@@ -6,9 +6,66 @@ existing Backend class works unchanged. We just provide a factory.
 
 from __future__ import annotations
 
+import json
+import re
+from typing import Iterator
+
 import httpx
 
 from harness.backends import Backend
+
+# Curated map of Ollama model-family → released parameter sizes. This is
+# maintained by hand — there is no public Ollama API that enumerates every
+# tag for a family. Add entries as new families land locally.
+MODEL_VARIANTS: dict[str, list[str]] = {
+    "gemma3": ["1b", "4b", "12b", "27b"],
+    "gemma2": ["2b", "9b", "27b"],
+    "qwen2.5": ["0.5b", "1.5b", "3b", "7b", "14b", "32b", "72b"],
+    "qwen2.5-coder": ["0.5b", "1.5b", "3b", "7b", "14b", "32b"],
+    "qwen2.5vl": ["3b", "7b", "32b", "72b"],
+    "llama3.3": ["70b"],
+    "llama3.2": ["1b", "3b"],
+    "llama3.2-vision": ["11b", "90b"],
+    "llama3.1": ["8b", "70b", "405b"],
+    "llava": ["7b", "13b", "34b"],
+    "minicpm-v": ["8b"],
+    "mistral-small": ["22b", "24b"],
+    "mistral": ["7b"],
+    "mistral-nemo": ["12b"],
+    "command-r": ["35b"],
+    "command-r-plus": ["104b"],
+    "mixtral": ["8x7b", "8x22b"],
+    "phi3.5": ["3.8b"],
+    "phi4": ["14b"],
+    "nomic-embed-text": ["137m"],
+    "deepseek-r1": ["1.5b", "7b", "8b", "14b", "32b", "70b", "671b"],
+    "deepseek-v3": ["671b"],
+}
+
+
+_VARIANT_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?x?\d*b|\d+m)", re.IGNORECASE)
+
+
+def family_of(tag: str) -> str:
+    """`qwen2.5:7b-instruct` → `qwen2.5`."""
+    return tag.split(":", 1)[0]
+
+
+def size_of(tag: str) -> str:
+    """Best-effort extract of param size from an Ollama tag's variant part.
+    `qwen2.5:7b-instruct` → `7b`; `mixtral:8x7b-…` → `8x7b`; no match → ``."""
+    variant = tag.split(":", 1)[1] if ":" in tag else ""
+    m = _VARIANT_SIZE_RE.search(variant)
+    return m.group(1).lower() if m else ""
+
+
+def installed_by_family(models: list[str]) -> dict[str, set[str]]:
+    """Group installed Ollama tags by family, collapsing variants to size."""
+    out: dict[str, set[str]] = {}
+    for tag in models:
+        sz = size_of(tag)
+        out.setdefault(family_of(tag), set()).add(sz or tag.split(":", 1)[-1])
+    return out
 
 
 def make_backend(model: str, base_url: str = "http://127.0.0.1:11434") -> Backend:
@@ -34,34 +91,216 @@ def list_models(base_url: str = "http://127.0.0.1:11434") -> list[str]:
         return []
 
 
+_PARAMS_CACHE: dict[str, str] = {}
+_PARAM_RE = re.compile(r"(\d+(?:\.\d+)?)[bB](?![a-zA-Z])")
+
+
+def parameter_size(model: str, base_url: str) -> str:
+    """Best-effort parameter count as a short string ("7B", "27B", "—").
+
+    Tries Ollama's /api/show (reports e.g. "7.6B"), then llama-server's
+    /props model_path, then a regex over the model name itself. Cached.
+    """
+    key = f"{base_url}::{model}"
+    if key in _PARAMS_CACHE:
+        return _PARAMS_CACHE[key]
+
+    # Ollama has the canonical field on `details.parameter_size`.
+    try:
+        r = httpx.post(f"{base_url}/api/show", json={"name": model}, timeout=5.0)
+        r.raise_for_status()
+        details = r.json().get("details") or {}
+        ps = details.get("parameter_size")
+        if isinstance(ps, str) and ps.strip():
+            _PARAMS_CACHE[key] = ps
+            return ps
+    except httpx.HTTPError:
+        pass
+
+    # llama-server only exposes the file path — parse the filename for "-27b-".
+    try:
+        r = httpx.get(f"{base_url}/props", timeout=5.0)
+        r.raise_for_status()
+        path = (r.json() or {}).get("model_path") or ""
+        m = _PARAM_RE.search(path)
+        if m:
+            result = f"{m.group(1)}B"
+            _PARAMS_CACHE[key] = result
+            return result
+    except httpx.HTTPError:
+        pass
+
+    m = _PARAM_RE.search(model)
+    result = f"{m.group(1)}B" if m else "—"
+    _PARAMS_CACHE[key] = result
+    return result
+
+
+def max_context_length(model: str, base_url: str) -> int | None:
+    """Model's native max context (distinct from the server's loaded ctx).
+    Read from Ollama's /api/show model_info. llama-server doesn't expose
+    this cleanly so we return None there."""
+    try:
+        r = httpx.post(f"{base_url}/api/show", json={"name": model}, timeout=5.0)
+        r.raise_for_status()
+        info = (r.json() or {}).get("model_info") or {}
+        for k, v in info.items():
+            if k.endswith(".context_length") and isinstance(v, int):
+                return v
+    except httpx.HTTPError:
+        pass
+    return None
+
+
+def estimate_kv_ram_gb(model: str, ctx: int, base_url: str) -> float | None:
+    """Rough fp16 KV-cache estimate in GiB, using architecture dims from
+    Ollama's model_info. Returns None if the fields aren't available.
+
+    Gemma 3 uses interleaved sliding-window + global attention, so the
+    actual footprint is materially lower than this naive formula — the
+    caller should display a disclaimer.
+    """
+    try:
+        r = httpx.post(f"{base_url}/api/show", json={"name": model}, timeout=5.0)
+        r.raise_for_status()
+        info = (r.json() or {}).get("model_info") or {}
+    except httpx.HTTPError:
+        return None
+
+    n_layers = n_kv_heads = head_dim = n_heads = embedding_length = None
+    for k, v in info.items():
+        if not isinstance(v, int):
+            continue
+        if k.endswith(".block_count"):
+            n_layers = v
+        elif k.endswith(".attention.head_count_kv"):
+            n_kv_heads = v
+        elif k.endswith(".attention.head_count"):
+            n_heads = v
+        elif k.endswith(".attention.key_length") or k.endswith(".attention.head_dim"):
+            head_dim = v
+        elif k.endswith(".embedding_length"):
+            embedding_length = v
+
+    # Not all families publish head_dim directly; derive it from
+    # embedding_length / n_heads when missing (standard transformer).
+    if head_dim is None and embedding_length and n_heads:
+        head_dim = embedding_length // n_heads
+
+    if not (n_layers and n_kv_heads and head_dim):
+        return None
+    bytes_per_token = 2 * n_layers * n_kv_heads * head_dim * 2  # K+V, fp16
+    return (bytes_per_token * ctx) / (1024 ** 3)
+
+
+def server_process_rss_gb(base_url: str) -> float | None:
+    """Resident set size (GB) of the process listening on the endpoint's
+    port. On macOS `psutil.net_connections()` needs root, so we iterate
+    user-owned processes instead (Ollama/llama-server run as the user)."""
+    try:
+        import psutil
+        from urllib.parse import urlparse
+    except ImportError:
+        return None
+    port = urlparse(base_url).port
+    if port is None:
+        return None
+    for proc in psutil.process_iter(["pid"]):
+        try:
+            for c in proc.net_connections(kind="inet"):
+                if c.laddr and c.laddr.port == port and c.status == "LISTEN":
+                    return proc.memory_info().rss / (1024 ** 3)
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+    return None
+
+
+def pull_stream(model: str, base_url: str) -> Iterator[dict]:
+    """Stream decoded events from Ollama's /api/pull. Each event is one line
+    of JSON with shape like {"status": "...", "digest": "...", "total": N,
+    "completed": N} or {"error": "..."}. Raises httpx errors on transport
+    failure; caller decides how to render."""
+    with httpx.stream(
+        "POST",
+        f"{base_url}/api/pull",
+        json={"name": model, "stream": True},
+        timeout=None,
+    ) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+
+def prewarm(model: str, base_url: str, *, timeout_s: float = 180.0) -> bool:
+    """Best-effort model load via a 1-token completion. Works for both
+    Ollama and llama-server since both accept /v1/chat/completions."""
+    try:
+        r = httpx.post(
+            f"{base_url}/v1/chat/completions",
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+                "temperature": 0,
+                "stream": False,
+            },
+            timeout=timeout_s,
+        )
+        return r.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
 _CTX_CACHE: dict[str, int] = {}
 _DEFAULT_CTX = 8192
 
 
 def context_length(model: str, base_url: str = "http://127.0.0.1:11434") -> int:
-    """Ollama's declared context window for `model`. Cached; falls back to 8192."""
-    if model in _CTX_CACHE:
-        return _CTX_CACHE[model]
+    """Declared context window for `model`. Tries Ollama's /api/show first,
+    then llama-server's /props. Cached; falls back to 8192."""
+    key = f"{base_url}::{model}"
+    if key in _CTX_CACHE:
+        return _CTX_CACHE[key]
+
+    # Try Ollama.
     try:
         r = httpx.post(f"{base_url}/api/show", json={"name": model}, timeout=5.0)
         r.raise_for_status()
         data = r.json()
+        ctx = _DEFAULT_CTX
+        info = data.get("model_info") or {}
+        for k, v in info.items():
+            if k.endswith(".context_length") and isinstance(v, int):
+                ctx = v
+                break
+        params = data.get("parameters") or ""
+        for line in params.splitlines() if isinstance(params, str) else []:
+            if line.strip().startswith("num_ctx"):
+                try:
+                    ctx = int(line.split()[-1])
+                except ValueError:
+                    pass
+        _CTX_CACHE[key] = ctx
+        return ctx
     except httpx.HTTPError:
-        _CTX_CACHE[model] = _DEFAULT_CTX
-        return _DEFAULT_CTX
+        pass
 
-    ctx = _DEFAULT_CTX
-    info = data.get("model_info") or {}
-    for k, v in info.items():
-        if k.endswith(".context_length") and isinstance(v, int):
-            ctx = v
-            break
-    params = data.get("parameters") or ""
-    for line in params.splitlines() if isinstance(params, str) else []:
-        if line.strip().startswith("num_ctx"):
-            try:
-                ctx = int(line.split()[-1])
-            except ValueError:
-                pass
-    _CTX_CACHE[model] = ctx
-    return ctx
+    # Try llama-server /props.
+    try:
+        r = httpx.get(f"{base_url}/props", timeout=5.0)
+        r.raise_for_status()
+        data = r.json()
+        ctx = (data.get("default_generation_settings") or {}).get("n_ctx")
+        if isinstance(ctx, int) and ctx > 0:
+            _CTX_CACHE[key] = ctx
+            return ctx
+    except httpx.HTTPError:
+        pass
+
+    _CTX_CACHE[key] = _DEFAULT_CTX
+    return _DEFAULT_CTX

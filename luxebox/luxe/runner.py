@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from luxe import prefs
-from luxe.agents import code, general, image, research, writing
+from luxe.agents import calc, code, general, image, refactor, research, review, writing
 from luxe.agents.base import AgentResult
 from luxe.backend import make_backend
 from luxe.registry import LuxeConfig
@@ -17,6 +17,9 @@ _SPECIALISTS = {
     "writing": writing.run,
     "image": image.run,
     "code": code.run,
+    "review": review.run,
+    "refactor": refactor.run,
+    "calc": calc.run,
 }
 
 
@@ -51,6 +54,7 @@ def dispatch(
     if updates:
         agent_cfg = agent_cfg.model_copy(update=updates)
 
-    backend = make_backend(agent_cfg.model, base_url=cfg.ollama_base_url)
+    endpoint = agent_cfg.endpoint or cfg.ollama_base_url
+    backend = make_backend(agent_cfg.model, base_url=endpoint)
     runner = _SPECIALISTS[decision.agent]
     return runner(backend, agent_cfg, task=decision.task, session=session)

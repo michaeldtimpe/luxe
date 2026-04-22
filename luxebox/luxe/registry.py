@@ -14,7 +14,10 @@ from pydantic import BaseModel, Field
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs"
 DEFAULT_CONFIG = CONFIG_DIR / "agents.yaml"
 
-AgentName = Literal["router", "general", "research", "writing", "image", "code"]
+AgentName = Literal[
+    "router", "general", "research", "writing", "image", "code",
+    "review", "refactor", "calc",
+]
 ToolName = Literal[
     "read_file",
     "write_file",
@@ -44,6 +47,7 @@ class AgentConfig(BaseModel):
     max_tool_calls_per_turn: int = 20
     enabled: bool = True
     notes: str = ""
+    endpoint: str | None = None  # override top-level ollama_base_url (e.g. llama-server)
 
 
 class LuxeConfig(BaseModel):
