@@ -16,7 +16,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
-from rich.console import Console, Group
+from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import (
@@ -837,40 +837,36 @@ def _status_banner(state: ReplState, cfg: LuxeConfig) -> Panel:
     rainbow_right = "[green1].[/green1][cyan]:[/cyan][magenta1].[/magenta1]"
     title = f"{rainbow_left} [bold white]luxe[/bold white] {rainbow_right}"
 
-    # Compute inner width so both grids hit the same right edge.
-    # Visible title length: ".:. luxe .:." = 12 chars (colors strip out).
-    TITLE_LEN = 12
-    VERSION_LINE = len(f"version: {version}")
-    # 4-col data rows: label + 1 + value + 2 (gap) + label + 1 + value
-    LBL_L = max(len("model:"), len("folder:"))              # 7
-    LBL_R = max(len("version:"), len("params:"), len("mode:"))  # 8
-    VAL_L = max(len(model), len(folder))
-    VAL_R = max(len(params), len(mode), len(version))
-    DATA_WIDTH = LBL_L + 1 + VAL_L + 3 + LBL_R + 1 + VAL_R
-    TITLE_WIDTH = TITLE_LEN + 3 + VERSION_LINE
-    inner_width = max(DATA_WIDTH, TITLE_WIDTH)
+    # Single 3-col grid so every row shares the same right-label column.
+    # That guarantees `version:`, `params:`, `mode:` colons line up
+    # vertically — a 2-grid / 4-col layout computed widths independently
+    # and drifted the colons by 2–4 chars per row.
+    #
+    # Left column renders differently per row:
+    #   Row 1 — the rainbow title (no label/value gutter).
+    #   Rows 2–3 — "label:<pad>value" pre-formatted so the labels
+    #   align on `:` and the values start at a consistent column.
+    left_lbl_w = max(len("model:"), len("folder:"))  # 7
 
-    title_grid = Table.grid(expand=True)
-    title_grid.add_column(justify="left",  no_wrap=True)
-    title_grid.add_column(justify="right", no_wrap=True)
-    title_grid.add_row(title, f"[dim]version:[/dim] {version}")
+    def _left_label_value(label: str, value: str) -> str:
+        # Pad the label to `left_lbl_w`, then one separator space, then
+        # value. Padding is applied to the plain label text (not the
+        # Rich markup) so widths stay accurate.
+        pad = " " * (left_lbl_w - len(label))
+        return f"[dim]{label}[/dim]{pad} {value}"
 
-    data_grid = Table.grid(expand=True, padding=(0, 1))
-    data_grid.add_column(justify="left",  no_wrap=True)
-    data_grid.add_column(justify="left",  no_wrap=True)
-    data_grid.add_column(justify="right", no_wrap=True)
-    data_grid.add_column(justify="left",  no_wrap=True)
-    data_grid.add_row("[dim]model:[/dim]",  model,
-                      "[dim]params:[/dim]", params)
-    data_grid.add_row("[dim]folder:[/dim]", folder,
-                      "[dim]mode:[/dim]",   mode)
+    grid = Table.grid(expand=False, padding=(0, 1))
+    grid.add_column(justify="left",  no_wrap=True)  # title / label:value
+    grid.add_column(justify="right", no_wrap=True)  # right label (colon-aligned)
+    grid.add_column(justify="left",  no_wrap=True)  # right value
+    grid.add_row(title,
+                 "[dim]version:[/dim]", version)
+    grid.add_row(_left_label_value("model:",  model),
+                 "[dim]params:[/dim]",  params)
+    grid.add_row(_left_label_value("folder:", folder),
+                 "[dim]mode:[/dim]",    mode)
 
-    return Panel(
-        Group(title_grid, data_grid),
-        border_style=_BORDER_STYLE,
-        width=inner_width + 4,  # +2 for borders, +2 for inner padding
-        expand=False,
-    )
+    return Panel(grid, border_style=_BORDER_STYLE, expand=False)
 
 
 def _print_status_banner(state: ReplState, cfg: LuxeConfig) -> None:
