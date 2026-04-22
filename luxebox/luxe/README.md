@@ -76,18 +76,80 @@ luxe> what is the difference between concurrency and parallelism?
 → routed to general (The user is asking a definitional question about computer science concepts.)
 Concurrency is about *dealing* with multiple tasks at once…
 general · 2.4s · 210↑ 52↓ tokens · 1 steps · 0 tool calls
+ctx: 210/32,768 (99% free) · qwen2.5:7b-instruct
+session totals: 1 turns · 2.4s · 210↑ 52↓ tokens
 
-luxe> write a haiku about the ocean
-→ routed to writing
+luxe> /writing a haiku about the ocean
+→ routed to writing (direct /writing flag)
 The gulls turn seaward…
-writing · 18.7s · 180↑ 44↓ tokens · 1 steps · 0 tool calls
 
-luxe> generate an image of a lighthouse in a storm, oil painting style
-→ routed to image
-Image saved to /Users/me/luxe-images/20260421T194512-lighthouse-in-a-storm-oil-p.png
-  ↗ file:///Users/me/luxe-images/…
-image · 34.1s · …
+luxe> /pin respond in British English
+pinned #1: respond in British English
+
+luxe> /save ocean-stuff
+saved bookmark ocean-stuff → 20260421T194000
 ```
+
+## REPL commands
+
+Everything below the banner is the REPL. Anything that doesn't start with
+`/` gets routed; `/`-prefixed tokens are commands or direct-dispatch flags.
+
+**Core**
+
+| Command | Notes |
+|---|---|
+| `/help` | Show the command cheatsheet |
+| `/agents` | List configured agents and their models |
+| `/models` | List Ollama models currently available locally |
+| `/quit` (or `/exit`, Ctrl-D) | Exit; session auto-saves |
+
+**Direct dispatch** — bypass the router:
+
+```
+/general   <prompt>
+/research  <prompt>
+/writing   <prompt>
+/image     <prompt>
+/code      <prompt>
+```
+
+**Turn control**
+
+| Command | Notes |
+|---|---|
+| `/retry` | Rerun the last prompt with the same agent |
+| `/redo <agent>` | Rerun the last prompt with a different agent |
+| `/model <tag>` | One-off model override for the next turn (e.g. `/model llama3.3-70b-4k:latest`) |
+| `/pin <text>` | Prepend a sticky note to every subsequent prompt |
+| `/pins` | List current pins |
+| `/unpin [n]` | Remove pin #n (default: clear all) |
+| `/history [n]` | Show the last n session events (default 10) |
+
+**Sessions** (see [Sessions](#sessions) for storage details)
+
+| Command | Notes |
+|---|---|
+| `/session` | Show current session id + path |
+| `/save <name>` | Bookmark current session under `<name>` |
+| `/sessions` | List saved sessions (bookmarks first, then recent) |
+| `/resume <id-or-name>` | Switch to another session (accepts bookmark name, full id, or unique id prefix) |
+| `/new` | Start a fresh session (reset totals + pins) |
+
+**Memory & aliases** (persisted in `~/.luxe/` — see below)
+
+| Command | Notes |
+|---|---|
+| `/memory` | Open `~/.luxe/memory.md` in `$EDITOR` |
+| `/memory view` | Print current memory |
+| `/memory clear` | Delete memory |
+| `/alias add <name> <expansion>` | Define `/<name>` as a shortcut (e.g. `/alias add q /research quick lookup:`) |
+| `/alias list` | List aliases |
+| `/alias remove <name>` | Remove an alias |
+
+After every turn, luxe prints three lines: the turn stats, a `ctx:` line
+showing how much of the model's declared context window the prompt used,
+and a running session total (turns, wall time, tokens).
 
 ## Swapping models
 
@@ -126,6 +188,23 @@ Code agent's bash allowlist: `cargo pytest go python python3 rustc node npm pnpm
 Stored as append-only JSONL at `~/.luxe/sessions/<timestamp>-<slug>.jsonl`.
 Each line records one turn (user / router / assistant / tool). Safe to
 inspect, copy, or delete.
+
+## User preferences (`~/.luxe/`)
+
+Separate from the repo-tracked `configs/agents.yaml`. Everything here is
+per-user state, managed through REPL commands but plain-text so you can
+edit or back it up by hand.
+
+| File | Written by | Read by |
+|---|---|---|
+| `memory.md` | `/memory` (opens `$EDITOR`) | Appended to every specialist's system prompt as `# User memory (persistent)` — capped at 2 000 chars |
+| `bookmarks.json` | `/save <name>` | `/resume <name>` and `/sessions` — maps friendly names to session ids |
+| `aliases.yaml` | `/alias add` | Every line of input — if the first token matches an alias, it expands before routing |
+| `sessions/` | Every turn | `luxe list`, `luxe resume`, `/resume`, `/sessions` |
+
+Memory is the simplest way to inject persistent preferences ("be terse",
+"prefer Rust examples") without editing YAML. Keep it short — it's loaded
+fresh on every turn, so it costs context tokens each time.
 
 ## Known limitations
 
