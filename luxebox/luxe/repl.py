@@ -223,7 +223,7 @@ def _status_renderable(task) -> Group:
             f"{icon} {s.status}",
             s.agent or "[dim]—[/dim]",
             str(s.tool_calls_total),
-            f"{s.wall_s:.0f}s" if s.wall_s else "[dim]—[/dim]",
+            _fmt_wall(s.wall_s) if s.wall_s else "[dim]—[/dim]",
             s.title[:60] + ("…" if len(s.title) > 60 else ""),
         )
     blocks.append(t)
@@ -551,7 +551,7 @@ def _tasks_save(partial: str | None) -> None:
     for s in task.subtasks:
         lines.append(f"## {s.index}. {s.title}")
         lines.append(f"*Agent: `{s.agent or 'route'}` · status: {s.status} · "
-                     f"wall: {s.wall_s:.1f}s · tool calls: {s.tool_calls_total}*")
+                     f"wall: {_fmt_wall(s.wall_s)} · tool calls: {s.tool_calls_total}*")
         lines.append("")
         if s.error:
             lines.append(f"> **Error:** {s.error}")
@@ -766,7 +766,7 @@ def _sync_event_printer(event: dict) -> None:
         }.get(status, "·")
         wall = event.get("wall_s", 0)
         tools = event.get("tool_calls", 0)
-        suffix = f"[dim]{wall}s · {tools} tool call{'s' if tools != 1 else ''}[/dim]"
+        suffix = f"[dim]{_fmt_wall(wall)} · {tools} tool call{'s' if tools != 1 else ''}[/dim]"
         err = event.get("error") or ""
         if err:
             suffix += f" [yellow]{err[:80]}[/yellow]"
@@ -949,6 +949,22 @@ def _prompt_assign_to_agent(tag: str, cfg: LuxeConfig) -> None:
     console.print(
         "[dim]  (session-only · edit configs/agents.yaml to persist across restarts)[/dim]"
     )
+
+
+def _fmt_wall(seconds: float | int) -> str:
+    """Render a wall-time duration readably. Under a minute stays in
+    seconds (no trailing zeros past one decimal for <10s). Once we
+    cross 60s it switches to m/h — "2m 05s", "1h 12m"."""
+    s = float(seconds or 0)
+    if s < 10:
+        return f"{s:.1f}s"
+    if s < 60:
+        return f"{s:.0f}s"
+    m, rem = divmod(int(s), 60)
+    if m < 60:
+        return f"{m}m {rem:02d}s"
+    h, rem_m = divmod(m, 60)
+    return f"{h}h {rem_m:02d}m"
 
 
 def _home_collapsed(p: Path) -> str:
@@ -1678,10 +1694,20 @@ def _print_stats(decision, result, state: ReplState, cfg: LuxeConfig) -> None:
     free = max(ctx_total - used, 0)
     pct_free = (free / ctx_total * 100.0) if ctx_total else 100.0
 
+    # Effective decode tokens/sec — a big perf hint. Sub-10 tok/s on a
+    # 30B model means Metal isn't warmed up or the context prefill
+    # dominated; 20+ tok/s is healthy.
+    tok_per_s = (
+        result.completion_tokens / result.wall_s
+        if result.wall_s > 0 and result.completion_tokens > 0
+        else 0.0
+    )
+    rate = f" · [dim]{tok_per_s:.0f} tok/s[/dim]" if tok_per_s else ""
     turn = (
-        f"[dim]{decision.agent} · {result.wall_s:.1f}s · "
+        f"[dim]{decision.agent} · {_fmt_wall(result.wall_s)} · "
         f"{result.prompt_tokens}↑ {result.completion_tokens}↓ tokens · "
         f"{result.steps_taken} steps · {result.tool_calls_total} tool calls[/dim]"
+        f"{rate}"
     )
     ctx_line = (
         f"[dim]ctx: {used:,}/{ctx_total:,} ({pct_free:.0f}% free) · "
@@ -1689,7 +1715,7 @@ def _print_stats(decision, result, state: ReplState, cfg: LuxeConfig) -> None:
     )
     totals = (
         f"[dim]session totals: {state.turns} turns · "
-        f"{state.total_wall_s:.1f}s · "
+        f"{_fmt_wall(state.total_wall_s)} · "
         f"{state.total_prompt_tokens:,}↑ {state.total_completion_tokens:,}↓ tokens[/dim]"
     )
     console.print(turn)

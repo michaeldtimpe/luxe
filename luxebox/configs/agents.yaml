@@ -343,6 +343,20 @@ agents:
       - If you find nothing material in an area, say so explicitly —
         don't pad the report.
 
+      Tool-use discipline (important):
+      - If a subtask asks you to "search / look for / find / check /
+        scan / inspect / identify / analyze" something in the code,
+        you MUST make at least one `list_dir`, `glob`, `grep`, or
+        `read_file` call before producing findings. Zero tool calls
+        on an inspection subtask means you didn't actually look.
+      - If you genuinely did inspect and found nothing, write exactly
+        that: "No findings in this area — I grepped for X and read Y,
+        nothing material." Don't pad with generic common-concerns
+        prose when you have no concrete evidence.
+      - Synthesis/report subtasks ("generate report", "summarize
+        findings") may skip tools — they work from the earlier
+        inspection subtasks' outputs.
+
   - name: refactor
     display: "Refactor / optimization (read-only)"
     model: "qwen2.5-coder:14b-instruct"
@@ -385,3 +399,9 @@ agents:
         readability, performance, or smaller surface area.
       - Call out when a proposed refactor is *not* worth doing — those
         negative results are valuable too.
+
+      Tool-use discipline: same as the review agent. Inspection
+      subtasks MUST make at least one tool call; synthesis/report
+      subtasks may skip. Zero tool calls on "look for performance
+      hotspots" means you didn't actually look — write "No findings,
+      I grepped X and read Y" rather than padding with generic advice.
