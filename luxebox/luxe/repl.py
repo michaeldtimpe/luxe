@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 import httpx
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console, Group
@@ -910,6 +912,35 @@ def _print_status_banner(state: ReplState, cfg: LuxeConfig) -> None:
     sys.stdout.flush()
 
 
+_PROMPT_ARROW_PALETTE = [
+    "#ff5c5c",  # red
+    "#ffa040",  # orange
+    "#ffdd33",  # yellow
+    "#66d9ff",  # light blue
+    "#66e066",  # green
+    "#c38bff",  # violet
+]
+
+
+def _prompt_message(sticky_agent: str) -> FormattedText:
+    """Build the per-turn prompt — `luxe [(mode)] >>> ` with each arrow
+    picking an independent color from the palette, enforcing that no
+    two adjacent arrows share a color. Colors randomize every turn so
+    the prompt has a little life to it."""
+    n = len(_PROMPT_ARROW_PALETTE)
+    c1 = random.randrange(n)
+    c2 = random.choice([i for i in range(n) if i != c1])
+    c3 = random.choice([i for i in range(n) if i != c2])
+    lead = f"\nluxe ({sticky_agent}) " if sticky_agent else "\nluxe "
+    return FormattedText([
+        ("", lead),
+        (f"bold fg:{_PROMPT_ARROW_PALETTE[c1]}", ">"),
+        (f"bold fg:{_PROMPT_ARROW_PALETTE[c2]}", ">"),
+        (f"bold fg:{_PROMPT_ARROW_PALETTE[c3]}", ">"),
+        ("", " "),
+    ])
+
+
 def _make_prompt_session() -> PromptSession:
     """prompt_toolkit session with persistent history, arrow-key recall,
     and Alt/Esc+Enter to insert a newline inside a single prompt.
@@ -1051,11 +1082,8 @@ def start(cfg: LuxeConfig, session: Session | None = None) -> None:
     while True:
         console.print()
         _print_status_banner(state, cfg)
-        prompt_label = (
-            f"luxe ({state.sticky_agent})> " if state.sticky_agent else "luxe> "
-        )
         try:
-            raw = prompt_session.prompt(prompt_label)
+            raw = prompt_session.prompt(_prompt_message(state.sticky_agent))
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]bye[/dim]")
             return
