@@ -30,6 +30,7 @@ from rich.table import Table
 from luxe import prefs, router, runner
 from luxe.backend import (
     MODEL_VARIANTS,
+    clear_caches,
     context_length,
     estimate_kv_ram_gb,
     installed_by_family,
@@ -240,6 +241,60 @@ def _tasks_log(partial: str | None, tail: int = 20) -> None:
         ts = ev.get("ts", "")[11:19]  # HH:MM:SS
         rest = {k: v for k, v in ev.items() if k != "ts"}
         console.print(f"[dim]{ts}[/dim]  {rest}")
+
+
+def _handle_tools_command(args: list[str]) -> None:
+    """/tools, /tools show <name>, /tools remove <name>."""
+    from luxe.tool_library import TOOLS_ROOT, list_tools
+    sub = args[0] if args else ""
+
+    if sub in ("", "list"):
+        entries = list_tools()
+        if not entries:
+            console.print(
+                "[dim]no saved tools yet — agents can call[/dim] "
+                "[cyan]create_tool[/cyan] [dim]to save one[/dim]"
+            )
+            return
+        t = Table(show_header=True, box=None, padding=(0, 2), header_style="dim")
+        t.add_column("name")
+        t.add_column("description")
+        t.add_column("tags")
+        for meta in entries:
+            tags = ", ".join(meta.get("tags") or []) or "[dim]—[/dim]"
+            desc = (meta.get("description") or "")[:80]
+            t.add_row(f"[cyan]{meta['name']}[/cyan]", desc, tags)
+        console.print(t)
+        console.print(f"[dim]stored at[/dim] {TOOLS_ROOT}")
+        return
+
+    if sub == "show":
+        if len(args) < 2:
+            console.print("[yellow]usage:[/yellow] /tools show <name>")
+            return
+        name = args[1]
+        path = TOOLS_ROOT / f"{name}.py"
+        if not path.exists():
+            console.print(f"[yellow]no tool named[/yellow] {name}")
+            return
+        console.print(f"[dim]{path}[/dim]")
+        console.print(path.read_text())
+        return
+
+    if sub == "remove":
+        if len(args) < 2:
+            console.print("[yellow]usage:[/yellow] /tools remove <name>")
+            return
+        name = args[1]
+        path = TOOLS_ROOT / f"{name}.py"
+        if not path.exists():
+            console.print(f"[yellow]no tool named[/yellow] {name}")
+            return
+        path.unlink()
+        console.print(f"[dim]removed[/dim] [cyan]{name}[/cyan]")
+        return
+
+    console.print("[yellow]usage:[/yellow] /tools [show <name> | remove <name>]")
 
 
 def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> None:
@@ -699,6 +754,9 @@ def _pull_with_progress(tag: str, base_url: str) -> bool:
         except httpx.HTTPError as e:
             progress.console.print(f"[red]pull failed:[/red] {e}")
             return False
+    # Fresh weights → invalidate cached ctx + params for this tag so the
+    # banner and /context pick up the real values on the next lookup.
+    clear_caches(tag)
     console.print(f"[green]✓ pulled[/green] [cyan]{tag}[/cyan]")
     return True
 
@@ -895,6 +953,11 @@ HELP = """[bold]Core[/bold]
 [bold]Code intelligence[/bold]
   [cyan]/review[/cyan] <git-url>          clone/pull, then review for flaws/bugs/security (background)
   [cyan]/refactor[/cyan] <git-url>        clone/pull, then look for optimization opportunities (background)
+
+[bold]Tool library[/bold] (reusable calcs saved by agents)
+  [cyan]/tools[/cyan]                     list saved tools with descriptions and tags
+  [cyan]/tools show[/cyan] <name>         print the source of a saved tool
+  [cyan]/tools remove[/cyan] <name>       delete a saved tool
   [cyan]/quit[/cyan] · [cyan]/exit[/cyan]              leave (session auto-saved)
   [cyan]/clear[/cyan]                     drop the sticky agent; next prompt re-routes
 
@@ -932,7 +995,7 @@ BUILTIN_CMDS = {
     "/retry", "/redo", "/history", "/model", "/params", "/pin", "/pins", "/unpin",
     "/save", "/sessions", "/resume", "/new", "/clear",
     "/memory", "/alias", "/variants", "/pull", "/context", "/tasks",
-    "/review", "/refactor",
+    "/review", "/refactor", "/tools",
 }
 
 
@@ -1096,6 +1159,10 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
 
     if cmd == "/context":
         _show_context_info(state, cfg)
+        return "consumed"
+
+    if cmd == "/tools":
+        _handle_tools_command(args)
         return "consumed"
 
     if cmd == "/review":
@@ -1350,7 +1417,15 @@ def _dispatch(
     *,
     original_prompt: str,
 ) -> None:
-    reasoning = f" [dim]({decision.reasoning})[/dim]" if decision.reasoning else ""
+    # Surface a router error visibly (yellow) rather than hiding it in the
+    # usual dim reasoning text — it's often the first hint Ollama or the
+    # router model is unreachable.
+    if decision.reasoning.startswith("router error"):
+        reasoning = f" [yellow]({decision.reasoning})[/yellow]"
+    elif decision.reasoning:
+        reasoning = f" [dim]({decision.reasoning})[/dim]"
+    else:
+        reasoning = ""
     model_note = ""
     if state.pending_model:
         model_note = f" [dim]· override →[/dim] [cyan]{state.pending_model}[/cyan]"

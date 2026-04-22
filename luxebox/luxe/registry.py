@@ -48,6 +48,7 @@ class AgentConfig(BaseModel):
     enabled: bool = True
     notes: str = ""
     endpoint: str | None = None  # override top-level ollama_base_url (e.g. llama-server)
+    history_keep_last: int = 4  # how many prior session messages to replay on dispatch
 
 
 class LuxeConfig(BaseModel):

@@ -179,12 +179,19 @@ def run_agent(
     if history is not None:
         messages.extend(history)
     elif session is not None:
+        keep = getattr(cfg, "history_keep_last", 4)
         if tool_style == "gemma_pycode":
             # Replay tool_code + tool_output pairs too, so Gemma sees real
             # file data across turns and doesn't have to re-read or invent.
-            messages.extend(_build_gemma_history_from_session(session, cfg.name))
+            messages.extend(
+                _build_gemma_history_from_session(
+                    session, cfg.name, keep_last_messages=max(keep * 3, 12)
+                )
+            )
         else:
-            messages.extend(_build_history_from_session(session, cfg.name))
+            messages.extend(
+                _build_history_from_session(session, cfg.name, keep_last=keep)
+            )
     messages.append({"role": "user", "content": task})
 
     if session:
@@ -248,15 +255,18 @@ def run_agent(
                     response.text = ""
 
         final_text = response.text or final_text
-        tool_calls_total += len(response.tool_calls)
-        tool_calls_accum.extend(response.tool_calls)
 
+        # Cap check runs BEFORE accumulation so an abort keeps the
+        # transcript/tool-call list clean (no half-committed bogus calls).
         if len(response.tool_calls) > cfg.max_tool_calls_per_turn:
             return _result(
                 True,
                 f"runaway turn: {len(response.tool_calls)} tool calls "
                 f"> cap {cfg.max_tool_calls_per_turn}",
             )
+
+        tool_calls_total += len(response.tool_calls)
+        tool_calls_accum.extend(response.tool_calls)
 
         if not response.tool_calls:
             # Final answer

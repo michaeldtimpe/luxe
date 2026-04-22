@@ -45,7 +45,13 @@ Execution model (important):
 - Subtasks run serially. Later subtasks see a summary of earlier
   completed subtasks' results, so you CAN chain them ("look up X, then
   use X to compute Y").
-- Pick the smallest number of subtasks that actually completes the goal.
+- Prefer 3–5 substantive subtasks. Fewer when the goal is simple;
+  rarely more than 6. Each subtask should be worth a standalone agent
+  turn — do NOT split arithmetic across multiple `calc` subtasks
+  unless the subproblems are genuinely independent ("charging time"
+  and "fuel cost" can go in one subtask together).
+- Do NOT add "summarize the previous findings" as its own subtask —
+  the last substantive subtask can do the summary inline.
 - If the goal is genuinely a single step, return a 1-element list.
 
 Example — "plan a trip from A to B with charging stops, estimate time
