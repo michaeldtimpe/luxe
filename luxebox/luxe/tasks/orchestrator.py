@@ -8,6 +8,7 @@ will wrap this in a subprocess for background runs.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Callable
 
@@ -166,8 +167,60 @@ class Orchestrator:
         if result.aborted:
             sub.status = "blocked"
             sub.error = result.abort_reason or "agent aborted"
-        else:
-            sub.status = "done"
+            return
+
+        # Tool-use enforcement for review/refactor inspection subtasks:
+        # if the agent produced findings without actually calling any
+        # tools, retry once with a sharper "you must use tools" prefix.
+        # Synthesis subtasks ("generate report", "summarize") are
+        # allowed to skip tools — they work from prior findings.
+        if (
+            agent in ("review", "refactor")
+            and result.tool_calls_total == 0
+            and _is_inspection_title(sub.title)
+        ):
+            self._emit(task, {
+                "event": "tool_use_retry",
+                "subtask": sub.id,
+                "reason": "inspection subtask produced 0 tool calls",
+            })
+            nudge = (
+                "\n\n# Retry — tool use required\n"
+                "Your previous response produced findings without calling "
+                "any tools. This subtask requires you to actually read the "
+                "code via list_dir, glob, grep, or read_file before making "
+                "claims. Re-attempt now and make at least one tool call. "
+                "If your inspection truly finds nothing worth noting, write "
+                "exactly \"No findings — I grepped X and read Y, nothing "
+                "material\" instead of generic common-concerns prose."
+            )
+            retry_decision = RouterDecision(
+                agent=agent,
+                task=augmented + nudge,
+                reasoning=f"task orchestrator retry (subtask {sub.id}, tool-use)",
+            )
+            retry_result = _runner.dispatch(
+                retry_decision, self.cfg, session=self.session
+            )
+            # Only accept the retry if it did better on the tool-use axis
+            # (otherwise we just overwrite good prose with worse prose).
+            if retry_result.tool_calls_total > 0:
+                sub.result_text = retry_result.final_text or sub.result_text
+                sub.tool_calls = list(retry_result.tool_calls)
+                sub.tool_calls_total = retry_result.tool_calls_total
+                sub.steps_taken += retry_result.steps_taken
+                sub.prompt_tokens += retry_result.prompt_tokens
+                sub.completion_tokens += retry_result.completion_tokens
+                sub.wall_s += retry_result.wall_s
+            else:
+                # Still didn't use tools. Flag the result so status
+                # shows a yellow warning rather than a clean green.
+                sub.error = (
+                    "produced output without reading code "
+                    "(retry also made no tool calls)"
+                )
+
+        sub.status = "done"
 
     def _pick_agent(self, title: str) -> str:
         """Use the router to pick an agent for an unassigned subtask. No
@@ -179,6 +232,30 @@ class Orchestrator:
             session=None,
         )
         return decision.agent
+
+
+_INSPECTION_VERBS = re.compile(
+    r"\b(search|look|find|check|scan|inspect|identify|analyze|audit|"
+    r"review\s+for|list\s+(directory|files)|read\s+(the\s+)?readme)\b",
+    re.IGNORECASE,
+)
+_SYNTHESIS_VERBS = re.compile(
+    r"\b(summari[zs]e|synthesi[zs]e|generate\s+(a\s+)?report|write\s+(the\s+)?"
+    r"(report|summary)|produce\s+(a\s+)?report)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_inspection_title(title: str) -> bool:
+    """Heuristic: true if the subtask title sounds like code inspection
+    (tool use expected), false if it sounds like synthesis (tool-free
+    report generation from earlier findings)."""
+    t = (title or "").strip()
+    if not t:
+        return False
+    if _SYNTHESIS_VERBS.search(t):
+        return False
+    return bool(_INSPECTION_VERBS.search(t))
 
 
 def _summarize_result(text: str, max_chars: int = 800) -> str:
