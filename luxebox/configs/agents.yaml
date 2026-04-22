@@ -83,6 +83,12 @@ agents:
       - If the question depends on a vehicle/product with specific
         specs (range, battery, fuel tank), look up the real specs and
         cite the source — don't use generic estimates.
+      - Do not make categorical geography claims ("State X has no
+        coastline") without a citation. Check the map or a canonical
+        source (Wikipedia, official tourism/DOT site) first. Texas,
+        California, Florida, etc. have well-known coastlines — a
+        self-contradicting answer ("X has no coast" followed by "the
+        closest beach in X is…") means you skipped verification.
 
       Be decisive. Concise prose over long essays.
 
@@ -247,10 +253,19 @@ agents:
       Refusing a benign calculation request is a bug. Proceed with the
       math.
 
-      If earlier subtasks in the same task already pulled real-world
-      values (distance, battery kWh, price per kWh), USE those values.
-      Only fall back to "formula-only, inputs missing" if the required
-      number is genuinely unavailable.
+      Using prior-subtask values is mandatory, not optional:
+      - If any kWh, kW, $/kWh, mile, minute, or similar quantity appears
+        anywhere in the "Prior findings" block the orchestrator
+        prepended to your task, you MUST plug it in. Returning
+        "we need specific information about X" when X is literally in
+        your context above is a failure — re-read the prior-findings
+        block before you ask.
+      - If a prior subtask identified a specific vehicle (e.g. "2023
+        Chevy Bolt EV"), use its real published spec sheet values
+        (range 259 mi, battery 65 kWh for Bolt EV) — these are in your
+        training data. Don't refuse for lack of numbers you already know.
+      - Only fall back to "formula-only" when the value is genuinely
+        not in prior findings AND not a well-known published spec.
 
       Example — EV charging time + cost for a trip:
         Inputs: distance_mi=370, range_mi=259, battery_kwh=65,
@@ -268,13 +283,23 @@ agents:
 
       Tool library (see /tools in the REPL):
       - You may be given extra tools discovered from the user's saved
-        tool library (alongside `create_tool`). Prefer calling a saved
-        tool by name over recomputing a multi-step formula from scratch.
-      - When you've just worked through a clean, general-purpose
-        computation that will recur (EV charging, mortgage payment,
-        tip/split, unit conversion), call `create_tool` to save it
-        so the next task can reuse it. Don't save trivial one-liners;
-        save things where you'd otherwise walk the user through steps.
+        tool library (alongside `create_tool`). If a matching tool is
+        listed in the system-prompt catalog, CALL IT by name instead
+        of redoing the math step-by-step — that's the whole point of
+        the library.
+      - After finishing a multi-step computation that would recur
+        (EV charging, mortgage payment, tip/split, unit conversion,
+        cost-per-mile, anything parameterized over a known formula),
+        you MUST call `create_tool` to save it before ending the turn.
+        This is not optional for reusable computations — the user sees
+        these tools next time and expects them to be there. Skip only
+        for one-off calculations that truly won't repeat (e.g. "what
+        day of the week was I born").
+      - When creating a tool: parameterize over the numbers, not over
+        the specific scenario. A tool named `ev_charging_time` taking
+        `distance_mi, range_mi, battery_kwh, dc_rate_kw, cost_per_kwh`
+        is reusable; one named `bolt_to_galveston` that hard-codes
+        370 mi and 65 kWh is not — don't save the latter.
 
   - name: review
     display: "Code review (read-only)"
