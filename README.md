@@ -11,8 +11,11 @@ outbound calls except the web searches you explicitly allow.
     harness for local coding LLMs. OpenAI-compat backends (MLX /
     llama.cpp), candidate registry, benchmark runners, metrics.
   - **`luxebox/luxe/`** — a local, multi-agent Claude-Code-alike CLI. A
-    small router picks one of five specialists (general / research /
-    writing / image / code) and hands off. Runs on Ollama + Draw Things.
+    small router picks one of eight specialists (general / research /
+    writing / code / image / review / refactor / calc) and hands off.
+    Runs on Ollama + llama.cpp + Draw Things, with a task orchestrator
+    for multi-step goals that runs background subprocesses and stitches
+    specialists together.
 
 ## Quick start (luxe CLI)
 
@@ -47,8 +50,11 @@ Fuller walkthrough in **`luxebox/README.md`**.
 
 - **luxebox harness**: Phase A–D runners, daily-driver launchd plists,
   `lux` CLI. Tested with MLX + Ollama; llama.cpp supported.
-- **luxe CLI**: all 9 build phases complete. Router + 5 specialists live.
-  Code agent uses `qwen2.5-coder:14b-instruct` with known depth limits —
+- **luxe CLI**: router + 8 specialists live. Task orchestrator with
+  background execution, clarifying questions, plan-preview, and
+  context forwarding between subtasks. Writing agent served via
+  `llama-server` for Gemma 3 27B with native tool-call support. Code
+  agent uses `qwen2.5-coder:14b-instruct` with known depth limits —
   see LESSONS.md.
 
 ## Hardware target

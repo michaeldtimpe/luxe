@@ -1,34 +1,41 @@
 # luxe — local multi-agent Claude-Code-alike
 
 A terminal REPL that takes a prompt, routes it to a specialist agent, and
-runs fully on your Mac via Ollama + Draw Things. Six roles share a single
-router: **general**, **research**, **writing**, **image**, **code** (music
-deferred).
+runs fully on your Mac via Ollama + llama.cpp + Draw Things. Eight
+specialists share a single router: **general**, **research**,
+**writing**, **code**, **image**, **review**, **refactor**, **calc**.
+A task orchestrator stitches specialists together for multi-step goals,
+with background execution, clarifying questions, plan-preview, and
+context forwarding between subtasks.
 
 ## Status
 
-| Phase | Agent | Model | Notes |
+| Agent | Model | Backend | Notes |
 |---|---|---|---|
-| 0 | scaffolding | — | REPL + session persistence at `~/.luxe/sessions/` |
-| 1 | router | `qwen2.5:7b-instruct` | Single hand-off; max 2 clarifying Qs |
-| 2 | general | `qwen2.5:7b-instruct` | Concise chat; 1.7 s avg |
-| 3 | research | `qwen2.5:32b-instruct` | DuckDuckGo + `trafilatura` extract, cited output |
-| 4 | writing | `gemma3:27b` | Best voice across 7 candidates |
-| 5 | image | `qwen2.5:7b-instruct` (prompt expander) + Draw Things | HTTP API on 7859 |
-| 6 | code | `qwen2.5-coder:14b-instruct` | Full tool surface; 32b had ollama tool-use quirks |
-| 7 | polish | — | Token/time stats, Ctrl-C, session resume |
-| 8 | install | — | launchd plist for Ollama, `install_luxe.sh` |
+| router | `qwen2.5:7b-instruct` | Ollama | Hands off to one specialist; up to 2 clarifying Qs |
+| general | `qwen2.5:7b-instruct` | Ollama | Concise chat, ~1–2 s typical |
+| research | `qwen2.5:32b-instruct` | Ollama | DuckDuckGo + `trafilatura` extract, cited output |
+| writing | `gemma-3-27b-it` | **llama-server** | Served via `llama-server --jinja`; native `tool_code` blocks parsed inline |
+| code | `qwen2.5-coder:14b-instruct` | Ollama | Full tool surface; 32b variants had Ollama tool-use quirks |
+| image | `qwen2.5:7b-instruct` (prompt expander) + Draw Things | Ollama + HTTP | Draw Things API on 7859 |
+| review | `qwen2.5-coder:14b-instruct` | Ollama | Read-only code review; driven by `/review <url>` |
+| refactor | `qwen2.5-coder:14b-instruct` | Ollama | Read-only optimization suggestions; driven by `/refactor <url>` |
+| calc | `mixtral:8x7b-instruct-v0.1-q3_K_M` | Ollama | Multi-step arithmetic, unit-carrying estimation |
 
-Disk footprint for the selected models ≈ 80 GB. Ollama hot-swaps, so only
-one model is resident at a time.
+Ollama hot-swaps, so only one Ollama-served model is resident at a time.
+`llama-server` for the writing agent stays resident (Gemma 3 27B Q4_K_M +
+KV cache ≈ 17–22 GB at 32–64K context).
 
 ## Prereqs
 
 - macOS with Homebrew
-- `brew install ollama uv ripgrep`
-- [Draw Things.app](https://drawthings.ai/) — enable **HTTP server** in the
-  app's settings (default port 7859 in newer versions; 7860 in older)
+- `brew install ollama llama.cpp uv ripgrep`
+- [Draw Things.app](https://drawthings.ai/) — enable **HTTP server** in
+  the app's settings (default 7859 in newer versions; 7860 in older)
 - For research: no extra setup — DuckDuckGo runs in-process via `ddgs`
+- For writing: `llama-server` (comes with `llama.cpp`) serves Gemma 3
+  27B with native function-call support; see **Starting llama-server**
+  below
 
 ## Install
 
@@ -42,17 +49,38 @@ That:
 
 - Symlinks `luxe` to `~/.local/bin/luxe`
 - Installs a launchd plist so `ollama serve` runs at login
-  (`~/Library/LaunchAgents/com.luxebox.ollama.plist`)
 - Verifies Ollama is reachable on `127.0.0.1:11434`
 
-Pull the selected models on first use (they'll pull on demand too):
+Pull the Ollama-served models (they'll pull on demand too):
 
 ```bash
 ollama pull qwen2.5:7b-instruct
 ollama pull qwen2.5:32b-instruct
-ollama pull gemma3:27b
 ollama pull qwen2.5-coder:14b-instruct
+ollama pull mixtral:8x7b-instruct-v0.1-q3_K_M
 ```
+
+## Starting llama-server (writing agent)
+
+Gemma 3 doesn't advertise the `tools` capability in Ollama's manifest,
+so it 400s on any tool-enabled request. We run it under `llama-server`
+with `--jinja` and parse its native ```tool_code``` blocks. Launch it
+once per login; it stays resident:
+
+```bash
+llama-server \
+  -hf ggml-org/gemma-3-27b-it-GGUF:Q4_K_M \
+  --jinja -ngl 99 -c 32768 --parallel 1 \
+  --host 127.0.0.1 --port 8080
+```
+
+First run downloads ~16 GB to `~/.cache/huggingface/hub/`. Subsequent
+starts boot in ~1 s. `/context` in the REPL shows the loaded context
+window and approximate RAM usage per server.
+
+The writing agent's config points at `http://127.0.0.1:8080` via the
+per-agent `endpoint` field in `configs/agents.yaml` — other agents keep
+going to Ollama on `11434`.
 
 ## Use
 
@@ -69,40 +97,41 @@ Example REPL session:
 
 ```
 $ luxe
-╭───────────────────────────────────────────────────────╮
-│ luxe — local multi-agent CLI                          │
-╰───────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────╮╮
+│ .:. luxe .:.                version: f669a5d ││
+│ model:  qwen2.5:7b-instruct   params: 7.6 B  ││
+│ folder: ~/code/myproj           mode: router ││
+╰──────────────────────────────────────────────╯╯
 luxe> what is the difference between concurrency and parallelism?
-→ routed to general (The user is asking a definitional question about computer science concepts.)
+→ routed to general
 Concurrency is about *dealing* with multiple tasks at once…
 general · 2.4s · 210↑ 52↓ tokens · 1 steps · 0 tool calls
 ctx: 210/32,768 (99% free) · qwen2.5:7b-instruct
-session totals: 1 turns · 2.4s · 210↑ 52↓ tokens
 
-luxe> /writing a haiku about the ocean
-→ routed to writing (direct /writing flag)
-The gulls turn seaward…
-
-luxe> /pin respond in British English
-pinned #1: respond in British English
-
-luxe> /save ocean-stuff
-saved bookmark ocean-stuff → 20260421T194000
+luxe> /writing
+→ sticky agent set to writing
+luxe (writing)> review the notes in this folder and suggest a three-act structure
+→ routed to writing (sticky)
+...
 ```
 
-## REPL commands
+The banner shows above every prompt: version (git hash), current model,
+param count, folder, and mode. `mode` is either `router` or an agent
+name (when sticky is engaged — see **Sticky mode** below).
 
-Everything below the banner is the REPL. Anything that doesn't start with
-`/` gets routed; `/`-prefixed tokens are commands or direct-dispatch flags.
+## REPL commands
 
 **Core**
 
 | Command | Notes |
 |---|---|
 | `/help` | Show the command cheatsheet |
-| `/agents` | List configured agents and their models |
-| `/models` | List Ollama models currently available locally |
-| `/quit` (or `/exit`, Ctrl-D) | Exit; session auto-saves |
+| `/agents` | List configured agents with model + param count |
+| `/models` | List Ollama models currently available with param count |
+| `/variants [family]` | Show released sizes per model family; green = installed, dim = pullable |
+| `/pull <tag>` | Download a model from Ollama's registry with a live progress bar; prompts to assign it to an agent on success |
+| `/context` | Show loaded ctx, max ctx, approximate KV-cache RAM, and server process RSS per agent |
+| `/quit` · `/exit` (or Ctrl-D) | Exit; session auto-saves |
 
 **Direct dispatch** — bypass the router:
 
@@ -110,9 +139,19 @@ Everything below the banner is the REPL. Anything that doesn't start with
 /general   <prompt>
 /research  <prompt>
 /writing   <prompt>
-/image     <prompt>
 /code      <prompt>
+/image     <prompt>
+/review    <git-url>
+/refactor  <git-url>
 ```
+
+Running an agent-flag alone (e.g. `/writing`) pre-warms the model and
+engages sticky mode without a prompt.
+
+**Sticky mode.** After any dispatch (direct or routed), subsequent
+plain-text prompts go to the same agent automatically — the banner
+reads `mode: <agent>`. Use `/clear` to drop sticky and return to
+router-driven routing for the next prompt. `/new` also clears sticky.
 
 **Turn control**
 
@@ -120,56 +159,117 @@ Everything below the banner is the REPL. Anything that doesn't start with
 |---|---|
 | `/retry` | Rerun the last prompt with the same agent |
 | `/redo <agent>` | Rerun the last prompt with a different agent |
-| `/model <tag>` | One-off model override for the next turn (e.g. `/model llama3.3-70b-4k:latest`) |
+| `/model <tag>` | One-off model override for the next turn |
+| `/params <text>` | Force the banner's `params:` display (useful if auto-detection can't resolve); `/params clear` to unset |
 | `/pin <text>` | Prepend a sticky note to every subsequent prompt |
-| `/pins` | List current pins |
-| `/unpin [n]` | Remove pin #n (default: clear all) |
+| `/pins` / `/unpin [n]` | List / remove pins |
 | `/history [n]` | Show the last n session events (default 10) |
 
-**Sessions** (see [Sessions](#sessions) for storage details)
+**Sessions**
 
 | Command | Notes |
 |---|---|
 | `/session` | Show current session id + path |
 | `/save <name>` | Bookmark current session under `<name>` |
-| `/sessions` | List saved sessions (bookmarks first, then recent) |
-| `/resume <id-or-name>` | Switch to another session (accepts bookmark name, full id, or unique id prefix) |
-| `/new` | Start a fresh session (reset totals + pins) |
+| `/sessions` | List saved sessions |
+| `/resume <id-or-name>` | Switch to another session (name, full id, or unique prefix) |
+| `/new` | Start a fresh session (reset totals, pins, sticky) |
+| `/clear` | Drop the sticky agent — next prompt re-routes |
 
-**Memory & aliases** (persisted in `~/.luxe/` — see below)
+**Memory & aliases** (persisted in `~/.luxe/`)
 
 | Command | Notes |
 |---|---|
-| `/memory` | Open `~/.luxe/memory.md` in `$EDITOR` |
-| `/memory view` | Print current memory |
-| `/memory clear` | Delete memory |
-| `/alias add <name> <expansion>` | Define `/<name>` as a shortcut (e.g. `/alias add q /research quick lookup:`) |
-| `/alias list` | List aliases |
-| `/alias remove <name>` | Remove an alias |
+| `/memory` / `/memory view` / `/memory clear` | Open or inspect `~/.luxe/memory.md` |
+| `/alias add <name> <expansion>` | Define `/<name>` as a shortcut |
+| `/alias list` / `/alias remove <name>` | Manage aliases |
 
-After every turn, luxe prints three lines: the turn stats, a `ctx:` line
-showing how much of the model's declared context window the prompt used,
-and a running session total (turns, wall time, tokens).
+**Input niceties** (prompt_toolkit)
 
-## Swapping models
+- `↑` / `↓` arrow keys: browse prompt history (persistent at `~/.luxe/history`)
+- `Alt-Enter` (or `Esc` then `Enter`): insert a newline without submitting
+- Pasting a multi-line block: arrives as one prompt via bracketed paste
+  — no more each-line-submits problems with prose prompts
 
-Edit `configs/agents.yaml`. Each agent has a `model` field — any tag that
-`ollama list` shows is valid. Ad-hoc overrides via CLI:
+## Tasks — multi-step orchestration
 
-```bash
-luxe analyze ~/my-repo --model llama3.3-70b-4k:latest
+For goals that need more than one specialist, the task orchestrator
+plans, asks clarifying questions, previews the plan, runs subtasks
+serially (each seeing prior findings), and produces a save-able report.
+
+```
+/tasks <goal>              plan + run in the background (detached subprocess)
+/tasks --sync <goal>       plan + run synchronously in the REPL
+/tasks                     list recent tasks (with alive marker)
+/tasks status [id]         full subtask breakdown; prefix id is fine
+/tasks log [id]            tail the task's structured log.jsonl
+/tasks abort [id]          SIGTERM a running task; SIGKILL after 5 s
+/tasks save [id]           stitch subtask outputs into md/txt report
 ```
 
-Eval scripts run a model against a canned set of prompts:
+**What happens when you run `/tasks <goal>`:**
 
-```bash
-uv run python scripts/run_luxe_eval.py router
-uv run python scripts/run_luxe_eval.py general --all
-uv run python scripts/run_luxe_eval.py research
-uv run python scripts/run_luxe_eval.py writing --all
+1. **Clarifying questions.** A small screener LLM decides whether the
+   goal is specific enough to plan. If not, it emits up to 3 focused
+   questions; your answers get folded into the goal.
+2. **Planning.** A planner LLM decomposes the goal into 1–8 ordered
+   subtasks, each with a recommended specialist.
+3. **Plan preview.** You get a `plan>` prompt where you can:
+   - `<enter>` — run as shown
+   - `abort` — cancel before anything runs
+   - `agent <i> <name>` — change subtask *i*'s assigned agent
+   - `drop <i>` — remove a subtask and re-index
+   - `add <title>` — append a new subtask
+4. **Execution.** Background by default (detached subprocess, survives
+   REPL exit). Each subtask sees a summary of previously completed
+   subtasks, so later steps build on earlier findings instead of
+   starting from scratch.
+5. **Report.** When done (sync mode auto-prompts; background runs use
+   `/tasks save <id>`), you see a per-subtask summary and a save
+   prompt: `<enter>` = default `REVIEW-<id>.md`, `new_name.md` to
+   rename, `new_name.txt` to switch format, `n` to skip.
+
+State lives at `~/.luxe/tasks/<task-id>/`:
+
+- `state.json` — full Task with subtasks and structured `ToolCall` list
+- `log.jsonl` — one event per state change (start / begin / end /
+  retry_transport / abort_sigterm / finish); tailed by `/tasks log`
+- `stdout.log` — raw stdout/stderr of the background subprocess
+- `repo_path` (for `/review` + `/refactor` only) — the clone root
+
+Background tasks are resilient to `/exit`: they keep running, and a
+subsequent `luxe` launch shows them in `/tasks list`. SIGTERM is
+polled at subtask boundaries (graceful); SIGKILL after 5 s grace is
+forceful and reconciles state to `aborted`.
+
+## Code intelligence — `/review` and `/refactor`
+
+Both take a git URL. They scan the **current folder** for an existing
+clone matching the URL's `origin` (pulled via `git pull --ff-only`);
+if none found, they `git clone` into the cwd as a subdirectory.
+
+The runtime wraps the repo in a background task that pins every
+subtask to the dedicated agent:
+
+- **`/review <url>`** — security → correctness → robustness →
+  maintainability. Severity-grouped markdown report on save.
+- **`/refactor <url>`** — performance → architecture → code size →
+  idiomatic improvements. Impact-ranked report.
+
+Both are read-only (no `write_file`, no `bash`). They identify and
+report; applying fixes is a separate conversation.
+
 ```
-
-Reports land in `results/luxe_eval/<agent>/<model>.md`.
+luxe> /review https://github.com/foo/bar
+resolving https://github.com/foo/bar...
+updated: Already up to date. → /cwd/bar
+4 subtasks (all → review):
+  1. ...
+plan> <enter>
+→ launched T-20260422T… (pid 12345, cwd /cwd/bar)
+monitor with /tasks status T-20260422…
+when done, save the report with /tasks save T-20260422…
+```
 
 ## Tool surfaces per agent
 
@@ -177,54 +277,84 @@ Reports land in `results/luxe_eval/<agent>/<model>.md`.
 |---|---|
 | general | — (chat only) |
 | research | `web_search`, `fetch_url` |
-| writing | `read_file`, `list_dir`, `glob`, `grep`, `write_file`, `edit_file` |
+| writing | `read_file`, `list_dir`, `glob`, `grep`, `write_file`, `edit_file` — scoped to cwd |
 | image | `draw_things_generate` |
 | code | `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_dir`, `bash` (allowlist), `fetch_url` |
+| review | `read_file`, `list_dir`, `glob`, `grep` (read-only) |
+| refactor | `read_file`, `list_dir`, `glob`, `grep` (read-only) |
+| calc | — (pure reasoning) |
 
-The writing agent's fs tools are scoped to the folder you launched `luxe` from — it can review, revise, and draft documents there. Inline prose is still the default; it only writes to disk when the task clearly calls for it.
+The writing agent is served by `llama-server` with a Python-signature
+prelude injected into the system prompt — Gemma 3's native
+function-call format is ```tool_code``` blocks (Python call syntax),
+which luxe parses via `ast.literal_eval` back into structured
+`ToolCall` values. Tool results round-trip as ```tool_output``` blocks
+inside a user message to satisfy Gemma's strict user/assistant
+alternation.
 
-Code agent's bash allowlist: `cargo pytest go python python3 rustc node npm pnpm yarn git ls pwd cat head tail echo wc`. Scoped to the CWD where you launched `luxe` (or the `--repo` arg to `luxe analyze`).
+Code agent's bash allowlist: `cargo pytest go python python3 rustc
+node npm pnpm yarn git ls pwd cat head tail echo wc`.
+
+## Swapping models
+
+Edit `configs/agents.yaml`. Each agent has a `model` field — any tag
+that `ollama list` shows is valid. Per-agent HTTP endpoint overrides
+(`endpoint: http://127.0.0.1:8080`) let a single agent point at
+llama-server while the rest stay on Ollama.
+
+Ad-hoc overrides via the REPL:
+
+```
+/model llama3.3-70b-4k:latest   # next turn only
+```
+
+Or via CLI:
+
+```bash
+luxe analyze ~/my-repo --model llama3.3-70b-4k:latest
+```
 
 ## Sessions
 
 Stored as append-only JSONL at `~/.luxe/sessions/<timestamp>-<slug>.jsonl`.
 Each line records one turn (user / router / assistant / tool). Safe to
-inspect, copy, or delete.
+inspect, copy, or delete. The writing agent's session history is
+replayed on multi-turn conversations with synthesized tool_code +
+tool_output pairs so Gemma sees real file data across turns instead of
+defending hallucinated prose.
 
 ## User preferences (`~/.luxe/`)
 
-Separate from the repo-tracked `configs/agents.yaml`. Everything here is
-per-user state, managed through REPL commands but plain-text so you can
-edit or back it up by hand.
+Separate from the repo-tracked `configs/agents.yaml`. Per-user state
+managed through REPL commands but plain-text so you can edit or back
+it up by hand.
 
 | File | Written by | Read by |
 |---|---|---|
 | `memory.md` | `/memory` (opens `$EDITOR`) | Appended to every specialist's system prompt as `# User memory (persistent)` — capped at 2 000 chars |
-| `bookmarks.json` | `/save <name>` | `/resume <name>` and `/sessions` — maps friendly names to session ids |
-| `aliases.yaml` | `/alias add` | Every line of input — if the first token matches an alias, it expands before routing |
+| `bookmarks.json` | `/save <name>` | `/resume <name>` and `/sessions` |
+| `aliases.yaml` | `/alias add` | Every line of input — expansion happens before routing |
 | `sessions/` | Every turn | `luxe list`, `luxe resume`, `/resume`, `/sessions` |
-
-Memory is the simplest way to inject persistent preferences ("be terse",
-"prefer Rust examples") without editing YAML. Keep it short — it's loaded
-fresh on every turn, so it costs context tokens each time.
+| `history` | prompt_toolkit | `↑` / `↓` arrow keys in the REPL |
+| `tasks/<task-id>/` | `/tasks <goal>` | `/tasks status`, `/tasks log`, `/tasks save` |
 
 ## Known limitations
 
-- **Coding depth is limited by the model class.** `qwen2.5-coder:14b` reads
-  2–4 files per analysis, which is enough to catch structural issues
-  (duplicate configs, consolidation opportunities) but not enough for
-  deep bug hunting. Think of it as a code reviewer's *first pass*, not a
-  final verdict — always human-review the output.
-- **qwen2.5-coder:32b on Ollama is flaky** with multi-turn tool use —
-  either too slow at default 32k context or leaks `<|im_start|>` tokens
-  at reduced context. `llama3.3-70b-4k` or `command-r:35b` are worth
-  trying for deeper analysis — slower but cleaner tool use.
-- **Draw Things port:** older versions default to 7860, newer to 7859.
-  If your config is wrong, `luxe` gets a connection error — update
-  `draw_things_url` in `configs/agents.yaml`.
-- **Research agent won't beat a frontier LLM** — DuckDuckGo results are
-  thinner than Google, and `qwen2.5:32b` sometimes defers to training
-  data over fetched pages. For canonical/current facts, verify.
+- **Coding depth is limited by the model class.** `qwen2.5-coder:14b`
+  reads 2–4 files per analysis, which is enough to catch structural
+  issues but not enough for deep bug hunting. Think of `review` /
+  `refactor` as a reviewer's first pass, not a final verdict.
+- **Writing agent uses llama-server.** It's a separate process — if
+  port 8080 is unreachable, the writing agent 400s. `/context` shows
+  the server's RSS and loaded context.
+- **SIGTERM is only polled between subtasks.** If a subtask is
+  mid-HTTP-call, that call completes before the subprocess notices an
+  abort request. SIGKILL after 5 s grace is the hard-stop path.
+- **Research agent won't beat a frontier LLM.** DuckDuckGo results
+  are thinner than Google, and `qwen2.5:32b` sometimes defers to
+  training data over fetched pages. For canonical facts, verify.
+- **Draw Things port:** older versions default to 7860, newer to
+  7859. Update `draw_things_url` in `configs/agents.yaml` if needed.
 
 ## Uninstall
 
@@ -232,6 +362,8 @@ fresh on every turn, so it costs context tokens each time.
 bash daily_driver/install_luxe.sh --uninstall
 ```
 
-Removes the launchd plist and the `luxe` symlink. Leaves models, sessions,
-and logs in place (delete manually if you want: `~/.luxe`, `~/luxe-images`,
-`~/Library/Logs/luxebox`).
+Removes the launchd plist and the `luxe` symlink. Leaves models,
+sessions, and logs in place (delete manually if you want: `~/.luxe`,
+`~/luxe-images`, `~/Library/Logs/luxebox`). `llama-server` is not
+managed by install/uninstall — stop it manually with
+`pkill -f llama-server` if needed.
