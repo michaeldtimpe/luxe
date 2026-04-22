@@ -1,0 +1,51 @@
+# Phase C/D optimization configs. Each runs the same winner model weights.
+# Phase D compares baseline against the other four.
+
+configs:
+  - id: baseline
+    display: Baseline (Q4, FP16 KV, no spec)
+    weight_quant: mlx-4bit
+    kv_quant: fp16
+    spec_decoding: false
+    prompt_cache: false
+    temperature: 0.2
+
+  - id: kv-q8
+    display: KV-only (Q4, KV-Q8)
+    weight_quant: mlx-4bit
+    kv_quant: q8
+    spec_decoding: false
+    prompt_cache: false
+    temperature: 0.2
+
+  - id: spec-only
+    display: Spec-only (Q4, FP16 KV, spec decoding)
+    weight_quant: mlx-4bit
+    kv_quant: fp16
+    spec_decoding: true
+    spec_draft_tokens: 3
+    prompt_cache: false
+    temperature: 0.2
+
+  - id: prompt-cache-only
+    display: Prompt-cache only (Q4, FP16 KV, cache)
+    weight_quant: mlx-4bit
+    kv_quant: fp16
+    spec_decoding: false
+    prompt_cache: true
+    temperature: 0.2
+
+  - id: all-on
+    display: All-on (Q4, KV-Q8, spec, cache)
+    weight_quant: mlx-4bit
+    kv_quant: q8
+    spec_decoding: true
+    spec_draft_tokens: 3
+    prompt_cache: true
+    temperature: 0.2
+
+acceptance_gate:
+  max_abs_regression_per_bench: 2.0
+  max_abs_regression_tool_call_success: 1.5
+  max_b2_task_regression: 1
+  hard_floor_per_bench: 5.0

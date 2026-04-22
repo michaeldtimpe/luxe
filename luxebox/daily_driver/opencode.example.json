@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8088/v1",
+        "apiKey": "none-needed"
+      },
+      "models": {
+        "qwen2.5-coder-32b": {
+          "name": "Qwen 2.5 Coder 32B (local, 4-bit, spec-dec)"
+        }
+      }
+    }
+  },
+  "model": "local/qwen2.5-coder-32b"
+}
