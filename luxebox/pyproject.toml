@@ -17,6 +17,7 @@ dependencies = [
     "tqdm>=4.66",
     "ddgs>=9.0",
     "trafilatura>=1.12",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.optional-dependencies]

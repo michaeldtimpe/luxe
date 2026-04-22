@@ -9,6 +9,7 @@ output is a single tool call — either `dispatch(agent, task)` or
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -109,12 +110,37 @@ def _system_prompt(cfg: LuxeConfig) -> str:
         "Heuristics:",
         "- Abstract coding questions ('how does Python list comprehension work?') → general, not code.",
         "- 'Fix the bug in X' or 'edit this file' → code.",
+        "- 'Review the documents', 'read my notes', 'what's in this folder',"
+        " 'summarize these drafts' → writing (it has filesystem tools for"
+        " prose/docs; code is only for source repos).",
         "- 'What happened last week in…' or 'latest version of…' → research.",
+        "- Meta questions like 'can you read files here?' → dispatch to the"
+        " agent that actually has those tools (writing for docs, code for"
+        " source) so it can demonstrate; don't send to general.",
         "- If the request is vague ('help me'), use `ask_user` once to get specifics.",
         f"- You may ask at most {MAX_CLARIFYING_ROUNDS} clarifying questions before you MUST dispatch.",
         "- If still uncertain after clarifications, default to `general`.",
     ]
     return "\n".join(lines)
+
+
+_FILE_HINT_RE = re.compile(
+    r"\b(folder|directory|document|documents|file|files|notes?|draft|drafts|"
+    r"manuscript|essay|chapter|letter|readme|\.md|\.txt|\.rst)\b",
+    re.IGNORECASE,
+)
+
+
+def _fallback_agent(prompt: str, enabled: list[str]) -> str:
+    """Pick a default when the router emits no tool call.
+
+    If the prompt mentions files/folders/documents, prefer `writing` (it has
+    the fs tool surface for prose review/drafting). Otherwise fall back to
+    `general`. Only return agents that are actually enabled.
+    """
+    if _FILE_HINT_RE.search(prompt) and "writing" in enabled:
+        return "writing"
+    return "general" if "general" in enabled else enabled[0]
 
 
 def route(
@@ -165,27 +191,30 @@ def route(
                 stream=False,
             )
         except Exception as e:  # noqa: BLE001
+            fallback = _fallback_agent(prompt, enabled)
             return RouterDecision(
-                agent="general",
+                agent=fallback,
                 task=prompt,
-                reasoning=f"router error ({type(e).__name__}); defaulted to general",
+                reasoning=f"router error ({type(e).__name__}); defaulted to {fallback}",
                 clarifications=clarifications,
             )
 
         if not response.tool_calls:
-            # Model didn't call a tool. Fall back to general.
+            # Model didn't call a tool. Fall back — pick writing if the prompt
+            # hints at files/docs, otherwise general.
+            fallback = _fallback_agent(prompt, enabled)
             if session:
                 session.append(
                     {
                         "role": "router",
-                        "content": "no tool call; defaulting to general",
+                        "content": f"no tool call; defaulting to {fallback}",
                         "raw": response.text[:500],
                     }
                 )
             return RouterDecision(
-                agent="general",
+                agent=fallback,
                 task=prompt,
-                reasoning="router emitted no tool call; default fallback",
+                reasoning=f"router emitted no tool call; fell back to {fallback}",
                 clarifications=clarifications,
             )
 
@@ -214,8 +243,9 @@ def route(
             question = args.get("question", "").strip()
             if not question:
                 # Model produced an empty clarifying question — bail out.
+                fallback = _fallback_agent(prompt, enabled)
                 return RouterDecision(
-                    agent="general",
+                    agent=fallback,
                     task=prompt,
                     reasoning="router produced empty clarification",
                     clarifications=clarifications,
@@ -254,7 +284,7 @@ def route(
 
         # Unknown tool — give up.
         return RouterDecision(
-            agent="general",
+            agent=_fallback_agent(prompt, enabled),
             task=prompt,
             reasoning=f"unknown router tool '{call.name}'",
             clarifications=clarifications,
