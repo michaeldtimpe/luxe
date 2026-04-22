@@ -177,9 +177,11 @@ Reports land in `results/luxe_eval/<agent>/<model>.md`.
 |---|---|
 | general | — (chat only) |
 | research | `web_search`, `fetch_url` |
-| writing | — (chat only, higher temperature) |
+| writing | `read_file`, `list_dir`, `glob`, `grep`, `write_file`, `edit_file` |
 | image | `draw_things_generate` |
 | code | `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_dir`, `bash` (allowlist), `fetch_url` |
+
+The writing agent's fs tools are scoped to the folder you launched `luxe` from — it can review, revise, and draft documents there. Inline prose is still the default; it only writes to disk when the task clearly calls for it.
 
 Code agent's bash allowlist: `cargo pytest go python python3 rustc node npm pnpm yarn git ls pwd cat head tail echo wc`. Scoped to the CWD where you launched `luxe` (or the `--repo` arg to `luxe analyze`).
 

@@ -88,11 +88,15 @@ or facts outside the fetched sources.
 ## Writing  — `luxe/agents/writing.py`
 
 **Model:** `gemma3:27b` (17 GB)
-**Tools:** none (pure chat)
+**Tools:** `read_file`, `list_dir`, `glob`, `grep`, `write_file`, `edit_file` — scoped to the folder `luxe` was launched from
 **Temperature:** 0.9
-**Max steps:** 2
+**Max steps:** 8
 
-**Role:** Creative writing — fiction, poetry, brainstorming.
+**Role:** Creative writing, editorial review, and drafting — fiction,
+poetry, brainstorming, plus reviewing existing drafts in the local
+folder, revising them in place, or saving new work to disk. Default is
+still inline prose; the agent only writes a file when the task calls
+for it.
 
 **Selection rationale:** 7 candidates were run through 3 prompts
 (paragraph story, 3 distinct character ideas, short poem/stanza).
@@ -108,7 +112,10 @@ User picked 27b over 12b for top quality. Full eval in
 
 **System prompt posture:** match requested form exactly; avoid
 preamble ("Here's a story…") and postamble; specificity over
-generality; distinct tones/settings when multiple items are asked for.
+generality; distinct tones/settings when multiple items are asked for;
+reach for the fs tools when the user references a local draft
+("review my notes", "tighten the second paragraph", "save it to
+foo.md") and otherwise stay inline.
 
 ---
 
