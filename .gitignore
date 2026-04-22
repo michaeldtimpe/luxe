@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Big local artifacts
+luxebox/models/
+luxebox/.venv/
+
+# Personal repo clones + ingested commit corpus — contains the user's
+# own private code; never push these anywhere.
+luxebox/personal_eval/cache/
+luxebox/personal_eval/corpus/
+
+# Per-run evaluation artifacts. Generic model evals under luxe_eval/
+# (general, research, writing) are kept; everything else is local run
+# state or contains personal-repo analysis and stays local.
+luxebox/results/runs/
+luxebox/results/server_logs/
+luxebox/results/luxe_eval/code_analysis/
+
+# Luxe-generated images (may include personal prompts / subjects)
+luxe-images/
+
+# Local session history
+.luxe/
+
+# Uv / pip local state
+.uv/
