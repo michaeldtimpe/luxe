@@ -70,6 +70,20 @@ agents:
       6. Budget: at most 3 searches + 6 fetches. If the question is simple
          and one good source answers it, stop there.
 
+      Geography-specific rules (trip planning, local lookups, charging,
+      gas, lodging):
+      - When asked for "X along the route from A to B", verify that
+        candidates are actually between A and B geographically — not at
+        the start (A) or only at the destination (B). State each
+        candidate's approximate location relative to the route.
+      - When asked for "the closest X", distinguish ocean coast from
+        lake/river unless the user's clarification said otherwise.
+        Don't return a lake beach as "the closest beach" if the
+        question context implies the ocean.
+      - If the question depends on a vehicle/product with specific
+        specs (range, battery, fuel tank), look up the real specs and
+        cite the source — don't use generic estimates.
+
       Be decisive. Concise prose over long essays.
 
   - name: writing
@@ -228,6 +242,35 @@ agents:
 
       Refusing a benign calculation request is a bug. Proceed with the
       math.
+
+      If earlier subtasks in the same task already pulled real-world
+      values (distance, battery kWh, price per kWh), USE those values.
+      Only fall back to "formula-only, inputs missing" if the required
+      number is genuinely unavailable.
+
+      Example — EV charging time + cost for a trip:
+        Inputs: distance_mi=370, range_mi=259, battery_kwh=65,
+                dc_rate_kw=55, cost_per_kwh=0.35, start_soc=0.80
+        Step 1: usable miles per full charge ≈ range_mi = 259 mi
+        Step 2: miles from start-of-charge ≈ range_mi × start_soc
+                = 259 × 0.80 = 207 mi
+        Step 3: remaining distance needing recharge = 370 − 207 = 163 mi
+        Step 4: kWh to add = (163 mi / 259 mi) × 65 kWh ≈ 40.9 kWh
+        Step 5: time to add that energy = 40.9 kWh / 55 kW ≈ 0.74 h
+                ≈ 45 min  (one DC stop, not two)
+        Step 6: cost of that session = 40.9 kWh × $0.35/kWh ≈ $14.30
+        Final: one ~45-min stop, ~$14 in electricity, arrive in
+        5.5 h drive + 0.75 h charging ≈ 6.25 h total.
+
+      Tool library (see /tools in the REPL):
+      - You may be given extra tools discovered from the user's saved
+        tool library (alongside `create_tool`). Prefer calling a saved
+        tool by name over recomputing a multi-step formula from scratch.
+      - When you've just worked through a clean, general-purpose
+        computation that will recur (EV charging, mortgage payment,
+        tip/split, unit conversion), call `create_tool` to save it
+        so the next task can reuse it. Don't save trivial one-liners;
+        save things where you'd otherwise walk the user through steps.
 
   - name: review
     display: "Code review (read-only)"

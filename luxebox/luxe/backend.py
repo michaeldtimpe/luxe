@@ -260,6 +260,21 @@ _CTX_CACHE: dict[str, int] = {}
 _DEFAULT_CTX = 8192
 
 
+def clear_caches(model: str | None = None) -> None:
+    """Invalidate cached ctx + param lookups. Call after `/pull` or when
+    an agent's model tag changes mid-session so the banner and /context
+    reflect the new weights. Passing `model` clears only entries for
+    that tag; otherwise wipes everything."""
+    if model is None:
+        _CTX_CACHE.clear()
+        _PARAMS_CACHE.clear()
+        return
+    for cache in (_CTX_CACHE, _PARAMS_CACHE):
+        for key in list(cache.keys()):
+            if key.endswith(f"::{model}"):
+                del cache[key]
+
+
 def context_length(model: str, base_url: str = "http://127.0.0.1:11434") -> int:
     """Declared context window for `model`. Tries Ollama's /api/show first,
     then llama-server's /props. Cached; falls back to 8192."""
