@@ -210,10 +210,14 @@ agents:
 
   - name: calc
     display: "Calculations / estimation"
-    # Mixtral MoE handles multi-step arithmetic and unit-carrying much
-    # better than the 7B `general` agent, which occasionally refuses
-    # benign cost/time questions outright.
-    model: "mixtral:8x7b-instruct-v0.1-q3_K_M"
+    # Was mixtral:8x7b-instruct-v0.1-q3_K_M — good at math but Ollama's
+    # Q3_K_M manifest doesn't advertise `tools` capability, so any
+    # request with `tools=[...]` (create_tool + matched library tools)
+    # 400s. qwen2.5:32b-instruct is the same model `research` uses,
+    # stays warm across a typical trip-planning task, and supports tool
+    # calls cleanly. Carries units well and is reliable on multi-step
+    # arithmetic.
+    model: "qwen2.5:32b-instruct"
     temperature: 0.1
     max_steps: 4
     max_tokens_per_turn: 2048

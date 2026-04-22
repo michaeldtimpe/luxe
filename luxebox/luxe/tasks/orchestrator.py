@@ -9,7 +9,7 @@ will wrap this in a subprocess for background runs.
 from __future__ import annotations
 
 import time
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -25,9 +25,24 @@ class Orchestrator:
         self,
         cfg: LuxeConfig,
         session: Session | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.cfg = cfg
         self.session = session
+        # Optional live-event hook. The REPL wires this up in sync mode
+        # to tail-print progress lines. Background subprocess runs leave
+        # it None — their equivalent is log.jsonl + /tasks tail.
+        self.on_event = on_event
+
+    def _emit(self, task: Task, event: dict[str, Any]) -> None:
+        """Persist the event to log.jsonl AND fan out to the optional
+        live-stream callback, if any."""
+        append_log_event(task, event)
+        if self.on_event:
+            try:
+                self.on_event(event)
+            except Exception:  # noqa: BLE001
+                pass  # never let a broken UI sink abort a task
 
     def run(
         self,
@@ -42,7 +57,7 @@ class Orchestrator:
 
         task.status = "running"
         persist(task)
-        append_log_event(task, {"event": "start", "n_subtasks": len(task.subtasks)})
+        self._emit(task, {"event": "start", "n_subtasks": len(task.subtasks)})
 
         t0 = time.monotonic()
         aborted = False
@@ -57,7 +72,7 @@ class Orchestrator:
                 sub.error = "aborted before start"
                 sub.completed_at = _now()
                 persist(task)
-                append_log_event(task, {
+                self._emit(task, {
                     "event": "skip", "subtask": sub.id, "reason": "aborted",
                 })
                 continue
@@ -67,7 +82,7 @@ class Orchestrator:
                 sub.error = "task wall budget exhausted"
                 sub.completed_at = _now()
                 persist(task)
-                append_log_event(task, {
+                self._emit(task, {
                     "event": "skip", "subtask": sub.id,
                     "reason": "task wall budget",
                 })
@@ -76,7 +91,7 @@ class Orchestrator:
             sub.status = "running"
             sub.started_at = _now()
             persist(task)
-            append_log_event(task, {
+            self._emit(task, {
                 "event": "begin", "subtask": sub.id,
                 "title": sub.title, "agent": sub.agent or "(route)",
             })
@@ -86,7 +101,7 @@ class Orchestrator:
             if not sub.completed_at:
                 sub.completed_at = _now()
             persist(task)
-            append_log_event(task, {
+            self._emit(task, {
                 "event": "end", "subtask": sub.id,
                 "status": sub.status, "error": sub.error,
                 "tool_calls": sub.tool_calls_total, "steps": sub.steps_taken,
@@ -100,7 +115,7 @@ class Orchestrator:
             task.status = "done" if all_ok else "blocked"
         task.completed_at = _now()
         persist(task)
-        append_log_event(task, {"event": "finish", "status": task.status})
+        self._emit(task, {"event": "finish", "status": task.status})
         return task
 
     # ── internals ──────────────────────────────────────────────────────
@@ -113,7 +128,7 @@ class Orchestrator:
             except (httpx.TransportError, ConnectionError) as e:
                 if task.retry_on_transport_error and attempt == 0:
                     sub.attempt += 1
-                    append_log_event(task, {
+                    self._emit(task, {
                         "event": "retry_transport", "subtask": sub.id,
                         "error": f"{type(e).__name__}: {e}",
                     })
