@@ -225,6 +225,64 @@ def _tasks_status(partial: str | None) -> None:
             console.print(f"  [yellow]{s.id} error:[/yellow] {s.error}")
 
 
+def _tasks_tail(partial: str | None) -> None:
+    """Follow a task's log.jsonl in real time and render events with the
+    same sync-mode formatter. Exits when the task hits a `finish` event
+    or the subprocess is no longer alive."""
+    import json as _json
+    import time as _time
+
+    task = _tasks_resolve(partial)
+    if task is None:
+        return
+    log_path = task.dir() / "log.jsonl"
+
+    console.print(f"[dim]following[/dim] [cyan]{task.id}[/cyan] [dim](Ctrl-C to stop watching)[/dim]")
+    # Replay what's already on disk first so the user sees current state.
+    if log_path.exists():
+        for line in log_path.read_text().splitlines():
+            try:
+                _sync_event_printer(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+
+    # Early exit if the task is already finished.
+    from luxe.tasks import load as _load_task
+    latest = _load_task(task.id)
+    if latest and latest.finished():
+        return
+
+    # Incremental tail: reopen file on each poll, seek past what we've seen.
+    try:
+        seen = log_path.stat().st_size if log_path.exists() else 0
+        while True:
+            _time.sleep(0.5)
+            latest = _load_task(task.id)
+            if not log_path.exists():
+                if latest and latest.finished():
+                    return
+                continue
+            size = log_path.stat().st_size
+            if size > seen:
+                with log_path.open() as f:
+                    f.seek(seen)
+                    chunk = f.read()
+                seen = size
+                for line in chunk.splitlines():
+                    try:
+                        _sync_event_printer(_json.loads(line))
+                    except _json.JSONDecodeError:
+                        continue
+            if latest and latest.finished():
+                return
+            # Subprocess died without writing 'finish' → give up politely.
+            if latest and latest.pid and not latest.is_alive() and not latest.finished():
+                console.print("[yellow]subprocess gone — task may have crashed[/yellow]")
+                return
+    except KeyboardInterrupt:
+        console.print("[dim]stopped watching[/dim]")
+
+
 def _tasks_log(partial: str | None, tail: int = 20) -> None:
     task = _tasks_resolve(partial)
     if not task:
@@ -463,7 +521,7 @@ def _tasks_save(partial: str | None) -> None:
         f"[/dim][cyan]new_name.txt[/cyan][dim] to save as text · [/dim][cyan]n[/cyan][dim] to skip[/dim]"
     )
     try:
-        answer = input("> ").strip()
+        answer = _ask_styled("save")
     except (EOFError, KeyboardInterrupt):
         console.print("[dim]skipped[/dim]")
         return
@@ -530,7 +588,7 @@ def _clarify_goal(goal: str, clarify_fn, cfg: LuxeConfig) -> str | None:
     for q in questions:
         console.print(f"  [yellow]?[/yellow] {q}")
         try:
-            ans = input("    > ").strip()
+            ans = _ask_styled("  answer")
         except (EOFError, KeyboardInterrupt):
             console.print("[dim]aborted during clarification[/dim]")
             return None
@@ -564,7 +622,7 @@ def _plan_review_loop(task, cfg: LuxeConfig) -> bool:
             "[dim]<enter>=run · abort · agent <i> <name> · drop <i> · add <title>[/dim]"
         )
         try:
-            answer = input("plan> ").strip()
+            answer = _ask_styled("plan")
         except (EOFError, KeyboardInterrupt):
             return False
         if not answer:
@@ -627,22 +685,62 @@ def _plan_review_loop(task, cfg: LuxeConfig) -> bool:
         )
 
 
+def _sync_event_printer(event: dict) -> None:
+    """Tail-style live output for sync task runs. Each orchestrator
+    event gets a one-line log entry so the user sees progress as it
+    happens rather than staring at a single spinner."""
+    kind = event.get("event", "")
+    sub = (event.get("subtask") or "").rsplit(".", 1)[-1]
+    if kind == "start":
+        console.print(f"[dim]┌ running {event.get('n_subtasks', 0)} subtask(s)…[/dim]")
+    elif kind == "begin":
+        console.print(
+            f"[dim]│[/dim] [{event.get('agent') or '?'}] "
+            f"[dim]·[/dim] {event.get('title', '')[:72]}"
+        )
+    elif kind == "end":
+        status = event.get("status", "")
+        icon = {
+            "done":    "[green]✓[/green]",
+            "blocked": "[yellow]⚠[/yellow]",
+            "skipped": "[dim]–[/dim]",
+        }.get(status, "·")
+        wall = event.get("wall_s", 0)
+        tools = event.get("tool_calls", 0)
+        suffix = f"[dim]{wall}s · {tools} tool call{'s' if tools != 1 else ''}[/dim]"
+        err = event.get("error") or ""
+        if err:
+            suffix += f" [yellow]{err[:80]}[/yellow]"
+        console.print(f"[dim]│[/dim] {icon} sub {sub} · {suffix}")
+    elif kind == "retry_transport":
+        console.print(
+            f"[dim]│[/dim] [yellow]retry[/yellow] sub {sub} "
+            f"[dim]({event.get('error', '')})[/dim]"
+        )
+    elif kind == "skip":
+        console.print(
+            f"[dim]│[/dim] [dim]skip sub {sub} ({event.get('reason', '')})[/dim]"
+        )
+    elif kind == "finish":
+        console.print(f"[dim]└ task {event.get('status', '')}[/dim]")
+
+
 def _tasks_run_sync(goal: str, state: "ReplState", cfg: LuxeConfig) -> None:
-    """Plan + run synchronously. Blocks the REPL until done. On completion
-    shows the status table and invokes the save flow so the user can
-    capture the report without a second command."""
+    """Plan + run synchronously. Blocks the REPL until done. Streams
+    tail-style events to the console as each subtask starts/finishes,
+    then shows the status table and offers the save prompt."""
     from luxe.tasks import Orchestrator
 
     task = _plan_and_persist(goal, cfg)
     if task is None:
         return
-    orch = Orchestrator(cfg, session=state.sess)
+    orch = Orchestrator(cfg, session=state.sess, on_event=_sync_event_printer)
     try:
-        with console.status("[cyan]task[/cyan] running...", spinner="dots"):
-            orch.run(task)
+        orch.run(task)
     except KeyboardInterrupt:
         console.print("[yellow]⚠ task interrupted[/yellow]")
         return
+    console.print()
     _tasks_status(task.id)
     if task.status == "done":
         console.print()
@@ -773,7 +871,7 @@ def _prompt_assign_to_agent(tag: str, cfg: LuxeConfig) -> None:
         f"{', '.join(roles)} [dim]or[/dim] skip"
     )
     try:
-        answer = input("role> ").strip().lower()
+        answer = _ask_styled("role").lower()
     except (EOFError, KeyboardInterrupt):
         console.print("[dim]skipped[/dim]")
         return
@@ -918,23 +1016,41 @@ _PROMPT_ARROW_PALETTE = [
 ]
 
 
-def _prompt_message(sticky_agent: str) -> FormattedText:
-    """Build the per-turn prompt — `luxe [(mode)] >>> ` with each arrow
-    picking an independent color from the palette, enforcing that no
-    two adjacent arrows share a color. Colors randomize every turn so
-    the prompt has a little life to it."""
+def _styled_arrow_prompt(lead: str) -> FormattedText:
+    """Build a FormattedText prompt with `<lead> >>> ` where the three
+    arrows each pick an independent color from the palette and no two
+    adjacent arrows share a color. Shared between the main `luxe` prompt
+    and sub-prompts (`plan`, `role`, clarifying questions, save name)
+    so the whole REPL reads consistently."""
     n = len(_PROMPT_ARROW_PALETTE)
     c1 = random.randrange(n)
     c2 = random.choice([i for i in range(n) if i != c1])
     c3 = random.choice([i for i in range(n) if i != c2])
-    lead = f"\nluxe ({sticky_agent}) " if sticky_agent else "\nluxe "
     return FormattedText([
-        ("", lead),
+        ("", f"{lead} "),
         (f"bold fg:{_PROMPT_ARROW_PALETTE[c1]}", ">"),
         (f"bold fg:{_PROMPT_ARROW_PALETTE[c2]}", ">"),
         (f"bold fg:{_PROMPT_ARROW_PALETTE[c3]}", ">"),
         ("", " "),
     ])
+
+
+def _prompt_message(sticky_agent: str) -> FormattedText:
+    """Main-REPL prompt: leading newline for breathing room + `luxe` or
+    `luxe (<mode>)`, then the colored `>>>`."""
+    lead = f"\nluxe ({sticky_agent})" if sticky_agent else "\nluxe"
+    return _styled_arrow_prompt(lead)
+
+
+def _ask_styled(lead: str) -> str:
+    """One-shot styled sub-prompt — same colored `>>>` look as the main
+    prompt but doesn't touch the main history file. Used for plan edits,
+    clarifying questions, role assignment, save-filename input."""
+    from prompt_toolkit import prompt as _ptk_prompt
+    try:
+        return _ptk_prompt(_styled_arrow_prompt(lead)).strip()
+    except (EOFError, KeyboardInterrupt):
+        raise
 
 
 def _make_prompt_session() -> PromptSession:
@@ -976,6 +1092,7 @@ HELP = """[bold]Core[/bold]
   [cyan]/tasks log[/cyan] [id]            tail the last events from a task's log.jsonl
   [cyan]/tasks abort[/cyan] [id]          SIGTERM a running background task (SIGKILL after 5s)
   [cyan]/tasks save[/cyan] [id]           assemble subtask outputs into a markdown/text report
+  [cyan]/tasks tail[/cyan] [id]           live-follow a running (or finished) task's event stream
 
 [bold]Code intelligence[/bold]
   [cyan]/review[/cyan] <git-url>          clone/pull, then review for flaws/bugs/security (background)
@@ -1220,6 +1337,9 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         if sub == "save":
             _tasks_save(args[1] if len(args) > 1 else None)
             return "consumed"
+        if sub == "tail":
+            _tasks_tail(args[1] if len(args) > 1 else None)
+            return "consumed"
         # Parse --sync flag then treat the rest as the goal.
         raw = line[len("/tasks "):].strip()
         run_sync = False
@@ -1420,7 +1540,7 @@ def _run_routed(
     def ask(q: str) -> str:
         console.print(f"[yellow]router asks:[/yellow] {q}")
         try:
-            return input("> ").strip()
+            return _ask_styled("  answer")
         except (EOFError, KeyboardInterrupt):
             return ""
 
