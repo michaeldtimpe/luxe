@@ -835,7 +835,7 @@ def _status_banner(state: ReplState, cfg: LuxeConfig) -> Panel:
     # `:` picks up cyan to match the (inner) border.
     rainbow_left = "[red1].[/red1][dark_orange]:[/dark_orange][yellow1].[/yellow1]"
     rainbow_right = "[green1].[/green1][cyan]:[/cyan][magenta1].[/magenta1]"
-    title = f"{rainbow_left} [bold dark_orange]luxe[/bold dark_orange] {rainbow_right}"
+    title = f"{rainbow_left} [bold white]luxe[/bold white] {rainbow_right}"
 
     # Compute inner width so both grids hit the same right edge.
     # Visible title length: ".:. luxe .:." = 12 chars (colors strip out).
