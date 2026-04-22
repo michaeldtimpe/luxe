@@ -32,7 +32,7 @@ configuration pattern:
 │   │   │   ├─ base.py      shared tool-use loop, usage accounting  │   │
 │   │   │   ├─ general.py   chat, no tools                          │   │
 │   │   │   ├─ research.py  web_search + fetch_url                  │   │
-│   │   │   ├─ writing.py   chat, higher temperature                │   │
+│   │   │   ├─ writing.py   fs read+write, higher temperature       │   │
 │   │   │   ├─ image.py     draw_things_generate                    │   │
 │   │   │   └─ code.py      full fs + bash + web surface            │   │
 │   │   └─ tools/                                                   │   │

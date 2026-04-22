@@ -95,7 +95,7 @@ def _system_prompt(cfg: LuxeConfig) -> str:
     descriptions = {
         "general": "Default for Q&A, explanations, definitions, chit-chat, simple factual or conceptual questions.",
         "research": "Use when the task genuinely needs fresh web info: current events, news, recent releases, deep investigation of a topic.",
-        "writing": "Creative writing: fiction, poetry, long-form essays, storytelling, brainstorming.",
+        "writing": "Creative writing, editorial review, and document drafting: fiction, poetry, long-form essays, storytelling, brainstorming, plus reviewing, revising, or creating text documents in the local folder.",
         "image": "Generating an image or picture from a text description.",
         "code": "Writing, editing, or debugging code in the user's working directory. Running tests. Anything that requires reading or editing real files in a repo.",
     }
