@@ -16,9 +16,11 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -179,10 +181,10 @@ def _tasks_resolve(partial: str | None):
     return all_tasks[0]
 
 
-def _tasks_status(partial: str | None) -> None:
-    task = _tasks_resolve(partial)
-    if not task:
-        return
+def _status_renderable(task) -> Group:
+    """Build the status view as a Rich Group so both `/tasks status`
+    (one-shot print) and `/tasks watch` (Live auto-refresh) share the
+    exact same layout."""
     status = task.status
     live_hint = ""
     if status == "running":
@@ -191,13 +193,18 @@ def _tasks_status(partial: str | None) -> None:
         elif task.pid:
             status = "stalled"
             live_hint = " [red](subprocess died without updating state)[/red]"
-    console.print(
+
+    header = Text.from_markup(
         f"[bold cyan]{task.id}[/bold cyan] [dim]·[/dim] {status}{live_hint} "
-        f"[dim]· created[/dim] {task.created_at[:19].replace('T',' ')}"
+        f"[dim]· created[/dim] {task.created_at[:19].replace('T', ' ')}"
     )
-    console.print(f"[dim]goal:[/dim] {task.goal}")
+    goal = Text.from_markup(f"[dim]goal:[/dim] {task.goal}")
+    blocks: list = [header, goal]
     if task.completed_at:
-        console.print(f"[dim]finished:[/dim] {task.completed_at[:19].replace('T',' ')}")
+        blocks.append(Text.from_markup(
+            f"[dim]finished:[/dim] {task.completed_at[:19].replace('T', ' ')}"
+        ))
+
     t = Table(show_header=True, box=None, padding=(0, 2), header_style="dim")
     t.add_column("sub")
     t.add_column("status")
@@ -219,10 +226,62 @@ def _tasks_status(partial: str | None) -> None:
             f"{s.wall_s:.0f}s" if s.wall_s else "[dim]—[/dim]",
             s.title[:60] + ("…" if len(s.title) > 60 else ""),
         )
-    console.print(t)
+    blocks.append(t)
     for s in task.subtasks:
         if s.error:
-            console.print(f"  [yellow]{s.id} error:[/yellow] {s.error}")
+            blocks.append(Text.from_markup(f"  [yellow]{s.id} error:[/yellow] {s.error}"))
+    return Group(*blocks)
+
+
+def _tasks_status(partial: str | None) -> None:
+    task = _tasks_resolve(partial)
+    if not task:
+        return
+    console.print(_status_renderable(task))
+
+
+def _tasks_watch(partial: str | None) -> None:
+    """Auto-refreshing dashboard view of a task's status table. Polls
+    state.json ~4× per second, auto-exits when the task reaches a
+    finished status (done/blocked/aborted). Ctrl-C leaves the final
+    view on screen rather than clearing it."""
+    import time as _time
+    from luxe.tasks import load as _load_task
+
+    task = _tasks_resolve(partial)
+    if task is None:
+        return
+
+    # If the task already finished, just render once instead of entering
+    # Live (which would immediately exit and look odd).
+    if task.finished():
+        console.print(_status_renderable(task))
+        return
+
+    try:
+        with Live(
+            _status_renderable(task),
+            console=console,
+            refresh_per_second=4,
+            transient=False,  # leave final frame on screen after exit
+        ) as live:
+            try:
+                while True:
+                    _time.sleep(0.25)
+                    latest = _load_task(task.id)
+                    if latest is None:
+                        break
+                    live.update(_status_renderable(latest))
+                    if latest.finished():
+                        break
+                    if latest.pid and not latest.is_alive() and not latest.finished():
+                        # subprocess gone but state not reconciled —
+                        # show one last frame and let the user exit.
+                        break
+            except KeyboardInterrupt:
+                pass
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[red]watch failed:[/red] {e}")
 
 
 def _tasks_tail(partial: str | None) -> None:
@@ -1093,6 +1152,7 @@ HELP = """[bold]Core[/bold]
   [cyan]/tasks abort[/cyan] [id]          SIGTERM a running background task (SIGKILL after 5s)
   [cyan]/tasks save[/cyan] [id]           assemble subtask outputs into a markdown/text report
   [cyan]/tasks tail[/cyan] [id]           live-follow a running (or finished) task's event stream
+  [cyan]/tasks watch[/cyan] [id]          auto-refreshing dashboard of the status table (Ctrl-C to exit)
 
 [bold]Code intelligence[/bold]
   [cyan]/review[/cyan] <git-url>          clone/pull, then review for flaws/bugs/security (background)
@@ -1339,6 +1399,9 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
             return "consumed"
         if sub == "tail":
             _tasks_tail(args[1] if len(args) > 1 else None)
+            return "consumed"
+        if sub == "watch":
+            _tasks_watch(args[1] if len(args) > 1 else None)
             return "consumed"
         # Parse --sync flag then treat the rest as the goal.
         raw = line[len("/tasks "):].strip()
