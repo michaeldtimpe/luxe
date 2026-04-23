@@ -1303,23 +1303,23 @@ _HELP_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
 
 
 def _render_help() -> "Group":
-    """Build the /help block as column-aligned Rich grids, one per
-    section. Every section's description column starts at the same
-    column as the widest command in that section + 2 spaces — no
-    ragged right edge. Command text goes through Text objects rather
-    than markup strings so literal `[family]` / `[id]` aren't parsed
-    as Rich style tags and eaten."""
+    """Build the /help block with a GLOBAL right-column alignment so the
+    description column starts at the same visual column across every
+    section, not just within each section. Commands flow through Text
+    objects (not markup strings) so literal `[family]`/`[id]`/`[n]`
+    aren't parsed by Rich as style tags."""
+    max_cmd_w = max(len(cmd) for _, rows in _HELP_SECTIONS for cmd, _ in rows)
+    pad = max_cmd_w + 2  # 2-space gutter before the description
+
     blocks: list = []
     for title, rows in _HELP_SECTIONS:
         blocks.append(Text.from_markup(f"[bold]{title}[/bold]"))
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(no_wrap=True)
-        grid.add_column(no_wrap=True)
         for cmd, desc in rows:
-            cmd_text = Text("  ")
-            cmd_text.append(cmd, style="cyan")  # literal, no markup parsing
-            grid.add_row(cmd_text, desc)
-        blocks.append(grid)
+            line = Text("  ")
+            line.append(cmd, style="cyan")
+            line.append(" " * (pad - len(cmd)))
+            line.append(desc)
+            blocks.append(line)
         blocks.append(Text(""))
     return Group(*blocks)
 
