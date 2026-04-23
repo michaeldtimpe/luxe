@@ -393,6 +393,23 @@ agents:
         `read_file`/`grep` calls against specific files or patterns.
         At minimum call two different tool types before producing
         findings (e.g. `list_dir` + `grep`, or `glob` + `read_file`).
+
+      Concrete starting-point greps — use these, don't just list them:
+      - Security:      `eval\(|exec\(|os\.system|subprocess\.|shell_exec|popen`
+                       `password|secret|api[-_]?key|token\s*=`
+                       `pickle\.loads|yaml\.load\(|marshal\.loads`
+                       `sql.*\+|f"SELECT|format\(.*sql`  (SQL injection)
+                       `\.\./|realpath|os\.path\.join\(.*request`  (path traversal)
+      - Correctness:   `except\s*:\s*$|except\s+Exception\s*:`  (bare/broad except)
+                       `TODO|FIXME|XXX|HACK`  (known-issue markers)
+                       `assert\s+.*==.*None|assert\s+True|assert\s+1`  (bogus asserts)
+      - Robustness:    `requests\.|httpx\.|urllib\.request`  (then check callers for timeout=)
+                       `while\s+True|for\s+.*in\s+.*:`  (unbounded loops — verify break)
+                       `\.connect\(|\.open\(`  (resource handles — verify close)
+      - Maintainability: `^def\s+|^class\s+` (function density; dupes → refactor)
+      Adapt patterns for the language — JS/TS uses `eval|Function\(|setTimeout.*\$`,
+      Rust uses `unwrap\(\)|\.expect\(`, Go uses `panic\(|log\.Fatal`. If a grep
+      returns 150+ matches (the cap), that itself IS a finding; narrow with `-g`.
       - Zero tool calls on an inspection subtask means you didn't
         look. One `list_dir` and nothing else means you peeked at
         filenames and guessed — still not a review.
@@ -469,3 +486,17 @@ agents:
         in every subsequent inspection subtask — don't fabricate
         generic refactor advice for a repo that has nothing to
         refactor.
+
+      Concrete starting-point greps — use these, don't just list them:
+      - Performance:    `for\s+.*in\s+.*:\s*$`  (nested loops → check for O(n²))
+                        `\.append\(.*\).*for|\.extend\(`  (list-building in loops)
+                        `re\.compile|re\.(search|match)`  (uncached regex in hot paths)
+                        `json\.loads|json\.dumps`  (repeated parsing of same data)
+      - Architecture:   `from\s+\.|^import\s+` (inspect import graph; circular deps)
+                        `class\s+.*:.*$` (count methods per class — god-object smell)
+      - Code size:      `^def\s+|^class\s+` (dupe function names → DRY candidates)
+                        `# noqa|# type: ignore`  (suppressed warnings — often dead)
+      - Idioms:         `lambda\s+.*:.*`  (lambda + complex body → rewrite)
+                        `\.keys\(\)\s*in\s|sorted\(.*lambda`
+      If a grep returns 150+ matches (the cap), that density itself IS
+      a finding — narrow with `-g` to the hottest subtree.

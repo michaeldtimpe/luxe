@@ -19,6 +19,7 @@ from luxe.registry import LuxeConfig
 from luxe.router import RouterDecision, route as _route
 from luxe.session import Session
 from luxe.tasks.model import Subtask, Task, _now, append_log_event, persist
+from luxe.tools import fs as _fs
 
 
 class Orchestrator:
@@ -236,10 +237,44 @@ class Orchestrator:
                 sub.completion_tokens += retry_result.completion_tokens
                 sub.wall_s += retry_result.wall_s
             else:
-                sub.error = (
-                    "shallow inspection (retry also didn't read files) — "
-                    "findings may not be grounded in code"
-                )
+                # The model refuses to call tools even when nudged twice.
+                # Last resort: pre-execute a handful of inspection greps
+                # ourselves and feed the results in, so the model has
+                # real data to analyze. This converts "agent refuses to
+                # use tools" into "agent summarizes data we handed it".
+                self._emit(task, {
+                    "event": "forced_inspection",
+                    "subtask": sub.id,
+                    "reason": "retry still didn't read files — pre-executing greps",
+                })
+                forced = _force_inspect(sub.title)
+                if forced:
+                    forced_decision = RouterDecision(
+                        agent=agent,
+                        task=augmented + "\n\n" + forced,
+                        reasoning=f"task orchestrator forced-data (subtask {sub.id})",
+                    )
+                    forced_result = _runner.dispatch(
+                        forced_decision, self.cfg, session=self.session
+                    )
+                    sub.result_text = forced_result.final_text or sub.result_text
+                    # Not real agent tool calls, but the orchestrator
+                    # did run greps so we count them for visibility.
+                    sub.tool_calls_total += forced.count("```grep-output")
+                    sub.prompt_tokens += forced_result.prompt_tokens
+                    sub.completion_tokens += forced_result.completion_tokens
+                    sub.wall_s += forced_result.wall_s
+                    sub.error = (
+                        "agent wouldn't use tools — orchestrator "
+                        "pre-ran inspection greps and had the agent "
+                        "summarize (findings cite orchestrator data, "
+                        "not agent-driven inspection)"
+                    )
+                else:
+                    sub.error = (
+                        "shallow inspection (retry also didn't read files) — "
+                        "findings may not be grounded in code"
+                    )
 
         sub.status = "done"
 
@@ -290,6 +325,93 @@ _PURE_ORIENTATION_TITLE = re.compile(
     r"^\s*(list|show)\s+(the\s+)?(directory|directories|dir|files|contents|tree)",
     re.IGNORECASE,
 )
+
+
+# Canonical starter greps for each inspection category. When the agent
+# refuses to use tools twice in a row, the orchestrator runs these
+# itself and hands the model the raw results to summarize — converting
+# "I didn't look" into "here's what I found; now you analyze."
+_FORCED_INSPECTION_RECIPES: list[tuple[re.Pattern[str], list[tuple[str, str]]]] = [
+    (
+        re.compile(r"security", re.IGNORECASE),
+        [
+            ("dangerous-exec",    r"eval\(|exec\(|os\.system|subprocess\.|shell_exec|popen"),
+            ("secrets",           r"password|secret|api[-_]?key|token\s*="),
+            ("deserialization",   r"pickle\.loads|yaml\.load\(|marshal\.loads"),
+            ("sql-injection",     r"(SELECT|INSERT|UPDATE|DELETE).*(\+|%s|f\")"),
+        ],
+    ),
+    (
+        re.compile(r"correctness|bugs?", re.IGNORECASE),
+        [
+            ("bare-except",       r"except\s*:\s*$|except\s+Exception\s*:"),
+            ("todo-markers",      r"TODO|FIXME|XXX|HACK"),
+        ],
+    ),
+    (
+        re.compile(r"robust", re.IGNORECASE),
+        [
+            ("network-no-timeout", r"requests\.|httpx\.|urllib\.request"),
+            ("unbounded-loops",    r"while\s+True"),
+        ],
+    ),
+    (
+        re.compile(r"maintain|duplicat|dead\s+code", re.IGNORECASE),
+        [
+            ("function-density",   r"^def\s+|^class\s+"),
+            ("suppressions",       r"# noqa|# type:\s*ignore"),
+        ],
+    ),
+    (
+        re.compile(r"performance|optimi[sz]", re.IGNORECASE),
+        [
+            ("nested-loops",       r"for\s+.*in\s+.*:"),
+            ("list-building",      r"\.append\(.*\).*for"),
+            ("uncached-regex",     r"re\.(compile|search|match)"),
+        ],
+    ),
+]
+
+
+def _force_inspect(title: str) -> str:
+    """When the agent refuses to call tools, run a small panel of greps
+    ourselves and return the raw output as a ready-to-summarize prompt
+    fragment. Returns empty string if no recipe matches the title."""
+    recipes: list[tuple[str, str]] = []
+    for pattern, grep_list in _FORCED_INSPECTION_RECIPES:
+        if pattern.search(title):
+            recipes = grep_list
+            break
+    if not recipes:
+        return ""
+
+    parts = [
+        "# Orchestrator-run inspection (you refused to call tools twice; "
+        "here is the data you need to summarize)",
+        "",
+    ]
+    any_hits = False
+    for label, pat in recipes:
+        try:
+            result, err = _fs.grep({"pattern": pat})
+        except Exception as e:  # noqa: BLE001
+            result, err = None, f"{type(e).__name__}: {e}"
+        body = (result or "").strip() if err is None else f"ERROR: {err}"
+        parts.append(f"```grep-output name={label} pattern={pat!r}")
+        parts.append(body or "(no matches)")
+        parts.append("```")
+        parts.append("")
+        if body and body != "(no matches)":
+            any_hits = True
+
+    parts.append(
+        "# Your task\n"
+        "Summarize the findings above. Cite specific `file:line` from "
+        "the grep output. If a grep returned no matches, say so "
+        "explicitly for that category. Do not invent file names that "
+        "aren't in the output."
+    )
+    return "\n".join(parts) if any_hits or True else ""  # always return; empty is OK
 
 
 def _inspection_too_shallow(tool_calls, title: str = "") -> bool:
