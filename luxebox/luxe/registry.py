@@ -16,7 +16,7 @@ DEFAULT_CONFIG = CONFIG_DIR / "agents.yaml"
 
 AgentName = Literal[
     "router", "general", "research", "writing", "image", "code",
-    "review", "refactor", "calc",
+    "review", "refactor", "calc", "lookup",
 ]
 ToolName = Literal[
     "read_file",

@@ -94,11 +94,15 @@ def _system_prompt(cfg: LuxeConfig) -> str:
         "Available specialists:",
     ]
     descriptions = {
-        "general": "Default for Q&A, explanations, definitions, chit-chat, simple factual or conceptual questions.",
-        "research": "Use when the task genuinely needs fresh web info: current events, news, recent releases, deep investigation of a topic.",
+        "general": "Short Q&A, explanations, definitions, chit-chat. Knows general facts from training. NOT for facts that need fresh web lookup.",
+        "lookup": "Quick one-sentence factual questions that need fresh web data — dates, versions, specs, prices, release years. Single web_search, snippet-only, no deep fetches. Use this over `research` when one cited number/line suffices.",
+        "research": "Deep web investigation — current events, multi-page synthesis, comparison across sources, anything where snippets alone aren't enough and the agent needs to read full pages.",
         "writing": "Creative writing, editorial review, and document drafting: fiction, poetry, long-form essays, storytelling, brainstorming, plus reviewing, revising, or creating text documents in the local folder.",
         "image": "Generating an image or picture from a text description.",
         "code": "Writing, editing, or debugging code in the user's working directory. Running tests. Anything that requires reading or editing real files in a repo.",
+        "calc": "Arithmetic, unit conversion, estimation, multi-step numeric reasoning. Use over general for any computation where precision matters.",
+        "review": "Read-only code review of a local repository (driven by /review <url>). Finds bugs, security issues, flaws.",
+        "refactor": "Read-only optimization / refactor suggestions for a local repository (driven by /refactor <url>).",
     }
     for a in cfg.agents:
         if a.name == "router" or not a.enabled:
