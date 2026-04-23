@@ -55,7 +55,7 @@ console = Console()
 
 
 def _git_short_hash() -> str:
-    """Short HEAD hash for the luxe repo. Cached: never changes at runtime."""
+    """Short HEAD hash for the luxe repo. Freshly queried each call."""
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -71,7 +71,27 @@ def _git_short_hash() -> str:
     return ""
 
 
-_GIT_HASH = _git_short_hash()
+# Hash at import time — fixed for the life of this Python process, so
+# it reflects the code actually running. The banner compares this to
+# the CURRENT HEAD and surfaces drift as a "restart pending" hint so
+# freshly-pulled changes don't silently stay stuck behind an old REPL.
+_GIT_HASH_AT_START = _git_short_hash()
+_GIT_HASH = _GIT_HASH_AT_START  # kept for backward-compat in any ext callers
+
+_HEAD_CACHE: tuple[float, str] | None = None
+
+
+def _current_head_hash() -> str:
+    """Current git HEAD, cached for 5s to avoid spamming git on every
+    banner render."""
+    import time as _time
+    global _HEAD_CACHE
+    now = _time.monotonic()
+    if _HEAD_CACHE is not None and now - _HEAD_CACHE[0] < 5.0:
+        return _HEAD_CACHE[1]
+    h = _git_short_hash()
+    _HEAD_CACHE = (now, h)
+    return h
 
 
 def _show_context_info(state: ReplState, cfg: LuxeConfig) -> None:
@@ -986,7 +1006,15 @@ def _status_banner(state: ReplState, cfg: LuxeConfig) -> Panel:
     edges line up with each other, giving the visual of three rows in
     a single box. A decorative doubled right edge is painted on by
     _print_status_banner; it's also orange to mirror the luxe title."""
-    version = _GIT_HASH or f"v{__version__}"
+    # Running hash is fixed for this process; current HEAD may have
+    # moved if the user pulled new code. Surface that drift so "your
+    # fix isn't running yet" is obvious at a glance.
+    running = _GIT_HASH_AT_START or f"v{__version__}"
+    head = _current_head_hash()
+    if head and _GIT_HASH_AT_START and head != _GIT_HASH_AT_START:
+        version = f"{running} [yellow](↻ {head} — restart)[/yellow]"
+    else:
+        version = running
 
     if state.sticky_agent:
         mode = f"{state.sticky_agent}"
