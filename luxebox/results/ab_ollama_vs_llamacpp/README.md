@@ -21,7 +21,10 @@ Four benchmarks per (model, backend) cell:
   input tokens) each asking for ~1024 tokens of continuation. Pure
   TTFT / decode tok/s / prefill rate / peak RSS signal.
 - **`bfcl_v3`** — single-turn function-call accuracy via `bfcl-eval`.
-  Tool-use reliability is what luxe lives or dies on.
+  Tool-use reliability is what luxe lives or dies on. **Not in the
+  default --bench list** because `bfcl-eval` pins `tree-sitter==0.21.3`
+  which conflicts with `evalplus` — it lives in a separate venv. See
+  "Running BFCL" below.
 - **`humaneval_plus`** — Python correctness. Both backends serve the
   same weights, so quality should match within noise; surfacing it
   also flags any tokenizer/template divergence.
@@ -51,15 +54,20 @@ several hours; the 32B model is the long pole:
 uv run python scripts/run_ab_benchmark.py
 ```
 
-Smoke test (one model, one bench, 5 tasks, both backends — about 5
-minutes):
+Smoke test (one model, one bench, 3 tasks, both backends — verifies
+the wiring end-to-end without paying real benchmark time):
 
 ```
-uv run python scripts/run_ab_benchmark.py \
+uv run python scripts/run_ab_full.py \
   --candidate qwen2.5-coder-14b \
-  --bench bfcl_v3 \
-  --limit 5
+  --bench decode_throughput \
+  --limit 3 -y
 ```
+
+Note: the **first** time you run this for a new candidate, llama-server
+needs to download the GGUF (~5–20 GB). Either let `run_ab_full.py`
+prefetch in Phase 1 (default), or accept a multi-minute "waiting for
+server on :PORT" pause on the first call.
 
 Just the perf microbench (skip code-correctness and replay):
 
@@ -72,6 +80,32 @@ Re-render the report from existing JSONL without re-running:
 ```
 uv run python scripts/run_ab_benchmark.py --report-only
 ```
+
+## Running BFCL (separate venv)
+
+`bfcl-eval` can't share luxebox's main venv (tree-sitter version
+clash with `evalplus`). One-time setup:
+
+```
+cd luxebox
+uv venv .venv-bfcl --python 3.11
+.venv-bfcl/bin/pip install -e .
+.venv-bfcl/bin/pip uninstall -y evalplus       # avoid the conflict
+.venv-bfcl/bin/pip install bfcl-eval
+```
+
+Then run the BFCL bench from that venv:
+
+```
+.venv-bfcl/bin/python scripts/run_ab_benchmark.py \
+  --candidate qwen2.5-coder-14b \
+  --bench bfcl_v3 \
+  --limit 50
+```
+
+The JSONL it writes lands in the same `results/runs/...` tree, so the
+final report stitches BFCL numbers in alongside everything else when
+you next run `--report-only`.
 
 ## Outputs
 
