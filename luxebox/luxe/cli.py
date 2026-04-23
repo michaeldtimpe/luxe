@@ -105,7 +105,13 @@ def agents() -> None:
 
 @app.command()
 def update() -> None:
-    """Pull latest luxe and reinstall in-place (`git pull` + `pip install -e .`)."""
+    """Pull latest luxe and reinstall in-place.
+
+    Picks the installer that fits the project: `uv pip install -e .` when a
+    `uv.lock` is present (uv-managed venvs typically ship without pip), else
+    `python -m pip install -e .`.
+    """
+    import shutil
     import subprocess
     import sys
 
@@ -116,10 +122,20 @@ def update() -> None:
             raise typer.Exit(1)
         root = root.parent
     console.print(f"[dim]root:[/dim] {root}")
-    for cmd in (
-        ["git", "pull"],
-        [sys.executable, "-m", "pip", "install", "-e", "."],
-    ):
+
+    uv_managed = (root / "uv.lock").exists()
+    uv_bin = shutil.which("uv")
+    if uv_managed and uv_bin:
+        install_cmd = [uv_bin, "pip", "install", "-e", "."]
+    else:
+        install_cmd = [sys.executable, "-m", "pip", "install", "-e", "."]
+        if uv_managed and not uv_bin:
+            console.print(
+                "[yellow]uv.lock present but `uv` not on PATH — falling back to pip "
+                "(may fail on uv-created venvs)[/yellow]"
+            )
+
+    for cmd in (["git", "pull"], install_cmd):
         console.print(f"[cyan]$[/cyan] {' '.join(cmd)}")
         r = subprocess.run(cmd, cwd=root)
         if r.returncode != 0:
