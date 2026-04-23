@@ -14,7 +14,7 @@ import httpx
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
-from prompt_toolkit.history import FileHistory
+from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console, Group
 from rich.live import Live
@@ -1134,13 +1134,23 @@ def _prompt_message(sticky_agent: str) -> FormattedText:
     return _styled_arrow_prompt(lead)
 
 
+# Sub-prompt histories are kept in memory per label so ↑/↓ inside a
+# plan-review loop or across clarifying answers works, but we don't
+# pollute the main luxe>>> FileHistory. Lives for the luxe process
+# lifetime; cleared on REPL exit.
+_SUB_PROMPT_HISTORIES: dict[str, InMemoryHistory] = {}
+
+
 def _ask_styled(lead: str) -> str:
     """One-shot styled sub-prompt — same colored `>>>` look as the main
-    prompt but doesn't touch the main history file. Used for plan edits,
-    clarifying questions, role assignment, save-filename input."""
+    prompt. Keeps a per-label in-memory history so ↑/↓ recalls earlier
+    entries within the same luxe session (plan commands stay in plan's
+    buffer; save filenames in save's; etc.)."""
     from prompt_toolkit import prompt as _ptk_prompt
+    key = lead.strip().lower()
+    history = _SUB_PROMPT_HISTORIES.setdefault(key, InMemoryHistory())
     try:
-        return _ptk_prompt(_styled_arrow_prompt(lead)).strip()
+        return _ptk_prompt(_styled_arrow_prompt(lead), history=history).strip()
     except (EOFError, KeyboardInterrupt):
         raise
 
@@ -1414,6 +1424,7 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         return "consumed"
 
     if cmd == "/tasks":
+        known_subs = ("status", "log", "abort", "save", "tail", "watch")
         sub = args[0] if args else ""
         if sub == "":
             _tasks_list_recent()
@@ -1435,6 +1446,19 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
             return "consumed"
         if sub == "watch":
             _tasks_watch(args[1] if len(args) > 1 else None)
+            return "consumed"
+        # Typo guard: if the first arg isn't a known subcommand AND the
+        # next token looks like a task id (T-YYYYMMDDT…), the user
+        # almost certainly mistyped a subcommand — don't silently
+        # interpret `/tasks tails T-…` as a new goal.
+        if len(args) >= 2 and re.match(r"^T-\d{8}T\d{6}-", args[1]):
+            import difflib
+            close = difflib.get_close_matches(sub, known_subs, n=1, cutoff=0.6)
+            hint = f" Did you mean [cyan]/tasks {close[0]} {args[1]}[/cyan]?" if close else ""
+            console.print(
+                f"[yellow]unknown /tasks subcommand:[/yellow] {sub}.{hint}\n"
+                f"[dim]valid subcommands: {', '.join(known_subs)}[/dim]"
+            )
             return "consumed"
         # Parse --sync flag then treat the rest as the goal.
         raw = line[len("/tasks "):].strip()
