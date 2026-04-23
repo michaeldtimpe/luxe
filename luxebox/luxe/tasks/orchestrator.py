@@ -92,9 +92,19 @@ class Orchestrator:
             sub.status = "running"
             sub.started_at = _now()
             persist(task)
+            # Resolve the model the agent will use so the begin event
+            # can surface it in the tail — makes it easy to spot when
+            # review/refactor isn't actually landing on the coder model.
+            agent_model = ""
+            if sub.agent:
+                try:
+                    agent_model = self.cfg.get(sub.agent).model
+                except (KeyError, Exception):  # noqa: BLE001
+                    pass
             self._emit(task, {
                 "event": "begin", "subtask": sub.id,
                 "title": sub.title, "agent": sub.agent or "(route)",
+                "model": agent_model,
             })
 
             self._run_subtask(sub, task)
@@ -107,6 +117,8 @@ class Orchestrator:
                 "status": sub.status, "error": sub.error,
                 "tool_calls": sub.tool_calls_total, "steps": sub.steps_taken,
                 "wall_s": round(sub.wall_s, 1),
+                "prompt_tokens": sub.prompt_tokens,
+                "completion_tokens": sub.completion_tokens,
             })
 
         if aborted:
