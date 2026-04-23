@@ -7,12 +7,38 @@ existing Backend class works unchanged. We just provide a factory.
 from __future__ import annotations
 
 import json
+import os
 import re
-from typing import Iterator
+import time
+from dataclasses import dataclass
+from typing import Any, Iterator
 
 import httpx
 
 from harness.backends import Backend
+
+
+_CACHE_TTL_S = float(os.environ.get("LUXE_CACHE_TTL_S", "300"))
+
+
+@dataclass
+class _CacheEntry:
+    value: Any
+    expires_at: float
+
+
+def _cache_get(cache: dict[str, "_CacheEntry"], key: str) -> Any | None:
+    entry = cache.get(key)
+    if entry is None:
+        return None
+    if time.monotonic() > entry.expires_at:
+        cache.pop(key, None)
+        return None
+    return entry.value
+
+
+def _cache_set(cache: dict[str, "_CacheEntry"], key: str, value: Any) -> None:
+    cache[key] = _CacheEntry(value=value, expires_at=time.monotonic() + _CACHE_TTL_S)
 
 # Curated map of Ollama model-family → released parameter sizes. This is
 # maintained by hand — there is no public Ollama API that enumerates every
@@ -91,7 +117,7 @@ def list_models(base_url: str = "http://127.0.0.1:11434") -> list[str]:
         return []
 
 
-_PARAMS_CACHE: dict[str, str] = {}
+_PARAMS_CACHE: dict[str, _CacheEntry] = {}
 _PARAM_RE = re.compile(r"(\d+(?:\.\d+)?)[bB](?![a-zA-Z])")
 
 
@@ -102,8 +128,9 @@ def parameter_size(model: str, base_url: str) -> str:
     /props model_path, then a regex over the model name itself. Cached.
     """
     key = f"{base_url}::{model}"
-    if key in _PARAMS_CACHE:
-        return _PARAMS_CACHE[key]
+    cached = _cache_get(_PARAMS_CACHE, key)
+    if cached is not None:
+        return cached
 
     # Ollama has the canonical field on `details.parameter_size`.
     try:
@@ -112,7 +139,7 @@ def parameter_size(model: str, base_url: str) -> str:
         details = r.json().get("details") or {}
         ps = details.get("parameter_size")
         if isinstance(ps, str) and ps.strip():
-            _PARAMS_CACHE[key] = ps
+            _cache_set(_PARAMS_CACHE, key, ps)
             return ps
     except httpx.HTTPError:
         pass
@@ -125,14 +152,14 @@ def parameter_size(model: str, base_url: str) -> str:
         m = _PARAM_RE.search(path)
         if m:
             result = f"{m.group(1)}B"
-            _PARAMS_CACHE[key] = result
+            _cache_set(_PARAMS_CACHE, key, result)
             return result
     except httpx.HTTPError:
         pass
 
     m = _PARAM_RE.search(model)
     result = f"{m.group(1)}B" if m else "—"
-    _PARAMS_CACHE[key] = result
+    _cache_set(_PARAMS_CACHE, key, result)
     return result
 
 
@@ -256,7 +283,7 @@ def prewarm(model: str, base_url: str, *, timeout_s: float = 180.0) -> bool:
         return False
 
 
-_CTX_CACHE: dict[str, int] = {}
+_CTX_CACHE: dict[str, _CacheEntry] = {}
 _DEFAULT_CTX = 8192
 
 
@@ -279,8 +306,9 @@ def context_length(model: str, base_url: str = "http://127.0.0.1:11434") -> int:
     """Declared context window for `model`. Tries Ollama's /api/show first,
     then llama-server's /props. Cached; falls back to 8192."""
     key = f"{base_url}::{model}"
-    if key in _CTX_CACHE:
-        return _CTX_CACHE[key]
+    cached = _cache_get(_CTX_CACHE, key)
+    if cached is not None:
+        return cached
 
     # Try Ollama.
     try:
@@ -300,7 +328,7 @@ def context_length(model: str, base_url: str = "http://127.0.0.1:11434") -> int:
                     ctx = int(line.split()[-1])
                 except ValueError:
                     pass
-        _CTX_CACHE[key] = ctx
+        _cache_set(_CTX_CACHE, key, ctx)
         return ctx
     except httpx.HTTPError:
         pass
@@ -312,10 +340,10 @@ def context_length(model: str, base_url: str = "http://127.0.0.1:11434") -> int:
         data = r.json()
         ctx = (data.get("default_generation_settings") or {}).get("n_ctx")
         if isinstance(ctx, int) and ctx > 0:
-            _CTX_CACHE[key] = ctx
+            _cache_set(_CTX_CACHE, key, ctx)
             return ctx
     except httpx.HTTPError:
         pass
 
-    _CTX_CACHE[key] = _DEFAULT_CTX
+    _cache_set(_CTX_CACHE, key, _DEFAULT_CTX)
     return _DEFAULT_CTX

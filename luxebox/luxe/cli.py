@@ -71,6 +71,30 @@ def list_cmd() -> None:
 
 
 @app.command()
+def clean(
+    days: int = typer.Option(7, "--days", help="Delete sessions older than N days"),
+) -> None:
+    """Delete session files older than --days (default 7)."""
+    import time
+
+    cfg = load_config()
+    root = Path(cfg.session_dir).expanduser()
+    if not root.exists():
+        console.print("[yellow]no session dir[/yellow]")
+        return
+    cutoff = time.time() - days * 86400
+    removed = 0
+    for p in root.glob("*.jsonl"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+                removed += 1
+        except OSError as e:
+            console.print(f"[yellow]skip {p.name}: {e}[/yellow]")
+    console.print(f"[green]✓[/green] removed {removed} session(s) older than {days}d")
+
+
+@app.command()
 def agents() -> None:
     """List configured agents."""
     cfg = load_config()
@@ -80,12 +104,51 @@ def agents() -> None:
 
 
 @app.command()
+def update() -> None:
+    """Pull latest luxe and reinstall in-place (`git pull` + `pip install -e .`)."""
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent  # luxebox/
+    while not (root / "pyproject.toml").exists():
+        if root == root.parent:
+            console.print("[red]pyproject.toml not found[/red]")
+            raise typer.Exit(1)
+        root = root.parent
+    console.print(f"[dim]root:[/dim] {root}")
+    for cmd in (
+        ["git", "pull"],
+        [sys.executable, "-m", "pip", "install", "-e", "."],
+    ):
+        console.print(f"[cyan]$[/cyan] {' '.join(cmd)}")
+        r = subprocess.run(cmd, cwd=root)
+        if r.returncode != 0:
+            raise typer.Exit(r.returncode)
+    console.print("[green]✓[/green] luxe updated")
+
+
+@app.command()
 def analyze(
     repo: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True),
     out: Path = typer.Option(None, "--out", help="Output markdown path"),
     model: str = typer.Option(None, "--model", help="Override code agent model"),
+    review: bool = typer.Option(False, "--review", help="Route through the review agent (background task) instead of the code-eval pipeline"),
 ) -> None:
     """Run a read-only code review on REPO. Produces a markdown report."""
+    if review:
+        from luxe.review import start_review_task
+
+        cfg = load_config()
+        console.print(f"[bold]Reviewing[/bold] [cyan]{repo}[/cyan]")
+        try:
+            tid = start_review_task(repo, mode="review", cfg=cfg)
+        except RuntimeError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        console.print(f"[green]✓ spawned review task[/green] {tid}")
+        console.print(f"[dim]tail:[/dim] luxe → /tasks tail {tid}")
+        return
+
     from luxe.agents import code
     from luxe.backend import make_backend
     from luxe.tools import fs

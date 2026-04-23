@@ -43,17 +43,36 @@ class Session:
     def read_all(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
-        events: list[dict[str, Any]] = []
-        with self.path.open() as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        return events
+        try:
+            events: list[dict[str, Any]] = []
+            with self.path.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            return events
+        except OSError:
+            return []
+
+    def prune(self, max_turns: int = 200) -> int:
+        """Keep only the last `max_turns` events. Returns # removed.
+
+        Atomic: writes to a sibling tempfile and renames, so a crash mid-prune
+        leaves the original intact."""
+        events = self.read_all()
+        if len(events) <= max_turns:
+            return 0
+        kept = events[-max_turns:]
+        tmp = self.path.with_suffix(".jsonl.tmp")
+        with tmp.open("w") as f:
+            for e in kept:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        tmp.replace(self.path)
+        return len(events) - len(kept)
 
 
 def list_sessions(root: Path) -> list[Path]:

@@ -91,6 +91,9 @@ luxe resume                # continue most recent session
 luxe --session <id>        # resume a specific session
 luxe agents                # show configured agents + models
 luxe analyze <path>        # one-shot read-only code review on a repo
+luxe analyze <path> --review  # route through the review agent (background task)
+luxe clean --days 7        # delete session files older than N days (default 7)
+luxe update                # git pull + pip install -e . from the luxe repo root
 ```
 
 Example REPL session:
@@ -271,6 +274,12 @@ monitor with /tasks status T-20260422…
 when done, save the report with /tasks save T-20260422…
 ```
 
+**Headless entry point.** `luxe analyze <path> --review` runs the same
+review pipeline without the REPL: it plans, persists, and spawns the
+background task, then prints the task id and a `/tasks tail` hint so
+you can pick it up in a REPL session later (or just watch the log
+file under `~/.luxe/tasks/<id>/`).
+
 ## Tool surfaces per agent
 
 | Agent | Tools |
@@ -323,6 +332,20 @@ replayed on multi-turn conversations with synthesized tool_code +
 tool_output pairs so Gemma sees real file data across turns instead of
 defending hallucinated prose.
 
+### Pruning
+
+Session files grow indefinitely. Two ways to trim:
+
+- **Per-session** — `Session.prune(max_turns=200)` keeps the last N
+  events and atomically rewrites the file (tempfile + rename, so a
+  crash mid-prune can't wipe history).
+- **Per-user** — `luxe clean --days N` deletes session files whose
+  mtime is older than N days (default 7). Safe to run on a cron.
+
+`read_all()` is also hardened against `OSError` (permission / unreadable
+file) — it returns `[]` instead of crashing so a corrupt session never
+takes the REPL down on resume.
+
 ## User preferences (`~/.luxe/`)
 
 Separate from the repo-tracked `configs/agents.yaml`. Per-user state
@@ -337,6 +360,38 @@ it up by hand.
 | `sessions/` | Every turn | `luxe list`, `luxe resume`, `/resume`, `/sessions` |
 | `history` | prompt_toolkit | `↑` / `↓` arrow keys in the REPL |
 | `tasks/<task-id>/` | `/tasks <goal>` | `/tasks status`, `/tasks log`, `/tasks save` |
+
+## Budgets & caches
+
+**`AgentConfig.min_tool_calls`** — per-agent knob (in `configs/agents.yaml`)
+that refuses to accept a "final answer" until the agent has made at
+least N tool calls. When the model returns text with zero tool calls
+and the threshold isn't met, the loop appends a nudge message
+(`"You must use tools to ground your answer…"`) and gives the model
+another step rather than returning early. `max_steps` still caps the
+total retries, so a stuck agent aborts cleanly instead of looping
+forever. Use for agents that must investigate before answering —
+especially `review` and `refactor`, where speculative answers
+without tool use are the main failure mode.
+
+```yaml
+# configs/agents.yaml
+- name: review
+  min_tool_calls: 3   # force at least 3 reads/greps before finalizing
+  max_steps: 12
+```
+
+**`LUXE_CACHE_TTL_S`** — env var controlling TTL on the
+`backend.py` caches (`_PARAMS_CACHE`, `_CTX_CACHE`). These back
+`/context`, `/models`, and the banner; without a TTL they went stale
+after a `/pull` unless `clear_caches()` was called explicitly.
+Default: `300` seconds. Set to `0` to effectively disable caching
+(entries expire on next access). `clear_caches()` still wipes
+everything manually.
+
+```bash
+LUXE_CACHE_TTL_S=60 luxe   # refresh model metadata every minute
+```
 
 ## Known limitations
 

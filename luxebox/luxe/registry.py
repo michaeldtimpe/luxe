@@ -45,6 +45,7 @@ class AgentConfig(BaseModel):
     max_steps: int = 12
     max_wall_s: float = 600.0
     max_tool_calls_per_turn: int = 20
+    min_tool_calls: int = 0  # if >0, nudge the agent back into tool use when a final answer arrives below this
     enabled: bool = True
     notes: str = ""
     endpoint: str | None = None  # override top-level ollama_base_url (e.g. llama-server)
