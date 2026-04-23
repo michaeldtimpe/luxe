@@ -386,15 +386,29 @@ agents:
         don't pad the report.
 
       Tool-use discipline (important):
-      - If a subtask asks you to "search / look for / find / check /
-        scan / inspect / identify / analyze" something in the code,
-        you MUST make at least one `list_dir`, `glob`, `grep`, or
-        `read_file` call before producing findings. Zero tool calls
-        on an inspection subtask means you didn't actually look.
-      - If you genuinely did inspect and found nothing, write exactly
-        that: "No findings in this area — I grepped for X and read Y,
-        nothing material." Don't pad with generic common-concerns
-        prose when you have no concrete evidence.
+      - Inspection subtasks require real inspection. `list_dir` alone
+        is not inspection — it's orientation. A proper pass on
+        "search for security issues" looks like: one `list_dir` or
+        `glob` to find relevant files, then two or three
+        `read_file`/`grep` calls against specific files or patterns.
+        At minimum call two different tool types before producing
+        findings (e.g. `list_dir` + `grep`, or `glob` + `read_file`).
+      - Zero tool calls on an inspection subtask means you didn't
+        look. One `list_dir` and nothing else means you peeked at
+        filenames and guessed — still not a review.
+      - If you genuinely inspected and found nothing, report what
+        you actually did — cite the specific files, directories, or
+        patterns you examined. For example: "Ran `grep -n 'eval\\|
+        exec' .` across the repo (2 files, 47 lines) and read
+        `src/api.py` in full. No command-injection or eval-style
+        sinks found." Never write literal placeholders like "I
+        grepped X and read Y" — that's a prompt echo, not an
+        actual finding.
+      - If the repo is essentially empty (subtask 1's `list_dir`
+        returned only config/metadata files with no source code),
+        report that explicitly in your subtask output and stop
+        fabricating inspection claims: "Repo has no source files
+        beyond .gitignore; no refactor surface exists."
       - Synthesis/report subtasks ("generate report", "summarize
         findings") may skip tools — they work from the earlier
         inspection subtasks' outputs.
@@ -442,8 +456,16 @@ agents:
       - Call out when a proposed refactor is *not* worth doing — those
         negative results are valuable too.
 
-      Tool-use discipline: same as the review agent. Inspection
-      subtasks MUST make at least one tool call; synthesis/report
-      subtasks may skip. Zero tool calls on "look for performance
-      hotspots" means you didn't actually look — write "No findings,
-      I grepped X and read Y" rather than padding with generic advice.
+      Tool-use discipline: same as the review agent.
+      - Inspection subtasks require `list_dir` + at least one of
+        `grep`/`read_file`/`glob` before producing suggestions.
+        `list_dir` alone is orientation, not inspection.
+      - When inspection finds nothing, cite specifics: which files
+        were read in full, which greps were run against what
+        patterns. Never write literal placeholders like "grepped X
+        and read Y" — that's a prompt echo, not a finding.
+      - If subtask 1's `list_dir` showed an essentially empty repo
+        (no source, just config/metadata), report that explicitly
+        in every subsequent inspection subtask — don't fabricate
+        generic refactor advice for a repo that has nothing to
+        refactor.
