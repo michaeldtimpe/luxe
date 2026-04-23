@@ -169,42 +169,53 @@ class Orchestrator:
             sub.error = result.abort_reason or "agent aborted"
             return
 
-        # Tool-use enforcement for review/refactor inspection subtasks:
-        # if the agent produced findings without actually calling any
-        # tools, retry once with a sharper "you must use tools" prefix.
-        # Synthesis subtasks ("generate report", "summarize") are
-        # allowed to skip tools — they work from prior findings.
+        # Tool-use enforcement for review/refactor inspection subtasks.
+        # A proper pass requires BOTH orientation (list_dir/glob) AND
+        # real reading (read_file/grep). "1 call, list_dir only" is
+        # barely better than 0 — the model peeked at filenames and
+        # guessed. So the threshold is tool-type diversity, not just
+        # a count.
         if (
             agent in ("review", "refactor")
-            and result.tool_calls_total == 0
             and _is_inspection_title(sub.title)
+            and _inspection_too_shallow(result.tool_calls)
         ):
+            shallow_reason = (
+                "no tool calls at all"
+                if result.tool_calls_total == 0
+                else f"only used {', '.join({c.name for c in result.tool_calls})} — "
+                     "no real reading"
+            )
             self._emit(task, {
                 "event": "tool_use_retry",
                 "subtask": sub.id,
-                "reason": "inspection subtask produced 0 tool calls",
+                "reason": f"inspection too shallow: {shallow_reason}",
             })
             nudge = (
-                "\n\n# Retry — tool use required\n"
-                "Your previous response produced findings without calling "
-                "any tools. This subtask requires you to actually read the "
-                "code via list_dir, glob, grep, or read_file before making "
-                "claims. Re-attempt now and make at least one tool call. "
-                "If your inspection truly finds nothing worth noting, write "
-                "exactly \"No findings — I grepped X and read Y, nothing "
-                "material\" instead of generic common-concerns prose."
+                "\n\n# Retry — inspection was too shallow\n"
+                f"Your previous attempt made shallow tool use ({shallow_reason}). "
+                "A real inspection pass needs BOTH orientation (list_dir/glob "
+                "to find files) AND reading (grep/read_file against specific "
+                "files or patterns). Re-attempt now: first list or glob, then "
+                "grep for relevant patterns or read specific files, then "
+                "produce findings grounded in what you read.\n"
+                "\n"
+                "If the repo genuinely has no source files (just .gitignore "
+                "or metadata), report that explicitly: 'Repo has no source "
+                "files; no inspection surface.' Do NOT write literal "
+                "placeholder phrases like 'I grepped X and read Y' — cite "
+                "the actual files and patterns you used."
             )
             retry_decision = RouterDecision(
                 agent=agent,
                 task=augmented + nudge,
-                reasoning=f"task orchestrator retry (subtask {sub.id}, tool-use)",
+                reasoning=f"task orchestrator retry (subtask {sub.id}, shallow inspection)",
             )
             retry_result = _runner.dispatch(
                 retry_decision, self.cfg, session=self.session
             )
-            # Only accept the retry if it did better on the tool-use axis
-            # (otherwise we just overwrite good prose with worse prose).
-            if retry_result.tool_calls_total > 0:
+            # Accept the retry only if it did better on the depth axis.
+            if not _inspection_too_shallow(retry_result.tool_calls):
                 sub.result_text = retry_result.final_text or sub.result_text
                 sub.tool_calls = list(retry_result.tool_calls)
                 sub.tool_calls_total = retry_result.tool_calls_total
@@ -213,11 +224,9 @@ class Orchestrator:
                 sub.completion_tokens += retry_result.completion_tokens
                 sub.wall_s += retry_result.wall_s
             else:
-                # Still didn't use tools. Flag the result so status
-                # shows a yellow warning rather than a clean green.
                 sub.error = (
-                    "produced output without reading code "
-                    "(retry also made no tool calls)"
+                    "shallow inspection (retry also didn't read files) — "
+                    "findings may not be grounded in code"
                 )
 
         sub.status = "done"
@@ -256,6 +265,31 @@ def _is_inspection_title(title: str) -> bool:
     if _SYNTHESIS_VERBS.search(t):
         return False
     return bool(_INSPECTION_VERBS.search(t))
+
+
+# Real inspection = orientation (list_dir / glob) + reading
+# (grep / read_file). One-call-only or list_dir-only runs are flagged
+# as shallow and retried with a stronger nudge.
+_ORIENTATION_TOOLS = frozenset({"list_dir", "glob"})
+_READING_TOOLS = frozenset({"read_file", "grep"})
+
+
+def _inspection_too_shallow(tool_calls) -> bool:
+    """True when an inspection subtask didn't do enough to be credible.
+    Zero calls, a single list_dir, or orientation-only (list_dir/glob
+    with no reading) all count as shallow."""
+    if not tool_calls:
+        return True
+    names = {c.name for c in tool_calls}
+    did_orient = bool(names & _ORIENTATION_TOOLS)
+    did_read = bool(names & _READING_TOOLS)
+    # Need real reading — just walking the tree doesn't count.
+    if not did_read:
+        return True
+    # Having read but not orient is fine (the planner/prior subtask
+    # may have supplied filenames already).
+    _ = did_orient
+    return False
 
 
 def _summarize_result(text: str, max_chars: int = 800) -> str:
