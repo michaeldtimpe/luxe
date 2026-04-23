@@ -154,7 +154,16 @@ def launch_server(
     models_dir: Path = Path("models"),
     port: int | None = None,
     log_dir: Path = Path("results/server_logs"),
+    ollama_base_url: str = "http://127.0.0.1:11434",
 ) -> Iterator[Backend]:
+    if kind == "ollama":
+        # Ollama runs as a long-lived daemon (launchd plist). The harness
+        # doesn't own its lifecycle — just confirm it's up and yield a
+        # Backend pointing at it. RSS sampling targets whichever process
+        # is listening on Ollama's port.
+        yield from _yield_ollama(candidate, ollama_base_url)
+        return
+
     port = port or _free_port()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{candidate.id}__{config.id}.log"
@@ -210,6 +219,86 @@ def launch_server(
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def _yield_ollama(candidate: Candidate, base_url: str) -> Iterator[Backend]:
+    """Treat an externally-managed Ollama daemon as the backend.
+
+    Validates connectivity to /v1/models, then preloads the model with a
+    one-token completion so the first benched task isn't measuring the
+    cold-load. Sampler targets whatever process is listening on Ollama's
+    port (usually the `ollama` parent that owns the loaded runner)."""
+    if not candidate.ollama_tag:
+        raise ServerError(
+            f"candidate {candidate.id} has no ollama_tag; cannot run on Ollama"
+        )
+    try:
+        r = httpx.get(f"{base_url}/v1/models", timeout=5.0)
+        r.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        raise ServerError(
+            f"Ollama daemon not reachable at {base_url}: {e}"
+        ) from e
+
+    _console.log(
+        f"using ollama daemon at [bold]{base_url}[/] for "
+        f"[bold]{candidate.id}[/] (tag: {candidate.ollama_tag})"
+    )
+    # Preload weights — Ollama lazy-loads on first request, which would
+    # otherwise be charged as the first benchmark task's TTFT.
+    try:
+        httpx.post(
+            f"{base_url}/v1/chat/completions",
+            json={
+                "model": candidate.ollama_tag,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+                "temperature": 0,
+                "stream": False,
+            },
+            timeout=300.0,
+        ).raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        raise ServerError(
+            f"Ollama failed to load {candidate.ollama_tag}: {e}"
+        ) from e
+
+    backend = Backend(
+        kind="ollama",
+        base_url=base_url,
+        model_id=candidate.ollama_tag,
+    )
+
+    sampler: "RssSampler | None" = None
+    pid = _ollama_pid(base_url)
+    if pid:
+        from harness.metrics import RssSampler
+
+        sampler = RssSampler(pid=pid, interval_s=2.0)
+        sampler.start()
+        backend._rss_sampler = sampler  # type: ignore[attr-defined]
+    try:
+        yield backend
+    finally:
+        if sampler is not None:
+            sampler.stop()
+
+
+def _ollama_pid(base_url: str) -> int | None:
+    """Find the pid of whatever process owns Ollama's listening socket."""
+    from urllib.parse import urlparse
+
+    port = urlparse(base_url).port
+    if port is None:
+        return None
+    for proc in psutil.process_iter(["pid"]):
+        try:
+            for c in proc.net_connections(kind="inet"):
+                if c.laddr and c.laddr.port == port and c.status == "LISTEN":
+                    return proc.pid
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+    return None
 
 
 def sample_peak_rss(pid: int) -> int:

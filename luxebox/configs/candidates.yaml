@@ -4,9 +4,58 @@
 # or ~3-5 GB for KV-Q8.
 
 candidates:
+  # ─── A/B benchmark candidates (luxe-served models) ───────────────────
+  # These three are what luxe routes through Ollama today. Both ollama_tag
+  # and gguf_repo/gguf_file are populated so the A/B runner can serve
+  # the same weights through ollama and llama-server.
+
+  - id: qwen2.5-7b-instruct
+    display: Qwen2.5-7B-Instruct
+    active: true
+    family: qwen
+    params_b: 7.6
+    dense: true
+    hf_repo: Qwen/Qwen2.5-7B-Instruct
+    mlx_repo: mlx-community/Qwen2.5-7B-Instruct-4bit
+    gguf_repo: bartowski/Qwen2.5-7B-Instruct-GGUF
+    gguf_file: Qwen2.5-7B-Instruct-Q4_K_M.gguf
+    ollama_tag: qwen2.5:7b-instruct
+    chat_template: qwen
+    tool_call_format: hermes
+    context_native: 32768
+    context_target: 32768
+    mem_gb_q4: 5
+    draft_id: null
+    notes: |
+      luxe's router/general/lookup/image agents all share this tag.
+
+  - id: qwen2.5-32b-instruct
+    display: Qwen2.5-32B-Instruct
+    active: true
+    family: qwen
+    params_b: 32
+    dense: true
+    hf_repo: Qwen/Qwen2.5-32B-Instruct
+    mlx_repo: mlx-community/Qwen2.5-32B-Instruct-4bit
+    gguf_repo: bartowski/Qwen2.5-32B-Instruct-GGUF
+    gguf_file: Qwen2.5-32B-Instruct-Q4_K_M.gguf
+    ollama_tag: qwen2.5:32b-instruct
+    chat_template: qwen
+    tool_call_format: hermes
+    context_native: 32768
+    context_target: 32768
+    mem_gb_q4: 19
+    draft_id: null
+    notes: |
+      luxe's research + calc agents. Same model class as the coder; tool
+      use through Ollama is reliable here too.
+
+  # ─── Phase-A coder candidates ────────────────────────────────────────
+  # Disabled by default for the A/B sweep; flip active: true to include.
+
   - id: qwen2.5-coder-32b
     display: Qwen2.5-Coder-32B-Instruct
-    active: true
+    active: false
     family: qwen
     params_b: 32
     dense: true
@@ -26,7 +75,7 @@ candidates:
 
   - id: qwen3-coder-32b
     display: Qwen3-Coder-32B (if released)
-    active: true
+    active: false
     family: qwen
     params_b: 32
     dense: true
@@ -46,7 +95,7 @@ candidates:
 
   - id: deepseek-coder-v2-lite
     display: DeepSeek-Coder-V2-Lite-Instruct
-    active: true
+    active: false
     family: deepseek
     params_b: 16
     dense: false
@@ -67,7 +116,7 @@ candidates:
 
   - id: devstral-24b
     display: Devstral-Small-24B
-    active: true
+    active: false
     family: mistral
     params_b: 24
     dense: true
@@ -87,7 +136,7 @@ candidates:
 
   - id: codestral-22b
     display: Codestral-22B-v0.1
-    active: true
+    active: false
     family: mistral
     params_b: 22
     dense: true
@@ -115,6 +164,7 @@ candidates:
     mlx_repo: mlx-community/Qwen2.5-Coder-14B-Instruct-4bit
     gguf_repo: bartowski/Qwen2.5-Coder-14B-Instruct-GGUF
     gguf_file: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
+    ollama_tag: qwen2.5-coder:14b-instruct
     chat_template: qwen
     tool_call_format: hermes
     context_native: 131072
@@ -122,8 +172,8 @@ candidates:
     mem_gb_q4: 8
     draft_id: qwen2.5-coder-0.5b-draft
     notes: |
-      Speed reference + smoke-test model. Expected to degrade on 20+ step
-      agent loops; included as a "does a smaller model suffice?" check.
+      luxe's code/review/refactor agents. Also a Phase-A speed reference.
+      Stays active by default in the A/B sweep.
 
 drafts:
   - id: qwen2.5-coder-0.5b-draft
