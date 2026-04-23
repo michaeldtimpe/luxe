@@ -302,6 +302,23 @@ def run_agent(
         tool_calls_accum.extend(response.tool_calls)
 
         if not response.tool_calls:
+            # Model thinks it's done. Enforce min_tool_calls by nudging it
+            # back into tool use if it hasn't investigated enough yet.
+            if tool_calls_total < cfg.min_tool_calls:
+                messages.append({"role": "assistant", "content": response.text or ""})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"You must use tools to ground your answer. So far "
+                            f"you've made {tool_calls_total} tool call(s); this "
+                            f"task requires at least {cfg.min_tool_calls}. "
+                            f"Continue investigating with tools before finalizing."
+                        ),
+                    }
+                )
+                step += 1
+                continue
             # Final answer
             final_text = response.text
             step += 1
