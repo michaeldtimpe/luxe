@@ -231,6 +231,146 @@ def _compute_phase_d(winner: str, gate: AcceptanceGate):
     return baseline_rows, config_rows, verdict_lines
 
 
+def ab_report(
+    *,
+    phase: str = "ab_ollama_vs_llamacpp",
+    backends: tuple[str, str] = ("ollama_q4km", "llamacpp_q4km"),
+    output_md: Path | None = None,
+    output_csv: Path | None = None,
+) -> str:
+    """Side-by-side comparison of two backend configs across all benchmarks.
+
+    For each (candidate, benchmark) pair, pivots the per-task records
+    into a row showing each backend's mean TTFT, decode tok/s, peak
+    RSS, and pass rate, plus the Δ% between them and a one-line
+    verdict per candidate."""
+    runs_root = RESULTS_ROOT / "runs" / phase
+    if not runs_root.exists():
+        return "No A/B results yet.\n"
+
+    a_id, b_id = backends
+    rows: list[dict[str, Any]] = []
+    per_candidate_summary: list[str] = []
+
+    for candidate_dir in sorted(runs_root.iterdir()):
+        if not candidate_dir.is_dir():
+            continue
+        a_dir = candidate_dir / a_id
+        b_dir = candidate_dir / b_id
+        if not (a_dir.exists() and b_dir.exists()):
+            continue
+
+        bench_files = sorted(
+            {p.name for p in a_dir.glob("*.jsonl")}
+            | {p.name for p in b_dir.glob("*.jsonl")}
+        )
+
+        decode_a, decode_b = [], []
+        ttft_a, ttft_b = [], []
+
+        for bench_name in bench_files:
+            a_recs = list(io.read(a_dir / bench_name)) if (a_dir / bench_name).exists() else []
+            b_recs = list(io.read(b_dir / bench_name)) if (b_dir / bench_name).exists() else []
+            if not (a_recs or b_recs):
+                continue
+
+            ttft_a_v, dec_a_v = _throughput(a_recs)
+            ttft_b_v, dec_b_v = _throughput(b_recs)
+
+            row = {
+                "candidate": candidate_dir.name,
+                "benchmark": bench_name.replace(".jsonl", ""),
+                "n": min(len(a_recs), len(b_recs)),
+                f"{a_id}_pass_pct": round(_bench_pass_rate(a_recs), 2),
+                f"{b_id}_pass_pct": round(_bench_pass_rate(b_recs), 2),
+                f"{a_id}_ttft_s": round(ttft_a_v, 3),
+                f"{b_id}_ttft_s": round(ttft_b_v, 3),
+                f"{a_id}_decode_tok_s": round(dec_a_v, 1),
+                f"{b_id}_decode_tok_s": round(dec_b_v, 1),
+                "ttft_delta_pct": _delta_pct(ttft_a_v, ttft_b_v, lower_is_better=True),
+                "decode_delta_pct": _delta_pct(dec_a_v, dec_b_v, lower_is_better=False),
+                f"{a_id}_peak_rss_gb": round(_peak_rss_gb(a_recs), 2),
+                f"{b_id}_peak_rss_gb": round(_peak_rss_gb(b_recs), 2),
+            }
+            rows.append(row)
+            if dec_a_v > 0:
+                decode_a.append(dec_a_v)
+            if dec_b_v > 0:
+                decode_b.append(dec_b_v)
+            if ttft_a_v > 0:
+                ttft_a.append(ttft_a_v)
+            if ttft_b_v > 0:
+                ttft_b.append(ttft_b_v)
+
+        if decode_a and decode_b:
+            dec_a_mean = mean(decode_a)
+            dec_b_mean = mean(decode_b)
+            ttft_a_mean = mean(ttft_a) if ttft_a else 0.0
+            ttft_b_mean = mean(ttft_b) if ttft_b else 0.0
+            verdict = _verdict(
+                a_id=a_id, b_id=b_id,
+                ttft_a=ttft_a_mean, ttft_b=ttft_b_mean,
+                dec_a=dec_a_mean, dec_b=dec_b_mean,
+            )
+            per_candidate_summary.append(
+                f"- **{candidate_dir.name}** — {verdict}"
+            )
+
+    if output_csv:
+        _write_csv(output_csv, rows)
+
+    md_parts = [
+        f"# A/B benchmark — `{a_id}` vs `{b_id}`\n",
+        "## Per-candidate verdicts\n",
+        *(line + "\n" for line in per_candidate_summary),
+        "\n",
+        _rows_to_markdown(
+            f"Detail (Δ% rows: TTFT lower-is-better; decode higher-is-better)",
+            rows,
+        ),
+    ]
+    md = "".join(md_parts)
+    if output_md:
+        output_md.parent.mkdir(parents=True, exist_ok=True)
+        output_md.write_text(md)
+    return md
+
+
+def _delta_pct(a: float, b: float, *, lower_is_better: bool) -> str:
+    """Format the percent change going from a to b. Sign convention: a
+    minus sign means b improved over a in the metric's preferred
+    direction."""
+    if a <= 0 or b <= 0:
+        return "—"
+    raw = (b - a) / a * 100.0
+    # When lower is better (e.g. TTFT), an improvement appears as
+    # negative raw; we keep that sign so the reader sees `-22%` = good.
+    sign = "+" if raw >= 0 else ""
+    if lower_is_better:
+        return f"{sign}{raw:.0f}%"
+    # Higher is better (decode tok/s): same sign convention so + = good.
+    return f"{sign}{raw:.0f}%"
+
+
+def _verdict(
+    *,
+    a_id: str, b_id: str,
+    ttft_a: float, ttft_b: float,
+    dec_a: float, dec_b: float,
+) -> str:
+    ttft_better = b_id if ttft_b > 0 and ttft_a > 0 and ttft_b < ttft_a * 0.95 else (
+        a_id if ttft_a > 0 and ttft_b > 0 and ttft_a < ttft_b * 0.95 else "tie"
+    )
+    dec_better = b_id if dec_b > dec_a * 1.05 else (a_id if dec_a > dec_b * 1.05 else "tie")
+    if ttft_better == dec_better and ttft_better != "tie":
+        return f"`{ttft_better}` wins on both TTFT and decode tok/s"
+    if ttft_better == "tie" and dec_better == "tie":
+        return "no meaningful difference"
+    return (
+        f"TTFT favors `{ttft_better}`, decode tok/s favors `{dec_better}`"
+    )
+
+
 def _config_tool_call_success(config_dir: Path) -> float:
     if not config_dir.exists():
         return 0.0

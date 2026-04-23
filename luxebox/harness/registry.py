@@ -33,6 +33,7 @@ class Candidate(BaseModel):
     mlx_repo: str | None = None
     gguf_repo: str | None = None
     gguf_file: str | None = None
+    ollama_tag: str | None = None  # tag served by Ollama, e.g. "qwen2.5:7b-instruct"
     chat_template: str
     tool_call_format: ToolCallFormat
     context_native: int
