@@ -64,7 +64,10 @@ ALL_BENCHES = {
 DEFAULT_CANDIDATES = (
     "qwen2.5-7b-instruct,qwen2.5-coder-14b,qwen2.5-32b-instruct"
 )
-DEFAULT_BENCHES = "decode_throughput,bfcl_v3,humaneval_plus,luxe_replay"
+# bfcl_v3 deliberately omitted: bfcl-eval lives in a separate venv per
+# pyproject.toml (tree-sitter conflict with evalplus). Add it explicitly
+# via --bench when running from the bfcl-only venv.
+DEFAULT_BENCHES = "decode_throughput,humaneval_plus,luxe_replay"
 
 
 def _make_ab_config() -> OptimizationConfig:

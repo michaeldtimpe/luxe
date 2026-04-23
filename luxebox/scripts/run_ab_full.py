@@ -75,15 +75,54 @@ def _section(title: str) -> None:
 # ── Phase 0: preflight ────────────────────────────────────────────────
 
 
+# Module name → (pyproject extra, install hint). Each benchmark that
+# pulls a heavyweight 3rd-party dep declares it here so preflight can
+# fail fast instead of 75s into a sweep.
+_BENCH_DEPS: dict[str, tuple[str, str]] = {
+    "bfcl_v3": (
+        "bfcl_eval",
+        "bfcl-eval is intentionally NOT in pyproject (tree-sitter pin "
+        "conflicts with evalplus). See pyproject.toml for the "
+        "separate-venv workaround, or drop bfcl_v3 from --bench.",
+    ),
+    "humaneval_plus": (
+        "evalplus",
+        "install with: `uv sync --extra evalplus`",
+    ),
+    "mbpp_plus": (
+        "evalplus",
+        "install with: `uv sync --extra evalplus`",
+    ),
+}
+
+
 def _preflight(
-    ollama_url: str, candidates: list[Candidate], backends: list[str]
+    ollama_url: str,
+    candidates: list[Candidate],
+    backends: list[str],
+    benches: list[str],
 ) -> tuple[list[str], list[Candidate]]:
-    """Check daemons + binaries. Returns (missing_ollama_tags,
+    """Check daemons + binaries + bench-deps. Returns (missing_ollama_tags,
     candidates_needing_gguf_prefetch). Hard-fails on any unrecoverable
     issue."""
     _section("Phase 0 · preflight")
 
     issues: list[str] = []
+
+    # Bench-level dependency check — fail fast before launching anything
+    import importlib
+    for bench in benches:
+        if bench not in _BENCH_DEPS:
+            continue
+        mod_name, hint = _BENCH_DEPS[bench]
+        try:
+            importlib.import_module(mod_name)
+            _say(f"[green]✓[/green] bench `{bench}` deps importable ({mod_name})")
+        except ImportError:
+            issues.append(
+                f"bench `{bench}` requires `{mod_name}` which isn't installed. "
+                f"{hint}"
+            )
 
     # Ollama daemon
     if "ollama" in backends:
@@ -230,9 +269,11 @@ def _pull_phase(
             _say(f"[green]✓[/green] {c.id} GGUF cached in "
                  f"{time.monotonic() - t0:.0f}s")
     elif needs_prefetch and skip_prefetch:
-        _say(f"[yellow]![/yellow] --skip-prefetch — first llama-server boot "
-             f"will inline-download {len(needs_prefetch)} GGUF(s) "
-             f"(may stall the bench)")
+        for c in needs_prefetch:
+            _say(f"[yellow]![/yellow] --skip-prefetch: {c.id} "
+                 f"({c.gguf_repo}/{c.gguf_file}) will download on first "
+                 f"llama-server boot — expect a multi-GB wait that shows up "
+                 f"as `waiting for server on :PORT…` lines")
 
 
 # ── Phase 2: sweep ────────────────────────────────────────────────────
@@ -315,8 +356,12 @@ def main(
         "--candidate",
     ),
     backends: str = typer.Option("ollama,llamacpp", "--backends"),
+    # bfcl_v3 deliberately omitted from defaults — bfcl-eval pins
+    # tree-sitter in a way that conflicts with evalplus, so it lives in
+    # a separate venv (see pyproject.toml). Add `bfcl_v3` to --bench
+    # when running from the bfcl-only venv.
     bench: str = typer.Option(
-        "decode_throughput,bfcl_v3,humaneval_plus,luxe_replay", "--bench"
+        "decode_throughput,humaneval_plus,luxe_replay", "--bench"
     ),
     limit: int | None = typer.Option(None, "--limit"),
     ollama_url: str = typer.Option(DEFAULT_OLLAMA, "--ollama-url"),
@@ -360,7 +405,7 @@ def main(
 
     # Phase 0
     missing_ollama, needs_prefetch = _preflight(
-        ollama_url, candidates, backend_kinds
+        ollama_url, candidates, backend_kinds, bench_names
     )
 
     # Phase 1
