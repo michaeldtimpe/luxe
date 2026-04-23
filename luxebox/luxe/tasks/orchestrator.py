@@ -178,7 +178,7 @@ class Orchestrator:
         if (
             agent in ("review", "refactor")
             and _is_inspection_title(sub.title)
-            and _inspection_too_shallow(result.tool_calls)
+            and _inspection_too_shallow(result.tool_calls, sub.title)
         ):
             shallow_reason = (
                 "no tool calls at all"
@@ -215,7 +215,7 @@ class Orchestrator:
                 retry_decision, self.cfg, session=self.session
             )
             # Accept the retry only if it did better on the depth axis.
-            if not _inspection_too_shallow(retry_result.tool_calls):
+            if not _inspection_too_shallow(retry_result.tool_calls, sub.title):
                 sub.result_text = retry_result.final_text or sub.result_text
                 sub.tool_calls = list(retry_result.tool_calls)
                 sub.tool_calls_total = retry_result.tool_calls_total
@@ -274,21 +274,30 @@ _ORIENTATION_TOOLS = frozenset({"list_dir", "glob"})
 _READING_TOOLS = frozenset({"read_file", "grep"})
 
 
-def _inspection_too_shallow(tool_calls) -> bool:
+_PURE_ORIENTATION_TITLE = re.compile(
+    r"^\s*(list|show)\s+(the\s+)?(directory|directories|dir|files|contents|tree)",
+    re.IGNORECASE,
+)
+
+
+def _inspection_too_shallow(tool_calls, title: str = "") -> bool:
     """True when an inspection subtask didn't do enough to be credible.
-    Zero calls, a single list_dir, or orientation-only (list_dir/glob
-    with no reading) all count as shallow."""
+
+    Pure-orientation subtasks ("List directory contents of the repo")
+    are considered done as long as they called any tool — their whole
+    purpose IS orientation. For inspection-proper subtasks ("Search
+    for security issues", "Identify maintainability issues"), we need
+    reading-tool use (grep/read_file), not just walking the tree.
+    """
     if not tool_calls:
         return True
+    # Orientation-only subtasks: any call counts as non-shallow.
+    if _PURE_ORIENTATION_TITLE.search(title or ""):
+        return False
     names = {c.name for c in tool_calls}
-    did_orient = bool(names & _ORIENTATION_TOOLS)
     did_read = bool(names & _READING_TOOLS)
-    # Need real reading — just walking the tree doesn't count.
     if not did_read:
         return True
-    # Having read but not orient is fine (the planner/prior subtask
-    # may have supplied filenames already).
-    _ = did_orient
     return False
 
 

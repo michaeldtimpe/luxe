@@ -84,6 +84,30 @@ def _safe_json(s: str) -> dict[str, Any] | None:
         return None
 
 
+def _extract_bare_json_objects(text: str) -> list[dict[str, Any]]:
+    """Walk `text` and pull out every top-level JSON object it contains,
+    regardless of whether it's inside a code fence or not. Uses
+    JSONDecoder.raw_decode so multi-line objects get captured — the
+    line-by-line fallback only matched single-line JSON, which missed
+    the pretty-printed calls Qwen emits on longer prompts."""
+    decoder = json.JSONDecoder()
+    out: list[dict[str, Any]] = []
+    i, n = 0, len(text)
+    while i < n:
+        j = text.find("{", i)
+        if j < 0:
+            break
+        try:
+            obj, consumed = decoder.raw_decode(text[j:])
+        except json.JSONDecodeError:
+            i = j + 1
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+        i = j + consumed
+    return out
+
+
 def _parse_text_tool_calls(text: str, known_names: set[str]) -> list[ToolCall]:
     """Recover tool calls that a model emitted as text content instead of
     structured tool_calls. Supports three patterns:
@@ -105,12 +129,12 @@ def _parse_text_tool_calls(text: str, known_names: set[str]) -> list[ToolCall]:
         for m in _PYCODE_BLOCK_RE.finditer(text):
             candidates.extend(_parse_python_calls(m.group(1), known_names))
     if not candidates:
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("{") and stripped.endswith("}"):
-                obj = _safe_json(stripped)
-                if obj and obj.get("name"):
-                    candidates.append(obj)
+        # Bare JSON anywhere in the text (multi-line via raw_decode).
+        # Filter by known_names so unrelated JSON in prose isn't
+        # misinterpreted as a call.
+        for obj in _extract_bare_json_objects(text):
+            if isinstance(obj.get("name"), str) and obj["name"] in known_names:
+                candidates.append(obj)
 
     calls: list[ToolCall] = []
     for i, obj in enumerate(candidates):

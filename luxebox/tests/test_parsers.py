@@ -87,3 +87,55 @@ def test_python_parser_rejects_non_literal_kwargs():
 def test_empty_text_parses_to_empty():
     assert _parse_text_tool_calls("", KNOWN) == []
     assert _parse_text_tool_calls("just prose, no call", KNOWN) == []
+
+
+# ── Multi-line bare JSON (Qwen pretty-printed tool calls) ────────────
+
+
+def test_multiline_bare_json_single_call():
+    # Qwen2.5-coder sometimes emits pretty-printed bare JSON without
+    # any code fence when it fails to use the structured tool-call
+    # channel. This was silently dropped before — now recovered.
+    text = """## Subtask 3
+{
+  "name": "grep",
+  "arguments": {
+    "pattern": "eval|exec"
+  }
+}"""
+    calls = _parse_text_tool_calls(text, KNOWN)
+    assert len(calls) == 1
+    assert calls[0].name == "grep"
+    assert calls[0].arguments == {"pattern": "eval|exec"}
+
+
+def test_multiline_bare_json_multiple_calls():
+    text = """First:
+{
+  "name": "grep",
+  "arguments": {"pattern": "foo"}
+}
+
+Second:
+{
+  "name": "read_file",
+  "arguments": {"path": "bar.py"}
+}"""
+    calls = _parse_text_tool_calls(text, KNOWN)
+    assert len(calls) == 2
+    assert calls[0].name == "grep"
+    assert calls[1].name == "read_file"
+
+
+def test_multiline_bare_json_filters_unknown():
+    # Unrelated JSON object in prose shouldn't be interpreted as a call.
+    text = """Config example:
+{
+  "timeout": 30,
+  "retries": 3
+}
+
+Then: {"name": "list_dir", "arguments": {}}"""
+    calls = _parse_text_tool_calls(text, KNOWN)
+    assert len(calls) == 1
+    assert calls[0].name == "list_dir"
