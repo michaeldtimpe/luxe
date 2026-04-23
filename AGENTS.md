@@ -1,7 +1,11 @@
 # Agents
 
-All six agents share the loop in `luxe/agents/base.py`. The differences
-are system prompt, tool surface, and model. This doc captures each one.
+All specialist agents share the loop in `luxe/agents/base.py`. The
+differences are system prompt, tool surface, and model. The router +
+nine specialists currently live (`general`, `lookup`, `research`,
+`writing`, `image`, `code`, `review`, `refactor`, `calc`); this doc
+captures the ones whose selection rationale is worth documenting.
+`configs/agents.yaml` is the authoritative source for every knob.
 
 ---
 
@@ -58,9 +62,10 @@ creative/research/code requests back to the router for re-dispatch.
 
 **Model:** `qwen2.5:32b-instruct` (19 GB)
 **Tools:** `web_search` (DuckDuckGo via `ddgs`), `fetch_url`
-(trafilatura extraction)
+(trafilatura extraction), `fetch_urls` (same extraction, up to 4 URLs
+fetched concurrently via `httpx.AsyncClient`)
 **Temperature:** 0.2
-**Max steps:** 10, budget 3 searches + 6 fetches
+**Max steps:** 10, prompt-budgeted to 2 searches + 3 fetches
 
 **Role:** Web-enabled synthesis with inline citations.
 
@@ -78,6 +83,12 @@ full 32k context on a 64 GB machine (weights ≈ 40 GB + KV cache).
 - Even 32b sometimes misses fresh sources. Always verify.
 - Search results are DuckDuckGo, which is thinner than Google.
   SearXNG was planned as an alternative; currently not wired up.
+
+**Parallel fetch.** `fetch_urls([url1, url2, …])` runs up to 4 reads
+concurrently and returns a list of `{url, text, truncated, error}`.
+The prompt tells the agent to prefer it over sequential `fetch_url`
+calls once 2+ URLs are queued, which halves wall time on multi-source
+research.
 
 **Cited output:** Inline `[n]` citations map to a "Sources" list at the
 end of the reply. The system prompt explicitly forbids inventing URLs
@@ -198,7 +209,12 @@ parses, first token must be in the set.
    `tool_defs()` and a `TOOL_FNS` dict.
 3. Register in `luxe/runner.py`'s `_SPECIALISTS` dict.
 4. Add a config entry to `configs/agents.yaml` with the model, prompt,
-   budgets, and tools list.
+   budgets, and tools list. Optional knobs: `min_tool_calls` (refuse
+   to finalize until the agent has made at least N tool calls),
+   `num_ctx` (Ollama `options.num_ctx` override, useful when the agent
+   needs a wider window than the loaded default), and `endpoint`
+   (per-agent base URL override, e.g. pointing at a llama-server
+   instance).
 5. Add the agent name to `luxe.registry.AgentName` enum and (if new
    tools) `ToolName` enum.
 6. Update `router.py`'s `descriptions` dict with a one-line description

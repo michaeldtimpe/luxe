@@ -172,6 +172,10 @@ class AgentResult:
     # total wall, including HTTP waits."
     model_wall_s: float = 0.0
     tool_calls: list[ToolCall] = field(default_factory=list)  # structured across all steps
+    # Count of turns whose completion_tokens hit ≥80% of
+    # cfg.max_tokens_per_turn — a signal that the per-turn cap is
+    # probably truncating real output and the YAML budget should go up.
+    near_cap_turns: int = 0
 
 
 def run_agent(
@@ -235,6 +239,14 @@ def run_agent(
     prompt_tokens = 0
     completion_tokens = 0
     model_wall_s = 0.0  # sum of backend.chat() durations; excludes tool exec
+    near_cap_turns = 0
+    # Extras for Ollama pass-throughs. `num_ctx` lets agents override the
+    # loaded server context per-agent without touching modelfiles — most
+    # useful for coder models where large contexts trade throughput for
+    # history depth.
+    extra_body: dict[str, Any] | None = None
+    if cfg.num_ctx:
+        extra_body = {"options": {"num_ctx": cfg.num_ctx}}
 
     def _result(aborted: bool = False, reason: str = "") -> AgentResult:
         return AgentResult(
@@ -249,6 +261,7 @@ def run_agent(
             wall_s=time.monotonic() - started,
             model_wall_s=model_wall_s,
             tool_calls=list(tool_calls_accum),
+            near_cap_turns=near_cap_turns,
         )
 
     while step < cfg.max_steps:
@@ -264,12 +277,19 @@ def run_agent(
                 max_tokens=cfg.max_tokens_per_turn,
                 temperature=cfg.temperature,
                 stream=False,  # REPL does its own streaming layer in a later phase
+                extra_body=extra_body,
             )
         except KeyboardInterrupt:
             return _result(True, "interrupted (Ctrl-C)")
         prompt_tokens += response.timing.prompt_tokens
         completion_tokens += response.timing.completion_tokens
         model_wall_s += response.timing.total_s
+        if (
+            cfg.max_tokens_per_turn
+            and response.timing.completion_tokens
+            >= 0.8 * cfg.max_tokens_per_turn
+        ):
+            near_cap_turns += 1
 
         # Ollama emits most qwen/hermes tool calls in `tool_calls` already,
         # but qwen2.5-coder sometimes falls back to text JSON and Gemma 3

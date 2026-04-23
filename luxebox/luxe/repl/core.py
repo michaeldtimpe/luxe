@@ -598,6 +598,14 @@ def _print_stats(decision, result, state: ReplState, cfg: LuxeConfig) -> None:
     console.print(turn)
     console.print(ctx_line)
     console.print(totals)
+    if result.near_cap_turns:
+        cap = cfg.get(decision.agent).max_tokens_per_turn
+        console.print(
+            f"[yellow]⚠ {result.near_cap_turns} turn(s) used ≥80% of "
+            f"max_tokens_per_turn ({cap})[/yellow] [dim]— output may be "
+            f"truncated; raise this agent's budget in agents.yaml if it "
+            f"keeps happening[/dim]"
+        )
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────

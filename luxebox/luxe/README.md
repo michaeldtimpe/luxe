@@ -1,12 +1,12 @@
 # luxe — local multi-agent Claude-Code-alike
 
 A terminal REPL that takes a prompt, routes it to a specialist agent, and
-runs fully on your Mac via Ollama + llama.cpp + Draw Things. Eight
-specialists share a single router: **general**, **research**,
-**writing**, **code**, **image**, **review**, **refactor**, **calc**.
-A task orchestrator stitches specialists together for multi-step goals,
-with background execution, clarifying questions, plan-preview, and
-context forwarding between subtasks.
+runs fully on your Mac via Ollama + llama.cpp + Draw Things. Nine
+specialists share a single router: **general**, **lookup**,
+**research**, **writing**, **code**, **image**, **review**,
+**refactor**, **calc**. A task orchestrator stitches specialists
+together for multi-step goals, with background execution, clarifying
+questions, plan-preview, and context forwarding between subtasks.
 
 ## Status
 
@@ -14,13 +14,14 @@ context forwarding between subtasks.
 |---|---|---|---|
 | router | `qwen2.5:7b-instruct` | Ollama | Hands off to one specialist; up to 2 clarifying Qs |
 | general | `qwen2.5:7b-instruct` | Ollama | Concise chat, ~1–2 s typical |
-| research | `qwen2.5:32b-instruct` | Ollama | DuckDuckGo + `trafilatura` extract, cited output |
+| lookup | `qwen2.5:7b-instruct` | Ollama | Single-snippet factual lookup (fast path before `research`) |
+| research | `qwen2.5:32b-instruct` | Ollama | DuckDuckGo + `trafilatura` extract, cited output; `fetch_urls` for parallel reads |
 | writing | `gemma-3-27b-it` | **llama-server** | Served via `llama-server --jinja`; native `tool_code` blocks parsed inline |
 | code | `qwen2.5-coder:14b-instruct` | Ollama | Full tool surface; 32b variants had Ollama tool-use quirks |
 | image | `qwen2.5:7b-instruct` (prompt expander) + Draw Things | Ollama + HTTP | Draw Things API on 7859 |
-| review | `qwen2.5-coder:14b-instruct` | Ollama | Read-only code review; driven by `/review <url>` |
-| refactor | `qwen2.5-coder:14b-instruct` | Ollama | Read-only optimization suggestions; driven by `/refactor <url>` |
-| calc | `mixtral:8x7b-instruct-v0.1-q3_K_M` | Ollama | Multi-step arithmetic, unit-carrying estimation |
+| review | `qwen2.5-coder:14b-instruct` | Ollama | Read-only code review with git context; driven by `/review <url>` |
+| refactor | `qwen2.5-coder:14b-instruct` | Ollama | Read-only optimization suggestions with git context; driven by `/refactor <url>` |
+| calc | `qwen2.5:32b-instruct` | Ollama | Multi-step arithmetic; `create_tool` + library-matched tools for reusable formulas |
 
 Ollama hot-swaps, so only one Ollama-served model is resident at a time.
 `llama-server` for the writing agent stays resident (Gemma 3 27B Q4_K_M +
@@ -227,16 +228,18 @@ serially (each seeing prior findings), and produces a save-able report.
    REPL exit). Each subtask sees a summary of previously completed
    subtasks, so later steps build on earlier findings instead of
    starting from scratch.
-5. **Report.** When done (sync mode auto-prompts; background runs use
-   `/tasks save <id>`), you see a per-subtask summary and a save
-   prompt: `<enter>` = default `REVIEW-<id>.md`, `new_name.md` to
-   rename, `new_name.txt` to switch format, `n` to skip.
+5. **Report.** Sync mode auto-prompts for a filename; background
+   `/review` and `/refactor` runs auto-write `REVIEW-<id>.md` (or
+   `REFACTOR-<id>.md`) into the cloned repo when they finish, with a
+   `📝 saved` line in `/tasks tail`. `/tasks save <id>` still works
+   and lets you rename or switch to `.txt`.
 
 State lives at `~/.luxe/tasks/<task-id>/`:
 
 - `state.json` — full Task with subtasks and structured `ToolCall` list
 - `log.jsonl` — one event per state change (start / begin / end /
-  retry_transport / abort_sigterm / finish); tailed by `/tasks log`
+  retry_transport / tool_use_retry / forced_inspection / report_saved /
+  abort_sigterm / finish); tailed by `/tasks log`
 - `stdout.log` — raw stdout/stderr of the background subprocess
 - `repo_path` (for `/review` + `/refactor` only) — the clone root
 
@@ -285,13 +288,14 @@ file under `~/.luxe/tasks/<id>/`).
 | Agent | Tools |
 |---|---|
 | general | — (chat only) |
-| research | `web_search`, `fetch_url` |
+| lookup | `web_search` (snippets only — no fetch) |
+| research | `web_search`, `fetch_url`, `fetch_urls` (parallel, up to 4 URLs) |
 | writing | `read_file`, `list_dir`, `glob`, `grep`, `write_file`, `edit_file` — scoped to cwd |
 | image | `draw_things_generate` |
 | code | `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_dir`, `bash` (allowlist), `fetch_url` |
-| review | `read_file`, `list_dir`, `glob`, `grep` (read-only) |
-| refactor | `read_file`, `list_dir`, `glob`, `grep` (read-only) |
-| calc | — (pure reasoning) |
+| review | `read_file`, `list_dir`, `glob`, `grep`, `git_diff`, `git_log`, `git_show` (read-only) |
+| refactor | `read_file`, `list_dir`, `glob`, `grep`, `git_diff`, `git_log`, `git_show` (read-only) |
+| calc | `create_tool` + tools auto-matched from the saved library (see `luxe/tool_library.py`) |
 
 The writing agent is served by `llama-server` with a Python-signature
 prelude injected into the system prompt — Gemma 3's native
@@ -380,6 +384,25 @@ without tool use are the main failure mode.
   min_tool_calls: 3   # force at least 3 reads/greps before finalizing
   max_steps: 12
 ```
+
+**`AgentConfig.num_ctx`** — optional per-agent Ollama context-window
+override in `configs/agents.yaml`. Passed to the chat request as
+`options.num_ctx` so you can raise the window for a single tool-heavy
+agent without rebuilding a modelfile. Leave unset to inherit whatever
+the server loaded (typically 8k for Ollama). Useful mainly for `code`
+/ `review` / `refactor` when sessions accumulate large tool results.
+
+```yaml
+- name: code
+  num_ctx: 16384   # more tool-result headroom
+```
+
+**Per-turn token cap — soft warning.** After every agent run, the
+REPL shows a yellow `⚠ N turn(s) used ≥80% of max_tokens_per_turn`
+line when a turn came close to the cap — a strong signal the
+synthesis was probably truncated and the YAML budget should go up.
+Task `end` events surface the same count so `/tasks tail` flags it
+per subtask.
 
 **`LUXE_CACHE_TTL_S`** — env var controlling TTL on the
 `backend.py` caches (`_PARAMS_CACHE`, `_CTX_CACHE`). These back
