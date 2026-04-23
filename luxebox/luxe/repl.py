@@ -1004,11 +1004,10 @@ def _status_banner(state: ReplState, cfg: LuxeConfig) -> Panel:
     params = re.sub(r"(\d)([BM])\b", r"\1 \2", params)
     folder = _home_collapsed(Path.cwd())
 
-    # Rainbow across the .:. markers — left warm, right cool; middle-right
-    # `:` picks up cyan to match the (inner) border.
-    rainbow_left = "[red1].[/red1][dark_orange]:[/dark_orange][yellow1].[/yellow1]"
-    rainbow_right = "[green1].[/green1][cyan]:[/cyan][magenta1].[/magenta1]"
-    title = f"{rainbow_left} [bold white]luxe[/bold white] {rainbow_right}"
+    # `.:.` markers randomize per render, same palette + no-adjacent
+    # rule as the prompt arrows — keeps the banner lively without
+    # looking monochrome.
+    title = _random_rainbow_title()
 
     # Single 3-col grid so every row shares the same right-label column.
     # That guarantees `version:`, `params:`, `mode:` colons line up
@@ -1091,21 +1090,39 @@ _PROMPT_ARROW_PALETTE = [
 ]
 
 
+def _pick_no_adjacent_repeats(n: int) -> list[str]:
+    """Pick `n` colors from the palette with no two neighbors equal.
+    Shared between the prompt arrows and the banner's .:. markers."""
+    picks: list[str] = []
+    for _ in range(n):
+        pool = [c for c in _PROMPT_ARROW_PALETTE if not picks or c != picks[-1]]
+        picks.append(random.choice(pool))
+    return picks
+
+
+def _random_rainbow_title() -> str:
+    """Render `.:. luxe .:.` with each of the 6 punctuation chars picking
+    an independent palette color (no adjacent duplicates). `luxe` stays
+    white."""
+    colors = _pick_no_adjacent_repeats(6)
+    marker = ('.', ':', '.')
+    left = "".join(f"[{colors[i]}]{c}[/]" for i, c in enumerate(marker))
+    right = "".join(f"[{colors[i + 3]}]{c}[/]" for i, c in enumerate(marker))
+    return f"{left} [bold white]luxe[/] {right}"
+
+
 def _styled_arrow_prompt(lead: str) -> FormattedText:
     """Build a FormattedText prompt with `<lead> >>> ` where the three
     arrows each pick an independent color from the palette and no two
     adjacent arrows share a color. Shared between the main `luxe` prompt
     and sub-prompts (`plan`, `role`, clarifying questions, save name)
     so the whole REPL reads consistently."""
-    n = len(_PROMPT_ARROW_PALETTE)
-    c1 = random.randrange(n)
-    c2 = random.choice([i for i in range(n) if i != c1])
-    c3 = random.choice([i for i in range(n) if i != c2])
+    colors = _pick_no_adjacent_repeats(3)
     return FormattedText([
         ("", f"{lead} "),
-        (f"bold fg:{_PROMPT_ARROW_PALETTE[c1]}", ">"),
-        (f"bold fg:{_PROMPT_ARROW_PALETTE[c2]}", ">"),
-        (f"bold fg:{_PROMPT_ARROW_PALETTE[c3]}", ">"),
+        (f"bold fg:{colors[0]}", ">"),
+        (f"bold fg:{colors[1]}", ">"),
+        (f"bold fg:{colors[2]}", ">"),
         ("", " "),
     ])
 
