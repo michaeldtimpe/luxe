@@ -509,11 +509,7 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
         f"[green]→ launched[/green] [cyan]{task.id}[/cyan] "
         f"[dim](pid {pid}, cwd {repo_path})[/dim]"
     )
-    console.print(
-        f"[dim]monitor with[/dim] [cyan]/tasks status {task.id}[/cyan]\n"
-        f"[dim]when done, save the report with[/dim] "
-        f"[cyan]/tasks save {task.id}[/cyan]"
-    )
+    _print_launch_hints(task.id)
 
 
 def _spawn_in_repo(task, repo_path: Path) -> int:
@@ -842,10 +838,25 @@ def _tasks_run_background(goal: str, state: "ReplState", cfg: LuxeConfig) -> Non
         f"[green]→ launched[/green] [cyan]{task.id}[/cyan] "
         f"[dim](pid {pid})[/dim]"
     )
-    console.print(
-        f"[dim]monitor with[/dim] [cyan]/tasks status[/cyan] [dim]or[/dim] "
-        f"[cyan]/tasks log[/cyan] · [dim]stop with[/dim] [cyan]/tasks abort[/cyan]"
-    )
+    _print_launch_hints(task.id)
+
+
+def _print_launch_hints(task_id: str) -> None:
+    """One copy-pasteable command per line — triple-click to select,
+    paste to run. Shared by /tasks and /review launch paths."""
+    rows = [
+        ("snapshot",  "status"),
+        ("live tail", "tail"),
+        ("dashboard", "watch"),
+        ("stop",      "abort"),
+        ("save",      "save"),
+    ]
+    label_w = max(len(lbl) for lbl, _ in rows)
+    for label, sub in rows:
+        console.print(
+            f"[dim]  {label:<{label_w}}[/dim]  "
+            f"[cyan]/tasks {sub} {task_id}[/cyan]"
+        )
 
 
 def _tasks_abort(partial: str | None) -> None:
