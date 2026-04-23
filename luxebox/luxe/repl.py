@@ -761,16 +761,20 @@ def _plan_review_loop(task, cfg: LuxeConfig) -> bool:
 
 
 def _sync_event_printer(event: dict) -> None:
-    """Tail-style live output for sync task runs. Each orchestrator
-    event gets a one-line log entry so the user sees progress as it
-    happens rather than staring at a single spinner."""
+    """Tail-style live output for sync + background tail runs. Surfaces
+    model tag on begin (so you can see which weights the subtask
+    actually asked for) and prompt/completion token counts on end
+    (so 'why is this so slow' is answerable from the log)."""
     kind = event.get("event", "")
     sub = (event.get("subtask") or "").rsplit(".", 1)[-1]
     if kind == "start":
         console.print(f"[dim]┌ running {event.get('n_subtasks', 0)} subtask(s)…[/dim]")
     elif kind == "begin":
+        agent = event.get("agent") or "?"
+        model = event.get("model") or ""
+        model_tag = f" [dim]·[/dim] [cyan]{model}[/cyan]" if model else ""
         console.print(
-            f"[dim]│[/dim] [{event.get('agent') or '?'}] "
+            f"[dim]│[/dim] [{agent}]{model_tag} "
             f"[dim]·[/dim] {event.get('title', '')[:72]}"
         )
     elif kind == "end":
@@ -782,7 +786,15 @@ def _sync_event_printer(event: dict) -> None:
         }.get(status, "·")
         wall = event.get("wall_s", 0)
         tools = event.get("tool_calls", 0)
-        suffix = f"[dim]{_fmt_wall(wall)} · {tools} tool call{'s' if tools != 1 else ''}[/dim]"
+        pt = event.get("prompt_tokens")
+        ct = event.get("completion_tokens")
+        tools_str = f"{tools} tool call{'s' if tools != 1 else ''}"
+        tok_str = (
+            f" · {pt}↑ {ct}↓ tok"
+            if (pt is not None and ct is not None)
+            else ""
+        )
+        suffix = f"[dim]{_fmt_wall(wall)} · {tools_str}{tok_str}[/dim]"
         err = event.get("error") or ""
         if err:
             suffix += f" [yellow]{err[:80]}[/yellow]"
@@ -791,6 +803,11 @@ def _sync_event_printer(event: dict) -> None:
         console.print(
             f"[dim]│[/dim] [yellow]retry[/yellow] sub {sub} "
             f"[dim]({event.get('error', '')})[/dim]"
+        )
+    elif kind == "tool_use_retry":
+        console.print(
+            f"[dim]│[/dim] [yellow]retry-tools[/yellow] sub {sub} "
+            f"[dim]({event.get('reason', '')})[/dim]"
         )
     elif kind == "skip":
         console.print(
@@ -1217,64 +1234,94 @@ def _make_prompt_session() -> PromptSession:
         mouse_support=False,
     )
 
-HELP = """[bold]Core[/bold]
-  [cyan]/help[/cyan]                      show this message
-  [cyan]/agents[/cyan]                    list configured agents
-  [cyan]/models[/cyan]                    list installed Ollama models (with param size)
-  [cyan]/variants[/cyan] [family]         show released sizes per family; green=installed, dim=available to pull
-  [cyan]/pull[/cyan] <tag>                download a model from the Ollama registry (with progress bar)
-  [cyan]/context[/cyan]                   show loaded/max context and approximate RAM per agent
+_HELP_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("Core", [
+        ("/help",                 "show this message"),
+        ("/agents",                "list configured agents"),
+        ("/models",                "list installed Ollama models"),
+        ("/variants [family]",     "show released sizes per family"),
+        ("/pull <tag>",            "download a model from the Ollama registry"),
+        ("/context",               "show loaded/max context and RAM per agent"),
+        ("/quit · /exit",          "leave luxe"),
+        ("/clear",                 "drop the sticky agent"),
+    ]),
+    ("Tasks", [
+        ("/tasks",                 "list recent tasks"),
+        ("/tasks <goal>",          "plan + run in the background"),
+        ("/tasks --sync <goal>",   "plan + run synchronously"),
+        ("/tasks status [id]",     "snapshot of a task's status table"),
+        ("/tasks log [id]",        "print last events from log.jsonl"),
+        ("/tasks tail [id]",       "live-follow a task's event stream"),
+        ("/tasks watch [id]",      "auto-refreshing dashboard"),
+        ("/tasks abort [id]",      "signal a running background task"),
+        ("/tasks save [id]",       "assemble subtasks into a report"),
+    ]),
+    ("Code intelligence", [
+        ("/review <git-url>",      "clone/pull, review for flaws/bugs/security"),
+        ("/refactor <git-url>",    "clone/pull, suggest optimizations"),
+    ]),
+    ("Tool library", [
+        ("/tools",                 "list saved tools"),
+        ("/tools show <name>",     "print source of a saved tool"),
+        ("/tools remove <name>",   "delete a saved tool"),
+    ]),
+    ("Direct dispatch", [
+        ("/general <prompt>",      "chat, Q&A"),
+        ("/lookup <prompt>",       "quick factual lookup, snippet-only"),
+        ("/research <prompt>",     "deep web investigation"),
+        ("/calc <prompt>",         "arithmetic, estimation"),
+        ("/writing <prompt>",      "prose, drafts, in-folder fs"),
+        ("/code <prompt>",         "read/edit/run source"),
+        ("/image <prompt>",        "generate an image"),
+    ]),
+    ("Turn control", [
+        ("/retry",                 "rerun last prompt, same agent"),
+        ("/redo <agent>",          "rerun last prompt, different agent"),
+        ("/model <tag>",           "one-off model override next turn"),
+        ("/params <text>",         "force banner params value"),
+        ("/pin <text>",            "sticky note prepended to every prompt"),
+        ("/pins",                  "list current pins"),
+        ("/unpin [n]",             "remove pin n"),
+        ("/history [n]",           "show last n session events"),
+    ]),
+    ("Sessions", [
+        ("/session",               "current session id and path"),
+        ("/save <name>",           "bookmark current session"),
+        ("/sessions",              "list saved sessions"),
+        ("/resume <id-or-name>",   "switch to another session"),
+        ("/new",                   "start a fresh session"),
+    ]),
+    ("Memory & aliases", [
+        ("/memory",                "open ~/.luxe/memory.md in $EDITOR"),
+        ("/memory view",           "print current memory"),
+        ("/memory clear",          "delete memory"),
+        ("/alias add <name> <expansion>", "define a shortcut"),
+        ("/alias list",            "list aliases"),
+        ("/alias remove <name>",   "remove an alias"),
+    ]),
+]
 
-[bold]Tasks[/bold]
-  [cyan]/tasks[/cyan]                     list recent tasks (alive ones marked)
-  [cyan]/tasks[/cyan] <goal>              plan + run in the background (detached subprocess)
-  [cyan]/tasks --sync[/cyan] <goal>       plan + run synchronously in the REPL (blocks)
-  [cyan]/tasks status[/cyan] [id]         show full subtask status for a task (prefix ok)
-  [cyan]/tasks log[/cyan] [id]            tail the last events from a task's log.jsonl
-  [cyan]/tasks abort[/cyan] [id]          SIGTERM a running background task (SIGKILL after 5s)
-  [cyan]/tasks save[/cyan] [id]           assemble subtask outputs into a markdown/text report
-  [cyan]/tasks tail[/cyan] [id]           live-follow a running (or finished) task's event stream
-  [cyan]/tasks watch[/cyan] [id]          auto-refreshing dashboard of the status table (Ctrl-C to exit)
 
-[bold]Code intelligence[/bold]
-  [cyan]/review[/cyan] <git-url>          clone/pull, then review for flaws/bugs/security (background)
-  [cyan]/refactor[/cyan] <git-url>        clone/pull, then look for optimization opportunities (background)
-
-[bold]Tool library[/bold] (reusable calcs saved by agents)
-  [cyan]/tools[/cyan]                     list saved tools with descriptions and tags
-  [cyan]/tools show[/cyan] <name>         print the source of a saved tool
-  [cyan]/tools remove[/cyan] <name>       delete a saved tool
-  [cyan]/quit[/cyan] · [cyan]/exit[/cyan]              leave (session auto-saved)
-  [cyan]/clear[/cyan]                     drop the sticky agent; next prompt re-routes
-
-[bold]Direct dispatch[/bold] (skip the router)
-  [cyan]/general[/cyan] | [cyan]/research[/cyan] | [cyan]/writing[/cyan] | [cyan]/image[/cyan] | [cyan]/code[/cyan]  <prompt>
-
-[bold]Turn control[/bold]
-  [cyan]/retry[/cyan]                     rerun last prompt with same agent
-  [cyan]/redo[/cyan] <agent>              rerun last prompt with a different agent
-  [cyan]/model[/cyan] <tag>               one-off model override for the next turn
-  [cyan]/params[/cyan] <text>             force banner "params:" value (e.g. 27B); bare /params prints current; /params clear unsets
-  [cyan]/pin[/cyan] <text>                prepend a sticky note to every subsequent prompt
-  [cyan]/pins[/cyan]                      list current pins
-  [cyan]/unpin[/cyan] [n]                 remove pin #n (default: all)
-  [cyan]/history[/cyan] [n]               show the last n session events (default 10)
-
-[bold]Sessions[/bold]
-  [cyan]/session[/cyan]                   show current session id + path
-  [cyan]/save[/cyan] <name>               bookmark current session under <name>
-  [cyan]/sessions[/cyan]                  list saved sessions (bookmarks first)
-  [cyan]/resume[/cyan] <id-or-name>       switch to another session
-  [cyan]/new[/cyan]                       start a fresh session (reset totals + pins)
-
-[bold]Memory & aliases[/bold]
-  [cyan]/memory[/cyan]                    open ~/.luxe/memory.md in $EDITOR
-  [cyan]/memory view[/cyan]               print current memory
-  [cyan]/memory clear[/cyan]              delete memory
-  [cyan]/alias add[/cyan] <name> <expansion>
-  [cyan]/alias list[/cyan]
-  [cyan]/alias remove[/cyan] <name>
-"""
+def _render_help() -> "Group":
+    """Build the /help block as column-aligned Rich grids, one per
+    section. Every section's description column starts at the same
+    column as the widest command in that section + 2 spaces — no
+    ragged right edge. Command text goes through Text objects rather
+    than markup strings so literal `[family]` / `[id]` aren't parsed
+    as Rich style tags and eaten."""
+    blocks: list = []
+    for title, rows in _HELP_SECTIONS:
+        blocks.append(Text.from_markup(f"[bold]{title}[/bold]"))
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(no_wrap=True)
+        grid.add_column(no_wrap=True)
+        for cmd, desc in rows:
+            cmd_text = Text("  ")
+            cmd_text.append(cmd, style="cyan")  # literal, no markup parsing
+            grid.add_row(cmd_text, desc)
+        blocks.append(grid)
+        blocks.append(Text(""))
+    return Group(*blocks)
 
 BUILTIN_CMDS = {
     "/help", "/agents", "/session", "/models", "/quit", "/exit",
@@ -1398,7 +1445,7 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
     args = parts[1:]
 
     if cmd == "/help":
-        console.print(HELP)
+        console.print(_render_help())
         return "consumed"
     if cmd == "/agents":
         t = Table(show_header=False, box=None, padding=(0, 2))
