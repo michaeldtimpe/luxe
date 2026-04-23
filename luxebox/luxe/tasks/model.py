@@ -54,6 +54,7 @@ class Subtask:
     steps_taken: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    near_cap_turns: int = 0  # turns that used ≥80% of per-turn token cap
     wall_s: float = 0.0
     error: str = ""
 

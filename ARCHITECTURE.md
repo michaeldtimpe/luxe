@@ -21,24 +21,46 @@ configuration pattern:
 │   ┌───────────────────────────────────────────────────────────────┐   │
 │   │  luxe/          multi-agent Claude-Code-alike                 │   │
 │   │   ├─ cli.py           `luxe` typer entry point                │   │
-│   │   ├─ repl.py          REPL loop + rich output + stats line    │   │
+│   │   ├─ repl/            REPL loop split by concern              │   │
+│   │   │   ├─ core.py      dispatch, stats line, sticky mode       │   │
+│   │   │   ├─ tasks.py     /tasks subcommands + tail printer       │   │
+│   │   │   ├─ review.py    /review + /refactor + plan-review loop  │   │
+│   │   │   ├─ status.py    banner, /context, /tools                │   │
+│   │   │   ├─ models.py    /pull, /variants, /models               │   │
+│   │   │   ├─ aliases.py   /alias, /pin, /memory                   │   │
+│   │   │   ├─ help.py      /help registry                          │   │
+│   │   │   └─ prompt.py    prompt_toolkit session setup            │   │
 │   │   ├─ registry.py      LuxeConfig (YAML) — per-agent model,    │   │
-│   │   │                   prompt, tools, budgets                  │   │
+│   │   │                   prompt, tools, budgets, num_ctx         │   │
 │   │   ├─ session.py       append-only JSONL per session           │   │
 │   │   ├─ backend.py       Ollama /v1 factory wrapping Backend     │   │
 │   │   ├─ router.py        interpreter w/ dispatch + ask_user tools│   │
 │   │   ├─ runner.py        decision → specialist dispatcher        │   │
+│   │   ├─ tasks/           multi-step orchestrator                 │   │
+│   │   │   ├─ orchestrator.py subtask driver, shallow-read retry   │   │
+│   │   │   ├─ planner.py  goal → ordered subtasks                  │   │
+│   │   │   ├─ clarify.py  screener for clarifying questions        │   │
+│   │   │   ├─ model.py    Task/Subtask dataclasses + persistence   │   │
+│   │   │   ├─ report.py   markdown report assembly                 │   │
+│   │   │   ├─ run.py      subprocess entry (auto-saves report)     │   │
+│   │   │   └─ spawn.py    fork + SIGTERM helpers                   │   │
+│   │   ├─ tool_library.py  /calc's saved-formula tool library      │   │
 │   │   ├─ agents/                                                  │   │
 │   │   │   ├─ base.py      shared tool-use loop, usage accounting  │   │
 │   │   │   ├─ general.py   chat, no tools                          │   │
-│   │   │   ├─ research.py  web_search + fetch_url                  │   │
+│   │   │   ├─ lookup.py    single web_search (snippet-only fast)   │   │
+│   │   │   ├─ research.py  web_search + fetch_url + fetch_urls     │   │
 │   │   │   ├─ writing.py   fs read+write, higher temperature       │   │
 │   │   │   ├─ image.py     draw_things_generate                    │   │
-│   │   │   └─ code.py      full fs + bash + web surface            │   │
+│   │   │   ├─ code.py      full fs + bash + web surface            │   │
+│   │   │   ├─ review.py    read-only fs + read-only git            │   │
+│   │   │   ├─ refactor.py  read-only fs + read-only git            │   │
+│   │   │   └─ calc.py      create_tool + library-matched tools     │   │
 │   │   └─ tools/                                                   │   │
-│   │       ├─ fs.py        read_file, edit_file, glob, grep, ...   │   │
-│   │       ├─ shell.py     bash (allowlist), scoped to CWD         │   │
-│   │       ├─ web.py       DuckDuckGo + trafilatura extract        │   │
+│   │       ├─ fs.py         read_file, edit_file, glob, grep, ...  │   │
+│   │       ├─ shell.py      bash (allowlist), scoped to CWD        │   │
+│   │       ├─ web.py        DuckDuckGo + trafilatura + fetch_urls  │   │
+│   │       ├─ git_tools.py  git_diff / git_log / git_show          │   │
 │   │       └─ draw_things.py  HTTP /sdapi/v1/txt2img client        │   │
 │   └───────────────────────────────────────────────────────────────┘   │
 │                                                                       │
@@ -122,7 +144,11 @@ The shared agent loop (`luxe/agents/base.py`) takes those two, handles:
 
 `configs/agents.yaml` holds:
 - Top-level: `ollama_base_url`, `draw_things_url`, `image_output_dir`, `session_dir`
-- Per-agent: `model`, `system_prompt`, `temperature`, `max_steps`, `max_tokens_per_turn`, `max_wall_s`, `tools`, `enabled`
+- Per-agent: `model`, `system_prompt`, `temperature`, `max_steps`,
+  `max_tokens_per_turn`, `max_wall_s`, `tools`, `enabled`,
+  `min_tool_calls` (investigation floor), `num_ctx` (Ollama
+  `options.num_ctx` override), `endpoint` (per-agent base URL, e.g.
+  llama-server for Gemma 3)
 
 `LuxeConfig` (pydantic) validates on load. The runner applies cross-cutting
 settings (Draw Things endpoint, image output dir) once per dispatch before

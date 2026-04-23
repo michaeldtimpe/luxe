@@ -7,13 +7,17 @@ function returns a compact dict that slots into the tool-result channel.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
+
+import httpx
 
 from harness.backends import ToolDef
 
 MAX_RESULTS_CAP = 8
 MAX_FETCH_CHARS = 12000
+MAX_FETCH_URLS = 4
 
 
 def tool_defs() -> list[ToolDef]:
@@ -52,6 +56,27 @@ def tool_defs() -> list[ToolDef]:
                     "url": {"type": "string", "description": "Absolute http(s) URL."},
                 },
                 "required": ["url"],
+            },
+        ),
+        ToolDef(
+            name="fetch_urls",
+            description=(
+                "Fetch up to 4 URLs concurrently and return each one's "
+                "readable main content. Returns a JSON list of "
+                "{url, text, truncated, error}. Prefer this over multiple "
+                "fetch_url calls when you already know which pages to read."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": MAX_FETCH_URLS,
+                        "description": "Absolute http(s) URLs.",
+                    },
+                },
+                "required": ["urls"],
             },
         ),
     ]
@@ -118,8 +143,67 @@ def fetch_url(args: dict[str, Any]) -> tuple[Any, str | None]:
     )
 
 
+async def _fetch_one_async(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
+    """Async HTTP GET + sync trafilatura extract. Runs the parse on the
+    event loop because trafilatura is pure-Python and the whole point of
+    this helper is to overlap the network waits across URLs."""
+    import trafilatura
+
+    entry: dict[str, Any] = {"url": url, "text": "", "truncated": False, "error": None}
+    if not url or not url.startswith(("http://", "https://")):
+        entry["error"] = "url must be absolute http(s)"
+        return entry
+    try:
+        r = await client.get(url, follow_redirects=True, timeout=20.0)
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:  # noqa: BLE001
+        entry["error"] = f"fetch failed: {type(e).__name__}: {e}"
+        return entry
+    text = trafilatura.extract(
+        html, include_comments=False, include_tables=True, favor_recall=True,
+    ) or ""
+    text = text.strip()
+    if not text:
+        entry["error"] = "no readable content extracted"
+        return entry
+    if len(text) > MAX_FETCH_CHARS:
+        entry["truncated"] = True
+        text = text[:MAX_FETCH_CHARS]
+    entry["text"] = text
+    return entry
+
+
+async def _fetch_urls_async(urls: list[str]) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient() as client:
+        return await asyncio.gather(*(_fetch_one_async(client, u) for u in urls))
+
+
+def fetch_urls(args: dict[str, Any]) -> tuple[Any, str | None]:
+    raw = args.get("urls") or []
+    if not isinstance(raw, list) or not raw:
+        return None, "urls must be a non-empty list"
+    urls = [str(u).strip() for u in raw][:MAX_FETCH_URLS]
+    try:
+        results = asyncio.run(_fetch_urls_async(urls))
+    except RuntimeError:
+        # Already inside an event loop — fall back to the serial path so
+        # we never deadlock. Never expected inside the sync agent loop.
+        results = []
+        for u in urls:
+            out, err = fetch_url({"url": u})
+            if err:
+                results.append({"url": u, "text": "", "truncated": False, "error": err})
+            else:
+                entry = json.loads(out)
+                entry.setdefault("error", None)
+                results.append(entry)
+    return json.dumps(results, ensure_ascii=False), None
+
+
 # Dispatch table for agent wiring.
 TOOL_FNS = {
     "web_search": web_search,
     "fetch_url": fetch_url,
+    "fetch_urls": fetch_urls,
 }

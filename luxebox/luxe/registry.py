@@ -28,7 +28,12 @@ ToolName = Literal[
     "bash",
     "web_search",
     "fetch_url",
+    "fetch_urls",
     "draw_things_generate",
+    "create_tool",
+    "git_diff",
+    "git_log",
+    "git_show",
 ]
 
 
@@ -50,6 +55,7 @@ class AgentConfig(BaseModel):
     notes: str = ""
     endpoint: str | None = None  # override top-level ollama_base_url (e.g. llama-server)
     history_keep_last: int = 4  # how many prior session messages to replay on dispatch
+    num_ctx: int | None = None  # Ollama num_ctx override — passed as `options.num_ctx`
 
 
 class LuxeConfig(BaseModel):

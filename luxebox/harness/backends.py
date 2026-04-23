@@ -90,6 +90,7 @@ class Backend:
         max_tokens: int = 2048,
         temperature: float = 0.2,
         stream: bool = True,
+        extra_body: dict[str, Any] | None = None,
     ) -> Response:
         payload: dict[str, Any] = {
             "model": self.model_id,
@@ -101,6 +102,11 @@ class Backend:
         if tools:
             payload["tools"] = [t.to_openai() for t in tools]
             payload["tool_choice"] = "auto"
+        # Merge caller-supplied extras (e.g. `{"options": {"num_ctx": N}}`
+        # for Ollama). Top-level fields like model/messages are reserved
+        # — callers should only pass server-specific pass-throughs.
+        if extra_body:
+            payload.update(extra_body)
 
         if stream:
             # Ask the server to include a `usage` block in its final stream

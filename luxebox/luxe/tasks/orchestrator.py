@@ -120,6 +120,7 @@ class Orchestrator:
                 "wall_s": round(sub.wall_s, 1),
                 "prompt_tokens": sub.prompt_tokens,
                 "completion_tokens": sub.completion_tokens,
+                "near_cap_turns": sub.near_cap_turns,
             })
 
         if aborted:
@@ -176,6 +177,7 @@ class Orchestrator:
         sub.steps_taken = result.steps_taken
         sub.prompt_tokens = result.prompt_tokens
         sub.completion_tokens = result.completion_tokens
+        sub.near_cap_turns = result.near_cap_turns
         sub.wall_s = result.wall_s
         if result.aborted:
             sub.status = "blocked"

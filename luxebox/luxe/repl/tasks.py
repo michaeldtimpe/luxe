@@ -257,7 +257,7 @@ def _tasks_save(partial: str | None) -> None:
     and write it into the task's target folder. Defaults to the repo root
     for /review and /refactor runs; otherwise falls back to cwd."""
     from luxe.repl.prompt import _ask_styled
-    from luxe.repl.status import _fmt_wall
+    from luxe.tasks.report import build_markdown_report
     task = _tasks_resolve(partial)
     if not task:
         return
@@ -278,28 +278,7 @@ def _tasks_save(partial: str | None) -> None:
     else:
         target_dir = Path.cwd()
 
-    # Build the report body.
-    lines: list[str] = [
-        f"# Task report — {task.id}",
-        "",
-        f"- **Goal**: {task.goal}",
-        f"- **Status**: {task.status}",
-        f"- **Started**: {task.created_at}",
-        f"- **Finished**: {task.completed_at}",
-        "",
-    ]
-    for s in task.subtasks:
-        lines.append(f"## {s.index}. {s.title}")
-        lines.append(f"*Agent: `{s.agent or 'route'}` · status: {s.status} · "
-                     f"wall: {_fmt_wall(s.wall_s)} · tool calls: {s.tool_calls_total}*")
-        lines.append("")
-        if s.error:
-            lines.append(f"> **Error:** {s.error}")
-            lines.append("")
-        if s.result_text:
-            lines.append(s.result_text.rstrip())
-            lines.append("")
-    body = "\n".join(lines) + "\n"
+    body = build_markdown_report(task)
 
     # Show summary + prompt for filename / format.
     console.print()
@@ -390,6 +369,9 @@ def _sync_event_printer(event: dict) -> None:
             else ""
         )
         suffix = f"[dim]{_fmt_wall(wall)} · {tools_str}{tok_str}[/dim]"
+        near_cap = event.get("near_cap_turns") or 0
+        if near_cap:
+            suffix += f" [yellow]⚠ {near_cap} near-cap turn(s)[/yellow]"
         err = event.get("error") or ""
         if err:
             suffix += f" [yellow]{err[:80]}[/yellow]"
@@ -408,6 +390,9 @@ def _sync_event_printer(event: dict) -> None:
         console.print(
             f"[dim]│[/dim] [dim]skip sub {sub} ({event.get('reason', '')})[/dim]"
         )
+    elif kind == "report_saved":
+        path = event.get("path", "")
+        console.print(f"[dim]│[/dim] [green]📝 saved[/green] [cyan]{path}[/cyan]")
     elif kind == "finish":
         console.print(f"[dim]└ task {event.get('status', '')}[/dim]")
 

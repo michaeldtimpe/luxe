@@ -14,10 +14,12 @@ import os
 import signal
 import sys
 import traceback
+from pathlib import Path
 
 from luxe.registry import load_config
 from luxe.tasks.model import _now, append_log_event, load, persist
 from luxe.tasks.orchestrator import Orchestrator
+from luxe.tasks.report import build_markdown_report
 
 
 def main() -> int:
@@ -58,7 +60,38 @@ def main() -> int:
             "traceback": traceback.format_exc(),
         })
         return 1
+
+    _auto_save_report(task)
     return 0
+
+
+def _auto_save_report(task) -> None:
+    """Write a markdown report to the review/refactor target dir so the
+    user doesn't have to remember `/tasks save` after a background run.
+    No-op unless the task has a `repo_path` pointer (written by the
+    review flow) and reached a usable terminal state."""
+    if task.status not in ("done", "blocked"):
+        return
+    repo_ptr = task.dir() / "repo_path"
+    if not repo_ptr.exists():
+        return
+    try:
+        target_dir = Path(repo_ptr.read_text().strip())
+    except OSError:
+        return
+    if not target_dir.exists() or not target_dir.is_dir():
+        return
+    first_agent = task.subtasks[0].agent if task.subtasks else ""
+    prefix = "REFACTOR" if first_agent == "refactor" else "REVIEW"
+    out = target_dir / f"{prefix}-{task.id}.md"
+    try:
+        out.write_text(build_markdown_report(task))
+    except OSError as e:
+        append_log_event(task, {"event": "report_save_failed", "error": str(e)})
+        return
+    append_log_event(task, {
+        "event": "report_saved", "path": str(out), "bytes": out.stat().st_size,
+    })
 
 
 if __name__ == "__main__":
