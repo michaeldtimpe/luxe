@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from luxe import prefs
-from luxe.agents import calc, code, general, image, refactor, research, review, writing
+from luxe.agents import (
+    calc, code, general, image, lookup, refactor, research, review, writing,
+)
 from luxe.agents.base import AgentResult
 from luxe.backend import make_backend
 from luxe.registry import LuxeConfig
@@ -20,6 +22,7 @@ _SPECIALISTS = {
     "review": review.run,
     "refactor": refactor.run,
     "calc": calc.run,
+    "lookup": lookup.run,
 }
 
 

@@ -1694,20 +1694,29 @@ def _print_stats(decision, result, state: ReplState, cfg: LuxeConfig) -> None:
     free = max(ctx_total - used, 0)
     pct_free = (free / ctx_total * 100.0) if ctx_total else 100.0
 
-    # Effective decode tokens/sec — a big perf hint. Sub-10 tok/s on a
-    # 30B model means Metal isn't warmed up or the context prefill
-    # dominated; 20+ tok/s is healthy.
+    # True decode rate uses pure model time, not total wall. Tool round-
+    # trips (web fetch, bash, file I/O) can dominate wall_s and made the
+    # old `completion / wall_s` ratio look misleadingly slow (e.g. "2
+    # tok/s" for a research turn where actual decode was ~17 tok/s but
+    # most of the wall was HTTP + context prefill).
+    model_s = result.model_wall_s or result.wall_s
+    tool_wait_s = max(0.0, result.wall_s - model_s) if result.model_wall_s else 0.0
     tok_per_s = (
-        result.completion_tokens / result.wall_s
-        if result.wall_s > 0 and result.completion_tokens > 0
+        result.completion_tokens / model_s
+        if model_s > 0 and result.completion_tokens > 0
         else 0.0
     )
-    rate = f" · [dim]{tok_per_s:.0f} tok/s[/dim]" if tok_per_s else ""
+    rate = f" · [dim]{tok_per_s:.0f} tok/s decode[/dim]" if tok_per_s else ""
+    tool_wait = (
+        f" [dim][tools: {_fmt_wall(tool_wait_s)}][/dim]"
+        if tool_wait_s >= 1.0
+        else ""
+    )
     turn = (
         f"[dim]{decision.agent} · {_fmt_wall(result.wall_s)} · "
         f"{result.prompt_tokens}↑ {result.completion_tokens}↓ tokens · "
         f"{result.steps_taken} steps · {result.tool_calls_total} tool calls[/dim]"
-        f"{rate}"
+        f"{rate}{tool_wait}"
     )
     ctx_line = (
         f"[dim]ctx: {used:,}/{ctx_total:,} ({pct_free:.0f}% free) · "

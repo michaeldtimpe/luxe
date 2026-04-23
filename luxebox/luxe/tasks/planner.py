@@ -19,16 +19,24 @@ Each entry: {"title": "what to do", "agent": "<name>"}
 
 Specialists (pick the best fit; misrouting wastes compute):
 - general  : Short Q&A, explanations, definitions, simple factual
-             answers. Quick and cheap. NOT for multi-step arithmetic.
+             answers from training knowledge. Quick and cheap.
+             NOT for multi-step arithmetic, NOT for anything needing
+             fresh web data.
+- lookup   : ONE-sentence factual web lookup — dates, versions, specs,
+             prices, release years, single numbers/strings. Single
+             web_search, snippet-only. Use over `research` whenever a
+             cited number/line suffices, because it's 5–10× faster.
 - calc     : Arithmetic, unit conversion, cost/time/distance estimation,
              step-by-step reasoning over numbers. Use this whenever the
              subtask is "compute / estimate / how long / how much / how
              far / add / subtract". Bigger model than `general`, picks
              up where `general` would hallucinate the math.
-- research : Needs fresh web data — current events, pricing lookups,
-             driving routes, store hours, charging-station locations,
-             geography. Use whenever the answer depends on info outside
-             the model's training cutoff.
+- research : Deep web investigation — multi-page synthesis, comparison
+             across sources, anything requiring reading full pages
+             (driving routes with specific turn-by-turn instructions,
+             store hours, current-event context, charging-station
+             details across multiple networks). Use only when `lookup`
+             isn't enough.
 - writing  : Prose, editorial review, creative writing, drafting or
              revising documents in the user's local folder.
 - code     : READ OR EDIT SOURCE CODE IN A LOCAL REPOSITORY. Running

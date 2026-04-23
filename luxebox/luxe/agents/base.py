@@ -141,6 +141,12 @@ class AgentResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     wall_s: float = 0.0
+    # Sum of `backend.chat(...)` durations across all agent steps. Always
+    # ≤ wall_s. The gap between the two is time the model wasn't running
+    # — tool execution, web round-trips, session I/O. Used so tok/s
+    # reflects actual decode rate rather than "output tokens divided by
+    # total wall, including HTTP waits."
+    model_wall_s: float = 0.0
     tool_calls: list[ToolCall] = field(default_factory=list)  # structured across all steps
 
 
@@ -204,6 +210,7 @@ def run_agent(
     final_text = ""
     prompt_tokens = 0
     completion_tokens = 0
+    model_wall_s = 0.0  # sum of backend.chat() durations; excludes tool exec
 
     def _result(aborted: bool = False, reason: str = "") -> AgentResult:
         return AgentResult(
@@ -216,6 +223,7 @@ def run_agent(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             wall_s=time.monotonic() - started,
+            model_wall_s=model_wall_s,
             tool_calls=list(tool_calls_accum),
         )
 
@@ -237,6 +245,7 @@ def run_agent(
             return _result(True, "interrupted (Ctrl-C)")
         prompt_tokens += response.timing.prompt_tokens
         completion_tokens += response.timing.completion_tokens
+        model_wall_s += response.timing.total_s
 
         # Ollama emits most qwen/hermes tool calls in `tool_calls` already,
         # but qwen2.5-coder sometimes falls back to text JSON and Gemma 3
