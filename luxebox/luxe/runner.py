@@ -13,6 +13,7 @@ from luxe.backend import make_backend
 from luxe.registry import LuxeConfig
 from luxe.router import RouterDecision
 from luxe.session import Session
+from luxe.tasks.cache import ToolCache
 from luxe.tools import draw_things
 
 _SPECIALISTS = {
@@ -35,6 +36,7 @@ def dispatch(
     session: Session | None = None,
     model_override: str | None = None,
     on_tool_event: Callable[[dict[str, Any]], None] | None = None,
+    tool_cache: ToolCache | None = None,
 ) -> AgentResult:
     if decision.agent not in _SPECIALISTS:
         return AgentResult(
@@ -63,6 +65,16 @@ def dispatch(
     endpoint = agent_cfg.endpoint or cfg.ollama_base_url
     backend = make_backend(agent_cfg.model, base_url=endpoint)
     runner = _SPECIALISTS[decision.agent]
+    # Task-scoped memoization is only meaningful for agents that dispatch
+    # multiple read-only tool calls within one Task. Pass the cache only
+    # to those; the rest keep their simpler signatures.
+    if decision.agent in ("review", "refactor", "code") and tool_cache is not None:
+        return runner(
+            backend, agent_cfg,
+            task=decision.task, session=session,
+            on_tool_event=on_tool_event,
+            tool_cache=tool_cache,
+        )
     return runner(
         backend, agent_cfg,
         task=decision.task, session=session,

@@ -53,6 +53,7 @@ configuration pattern:
 │   │   │   ├─ planner.py  goal → ordered subtasks                  │   │
 │   │   │   ├─ clarify.py  screener for clarifying questions        │   │
 │   │   │   ├─ model.py    Task/Subtask dataclasses + persistence   │   │
+│   │   │   ├─ cache.py    task-scoped ToolCache + wrap_tool_fns    │   │
 │   │   │   ├─ report.py   markdown report assembly                 │   │
 │   │   │   ├─ run.py      subprocess entry (auto-saves report)     │   │
 │   │   │   └─ spawn.py    fork + SIGTERM helpers                   │   │
@@ -273,6 +274,33 @@ Python repo never sees `lint_js` / `typecheck_ts` / `lint_rust` /
 tokens saved per turn on single-language repos — the tool-description
 block is dead weight otherwise.
 
+### Task-scoped tool cache + schema validation
+
+`luxe/tasks/cache.py` defines a per-Task `ToolCache` that memoizes
+deterministic read-only tool calls by `(name, hash(args))`. The
+`Orchestrator` allocates a fresh cache on every `run()` and threads it
+through `runner.dispatch` → `review|refactor|code.run` →
+`wrap_tool_fns`. The wrapping layer gates membership: `read_file`,
+`list_dir`, `glob`, `grep`, the ten static analyzers, and the three
+read-only git tools are cached; `write_file`, `edit_file`, `bash`,
+and `web_*` never are. The pre-fix pattern had review subtasks 2–6
+each re-reading the same three source files and re-running the same
+four security analyzers — the cache collapses those repeats into one
+real invocation, and the orchestrator emits per-subtask
+`cache_hits` / `cache_misses` in its `end` events so the tail + bench
+harness can see the payoff directly.
+
+Client-side JSONSchema validation lives in
+`luxe/agents/base.py:_validate_args`. Before each tool fn dispatch,
+the agent checks `required` fields are present and primitive types
+match the declared schema; a mismatch returns a structured error via
+the normal tool-result path (so the model sees it and retries) and
+increments `AgentResult.schema_rejects` → `Subtask.schema_rejects` →
+the task-level finish event. This catches the common model mistake
+(`grep path=foo.py` with no `pattern`) one turn earlier than the
+previous behaviour, which let the malformed call reach the ripgrep
+subprocess and surface as a noisier runtime `KeyError`.
+
 ### Observability: summary vs. verbose tail
 
 `/tasks tail` has two modes driven by a single flag. The default
@@ -295,6 +323,30 @@ path. The orchestrator already skipped non-`pending` subtasks
 free of special-case logic on the execution side — completed subtasks
 stay done and their `result_text` continues to seed
 `_augment_with_prior`.
+
+### Orchestrator performance history
+
+`luxebox/scripts/bench_orchestrator.py` is an append-only history
+of task-level orchestration metrics. Records land in
+`results/orchestrator_bench/history.jsonl`, one JSON object per run,
+stamped with the short git rev. Three subcommands:
+
+- `import <task-id>` reads a finished `~/.luxe/tasks/<id>` off disk,
+  reconstructs totals from `state.json` + `log.jsonl`, and appends a
+  row. Used to backfill baselines from completed sessions without
+  re-running.
+- `run "<goal>" [--cwd <path>]` plans + runs a fresh task against the
+  Orchestrator, then appends. Requires Ollama + the review model.
+- `show [-n N]` tails the history with per-row deltas (wall time,
+  tool calls, cache hits/misses, schema rejects, tokens) so a
+  regression between two commits is visible at a glance.
+
+The point isn't to micro-benchmark model decode — that's what
+`harness/metrics.py` and the existing benchmarks cover. It's to track
+the things a language/runtime change can actually move: how often the
+orchestrator spent wall time on work it already had cached, how often
+it dispatched malformed tool calls, how often it spent tokens re-
+reading the same files.
 
 ## Scoping / safety
 

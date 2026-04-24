@@ -20,6 +20,7 @@ from luxe.agents.base import AgentResult, run_agent
 from luxe.registry import AgentConfig
 from luxe.repo_survey import analyze_repo, size_budgets
 from luxe.session import Session
+from luxe.tasks.cache import ToolCache, wrap_tool_fns
 from luxe.tools import analysis, fs, shell, web
 
 
@@ -59,6 +60,7 @@ def run(
     session: Session | None = None,
     read_only: bool = False,
     on_tool_event: Callable[[dict[str, Any]], None] | None = None,
+    tool_cache: ToolCache | None = None,
 ) -> AgentResult:
     cfg = _resize_for_cwd(cfg)
     tool_defs = list(fs.read_only_defs())
@@ -73,6 +75,15 @@ def run(
         tool_fns.update(fs.MUTATION_FNS)
         tool_defs.extend(shell.tool_defs())
         tool_fns.update(shell.TOOL_FNS)
+
+    if tool_cache is not None:
+        # Mutations (write_file / edit_file) and shell calls are
+        # deliberately NOT in the cacheable set — their behavior depends
+        # on (and changes) filesystem state. Web fetches are also
+        # excluded: URLs can change between calls and the cost of a
+        # duplicate fetch is usually network, not compute.
+        cacheable = set(fs.READ_ONLY_FNS) | set(analysis.TOOL_FNS)
+        tool_fns = wrap_tool_fns(tool_fns, tool_cache, cacheable)
 
     return run_agent(
         backend,

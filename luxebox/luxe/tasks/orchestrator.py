@@ -18,6 +18,7 @@ from luxe import runner as _runner
 from luxe.registry import LuxeConfig
 from luxe.router import RouterDecision, route as _route
 from luxe.session import Session
+from luxe.tasks.cache import ToolCache
 from luxe.tasks.model import Subtask, Task, _now, append_log_event, persist
 from luxe.tools import fs as _fs
 from shared.trace_hints import parse_trace_paths
@@ -36,6 +37,10 @@ class Orchestrator:
         # to tail-print progress lines. Background subprocess runs leave
         # it None — their equivalent is log.jsonl + /tasks tail.
         self.on_event = on_event
+        # Task-scoped tool-call cache. Freshly allocated at the start of
+        # every `run()` so entries never leak across tasks (file mtimes
+        # could change between invocations). See luxe/tasks/cache.py.
+        self.tool_cache: ToolCache = ToolCache()
 
     def _emit(self, task: Task, event: dict[str, Any]) -> None:
         """Persist the event to log.jsonl AND fan out to the optional
@@ -59,6 +64,9 @@ class Orchestrator:
             raise ValueError("task has no subtasks; plan before running")
 
         task.status = "running"
+        # Reset task-scoped cache so resuming an older task doesn't
+        # inherit a stale map from whatever Orchestrator last ran.
+        self.tool_cache = ToolCache()
         persist(task)
         self._emit(task, {"event": "start", "n_subtasks": len(task.subtasks)})
 
@@ -109,6 +117,10 @@ class Orchestrator:
                 "model": agent_model,
             })
 
+            # Snapshot cache counters to compute this subtask's delta.
+            hits_before = self.tool_cache.hits
+            misses_before = self.tool_cache.misses
+
             self._run_subtask(sub, task)
 
             if not sub.completed_at:
@@ -122,6 +134,9 @@ class Orchestrator:
                 "prompt_tokens": sub.prompt_tokens,
                 "completion_tokens": sub.completion_tokens,
                 "near_cap_turns": sub.near_cap_turns,
+                "schema_rejects": sub.schema_rejects,
+                "cache_hits": self.tool_cache.hits - hits_before,
+                "cache_misses": self.tool_cache.misses - misses_before,
                 "started_at": sub.started_at,
                 "completed_at": sub.completed_at,
             })
@@ -133,7 +148,16 @@ class Orchestrator:
             task.status = "done" if all_ok else "blocked"
         task.completed_at = _now()
         persist(task)
-        self._emit(task, {"event": "finish", "status": task.status})
+        self._emit(task, {
+            "event": "finish",
+            "status": task.status,
+            # Totals for the whole task so the tail / bench harness can
+            # see how effective cross-subtask memoization was without
+            # walking every subtask record.
+            "cache_hits": self.tool_cache.hits,
+            "cache_misses": self.tool_cache.misses,
+            "schema_rejects": sum(s.schema_rejects for s in task.subtasks),
+        })
         return task
 
     # ── internals ──────────────────────────────────────────────────────
@@ -186,6 +210,7 @@ class Orchestrator:
         result = _runner.dispatch(
             decision, dispatch_cfg,
             session=self.session, on_tool_event=_on_tool,
+            tool_cache=self.tool_cache,
         )
         sub.agent = agent
         sub.result_text = result.final_text or ""
@@ -195,6 +220,7 @@ class Orchestrator:
         sub.prompt_tokens = result.prompt_tokens
         sub.completion_tokens = result.completion_tokens
         sub.near_cap_turns = result.near_cap_turns
+        sub.schema_rejects = result.schema_rejects
         sub.wall_s = result.wall_s
         if result.aborted:
             sub.status = "blocked"
@@ -248,6 +274,7 @@ class Orchestrator:
             retry_result = _runner.dispatch(
                 retry_decision, dispatch_cfg,
                 session=self.session, on_tool_event=_on_tool,
+                tool_cache=self.tool_cache,
             )
             # Accept the retry only if it did better on the depth axis.
             if not _inspection_too_shallow(
@@ -260,6 +287,7 @@ class Orchestrator:
                 sub.steps_taken += retry_result.steps_taken
                 sub.prompt_tokens += retry_result.prompt_tokens
                 sub.completion_tokens += retry_result.completion_tokens
+                sub.schema_rejects += retry_result.schema_rejects
                 sub.wall_s += retry_result.wall_s
             else:
                 # The model refuses to call tools even when nudged twice.
@@ -282,6 +310,7 @@ class Orchestrator:
                     forced_result = _runner.dispatch(
                         forced_decision, dispatch_cfg,
                         session=self.session, on_tool_event=_on_tool,
+                        tool_cache=self.tool_cache,
                     )
                     sub.result_text = forced_result.final_text or sub.result_text
                     # Not real agent tool calls, but the orchestrator
@@ -289,6 +318,7 @@ class Orchestrator:
                     sub.tool_calls_total += forced.count("```grep-output")
                     sub.prompt_tokens += forced_result.prompt_tokens
                     sub.completion_tokens += forced_result.completion_tokens
+                    sub.schema_rejects += forced_result.schema_rejects
                     sub.wall_s += forced_result.wall_s
                     sub.error = (
                         "agent wouldn't use tools — orchestrator "

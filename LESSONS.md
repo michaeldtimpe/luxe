@@ -587,6 +587,57 @@ treat "always use the LLM" as a default; treat it as a fallback.
 
 ---
 
+## Cross-subtask redundancy dwarfs the per-subtask win
+
+A `/review` run on elara (17 Python files, 7.8k LOC) took ~50 minutes.
+Roughly all of that was 32B-Qwen decode time; orchestration overhead
+is well under 5%. But the decode time was buying a lot less than it
+should have been:
+
+- Subtask 2 (docs / orient) already ran the full security-tool suite
+  — `security_scan`, `deps_audit`, `security_taint`, `secrets_scan`.
+  Subtask 3, whose whole job was *security*, ran the same four tools
+  twice before the shallow-inspection retry forced it to read real
+  files.
+- Subtasks 3, 4, 5, 6 each read the same three source files
+  (`elara_kill.py`, `elara_task.py`, `tools/calculate_distances_to_chargers.py`).
+  That's 4× disk hits and 4× the resulting context tokens per file on
+  a repo small enough that "just hold everything in view" was always
+  on the table.
+- One subtask dispatched `grep path=elara_kill.py` with no `pattern` —
+  a malformed call that failed at ripgrep-invocation time, wasting a
+  turn on a structured error the agent could have gotten client-side.
+
+The obvious fix — a task-scoped `ToolCache` keyed by
+`(name, hash(args))` — is the cheap bit. The harder judgement was
+*what to cache*. Read-only fs, read-only git, and all ten static
+analyzers are deterministic during a task run (no file writes happen
+on a review pass), so they're safe. Mutations (`write_file`,
+`edit_file`, `bash`) and web fetches are not, and the wrapping layer
+in `luxe/tasks/cache.py:wrap_tool_fns` gates them out. Errors get
+cached too — a malformed call won't magically succeed on retry with
+the same args, so re-running it is pure waste.
+
+Two rules fell out of tracking the fix:
+
+1. **Inference-bound doesn't mean language-bound.** The Python
+   orchestrator costs microseconds per event; a rewrite in Go or Rust
+   would have recovered nothing. The wins came from avoiding decode
+   cycles the model shouldn't have spent in the first place. Track
+   orchestration-level metrics separately from model-level metrics —
+   `scripts/bench_orchestrator.py` does this for luxe, appending
+   `wall_s / tool_calls / cache_hits / schema_rejects / tokens` to a
+   JSONL history with the git rev, so a regression has an audit
+   trail.
+2. **Validate tool-call args client-side before dispatch.** A
+   lightweight JSONSchema check (required fields + primitive types,
+   no recursive object validation) inside `luxe/agents/base.py`
+   converts "agent emitted garbage, tool errored with a KeyError" into
+   "agent emitted garbage, got a schema error back on the same turn
+   and retried." Full `jsonschema` isn't worth the dep — the common
+   model failure is missing-field or wrong-primitive-type, which is
+   ~40 lines of code.
+
 ## Live tool telemetry needs its own tap, separate from the task timeline
 
 The task log event stream evolved from five coarse events

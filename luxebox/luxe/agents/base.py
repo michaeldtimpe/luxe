@@ -113,6 +113,54 @@ def _safe_json(s: str) -> dict[str, Any] | None:
         return None
 
 
+# Light JSONSchema subset. Covers the mistakes models actually make
+# (missing required field, wrong primitive type) without pulling in a
+# full jsonschema dep. Nested object/array validation is intentionally
+# skipped — an invalid nested payload surfaces as a runtime error from
+# the tool fn, which is already handled by the normal except path.
+_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
+    "string": str,
+    "number": (int, float),
+    "integer": int,
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
+
+
+def _validate_args(defn: ToolDef | None, args: dict[str, Any]) -> str | None:
+    """Return None if `args` satisfies `defn.parameters`, otherwise an
+    error string the agent will see as a tool result.
+
+    Catches the common model failure mode (e.g. `grep` without a
+    `pattern`) client-side, so a busted call becomes an immediate
+    in-turn error message instead of a subprocess dispatch that wastes
+    seconds and yields a less informative traceback."""
+    if defn is None:
+        return None
+    params = defn.parameters or {}
+    required = params.get("required") or []
+    props = params.get("properties") or {}
+    for name in required:
+        if name not in args:
+            return f"schema: missing required argument '{name}'"
+    for name, value in args.items():
+        schema = props.get(name)
+        if not isinstance(schema, dict):
+            continue
+        expected = schema.get("type")
+        py_type = _TYPE_MAP.get(expected) if isinstance(expected, str) else None
+        if py_type is None:
+            continue
+        # `bool` is a subclass of `int` in Python — exclude when the
+        # schema asks for a number so `true` doesn't slip through as 1.
+        if expected in ("integer", "number") and isinstance(value, bool):
+            return f"schema: argument '{name}' must be {expected}, got boolean"
+        if not isinstance(value, py_type):
+            return f"schema: argument '{name}' must be {expected}"
+    return None
+
+
 def _extract_bare_json_objects(text: str) -> list[dict[str, Any]]:
     """Walk `text` and pull out every top-level JSON object it contains,
     regardless of whether it's inside a code fence or not. Uses
@@ -205,6 +253,13 @@ class AgentResult:
     # cfg.max_tokens_per_turn — a signal that the per-turn cap is
     # probably truncating real output and the YAML budget should go up.
     near_cap_turns: int = 0
+    # Number of tool calls this agent attempted whose arguments failed
+    # client-side JSONSchema validation (`_validate_args`). These never
+    # reached the tool fn; the agent got a structured error back and
+    # typically retried on the next turn. Counted so the orchestrator
+    # and benchmark harness can see when models are emitting malformed
+    # calls.
+    schema_rejects: int = 0
 
 
 def run_agent(
@@ -270,6 +325,8 @@ def run_agent(
     completion_tokens = 0
     model_wall_s = 0.0  # sum of backend.chat() durations; excludes tool exec
     near_cap_turns = 0
+    schema_rejects = 0
+    tool_def_by_name = {d.name: d for d in (tool_defs or [])}
     # Extras for Ollama pass-throughs. `num_ctx` lets agents override the
     # loaded server context per-agent without touching modelfiles — most
     # useful for coder models where large contexts trade throughput for
@@ -292,6 +349,7 @@ def run_agent(
             model_wall_s=model_wall_s,
             tool_calls=list(tool_calls_accum),
             near_cap_turns=near_cap_turns,
+            schema_rejects=schema_rejects,
         )
 
     while step < cfg.max_steps:
@@ -424,10 +482,17 @@ def run_agent(
                 result: Any = None
                 err: str | None = f"unknown tool: {call.name}"
             else:
-                try:
-                    result, err = fn(call.arguments)
-                except Exception as e:  # noqa: BLE001
-                    result, err = None, f"{type(e).__name__}: {e}"
+                schema_err = _validate_args(
+                    tool_def_by_name.get(call.name), call.arguments
+                )
+                if schema_err is not None:
+                    schema_rejects += 1
+                    result, err = None, schema_err
+                else:
+                    try:
+                        result, err = fn(call.arguments)
+                    except Exception as e:  # noqa: BLE001
+                        result, err = None, f"{type(e).__name__}: {e}"
 
             tool_content = _trim(result if err is None else f"ERROR: {err}")
             # Stamp telemetry on the ToolCall so downstream (Subtask,
