@@ -53,9 +53,17 @@ Fuller walkthrough in **`luxebox/README.md`**.
 - **luxe CLI**: router + 9 specialists live. Task orchestrator with
   background execution, clarifying questions, plan-preview, and
   context forwarding between subtasks. Writing agent served via
-  `llama-server` for Gemma 3 27B with native tool-call support. Code
-  agent uses `qwen2.5-coder:14b-instruct` with known depth limits —
-  see LESSONS.md.
+  `llama-server` for Gemma 3 27B with native tool-call support.
+- **Code intelligence**: `/review` and `/refactor` run on
+  `qwen2.5:32b-instruct` with a 10-tool static-analysis surface
+  (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for
+  Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language). Pre-
+  flight repo survey sizes task wall + `num_ctx` per clone; a
+  four-layer anti-fabrication check (shallow-retry → forced
+  inspection → `file:line` citation verification → construct-
+  presence verification) annotates suspect findings. `code` agent
+  stays on `qwen2.5-coder:14b-instruct` with the same analyzer
+  tools — see AGENTS.md for the per-agent breakdown.
 
 ## Hardware target
 

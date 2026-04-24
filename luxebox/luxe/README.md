@@ -42,8 +42,9 @@ KV cache ≈ 17–22 GB at 32–64K context).
 
 ```bash
 cd ~/Downloads/local-llm/luxebox
-uv sync
+uv sync --extra dev          # installs analyzer tools (ruff/mypy/bandit/pip-audit/semgrep)
 bash daily_driver/install_luxe.sh
+brew install gitleaks         # optional: enables the `secrets_scan` tool
 ```
 
 That:
@@ -51,6 +52,12 @@ That:
 - Symlinks `luxe` to `~/.local/bin/luxe`
 - Installs a launchd plist so `ollama serve` runs at login
 - Verifies Ollama is reachable on `127.0.0.1:11434`
+
+`--extra dev` pulls the static-analysis binaries into `.venv/bin/`
+(~300 MB including semgrep's lazy rulesets). The `code`, `review`,
+and `refactor` agents call them as tools; missing binaries degrade
+gracefully — if you skip `--extra dev`, the review still runs with
+the fs/git/web tools, just without the analyzer findings.
 
 Pull the Ollama-served models (they'll pull on demand too):
 
@@ -209,6 +216,7 @@ serially (each seeing prior findings), and produces a save-able report.
 /tasks log [id]            tail the task's structured log.jsonl
 /tasks abort [id]          SIGTERM a running task; SIGKILL after 5 s
 /tasks save [id]           stitch subtask outputs into md/txt report
+/tasks analyze [id]        per-subtask tool-usage breakdown + adoption ratio
 ```
 
 **What happens when you run `/tasks <goal>`:**
@@ -284,6 +292,66 @@ background task, then prints the task id and a `/tasks tail` hint so
 you can pick it up in a REPL session later (or just watch the log
 file under `~/.luxe/tasks/<id>/`).
 
+**Adaptive budgets.** `/review` and `/refactor` pre-flight-survey the
+cloned repo (file count, LOC, language breakdown via
+`luxe/repo_survey.py`) and pick a task wall + `num_ctx` tuned to its
+size tier:
+
+| Tier   | Source LOC       | Task wall | `num_ctx` |
+|--------|------------------|-----------|-----------|
+| tiny   | < 500            | 30 min    | 8k        |
+| small  | 500–2 000        | 45 min    | 8k        |
+| medium | 2 000–10 000     | 60 min    | 16k       |
+| large  | 10 000–50 000    | 90 min    | 16k       |
+| huge   | 50 000+          | 120 min   | 32k       |
+
+The chosen decision prints at plan time:
+`repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min
+wall, 16k ctx`. Per-subtask overrides on top: the synthesis subtask
+gets a doubled `max_tokens_per_turn` so the severity-grouped report
+doesn't truncate mid-category. The `code` agent has the same
+self-sizing hook — dispatching in a medium+ cwd bumps its own
+`num_ctx`/`max_wall_s` for that turn.
+
+## Static-analysis tool surface
+
+The `code`, `review`, and `refactor` agents can call real analyzers
+as tools. A grep match is evidence; an analyzer finding is already
+located, classified, severity-tagged, and paired with an upstream
+rule URL. The per-category orchestrator hints nudge each inspection
+subtask toward the right tool before it reaches for `grep`.
+
+**Python:**
+
+| Tool | Wraps | Use case |
+|---|---|---|
+| `lint` | `ruff check --output-format=json` | Style, unused imports, bugbear, bare-except. |
+| `typecheck` | `mypy --output json` | Type errors, missing returns, unreachable code. |
+| `security_scan` | `bandit -r -f json` | In-source security patterns (weak crypto, pickle, hardcoded creds). `min_confidence=MEDIUM` default filters noise. |
+| `deps_audit` | `pip-audit --format json` | Known-CVE dependency audit on the live env or a requirements file. |
+| `security_taint` | `semgrep --config p/python --json` | Source→sanitizer→sink taint reasoning for eval/exec/subprocess/pickle/SQL. Correctly ignores sandboxed or non-user-reachable sinks that `security_scan` would flag uniformly. |
+| `secrets_scan` | `gitleaks detect --no-git --redact=100` | Hardcoded credentials (AWS/GCP/GitHub/Slack/Stripe tokens, private keys). Matches are redacted before reaching the model. |
+
+**Cross-language:**
+
+| Tool | Wraps | Requires |
+|---|---|---|
+| `lint_js` | `eslint --format json` | `package.json` + eslint (via `npm install --save-dev`) |
+| `typecheck_ts` | `tsc --noEmit --pretty false --project <dir>` | `tsconfig.json` + typescript |
+| `lint_rust` | `cargo clippy --message-format=json` | `Cargo.toml` + clippy toolchain |
+| `vet_go` | `go vet ./...` | `go.mod` + Go toolchain |
+
+Each tool returns a uniform `{findings: [...], count, note?}` JSON
+payload capped at 150 items. Missing binaries or missing project
+markers produce a helpful note (`"not a Rust project"`, `"ruff not
+installed. uv sync --extra dev pulls it in"`) — the agent sees the
+message and adapts instead of crashing.
+
+`/tasks analyze <id>` after any review prints a per-subtask breakdown
+of tool calls with wall-time, bytes emitted, and ok/total ratio,
+plus an "adoption: analyzer X% · reader Y% · orientation Z%" summary
+so you can see whether the prompt nudges are landing on real runs.
+
 ## Tool surfaces per agent
 
 | Agent | Tools |
@@ -293,9 +361,9 @@ file under `~/.luxe/tasks/<id>/`).
 | research | `web_search`, `fetch_url`, `fetch_urls` (parallel, up to 4 URLs) |
 | writing | `read_file`, `list_dir`, `glob`, `grep`, `write_file`, `edit_file` — scoped to cwd |
 | image | `draw_things_generate` |
-| code | `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_dir`, `bash` (allowlist), `fetch_url` |
-| review | `read_file`, `list_dir`, `glob`, `grep`, `git_diff`, `git_log`, `git_show` (read-only) |
-| refactor | `read_file`, `list_dir`, `glob`, `grep`, `git_diff`, `git_log`, `git_show` (read-only) |
+| code | fs (read/write/edit) + `glob`/`grep`/`list_dir` + `bash` (allowlist) + `fetch_url` + 10 analyzers (see above) |
+| review | read-only fs + 3 git tools + 10 analyzers |
+| refactor | read-only fs + 3 git tools + 10 analyzers |
 | calc | `create_tool` + tools auto-matched from the saved library (see `luxe/tool_library.py`) |
 
 The writing agent is served by `llama-server` with a Python-signature
