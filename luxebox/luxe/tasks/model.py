@@ -57,6 +57,13 @@ class Subtask:
     near_cap_turns: int = 0  # turns that used ≥80% of per-turn token cap
     wall_s: float = 0.0
     error: str = ""
+    # Optional per-subtask overrides. Take precedence over Task-level
+    # overrides when set, which take precedence over the agent's
+    # static config. Used when a specific subtask has different needs
+    # — e.g. the synthesis subtask wants more output tokens because
+    # it assembles the final report.
+    num_ctx_override: int | None = None
+    max_tokens_per_turn_override: int | None = None
 
     def short(self) -> str:
         icons = {

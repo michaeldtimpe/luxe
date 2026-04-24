@@ -10,6 +10,26 @@ from luxe.backend import make_backend
 from luxe.registry import LuxeConfig
 from luxe.tasks.model import Subtask, subtask_id
 
+
+_SYNTHESIS_RE = re.compile(
+    r"\b(summari[zs]e|synthesi[zs]e|"
+    r"(generate|write|produce|compile|assemble|emit)\s+[\w\s-]*?"
+    r"\b(report|summary|writeup|write[\s-]?up))\b",
+    re.IGNORECASE,
+)
+
+
+def _subtask_overrides(title: str) -> dict[str, int]:
+    """Per-subtask budget overrides, chosen from the title shape. The
+    synthesis subtask in /review assembles the final severity-grouped
+    report by concatenating all prior findings — it needs a bigger
+    per-turn output cap than inspection subtasks, which typically
+    emit one finding block per pass. Doubling the default 4096 keeps
+    the report from getting truncated mid-category."""
+    if _SYNTHESIS_RE.search(title or ""):
+        return {"max_tokens_per_turn_override": 8192}
+    return {}
+
 _PLAN_SYSTEM_PROMPT = """You are a task planner inside luxe, a local multi-agent CLI.
 Given a user's goal, break it into 1–8 ordered subtasks that can each be
 handed off to one specialist. Return ONLY a JSON array — no prose, no
@@ -135,6 +155,7 @@ def plan(goal: str, cfg: LuxeConfig, task_id_full: str) -> list[Subtask]:
             index=i,
             title=title,
             agent=agent,
+            **_subtask_overrides(title),
         ))
     if not subs:
         subs.append(Subtask(
