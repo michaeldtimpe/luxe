@@ -69,7 +69,11 @@ def start_review_task(
     repo_label = repo_name_from_url(str(url_or_path)) or repo_path.name
     goal = build_review_goal(repo_label, repo_path, mode)
 
-    task = Task(id=task_id(), goal=goal, max_wall_s=1800.0)
+    # 60 min budget — matches the interactive /review path in
+    # repl/review.py; the 32B review agent can spend 13+ min on a
+    # single inspection subtask for mid-sized repos, so 30 min made
+    # the 7-subtask plan skip synthesis.
+    task = Task(id=task_id(), goal=goal, max_wall_s=3600.0)
     task.subtasks = plan(goal, cfg, task.id)
     for s in task.subtasks:
         s.agent = mode
