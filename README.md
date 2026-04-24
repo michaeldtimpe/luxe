@@ -1,4 +1,4 @@
-# local-llm
+# luxe
 
 Two companion projects that run large-language-model workloads entirely on
 a MacBook Pro — no cloud, no API keys (beyond what you choose to use), no
