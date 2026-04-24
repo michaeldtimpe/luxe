@@ -172,7 +172,7 @@ class Orchestrator:
             task=augmented,
             reasoning=f"task orchestrator (subtask {sub.id})",
         )
-        dispatch_cfg = _cfg_with_task_overrides(self.cfg, agent, task)
+        dispatch_cfg = _cfg_with_task_overrides(self.cfg, agent, task, sub)
         result = _runner.dispatch(decision, dispatch_cfg, session=self.session)
         sub.agent = agent
         sub.result_text = result.final_text or ""
@@ -334,24 +334,32 @@ class Orchestrator:
 
 
 def _cfg_with_task_overrides(
-    cfg: LuxeConfig, agent_name: str, task: Task
+    cfg: LuxeConfig, agent_name: str, task: Task, sub: Subtask | None = None
 ) -> LuxeConfig:
-    """Apply per-task overrides to the dispatched agent's config.
-    Currently honors `task.num_ctx_override` for review/refactor — the
-    pre-flight repo survey sets this so big codebases get a wider
-    Ollama context window than the agent's static default. Returns the
-    original cfg unchanged when no override applies, so this is
-    free on the common path."""
-    if task.num_ctx_override is None:
-        return cfg
+    """Apply per-task (and optionally per-subtask) overrides to the
+    dispatched agent's config.
+
+    Precedence: subtask override > task override > agent default.
+    Only applies to review/refactor (the agents with a pre-flight
+    survey behind their budgets). Returns the original cfg unchanged
+    when no override applies, so this is free on the common path."""
     if agent_name not in ("review", "refactor"):
         return cfg
+    updates: dict[str, int] = {}
+    # num_ctx: subtask first, then task.
+    if sub is not None and sub.num_ctx_override is not None:
+        updates["num_ctx"] = sub.num_ctx_override
+    elif task.num_ctx_override is not None:
+        updates["num_ctx"] = task.num_ctx_override
+    # max_tokens_per_turn: only subtask-level for now (Task has no
+    # equivalent yet — synthesis pass typically wants a generous
+    # per-turn cap so the full report fits in one decode).
+    if sub is not None and sub.max_tokens_per_turn_override is not None:
+        updates["max_tokens_per_turn"] = sub.max_tokens_per_turn_override
+    if not updates:
+        return cfg
     new_agents = [
-        (
-            a.model_copy(update={"num_ctx": task.num_ctx_override})
-            if a.name == agent_name
-            else a
-        )
+        a.model_copy(update=updates) if a.name == agent_name else a
         for a in cfg.agents
     ]
     return cfg.model_copy(update={"agents": new_agents})
