@@ -8,11 +8,11 @@
 
 set -eu
 
-BRIDGE_URL="${LUXEBOX_BRIDGE_URL:-http://127.0.0.1:4000}"
-MLX_URL="${LUXEBOX_MLX_URL:-http://127.0.0.1:8088}"
+BRIDGE_URL="${LUXE_BRIDGE_URL:-http://127.0.0.1:4000}"
+MLX_URL="${LUXE_MLX_URL:-http://127.0.0.1:8088}"
 MLX_LABEL="com.luxe.mlx"
 LITELLM_LABEL="com.luxe.litellm"
-READY_TIMEOUT_S="${LUXEBOX_READY_TIMEOUT_S:-60}"
+READY_TIMEOUT_S="${LUXE_READY_TIMEOUT_S:-60}"
 
 is_up() {
     curl -sfL --max-time 3 "$1/v1/models" >/dev/null 2>&1
