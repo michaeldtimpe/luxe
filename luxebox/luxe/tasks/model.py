@@ -77,6 +77,11 @@ class Task:
     max_wall_s: float = 3600.0         # overall job cap; scope this up for big jobs
     retry_on_transport_error: bool = True
     pid: int = 0                       # subprocess pid when running in background
+    # Optional per-task override of the dispatched agent's num_ctx. Set
+    # by pre-flight repo survey in /review + /refactor so a big codebase
+    # gets a wider Ollama context window than the agent's default. None
+    # means "fall through to agent config".
+    num_ctx_override: int | None = None
 
     def dir(self) -> Path:
         return TASKS_ROOT / self.id
@@ -144,6 +149,7 @@ def persist(task: Task) -> None:
         "max_wall_s": task.max_wall_s,
         "retry_on_transport_error": task.retry_on_transport_error,
         "pid": task.pid,
+        "num_ctx_override": task.num_ctx_override,
     }
     tmp = d / "state.json.tmp"
     with tmp.open("w") as f:
