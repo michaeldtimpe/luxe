@@ -27,7 +27,42 @@ from luxe.tools._subprocess import run_binary
 MAX_FINDINGS = 150  # per-tool cap; matches fs.MAX_GREP_MATCHES sensibility
 
 
-def tool_defs() -> list[ToolDef]:
+_LANG_FAMILY = {
+    "lint":           "python",
+    "typecheck":      "python",
+    "security_scan":  "python",
+    "deps_audit":     "python",
+    "security_taint": "python",
+    "secrets_scan":   "*",        # always included — creds appear in any language
+    "lint_js":        "javascript",
+    "typecheck_ts":   "javascript",
+    "lint_rust":      "rust",
+    "vet_go":         "go",
+}
+
+
+def _language_match(tool_name: str, languages: frozenset[str] | None) -> bool:
+    """Decide whether to expose `tool_name` given the repo's language
+    breakdown. None / empty → include all (unknown repo is conservative).
+    The `*` family marker means language-agnostic (secrets_scan)."""
+    if not languages:
+        return True
+    family = _LANG_FAMILY.get(tool_name)
+    if family is None or family == "*":
+        return True
+    return family in languages
+
+
+def tool_defs(languages: frozenset[str] | None = None) -> list[ToolDef]:
+    """Tool definitions for static analyzers. When `languages` is a set
+    of language names (as they appear in RepoSurvey.language_breakdown),
+    gate out analyzers whose language isn't represented. `secrets_scan`
+    is always included. Pass None for the unfiltered surface."""
+    all_defs = _all_defs()
+    return [d for d in all_defs if _language_match(d.name, languages)]
+
+
+def _all_defs() -> list[ToolDef]:
     return [
         ToolDef(
             name="lint",

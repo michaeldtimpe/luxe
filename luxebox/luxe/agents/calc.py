@@ -14,6 +14,8 @@ model handles multi-step math much more reliably.
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from harness.backends import Backend
 
 from luxe.agents.base import AgentResult, run_agent
@@ -49,6 +51,7 @@ def run(
     *,
     task: str,
     session: Session | None = None,
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentResult:
     matched = match_tools(task, limit=4)
     tool_defs = [CREATE_TOOL_DEF, *(tool_def_from_meta(m) for m in matched)]
@@ -67,4 +70,5 @@ def run(
         tool_defs=tool_defs,
         tool_fns=tool_fns,
         session=session,
+        on_tool_event=on_tool_event,
     )

@@ -7,6 +7,8 @@ documents, draft new ones to disk, and revise in place.
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from harness.backends import Backend, ToolDef
 
 from luxe.agents.base import AgentResult, run_agent
@@ -78,6 +80,7 @@ def run(
     *,
     task: str,
     session: Session | None = None,
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentResult:
     tool_defs = list(fs.read_only_defs())
     tool_defs.extend(fs.mutation_defs())
@@ -100,4 +103,5 @@ def run(
         tool_fns=tool_fns,
         session=session,
         tool_style="gemma_pycode" if cfg.endpoint else "openai",
+        on_tool_event=on_tool_event,
     )

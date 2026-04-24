@@ -182,7 +182,11 @@ class Orchestrator:
             reasoning=f"task orchestrator (subtask {sub.id})",
         )
         dispatch_cfg = _cfg_with_task_overrides(self.cfg, agent, task, sub)
-        result = _runner.dispatch(decision, dispatch_cfg, session=self.session)
+        _on_tool = lambda ev: self._emit(task, {**ev, "subtask": sub.id})
+        result = _runner.dispatch(
+            decision, dispatch_cfg,
+            session=self.session, on_tool_event=_on_tool,
+        )
         sub.agent = agent
         sub.result_text = result.final_text or ""
         sub.tool_calls = list(result.tool_calls)
@@ -242,7 +246,8 @@ class Orchestrator:
                 reasoning=f"task orchestrator retry (subtask {sub.id}, shallow inspection)",
             )
             retry_result = _runner.dispatch(
-                retry_decision, dispatch_cfg, session=self.session
+                retry_decision, dispatch_cfg,
+                session=self.session, on_tool_event=_on_tool,
             )
             # Accept the retry only if it did better on the depth axis.
             if not _inspection_too_shallow(
@@ -275,7 +280,8 @@ class Orchestrator:
                         reasoning=f"task orchestrator forced-data (subtask {sub.id})",
                     )
                     forced_result = _runner.dispatch(
-                        forced_decision, dispatch_cfg, session=self.session
+                        forced_decision, dispatch_cfg,
+                        session=self.session, on_tool_event=_on_tool,
                     )
                     sub.result_text = forced_result.final_text or sub.result_text
                     # Not real agent tool calls, but the orchestrator
@@ -354,7 +360,7 @@ def _cfg_with_task_overrides(
     when no override applies, so this is free on the common path."""
     if agent_name not in ("review", "refactor"):
         return cfg
-    updates: dict[str, int] = {}
+    updates: dict[str, Any] = {}
     # num_ctx: subtask first, then task.
     if sub is not None and sub.num_ctx_override is not None:
         updates["num_ctx"] = sub.num_ctx_override
@@ -365,6 +371,11 @@ def _cfg_with_task_overrides(
     # per-turn cap so the full report fits in one decode).
     if sub is not None and sub.max_tokens_per_turn_override is not None:
         updates["max_tokens_per_turn"] = sub.max_tokens_per_turn_override
+    # analyzer_languages: task-level, set by /review's repo survey so the
+    # review/refactor agents only see analyzers that match the repo's
+    # languages.
+    if task.analyzer_languages is not None:
+        updates["analyzer_languages"] = frozenset(task.analyzer_languages)
     if not updates:
         return cfg
     new_agents = [
@@ -948,9 +959,42 @@ def _augment_with_trace_hints(
             corpus_parts.append(s.result_text)
     corpus = "\n".join(corpus_parts)
 
-    paths = parse_trace_paths(corpus, repo_root)[:max_files]
-    if not paths:
+    seed_paths = parse_trace_paths(corpus, repo_root)
+    if not seed_paths:
         return ""
+
+    # Expand via import graph: for each seed, include its first-hop
+    # neighbors (files it imports + files that import it) up to the
+    # remaining budget. Whole-file reads only — summarisation regressed
+    # in the compression benchmark. Graph errors are non-fatal.
+    paths: list[Any] = []
+    seen: set[Any] = set()
+    for seed in seed_paths:
+        if seed not in seen:
+            paths.append(seed)
+            seen.add(seed)
+        if len(paths) >= max_files:
+            break
+    if len(paths) < max_files:
+        try:
+            from luxe.import_graph import build_graph as _build_graph
+            from luxe.import_graph import neighbors as _neighbors
+            graph = _build_graph(repo_root)
+            remaining = max_files - len(paths)
+            for seed in seed_paths:
+                for n in _neighbors(graph, seed, max_neighbors=remaining):
+                    if n in seen:
+                        continue
+                    paths.append(n)
+                    seen.add(n)
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
+                if remaining <= 0:
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+    paths = paths[:max_files]
 
     blocks: list[str] = [
         "# Files mentioned in the error you're debugging",

@@ -28,6 +28,35 @@ ToolFn = Callable[[dict[str, Any]], tuple[Any, str | None]]
 
 _TOOL_TAG_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _JSON_BLOCK_RE = re.compile(r"```(?:json|tool_call)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _preview_args(args: dict[str, Any]) -> str:
+    """Compact, human-scannable render of a tool's arguments for live tail.
+    Keeps the two most informative keys (path-like + pattern-like first)
+    and truncates each value to 40 chars. Never blocks on large payloads."""
+    if not args:
+        return ""
+    priority = ("path", "file", "pattern", "query", "url", "cmd", "command", "name")
+    items: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for k in priority:
+        if k in args and k not in seen:
+            items.append((k, args[k]))
+            seen.add(k)
+    for k, v in args.items():
+        if k in seen:
+            continue
+        items.append((k, v))
+        seen.add(k)
+        if len(items) >= 2:
+            break
+    parts: list[str] = []
+    for k, v in items[:2]:
+        s = str(v).replace("\n", " ")
+        if len(s) > 40:
+            s = s[:37] + "…"
+        parts.append(f"{k}={s}")
+    return " ".join(parts)
 # Gemma 3's native function-call format: ```tool_code\n<python call>\n```.
 # Some Gemma variants (or bare IT without tool_code priming) fall back to a
 # ```python block instead — accept both.
@@ -188,6 +217,7 @@ def run_agent(
     session: Session | None = None,
     history: list[dict[str, Any]] | None = None,
     tool_style: str = "openai",
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentResult:
     """Run a specialist agent until it stops calling tools or hits a budget.
 
@@ -380,6 +410,15 @@ def run_agent(
         tool_results: list[str] = []
         for call in response.tool_calls:
             fn = tool_fns.get(call.name)
+            if on_tool_event:
+                try:
+                    on_tool_event({
+                        "event": "tool_call_begin",
+                        "name": call.name,
+                        "args_preview": _preview_args(call.arguments),
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
             tool_start = time.monotonic()
             if not fn:
                 result: Any = None
@@ -396,6 +435,18 @@ def run_agent(
             call.wall_s = time.monotonic() - tool_start
             call.ok = err is None
             call.bytes_out = len(tool_content)
+            if on_tool_event:
+                try:
+                    on_tool_event({
+                        "event": "tool_call_end",
+                        "name": call.name,
+                        "ok": call.ok,
+                        "wall_s": round(call.wall_s, 2),
+                        "bytes_out": call.bytes_out,
+                        "error": None if call.ok else (err or ""),
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
             if tool_style == "gemma_pycode":
                 tool_results.append(
                     f"```tool_output\n# {call.name}\n{tool_content}\n```"

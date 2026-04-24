@@ -89,6 +89,13 @@ class Task:
     # gets a wider Ollama context window than the agent's default. None
     # means "fall through to agent config".
     num_ctx_override: int | None = None
+    # Languages the dispatched review/refactor agent's analyzer surface
+    # should target. Populated from RepoSurvey.language_breakdown in
+    # /review + /refactor so a pure-Python repo doesn't see
+    # lint_js/typecheck_ts/lint_rust/vet_go in its tool list. None = no
+    # filter (full surface). Stored as a list so state.json stays clean;
+    # converted to frozenset at dispatch.
+    analyzer_languages: list[str] | None = None
 
     def dir(self) -> Path:
         return TASKS_ROOT / self.id
@@ -163,6 +170,7 @@ def persist(task: Task) -> None:
         "retry_on_transport_error": task.retry_on_transport_error,
         "pid": task.pid,
         "num_ctx_override": task.num_ctx_override,
+        "analyzer_languages": task.analyzer_languages,
     }
     tmp = d / "state.json.tmp"
     with tmp.open("w") as f:
@@ -206,6 +214,36 @@ def append_log_event(task: Task, event: dict[str, Any]) -> None:
     event = {"ts": _now(), **event}
     with (d / "log.jsonl").open("a") as f:
         f.write(json.dumps(event, default=str) + "\n")
+
+
+def reset_incomplete_subtasks(task: Task) -> int:
+    """Flip blocked/skipped/running subtasks back to pending so the
+    orchestrator will re-execute them on the next run. Done subtasks
+    are untouched — their result_text is re-used by _augment_with_prior.
+    Returns the count reset."""
+    reset = 0
+    for s in task.subtasks:
+        if s.status in ("blocked", "skipped", "running"):
+            s.status = "pending"
+            s.attempt = 0
+            s.started_at = ""
+            s.completed_at = ""
+            s.error = ""
+            s.result_text = ""
+            s.tool_calls = []
+            s.tool_calls_total = 0
+            s.steps_taken = 0
+            s.prompt_tokens = 0
+            s.completion_tokens = 0
+            s.near_cap_turns = 0
+            s.wall_s = 0.0
+            reset += 1
+    if reset:
+        task.status = "planning"
+        task.completed_at = ""
+        task.pid = 0
+        persist(task)
+    return reset
 
 
 def resolve_partial(partial: str) -> Task | None:

@@ -204,8 +204,13 @@ class BudgetDecision:
 _TIER_TABLE: list[tuple[int, str, float, int]] = [
     (500, "tiny", 1800.0, 8192),
     (2_000, "small", 2700.0, 8192),
-    (10_000, "medium", 3600.0, 16_384),
-    (50_000, "large", 5400.0, 16_384),
+    # Medium / large get 24k: prior 16k was too tight for multi-turn
+    # review — sub-task prompt_tokens totals observed at 33k across 16
+    # tool calls mean Ollama was silently dropping the oldest messages
+    # when num_ctx = 16k. 24k at qwen2.5:32b Q4_K_M adds ~5 GB of KV
+    # cache over 16k; acceptable on 64 GB unified memory.
+    (10_000, "medium", 3600.0, 24_576),
+    (50_000, "large", 5400.0, 24_576),
     # Anything larger — including `hit_scan_cap` cases — gets the
     # huge tier. 32k ctx on qwen2.5:32b Q4_K_M adds ~8 GB to KV
     # cache; acceptable on a 64 GB machine but worth keeping in mind.

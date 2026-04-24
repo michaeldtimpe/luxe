@@ -6,6 +6,8 @@ from luxe import prefs
 from luxe.agents import (
     calc, code, general, image, lookup, refactor, research, review, writing,
 )
+from typing import Any, Callable
+
 from luxe.agents.base import AgentResult
 from luxe.backend import make_backend
 from luxe.registry import LuxeConfig
@@ -32,6 +34,7 @@ def dispatch(
     *,
     session: Session | None = None,
     model_override: str | None = None,
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentResult:
     if decision.agent not in _SPECIALISTS:
         return AgentResult(
@@ -60,4 +63,8 @@ def dispatch(
     endpoint = agent_cfg.endpoint or cfg.ollama_base_url
     backend = make_backend(agent_cfg.model, base_url=endpoint)
     runner = _SPECIALISTS[decision.agent]
-    return runner(backend, agent_cfg, task=decision.task, session=session)
+    return runner(
+        backend, agent_cfg,
+        task=decision.task, session=session,
+        on_tool_event=on_tool_event,
+    )

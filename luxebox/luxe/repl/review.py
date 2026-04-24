@@ -29,21 +29,21 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
     console.print(f"[dim]{status_msg} → {repo_path}[/dim]")
 
     repo_label = repo_name_from_url(url) or repo_path.name
-    from luxe.review import build_review_goal, size_review_budget
+    from luxe.review import build_review_goal, survey_and_budget
     goal = build_review_goal(repo_label, repo_path, mode)
 
-    # Pre-flight survey: walk the repo once and pick a task wall +
-    # num_ctx tuned to its size. Replaces the previous hardcoded
-    # 60-minute budget that was too tight for mid-sized repos and
-    # too generous for single-file clones. See luxe/repo_survey.py
-    # for the tier table.
-    decision = size_review_budget(repo_path)
+    # Pre-flight survey: walk the repo once, pick a task wall + num_ctx
+    # tuned to its size, and capture language_breakdown so we can gate
+    # out analyzers whose language isn't represented (pure-Python repo
+    # doesn't need lint_js / vet_go / etc. on every turn).
+    survey, decision = survey_and_budget(repo_path)
     console.print(f"[dim]repo survey: {decision.rationale}[/dim]")
     task = Task(
         id=task_id(),
         goal=goal,
         max_wall_s=decision.task_max_wall_s,
         num_ctx_override=decision.num_ctx,
+        analyzer_languages=sorted(survey.language_breakdown.keys()) or None,
     )
     task.subtasks = plan(goal, cfg, task.id)
     # Pin every subtask to the dedicated agent — planner may default to

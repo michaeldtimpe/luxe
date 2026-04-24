@@ -155,10 +155,31 @@ def route(
     session: Session | None = None,
 ) -> RouterDecision:
     router_cfg = cfg.get("router")
-    backend = make_backend(router_cfg.model, base_url=cfg.ollama_base_url)
     enabled = [a.name for a in cfg.agents if a.enabled and a.name != "router"]
     if not enabled:
         raise RuntimeError("no specialists enabled")
+
+    # Heuristic pre-router: skip the LLM when a rule-based scorer is
+    # confident. Saves ~1 turn of router latency on the easy 60%.
+    if getattr(cfg, "heuristic_router_enabled", True):
+        from luxe.heuristic_router import decide as _heuristic_decide
+        threshold = getattr(cfg, "heuristic_router_threshold", 0.35)
+        agent, confidence, scores = _heuristic_decide(
+            prompt, enabled, threshold=threshold,
+        )
+        if agent is not None:
+            reasoning = f"heuristic (conf={confidence:.2f})"
+            if session:
+                session.append({
+                    "role": "router",
+                    "decision": {"agent": agent, "task": prompt, "reasoning": reasoning},
+                    "source": "heuristic",
+                    "confidence": round(confidence, 3),
+                    "scores": {k: round(v, 2) for k, v in scores.items()},
+                })
+            return RouterDecision(agent=agent, task=prompt, reasoning=reasoning)
+
+    backend = make_backend(router_cfg.model, base_url=cfg.ollama_base_url)
 
     tools = _build_tools(enabled)
     messages: list[dict[str, Any]] = [

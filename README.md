@@ -54,6 +54,11 @@ Fuller walkthrough in **`luxebox/README.md`**.
   background execution, clarifying questions, plan-preview, and
   context forwarding between subtasks. Writing agent served via
   `llama-server` for Gemma 3 27B with native tool-call support.
+  Deterministic keyword/regex pre-router short-circuits the LLM router
+  on decisive prompts (path + code verb → `code`, draft + essay →
+  `writing`, etc.). `/tasks resume <id>` re-runs blocked/skipped
+  subtasks without redoing completed ones; `/tasks tail <id> -v` adds
+  per-tool-call lines to the live event stream.
 - **Code intelligence**: `/review` and `/refactor` run on
   `qwen2.5:32b-instruct` with a 10-tool static-analysis surface
   (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for

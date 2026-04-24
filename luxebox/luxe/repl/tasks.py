@@ -174,10 +174,12 @@ def _tasks_watch(partial: str | None) -> None:
         console.print(f"[red]watch failed:[/red] {e}")
 
 
-def _tasks_tail(partial: str | None) -> None:
+def _tasks_tail(partial: str | None, verbose: bool = False) -> None:
     """Follow a task's log.jsonl in real time and render events with the
-    same sync-mode formatter. Exits when the task hits a `finish` event
-    or the subprocess is no longer alive."""
+    same sync-mode formatter. When `verbose` is True, also surface
+    per-tool-call begin/end events (name + args preview + duration).
+    Exits when the task hits a `finish` event or the subprocess is no
+    longer alive."""
     import json as _json
     import time as _time
 
@@ -186,12 +188,16 @@ def _tasks_tail(partial: str | None) -> None:
         return
     log_path = task.dir() / "log.jsonl"
 
-    console.print(f"[dim]following[/dim] [cyan]{task.id}[/cyan] [dim](Ctrl-C to stop watching)[/dim]")
+    mode = " [dim](verbose)[/dim]" if verbose else ""
+    console.print(
+        f"[dim]following[/dim] [cyan]{task.id}[/cyan]{mode} "
+        f"[dim](Ctrl-C to stop watching)[/dim]"
+    )
     # Replay what's already on disk first so the user sees current state.
     if log_path.exists():
         for line in log_path.read_text().splitlines():
             try:
-                _sync_event_printer(_json.loads(line))
+                _sync_event_printer(_json.loads(line), verbose=verbose)
             except _json.JSONDecodeError:
                 continue
 
@@ -219,7 +225,7 @@ def _tasks_tail(partial: str | None) -> None:
                 seen = size
                 for line in chunk.splitlines():
                     try:
-                        _sync_event_printer(_json.loads(line))
+                        _sync_event_printer(_json.loads(line), verbose=verbose)
                     except _json.JSONDecodeError:
                         continue
             if latest and latest.finished():
@@ -416,6 +422,40 @@ def _tasks_save(partial: str | None) -> None:
     console.print(f"[green]✓ wrote[/green] [cyan]{target}[/cyan] [dim]({len(body):,} bytes)[/dim]")
 
 
+def _tasks_resume(partial: str | None) -> None:
+    """Re-run a task's non-done subtasks in place. Flips blocked/skipped/
+    running subs back to pending and re-spawns via the background path.
+    Done subs are preserved so their results still seed later subs."""
+    from luxe.tasks import reset_incomplete_subtasks, spawn_background
+    from luxe.tasks.model import persist
+    task = _tasks_resolve(partial)
+    if not task:
+        return
+    if task.is_alive():
+        console.print(
+            f"[yellow]{task.id} is still running[/yellow] "
+            f"[dim](pid {task.pid}). /tasks abort first.[/dim]"
+        )
+        return
+    reset = reset_incomplete_subtasks(task)
+    if reset == 0:
+        console.print(
+            f"[dim]{task.id} has no blocked/skipped subtasks — nothing to resume.[/dim]"
+        )
+        return
+    done = sum(1 for s in task.subtasks if s.status == "done")
+    total = len(task.subtasks)
+    console.print(
+        f"[green]↻ resuming[/green] [cyan]{task.id}[/cyan] "
+        f"[dim]· {reset} subtask(s) reset · {done}/{total} already done[/dim]"
+    )
+    pid = spawn_background(task)
+    task.pid = pid
+    persist(task)
+    console.print(f"[dim]pid {pid}[/dim]")
+    _print_launch_hints(task.id)
+
+
 def _tasks_abort(partial: str | None) -> None:
     from luxe.tasks import abort_task
     task = _tasks_resolve(partial)
@@ -454,11 +494,20 @@ def _wrap_or_inline(
         console.print(f"{indent}{styled}", overflow="fold", soft_wrap=False)
 
 
-def _sync_event_printer(event: dict) -> None:
+def _fmt_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n}B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f}KB"
+    return f"{n / (1024 * 1024):.1f}MB"
+
+
+def _sync_event_printer(event: dict, verbose: bool = False) -> None:
     """Tail-style live output for sync + background tail runs. Surfaces
     model tag on begin (so you can see which weights the subtask
     actually asked for) and prompt/completion token counts on end
-    (so 'why is this so slow' is answerable from the log)."""
+    (so 'why is this so slow' is answerable from the log). When
+    `verbose` is True, also renders per-tool-call begin/end events."""
     from luxe.repl.status import _fmt_clock, _fmt_wall
     kind = event.get("event", "")
     sub = (event.get("subtask") or "").rsplit(".", 1)[-1]
@@ -527,6 +576,32 @@ def _sync_event_printer(event: dict) -> None:
     elif kind == "report_saved":
         path = event.get("path", "")
         console.print(f"[dim]│[/dim] [green]📝 saved[/green] [cyan]{path}[/cyan]")
+    elif kind == "tool_call_begin" and verbose:
+        name = event.get("name", "")
+        preview = event.get("args_preview", "")
+        preview_str = f" [dim]{preview}[/dim]" if preview else ""
+        console.print(
+            f"[dim]│   →[/dim] [cyan]{name}[/cyan]{preview_str}",
+            overflow="ellipsis",
+            soft_wrap=False,
+        )
+    elif kind == "tool_call_end" and verbose:
+        name = event.get("name", "")
+        ok = event.get("ok", True)
+        wall = event.get("wall_s", 0.0)
+        bytes_out = event.get("bytes_out", 0)
+        icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+        size = _fmt_bytes(int(bytes_out))
+        err = event.get("error") or ""
+        suffix = f"[dim]{wall:.2f}s · {size}[/dim]"
+        if ok:
+            console.print(f"[dim]│   [/dim]{icon} [cyan]{name}[/cyan] {suffix}")
+        else:
+            err_short = err[:80] + ("…" if len(err) > 80 else "")
+            console.print(
+                f"[dim]│   [/dim]{icon} [cyan]{name}[/cyan] {suffix} "
+                f"[yellow]err:[/yellow] [dim]{err_short}[/dim]"
+            )
     elif kind == "finish":
         console.print(f"[dim]└ task {event.get('status', '')}[/dim]")
 
@@ -582,6 +657,7 @@ def _print_launch_hints(task_id: str) -> None:
         ("live tail", "tail"),
         ("dashboard", "watch"),
         ("stop",      "abort"),
+        ("resume",    "resume"),
         ("save",      "save"),
     ]
     label_w = max(len(lbl) for lbl, _ in rows)

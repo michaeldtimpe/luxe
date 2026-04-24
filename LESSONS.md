@@ -326,9 +326,17 @@ tier:
 |--------|-----------------|-----------|---------|-----------------------------|
 | tiny   | <500            | 30 min    | 8k      | matches zoleb (769 LOC=small) |
 | small  | 500–2 000       | 45 min    | 8k      |                              |
-| medium | 2 000–10 000    | 60 min    | 16k     | elara (7 797 LOC)            |
-| large  | 10 000–50 000   | 90 min    | 16k     | luxe itself (7 822 LOC=medium) |
+| medium | 2 000–10 000    | 60 min    | 24k     | elara (7 797 LOC)            |
+| large  | 10 000–50 000   | 90 min    | 24k     | luxe itself (7 822 LOC=medium) |
 | huge   | 50 000+         | 120 min   | 32k     | watch KV-cache RAM          |
+
+Medium / large bumped from 16k → 24k after the 2026-04-24 elara rerun:
+one inspection subtask logged ~33k cumulative prompt tokens across 16
+tool calls, meaning the per-turn context kept pressing against the
+16k cap and Ollama was silently dropping the oldest messages (no log
+signal — the agent just quietly "forgot" earlier reads). 24k at
+qwen2.5:32b Q4_K_M costs ~5 GB more KV cache than 16k; acceptable on
+64 GB unified memory.
 
 Numbers grounded in two sources: the A/B decode data in
 `results/ab_ollama_vs_llamacpp/REPORT.md` (qwen2.5:32b ≈ 7.6 tok/s,
@@ -343,7 +351,7 @@ review/refactor agents; other specialists keep their configured ctx.
 Printed rationale at plan time so the sizing is visible and
 challengeable:
 
-    repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min wall, 16k ctx
+    repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min wall, 24k ctx
 
 **Principle:** static config is the wrong place for a decision that
 depends on the input. If you can compute the right value at task
@@ -490,4 +498,122 @@ systematically wrong `@@ -a,b +c,d @@` counts.
 
 Shared trace parser at `luxebox/shared/trace_hints.py` is used by
 both the orchestrator and the benchmark's `stack_trace_guided`
-strategy.
+strategy. The same selectivity principle is also applied structurally:
+`luxebox/luxe/import_graph.py` walks the repo's Python AST to build a
+first-hop import / imported-by index, and `_augment_with_trace_hints`
+expands each cited file with up to `max_files − 1` neighbors. The
+agent's turn 1 starts with the cited module *plus* its closest
+collaborators already in view — same oracle-style whole-file reads,
+extended by a real relationship rather than a similarity score.
+
+---
+
+## Ollama silently drops messages when num_ctx is exceeded
+
+A `/review` run at `num_ctx=16_384` logged ~33 000 cumulative prompt
+tokens across a 16-tool-call inspection subtask. There were no
+warnings, no errors, no `near_cap_turns` flags — the task simply took
+longer and produced shallower findings than expected.
+
+What Ollama actually does when the running conversation exceeds
+`options.num_ctx`: it quietly truncates the oldest messages and
+prompts the model on the truncated window. From the model's point of
+view, tool results it read five turns ago have silently vanished. It
+re-reads the same files, duplicates work, and sometimes "forgets" that
+it already investigated an area.
+
+The signal that exposed this was the gap between `sub.prompt_tokens`
+(cumulative input across turns) and the 16k per-turn cap. Once per-
+turn input routinely approaches 80% of num_ctx, you are almost
+certainly losing older context silently.
+
+**Responses:**
+
+1. Bumped `medium` / `large` tiers in
+   `luxebox/luxe/repo_survey.py` from 16k → 24k. Costs ~5 GB more KV
+   cache on qwen2.5:32b Q4_K_M; gains the headroom the workload
+   actually needs.
+2. The heuristic is now: if `sub.prompt_tokens ≥ 0.5 × num_ctx`, the
+   subtask probably saw truncation. Worth surfacing as a log event in
+   a future pass, but for now `/tasks analyze` makes it inspectable.
+
+**Principle:** silent failure modes of downstream services are more
+dangerous than loud ones. Add a log signal the moment you know the
+boundary condition; don't wait until a benchmark run points you at
+it three weeks later.
+
+---
+
+## Fast rules cover the easy 60%; use the LLM for the ambiguous 40%
+
+The router is an LLM tool-use call: prompt in, `dispatch(agent, task)`
+out. That's correct for genuinely ambiguous prompts ("help me figure
+this out"), but the other 60% of prompts carry decisive signals —
+a traceback token, a file path with `.py`, `draft an essay`, `compute
+15% of $42` — that a deterministic rule table routes in microseconds.
+Running the LLM on those costs ~1–2 s per turn for no decision
+quality gain.
+
+`luxebox/luxe/heuristic_router.py` is a pure-regex scorer with
+per-agent feature tables. It returns `(agent, confidence, scores)` or
+`None`, with the None triggering fallthrough to the LLM. Key design
+points:
+
+- **Score, don't classify.** Each agent gets a numeric tally over
+  feature hits. The decision rule is a normalized margin between top
+  and second scores, not "top score > X". This lets you see the
+  second-place choice — useful when the LLM later routes differently
+  and you're trying to understand why.
+- **Skip the ambiguous cases, don't guess.** Short prompts (< 3
+  words), meta questions (`can you …`), and low-margin scores return
+  None. The LLM handles those. The heuristic never pretends to know
+  when it doesn't.
+- **Never score the residual.** `general` isn't in the scorer — if
+  no specialist scores, the heuristic abstains and the LLM picks
+  `general` itself. `review` / `refactor` also aren't scored because
+  they're command-driven (`/review <url>`), not prompt-driven.
+- **Replayable.** Session logs tag each decision with
+  `"source": "heuristic"` or `"llm"` plus the full score breakdown,
+  so offline replay can measure short-circuit rate + disagreement.
+
+Config knobs: `LuxeConfig.heuristic_router_enabled: bool = True`
+flips it off for pure-LLM regression testing;
+`heuristic_router_threshold: float = 0.35` is the normalized margin
+below which the heuristic abstains.
+
+**Principle:** when a cheap oracle can answer confidently on most of
+the distribution, route the hard cases to the expensive one. Don't
+treat "always use the LLM" as a default; treat it as a fallback.
+
+---
+
+## Live tool telemetry needs its own tap, separate from the task timeline
+
+The task log event stream evolved from five coarse events
+(start / begin / end / skip / finish) per subtask. That's fine for a
+dashboard but too sparse for live debugging — when a subtask stalls
+for 15 minutes, "still running" isn't useful.
+
+The split that worked: **`/tasks tail` stays summary-mode by default**
+(one line per subtask begin/end, same as before). **`/tasks tail -v`
+opts into per-tool-call lines** (tool name, arg preview, duration,
+bytes out, ok/error). Two event kinds —`tool_call_begin` and
+`tool_call_end` — are threaded from the tool dispatch loop in
+`luxe/agents/base.py` out through `runner.dispatch` → orchestrator
+→ `log.jsonl` via an `on_tool_event` callback.
+
+Two things fell out of this:
+
+1. **Always persist, optionally render.** The events land in
+   `log.jsonl` regardless of the tail mode, so `/tasks analyze` gets
+   the per-tool breakdown for free on every run. `-v` just changes the
+   live-render filter.
+2. **Arg previews need a policy.** `read_file path=luxe/router.py`
+   is useful; dumping a 2 KB `content` arg flooded the tail. The
+   preview helper picks two priority keys (path, file, pattern, query,
+   url, cmd, name) first, caps each value to 40 chars, and truncates
+   with `…`. One-line-per-call is a hard constraint.
+
+**Principle:** give observability a UX flag instead of conditional
+logging. Keep the persisted stream complete; let the viewer decide how
+much to show.
