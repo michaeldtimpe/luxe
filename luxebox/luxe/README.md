@@ -41,7 +41,7 @@ KV cache ≈ 17–22 GB at 32–64K context).
 ## Install
 
 ```bash
-cd ~/Downloads/local-llm/luxebox
+cd <your-clone>/luxebox
 uv sync --extra dev          # installs analyzer tools (ruff/mypy/bandit/pip-audit/semgrep)
 bash daily_driver/install_luxe.sh
 brew install gitleaks         # optional: enables the `secrets_scan` tool
