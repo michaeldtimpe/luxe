@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,8 @@ from luxe.registry import AgentConfig
 from luxe.session import Session
 
 ToolFn = Callable[[dict[str, Any]], tuple[Any, str | None]]
+
+logger = logging.getLogger(__name__)
 
 _TOOL_TAG_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _JSON_BLOCK_RE = re.compile(r"```(?:json|tool_call)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -100,7 +103,11 @@ def _parse_python_calls(block: str, known_names: set[str]) -> list[dict[str, Any
             try:
                 args[kw.arg] = ast.literal_eval(kw.value)
             except (ValueError, SyntaxError):
-                pass  # drop non-literal kwarg
+                logger.info(
+                    "_parse_python_calls dropped non-literal kwarg %s on %s",
+                    kw.arg,
+                    call.func.id,
+                )
         out.append({"name": call.func.id, "arguments": args})
     return out
 
@@ -416,7 +423,7 @@ def run_agent(
                 messages.append({"role": "assistant", "content": response.text or ""})
                 messages.append(
                     {
-                        "role": "user",
+                        "role": "system",
                         "content": (
                             f"You must use tools to ground your answer. So far "
                             f"you've made {tool_calls_total} tool call(s); this "

@@ -217,6 +217,16 @@ def route(
             )
         except Exception as e:  # noqa: BLE001
             fallback = _fallback_agent(prompt, enabled)
+            if session:
+                session.append(
+                    {
+                        "role": "router",
+                        "content": (
+                            f"router error ({type(e).__name__}); "
+                            f"defaulting to {fallback}"
+                        ),
+                    }
+                )
             return RouterDecision(
                 agent=fallback,
                 task=prompt,
@@ -269,6 +279,15 @@ def route(
             if not question:
                 # Model produced an empty clarifying question — bail out.
                 fallback = _fallback_agent(prompt, enabled)
+                if session:
+                    session.append(
+                        {
+                            "role": "router",
+                            "content": (
+                                f"empty clarification; defaulting to {fallback}"
+                            ),
+                        }
+                    )
                 return RouterDecision(
                     agent=fallback,
                     task=prompt,
@@ -308,8 +327,19 @@ def route(
             continue
 
         # Unknown tool — give up.
+        fallback = _fallback_agent(prompt, enabled)
+        if session:
+            session.append(
+                {
+                    "role": "router",
+                    "content": (
+                        f"unknown router tool '{call.name}'; "
+                        f"defaulting to {fallback}"
+                    ),
+                }
+            )
         return RouterDecision(
-            agent=_fallback_agent(prompt, enabled),
+            agent=fallback,
             task=prompt,
             reasoning=f"unknown router tool '{call.name}'",
             clarifications=clarifications,
