@@ -1,6 +1,6 @@
 """Tests for the git URL helpers used by /review and /refactor."""
 
-from luxe.git import normalize_url, repo_name_from_url, urls_match
+from cli.git import normalize_url, repo_name_from_url, urls_match
 
 
 def test_normalize_https():

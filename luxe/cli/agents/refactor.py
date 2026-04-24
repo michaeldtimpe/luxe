@@ -1,0 +1,52 @@
+"""Refactor-suggestion agent — read-only fs surface, optimization-flavored prompt.
+
+Same pattern as review: enumerates opportunities, doesn't apply them. A
+future /refactor --apply mode can layer write tools on top if needed.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable
+
+from harness.backends import Backend
+
+from cli.agents.base import AgentResult, run_agent
+from cli.registry import AgentConfig
+from cli.session import Session
+from cli.tasks.cache import ToolCache, wrap_tool_fns
+from cli.tools import analysis, fs, git_tools
+
+
+def run(
+    backend: Backend,
+    cfg: AgentConfig,
+    *,
+    task: str,
+    session: Session | None = None,
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
+    tool_cache: ToolCache | None = None,
+) -> AgentResult:
+    tool_defs = (
+        list(fs.read_only_defs())
+        + list(git_tools.tool_defs())
+        + list(analysis.tool_defs(languages=cfg.analyzer_languages))
+    )
+    tool_fns = {**fs.READ_ONLY_FNS, **git_tools.TOOL_FNS, **analysis.TOOL_FNS}
+
+    if tool_cache is not None:
+        cacheable = (
+            set(fs.READ_ONLY_FNS)
+            | set(git_tools.TOOL_FNS)
+            | set(analysis.TOOL_FNS)
+        )
+        tool_fns = wrap_tool_fns(tool_fns, tool_cache, cacheable)
+
+    return run_agent(
+        backend,
+        cfg,
+        task=task,
+        tool_defs=tool_defs,
+        tool_fns=tool_fns,
+        session=session,
+        on_tool_event=on_tool_event,
+    )

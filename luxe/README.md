@@ -22,8 +22,8 @@ Plan: `~/.claude/plans/linked-conjuring-fiddle.md`.
   luxe's orchestrator pre-retrieval
 - `personal_eval/` — Phase B review (B1) and write (B2) replay on your PRs;
   self-contained mini agent loop with scoped tool surface
-- `luxe/` — **local multi-agent Claude-Code-alike CLI** (router + general,
-  research, writing, image, code specialists). See [luxe/README.md](luxe/README.md).
+- `cli/` — **local multi-agent Claude-Code-alike CLI** (router + general,
+  research, writing, image, code specialists). See [cli/README.md](cli/README.md).
 - `configs/` — candidate + optimization YAML + `agents.yaml` for luxe
 - `daily_driver/` — mlx-lm + ollama launcher scripts, Aider / OpenCode /
   LiteLLM configs, `install_luxe.sh`
@@ -151,12 +151,12 @@ cd ~/your-repo && uvx aider --config ~/Downloads/luxe/daily_driver/aider.conf.ym
 
 ## luxe — local multi-agent CLI
 
-Separate from the evaluation harness above, `luxe/` is a self-contained
+Separate from the evaluation harness above, `cli/` is a self-contained
 Claude-Code-alike CLI that runs entirely on Ollama + Draw Things. A small
 router picks one of five specialists (general / research / writing / image
 / code) and hands off. Full docs, prereqs, and model picks:
 
-- [luxe/README.md](luxe/README.md) — usage + per-agent model selections
+- [cli/README.md](cli/README.md) — usage + per-agent model selections
 - Install: `bash daily_driver/install_luxe.sh`
 - Uninstall: `bash daily_driver/install_luxe.sh --uninstall`
 

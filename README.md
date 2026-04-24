@@ -15,7 +15,7 @@ outbound calls except the web searches you explicitly allow.
   - **`luxe/harness/`** — Apple-Silicon-friendly evaluation + optimization
     harness for local coding LLMs. OpenAI-compat backends (MLX /
     llama.cpp), candidate registry, benchmark runners, metrics.
-  - **`luxe/luxe/`** — a local, multi-agent Claude-Code-alike CLI. A
+  - **`luxe/cli/`** — a local, multi-agent Claude-Code-alike CLI. A
     small router picks one of nine specialists (general / lookup /
     research / writing / code / image / review / refactor / calc) and
     hands off. Runs on Ollama + llama.cpp + Draw Things, with a task
@@ -31,7 +31,7 @@ bash daily_driver/install_luxe.sh
 luxe                       # interactive REPL
 ```
 
-Fuller walkthrough in **`luxe/luxe/README.md`**.
+Fuller walkthrough in **`luxe/cli/README.md`**.
 
 ## Quick start (luxe evaluation harness)
 

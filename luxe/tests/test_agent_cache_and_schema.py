@@ -21,9 +21,9 @@ from harness.backends import (
     ToolDef,
 )
 
-from luxe.agents.base import run_agent
-from luxe.registry import AgentConfig
-from luxe.tasks.cache import ToolCache, wrap_tool_fns
+from cli.agents.base import run_agent
+from cli.registry import AgentConfig
+from cli.tasks.cache import ToolCache, wrap_tool_fns
 
 
 @dataclass

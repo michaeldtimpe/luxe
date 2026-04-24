@@ -21,12 +21,12 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from luxe import router
-from luxe.agents import general as general_agent
-from luxe.agents import research as research_agent
-from luxe.agents import writing as writing_agent
-from luxe.backend import list_models, make_backend
-from luxe.registry import load_config
+from cli import router
+from cli.agents import general as general_agent
+from cli.agents import research as research_agent
+from cli.agents import writing as writing_agent
+from cli.backend import list_models, make_backend
+from cli.registry import load_config
 
 console = Console()
 
