@@ -351,6 +351,48 @@ spawn, do that instead.
 
 ---
 
+## Semgrep closes the loop on severity mischaracterization
+
+The elara rerun flagged `eval(expression, {"__builtins__": {}}, ns)`
+at `elara_task.py:385` as High-severity RCE. That's a pattern-match
+error — the sandbox + allowlist namespace is a real mitigation, but
+bandit and grep both report it as-is without tracing data flow. The
+earlier severity-validity checklist and per-category nudges moved
+the needle but didn't fully solve it: the model still has to reason
+about exploitability from the code.
+
+Added `security_taint` (semgrep, `p/python` ruleset) as a callable
+tool. Verified on two fixtures:
+
+- `elara/elara_task.py:385` (sandboxed eval) → **0 findings**.
+  Semgrep's taint rules correctly see the globals/locals restriction
+  and ignore this site. The model was right to notice `eval`; it
+  was wrong to call it High.
+- Synthetic `subprocess.run(request.args.get("cmd"), shell=True)` →
+  3 findings at ERROR/HIGH-or-MEDIUM confidence
+  (subprocess-injection, dangerous-subprocess-use,
+  subprocess-shell-true). Taint path from `request.args` to the
+  sink is explicit.
+
+The severity-validity checklist now says: for eval/exec/subprocess/
+pickle/SQL patterns, call `security_taint` before assigning
+severity. If semgrep doesn't flag the site, the sink is either
+sandboxed or not user-reachable — downgrade or drop, don't guess.
+
+Semgrep pulls ~100 MB of Python packages + a lazy rules cache.
+First run downloads the ruleset from the registry; subsequent runs
+are offline. Graceful-degrade path (`(None, "semgrep not installed.
+…")`) means reviews without semgrep still work via the other four
+analyzers.
+
+**Principle for the broader toolbox:** when a tool implements the
+specific reasoning you want, use it instead of prompting the model
+to reason. Data-flow analysis is a solved problem for simple Python
+patterns; the model's value-add is orchestrating the analyzer and
+synthesizing across categories, not re-inventing taint tracking.
+
+---
+
 ## Write persistence append-only, not read-then-write
 
 Sessions land in JSONL with one event per line. Any crash mid-agent

@@ -34,6 +34,12 @@ dev = [
     "mypy>=1.11",
     "bandit>=1.7",
     "pip-audit>=2.7",
+    # semgrep is the heaviest dev dep (~100 MB pulled + ~300 MB of
+    # default rulesets resolved lazily). Kept in `dev` (not a
+    # separate extra) because /review's `security_taint` tool degrades
+    # gracefully when it's absent — users who skip it still get
+    # `security_scan` (bandit) + `deps_audit` (pip-audit).
+    "semgrep>=1.86",
 ]
 # `bfcl-eval` is intentionally NOT listed here.
 # It pins tree-sitter==0.21.3, which conflicts with evalplus (>=0.22). Install

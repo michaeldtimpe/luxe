@@ -38,6 +38,7 @@ ToolName = Literal[
     "typecheck",
     "security_scan",
     "deps_audit",
+    "security_taint",
 ]
 
 
