@@ -17,7 +17,7 @@
 
 set -eu
 
-LUXEBOX_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LUXE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 LOGS_DIR="$HOME/Library/Logs/luxe"
 LOCAL_BIN="$HOME/.local/bin"
@@ -41,7 +41,7 @@ mkdir -p "$LOGS_DIR"
 say "installing launchd agents to $AGENTS_DIR"
 mkdir -p "$AGENTS_DIR"
 for label in com.luxe.mlx com.luxe.litellm; do
-    src="$LUXEBOX_ROOT/daily_driver/launchd/${label}.plist"
+    src="$LUXE_ROOT/daily_driver/launchd/${label}.plist"
     dest="$AGENTS_DIR/${label}.plist"
     cp "$src" "$dest"
     chmod 644 "$dest"
@@ -57,7 +57,7 @@ done
 #
 say "installing ~/.local/bin/claude-local"
 mkdir -p "$LOCAL_BIN"
-wrapper_src="$LUXEBOX_ROOT/daily_driver/claude-local"
+wrapper_src="$LUXE_ROOT/daily_driver/claude-local"
 wrapper_dest="$LOCAL_BIN/claude-local"
 if [ -L "$wrapper_dest" ] || [ -f "$wrapper_dest" ]; then
     rm -f "$wrapper_dest"
