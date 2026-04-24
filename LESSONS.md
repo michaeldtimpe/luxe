@@ -210,12 +210,17 @@ Fix was layered, not a single knob:
   panel before the model sees it. Empty panels must emit a single
   "No findings in this category." line and nothing else.
 - **`file:line` citation verification.** After every review/refactor
-  subtask, the orchestrator re-reads each cited location, confirms the
-  file exists and the line is in range, and prepends a
-  `⚠️ Grounding check failed` block to the subtask output for anything
-  that doesn't verify. This doesn't catch fake *quoted code* next to a
-  real file path, but it does catch invented file paths and
-  out-of-range line numbers — the cheaper class of hallucination.
+  subtask, the orchestrator re-reads each cited location and confirms
+  the file exists and the line is in range.
+- **Finding-level pattern verification.** Parses each `**File:** ... /
+  **Why:** ...` finding block, extracts backtick-quoted code tokens
+  from the claim text (skipping `**Suggested fix:**` so recommendations
+  aren't treated as claims), and greps the cited file for each. A
+  fabricated "os.system call in server.py" — the 32B follow-up's
+  dominant failure mode — gets flagged because `grep 'os.system'
+  server.py` → 0 matches. False claims are marked with a
+  `⚠️ Grounding check failed` block prepended to the subtask output
+  so the synthesis pass and the reader both see what to distrust.
 
 **Broader takeaway:** when a small model fabricates, adding more
 prompt discipline gets you a diminishing return. The model-swap + post-
