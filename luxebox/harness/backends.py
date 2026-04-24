@@ -71,10 +71,23 @@ class Backend:
     kind: BackendKind
     base_url: str
     model_id: str
-    timeout_s: float = 600.0
+    # Read timeout for a single chat call. 32B at 16k num_ctx can
+    # take ~15+ min end-to-end for one response (prefill + full
+    # decode under ~8 tok/s). 20 min keeps us above the agent-level
+    # per-subtask wall (15 min) so the wall check fires first
+    # instead of a httpx ReadTimeout bubbling up.
+    timeout_s: float = 1200.0
 
     def client(self) -> httpx.Client:
-        return httpx.Client(base_url=self.base_url, timeout=self.timeout_s)
+        # Per-axis timeouts: short connect/write so a dead backend
+        # fails fast, long read to accommodate slow 32B decode.
+        timeout = httpx.Timeout(
+            connect=15.0,
+            read=self.timeout_s,
+            write=60.0,
+            pool=30.0,
+        )
+        return httpx.Client(base_url=self.base_url, timeout=timeout)
 
     @retry(
         stop=stop_after_attempt(3),
