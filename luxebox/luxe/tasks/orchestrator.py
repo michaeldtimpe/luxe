@@ -20,6 +20,7 @@ from luxe.router import RouterDecision, route as _route
 from luxe.session import Session
 from luxe.tasks.model import Subtask, Task, _now, append_log_event, persist
 from luxe.tools import fs as _fs
+from shared.trace_hints import parse_trace_paths
 
 
 class Orchestrator:
@@ -167,6 +168,12 @@ class Orchestrator:
         scope_note = _subtask_scope_note(sub, agent)
         if scope_note:
             augmented = augmented + scope_note
+        # Pre-read files cited in pasted tracebacks so the agent
+        # doesn't spend its first tool calls rediscovering them.
+        # No-op when the task has no `path.py:LINE` mentions.
+        trace_hints = _augment_with_trace_hints(task, sub, _fs.repo_root())
+        if trace_hints:
+            augmented = trace_hints + "\n\n" + augmented
         decision = RouterDecision(
             agent=agent,
             task=augmented,
@@ -910,3 +917,61 @@ def _augment_with_prior(task: Task, sub: Subtask) -> str:
     parts.append("# Your task")
     parts.append(sub.title)
     return "\n\n".join(parts)
+
+
+def _augment_with_trace_hints(
+    task: Task,
+    sub: Subtask,
+    repo_root: Any,  # Path; Any to avoid importing at module top just for typing
+    *,
+    max_files: int = 3,
+    max_lines: int = 200,
+) -> str:
+    """Pre-read files cited in pasted traceback output so the agent
+    can start from real code instead of guessing paths with grep.
+
+    Scans the subtask title plus prior completed subtasks' result_text
+    for `path.py:LINE` references; resolves each against the repo
+    root; skips paths that escape the repo or don't exist. Returns a
+    Markdown block to prepend to the agent's prompt, or "" when
+    nothing relevant was found (the common case for non-code tasks).
+
+    This is the positive application of the compression-benchmark
+    finding: selectivity-based pre-retrieval (oracle-style). We
+    deliberately do NOT summarise or outline the files — that finding
+    was negative on local coder models."""
+    corpus_parts: list[str] = [sub.title or ""]
+    for s in task.subtasks:
+        if s.index < sub.index and s.status == "done" and s.result_text:
+            corpus_parts.append(s.result_text)
+    corpus = "\n".join(corpus_parts)
+
+    paths = parse_trace_paths(corpus, repo_root)[:max_files]
+    if not paths:
+        return ""
+
+    blocks: list[str] = [
+        "# Files mentioned in the error you're debugging",
+        "(Pre-read by the orchestrator so you don't need to grep for them. "
+        "Verify line numbers against the paste above before editing.)",
+    ]
+    repo_real = repo_root.resolve()
+    for path in paths:
+        try:
+            rel = path.relative_to(repo_real)
+        except ValueError:
+            continue
+        try:
+            body = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        lines = body.splitlines()
+        if len(lines) <= max_lines:
+            blocks.append(f"\n## {rel}\n```\n{body}\n```")
+        else:
+            head = "\n".join(lines[:max_lines])
+            blocks.append(
+                f"\n## {rel} (first {max_lines} of {len(lines)} lines)\n"
+                f"```\n{head}\n```"
+            )
+    return "\n".join(blocks)
