@@ -55,6 +55,10 @@ class Subtask:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     near_cap_turns: int = 0  # turns that used ≥80% of per-turn token cap
+    # Count of tool-call attempts rejected by client-side JSONSchema
+    # validation before reaching the fn. Surfaced so repeated malformed
+    # calls are visible without digging through session logs.
+    schema_rejects: int = 0
     wall_s: float = 0.0
     error: str = ""
     # Optional per-subtask overrides. Take precedence over Task-level
@@ -236,6 +240,7 @@ def reset_incomplete_subtasks(task: Task) -> int:
             s.prompt_tokens = 0
             s.completion_tokens = 0
             s.near_cap_turns = 0
+            s.schema_rejects = 0
             s.wall_s = 0.0
             reset += 1
     if reset:

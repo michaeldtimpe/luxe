@@ -13,6 +13,7 @@ from harness.backends import Backend
 from luxe.agents.base import AgentResult, run_agent
 from luxe.registry import AgentConfig
 from luxe.session import Session
+from luxe.tasks.cache import ToolCache, wrap_tool_fns
 from luxe.tools import analysis, fs, git_tools
 
 
@@ -23,6 +24,7 @@ def run(
     task: str,
     session: Session | None = None,
     on_tool_event: Callable[[dict[str, Any]], None] | None = None,
+    tool_cache: ToolCache | None = None,
 ) -> AgentResult:
     tool_defs = (
         list(fs.read_only_defs())
@@ -30,6 +32,14 @@ def run(
         + list(analysis.tool_defs(languages=cfg.analyzer_languages))
     )
     tool_fns = {**fs.READ_ONLY_FNS, **git_tools.TOOL_FNS, **analysis.TOOL_FNS}
+
+    if tool_cache is not None:
+        cacheable = (
+            set(fs.READ_ONLY_FNS)
+            | set(git_tools.TOOL_FNS)
+            | set(analysis.TOOL_FNS)
+        )
+        tool_fns = wrap_tool_fns(tool_fns, tool_cache, cacheable)
 
     return run_agent(
         backend,

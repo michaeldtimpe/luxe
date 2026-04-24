@@ -587,6 +587,45 @@ everything manually.
 LUXE_CACHE_TTL_S=60 luxe   # refresh model metadata every minute
 ```
 
+**Task-scoped tool cache.** `luxe/tasks/cache.py:ToolCache` memoizes
+deterministic read-only tool calls across subtasks of a single Task
+(read_file, list_dir, glob, grep, git_diff/log/show, the ten static
+analyzers). Allocated fresh by the orchestrator on every `run()`;
+mutations (`write_file`, `edit_file`, `bash`) and web fetches are
+excluded. Each subtask's `end` event carries `cache_hits` /
+`cache_misses`, and the task `finish` event rolls up the totals.
+
+**Client-side tool-arg schema.** `luxe/agents/base.py:_validate_args`
+checks each tool call's arguments against the declared JSONSchema
+(`required` fields + primitive `type`s) before dispatching to the fn.
+Rejections come back to the model as structured errors on the same
+turn and increment `AgentResult.schema_rejects` →
+`Subtask.schema_rejects`. Catches the common `grep` / `read_file`
+without-required-field pattern a turn earlier than the old path.
+
+## Benchmarking orchestrator changes
+
+`scripts/bench_orchestrator.py` tracks orchestration-level performance
+over time. The metrics that actually move between commits on a local-
+inference setup aren't decode tok/s (set by the model); they're wall
+time, tool calls, cache hits, schema rejects, and context-token spend.
+
+```bash
+# Backfill a baseline from a finished ~/.luxe/tasks run.
+.venv/bin/python scripts/bench_orchestrator.py import <task-id> --label baseline
+
+# Run a fresh review task against a specific repo, append to history.
+.venv/bin/python scripts/bench_orchestrator.py run \
+    "Review this repo for security and correctness" \
+    --cwd /path/to/target --label post-fix
+
+# Show the last 5 rows with per-metric deltas against the prior row.
+.venv/bin/python scripts/bench_orchestrator.py show -n 5
+```
+
+History lands in `results/orchestrator_bench/history.jsonl`, one
+record per row, stamped with the short git rev.
+
 ## Known limitations
 
 - **Coding depth is limited by the model class.** `qwen2.5-coder:14b`
