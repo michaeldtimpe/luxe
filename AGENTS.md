@@ -161,18 +161,32 @@ luxebox's licensing. HTTP mode in Draw Things settings sidesteps that.
 
 **Model:** `qwen2.5-coder:14b-instruct` (9 GB)
 **Tools:**
-- read_only: `read_file`, `list_dir`, `glob`, `grep`
-- mutation: `write_file`, `edit_file` (targeted string replace)
-- shell: `bash` with allowlist (`cargo pytest go python python3 rustc
-  node npm pnpm yarn git ls pwd cat head tail echo wc`)
+- read_only fs: `read_file`, `list_dir`, `glob`, `grep`
+- mutation fs: `write_file`, `edit_file` (targeted string replace)
+- shell: `bash` with allowlist (cargo, pytest, go, python, rustc,
+  node/npm/pnpm/yarn, git, and the analyzer binaries —
+  `ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks`/
+  `eslint`/`tsc`/`clippy`/`staticcheck` — for `ruff --fix` style
+  escape-hatch invocations beyond what the narrow tool schemas
+  allow)
 - web: `fetch_url`
+- static analyzers: `lint`, `typecheck`, `security_scan`,
+  `deps_audit`, `security_taint`, `secrets_scan`, `lint_js`,
+  `typecheck_ts`, `lint_rust`, `vet_go` (see *Static analysis*
+  below)
 
 **Temperature:** 0.2
 **Max steps:** 30, max wall 15 minutes
 
-**Role:** Claude-Code-like editing, with the full fs + bash + web
-surface. `luxe analyze <path>` runs in read-only mode (no mutation
-tools) for code review.
+**Role:** Claude-Code-like editing, with the full fs + bash + web +
+analyzer surface. `luxe analyze <path>` runs in read-only mode
+(no mutation tools) for code review.
+
+**Adaptive sizing:** on dispatch, `_resize_for_cwd()` runs
+`analyze_repo(fs.repo_root())` and bumps `num_ctx`/`max_wall_s` when
+the cwd is medium+ (see `luxe/repo_survey.py`'s tier table). Tiny
+and small repos keep the static config — 16k ctx costs KV-cache RAM
+the agent doesn't need for a 500-LOC codebase.
 
 **Selection rationale:** tried 4 model configurations against 4 real
 personal repos.
@@ -191,12 +205,108 @@ use but slower turn times.
 
 **Known limitation:** 14b hallucinates bugs it didn't read. Example:
 claimed a repo's `.env.example` was "missing the API key" when the key
-was in fact on line 3. Strong exploration-protocol prompts help but
-don't eliminate this. Always human-review code-agent output.
+was in fact on line 3. The analyzer tool surface reduces this: `lint`
+and `typecheck` return deterministic findings for the most common
+false-positive classes before the model reaches for grep. Still human-
+review the output — the underlying hallucination mode isn't fully
+gone, just scoped.
 
 **Scoping:** All fs tools confined to `fs.repo_root()` (process CWD
 unless overridden). Bash only runs allowlisted binaries — `shlex.split`
 parses, first token must be in the set.
+
+---
+
+## Review  — `luxe/agents/review.py`
+
+**Model:** `qwen2.5:32b-instruct` (19 GB). Moved off
+`qwen2.5-coder:14b` in April 2026 after concrete evidence the 14B
+coder fabricated findings on real repos — it re-derived bug patterns
+from grep rather than reading code. 32B general-instruct reads more
+before claiming and is already proven stable on Ollama's tool surface
+(also used by `research` and `calc`).
+
+**Tools:** read-only fs (`read_file`, `list_dir`, `glob`, `grep`) +
+read-only git (`git_diff`, `git_log`, `git_show`) + the full
+analyzer suite above. Never writes.
+
+**Driven by:** `/review <git-url>` in the REPL or
+`luxe analyze <path> --review`. Both plan a 7-subtask task
+(orientation → docs → security → correctness → robustness →
+maintainability → severity-grouped synthesis) pinned to the review
+agent.
+
+**Anti-fabrication guardrails** (`luxe/tasks/orchestrator.py`):
+
+- **Shallow-inspection retry.** Subtasks that end with zero reading-
+  tool calls (or with many `file:line` citations from too few reads)
+  are retried with a stronger prompt. Catches the "one `list_dir`
+  and a page of invented findings" pathology.
+- **Forced inspection fallback.** If the retry also refuses, the
+  orchestrator runs a canonical grep panel itself and asks the
+  model to summarize the raw output instead of generating from
+  training-data recall.
+- **`file:line` citation verification.** Every cited location is
+  re-read post-subtask; out-of-range or nonexistent citations get a
+  `⚠️ Grounding check failed` block prepended to the finding.
+- **Finding-level pattern verification.** Each backtick-quoted code
+  construct in a finding's Issue/Why text is grepped in the cited
+  file; absent constructs are flagged the same way. Catches claims
+  like "`server.py` contains a call to `os.system`" when the file
+  has no such call.
+- **Severity-validity checklist.** System prompt includes explicit
+  rules for eval/subprocess/`while True:`/missing-timeout patterns:
+  check for sandbox, list-args, break conditions, actual kwargs
+  before assigning severity.
+- **Pre-flight repo survey.** Task wall + `num_ctx` sized from the
+  target repo's LOC tier (see `luxe/repo_survey.py`).
+
+---
+
+## Refactor  — `luxe/agents/refactor.py`
+
+**Model:** `qwen2.5:32b-instruct` (shared config rationale with
+`review`). **Tools:** identical to review. **Driven by:**
+`/refactor <git-url>`. Subtasks focus on performance → architecture
+→ code size → idioms rather than security. Same anti-fabrication
+guardrails, same pre-flight survey.
+
+---
+
+## Static analysis — `luxe/tools/analysis.py`
+
+10 callable analyzer tools share `luxe/tools/_subprocess.py`'s
+`run_binary()` helper, which resolves binary paths to the current
+venv's `bin/` before falling back to system PATH (so `uv sync
+--extra dev` installs are picked up even when luxe runs as a
+detached subprocess).
+
+**Python:** `lint` (ruff), `typecheck` (mypy), `security_scan`
+(bandit, filtered to `min_confidence=MEDIUM` by default),
+`deps_audit` (pip-audit), `security_taint` (semgrep's `p/python`
+taint rules — the only tool in the kit that does source→sanitizer→
+sink analysis; use it before severity calls on eval/exec/subprocess/
+pickle/SQL), `secrets_scan` (gitleaks with `--redact=100` so
+credentials never reach the model).
+
+**Cross-language:** `lint_js` (eslint), `typecheck_ts` (tsc),
+`lint_rust` (cargo clippy JSONL), `vet_go` (go vet + stderr parse).
+Each checks for its project marker (`package.json`, `tsconfig.json`,
+`Cargo.toml`, `go.mod`) and returns `{note: "not a <lang> project"}`
+when absent — the agent moves on rather than erroring.
+
+All tools return `(result, err)` tuples where `result` is a JSON
+string shaped as `{findings: [...], count, note?, truncated_at?}`
+and `err` is None on success or a string on failure. Graceful-degrade
+is the same pattern as `fs.grep` — `FileNotFoundError` on the binary
+becomes a helpful error message (`"ruff not installed. uv sync
+--extra dev pulls it in."`) that the model can read and adapt to.
+
+Per-tool telemetry is stamped onto `ToolCall` (`wall_s`, `ok`,
+`bytes_out`) in the dispatch loop. `/tasks analyze <id>` prints a
+per-subtask breakdown with totals and an analyzer-vs-reader
+adoption ratio; `scripts/summarize_runs.py` aggregates the same
+data across every run in `~/.luxe/tasks/` as a CSV.
 
 ---
 

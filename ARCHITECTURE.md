@@ -137,8 +137,40 @@ The shared agent loop (`luxe/agents/base.py`) takes those two, handles:
 - Text-JSON fallback (first call only — speculative plans get 1 entry, not 63)
 - Budgets: `max_steps`, `max_wall_s`, `max_tool_calls_per_turn`
 - Per-turn token accounting (sums `response.timing.prompt_tokens` / completion)
+- Per-call telemetry: each `ToolCall` is stamped with `wall_s`, `ok`,
+  `bytes_out` as it runs so downstream (`state.json`, `/tasks analyze`,
+  `scripts/summarize_runs.py`) can break wall and adoption down by tool
 - Session logging (every tool call + result)
 - Keyboard interrupt as a clean abort with `reason="interrupted (Ctrl-C)"`
+
+### External-binary wrappers
+
+`luxe/tools/_subprocess.py:run_binary()` is the shared subprocess
+runner for every tool that shells out to an external binary (git,
+ripgrep, and the 10 static analyzers). It resolves binary paths
+against the current venv's `bin/` before falling back to system
+PATH, so tools installed via `uv sync --extra dev` work even when
+luxe runs as a detached subprocess with an unchanged shell
+environment. Per-axis `httpx.Timeout` on the backend client
+(`harness/backends.py`) gives slow 32B decodes 20 minutes of read
+headroom without starving quick connect/write failures.
+
+### Static-analysis tools
+
+`luxe/tools/analysis.py` holds 10 analyzer wrappers following the
+same `run_binary` + `(result, err)` pattern as `fs.grep`:
+
+- **Python:** `lint` (ruff), `typecheck` (mypy), `security_scan`
+  (bandit), `deps_audit` (pip-audit), `security_taint` (semgrep),
+  `secrets_scan` (gitleaks).
+- **Cross-language:** `lint_js` (eslint), `typecheck_ts` (tsc),
+  `lint_rust` (cargo clippy), `vet_go` (go vet).
+
+Each tool reshapes its native JSON/JSONL/text output into a uniform
+`{findings: [...], count, note?}` payload capped at 150 items.
+Missing binaries or missing project markers produce a helpful
+`note` the model can read and adapt to rather than crashing. See
+`luxebox/luxe/README.md` for the full per-tool reference.
 
 ## Configuration
 
@@ -153,6 +185,28 @@ The shared agent loop (`luxe/agents/base.py`) takes those two, handles:
 `LuxeConfig` (pydantic) validates on load. The runner applies cross-cutting
 settings (Draw Things endpoint, image output dir) once per dispatch before
 invoking the specialist.
+
+### Task-level and subtask-level budget overrides
+
+The static per-agent budgets above are the defaults. Two override
+axes sit on top:
+
+- **`Task.num_ctx_override`** (`luxe/tasks/model.py`). Set by
+  `/review` and `/refactor` based on a pre-flight repo survey
+  (`luxe/repo_survey.py:analyze_repo` → `size_budgets` → tier
+  table). Threads through `luxe/tasks/orchestrator.py:
+  _cfg_with_task_overrides`, which derives an
+  `AgentConfig.model_copy(update={"num_ctx": ...})` just for that
+  task's dispatches.
+- **`Subtask.num_ctx_override` / `Subtask.max_tokens_per_turn_override`**.
+  Populated by the planner at plan time — synthesis subtasks get a
+  doubled output cap so the severity-grouped report doesn't
+  truncate mid-category. Precedence: subtask > task > agent default.
+
+The `code` agent has its own `_resize_for_cwd()` hook in
+`luxe/agents/code.py` that surveys the current working directory at
+dispatch time and bumps `num_ctx`/`max_wall_s` for medium+ repos.
+No task wrapper needed — the hook runs before `run_agent()`.
 
 ## Scoping / safety
 
