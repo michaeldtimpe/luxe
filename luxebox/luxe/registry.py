@@ -39,6 +39,7 @@ ToolName = Literal[
     "security_scan",
     "deps_audit",
     "security_taint",
+    "secrets_scan",
 ]
 
 
