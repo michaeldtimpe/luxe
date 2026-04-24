@@ -164,6 +164,9 @@ class Orchestrator:
     def _dispatch_subtask(self, sub: Subtask, task: Task) -> None:
         agent = sub.agent or self._pick_agent(sub.title)
         augmented = _augment_with_prior(task, sub)
+        scope_note = _subtask_scope_note(sub, agent)
+        if scope_note:
+            augmented = augmented + scope_note
         decision = RouterDecision(
             agent=agent,
             task=augmented,
@@ -193,7 +196,9 @@ class Orchestrator:
         if (
             agent in ("review", "refactor")
             and _is_inspection_title(sub.title)
-            and _inspection_too_shallow(result.tool_calls, sub.title)
+            and _inspection_too_shallow(
+                result.tool_calls, sub.title, sub.result_text
+            )
         ):
             shallow_reason = (
                 "no tool calls at all"
@@ -230,7 +235,10 @@ class Orchestrator:
                 retry_decision, self.cfg, session=self.session
             )
             # Accept the retry only if it did better on the depth axis.
-            if not _inspection_too_shallow(retry_result.tool_calls, sub.title):
+            if not _inspection_too_shallow(
+                retry_result.tool_calls, sub.title,
+                retry_result.final_text or "",
+            ):
                 sub.result_text = retry_result.final_text or sub.result_text
                 sub.tool_calls = list(retry_result.tool_calls)
                 sub.tool_calls_total = retry_result.tool_calls_total
@@ -278,6 +286,27 @@ class Orchestrator:
                         "findings may not be grounded in code"
                     )
 
+        # Ground-truthing: for review/refactor, verify every `file:line`
+        # the agent cited actually exists in the repo and the line is in
+        # range. Fake citations get annotated into sub.result_text so the
+        # final report makes the unreliability obvious.
+        if agent in ("review", "refactor") and sub.result_text:
+            bad = _verify_citations(sub.result_text)
+            if bad:
+                self._emit(task, {
+                    "event": "grounding_issues",
+                    "subtask": sub.id,
+                    "count": len(bad),
+                })
+                sub.result_text = _annotate_bad_citations(sub.result_text, bad)
+                suffix_note = (
+                    f"{len(bad)} unverified citation(s) — "
+                    "see grounding warning in report"
+                )
+                sub.error = (
+                    f"{sub.error}; {suffix_note}" if sub.error else suffix_note
+                )
+
         sub.status = "done"
 
     def _pick_agent(self, title: str) -> str:
@@ -294,12 +323,15 @@ class Orchestrator:
 
 _INSPECTION_VERBS = re.compile(
     r"\b(search|look|find|check|scan|inspect|identify|analyze|audit|"
-    r"review\s+for|list\s+(directory|files)|read\s+(the\s+)?readme)\b",
+    r"review\s+for|list\s+(directory|files)|"
+    r"read\s+[\w\s,]*?\b(readme|architecture|arch|docs?|contributing|"
+    r"security|changelog|license))\b",
     re.IGNORECASE,
 )
 _SYNTHESIS_VERBS = re.compile(
-    r"\b(summari[zs]e|synthesi[zs]e|generate\s+(a\s+)?report|write\s+(the\s+)?"
-    r"(report|summary)|produce\s+(a\s+)?report)\b",
+    r"\b(summari[zs]e|synthesi[zs]e|"
+    r"(generate|write|produce|compile|assemble|emit)\s+[\w\s-]*?"
+    r"\b(report|summary|writeup|write[\s-]?up))\b",
     re.IGNORECASE,
 )
 
@@ -324,52 +356,70 @@ _READING_TOOLS = frozenset({"read_file", "grep"})
 
 
 _PURE_ORIENTATION_TITLE = re.compile(
-    r"^\s*(list|show)\s+(the\s+)?(directory|directories|dir|files|contents|tree)",
+    r"^\s*(list|show)\s+[\w\s-]*?"
+    r"\b(directory|directories|dir|files|contents|tree|layout|structure)\b",
     re.IGNORECASE,
 )
 
 
 # Canonical starter greps for each inspection category. When the agent
-# refuses to use tools twice in a row, the orchestrator runs these
+# refuses to call tools twice in a row, the orchestrator runs these
 # itself and hands the model the raw results to summarize — converting
 # "I didn't look" into "here's what I found; now you analyze."
-_FORCED_INSPECTION_RECIPES: list[tuple[re.Pattern[str], list[tuple[str, str]]]] = [
+#
+# Each recipe entry is (label, include_pattern, exclude_pattern). The
+# exclude_pattern is applied line-by-line to the grep output to drop
+# benign false positives (e.g. `secrets.token_hex` from Python's
+# `secrets` module — a password-generator API, not a vuln).
+_FORCED_INSPECTION_RECIPES: list[tuple[re.Pattern[str], list[tuple[str, str, str | None]]]] = [
     (
         re.compile(r"security", re.IGNORECASE),
         [
-            ("dangerous-exec",    r"eval\(|exec\(|os\.system|subprocess\.|shell_exec|popen"),
-            ("secrets",           r"password|secret|api[-_]?key|token\s*="),
-            ("deserialization",   r"pickle\.loads|yaml\.load\(|marshal\.loads"),
-            ("sql-injection",     r"(SELECT|INSERT|UPDATE|DELETE).*(\+|%s|f\")"),
+            ("dangerous-exec",
+             r"eval\(|exec\(|os\.system|subprocess\.|shell_exec|popen",
+             None),
+            # The `secrets` stdlib module is the *safe* RNG API — exclude
+            # its method calls so we stop flagging `secrets.token_hex`
+            # and friends as potential leaks. Same for `os.urandom`.
+            ("secrets",
+             r"password|secret|api[-_]?key|token\s*=",
+             r"\bsecrets\.(token_|choice|randbits|compare_digest|SystemRandom)"
+             r"|\bos\.urandom\b"),
+            ("deserialization",
+             r"pickle\.loads|yaml\.load\(|marshal\.loads",
+             None),
+            ("sql-injection",
+             r"(SELECT|INSERT|UPDATE|DELETE).*(\+|%s|f\")",
+             None),
         ],
     ),
     (
         re.compile(r"correctness|bugs?", re.IGNORECASE),
         [
-            ("bare-except",       r"except\s*:\s*$|except\s+Exception\s*:"),
-            ("todo-markers",      r"TODO|FIXME|XXX|HACK"),
+            ("bare-except",       r"except\s*:\s*$|except\s+Exception\s*:", None),
+            ("todo-markers",      r"TODO|FIXME|XXX|HACK", None),
         ],
     ),
     (
         re.compile(r"robust", re.IGNORECASE),
         [
-            ("network-no-timeout", r"requests\.|httpx\.|urllib\.request"),
-            ("unbounded-loops",    r"while\s+True"),
+            ("network-no-timeout", r"requests\.|httpx\.|urllib\.request", None),
+            ("unbounded-loops",    r"while\s+True", None),
         ],
     ),
     (
         re.compile(r"maintain|duplicat|dead\s+code", re.IGNORECASE),
         [
-            ("function-density",   r"^def\s+|^class\s+"),
-            ("suppressions",       r"# noqa|# type:\s*ignore"),
+            ("function-density",   r"^def\s+|^class\s+", None),
+            ("suppressions",       r"# noqa|# type:\s*ignore", None),
         ],
     ),
     (
         re.compile(r"performance|optimi[sz]", re.IGNORECASE),
         [
-            ("nested-loops",       r"for\s+.*in\s+.*:"),
-            ("list-building",      r"\.append\(.*\).*for"),
-            ("uncached-regex",     r"re\.(compile|search|match)"),
+            ("nested-loops",       r"for\s+.*in\s+.*:", None),
+            ("list-building",      r"\.append\(.*\).*for", None),
+            ("uncached-regex",     r"re\.(compile|search|match)", None),
         ],
     ),
 ]
@@ -379,7 +429,7 @@ def _force_inspect(title: str) -> str:
     """When the agent refuses to call tools, run a small panel of greps
     ourselves and return the raw output as a ready-to-summarize prompt
     fragment. Returns empty string if no recipe matches the title."""
-    recipes: list[tuple[str, str]] = []
+    recipes: list[tuple[str, str, str | None]] = []
     for pattern, grep_list in _FORCED_INSPECTION_RECIPES:
         if pattern.search(title):
             recipes = grep_list
@@ -393,12 +443,18 @@ def _force_inspect(title: str) -> str:
         "",
     ]
     any_hits = False
-    for label, pat in recipes:
+    for label, pat, exclude in recipes:
         try:
             result, err = _fs.grep({"pattern": pat})
         except Exception as e:  # noqa: BLE001
             result, err = None, f"{type(e).__name__}: {e}"
         body = (result or "").strip() if err is None else f"ERROR: {err}"
+        if body and body != "(no matches)" and exclude and err is None:
+            keep = re.compile(exclude)
+            body = "\n".join(
+                line for line in body.splitlines()
+                if not keep.search(line)
+            ).strip()
         parts.append(f"```grep-output name={label} pattern={pat!r}")
         parts.append(body or "(no matches)")
         parts.append("```")
@@ -408,15 +464,28 @@ def _force_inspect(title: str) -> str:
 
     parts.append(
         "# Your task\n"
-        "Summarize the findings above. Cite specific `file:line` from "
-        "the grep output. If a grep returned no matches, say so "
-        "explicitly for that category. Do not invent file names that "
-        "aren't in the output."
+        "Summarize the findings above. Rules — these are strict, not "
+        "suggestions:\n"
+        "- Cite the specific `file:line` exactly as it appears in the "
+        "grep output above. Do NOT invent filenames or line numbers.\n"
+        "- For any category whose grep output is `(no matches)`, output "
+        "EXACTLY this single line for that category and nothing more:\n"
+        "    **No findings in this category.**\n"
+        "  No generic advice, no 'however it's still important to…', "
+        "no speculation about what might exist. Empty means empty.\n"
+        "- If every category is `(no matches)`, your whole answer is "
+        "one line: **No findings in any inspected category.**\n"
+        "- When grep output IS non-empty, every finding you emit must "
+        "quote a real line from the output above. Do not paraphrase into "
+        "hypothetical code (`query = f\"SELECT ...\"`) — that's "
+        "hallucination."
     )
-    return "\n".join(parts) if any_hits or True else ""  # always return; empty is OK
+    return "\n".join(parts)
 
 
-def _inspection_too_shallow(tool_calls, title: str = "") -> bool:
+def _inspection_too_shallow(
+    tool_calls, title: str = "", result_text: str = ""
+) -> bool:
     """True when an inspection subtask didn't do enough to be credible.
 
     Pure-orientation subtasks ("List directory contents of the repo")
@@ -424,6 +493,12 @@ def _inspection_too_shallow(tool_calls, title: str = "") -> bool:
     purpose IS orientation. For inspection-proper subtasks ("Search
     for security issues", "Identify maintainability issues"), we need
     reading-tool use (grep/read_file), not just walking the tree.
+
+    We also apply a citation/read-ratio check: if the final text cites
+    many `file:line` locations but the agent ran only one reading call,
+    the findings are almost certainly hallucinated from training
+    knowledge rather than grounded in the repo. Flag as shallow so the
+    retry-then-forced-inspection fallback kicks in.
     """
     if not tool_calls:
         return True
@@ -434,7 +509,129 @@ def _inspection_too_shallow(tool_calls, title: str = "") -> bool:
     did_read = bool(names & _READING_TOOLS)
     if not did_read:
         return True
+    n_reads = sum(1 for c in tool_calls if c.name in _READING_TOOLS)
+    n_cit = len(_extract_citations(result_text))
+    # 1 read call citing 4+ file:line pairs is a hallmark of a model
+    # that skimmed filenames and then invented findings.
+    if n_cit >= 4 and n_reads < 2:
+        return True
     return False
+
+
+_CITATION_RE = re.compile(
+    r"(?<![\w/])([\w][\w./-]*?\.(?:py|pyi|js|ts|tsx|jsx|go|rs|rb|java|"
+    r"kt|kts|c|h|cc|cpp|hpp|cs|swift|m|mm|sh|bash|zsh|yaml|yml|toml|"
+    r"json|md|txt|html|css|sql|tf|hcl|dockerfile|mk|cfg|ini|conf|service)):"
+    r"(\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_citations(text: str) -> list[tuple[str, int]]:
+    """Pull `path/to/file.ext:NNN` citations out of a subtask's final
+    text. Extension list is explicit to avoid false matches on things
+    like `http://host:8080` or `time 00:42`."""
+    if not text:
+        return []
+    out: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for m in _CITATION_RE.finditer(text):
+        path, line = m.group(1), int(m.group(2))
+        if (path, line) in seen:
+            continue
+        seen.add((path, line))
+        out.append((path, line))
+    return out
+
+
+def _verify_citations(
+    text: str,
+) -> list[tuple[str, int, str]]:
+    """For each unique `file:line` citation in `text`, confirm the file
+    exists in the repo root and the line number is within range. Returns
+    a list of `(path, line, reason)` for citations that did NOT verify.
+    An empty list means every citation is grounded."""
+    bad: list[tuple[str, int, str]] = []
+    for path, line in _extract_citations(text):
+        try:
+            content, err = _fs.read_file({"path": path})
+        except Exception as e:  # noqa: BLE001
+            bad.append((path, line, f"{type(e).__name__}: {e}"))
+            continue
+        if err is not None:
+            bad.append((path, line, err))
+            continue
+        n_lines = (content or "").count("\n") + (0 if not content else 1)
+        if line < 1 or line > n_lines:
+            bad.append(
+                (path, line, f"line out of range (file has {n_lines} lines)")
+            )
+    return bad
+
+
+def _annotate_bad_citations(
+    text: str, bad: list[tuple[str, int, str]]
+) -> str:
+    """Prepend a grounding-warning block to a subtask's output so the
+    final report makes it visible which findings couldn't be verified.
+    Stripping findings automatically is too error-prone with free-form
+    markdown — annotation is the honest middle ground."""
+    if not bad:
+        return text
+    lines = [
+        "> ⚠️ **Grounding check failed for the following citations** — "
+        "treat findings that reference these locations as unverified:"
+    ]
+    for path, line, reason in bad:
+        lines.append(f"> - `{path}:{line}` — {reason}")
+    lines.append("")
+    return "\n".join(lines) + "\n" + text
+
+
+def _subtask_scope_note(sub: Subtask, agent: str) -> str:
+    """Per-subtask scope reminder. The planner decomposes a single user
+    goal into N ordered subtasks, but the agent still sees the full
+    goal text — which nudges models into answering the whole thing on
+    subtask 1. The scope note tells the model what NOT to do in this
+    particular subtask so that tool-use effort lands on the right pass.
+    Only applied to review/refactor agents where this miscategorization
+    has been observed in practice."""
+    if agent not in ("review", "refactor"):
+        return ""
+    title = (sub.title or "").strip()
+    if not title:
+        return ""
+    if _PURE_ORIENTATION_TITLE.search(title):
+        return (
+            "\n\n# Scope for THIS subtask (strict)\n"
+            "This is an ORIENTATION subtask only. Call `list_dir` (or "
+            "`glob`) once and report what you see: filenames and "
+            "top-level directories. Do NOT produce any security, "
+            "correctness, robustness, or maintainability findings — "
+            "later subtasks will do that with the right tools. One "
+            "paragraph listing what's present is the whole answer."
+        )
+    if _SYNTHESIS_VERBS.search(title):
+        return (
+            "\n\n# Scope for THIS subtask (strict)\n"
+            "This is a SYNTHESIS subtask. Work only from the 'Prior "
+            "findings' block above — do not run new tool calls and do "
+            "not introduce findings that weren't in a prior subtask. "
+            "Your job is to reorganize existing findings into a "
+            "severity-grouped report."
+        )
+    if _is_inspection_title(title):
+        return (
+            "\n\n# Scope for THIS subtask (strict)\n"
+            f"This subtask is scoped to ONE category: `{title}`. Only "
+            "report findings in that category. Do NOT emit the final "
+            "severity-grouped report (a later synthesis subtask will). "
+            "Do NOT re-report findings that a prior subtask already "
+            "listed above — the synthesis pass will merge them. Ground "
+            "every finding in code you read with `read_file` or `grep` "
+            "in this turn; if you didn't read it, don't cite it."
+        )
+    return ""
 
 
 def _summarize_result(text: str, max_chars: int = 800) -> str:

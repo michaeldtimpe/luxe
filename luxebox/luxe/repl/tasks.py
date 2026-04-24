@@ -333,6 +333,30 @@ def _tasks_abort(partial: str | None) -> None:
     console.print(f"[yellow]✗ aborted[/yellow] {task.id}")
 
 
+def _wrap_or_inline(
+    prefix: str,
+    message: str,
+    *,
+    message_style: str = "",
+    indent: str = "[dim]│[/dim]     ",
+) -> None:
+    """Print 'prefix + message'. If the combined line would overflow the
+    terminal, emit the message on an indented continuation line instead
+    of silently truncating. Full untruncated text is also in log.jsonl —
+    this is a display-only concern."""
+    if not message:
+        console.print(prefix.rstrip())
+        return
+    prefix_cells = Text.from_markup(prefix).cell_len
+    avail = max(40, console.width - prefix_cells)
+    styled = f"[{message_style}]{message}[/{message_style}]" if message_style else message
+    if Text(message).cell_len <= avail:
+        console.print(f"{prefix}{styled}")
+    else:
+        console.print(prefix.rstrip())
+        console.print(f"{indent}{styled}", overflow="fold", soft_wrap=False)
+
+
 def _sync_event_printer(event: dict) -> None:
     """Tail-style live output for sync + background tail runs. Surfaces
     model tag on begin (so you can see which weights the subtask
@@ -347,9 +371,13 @@ def _sync_event_printer(event: dict) -> None:
         agent = event.get("agent") or "?"
         model = event.get("model") or ""
         model_tag = f" [dim]·[/dim] [cyan]{model}[/cyan]" if model else ""
-        console.print(
-            f"[dim]│[/dim] [{agent}]{model_tag} "
-            f"[dim]·[/dim] {event.get('title', '')[:72]}"
+        # Escape the literal brackets around the agent name so Rich
+        # doesn't parse "[review]" as a markup tag (unknown style names
+        # render as empty). See tasks.py history for the silent bug this
+        # replaced.
+        _wrap_or_inline(
+            f"[dim]│[/dim] \\[[magenta]{agent}[/magenta]]{model_tag} [dim]·[/dim] ",
+            event.get("title", ""),
         )
     elif kind == "end":
         status = event.get("status", "")
@@ -373,22 +401,28 @@ def _sync_event_printer(event: dict) -> None:
         if near_cap:
             suffix += f" [yellow]⚠ {near_cap} near-cap turn(s)[/yellow]"
         err = event.get("error") or ""
-        if err:
-            suffix += f" [yellow]{err[:80]}[/yellow]"
-        console.print(f"[dim]│[/dim] {icon} sub {sub} · {suffix}")
+        _wrap_or_inline(
+            f"[dim]│[/dim] {icon} sub {sub} · {suffix} ",
+            err,
+            message_style="yellow",
+        )
     elif kind == "retry_transport":
-        console.print(
-            f"[dim]│[/dim] [yellow]retry[/yellow] sub {sub} "
-            f"[dim]({event.get('error', '')})[/dim]"
+        _wrap_or_inline(
+            f"[dim]│[/dim] [yellow]retry[/yellow] sub {sub} ",
+            f"({event.get('error', '')})" if event.get("error") else "",
+            message_style="dim",
         )
     elif kind == "tool_use_retry":
-        console.print(
-            f"[dim]│[/dim] [yellow]retry-tools[/yellow] sub {sub} "
-            f"[dim]({event.get('reason', '')})[/dim]"
+        _wrap_or_inline(
+            f"[dim]│[/dim] [yellow]retry-tools[/yellow] sub {sub} ",
+            f"({event.get('reason', '')})" if event.get("reason") else "",
+            message_style="dim",
         )
     elif kind == "skip":
-        console.print(
-            f"[dim]│[/dim] [dim]skip sub {sub} ({event.get('reason', '')})[/dim]"
+        _wrap_or_inline(
+            f"[dim]│[/dim] [dim]skip sub {sub}[/dim] ",
+            f"({event.get('reason', '')})" if event.get("reason") else "",
+            message_style="dim",
         )
     elif kind == "report_saved":
         path = event.get("path", "")

@@ -166,6 +166,65 @@ Those are real refactor targets. The rest was noise.
 
 ---
 
+## A tool-shy review agent fabricates more than it finds
+
+A 2026-04-23 `/review` run on a tiny HTTP-server repo made the coder
+model's failure mode concrete. Seven subtasks; `qwen2.5-coder:14b` did
+one `list_dir` on subtask 1 and then emitted a "critical SQL injection
+in `server.py`" finding — complete with a quoted `query = f"SELECT *
+FROM users..."` that does not exist anywhere in `server.py`. The file
+is an `http.server` handler with zero database code. Subtasks 3–6 did
+not call a tool at all; the final "severity-grouped report" reprinted
+the hallucinated SQLi as the headline critical issue.
+
+Three pathologies stacked:
+
+1. **Model prefers plausible output over refusal.** Given a
+   structured-finding prompt, a 14B coder-instruct fills in the shape
+   of a bug report whether or not the data supports it.
+2. **Forced-inspection greps are only as good as their precision.** The
+   `secrets` recipe matched `secrets.token_hex(8)` — Python's *safe*
+   RNG API — and a tool-shy model happily wrote it up as a medium-sev
+   "potential exposure."
+3. **Planner-decomposed subtasks don't self-scope.** Subtask 1's
+   title was "List the root directory," but the agent saw the full
+   `/review` goal text and produced a full security review from one
+   `list_dir` call. Orientation, inspection, and synthesis subtasks
+   all looked like inspection subtasks to the model.
+
+Fix was layered, not a single knob:
+
+- **Model swap** for review/refactor from `qwen2.5-coder:14b-instruct`
+  to `qwen2.5:32b-instruct`. These agents reason over code rather than
+  writing it, and general-instruct 32B is both less eager to fabricate
+  and already proven stable on Ollama tool use (research + calc).
+- **Per-subtask scope notes** injected by the orchestrator for
+  review/refactor agents: orientation subtasks are told not to produce
+  findings; synthesis subtasks are told not to introduce new ones;
+  inspection subtasks are scoped to one category.
+- **Shallow-detection citation check.** If the final text cites ≥4
+  `file:line` pairs from fewer than 2 reading-tool calls, the shallow
+  retry kicks in even if the agent called `read_file` once for show.
+- **Orchestrator-run grep exclude patterns.** `secrets.token_*`,
+  `secrets.SystemRandom`, `os.urandom` get stripped from the secrets
+  panel before the model sees it. Empty panels must emit a single
+  "No findings in this category." line and nothing else.
+- **`file:line` citation verification.** After every review/refactor
+  subtask, the orchestrator re-reads each cited location, confirms the
+  file exists and the line is in range, and prepends a
+  `⚠️ Grounding check failed` block to the subtask output for anything
+  that doesn't verify. This doesn't catch fake *quoted code* next to a
+  real file path, but it does catch invented file paths and
+  out-of-range line numbers — the cheaper class of hallucination.
+
+**Broader takeaway:** when a small model fabricates, adding more
+prompt discipline gets you a diminishing return. The model-swap + post-
+hoc verification buys more than any amount of "please cite only real
+files" in the system prompt. Verify in code what you can't trust the
+model to self-report.
+
+---
+
 ## Write persistence append-only, not read-then-write
 
 Sessions land in JSONL with one event per line. Any crash mid-agent

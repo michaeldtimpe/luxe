@@ -19,8 +19,8 @@ questions, plan-preview, and context forwarding between subtasks.
 | writing | `gemma-3-27b-it` | **llama-server** | Served via `llama-server --jinja`; native `tool_code` blocks parsed inline |
 | code | `qwen2.5-coder:14b-instruct` | Ollama | Full tool surface; 32b variants had Ollama tool-use quirks |
 | image | `qwen2.5:7b-instruct` (prompt expander) + Draw Things | Ollama + HTTP | Draw Things API on 7859 |
-| review | `qwen2.5-coder:14b-instruct` | Ollama | Read-only code review with git context; driven by `/review <url>` |
-| refactor | `qwen2.5-coder:14b-instruct` | Ollama | Read-only optimization suggestions with git context; driven by `/refactor <url>` |
+| review | `qwen2.5:32b-instruct` | Ollama | Read-only code review with git context; driven by `/review <url>`. Orchestrator retries tool-shy agents, pre-runs canonical greps, and verifies every cited `file:line` exists before reporting |
+| refactor | `qwen2.5:32b-instruct` | Ollama | Read-only optimization suggestions with git context; driven by `/refactor <url>`. Same anti-fabrication guardrails as `review` |
 | calc | `qwen2.5:32b-instruct` | Ollama | Multi-step arithmetic; `create_tool` + library-matched tools for reusable formulas |
 
 Ollama hot-swaps, so only one Ollama-served model is resident at a time.
@@ -238,8 +238,9 @@ State lives at `~/.luxe/tasks/<task-id>/`:
 
 - `state.json` — full Task with subtasks and structured `ToolCall` list
 - `log.jsonl` — one event per state change (start / begin / end /
-  retry_transport / tool_use_retry / forced_inspection / report_saved /
-  abort_sigterm / finish); tailed by `/tasks log`
+  retry_transport / tool_use_retry / forced_inspection /
+  grounding_issues / report_saved / abort_sigterm / finish); tailed by
+  `/tasks log`
 - `stdout.log` — raw stdout/stderr of the background subprocess
 - `repo_path` (for `/review` + `/refactor` only) — the clone root
 
@@ -419,9 +420,13 @@ LUXE_CACHE_TTL_S=60 luxe   # refresh model metadata every minute
 ## Known limitations
 
 - **Coding depth is limited by the model class.** `qwen2.5-coder:14b`
-  reads 2–4 files per analysis, which is enough to catch structural
-  issues but not enough for deep bug hunting. Think of `review` /
-  `refactor` as a reviewer's first pass, not a final verdict.
+  (the `code` agent) reads 2–4 files per analysis — enough to catch
+  structural issues, not enough for deep bug hunting. `review` and
+  `refactor` moved to `qwen2.5:32b-instruct` and are guarded by a
+  three-layer anti-fabrication check (shallow-inspection retry →
+  orchestrator-run greps → `file:line` citation verification), but they
+  still aren't a replacement for human review. Treat agent output as a
+  first pass, not a final verdict.
 - **Writing agent uses llama-server.** It's a separate process — if
   port 8080 is unreachable, the writing agent 400s. `/context` shows
   the server's RSS and loaded context.

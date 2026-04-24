@@ -355,7 +355,13 @@ agents:
 
   - name: review
     display: "Code review (read-only)"
-    model: "qwen2.5-coder:14b-instruct"
+    # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct — the 14b
+    # coder was fabricating findings (quoted SQL that didn't exist in
+    # the file, refused to use tools on 4/6 inspection subtasks). This
+    # agent reasons over code rather than writing it, so general-instruct
+    # is a better fit; the 32b variant is the one `research` and `calc`
+    # use, so tool-use stability is already validated.
+    model: "qwen2.5:32b-instruct"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
@@ -443,7 +449,10 @@ agents:
 
   - name: refactor
     display: "Refactor / optimization (read-only)"
-    model: "qwen2.5-coder:14b-instruct"
+    # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct for the same
+    # reason as `review` — this agent reads and reasons, never writes,
+    # so general-instruct 32b is a better fit than the coder 14b.
+    model: "qwen2.5:32b-instruct"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
