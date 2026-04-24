@@ -48,6 +48,67 @@ def tool_defs() -> list[ToolDef]:
                 "required": [],
             },
         ),
+        ToolDef(
+            name="typecheck",
+            description=(
+                "Run mypy (a real Python type checker) and return structured "
+                "type errors. Prefer this over inferring types from grep. "
+                "`path` defaults to repo root; `config_file` points at an "
+                "existing `mypy.ini` / `pyproject.toml` section."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                    "config_file": {"type": "string"},
+                },
+                "required": [],
+            },
+        ),
+        ToolDef(
+            name="security_scan",
+            description=(
+                "Run bandit (Python security linter) and return findings. "
+                "Catches deserialization, weak crypto, insecure subprocess, "
+                "hardcoded credentials patterns. Prefer this over grepping "
+                "for security patterns. Default filters out LOW-severity / "
+                "LOW-confidence noise — raise `min_severity` to 'MEDIUM' for "
+                "only material findings, or 'LOW' for everything."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                    "min_severity": {
+                        "type": "string",
+                        "enum": ["LOW", "MEDIUM", "HIGH"],
+                        "default": "LOW",
+                    },
+                    "min_confidence": {
+                        "type": "string",
+                        "enum": ["LOW", "MEDIUM", "HIGH"],
+                        "default": "MEDIUM",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        ToolDef(
+            name="deps_audit",
+            description=(
+                "Run pip-audit against installed Python dependencies (or a "
+                "requirements file) and return known-CVE findings. `requirements` "
+                "is optional — if set, audits the pinned file instead of the "
+                "live environment."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "requirements": {"type": "string"},
+                },
+                "required": [],
+            },
+        ),
     ]
 
 
@@ -123,6 +184,177 @@ def lint(args: dict[str, Any]) -> tuple[Any, str | None]:
     return json.dumps(payload), None
 
 
+_SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+
+
+def typecheck(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    config_file = (args.get("config_file") or "").strip()
+
+    cmd = ["mypy", "--show-column-numbers", "--no-error-summary", "--output", "json"]
+    if config_file:
+        cmd += ["--config-file", config_file]
+    cmd.append(path)
+
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=180,
+        max_output_chars=256_000,
+        missing_hint="uv sync --extra dev pulls it in, or `pip install mypy`.",
+        allow_nonzero_exit=True,  # exit=1 when type errors exist
+    )
+    if err:
+        return None, err
+
+    findings: list[dict[str, Any]] = []
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        findings.append({
+            "file": _relpath(rec.get("file", "")),
+            "line": rec.get("line"),
+            "column": rec.get("column"),
+            "severity": rec.get("severity", "error"),
+            "code": rec.get("code", ""),
+            "message": rec.get("message", ""),
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = "no type errors"
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
+def security_scan(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    min_sev = (args.get("min_severity") or "LOW").strip().upper()
+    min_conf = (args.get("min_confidence") or "MEDIUM").strip().upper()
+    min_sev_rank = _SEVERITY_RANK.get(min_sev, 0)
+    min_conf_rank = _SEVERITY_RANK.get(min_conf, 1)
+
+    cmd = ["bandit", "-q", "-r", "-f", "json", path]
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=120,
+        max_output_chars=512_000,
+        missing_hint="uv sync --extra dev pulls it in, or `pip install bandit`.",
+        allow_nonzero_exit=True,  # exit=1 when issues found
+    )
+    if err:
+        return None, err
+
+    if not out or not out.strip():
+        return json.dumps({"findings": [], "count": 0, "note": "no output"}), None
+
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as e:
+        return None, f"bandit produced non-JSON output: {e}; head={out[:400]!r}"
+
+    findings: list[dict[str, Any]] = []
+    for item in data.get("results", []):
+        if not isinstance(item, dict):
+            continue
+        sev = str(item.get("issue_severity", "LOW")).upper()
+        conf = str(item.get("issue_confidence", "LOW")).upper()
+        if _SEVERITY_RANK.get(sev, 0) < min_sev_rank:
+            continue
+        if _SEVERITY_RANK.get(conf, 0) < min_conf_rank:
+            continue
+        findings.append({
+            "file": _relpath(item.get("filename", "")),
+            "line": item.get("line_number"),
+            "test_id": item.get("test_id", ""),
+            "issue_text": item.get("issue_text", ""),
+            "severity": sev,
+            "confidence": conf,
+            "more_info": item.get("more_info", ""),
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = (
+            f"no findings at severity>={min_sev} confidence>={min_conf} "
+            "— pass `min_severity='LOW', min_confidence='LOW'` to widen"
+        )
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
+def deps_audit(args: dict[str, Any]) -> tuple[Any, str | None]:
+    requirements = (args.get("requirements") or "").strip()
+
+    cmd = ["pip-audit", "--format", "json", "--progress-spinner", "off"]
+    if requirements:
+        cmd += ["--requirement", requirements]
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=120,
+        max_output_chars=512_000,
+        missing_hint="uv sync --extra dev pulls it in, or `pip install pip-audit`.",
+        allow_nonzero_exit=True,  # exit=1 when vulns found
+    )
+    if err:
+        return None, err
+    if not out or not out.strip():
+        return json.dumps({"findings": [], "count": 0, "note": "no output"}), None
+
+    # pip-audit may prefix stdout with a banner before the JSON body.
+    # Find the first '{' and parse from there.
+    brace = out.find("{")
+    if brace < 0:
+        return json.dumps({"findings": [], "count": 0, "note": "no JSON body"}), None
+    try:
+        data = json.loads(out[brace:])
+    except json.JSONDecodeError as e:
+        return None, f"pip-audit produced non-JSON output: {e}; head={out[:400]!r}"
+
+    findings: list[dict[str, Any]] = []
+    for dep in data.get("dependencies", []):
+        if not isinstance(dep, dict):
+            continue
+        vulns = dep.get("vulns") or []
+        if not vulns:
+            continue
+        findings.append({
+            "name": dep.get("name", ""),
+            "version": dep.get("version", ""),
+            "vulns": [
+                {
+                    "id": v.get("id", ""),
+                    "fix_versions": v.get("fix_versions", []),
+                    "description": v.get("description", ""),
+                }
+                for v in vulns if isinstance(v, dict)
+            ],
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = "no known-CVE dependencies"
+    return json.dumps(payload), None
+
+
 TOOL_FNS = {
     "lint": lint,
+    "typecheck": typecheck,
+    "security_scan": security_scan,
+    "deps_audit": deps_audit,
 }

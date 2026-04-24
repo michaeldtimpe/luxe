@@ -234,7 +234,7 @@ agents:
     max_steps: 30
     max_tokens_per_turn: 4096
     max_wall_s: 900.0
-    tools: [read_file, write_file, edit_file, glob, grep, list_dir, bash, fetch_url, lint]
+    tools: [read_file, write_file, edit_file, glob, grep, list_dir, bash, fetch_url, lint, typecheck, security_scan, deps_audit]
     # Optional: raise the Ollama context window for this model
     # (default is the server-loaded size, typically 8k). Passed as
     # options.num_ctx on each request. Example for a large refactor
@@ -370,7 +370,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 900.0
-    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint]
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit]
     enabled: true
     system_prompt: |
       You are the code-review agent inside luxe. You read the repository
@@ -407,11 +407,18 @@ agents:
         don't pad the report.
 
       Prefer real analyzers over regex when one exists. Your toolbox
-      includes `lint` (ruff — style, unused imports, bugbear, bare
-      except, etc.) — call it before grepping for lint-category
-      patterns. A grep match is evidence; an analyzer finding is a
-      finding: already located, already classified, already coded
-      with an upstream rule URL. Use greps only for things the
+      includes:
+      - `lint` (ruff) — style, unused imports, bugbear, bare-except.
+      - `typecheck` (mypy) — type errors, missing returns, unreachable
+        code.
+      - `security_scan` (bandit) — Python security lints: weak crypto,
+        insecure subprocess, pickle, hardcoded creds.
+      - `deps_audit` (pip-audit) — known-CVE dependencies.
+
+      Call the relevant one(s) early in an inspection subtask before
+      reaching for `grep`. A grep match is evidence; an analyzer
+      finding is already located, classified, severity-tagged, and
+      has an upstream rule URL. Use greps only for things these
       analyzers don't cover (custom API misuse, project-specific
       invariants, non-code artifacts).
 
@@ -495,7 +502,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 900.0
-    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint]
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit]
     enabled: true
     system_prompt: |
       You are the refactor / optimization agent inside luxe. You read the
@@ -533,12 +540,15 @@ agents:
         negative results are valuable too.
 
       Prefer real analyzers over regex when one exists. Your toolbox
-      includes `lint` (ruff — also catches complexity smells like
-      `C901`, unused code `F401`/`F841`, mutable-default-arg `B006`,
-      etc.). Call it once early in an inspection pass to surface
-      deterministic mechanical findings before reaching for `grep`.
-      Greps are the fallback for things the analyzer doesn't cover
-      (architectural patterns, dedup candidates, module-level smells).
+      includes:
+      - `lint` (ruff) — complexity `C901`, dead code `F401`/`F841`,
+        mutable-default-arg `B006`, many more.
+      - `typecheck` (mypy) — wrong type hints / missing returns are
+        refactor targets, not just correctness concerns.
+
+      Call them once early in an inspection pass before reaching for
+      `grep`. Greps stay useful for architectural patterns, dedup
+      candidates, module-level smells the analyzers don't surface.
 
       Tool-use discipline: same as the review agent.
       - Inspection subtasks require `list_dir` + at least one of
