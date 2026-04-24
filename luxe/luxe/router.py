@@ -9,13 +9,13 @@ output is a single tool call — either `dispatch(agent, task)` or
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from harness.backends import Backend, ToolDef
 
 from luxe.backend import make_backend
+from luxe.heuristic_router import FILE_HINT_RE
 from luxe.registry import AgentConfig, LuxeConfig
 from luxe.session import Session
 
@@ -128,13 +128,6 @@ def _system_prompt(cfg: LuxeConfig) -> str:
     return "\n".join(lines)
 
 
-_FILE_HINT_RE = re.compile(
-    r"\b(folder|directory|document|documents|file|files|notes?|draft|drafts|"
-    r"manuscript|essay|chapter|letter|readme|\.md|\.txt|\.rst)\b",
-    re.IGNORECASE,
-)
-
-
 def _fallback_agent(prompt: str, enabled: list[str]) -> str:
     """Pick a default when the router emits no tool call.
 
@@ -142,7 +135,7 @@ def _fallback_agent(prompt: str, enabled: list[str]) -> str:
     the fs tool surface for prose review/drafting). Otherwise fall back to
     `general`. Only return agents that are actually enabled.
     """
-    if _FILE_HINT_RE.search(prompt) and "writing" in enabled:
+    if FILE_HINT_RE.search(prompt) and "writing" in enabled:
         return "writing"
     return "general" if "general" in enabled else enabled[0]
 
