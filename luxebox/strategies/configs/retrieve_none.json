@@ -1,0 +1,11 @@
+{
+  "name": "retrieve_none",
+  "description": "Control: no retrieval. Prompt carries only task description + goal. Measures how far pattern-matching alone gets the model.",
+  "stages": [
+    { "id": "preprocess", "enabled": false },
+    { "id": "index", "enabled": false },
+    { "id": "retrieve", "enabled": true, "params": { "method": "none" } },
+    { "id": "compress", "enabled": false },
+    { "id": "prompt_assembly", "enabled": true }
+  ]
+}

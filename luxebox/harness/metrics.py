@@ -37,6 +37,14 @@ class RunMetrics:
 
     known_tool_names: set[str] = field(default_factory=set)
 
+    # Compression-benchmark extensions. Zero/empty when the benchmark
+    # doesn't run retrieval or compression, so reports can safely aggregate.
+    t_retrieval_s: float = 0.0
+    t_compression_s: float = 0.0
+    peak_context_tokens: int = 0
+    file_precision: float = 0.0
+    file_recall: float = 0.0
+
     def record_turn(
         self,
         step: int,
@@ -127,6 +135,13 @@ class RunMetrics:
             "peak_rss_bytes": self.peak_rss_bytes,
             "tool_call": self.tool_call_stats(),
             "throughput": self.throughput_stats(),
+            "compression": {
+                "t_retrieval_s": self.t_retrieval_s,
+                "t_compression_s": self.t_compression_s,
+                "peak_context_tokens": self.peak_context_tokens,
+                "file_precision": self.file_precision,
+                "file_recall": self.file_recall,
+            },
         }
 
 

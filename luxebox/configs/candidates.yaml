@@ -63,6 +63,7 @@ candidates:
     mlx_repo: mlx-community/Qwen2.5-Coder-32B-Instruct-4bit
     gguf_repo: bartowski/Qwen2.5-Coder-32B-Instruct-GGUF
     gguf_file: Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf
+    ollama_tag: qwen2.5-coder:32b-instruct
     chat_template: qwen
     tool_call_format: hermes
     context_native: 131072

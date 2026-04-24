@@ -63,9 +63,18 @@ def run_benchmark(
     limit: int | None = None,
     max_tokens: int = 2048,
     temperature: float = 0.2,
+    extra_body: dict[str, Any] | None = None,
 ) -> list[TaskResult]:
     out_path = io.runs_path(phase, candidate_id, config_id, bench.name)
     done = io.completed_task_ids(out_path)
+
+    # Attach the backend so benchmarks with compression stages that
+    # need to call the model (e.g. summarize) can reach it via
+    # getattr(self, "backend", None).
+    try:
+        bench.backend = backend  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
 
     results: list[TaskResult] = []
     tasks = list(bench.tasks(limit=limit))
@@ -100,12 +109,17 @@ def run_benchmark(
                     tools=tools or None,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    extra_body=extra_body,
                 )
                 metrics.record_turn(step=0, response=response)
                 # Carry the server's peak RSS so far onto each task record.
                 sampler = getattr(backend, "_rss_sampler", None)
                 if sampler is not None:
                     metrics.peak_rss_bytes = sampler.peak_rss_bytes
+                # Record the prompt size the backend actually saw — for
+                # compression benchmarks this is the true context cost.
+                if response.timing.prompt_tokens > metrics.peak_context_tokens:
+                    metrics.peak_context_tokens = response.timing.prompt_tokens
                 metrics.finish()
 
                 graded = bench.grade(task, response.text, [])
@@ -117,6 +131,19 @@ def run_benchmark(
                     passed=False,
                     error=f"{type(e).__name__}: {e}",
                 )
+
+            # Mirror compression-benchmark fields from grader details
+            # onto RunMetrics so the report layer can pivot on them
+            # without cracking open the per-row details blob.
+            _d = graded.details or {}
+            for src, dst in (
+                ("t_retrieval_s", "t_retrieval_s"),
+                ("t_compression_s", "t_compression_s"),
+                ("file_precision", "file_precision"),
+                ("file_recall", "file_recall"),
+            ):
+                if src in _d:
+                    setattr(metrics, dst, _d[src])
 
             graded.metrics = metrics.to_dict()
             io.append(

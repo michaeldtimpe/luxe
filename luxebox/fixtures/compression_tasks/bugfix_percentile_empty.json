@@ -1,0 +1,15 @@
+{
+  "id": "bugfix_percentile_empty",
+  "repo_id": "example_small_repo",
+  "description": "Fix `percentile` in stats.py: on empty input it currently returns 0.0 silently. It should raise ValueError like the other stats functions (mean, median, variance) do.",
+  "entry_instruction": "You are helping fix a bug in this repository.",
+  "goal": "All tests in tests/test_stats.py pass when running `pytest -q tests/test_stats.py` from the repository root.",
+  "validation": {
+    "type": "pytest",
+    "command": ["pytest", "-q", "tests/test_stats.py"],
+    "success_criteria": { "exit_code": 0 }
+  },
+  "reference": {
+    "relevant_files": ["stats.py"]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "retrieve_oracle",
+  "description": "Control: reveal exactly the reference relevant_files. Upper bound for retrieval-driven pass rate on this benchmark.",
+  "stages": [
+    { "id": "preprocess", "enabled": false },
+    { "id": "index", "enabled": false },
+    { "id": "retrieve", "enabled": true, "params": { "method": "oracle" } },
+    { "id": "compress", "enabled": false },
+    { "id": "prompt_assembly", "enabled": true }
+  ]
+}

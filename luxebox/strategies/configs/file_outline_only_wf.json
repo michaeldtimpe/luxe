@@ -1,0 +1,11 @@
+{
+  "name": "file_outline_only_wf",
+  "description": "Full retrieval + AST outline compression. Tests whether the model needs file contents or just signatures.",
+  "stages": [
+    { "id": "preprocess", "enabled": false },
+    { "id": "index", "enabled": true, "params": { "method": "text_files" } },
+    { "id": "retrieve", "enabled": true, "params": { "method": "full" } },
+    { "id": "compress", "enabled": true, "params": { "method": "outlines" } },
+    { "id": "prompt_assembly", "enabled": true, "params": { "output_format": "whole_file" } }
+  ]
+}

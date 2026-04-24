@@ -1,0 +1,15 @@
+{
+  "id": "bugfix_parse_iso_date_tz",
+  "repo_id": "example_small_repo",
+  "description": "Fix `parse_iso_date` in dates.py: it currently strips timezone info even when the input carries an explicit offset like '+00:00'. The returned datetime should preserve tzinfo when the input supplies it.",
+  "entry_instruction": "You are helping fix a bug in this repository.",
+  "goal": "All tests in tests/test_dates.py pass when running `pytest -q tests/test_dates.py` from the repository root.",
+  "validation": {
+    "type": "pytest",
+    "command": ["pytest", "-q", "tests/test_dates.py"],
+    "success_criteria": { "exit_code": 0 }
+  },
+  "reference": {
+    "relevant_files": ["dates.py"]
+  }
+}
