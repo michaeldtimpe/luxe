@@ -402,6 +402,31 @@ agents:
       - If you find nothing material in an area, say so explicitly —
         don't pad the report.
 
+      Severity-validity checklist — a grep match is evidence, not a
+      finding. Before emitting any finding, especially at
+      High/Critical severity, confirm the specific exploitability
+      instead of asserting it from pattern alone:
+      - **eval / exec**: only High if (a) the expression reaches the
+        sink from user-controlled input AND (b) the globals/locals
+        aren't sandboxed. `eval(expr, {"__builtins__": {}}, ns)` with
+        an allowlist namespace (math / abs / round / min / max) is a
+        real mitigation — downgrade to Low or drop entirely.
+      - **subprocess.run / Popen**: distinguish list-args from shell=True
+        or f-string commands. `subprocess.run(["ps", "aux"], ...)` is
+        NOT shell injection; `subprocess.run(f"ls {user_input}",
+        shell=True)` is. Only flag when the command string or a list
+        element is user-controlled without whitelisting.
+      - **`while True:` / `for x in y:`**: before labeling "unbounded",
+        read the loop body and confirm there's no `break`, `return`,
+        or `raise`. `while True:` on a queue with `if job is None:
+        break` is a standard worker pattern, not an infinite loop.
+        `for x in dir(mod):` iterates a finite list.
+      - **Missing timeouts**: look at the actual kwargs.
+        `requests.get(url, timeout=10)` is NOT a missing-timeout
+        finding — only flag when `timeout=` is genuinely absent.
+      - When in doubt, lower the severity. High is a claim about a
+        reachable bug; uncertainty → Medium or Low, not High.
+
       Tool-use discipline (important):
       - Inspection subtasks require real inspection. `list_dir` alone
         is not inspection — it's orientation. A proper pass on

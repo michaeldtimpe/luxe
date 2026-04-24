@@ -32,7 +32,12 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
     from luxe.review import build_review_goal
     goal = build_review_goal(repo_label, repo_path, mode)
 
-    task = Task(id=task_id(), goal=goal, max_wall_s=1800.0)
+    # 30 min was too tight once review moved to qwen2.5:32b — on a
+    # mid-sized repo a single inspection subtask can spend 13+ min
+    # on three sequential grep/read_file rounds. 60 min gives the
+    # 7-subtask plan room without making aborted runs obvious by
+    # skipping the synthesis pass.
+    task = Task(id=task_id(), goal=goal, max_wall_s=3600.0)
     task.subtasks = plan(goal, cfg, task.id)
     # Pin every subtask to the dedicated agent — planner may default to
     # `code`, but we want the review-flavored system prompt on the whole

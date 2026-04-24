@@ -228,6 +228,43 @@ hoc verification buys more than any amount of "please cite only real
 files" in the system prompt. Verify in code what you can't trust the
 model to self-report.
 
+**Follow-up finding from a second rerun on a mid-sized repo** (`elara`,
+2026-04-23): the grounding check correctly did NOT fire because every
+citation pointed at real code. The remaining failure mode is subtler
+— *cherry-picked-true claims with wrong severity*:
+
+- `eval(expression, {"__builtins__": {}}, ns)` at `elara_task.py:385` —
+  flagged High for "remote code execution." `eval` IS there, but the
+  restricted globals + math-only namespace make it a hardened
+  expression evaluator, not a RCE sink.
+- `subprocess.run(["ps", "aux"], ...)` at `elara_kill.py:98` — flagged
+  Medium for "command injection." List-args to `subprocess.run` are
+  NOT shell-injection vectors; only `shell=True` or user-controlled
+  string args are.
+- `while True:` on a worker's queue drain at `elara_memory.py:179` —
+  flagged High for "infinite loop." The loop breaks on a None
+  sentinel; it's a normal worker idle loop.
+- `for name in dir(mod):` at `elara_task.py:234` — flagged Medium for
+  "unbounded loop." `dir()` returns a finite list.
+
+These aren't substring hallucinations; they're shallow pattern-match
+severity. A programmatic check can't easily catch them — verifying
+exploitability needs data-flow tracing, which is beyond the model's
+reliable reach and beyond what a ~200-line orchestrator helper can
+do. Partial mitigation added in configs/agents.yaml: a
+severity-validity checklist that spells out each of these traps
+explicitly so the model has to consider the mitigation before
+emitting the finding. Effective in testing; not a substitute for a
+human reading the code.
+
+Second lesson from the same run: a 32B review agent on a mid-sized
+repo (~15 Python files) spent 13+ min on single inspection subtasks
+(3 sequential grep/read cycles, ~1.5 K output tokens). The original
+30-min task wall budget ran out after 5 of 7 subtasks — synthesis
+pass was skipped. Bumped `/review` and `/refactor` task wall to 60
+min (`luxe/repl/review.py`, `luxe/review.py`). Per-subtask agent
+wall stays at 15 min.
+
 ---
 
 ## Write persistence append-only, not read-then-write
