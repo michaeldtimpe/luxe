@@ -459,7 +459,7 @@ def _sync_event_printer(event: dict) -> None:
     model tag on begin (so you can see which weights the subtask
     actually asked for) and prompt/completion token counts on end
     (so 'why is this so slow' is answerable from the log)."""
-    from luxe.repl.status import _fmt_wall
+    from luxe.repl.status import _fmt_clock, _fmt_wall
     kind = event.get("event", "")
     sub = (event.get("subtask") or "").rsplit(".", 1)[-1]
     if kind == "start":
@@ -493,7 +493,10 @@ def _sync_event_printer(event: dict) -> None:
             if (pt is not None and ct is not None)
             else ""
         )
-        suffix = f"[dim]{_fmt_wall(wall)} · {tools_str}{tok_str}[/dim]"
+        started = _fmt_clock(event.get("started_at") or "")
+        ended = _fmt_clock(event.get("completed_at") or "")
+        clock_str = f" · {started} · {ended}" if (started and ended) else ""
+        suffix = f"[dim]{_fmt_wall(wall)} · {tools_str}{tok_str}{clock_str}[/dim]"
         near_cap = event.get("near_cap_turns") or 0
         if near_cap:
             suffix += f" [yellow]⚠ {near_cap} near-cap turn(s)[/yellow]"
