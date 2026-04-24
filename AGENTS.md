@@ -349,7 +349,7 @@ data across every run in `~/.luxe/tasks/` as a CSV.
    needs a wider window than the loaded default), and `endpoint`
    (per-agent base URL override, e.g. pointing at a llama-server
    instance).
-5. Add the agent name to `luxe.registry.AgentName` enum and (if new
+5. Add the agent name to `cli.registry.AgentName` enum and (if new
    tools) `ToolName` enum.
 6. Update `router.py`'s `descriptions` dict with a one-line description
    the router can use when deciding to dispatch.

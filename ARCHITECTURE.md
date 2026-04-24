@@ -127,7 +127,7 @@ user types prompt
 
 ## Backend abstraction
 
-`harness.backends.Backend` is the common interface. `luxe.backend.make_backend`
+`harness.backends.Backend` is the common interface. `cli.backend.make_backend`
 just points it at Ollama's `/v1`:
 
 ```python
@@ -183,7 +183,7 @@ Each tool reshapes its native JSON/JSONL/text output into a uniform
 `{findings: [...], count, note?}` payload capped at 150 items.
 Missing binaries or missing project markers produce a helpful
 `note` the model can read and adapt to rather than crashing. See
-`luxe/luxe/README.md` for the full per-tool reference.
+`luxe/cli/README.md` for the full per-tool reference.
 
 ## Configuration
 
