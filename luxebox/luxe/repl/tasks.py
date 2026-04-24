@@ -252,6 +252,103 @@ def _tasks_log(partial: str | None, tail: int = 20) -> None:
         console.print(f"[dim]{ts}[/dim]  {rest}")
 
 
+def _tasks_analyze(partial: str | None) -> None:
+    """Per-tool breakdown for a task — surfaces which tools the agent
+    actually used per subtask, how long each took, and the real-
+    analyzer-vs-grep adoption ratio. Reads directly from state.json."""
+    from collections import defaultdict
+    from luxe.repl.status import _fmt_wall
+    task = _tasks_resolve(partial)
+    if not task:
+        return
+    if not task.subtasks:
+        console.print("[dim]no subtasks[/dim]")
+        return
+
+    # Tag each tool name as analyzer / reader / orientation / other —
+    # lets us print an "analyzer adoption" ratio at the bottom.
+    ANALYZERS = frozenset({
+        "lint", "typecheck", "security_scan", "deps_audit",
+        "security_taint", "secrets_scan",
+    })
+    READERS = frozenset({"read_file", "grep"})
+    ORIENTATION = frozenset({"list_dir", "glob"})
+
+    t = Table(show_header=True, box=None, padding=(0, 2), header_style="dim")
+    t.add_column("sub")
+    t.add_column("agent")
+    t.add_column("tool", overflow="fold")
+    t.add_column("calls", justify="right")
+    t.add_column("wall", justify="right")
+    t.add_column("bytes out", justify="right")
+    t.add_column("ok", justify="right")
+
+    totals_by_kind: dict[str, int] = defaultdict(int)
+
+    for sub in task.subtasks:
+        if not sub.tool_calls:
+            if sub.status == "done":
+                t.add_row(
+                    str(sub.index), sub.agent or "(route)",
+                    "[dim](no tool calls)[/dim]", "0", "-", "-", "-",
+                )
+            continue
+        counts: dict[str, list[float]] = defaultdict(list)
+        bytes_by: dict[str, int] = defaultdict(int)
+        oks_by: dict[str, int] = defaultdict(int)
+        for tc in sub.tool_calls:
+            counts[tc.name].append(tc.wall_s)
+            bytes_by[tc.name] += tc.bytes_out
+            if tc.ok:
+                oks_by[tc.name] += 1
+            if tc.name in ANALYZERS:
+                totals_by_kind["analyzer"] += 1
+            elif tc.name in READERS:
+                totals_by_kind["reader"] += 1
+            elif tc.name in ORIENTATION:
+                totals_by_kind["orientation"] += 1
+            else:
+                totals_by_kind["other"] += 1
+        first = True
+        for name in sorted(counts, key=lambda k: -sum(counts[k])):
+            total_wall = sum(counts[name])
+            n = len(counts[name])
+            color = (
+                "green" if name in ANALYZERS
+                else "cyan" if name in READERS
+                else "dim" if name in ORIENTATION
+                else "white"
+            )
+            t.add_row(
+                str(sub.index) if first else "",
+                (sub.agent or "(route)") if first else "",
+                f"[{color}]{name}[/{color}]",
+                str(n),
+                _fmt_wall(total_wall),
+                f"{bytes_by[name]:,}",
+                f"{oks_by[name]}/{n}",
+            )
+            first = False
+
+    console.print(t)
+
+    total = sum(totals_by_kind.values())
+    if total:
+        analyzer_pct = 100 * totals_by_kind["analyzer"] / total
+        reader_pct = 100 * totals_by_kind["reader"] / total
+        orient_pct = 100 * totals_by_kind["orientation"] / total
+        console.print(
+            f"[dim]adoption:[/dim] "
+            f"[green]analyzer[/green] {totals_by_kind['analyzer']} "
+            f"({analyzer_pct:.0f}%) · "
+            f"[cyan]reader[/cyan] {totals_by_kind['reader']} "
+            f"({reader_pct:.0f}%) · "
+            f"[dim]orientation[/dim] {totals_by_kind['orientation']} "
+            f"({orient_pct:.0f}%) · "
+            f"[dim]other[/dim] {totals_by_kind['other']}"
+        )
+
+
 def _tasks_save(partial: str | None) -> None:
     """Assemble a finished task's subtask outputs into a markdown report
     and write it into the task's target folder. Defaults to the repo root
