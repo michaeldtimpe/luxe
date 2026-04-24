@@ -4,6 +4,11 @@ Two companion projects that run large-language-model workloads entirely on
 a MacBook Pro — no cloud, no API keys (beyond what you choose to use), no
 outbound calls except the web searches you explicitly allow.
 
+> **New here?** [LESSONS.md](LESSONS.md) captures the hard-won findings
+> behind the choices below — model selection, tool-use quirks per agent,
+> prompt-cache vs. context-size trade-offs, Ollama vs. llama-server A/B
+> results. Start there if you want the *why* before the *what*.
+
 ## Contents
 
 - **`luxe/`** — the core workspace.
@@ -78,4 +83,4 @@ see `LESSONS.md` for the specifics.
 
 ## License
 
-Not yet licensed. Personal project; license TBD.
+Apache License 2.0 — see [LICENSE](LICENSE).
