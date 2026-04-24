@@ -110,6 +110,27 @@ def tool_defs() -> list[ToolDef]:
             },
         ),
         ToolDef(
+            name="secrets_scan",
+            description=(
+                "Run gitleaks against files on disk and return findings of "
+                "hardcoded secrets (AWS/GCP/Azure keys, GitHub/GitLab/"
+                "Slack/Stripe tokens, private keys, generic high-entropy "
+                "strings). Prefer this over grepping for `password|secret|"
+                "api_key` — gitleaks has ~200 rules with entropy checks "
+                "and fewer false positives. Scans only tracked+untracked "
+                "files on disk by default; set `include_history=true` for "
+                "a deep git-history pass (much slower)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                    "include_history": {"type": "boolean", "default": False},
+                },
+                "required": [],
+            },
+        ),
+        ToolDef(
             name="security_taint",
             description=(
                 "Run semgrep with its Python security rulesets against "
@@ -381,6 +402,74 @@ def deps_audit(args: dict[str, Any]) -> tuple[Any, str | None]:
     return json.dumps(payload), None
 
 
+def secrets_scan(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    include_history = bool(args.get("include_history", False))
+
+    cmd = [
+        "gitleaks", "detect",
+        "--report-format", "json", "--report-path", "-",
+        "--redact=100",  # never leak actual secret bytes into the model
+        "--source", path,
+    ]
+    if not include_history:
+        # Scan files on disk (tracked + untracked) rather than crawling
+        # git history — much faster, covers the current state which is
+        # what a review cares about.
+        cmd.append("--no-git")
+
+    # gitleaks logs a banner to stderr and returns exit 1 when leaks are
+    # found; allow_nonzero_exit so that's treated as a finding, not an
+    # error.
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=300 if include_history else 120,
+        max_output_chars=512_000,
+        missing_hint="brew install gitleaks.",
+        allow_nonzero_exit=True,
+    )
+    if err:
+        return None, err
+    if not out or not out.strip():
+        return json.dumps({"findings": [], "count": 0, "note": "no output"}), None
+
+    try:
+        raw = json.loads(out)
+    except json.JSONDecodeError as e:
+        return None, f"gitleaks produced non-JSON output: {e}; head={out[:400]!r}"
+
+    if not isinstance(raw, list):
+        return json.dumps({"findings": [], "count": 0}), None
+
+    findings: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        findings.append({
+            "file": _relpath(item.get("File", "")),
+            "line": item.get("StartLine"),
+            "end_line": item.get("EndLine"),
+            "rule": item.get("RuleID", ""),
+            "description": item.get("Description", ""),
+            # Match/Secret are redacted by --redact=100 → show shape
+            # so the model can confirm it's a real credential pattern
+            # without seeing the underlying bytes.
+            "match_redacted": item.get("Match", ""),
+            "entropy": item.get("Entropy"),
+            "tags": item.get("Tags") or [],
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = "no hardcoded secrets detected"
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
 def security_taint(args: dict[str, Any]) -> tuple[Any, str | None]:
     path = (args.get("path") or ".").strip() or "."
     config = (args.get("config") or "p/python").strip() or "p/python"
@@ -448,4 +537,5 @@ TOOL_FNS = {
     "security_scan": security_scan,
     "deps_audit": deps_audit,
     "security_taint": security_taint,
+    "secrets_scan": secrets_scan,
 }

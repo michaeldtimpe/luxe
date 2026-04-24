@@ -818,14 +818,16 @@ def _subtask_scope_note(sub: Subtask, agent: str) -> str:
 _ANALYZER_HINTS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r"security", re.IGNORECASE),
-        "Start this subtask with THREE tools: `security_scan` (bandit) "
-        "for in-source security patterns, `deps_audit` (pip-audit) for "
-        "known-CVE deps, and `security_taint` (semgrep) for the "
-        "source→sanitizer→sink reasoning bandit can't do. ALWAYS call "
-        "`security_taint` before assigning High/Critical severity to "
-        "any eval/exec/subprocess/pickle/SQL finding — semgrep's taint "
-        "rules correctly ignore sandboxed or non-reachable sinks. Grep "
-        "is the fallback for patterns outside these analyzers' coverage.",
+        "Start this subtask with FOUR tools, each covering a different "
+        "dimension: `security_scan` (bandit — in-source security "
+        "patterns), `deps_audit` (pip-audit — known-CVE deps), "
+        "`security_taint` (semgrep — source→sanitizer→sink reasoning), "
+        "and `secrets_scan` (gitleaks — hardcoded credentials, redacted). "
+        "ALWAYS call `security_taint` before assigning High/Critical "
+        "severity to any eval/exec/subprocess/pickle/SQL finding — "
+        "semgrep's taint rules correctly ignore sandboxed or "
+        "non-reachable sinks. Grep is the fallback for patterns outside "
+        "these analyzers' coverage.",
     ),
     (
         re.compile(r"correctness|bugs?|error", re.IGNORECASE),
