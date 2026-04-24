@@ -177,6 +177,36 @@ Simple and worth the tiny extra I/O.
 
 ---
 
+## Ollama and llama-server are perf-equivalent on Q4_K_M Qwen2.5
+
+Suspected llama-server might be measurably faster than Ollama for
+luxe's hot-path Qwen2.5 models. A/B'd `qwen2.5:7b-instruct`,
+`qwen2.5-coder:14b-instruct`, and `qwen2.5:32b-instruct` on the same
+Q4_K_M weights via the harness — three fixed-prompt decode runs each
+through both servers. Decode tok/s landed within ±4% on every model;
+TTFT within ±3%. Both backends hit Metal kernels on identical
+weights, so identical work = identical wall.
+
+Peak RSS *looked* different (32B: llama-server 25.7 GB vs Ollama
+38.2 GB on a 19 GB weights file), but the methodology is suspect —
+the sampler walks the listening process's tree and likely
+double-counts Ollama's runner subprocess where mmap'd GGUF pages
+appear in both parent and child. Don't trust the RSS column without
+cross-checking against `htop` or Activity Monitor.
+
+**Decision:** stay on Ollama everywhere except Gemma 3 (which already
+lives on llama-server because Ollama refuses tools for it). The
+migration cost — per-model server lifecycle, port management, losing
+Ollama's auto-keep-alive eviction — isn't justified by zero
+throughput improvement. Re-test if a future Ollama version regresses
+or if a model class shows up that one backend handles materially
+better.
+
+Suite lives at `luxebox/scripts/run_ab_full.py`; raw numbers under
+`luxebox/results/ab_ollama_vs_llamacpp/REPORT.md`.
+
+---
+
 ## Permission prompts shape your design
 
 Claude Code's permission system blocked cloning Draw Things' community
