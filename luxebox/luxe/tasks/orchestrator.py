@@ -172,7 +172,8 @@ class Orchestrator:
             task=augmented,
             reasoning=f"task orchestrator (subtask {sub.id})",
         )
-        result = _runner.dispatch(decision, self.cfg, session=self.session)
+        dispatch_cfg = _cfg_with_task_overrides(self.cfg, agent, task)
+        result = _runner.dispatch(decision, dispatch_cfg, session=self.session)
         sub.agent = agent
         sub.result_text = result.final_text or ""
         sub.tool_calls = list(result.tool_calls)
@@ -232,7 +233,7 @@ class Orchestrator:
                 reasoning=f"task orchestrator retry (subtask {sub.id}, shallow inspection)",
             )
             retry_result = _runner.dispatch(
-                retry_decision, self.cfg, session=self.session
+                retry_decision, dispatch_cfg, session=self.session
             )
             # Accept the retry only if it did better on the depth axis.
             if not _inspection_too_shallow(
@@ -265,7 +266,7 @@ class Orchestrator:
                         reasoning=f"task orchestrator forced-data (subtask {sub.id})",
                     )
                     forced_result = _runner.dispatch(
-                        forced_decision, self.cfg, session=self.session
+                        forced_decision, dispatch_cfg, session=self.session
                     )
                     sub.result_text = forced_result.final_text or sub.result_text
                     # Not real agent tool calls, but the orchestrator
@@ -330,6 +331,30 @@ class Orchestrator:
             session=None,
         )
         return decision.agent
+
+
+def _cfg_with_task_overrides(
+    cfg: LuxeConfig, agent_name: str, task: Task
+) -> LuxeConfig:
+    """Apply per-task overrides to the dispatched agent's config.
+    Currently honors `task.num_ctx_override` for review/refactor — the
+    pre-flight repo survey sets this so big codebases get a wider
+    Ollama context window than the agent's static default. Returns the
+    original cfg unchanged when no override applies, so this is
+    free on the common path."""
+    if task.num_ctx_override is None:
+        return cfg
+    if agent_name not in ("review", "refactor"):
+        return cfg
+    new_agents = [
+        (
+            a.model_copy(update={"num_ctx": task.num_ctx_override})
+            if a.name == agent_name
+            else a
+        )
+        for a in cfg.agents
+    ]
+    return cfg.model_copy(update={"agents": new_agents})
 
 
 _INSPECTION_VERBS = re.compile(

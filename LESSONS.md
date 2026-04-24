@@ -308,6 +308,49 @@ something verifiable.
 
 ---
 
+## Size the budget from the repo, not from a hunch
+
+The earlier "30 min too tight → 60 min" bump was a reactive edit: the
+elara run blew the wall, so the wall got bigger. But 60 min is too
+generous for zoleb (tiny single-file repo) and would be too tight for
+a 20k-LOC monorepo. A budget that doesn't look at the target is
+always wrong in one direction.
+
+Replaced the hardcoded `Task(max_wall_s=3600.0)` in both /review
+entrypoints with a pre-flight repo survey. `luxe/repo_survey.py`
+walks the clone (skipping `.git`, `.venv`, `node_modules`, `target/`,
+etc.), counts source files by extension, sums LOC, and maps to a
+tier:
+
+| Tier   | LOC             | task wall | num_ctx | Source basis                |
+|--------|-----------------|-----------|---------|-----------------------------|
+| tiny   | <500            | 30 min    | 8k      | matches zoleb (769 LOC=small) |
+| small  | 500–2 000       | 45 min    | 8k      |                              |
+| medium | 2 000–10 000    | 60 min    | 16k     | elara (7 797 LOC)            |
+| large  | 10 000–50 000   | 90 min    | 16k     | luxe itself (7 822 LOC=medium) |
+| huge   | 50 000+         | 120 min   | 32k     | watch KV-cache RAM          |
+
+Numbers grounded in two sources: the A/B decode data in
+`results/ab_ollama_vs_llamacpp/REPORT.md` (qwen2.5:32b ≈ 7.6 tok/s,
+so ~1500-token subtask output ≈ 3.3 min pure decode) and the 2026-
+04-23 elara run's observed 13-min/subtask inspection cost.
+
+Also added `Task.num_ctx_override` — the tier's ctx value threads
+through the orchestrator via `AgentConfig.model_copy(update={...})`
+without touching the static YAML defaults. Only applies to
+review/refactor agents; other specialists keep their configured ctx.
+
+Printed rationale at plan time so the sizing is visible and
+challengeable:
+
+    repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min wall, 16k ctx
+
+**Principle:** static config is the wrong place for a decision that
+depends on the input. If you can compute the right value at task
+spawn, do that instead.
+
+---
+
 ## Write persistence append-only, not read-then-write
 
 Sessions land in JSONL with one event per line. Any crash mid-agent

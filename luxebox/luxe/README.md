@@ -426,10 +426,16 @@ LUXE_CACHE_TTL_S=60 luxe   # refresh model metadata every minute
   four-layer anti-fabrication check (shallow-inspection retry →
   orchestrator-run greps → `file:line` citation verification →
   finding-level pattern verification that greps each claimed code
-  construct against the cited file). Suspect findings are annotated
-  with a `⚠️ Grounding check failed` block rather than silently
-  dropped. Still not a replacement for human review — treat agent
-  output as a first pass, not a final verdict.
+  construct against the cited file). Real analyzers are also
+  available as callable tools: `lint` (ruff), `typecheck` (mypy),
+  `security_scan` (bandit), `deps_audit` (pip-audit) — the agents
+  are prompted to prefer them over regex when one applies.
+  `/review` and `/refactor` pre-flight the target repo with
+  `repo_survey.analyze_repo()` and size the task wall + num_ctx
+  from the LOC tier (tiny=30m/8k → huge=120m/32k), so budgets
+  track repo size instead of a hardcoded hunch. Still not a
+  replacement for human review — treat agent output as a first pass,
+  not a final verdict.
 - **Writing agent uses llama-server.** It's a separate process — if
   port 8080 is unreachable, the writing agent 400s. `/context` shows
   the server's RSS and loaded context.

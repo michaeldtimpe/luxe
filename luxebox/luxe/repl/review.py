@@ -29,15 +29,22 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
     console.print(f"[dim]{status_msg} → {repo_path}[/dim]")
 
     repo_label = repo_name_from_url(url) or repo_path.name
-    from luxe.review import build_review_goal
+    from luxe.review import build_review_goal, size_review_budget
     goal = build_review_goal(repo_label, repo_path, mode)
 
-    # 30 min was too tight once review moved to qwen2.5:32b — on a
-    # mid-sized repo a single inspection subtask can spend 13+ min
-    # on three sequential grep/read_file rounds. 60 min gives the
-    # 7-subtask plan room without making aborted runs obvious by
-    # skipping the synthesis pass.
-    task = Task(id=task_id(), goal=goal, max_wall_s=3600.0)
+    # Pre-flight survey: walk the repo once and pick a task wall +
+    # num_ctx tuned to its size. Replaces the previous hardcoded
+    # 60-minute budget that was too tight for mid-sized repos and
+    # too generous for single-file clones. See luxe/repo_survey.py
+    # for the tier table.
+    decision = size_review_budget(repo_path)
+    console.print(f"[dim]repo survey: {decision.rationale}[/dim]")
+    task = Task(
+        id=task_id(),
+        goal=goal,
+        max_wall_s=decision.task_max_wall_s,
+        num_ctx_override=decision.num_ctx,
+    )
     task.subtasks = plan(goal, cfg, task.id)
     # Pin every subtask to the dedicated agent — planner may default to
     # `code`, but we want the review-flavored system prompt on the whole

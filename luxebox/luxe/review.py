@@ -14,8 +14,17 @@ from pathlib import Path
 
 from luxe.git import repo_name_from_url, resolve_repo
 from luxe.registry import LuxeConfig
+from luxe.repo_survey import BudgetDecision, analyze_repo, size_budgets
 from luxe.tasks import plan
 from luxe.tasks.model import Task, persist, task_id
+
+
+def size_review_budget(repo_path: Path) -> BudgetDecision:
+    """Pre-flight survey → budget decision for a /review or /refactor
+    task. Single source of truth shared by the interactive REPL path
+    and the headless `luxe analyze --review` path, so both land on
+    the same tier for the same repo."""
+    return size_budgets(analyze_repo(repo_path))
 
 
 def build_review_goal(repo_label: str, repo_path: Path, mode: str) -> str:
@@ -69,11 +78,15 @@ def start_review_task(
     repo_label = repo_name_from_url(str(url_or_path)) or repo_path.name
     goal = build_review_goal(repo_label, repo_path, mode)
 
-    # 60 min budget — matches the interactive /review path in
-    # repl/review.py; the 32B review agent can spend 13+ min on a
-    # single inspection subtask for mid-sized repos, so 30 min made
-    # the 7-subtask plan skip synthesis.
-    task = Task(id=task_id(), goal=goal, max_wall_s=3600.0)
+    # Pre-flight repo survey sizes the task wall + num_ctx so tiny
+    # repos don't waste budget and large repos aren't starved of it.
+    decision = size_review_budget(repo_path)
+    task = Task(
+        id=task_id(),
+        goal=goal,
+        max_wall_s=decision.task_max_wall_s,
+        num_ctx_override=decision.num_ctx,
+    )
     task.subtasks = plan(goal, cfg, task.id)
     for s in task.subtasks:
         s.agent = mode
