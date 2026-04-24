@@ -380,6 +380,7 @@ def run_agent(
         tool_results: list[str] = []
         for call in response.tool_calls:
             fn = tool_fns.get(call.name)
+            tool_start = time.monotonic()
             if not fn:
                 result: Any = None
                 err: str | None = f"unknown tool: {call.name}"
@@ -390,6 +391,11 @@ def run_agent(
                     result, err = None, f"{type(e).__name__}: {e}"
 
             tool_content = _trim(result if err is None else f"ERROR: {err}")
+            # Stamp telemetry on the ToolCall so downstream (Subtask,
+            # state.json, /tasks analyze) can break down time by tool.
+            call.wall_s = time.monotonic() - tool_start
+            call.ok = err is None
+            call.bytes_out = len(tool_content)
             if tool_style == "gemma_pycode":
                 tool_results.append(
                     f"```tool_output\n# {call.name}\n{tool_content}\n```"

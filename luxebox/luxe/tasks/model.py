@@ -110,6 +110,9 @@ def _tc_to_dict(tc: ToolCall) -> dict[str, Any]:
         "name": tc.name,
         "arguments": tc.arguments,
         "raw_arguments": tc.raw_arguments,
+        "wall_s": round(tc.wall_s, 3),
+        "ok": tc.ok,
+        "bytes_out": tc.bytes_out,
     }
 
 
@@ -119,6 +122,9 @@ def _tc_from_dict(d: dict[str, Any]) -> ToolCall:
         name=d.get("name", ""),
         arguments=d.get("arguments", {}),
         raw_arguments=d.get("raw_arguments", ""),
+        wall_s=float(d.get("wall_s", 0.0)),
+        ok=bool(d.get("ok", True)),
+        bytes_out=int(d.get("bytes_out", 0)),
     )
 
 

@@ -62,6 +62,7 @@ from luxe.repl.status import (
 from luxe.repl.tasks import (
     _print_launch_hints,
     _tasks_abort,
+    _tasks_analyze,
     _tasks_list_recent,
     _tasks_log,
     _tasks_run_background,
@@ -251,7 +252,7 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         return "consumed"
 
     if cmd == "/tasks":
-        known_subs = ("status", "log", "abort", "save", "tail", "watch")
+        known_subs = ("status", "log", "abort", "save", "tail", "watch", "analyze")
         sub = args[0] if args else ""
         if sub == "":
             _tasks_list_recent()
@@ -273,6 +274,9 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
             return "consumed"
         if sub == "watch":
             _tasks_watch(args[1] if len(args) > 1 else None)
+            return "consumed"
+        if sub == "analyze":
+            _tasks_analyze(args[1] if len(args) > 1 else None)
             return "consumed"
         # Typo guard: if the first arg isn't a known subcommand AND the
         # next token looks like a task id (T-YYYYMMDDT…), the user

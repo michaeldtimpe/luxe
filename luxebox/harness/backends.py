@@ -42,6 +42,14 @@ class ToolCall:
     name: str
     arguments: dict[str, Any]
     raw_arguments: str = ""
+    # Execution telemetry — filled in after the tool runs. `ok=False`
+    # means the tool returned a non-None error. `wall_s` is the fn()
+    # call duration (does NOT include backend prefill/decode around it).
+    # `bytes_out` is the size of the trimmed content handed back to
+    # the model — useful for calibrating context usage across tools.
+    wall_s: float = 0.0
+    ok: bool = True
+    bytes_out: int = 0
 
 
 @dataclass
