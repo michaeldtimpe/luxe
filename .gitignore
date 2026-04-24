@@ -49,3 +49,13 @@ luxe-images/
 
 # Uv / pip local state
 .uv/
+
+# Local clones pulled in by `/review` and `/refactor`. These target
+# external repos the user happens to be analyzing; their source of
+# truth is elsewhere. Add new subdirectories here when /review clones
+# a new target into the cwd.
+/ecliptic/
+/luxebox/zoleb/
+
+# Personal writing outside any tracked project (story drafts, outlines).
+/warrens/
