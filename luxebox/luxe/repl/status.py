@@ -169,6 +169,19 @@ def _handle_tools_command(args: list[str]) -> None:
     console.print("[yellow]usage:[/yellow] /tools [show <name> | remove <name>]")
 
 
+def _fmt_clock(iso: str) -> str:
+    """Extract HH:MM:SS from an ISO-format timestamp (what _now() emits).
+    Returns "" when the input is empty or unparseable — the caller
+    decides whether to render the segment at all."""
+    if not iso:
+        return ""
+    # _now() uses datetime.now().isoformat(timespec="seconds"), e.g.
+    # "2026-04-24T09:00:37" — the time portion is always characters 11:19.
+    if len(iso) >= 19 and iso[10] == "T":
+        return iso[11:19]
+    return ""
+
+
 def _fmt_wall(seconds: float | int) -> str:
     """Render a wall-time duration readably. Under a minute stays in
     seconds (no trailing zeros past one decimal for <10s). Once we

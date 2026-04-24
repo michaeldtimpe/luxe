@@ -122,6 +122,8 @@ class Orchestrator:
                 "prompt_tokens": sub.prompt_tokens,
                 "completion_tokens": sub.completion_tokens,
                 "near_cap_turns": sub.near_cap_turns,
+                "started_at": sub.started_at,
+                "completed_at": sub.completed_at,
             })
 
         if aborted:
