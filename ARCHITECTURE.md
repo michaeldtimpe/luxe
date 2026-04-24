@@ -14,10 +14,20 @@ configuration pattern:
 │   │   ├─ registry.py      YAML → Pydantic candidate registry      │   │
 │   │   ├─ metrics.py       RunMetrics, per-turn TurnRecord         │   │
 │   │   └─ cli.py           `lux` typer entry point                 │   │
+│   │                                                               │   │
+│   │  benchmarks/compression_repo.py                               │   │
+│   │  strategies/          preprocess/index/retrieve/compress/     │   │
+│   │                       prompt_assembly pipelines (JSON-        │   │
+│   │                       configured strategies)                  │   │
+│   │  fixtures/            compression_repos/ + compression_tasks/ │   │
+│   │  shared/trace_hints.py  pytest / traceback path parser        │   │
+│   │                         (used by both the compression         │   │
+│   │                         benchmark and luxe's orchestrator)    │   │
 │   └───────────────────────────────────────────────────────────────┘   │
 │                              ▲                                        │
 │                              │ reuses Backend, ToolDef, ToolCall,     │
-│                              │ _parse_text_tool_calls                 │
+│                              │ _parse_text_tool_calls,                │
+│                              │ shared.trace_hints                     │
 │   ┌───────────────────────────────────────────────────────────────┐   │
 │   │  luxe/          multi-agent Claude-Code-alike                 │   │
 │   │   ├─ cli.py           `luxe` typer entry point                │   │
@@ -207,6 +217,20 @@ The `code` agent has its own `_resize_for_cwd()` hook in
 `luxe/agents/code.py` that surveys the current working directory at
 dispatch time and bumps `num_ctx`/`max_wall_s` for medium+ repos.
 No task wrapper needed — the hook runs before `run_agent()`.
+
+### Pre-retrieval for trace-bearing tasks
+
+`luxe/tasks/orchestrator.py:_augment_with_trace_hints` scans the
+subtask title plus prior completed subtasks' `result_text` for
+`path.py:LINE` / `File "path.py", line N` references (via
+`shared.trace_hints.parse_trace_paths`) and pre-reads up to 3 cited
+files, prepending them as a `# Files mentioned in the error you're
+debugging` block before `_augment_with_prior` output. Zero-overhead
+on tasks with no trace paths. This is the positive transfer from
+the compression benchmark (April 2026): oracle-style selectivity is
+the one compression technique that measurably helps; summarization
+and outlining regressed pass rate, so we deliberately don't
+summarise file contents — they land raw.
 
 ## Scoping / safety
 

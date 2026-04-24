@@ -8,7 +8,18 @@ Plan: `~/.claude/plans/linked-conjuring-fiddle.md`.
 - `harness/` — backends (MLX / llama.cpp OpenAI-compat clients), server
   lifecycle, candidate registry, metrics, JSONL IO, report generator, CLI
 - `benchmarks/` — Phase A runners (HumanEval+, MBPP+, MultiPL-E Rust/Go,
-  LiveCodeBench, BFCL v3, τ-bench + SWE-bench Lite skeletons)
+  LiveCodeBench, BFCL v3, τ-bench + SWE-bench Lite skeletons) and
+  `compression_repo.py` (context-compression sweep — see Compression
+  benchmark below)
+- `strategies/` — composable retrieval/compression pipelines for the
+  compression benchmark (preprocess / index / retrieve / compress /
+  prompt_assembly stages, JSON-configured per strategy)
+- `fixtures/compression_repos/`, `fixtures/compression_tasks/` — small
+  bug-laden Python fixture + per-task JSONs used by the compression
+  benchmark
+- `shared/trace_hints.py` — tiny `path.py:LINE` / `File "…", line N`
+  parser used by both the `stack_trace_guided` benchmark strategy and
+  luxe's orchestrator pre-retrieval
 - `personal_eval/` — Phase B review (B1) and write (B2) replay on your PRs;
   self-contained mini agent loop with scoped tool surface
 - `luxe/` — **local multi-agent Claude-Code-alike CLI** (router + general,
@@ -16,9 +27,10 @@ Plan: `~/.claude/plans/linked-conjuring-fiddle.md`.
 - `configs/` — candidate + optimization YAML + `agents.yaml` for luxe
 - `daily_driver/` — mlx-lm + ollama launcher scripts, Aider / OpenCode /
   LiteLLM configs, `install_luxe.sh`
-- `scripts/` — phase entry points + `run_luxe_eval.py` for per-agent
-  model evaluation
-- `results/` — JSONL per run; reports land here (including `luxe_eval/`)
+- `scripts/` — phase entry points, `run_luxe_eval.py`,
+  `run_compression_bench.py` + `analyze_compression_sweep.py`
+- `results/` — JSONL per run; reports land here (including `luxe_eval/`
+  and `runs/compression_strategies/`)
 
 ## Prereqs (user-installed)
 
@@ -147,6 +159,37 @@ router picks one of five specialists (general / research / writing / image
 - [luxe/README.md](luxe/README.md) — usage + per-agent model selections
 - Install: `bash daily_driver/install_luxe.sh`
 - Uninstall: `bash daily_driver/install_luxe.sh --uninstall`
+
+## Compression benchmark
+
+Separate phase that measures how retrieval/compression strategies affect
+local coder models on repo-scoped bugfix tasks. Strategies are JSON
+pipelines of 5 stages (preprocess / index / retrieve / compress /
+prompt_assembly); tasks are per-repo JSONs that name a failing pytest
+command. Runs land under `results/runs/compression_strategies/`.
+
+```bash
+# Smoke (single strategy, single task, 14B)
+uv run python scripts/run_compression_bench.py \
+    --candidate qwen2.5-coder-14b \
+    --strategy baseline_whole_file \
+    --limit 1
+
+# Full sweep: 7 strategies × 14B + 32B × 5 tasks, context pressure at 4k
+uv run python scripts/run_compression_bench.py \
+    --candidate qwen2.5-coder-14b,qwen2.5-coder-32b \
+    --strategy retrieve_none_wf,retrieve_oracle_whole_file,baseline_whole_file,retrieve_full_wf,stack_trace_guided_wf,file_outline_only_wf,retrieve_then_summarize_wf \
+    --num-ctx 4096
+
+# Aggregate
+uv run python scripts/analyze_compression_sweep.py --show-errors
+```
+
+Headline result from the April 2026 sweep (see `LESSONS.md` for the
+writeup): **selectivity-based retrieval is the only compression that
+works on local coder models** — oracle retrieval gets 90% pass at ~7×
+fewer prompt tokens than dumping the whole repo, while LLM
+summarization and AST outlining regress pass rate by 50-70 pct.
 
 ## Known gaps (intentional)
 
