@@ -11,7 +11,7 @@ from harness.backends import Backend
 from luxe.agents.base import AgentResult, run_agent
 from luxe.registry import AgentConfig
 from luxe.session import Session
-from luxe.tools import fs, git_tools
+from luxe.tools import analysis, fs, git_tools
 
 
 def run(
@@ -21,8 +21,12 @@ def run(
     task: str,
     session: Session | None = None,
 ) -> AgentResult:
-    tool_defs = list(fs.read_only_defs()) + list(git_tools.tool_defs())
-    tool_fns = {**fs.READ_ONLY_FNS, **git_tools.TOOL_FNS}
+    tool_defs = (
+        list(fs.read_only_defs())
+        + list(git_tools.tool_defs())
+        + list(analysis.tool_defs())
+    )
+    tool_fns = {**fs.READ_ONLY_FNS, **git_tools.TOOL_FNS, **analysis.TOOL_FNS}
 
     return run_agent(
         backend,

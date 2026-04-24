@@ -11,12 +11,12 @@ All commands run with cwd set to `fs.repo_root()` so paths stay scoped.
 
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 
 from harness.backends import ToolDef
 
 from luxe.tools import fs
+from luxe.tools._subprocess import run_binary
 
 MAX_OUTPUT_CHARS = 16000
 
@@ -73,24 +73,16 @@ def tool_defs() -> list[ToolDef]:
 
 
 def _run(cmd: list[str]) -> tuple[str, str | None]:
-    try:
-        res = subprocess.run(  # noqa: S603
-            cmd,
-            cwd=fs.repo_root(),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except FileNotFoundError:
-        return "", "git not installed"
-    except subprocess.TimeoutExpired:
-        return "", "git command timed out"
-    if res.returncode != 0:
-        return "", (res.stderr.strip() or f"git exited {res.returncode}")
-    out = res.stdout
-    if len(out) > MAX_OUTPUT_CHARS:
-        out = out[:MAX_OUTPUT_CHARS] + f"\n... [truncated at {MAX_OUTPUT_CHARS} bytes]"
-    return out, None
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=30,
+        max_output_chars=MAX_OUTPUT_CHARS,
+        missing_hint="git not installed on PATH",
+    )
+    if err:
+        return "", err
+    return out or "", None
 
 
 def git_diff(args: dict[str, Any]) -> tuple[Any, str | None]:

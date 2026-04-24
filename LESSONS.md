@@ -267,6 +267,43 @@ wall stays at 15 min.
 
 ---
 
+## Let the model orchestrate real tools, don't make it re-derive them
+
+The elara run also made a third thing clear: 32B re-deriving bare-except
+/ unused-import / lint findings with `grep` is wasted compute. Every
+structured lint finding invented via regex is a finding we'd have
+gotten cheaper, more precisely, and without severity-mischaracterization
+risk from a real analyzer that's already installed.
+
+First step taken: add `lint` as a proper callable tool for the code,
+review, and refactor agents. It wraps `ruff check --output-format=json`
+via `luxe/tools/_subprocess.py:run_binary` (new shared helper that
+unifies the subprocess pattern previously duplicated between
+`fs.grep` and `git_tools._run`), returns structured
+`{file, line, column, code, message, url}` records, and caps at 150
+findings. The agent system prompts now explicitly prefer `lint` over
+greps for lint-category patterns.
+
+Binary resolution: `run_binary` looks up analyzer binaries in the
+current venv's `bin/` before falling back to system `PATH`. `ruff`
+and friends install via `uv sync --extra dev` into `.venv/bin/`,
+which isn't on the shell's PATH when luxe runs as a daemon — the
+lookup order handles that uniformly.
+
+Follow-ups planned (same file, same pattern): `typecheck` (mypy),
+`security_scan` (bandit), `deps_audit` (pip-audit), `security_taint`
+(semgrep), `secrets_scan` (gitleaks). The `run_binary` foundation
+keeps each new wrapper to ~30 lines. LSP-grade taint tracking (Pysa,
+CodeQL) stays out of scope; semgrep + rulesets cover the 80% case we
+care about.
+
+**Broader principle:** when a deterministic tool exists, the model
+should call it and summarize. Re-deriving it with greps is
+proof-by-vibes. Token budget spent on real tool output is spent on
+something verifiable.
+
+---
+
 ## Write persistence append-only, not read-then-write
 
 Sessions land in JSONL with one event per line. Any crash mid-agent

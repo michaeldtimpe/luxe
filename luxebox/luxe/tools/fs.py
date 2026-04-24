@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import fnmatch
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
 from harness.backends import ToolDef
+
+from luxe.tools._subprocess import run_binary
 
 _REPO_ROOT: Path = Path.cwd()
 MAX_FILE_BYTES = 256 * 1024
@@ -156,13 +157,16 @@ def grep(args: dict[str, Any]) -> tuple[Any, str | None]:
     rg_args = ["rg", "--no-heading", "--color=never", "-n", pattern]
     if args.get("glob"):
         rg_args += ["-g", args["glob"]]
-    try:
-        res = subprocess.run(  # noqa: S603
-            rg_args, cwd=_REPO_ROOT, capture_output=True, text=True, timeout=30
-        )
-    except FileNotFoundError:
-        return None, "ripgrep (rg) not installed"
-    lines = (res.stdout or "").splitlines()
+    out, err = run_binary(
+        rg_args,
+        cwd=_REPO_ROOT,
+        timeout_s=30,
+        missing_hint="brew install ripgrep",
+        allow_nonzero_exit=True,  # rg exits 1 on no matches — not an error
+    )
+    if err:
+        return None, err
+    lines = (out or "").splitlines()
     return "\n".join(lines[:MAX_GREP_MATCHES]), None
 
 
