@@ -794,6 +794,7 @@ def _subtask_scope_note(sub: Subtask, agent: str) -> str:
             "severity-grouped report."
         )
     if _is_inspection_title(title):
+        tool_hint = _analyzer_hint_for_title(title)
         return (
             "\n\n# Scope for THIS subtask (strict)\n"
             f"This subtask is scoped to ONE category: `{title}`. Only "
@@ -803,7 +804,63 @@ def _subtask_scope_note(sub: Subtask, agent: str) -> str:
             "listed above — the synthesis pass will merge them. Ground "
             "every finding in code you read with `read_file` or `grep` "
             "in this turn; if you didn't read it, don't cite it."
+            f"{tool_hint}"
         )
+    return ""
+
+
+# Category → analyzer tool hint. Emitted inside the scope note so the
+# suggestion is visible at the right point — the generic "prefer real
+# analyzers" line in the system prompt is easy to miss once the prior-
+# findings block and scope note push it out of the model's near-term
+# attention. Per-category hints surface the exact tool that matches
+# the subtask's title.
+_ANALYZER_HINTS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r"security", re.IGNORECASE),
+        "Start this subtask with `security_scan` (bandit) for in-source "
+        "security patterns and `deps_audit` (pip-audit) for known-CVE "
+        "deps. They catch what grep can't classify correctly (taint "
+        "reachability, CVE lookups). Then grep only for patterns those "
+        "analyzers don't cover.",
+    ),
+    (
+        re.compile(r"correctness|bugs?|error", re.IGNORECASE),
+        "Start this subtask with `typecheck` (mypy). Most correctness "
+        "bugs (wrong returns, unreachable branches, missing None "
+        "checks) are type errors a grep can't find. Then `lint` for "
+        "bare-except / unused-import / mutable-default patterns.",
+    ),
+    (
+        re.compile(r"robust", re.IGNORECASE),
+        "Start this subtask with `lint --select B` (ruff's bugbear "
+        "rules catch loop/try/timeout robustness issues). `grep` is the "
+        "fallback for patterns outside bugbear's coverage.",
+    ),
+    (
+        re.compile(r"maintain|refactor|duplicat|dead\s+code", re.IGNORECASE),
+        "Start this subtask with `lint` (ruff catches C901 complexity, "
+        "F401/F841 dead code, B006 mutable defaults — pre-classified "
+        "maintainability signals). Then grep for architectural patterns "
+        "the linter doesn't address (duplicate logic, god-modules).",
+    ),
+    (
+        re.compile(r"performance|optimi[sz]", re.IGNORECASE),
+        "Start this subtask with `lint --select PERF,SIM` (ruff's "
+        "perflint + simplify rules). Then `grep` for hot-path patterns "
+        "the analyzer doesn't model (nested loops, repeated parsing).",
+    ),
+]
+
+
+def _analyzer_hint_for_title(title: str) -> str:
+    """Return a leading-newline-prefixed analyzer nudge string if the
+    subtask title matches one of the known categories, else ''. Used
+    by `_subtask_scope_note` to suggest the right analyzer tool for
+    each category before the model reaches for grep."""
+    for pattern, hint in _ANALYZER_HINTS:
+        if pattern.search(title):
+            return f"\n\n## Preferred tool for this category\n{hint}"
     return ""
 
 
