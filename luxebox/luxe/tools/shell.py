@@ -20,6 +20,11 @@ DEFAULT_ALLOWLIST = (
     # hatch for unusual invocations (e.g. `ruff format`, `ruff
     # --fix`, specific bandit plugins, a custom mypy config).
     "ruff", "mypy", "bandit", "pip-audit", "semgrep", "gitleaks",
+    # Cross-language analyzers. Same pattern — dedicated tool fns
+    # call these with narrow flags; `bash` is the escape hatch for
+    # non-standard invocations (`cargo clippy --fix`, `tsc --watch`,
+    # `eslint --fix`).
+    "eslint", "tsc", "clippy", "staticcheck",
 )
 
 _ALLOWLIST: tuple[str, ...] = DEFAULT_ALLOWLIST

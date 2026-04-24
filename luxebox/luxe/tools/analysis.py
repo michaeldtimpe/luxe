@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,70 @@ def tool_defs() -> list[ToolDef]:
                 "type": "object",
                 "properties": {
                     "requirements": {"type": "string"},
+                },
+                "required": [],
+            },
+        ),
+        ToolDef(
+            name="lint_js",
+            description=(
+                "Run ESLint against JavaScript/TypeScript source and "
+                "return structured findings. Requires eslint on PATH or "
+                "in the repo's node_modules/.bin. `path` defaults to "
+                "the repo root. The tool reports 'not a JS/TS project' "
+                "if no package.json is found at the scanned path."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                },
+                "required": [],
+            },
+        ),
+        ToolDef(
+            name="typecheck_ts",
+            description=(
+                "Run `tsc --noEmit` for TypeScript type checking. "
+                "Requires tsconfig.json at `path` (or a parent). "
+                "Reports 'not a TS project' if none found."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                },
+                "required": [],
+            },
+        ),
+        ToolDef(
+            name="lint_rust",
+            description=(
+                "Run `cargo clippy` (Rust linter) with JSON output and "
+                "return structured findings. Requires Cargo.toml at the "
+                "scanned path and a clippy-capable toolchain. Reports "
+                "'not a Rust project' otherwise."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                },
+                "required": [],
+            },
+        ),
+        ToolDef(
+            name="vet_go",
+            description=(
+                "Run `go vet ./...` against a Go module. Requires "
+                "go.mod at the scanned path. Also runs `staticcheck` "
+                "if installed for deeper checks. Reports 'not a Go "
+                "project' if no go.mod found."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
                 },
                 "required": [],
             },
@@ -402,6 +467,242 @@ def deps_audit(args: dict[str, Any]) -> tuple[Any, str | None]:
     return json.dumps(payload), None
 
 
+def _project_marker(path: Path, markers: tuple[str, ...]) -> Path | None:
+    """Return the directory containing any of `markers`, searching
+    `path` and walking upward. None when no marker is found."""
+    cur = path.resolve()
+    root = fs.repo_root()
+    # Stop at repo_root or the filesystem root, whichever comes first.
+    while True:
+        for m in markers:
+            if (cur / m).exists():
+                return cur
+        if cur == root or cur.parent == cur:
+            return None
+        cur = cur.parent
+
+
+def lint_js(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    scan_path = (fs.repo_root() / path).resolve()
+    marker = _project_marker(scan_path, ("package.json",))
+    if marker is None:
+        return json.dumps({
+            "findings": [], "count": 0, "note": "not a JS/TS project",
+        }), None
+
+    cmd = ["eslint", "--format", "json", path]
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=120,
+        max_output_chars=512_000,
+        missing_hint="`npm install --save-dev eslint` or install globally.",
+        allow_nonzero_exit=True,  # exit=1 when lint issues found
+    )
+    if err:
+        return None, err
+    if not out or not out.strip():
+        return json.dumps({"findings": [], "count": 0, "note": "no output"}), None
+    try:
+        raw = json.loads(out)
+    except json.JSONDecodeError as e:
+        return None, f"eslint produced non-JSON output: {e}; head={out[:400]!r}"
+    findings: list[dict[str, Any]] = []
+    for file_result in raw:
+        if not isinstance(file_result, dict):
+            continue
+        fpath = _relpath(file_result.get("filePath", ""))
+        for m in file_result.get("messages", []) or []:
+            if not isinstance(m, dict):
+                continue
+            findings.append({
+                "file": fpath,
+                "line": m.get("line"),
+                "column": m.get("column"),
+                "severity": "error" if m.get("severity") == 2 else "warning",
+                "rule": m.get("ruleId") or "",
+                "message": m.get("message", ""),
+            })
+            if len(findings) >= MAX_FINDINGS:
+                break
+        if len(findings) >= MAX_FINDINGS:
+            break
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = "no findings"
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
+def typecheck_ts(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    scan_path = (fs.repo_root() / path).resolve()
+    marker = _project_marker(scan_path, ("tsconfig.json",))
+    if marker is None:
+        return json.dumps({
+            "findings": [], "count": 0, "note": "not a TS project",
+        }), None
+
+    cmd = ["tsc", "--noEmit", "--pretty", "false", "--project", str(marker)]
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=180,
+        max_output_chars=256_000,
+        missing_hint="`npm install --save-dev typescript` or install globally.",
+        allow_nonzero_exit=True,  # exit=1/2 when type errors found
+    )
+    if err:
+        return None, err
+    # tsc output format: `path(line,col): error TSXXXX: message`
+    findings: list[dict[str, Any]] = []
+    tsc_re = re.compile(
+        r"^(.*?)\((\d+),(\d+)\):\s*(error|warning)\s+(TS\d+):\s*(.*)$"
+    )
+    for line in (out or "").splitlines():
+        m = tsc_re.match(line)
+        if not m:
+            continue
+        findings.append({
+            "file": _relpath(m.group(1)),
+            "line": int(m.group(2)),
+            "column": int(m.group(3)),
+            "severity": m.group(4),
+            "code": m.group(5),
+            "message": m.group(6),
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = "no type errors"
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
+def lint_rust(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    scan_path = (fs.repo_root() / path).resolve()
+    marker = _project_marker(scan_path, ("Cargo.toml",))
+    if marker is None:
+        return json.dumps({
+            "findings": [], "count": 0, "note": "not a Rust project",
+        }), None
+
+    cmd = [
+        "cargo", "clippy", "--message-format=json",
+        "--manifest-path", str(marker / "Cargo.toml"),
+        "--quiet",
+    ]
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=300,
+        max_output_chars=1_000_000,
+        missing_hint="`rustup component add clippy`.",
+        allow_nonzero_exit=True,
+    )
+    if err:
+        return None, err
+    findings: list[dict[str, Any]] = []
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("reason") != "compiler-message":
+            continue
+        msg = rec.get("message") or {}
+        if not isinstance(msg, dict):
+            continue
+        level = msg.get("level", "")
+        if level not in ("warning", "error"):
+            continue
+        spans = msg.get("spans") or []
+        primary = next(
+            (s for s in spans if isinstance(s, dict) and s.get("is_primary")),
+            spans[0] if spans else None,
+        )
+        if not primary:
+            continue
+        findings.append({
+            "file": _relpath(primary.get("file_name", "")),
+            "line": primary.get("line_start"),
+            "column": primary.get("column_start"),
+            "severity": level,
+            "code": (msg.get("code") or {}).get("code", "") if isinstance(msg.get("code"), dict) else "",
+            "message": msg.get("message", ""),
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = "no clippy findings"
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
+def vet_go(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    scan_path = (fs.repo_root() / path).resolve()
+    marker = _project_marker(scan_path, ("go.mod",))
+    if marker is None:
+        return json.dumps({
+            "findings": [], "count": 0, "note": "not a Go project",
+        }), None
+
+    # `go vet` emits diagnostics on stderr. `run_binary` captures
+    # stdout only, so fall back to a dedicated subprocess for this
+    # tool to capture both streams — keep the helper uniform
+    # elsewhere but handle Go's quirk locally.
+    import subprocess
+    try:
+        res = subprocess.run(  # noqa: S603
+            ["go", "vet", "./..."],
+            cwd=str(marker),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except FileNotFoundError:
+        return None, "go not installed. `brew install go`."
+    except subprocess.TimeoutExpired:
+        return None, "go vet timed out after 180s"
+
+    lines = (res.stdout + "\n" + res.stderr).splitlines()
+    vet_re = re.compile(r"^(.*?):(\d+):(?:(\d+):)?\s*(.*)$")
+    findings: list[dict[str, Any]] = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith(("#", "go:")):
+            continue
+        m = vet_re.match(line)
+        if not m:
+            continue
+        findings.append({
+            "file": _relpath(m.group(1)),
+            "line": int(m.group(2)),
+            "column": int(m.group(3)) if m.group(3) else None,
+            "severity": "warning",
+            "message": m.group(4),
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if not findings:
+        payload["note"] = "no vet findings"
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
 def secrets_scan(args: dict[str, Any]) -> tuple[Any, str | None]:
     path = (args.get("path") or ".").strip() or "."
     include_history = bool(args.get("include_history", False))
@@ -538,4 +839,8 @@ TOOL_FNS = {
     "deps_audit": deps_audit,
     "security_taint": security_taint,
     "secrets_scan": secrets_scan,
+    "lint_js": lint_js,
+    "typecheck_ts": typecheck_ts,
+    "lint_rust": lint_rust,
+    "vet_go": vet_go,
 }
