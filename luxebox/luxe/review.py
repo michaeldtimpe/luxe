@@ -14,7 +14,7 @@ from pathlib import Path
 
 from luxe.git import repo_name_from_url, resolve_repo
 from luxe.registry import LuxeConfig
-from luxe.repo_survey import BudgetDecision, analyze_repo, size_budgets
+from luxe.repo_survey import BudgetDecision, RepoSurvey, analyze_repo, size_budgets
 from luxe.tasks import plan
 from luxe.tasks.model import Task, persist, task_id
 
@@ -25,6 +25,13 @@ def size_review_budget(repo_path: Path) -> BudgetDecision:
     and the headless `luxe analyze --review` path, so both land on
     the same tier for the same repo."""
     return size_budgets(analyze_repo(repo_path))
+
+
+def survey_and_budget(repo_path: Path) -> tuple[RepoSurvey, BudgetDecision]:
+    """Like size_review_budget but also returns the underlying survey so
+    callers can pass `language_breakdown` through to analyzer gating."""
+    survey = analyze_repo(repo_path)
+    return survey, size_budgets(survey)
 
 
 def build_review_goal(repo_label: str, repo_path: Path, mode: str) -> str:
@@ -80,12 +87,13 @@ def start_review_task(
 
     # Pre-flight repo survey sizes the task wall + num_ctx so tiny
     # repos don't waste budget and large repos aren't starved of it.
-    decision = size_review_budget(repo_path)
+    survey, decision = survey_and_budget(repo_path)
     task = Task(
         id=task_id(),
         goal=goal,
         max_wall_s=decision.task_max_wall_s,
         num_ctx_override=decision.num_ctx,
+        analyzer_languages=sorted(survey.language_breakdown.keys()) or None,
     )
     task.subtasks = plan(goal, cfg, task.id)
     for s in task.subtasks:

@@ -8,6 +8,8 @@ grounded by live search snippets, so hallucinations are bounded.
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from harness.backends import Backend
 
 from luxe.agents.base import AgentResult, run_agent
@@ -22,6 +24,7 @@ def run(
     *,
     task: str,
     session: Session | None = None,
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentResult:
     # Only `web_search` — deliberately no fetch_url. If the snippet
     # doesn't have the answer, we want the agent to say so rather than
@@ -35,4 +38,5 @@ def run(
         tool_defs=tool_defs,
         tool_fns=tool_fns,
         session=session,
+        on_tool_event=on_tool_event,
     )

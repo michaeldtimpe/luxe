@@ -24,8 +24,10 @@ _HELP_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ("/tasks status [id]",     "snapshot of a task's status table"),
         ("/tasks log [id]",        "print last events from log.jsonl"),
         ("/tasks tail [id]",       "live-follow a task's event stream"),
+        ("/tasks tail [id] -v",    "verbose: include per-tool-call begin/end"),
         ("/tasks watch [id]",      "auto-refreshing dashboard"),
         ("/tasks abort [id]",      "signal a running background task"),
+        ("/tasks resume [id]",     "retry blocked/skipped subtasks in place"),
         ("/tasks save [id]",       "assemble subtasks into a report"),
     ]),
     ("Code intelligence", [

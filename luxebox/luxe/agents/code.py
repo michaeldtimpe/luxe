@@ -12,6 +12,8 @@ to the shell allowlist.
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from harness.backends import Backend
 
 from luxe.agents.base import AgentResult, run_agent
@@ -56,6 +58,7 @@ def run(
     task: str,
     session: Session | None = None,
     read_only: bool = False,
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentResult:
     cfg = _resize_for_cwd(cfg)
     tool_defs = list(fs.read_only_defs())
@@ -78,4 +81,5 @@ def run(
         tool_defs=tool_defs,
         tool_fns=tool_fns,
         session=session,
+        on_tool_event=on_tool_event,
     )

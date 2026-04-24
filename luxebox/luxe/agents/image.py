@@ -6,6 +6,8 @@ Takes the user's request, rewrites it into a rich visual prompt, calls
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from harness.backends import Backend
 
 from luxe.agents.base import AgentResult, run_agent
@@ -20,6 +22,7 @@ def run(
     *,
     task: str,
     session: Session | None = None,
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentResult:
     ok, detail = draw_things.health_check()
     if not ok:
@@ -42,4 +45,5 @@ def run(
         tool_defs=draw_things.tool_defs(),
         tool_fns=draw_things.TOOL_FNS,
         session=session,
+        on_tool_event=on_tool_event,
     )

@@ -65,6 +65,7 @@ from luxe.repl.tasks import (
     _tasks_analyze,
     _tasks_list_recent,
     _tasks_log,
+    _tasks_resume,
     _tasks_run_background,
     _tasks_run_sync,
     _tasks_save,
@@ -252,7 +253,7 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         return "consumed"
 
     if cmd == "/tasks":
-        known_subs = ("status", "log", "abort", "save", "tail", "watch", "analyze")
+        known_subs = ("status", "log", "abort", "save", "tail", "watch", "analyze", "resume")
         sub = args[0] if args else ""
         if sub == "":
             _tasks_list_recent()
@@ -270,13 +271,18 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
             _tasks_save(args[1] if len(args) > 1 else None)
             return "consumed"
         if sub == "tail":
-            _tasks_tail(args[1] if len(args) > 1 else None)
+            tail_args = [a for a in args[1:] if a not in ("-v", "--verbose")]
+            verbose = any(a in ("-v", "--verbose") for a in args[1:])
+            _tasks_tail(tail_args[0] if tail_args else None, verbose=verbose)
             return "consumed"
         if sub == "watch":
             _tasks_watch(args[1] if len(args) > 1 else None)
             return "consumed"
         if sub == "analyze":
             _tasks_analyze(args[1] if len(args) > 1 else None)
+            return "consumed"
+        if sub == "resume":
+            _tasks_resume(args[1] if len(args) > 1 else None)
             return "consumed"
         # Typo guard: if the first arg isn't a known subcommand AND the
         # next token looks like a task id (T-YYYYMMDDT…), the user

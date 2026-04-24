@@ -204,10 +204,9 @@ def _home_collapsed(p: Path) -> str:
     return "~" + s[len(home):] if s == home or s.startswith(home + "/") else s
 
 
-_BORDER_STYLE = "cyan"
-
-
-def _status_banner(state: "ReplState", cfg: LuxeConfig) -> Panel:
+def _status_banner(
+    state: "ReplState", cfg: LuxeConfig, border_color: str = "cyan"
+) -> Panel:
     """Claude Code-style status panel.
 
     Row 1 is a 2-column grid (left-aligned title, right-aligned version).
@@ -215,8 +214,9 @@ def _status_banner(state: "ReplState", cfg: LuxeConfig) -> Panel:
     or model names still keep all four columns aligned. Both grids use
     expand=True inside a Panel with a computed width so their right
     edges line up with each other, giving the visual of three rows in
-    a single box. A decorative doubled right edge is painted on by
-    _print_status_banner; it's also orange to mirror the luxe title."""
+    a single box. A decorative tripled right edge is painted on by
+    _print_status_banner; its outer two chars pick random palette colors
+    per render to match the rainbow `.:.` title markers."""
     # Running hash is fixed for this process; current HEAD may have
     # moved if the user pulled new code. Surface that drift so "your
     # fix isn't running yet" is obvious at a glance.
@@ -277,20 +277,41 @@ def _status_banner(state: "ReplState", cfg: LuxeConfig) -> Panel:
     grid.add_row(_left_label_value("folder:", folder),
                  "[dim]mode:[/dim]",    mode)
 
-    return Panel(grid, border_style=_BORDER_STYLE, expand=False)
+    return Panel(grid, border_style=border_color, expand=False)
+
+
+def _hex_to_truecolor(hex_color: str) -> str:
+    """#rrggbb → `\x1b[38;2;R;G;Bm` truecolor SGR. Used to paint the
+    banner's doubled right edge without routing back through Rich."""
+    h = hex_color.lstrip("#")
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    return f"\x1b[38;2;{r};{g};{b}m"
 
 
 def _print_status_banner(state: "ReplState", cfg: LuxeConfig) -> None:
-    """Render the Panel and tack on a decorative doubled right edge.
+    """Render the Panel and tack on a decorative tripled right edge.
 
-    Panel's Box char-set is fixed at 1 char per position, so a doubled
-    right border can't be expressed through Rich's usual APIs. We render
-    the panel into a capture Console, then append a cyan border char to
-    the end of each line so the visual reads as ╮╮ / ││ / ╯╯."""
+    Panel's Box char-set is fixed at 1 char per position, so a tripled
+    right border can't be expressed through Rich's usual APIs. We pick
+    three palette colors per render — one per vertical column — and:
+      - feed column 0 into the Panel's `border_style` so the whole box
+        (all four edges) flips to that color this render,
+      - emit the captured panel lines as-is,
+      - append two more border chars per row, painting each column
+        uniformly in colors 1 and 2.
+    Result: ╮╮╮ / │││ / ╯╯╯ where each column reads as a single solid
+    stripe and the three stripes rotate colors every refresh (like the
+    `.:.` title markers, but column-wise instead of char-wise)."""
     from io import StringIO
     from rich.console import Console as _Cons
 
-    panel = _status_banner(state, cfg)
+    # Three distinct colors with no adjacent repeats → neighboring
+    # stripes always read as different hues.
+    cols = _pick_no_adjacent_repeats(3)
+    panel = _status_banner(state, cfg, border_color=cols[0])
+
     buf = StringIO()
     capture = _Cons(
         file=buf,
@@ -301,10 +322,10 @@ def _print_status_banner(state: "ReplState", cfg: LuxeConfig) -> None:
     capture.print(panel)
     lines = buf.getvalue().rstrip("\n").split("\n")
 
-    # The inner panel border is cyan; the outer doubled-right layer
-    # picks up dark_orange to match the luxe title.
-    ORANGE = "\x1b[38;5;208m"  # xterm-256 dark_orange, matches Rich's named color
     RESET = "\x1b[0m"
+    c_mid = _hex_to_truecolor(cols[1])
+    c_out = _hex_to_truecolor(cols[2])
+
     decorated: list[str] = []
     for i, ln in enumerate(lines):
         if i == 0:
@@ -313,7 +334,7 @@ def _print_status_banner(state: "ReplState", cfg: LuxeConfig) -> None:
             extra = "╯"
         else:
             extra = "│"
-        decorated.append(f"{ln}{ORANGE}{extra}{RESET}")
+        decorated.append(f"{ln}{c_mid}{extra}{RESET}{c_out}{extra}{RESET}")
     import sys
     sys.stdout.write("\n".join(decorated) + "\n")
     sys.stdout.flush()

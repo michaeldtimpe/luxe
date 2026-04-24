@@ -108,11 +108,11 @@ Example REPL session:
 
 ```
 $ luxe
-╭──────────────────────────────────────────────╮╮
-│ .:. luxe .:.                version: f669a5d ││
-│ model:  qwen2.5:7b-instruct   params: 7.6 B  ││
-│ folder: ~/code/myproj           mode: router ││
-╰──────────────────────────────────────────────╯╯
+╭──────────────────────────────────────────────╮╮╮
+│ .:. luxe .:.                version: f669a5d │││
+│ model:  qwen2.5:7b-instruct   params: 7.6 B  │││
+│ folder: ~/code/myproj           mode: router │││
+╰──────────────────────────────────────────────╯╯╯
 luxe> what is the difference between concurrency and parallelism?
 → routed to general
 Concurrency is about *dealing* with multiple tasks at once…
@@ -128,7 +128,9 @@ luxe (writing)> review the notes in this folder and suggest a three-act structur
 
 The banner shows above every prompt: version (git hash), current model,
 param count, folder, and mode. `mode` is either `router` or an agent
-name (when sticky is engaged — see **Sticky mode** below).
+name (when sticky is engaged — see **Sticky mode** below). The tripled
+right edge picks three fresh palette colors per render (one per vertical
+stripe), mirroring the `.:.` title markers' per-refresh rotation.
 
 ## REPL commands
 
@@ -214,10 +216,39 @@ serially (each seeing prior findings), and produces a save-able report.
 /tasks                     list recent tasks (with alive marker)
 /tasks status [id]         full subtask breakdown; prefix id is fine
 /tasks log [id]            tail the task's structured log.jsonl
+/tasks tail [id] [-v]      live-follow event stream; `-v` adds per-tool-call lines
+/tasks watch [id]          auto-refreshing dashboard
 /tasks abort [id]          SIGTERM a running task; SIGKILL after 5 s
+/tasks resume [id]         re-run blocked/skipped subtasks in place; keeps done ones
 /tasks save [id]           stitch subtask outputs into md/txt report
 /tasks analyze [id]        per-subtask tool-usage breakdown + adoption ratio
 ```
+
+**Verbose tail (`-v`).** The default tail renders one line per subtask
+begin/end (agent, model, wall time, tool-call count, token totals).
+Adding `-v` surfaces every individual tool call as it happens:
+
+```
+│ [review] · qwen2.5:32b-instruct · Security issues
+│   → grep pattern=token= path=luxe
+│   ✓ grep 0.42s · 1.2KB
+│   → read_file path=luxe/prefs.py
+│   ✓ read_file 0.10s · 3.4KB
+│ ✓ sub 03 · 4m 12s · 8 tool calls · …
+```
+
+Each line shows the tool, a two-key arg preview, duration, and result
+size. Errors render as `✗ <tool> <wall>s · err: <message>`. Events are
+persisted to `log.jsonl` either way; `-v` only changes what the tail
+renders.
+
+**Resume.** When a task exits with blocked/skipped subtasks (e.g. a
+per-agent wall budget expired mid-inspection), `/tasks resume <id>`
+flips those back to `pending` and re-spawns. Completed subtasks are
+preserved — their `result_text` still seeds `_augment_with_prior` for
+anything that runs next — so resume doesn't re-pay the time already
+spent. Only meaningful on non-alive tasks; for a live one, `/tasks
+abort` first.
 
 **What happens when you run `/tasks <goal>`:**
 
@@ -301,17 +332,30 @@ size tier:
 |--------|------------------|-----------|-----------|
 | tiny   | < 500            | 30 min    | 8k        |
 | small  | 500–2 000        | 45 min    | 8k        |
-| medium | 2 000–10 000     | 60 min    | 16k       |
-| large  | 10 000–50 000    | 90 min    | 16k       |
+| medium | 2 000–10 000     | 60 min    | 24k       |
+| large  | 10 000–50 000    | 90 min    | 24k       |
 | huge   | 50 000+          | 120 min   | 32k       |
+
+Medium / large run at 24k ctx after observing a real review burn ~33k
+cumulative prompt tokens across 16 tool calls in one subtask at the
+prior 16k budget — which meant Ollama was silently dropping older
+messages (no warning in the log) whenever the agent's running context
+hit the cap. 24k on `qwen2.5:32b` Q4_K_M adds ~5 GB of KV cache over
+16k; acceptable on 64 GB unified memory.
 
 The chosen decision prints at plan time:
 `repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min
-wall, 16k ctx`. Per-subtask overrides on top: the synthesis subtask
+wall, 24k ctx`. Per-subtask overrides on top: the synthesis subtask
 gets a doubled `max_tokens_per_turn` so the severity-grouped report
 doesn't truncate mid-category. The `code` agent has the same
 self-sizing hook — dispatching in a medium+ cwd bumps its own
 `num_ctx`/`max_wall_s` for that turn.
+
+**Per-agent wall budgets** on `review` / `refactor` / `code` are
+1500 s (vs. the 600 s default). With one mid-run tool-depth retry and
+a ~1 MB repo, completing an inspection subtask has been observed in
+the 700–900 s range; the 1500 s cap leaves headroom before a blocked
+subtask triggers `/tasks resume`.
 
 ## Static-analysis tool surface
 
@@ -351,6 +395,64 @@ message and adapts instead of crashing.
 of tool calls with wall-time, bytes emitted, and ok/total ratio,
 plus an "adoption: analyzer X% · reader Y% · orientation Z%" summary
 so you can see whether the prompt nudges are landing on real runs.
+
+**Language gating.** On `/review` / `/refactor`, the pre-flight repo
+survey records the repo's `language_breakdown` and threads the language
+set into the dispatched agent's `AgentConfig`. `analysis.tool_defs`
+then hides analyzers whose language family isn't represented — a
+pure-Python repo never sees `lint_js`, `typecheck_ts`, `lint_rust`, or
+`vet_go` in its tool prompt. `secrets_scan` is always exposed
+(credentials appear in any language). An empty survey (unknown repo)
+falls through to the full ten-tool surface. This shaves ~400 tokens
+off the tool-description prompt per turn on single-language repos.
+
+## Routing — heuristic pre-router
+
+The router first runs a deterministic keyword/regex scorer
+(`luxe/heuristic_router.py`) against the prompt. When the scorer is
+confident — a clear path-token + code verb for `code`, a `draft` /
+`essay` hit for `writing`, a short interrogative + factual noun for
+`lookup`, etc. — it short-circuits the LLM router and returns the
+decision directly. On ambiguous prompts (< 3 words, meta questions,
+low-margin scores) it returns None and falls through to the LLM.
+
+The scorer never picks `review` / `refactor` (command-driven, not
+prompt-driven) or `general` (the residual — a miss means the LLM
+decides). Session logs tag each decision `"source": "heuristic"` vs
+`"llm"` with the confidence + score breakdown so you can replay
+decisions offline.
+
+Config knobs (`LuxeConfig`):
+
+- `heuristic_router_enabled: bool = True` — turn off for pure-LLM
+  routing (A/B testing, regression checks).
+- `heuristic_router_threshold: float = 0.35` — minimum normalized
+  margin between the top two agent scores before a short-circuit is
+  allowed. Lower values short-circuit more aggressively at the cost of
+  disagreement with the LLM on close calls.
+
+## Pre-retrieval — traceback + import graph
+
+When a subtask's title or an earlier subtask's result_text mentions
+`path.py:LINE` style references (pasted pytest output, a Python
+long-form traceback), the orchestrator resolves those paths and
+pre-reads them into the agent's prompt before dispatch. This is the
+oracle-style selectivity that the compression benchmark validated:
+whole-file pre-reads help local coder models, summarised/outlined
+context hurts them.
+
+Seed paths are then **expanded via a lightweight Python import graph**
+(`luxe/import_graph.py`): for each cited file, up to `max_files` total
+first-hop neighbors (files it imports + files that import it) are
+added to the pre-read block. The graph is an AST walk over all `.py`
+files under the repo root, cached on a `max(mtime)` key so rebuilds
+only happen when a file actually changes. One seed traceback → the
+cited file plus its 2 most relevant neighbors, and the agent starts
+turn 1 with the right module already in view.
+
+Scope is Python only for now; TS / Go / Rust use the same pattern but
+need per-language parsers and are deferred until the Python version
+proves out.
 
 ## Tool surfaces per agent
 

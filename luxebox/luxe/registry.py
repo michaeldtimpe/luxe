@@ -66,6 +66,12 @@ class AgentConfig(BaseModel):
     endpoint: str | None = None  # override top-level ollama_base_url (e.g. llama-server)
     history_keep_last: int = 4  # how many prior session messages to replay on dispatch
     num_ctx: int | None = None  # Ollama num_ctx override — passed as `options.num_ctx`
+    # Languages the analyzer tool surface should target. None = no
+    # filtering (all 10 analyzers registered). A frozenset of language
+    # names (e.g. {"python", "javascript"}) hides analyzers whose
+    # language isn't represented — set by the repo-survey step in the
+    # /review and /refactor flows to shrink the per-turn tool prompt.
+    analyzer_languages: frozenset[str] | None = None
 
 
 class LuxeConfig(BaseModel):
@@ -75,6 +81,11 @@ class LuxeConfig(BaseModel):
     session_dir: str = "~/.luxe/sessions"
     draw_things_url: str = "http://127.0.0.1:7860"
     image_output_dir: str = "~/luxe-images"
+    # Deterministic pre-router: when enabled, a keyword/regex scorer
+    # short-circuits the LLM router on decisive prompts. Falls through
+    # to the LLM on low-confidence decisions. Disable for A/B testing.
+    heuristic_router_enabled: bool = True
+    heuristic_router_threshold: float = 0.35
     agents: list[AgentConfig]
 
     def get(self, name: str) -> AgentConfig:

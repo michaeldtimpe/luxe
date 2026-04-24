@@ -9,7 +9,7 @@ captures the ones whose selection rationale is worth documenting.
 
 ---
 
-## Router  — `luxe/router.py`
+## Router  — `luxe/router.py` + `luxe/heuristic_router.py`
 
 **Model:** `qwen2.5:7b-instruct` (4.4 GB)
 **Tools:** `dispatch(agent, task, reasoning)`, `ask_user(question)`
@@ -19,6 +19,19 @@ captures the ones whose selection rationale is worth documenting.
 **Role:** Single hand-off interpreter. Reads the user prompt, picks one
 specialist, passes the refined task. The specialist conversation starts
 fresh — router history is not forwarded.
+
+**Pre-router (heuristic).** Before the LLM runs, a deterministic
+keyword/regex scorer
+(`luxe/heuristic_router.decide`) tries to pick an agent from rule
+tables (path-like token → `code`, `draft`/`essay` → `writing`, short
+interrogative + factual noun → `lookup`, etc.). On a confident
+decision (normalized margin ≥ `heuristic_router_threshold`, default
+0.35), it short-circuits and returns a `RouterDecision` directly — no
+LLM call. On ambiguous prompts (< 3 words, meta questions, low
+margin), it returns `None` and falls through. The scorer never picks
+`review`/`refactor` (command-driven) or `general` (the residual).
+Session logs tag each decision `"source": "heuristic"` vs `"llm"` with
+scores. Disable via `LuxeConfig.heuristic_router_enabled = False`.
 
 **Selection rationale:** Tested `qwen2.5:7b-instruct` vs `gemma3:12b`
 against 10 mixed prompts.
@@ -176,7 +189,8 @@ luxebox's licensing. HTTP mode in Draw Things settings sidesteps that.
   below)
 
 **Temperature:** 0.2
-**Max steps:** 30, max wall 15 minutes
+**Max steps:** 30, max wall 25 minutes (1500 s; raised from 15 min
+after the elara `/review` timed out a correctness subtask mid-retry).
 
 **Role:** Claude-Code-like editing, with the full fs + bash + web +
 analyzer surface. `luxe analyze <path>` runs in read-only mode
@@ -185,7 +199,8 @@ analyzer surface. `luxe analyze <path>` runs in read-only mode
 **Adaptive sizing:** on dispatch, `_resize_for_cwd()` runs
 `analyze_repo(fs.repo_root())` and bumps `num_ctx`/`max_wall_s` when
 the cwd is medium+ (see `luxe/repo_survey.py`'s tier table). Tiny
-and small repos keep the static config — 16k ctx costs KV-cache RAM
+and small repos keep the static config — 24k ctx (the medium/large
+tier) costs ~5 GB more KV cache than 16k on qwen2.5:32b Q4_K_M, RAM
 the agent doesn't need for a 500-LOC codebase.
 
 **Selection rationale:** tried 4 model configurations against 4 real
@@ -259,7 +274,16 @@ agent.
   check for sandbox, list-args, break conditions, actual kwargs
   before assigning severity.
 - **Pre-flight repo survey.** Task wall + `num_ctx` sized from the
-  target repo's LOC tier (see `luxe/repo_survey.py`).
+  target repo's LOC tier (see `luxe/repo_survey.py`; medium/large
+  land at 24k ctx). The survey's `language_breakdown` also gates the
+  analyzer surface (`AgentConfig.analyzer_languages`) — a pure-Python
+  repo never sees `lint_js` / `vet_go` / etc.
+- **Per-agent wall budget:** 1500 s (25 min). The orchestrator's
+  shallow-retry can consume the first 400–600 s, so the budget needs
+  to be wide enough to fit `initial attempt + retry + productive
+  work`. Subtasks that still time out now survive via `/tasks
+  resume <id>`, which flips blocked/skipped subs back to `pending`
+  without discarding completed ones.
 
 ---
 
@@ -269,7 +293,7 @@ agent.
 `review`). **Tools:** identical to review. **Driven by:**
 `/refactor <git-url>`. Subtasks focus on performance → architecture
 → code size → idioms rather than security. Same anti-fabrication
-guardrails, same pre-flight survey.
+guardrails, same pre-flight survey, same 1500 s per-agent wall.
 
 ---
 

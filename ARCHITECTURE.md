@@ -45,6 +45,8 @@ configuration pattern:
 │   │   ├─ session.py       append-only JSONL per session           │   │
 │   │   ├─ backend.py       Ollama /v1 factory wrapping Backend     │   │
 │   │   ├─ router.py        interpreter w/ dispatch + ask_user tools│   │
+│   │   ├─ heuristic_router.py keyword/regex pre-router             │   │
+│   │   ├─ import_graph.py   AST-walked Python imports + neighbors  │   │
 │   │   ├─ runner.py        decision → specialist dispatcher        │   │
 │   │   ├─ tasks/           multi-step orchestrator                 │   │
 │   │   │   ├─ orchestrator.py subtask driver, shallow-read retry   │   │
@@ -231,6 +233,68 @@ the compression benchmark (April 2026): oracle-style selectivity is
 the one compression technique that measurably helps; summarization
 and outlining regressed pass rate, so we deliberately don't
 summarise file contents — they land raw.
+
+Seed files are then expanded via `luxe/import_graph.py`. The module
+AST-walks every `.py` file under the repo root, extracting `import X` /
+`from X import Y` / relative-import edges and building a forward
+(`imports`) + reverse (`imported_by`) index, cached on a `max(mtime)`
+key so rebuilds only happen when files change. `neighbors(graph,
+path)` returns the first-hop union — imports first, then importers,
+capped. The augmentation pre-reads the cited file plus up to
+`max_files − len(seeds)` neighbors, giving the agent the cited module
+plus its closest collaborators in one turn.
+
+### Heuristic pre-router
+
+`luxe/heuristic_router.py` is a deterministic keyword/regex scorer
+called from `router.route()` before the LLM pass. Each agent gets a
+per-feature score table (path-like tokens + code verbs → `code`,
+`draft`/`essay`/`chapter` → `writing`, short-interrogative + factual
+noun → `lookup`, currency markers → `lookup`, `compare`/`synthesise`
+→ `research`, `draw`/`generate an image` → `image`, arithmetic chars +
+compute verbs → `calc`); `decide()` returns `(agent, confidence,
+scores)` or `None`. Short prompts (< 3 words), meta questions (`can
+you …`), and low-margin decisions return `None` and fall through to
+the LLM router — the heuristic never pretends to know when it
+doesn't. `review` / `refactor` aren't scored (command-driven); nor is
+`general` (the residual). Session logs tag each decision with
+`"source": "heuristic"` vs `"llm"` for offline replay / A/B.
+
+### Language-gated analyzer surface
+
+`luxe/tools/analysis.tool_defs(languages=…)` filters the ten-tool
+analyzer catalog by language family. On `/review` / `/refactor` the
+pre-flight repo survey records
+`RepoSurvey.language_breakdown` and threads it through
+`Task.analyzer_languages` →
+`_cfg_with_task_overrides` → `AgentConfig.analyzer_languages`. A pure-
+Python repo never sees `lint_js` / `typecheck_ts` / `lint_rust` /
+`vet_go` in its tool prompt; `secrets_scan` is always exposed. ~400
+tokens saved per turn on single-language repos — the tool-description
+block is dead weight otherwise.
+
+### Observability: summary vs. verbose tail
+
+`/tasks tail` has two modes driven by a single flag. The default
+renders one line per subtask begin/end. `/tasks tail <id> -v` adds
+per-tool-call lines (name, two-key arg preview, wall time, bytes out,
+ok/error). Implementation: `luxe/agents/base.py:run_agent` accepts an
+`on_tool_event` callback; `runner.dispatch` threads it through; the
+orchestrator wires each subtask's callback to `_emit`, so every tool
+call lands in `log.jsonl` regardless of render mode. `-v` only
+changes the live-render filter.
+
+### Task resumption
+
+`luxe/tasks/model.reset_incomplete_subtasks(task)` flips any
+blocked/skipped/running subtasks back to `pending` (clearing their
+metrics + error fields) and persists. `/tasks resume <id>` then
+re-spawns via the same `spawn_background` → `run.py` → `Orchestrator`
+path. The orchestrator already skipped non-`pending` subtasks
+(`if sub.status != "pending": continue`), so resume is effectively
+free of special-case logic on the execution side — completed subtasks
+stay done and their `result_text` continues to seed
+`_augment_with_prior`.
 
 ## Scoping / safety
 
