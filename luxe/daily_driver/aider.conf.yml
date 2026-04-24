@@ -1,0 +1,29 @@
+# Aider config — primary daily driver for the local coding LLM.
+#
+# Run: cd ~/your-repo && aider --config ~/Downloads/luxe/daily_driver/aider.conf.yml
+#
+# Aider talks OpenAI-compat → points directly at the mlx-lm server. Works with
+# `gh` CLI for GitHub operations (create PR, comment, review) out of the box.
+
+openai-api-base: http://127.0.0.1:8088/v1
+openai-api-key: none-needed
+model: openai/qwen2.5-coder-32b
+
+# Edit format matters a LOT for local models. `diff` (unified diff) is the most
+# reliable format across Qwen / DeepSeek / Devstral; `udiff` is stricter and has
+# fewer parse errors but smaller models sometimes produce malformed diffs.
+edit-format: diff
+
+# Auto-commit per edit — matches Aider's strength as a git-native editor.
+auto-commits: true
+dirty-commits: true
+
+# Small window of surrounding context speeds local-model iteration.
+map-tokens: 2048
+
+# We handle tests ourselves in the agent loop; Aider's auto-test is optional.
+auto-test: false
+test-cmd: ""  # set per-repo if you want: "cargo test" / "pytest -q" / "go test ./..."
+
+# Verbose logging is useful the first few runs; drop to false once stable.
+verbose: true

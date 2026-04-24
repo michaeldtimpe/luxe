@@ -5,7 +5,7 @@ configuration pattern:
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│                          luxebox (repo root)                          │
+│                          luxe (repo root)                          │
 │                                                                       │
 │   ┌───────────────────────────────────────────────────────────────┐   │
 │   │  harness/       evaluation + optimization                     │   │
@@ -183,7 +183,7 @@ Each tool reshapes its native JSON/JSONL/text output into a uniform
 `{findings: [...], count, note?}` payload capped at 150 items.
 Missing binaries or missing project markers produce a helpful
 `note` the model can read and adapt to rather than crashing. See
-`luxebox/luxe/README.md` for the full per-tool reference.
+`luxe/luxe/README.md` for the full per-tool reference.
 
 ## Configuration
 
@@ -326,7 +326,7 @@ stay done and their `result_text` continues to seed
 
 ### Orchestrator performance history
 
-`luxebox/scripts/bench_orchestrator.py` is an append-only history
+`luxe/scripts/bench_orchestrator.py` is an append-only history
 of task-level orchestration metrics. Records land in
 `results/orchestrator_bench/history.jsonl`, one JSON object per run,
 stamped with the short git rev. Three subcommands:
@@ -372,7 +372,7 @@ context even without full context rehydration.
 
 ## Service integration
 
-- `daily_driver/launchd/com.luxebox.ollama.plist` keeps `ollama serve`
+- `daily_driver/launchd/com.luxe.ollama.plist` keeps `ollama serve`
   running at login (127.0.0.1:11434, 5-minute keep-alive).
 - `daily_driver/install_luxe.sh` installs the plist, symlinks `luxe` to
   `~/.local/bin/`, and verifies the HTTP endpoint.

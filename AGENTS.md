@@ -166,7 +166,7 @@ helpful message rather than trying.
 
 **Not used: gRPC.** Draw Things also offers a gRPC interface on the
 same port, but it requires a GPL-v3 proto file that would complicate
-luxebox's licensing. HTTP mode in Draw Things settings sidesteps that.
+luxe's licensing. HTTP mode in Draw Things settings sidesteps that.
 
 ---
 

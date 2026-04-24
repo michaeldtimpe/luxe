@@ -6,11 +6,11 @@ outbound calls except the web searches you explicitly allow.
 
 ## Contents
 
-- **`luxebox/`** — the core workspace.
-  - **`luxebox/harness/`** — Apple-Silicon-friendly evaluation + optimization
+- **`luxe/`** — the core workspace.
+  - **`luxe/harness/`** — Apple-Silicon-friendly evaluation + optimization
     harness for local coding LLMs. OpenAI-compat backends (MLX /
     llama.cpp), candidate registry, benchmark runners, metrics.
-  - **`luxebox/luxe/`** — a local, multi-agent Claude-Code-alike CLI. A
+  - **`luxe/luxe/`** — a local, multi-agent Claude-Code-alike CLI. A
     small router picks one of nine specialists (general / lookup /
     research / writing / code / image / review / refactor / calc) and
     hands off. Runs on Ollama + llama.cpp + Draw Things, with a task
@@ -20,24 +20,24 @@ outbound calls except the web searches you explicitly allow.
 ## Quick start (luxe CLI)
 
 ```bash
-cd luxebox
+cd luxe
 uv sync
 bash daily_driver/install_luxe.sh
 luxe                       # interactive REPL
 ```
 
-Fuller walkthrough in **`luxebox/luxe/README.md`**.
+Fuller walkthrough in **`luxe/luxe/README.md`**.
 
-## Quick start (luxebox evaluation harness)
+## Quick start (luxe evaluation harness)
 
 ```bash
-cd luxebox
+cd luxe
 uv sync --extra mlx --extra evalplus
 uv run python scripts/smoke_test.py     # no weights needed
 uv run python scripts/run_phase_a.py --limit 20
 ```
 
-Fuller walkthrough in **`luxebox/README.md`**.
+Fuller walkthrough in **`luxe/README.md`**.
 
 ## Docs
 
@@ -48,7 +48,7 @@ Fuller walkthrough in **`luxebox/README.md`**.
 
 ## Status
 
-- **luxebox harness**: Phase A–D runners, daily-driver launchd plists,
+- **luxe harness**: Phase A–D runners, daily-driver launchd plists,
   `lux` CLI. Tested with MLX + Ollama; llama.cpp supported.
 - **luxe CLI**: router + 9 specialists live. Task orchestrator with
   background execution, clarifying questions, plan-preview, and
