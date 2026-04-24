@@ -41,7 +41,16 @@ def _free_port(preferred: int = 8088) -> int:
             return s.getsockname()[1]
 
 
-def _wait_ready(port: int, timeout_s: float = 300.0) -> None:
+def _wait_ready(
+    port: int,
+    timeout_s: float = 300.0,
+    proc: subprocess.Popen | None = None,
+    log_path: Path | None = None,
+) -> None:
+    """Block until the OpenAI-compat server answers /v1/models. If the
+    subprocess we're polling for died (e.g. llama-server bailed because
+    the model path was wrong), bail immediately with the tail of its
+    log so the caller doesn't sit through the full timeout."""
     url = f"http://127.0.0.1:{port}/v1/models"
     deadline = time.monotonic() + timeout_s
     last_err: Exception | None = None
@@ -54,6 +63,15 @@ def _wait_ready(port: int, timeout_s: float = 300.0) -> None:
                 return
         except Exception as e:  # noqa: BLE001
             last_err = e
+        if proc is not None and proc.poll() is not None:
+            tail = ""
+            if log_path and log_path.exists():
+                lines = log_path.read_text().splitlines()[-15:]
+                tail = "\n  | " + "\n  | ".join(lines)
+            raise ServerError(
+                f"server on :{port} exited {proc.returncode} before ready"
+                f"{tail}"
+            )
         time.sleep(1.0)
         elapsed_s += 1
         if elapsed_s % 15 == 0:
@@ -106,6 +124,35 @@ def _mlx_args(
     return args
 
 
+def _resolve_gguf_path(candidate: Candidate, models_dir: Path) -> Path:
+    """Find the on-disk GGUF for `candidate`, checking the legacy
+    models/<id>/<file> path first (for hand-placed weights), then the
+    HuggingFace hub cache that hf_hub_download / snapshot_download
+    write into."""
+    if not candidate.gguf_file:
+        raise ServerError(
+            f"candidate {candidate.id} has no gguf_file; cannot run on llamacpp"
+        )
+    legacy = models_dir / candidate.id / candidate.gguf_file
+    if legacy.exists():
+        return legacy
+    if candidate.gguf_repo:
+        from huggingface_hub import try_to_load_from_cache
+
+        cached = try_to_load_from_cache(
+            repo_id=candidate.gguf_repo, filename=candidate.gguf_file
+        )
+        if cached and Path(str(cached)).exists():
+            return Path(str(cached))
+    raise ServerError(
+        f"GGUF for {candidate.id} not found. Tried:\n"
+        f"  - {legacy}\n"
+        f"  - HF cache for {candidate.gguf_repo}/{candidate.gguf_file}\n"
+        f"Run `python scripts/run_ab_full.py` (no --skip-prefetch) to "
+        f"download, or place the file at the legacy path manually."
+    )
+
+
 def _llamacpp_args(
     candidate: Candidate,
     config: OptimizationConfig,
@@ -113,7 +160,7 @@ def _llamacpp_args(
     port: int,
     models_dir: Path,
 ) -> list[str]:
-    gguf_path = models_dir / candidate.id / (candidate.gguf_file or "")
+    gguf_path = _resolve_gguf_path(candidate, models_dir)
     args = [
         "llama-server",
         "--host",
@@ -190,7 +237,7 @@ def launch_server(
     )
     sampler = None
     try:
-        _wait_ready(port)
+        _wait_ready(port, proc=proc, log_path=log_path)
         # mlx-lm's server uses the `model` field in each request to resolve
         # which weights to serve; it must match the repo passed on the CLI,
         # not our local registry id, or it 404s trying to download it.
