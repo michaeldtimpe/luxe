@@ -109,6 +109,35 @@ def tool_defs() -> list[ToolDef]:
                 "required": [],
             },
         ),
+        ToolDef(
+            name="security_taint",
+            description=(
+                "Run semgrep with its Python security rulesets against "
+                "source and return findings. Unlike `security_scan` (bandit, "
+                "which is pattern-based), semgrep does source→sanitizer→sink "
+                "taint reasoning. USE THIS for `eval`/`exec`/`subprocess`/"
+                "pickle/SQL-injection severity calls — semgrep correctly "
+                "ignores sandboxed or non-user-controlled sinks that "
+                "bandit would flag as LOW. First invocation may pull "
+                "rules from the registry (needs network); cached after."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                    "config": {
+                        "type": "string",
+                        "description": (
+                            "Semgrep ruleset — 'p/python' (default) covers "
+                            "Flask/Django/language-level security. Also "
+                            "useful: 'p/owasp-top-ten', 'p/cwe-top-25', "
+                            "or a path to a local .yml rules file."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        ),
     ]
 
 
@@ -352,9 +381,71 @@ def deps_audit(args: dict[str, Any]) -> tuple[Any, str | None]:
     return json.dumps(payload), None
 
 
+def security_taint(args: dict[str, Any]) -> tuple[Any, str | None]:
+    path = (args.get("path") or ".").strip() or "."
+    config = (args.get("config") or "p/python").strip() or "p/python"
+
+    cmd = ["semgrep", "--config", config, "--json", "--quiet", path]
+    out, err = run_binary(
+        cmd,
+        cwd=fs.repo_root(),
+        timeout_s=300,  # semgrep can be slow on first run (rule download)
+        max_output_chars=1_000_000,  # reports are verbose; cap post-parse
+        missing_hint="uv sync --extra dev pulls it in, or `brew install semgrep`.",
+        allow_nonzero_exit=True,  # exit=1 on findings
+    )
+    if err:
+        return None, err
+    if not out or not out.strip():
+        return json.dumps({"findings": [], "count": 0, "note": "no output"}), None
+
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as e:
+        return None, f"semgrep produced non-JSON output: {e}; head={out[:400]!r}"
+
+    findings: list[dict[str, Any]] = []
+    for r in data.get("results", []):
+        if not isinstance(r, dict):
+            continue
+        extra = r.get("extra") or {}
+        meta = extra.get("metadata") or {}
+        findings.append({
+            "file": _relpath(r.get("path", "")),
+            "line": (r.get("start") or {}).get("line"),
+            "end_line": (r.get("end") or {}).get("line"),
+            "check_id": r.get("check_id", ""),
+            "severity": extra.get("severity", "INFO"),
+            "confidence": meta.get("confidence", ""),
+            "cwe": (meta.get("cwe") or [""])[0],
+            "message": extra.get("message", "").strip(),
+            "url": meta.get("source") or meta.get("shortlink") or "",
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+
+    errors = [
+        {"message": e.get("message", ""), "path": e.get("path", "")}
+        for e in data.get("errors", [])
+        if isinstance(e, dict)
+    ]
+
+    payload: dict[str, Any] = {"findings": findings, "count": len(findings)}
+    if errors:
+        payload["semgrep_errors"] = errors[:5]
+    if not findings:
+        payload["note"] = (
+            f"no taint-reachable findings with config={config!r}"
+        )
+    elif len(findings) >= MAX_FINDINGS:
+        payload["truncated_at"] = MAX_FINDINGS
+    return json.dumps(payload), None
+
+
 TOOL_FNS = {
     "lint": lint,
     "typecheck": typecheck,
     "security_scan": security_scan,
     "deps_audit": deps_audit,
+    "security_taint": security_taint,
 }

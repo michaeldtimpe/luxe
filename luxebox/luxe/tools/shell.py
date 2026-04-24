@@ -19,7 +19,7 @@ DEFAULT_ALLOWLIST = (
     # tools call these with narrow flags, but `bash` is the escape
     # hatch for unusual invocations (e.g. `ruff format`, `ruff
     # --fix`, specific bandit plugins, a custom mypy config).
-    "ruff", "mypy", "bandit", "pip-audit",
+    "ruff", "mypy", "bandit", "pip-audit", "semgrep",
 )
 
 _ALLOWLIST: tuple[str, ...] = DEFAULT_ALLOWLIST

@@ -234,7 +234,7 @@ agents:
     max_steps: 30
     max_tokens_per_turn: 4096
     max_wall_s: 900.0
-    tools: [read_file, write_file, edit_file, glob, grep, list_dir, bash, fetch_url, lint, typecheck, security_scan, deps_audit]
+    tools: [read_file, write_file, edit_file, glob, grep, list_dir, bash, fetch_url, lint, typecheck, security_scan, deps_audit, security_taint]
     # Optional: raise the Ollama context window for this model
     # (default is the server-loaded size, typically 8k). Passed as
     # options.num_ctx on each request. Example for a large refactor
@@ -370,7 +370,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 900.0
-    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit]
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint]
     enabled: true
     system_prompt: |
       You are the code-review agent inside luxe. You read the repository
@@ -414,6 +414,11 @@ agents:
       - `security_scan` (bandit) — Python security lints: weak crypto,
         insecure subprocess, pickle, hardcoded creds.
       - `deps_audit` (pip-audit) — known-CVE dependencies.
+      - `security_taint` (semgrep) — source→sanitizer→sink taint
+        reasoning for eval/exec/subprocess/pickle/SQL. Use when
+        assigning severity to those patterns: bandit flags
+        everything, semgrep tells you which ones are actually
+        reachable from user input.
 
       Call the relevant one(s) early in an inspection subtask before
       reaching for `grep`. A grep match is evidence; an analyzer
@@ -426,16 +431,20 @@ agents:
       finding. Before emitting any finding, especially at
       High/Critical severity, confirm the specific exploitability
       instead of asserting it from pattern alone:
-      - **eval / exec**: only High if (a) the expression reaches the
-        sink from user-controlled input AND (b) the globals/locals
-        aren't sandboxed. `eval(expr, {"__builtins__": {}}, ns)` with
-        an allowlist namespace (math / abs / round / min / max) is a
-        real mitigation — downgrade to Low or drop entirely.
-      - **subprocess.run / Popen**: distinguish list-args from shell=True
-        or f-string commands. `subprocess.run(["ps", "aux"], ...)` is
-        NOT shell injection; `subprocess.run(f"ls {user_input}",
-        shell=True)` is. Only flag when the command string or a list
-        element is user-controlled without whitelisting.
+      - **eval / exec / subprocess / pickle / SQL concat**: call
+        `security_taint` (semgrep) before assigning severity. It does
+        source→sanitizer→sink taint reasoning that grep and bandit
+        can't. If `security_taint` doesn't flag a site, the sink is
+        either sandboxed, not user-reachable, or otherwise safe —
+        treat as Low/Info or drop, not High. The elara run
+        fabricated a High `eval` RCE on `eval(expr, {"__builtins__":
+        {}}, ns)` — semgrep's taint rules correctly ignore that
+        pattern, and you should too.
+      - **subprocess.run / Popen specifics**: distinguish list-args
+        from shell=True or f-string commands. `subprocess.run(["ps",
+        "aux"], ...)` is NOT shell injection; `subprocess.run(f"ls
+        {user_input}", shell=True)` is. If unsure, let `security_taint`
+        decide.
       - **`while True:` / `for x in y:`**: before labeling "unbounded",
         read the loop body and confirm there's no `break`, `return`,
         or `raise`. `while True:` on a queue with `if job is None:
@@ -502,7 +511,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 900.0
-    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit]
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint]
     enabled: true
     system_prompt: |
       You are the refactor / optimization agent inside luxe. You read the
