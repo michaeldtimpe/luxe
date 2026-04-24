@@ -441,3 +441,53 @@ repo to extract the gRPC proto, flagging it as "scope escalation" and
 "external code integration." That nudge pushed me toward the HTTP API
 path, which turned out to be simpler, better-licensed, and more
 maintainable anyway. Not always right, but worth listening to.
+
+---
+
+## On this hardware, "compression" means retrieval, not summarization
+
+A 70-run compression benchmark (7 strategies × qwen2.5-coder:14b and
+:32b × 5 bugfix tasks, ctx=4096) measured what actually helps local
+coder models fix bugs in a small fixture repo. The clean result: the
+only compression that works is *being more selective about which files
+to include*. Compressing the *contents* of selected files is a
+regression.
+
+Numbers (raw JSONL under `luxebox/results/runs/compression_strategies/`):
+
+- **retrieve_oracle** (exactly the relevant files): 90% pass, 496
+  prompt tokens on average.
+- **retrieve_full** (every file in the repo): 100% pass, 3 424 prompt
+  tokens — 7× more context for 10 pct-points more pass rate.
+- **file_outline_only** (AST signatures + docstrings, no bodies):
+  **10% pass** at 1 237 tokens. The model can't fix a bug from a
+  signature.
+- **retrieve_then_summarize** (LLM-summarised top-k files): **30%
+  pass** at ~780 tokens — tied with "no retrieval at all" despite
+  costing more context. Summaries strip the exact syntactic content
+  the model needs to reproduce in its whole-file rewrite.
+- **stack_trace_guided** (parse pytest's traceback, seed retrieval
+  from the `path.py:LINE` mentions): 80% pass at 2 031 tokens — sits
+  on the efficient frontier between oracle and full.
+
+The format axis also mattered: whole-file rewrites (`# FILE: path\n
+<body>`) got 100% apply rate vs. 12% for unified diffs on the same
+prompts, because qwen2.5-coder produces correct code contents but
+systematically wrong `@@ -a,b +c,d @@` counts.
+
+**Consequences for luxe:**
+
+1. Keep the on-demand tool-based retrieval pattern. The code/refactor/
+   review agents read raw files via `read_file`; no pre-filter, no
+   summarization, no outline pass. Validated by data.
+2. The orchestrator pre-reads files cited in pasted tracebacks
+   (`_augment_with_trace_hints` in `luxebox/luxe/tasks/orchestrator
+   .py`) — this is the one positive transfer from the benchmark.
+   Oracle-style retrieval when the user has already named the file.
+3. **Do not add** a file-summarisation pass, AST outlining, or
+   LLM-based context compression to any code-editing path. The data
+   is loud: -50 to -70 pct pass rate vs. raw content.
+
+Shared trace parser at `luxebox/shared/trace_hints.py` is used by
+both the orchestrator and the benchmark's `stack_trace_guided`
+strategy.
