@@ -22,7 +22,9 @@ from typing import Any
 from shared.trace_hints import TRACE_PATH_RE
 
 
-_FILE_HINT_RE = re.compile(
+# Shared with router.py's _fallback_agent. Exported as FILE_HINT_RE
+# (public) so importers don't reach past an underscored name.
+FILE_HINT_RE = re.compile(
     r"\b(folder|directory|document|documents|file|files|notes?|draft|drafts|"
     r"manuscript|essay|chapter|letter|readme|\.md|\.txt|\.rst)\b",
     re.IGNORECASE,
@@ -109,7 +111,7 @@ def _score(prompt: str, enabled: list[str]) -> dict[str, float]:
         add("code", 1.5)
 
     # --- writing --------------------------------------------------------
-    if _FILE_HINT_RE.search(prompt):
+    if FILE_HINT_RE.search(prompt):
         add("writing", 2.0)
     if re.search(
         r"\b(draft|revise|essay|story|poem|chapter|outline|brainstorm|prose)\b",

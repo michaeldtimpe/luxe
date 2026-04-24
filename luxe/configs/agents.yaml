@@ -234,6 +234,7 @@ agents:
     max_steps: 30
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, write_file, edit_file, glob, grep, list_dir, bash, fetch_url, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
     # Optional: raise the Ollama context window for this model
     # (default is the server-loaded size, typically 8k). Passed as
@@ -370,6 +371,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
     enabled: true
     system_prompt: |
@@ -517,6 +519,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
     enabled: true
     system_prompt: |

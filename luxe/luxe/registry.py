@@ -66,6 +66,11 @@ class AgentConfig(BaseModel):
     endpoint: str | None = None  # override top-level ollama_base_url (e.g. llama-server)
     history_keep_last: int = 4  # how many prior session messages to replay on dispatch
     num_ctx: int | None = None  # Ollama num_ctx override — passed as `options.num_ctx`
+    # Tool output byte cap. Applied to each tool result before it lands
+    # in the conversation history. Default 4000 keeps small models honest;
+    # bump for code/review/refactor agents where large analyzer payloads
+    # lose signal when truncated.
+    tool_output_trim_bytes: int = 4000
     # Languages the analyzer tool surface should target. None = no
     # filtering (all 10 analyzers registered). A frozenset of language
     # names (e.g. {"python", "javascript"}) hides analyzers whose

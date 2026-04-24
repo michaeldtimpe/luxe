@@ -501,7 +501,10 @@ def run_agent(
                     except Exception as e:  # noqa: BLE001
                         result, err = None, f"{type(e).__name__}: {e}"
 
-            tool_content = _trim(result if err is None else f"ERROR: {err}")
+            tool_content = _trim(
+                result if err is None else f"ERROR: {err}",
+                limit=cfg.tool_output_trim_bytes,
+            )
             # Stamp telemetry on the ToolCall so downstream (Subtask,
             # state.json, /tasks analyze) can break down time by tool.
             call.wall_s = time.monotonic() - tool_start

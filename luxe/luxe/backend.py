@@ -97,6 +97,13 @@ def installed_by_family(models: list[str]) -> dict[str, set[str]]:
 def make_backend(model: str, base_url: str = "http://127.0.0.1:11434") -> Backend:
     # harness.backends.Backend posts to "/v1/chat/completions", so the
     # base_url must NOT include the /v1 suffix itself.
+    #
+    # `kind="mlx"` looks wrong when the default target is Ollama — it
+    # isn't. `kind` is a label the harness uses for metrics/config
+    # routing, not a transport selector. Both MLX and Ollama expose
+    # OpenAI-compat endpoints, so the same Backend client drives both.
+    # Every caller in luxe uses this for Ollama; `kind` stays "mlx" for
+    # continuity with the harness's benchmark logging.
     return Backend(kind="mlx", base_url=base_url, model_id=model, timeout_s=600.0)
 
 
