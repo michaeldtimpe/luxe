@@ -30,6 +30,7 @@ evalplus = [
 ]
 dev = [
     "pytest>=8.0",
+    "ruff>=0.6",
 ]
 # `bfcl-eval` is intentionally NOT listed here.
 # It pins tree-sitter==0.21.3, which conflicts with evalplus (>=0.22). Install

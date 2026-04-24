@@ -15,6 +15,11 @@ DEFAULT_ALLOWLIST = (
     "cargo", "pytest", "go", "python", "python3", "rustc",
     "node", "npm", "pnpm", "yarn",
     "git", "ls", "pwd", "cat", "head", "tail", "echo", "wc",
+    # Static-analysis binaries. The dedicated `lint`/`typecheck`/etc.
+    # tools call these with narrow flags, but `bash` is the escape
+    # hatch for unusual invocations (e.g. `ruff format`, `ruff
+    # --fix`, specific bandit plugins).
+    "ruff",
 )
 
 _ALLOWLIST: tuple[str, ...] = DEFAULT_ALLOWLIST

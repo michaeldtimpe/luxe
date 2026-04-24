@@ -17,7 +17,7 @@ from harness.backends import Backend
 from luxe.agents.base import AgentResult, run_agent
 from luxe.registry import AgentConfig
 from luxe.session import Session
-from luxe.tools import fs, shell, web
+from luxe.tools import analysis, fs, shell, web
 
 
 def run(
@@ -32,6 +32,8 @@ def run(
     tool_fns = dict(fs.READ_ONLY_FNS)
     tool_defs.extend(web.tool_defs())
     tool_fns.update(web.TOOL_FNS)
+    tool_defs.extend(analysis.tool_defs())
+    tool_fns.update(analysis.TOOL_FNS)
 
     if not read_only:
         tool_defs.extend(fs.mutation_defs())

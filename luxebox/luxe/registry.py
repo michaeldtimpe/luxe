@@ -34,6 +34,7 @@ ToolName = Literal[
     "git_diff",
     "git_log",
     "git_show",
+    "lint",
 ]
 
 
