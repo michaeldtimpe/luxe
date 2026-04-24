@@ -286,23 +286,34 @@ class Orchestrator:
                         "findings may not be grounded in code"
                     )
 
-        # Ground-truthing: for review/refactor, verify every `file:line`
-        # the agent cited actually exists in the repo and the line is in
-        # range. Fake citations get annotated into sub.result_text so the
-        # final report makes the unreliability obvious.
+        # Ground-truthing: for review/refactor, verify (a) every
+        # `file:line` the agent cited resolves to a real line, and
+        # (b) every backtick-quoted code construct claimed in a
+        # finding's Issue/Why text is an actual substring of the
+        # cited file. (a) catches invented file paths and
+        # out-of-range line numbers; (b) catches the more common
+        # pattern where the model claims "server.py contains a call
+        # to `os.system`" when it doesn't. Both get collected into a
+        # single grounding warning prepended to sub.result_text so
+        # the final report flags suspect findings visibly.
         if agent in ("review", "refactor") and sub.result_text:
-            bad = _verify_citations(sub.result_text)
-            if bad:
+            bad_cites = _verify_citations(sub.result_text)
+            bad_patterns = _unverified_patterns(
+                _extract_findings(sub.result_text)
+            )
+            total = len(bad_cites) + len(bad_patterns)
+            if total:
                 self._emit(task, {
                     "event": "grounding_issues",
                     "subtask": sub.id,
-                    "count": len(bad),
+                    "count": total,
+                    "bad_citations": len(bad_cites),
+                    "bad_patterns": len(bad_patterns),
                 })
-                sub.result_text = _annotate_bad_citations(sub.result_text, bad)
-                suffix_note = (
-                    f"{len(bad)} unverified citation(s) — "
-                    "see grounding warning in report"
+                sub.result_text = _annotate_grounding_issues(
+                    sub.result_text, bad_cites, bad_patterns
                 )
+                suffix_note = f"{total} unverified claim(s) — see grounding warning in report"
                 sub.error = (
                     f"{sub.error}; {suffix_note}" if sub.error else suffix_note
                 )
@@ -569,21 +580,158 @@ def _verify_citations(
     return bad
 
 
-def _annotate_bad_citations(
-    text: str, bad: list[tuple[str, int, str]]
+_FILE_ANCHOR_RE = re.compile(
+    # Optional list prefix (numbered or bulleted) before the anchor
+    # itself. Allows both "1. **File: server.py**" and plain
+    # "**File:** server.py".
+    r"^\s*(?:(?:[-*]|\d+\.)\s+)*"
+    r"\*\*\s*File:?\s*\*?\*?\s*`?([\w./-]+)`?\s*\*?\*?",
+    re.IGNORECASE,
+)
+
+_FIELD_LINE_RE = re.compile(
+    r"^\s*[-*]?\s*\*\*\s*(Issue|Why|Severity|Suggested\s+fix|Impact|"
+    r"Proposed|Tradeoff|Current)\s*\*\*\s*:?\s*(.*)$",
+    re.IGNORECASE,
+)
+
+# Only Issue/Why are assertions about what exists in the cited file.
+# Suggested-fix / Proposed are recommendations — a model suggesting
+# "use `subprocess.run`" isn't claiming `subprocess.run` is present.
+_CLAIM_FIELDS = frozenset({"issue", "why"})
+
+_CODE_TOKEN_RE = re.compile(r"`([^`\n]{2,120})`")
+
+
+def _extract_findings(text: str) -> list[tuple[str, str]]:
+    """Parse a review/refactor subtask's output and return
+    `[(file_path, claim_text), ...]` — one tuple per **File:**-
+    anchored finding block. `claim_text` is only the Issue/Why
+    content; Suggested-fix text is excluded so that recommendations
+    aren't treated as assertions."""
+    if not text:
+        return []
+    out: list[tuple[str, str]] = []
+    current_file: str | None = None
+    current_claims: list[str] = []
+    current_field: str | None = None
+
+    def _flush() -> None:
+        nonlocal current_file, current_claims, current_field
+        if current_file and current_claims:
+            out.append((current_file, " ".join(current_claims).strip()))
+        current_file = None
+        current_claims = []
+        current_field = None
+
+    for line in text.splitlines():
+        fa = _FILE_ANCHOR_RE.match(line)
+        if fa:
+            _flush()
+            current_file = fa.group(1).strip().rstrip(".,;:")
+            continue
+        fm = _FIELD_LINE_RE.match(line)
+        if fm:
+            field = fm.group(1).lower().replace(" ", "")
+            current_field = field
+            value = fm.group(2).strip()
+            if field in _CLAIM_FIELDS and value:
+                current_claims.append(value)
+            continue
+        # Continuation of a claim field (wrapped Why paragraph etc.)
+        if current_field in _CLAIM_FIELDS and line.strip():
+            current_claims.append(line.strip())
+    _flush()
+    return out
+
+
+def _normalize_construct(tok: str) -> str:
+    """Strip parenthesized call args so `os.system('ls')` and the
+    bare `os.system` both check against the same base identifier. We
+    keep `()` as a marker so `foo()` and `foo.bar` stay distinguishable."""
+    return re.sub(r"\(.*?\)", "()", tok).strip()
+
+
+def _unverified_patterns(
+    findings: list[tuple[str, str]]
+) -> list[tuple[str, str, str]]:
+    """For each finding, extract backtick-quoted code-like tokens from
+    its claim text (Issue/Why) and confirm each is an actual substring
+    of the cited file. Returns `[(path, token, reason)]` for tokens
+    that don't verify, plus one entry per finding whose cited file is
+    missing from the repo."""
+    bad: list[tuple[str, str, str]] = []
+    cache: dict[str, str | None] = {}
+    seen: set[tuple[str, str]] = set()
+    for path, claim_text in findings:
+        if path not in cache:
+            try:
+                content, err = _fs.read_file({"path": path})
+                cache[path] = content if err is None else None
+            except Exception:  # noqa: BLE001
+                cache[path] = None
+        content = cache[path]
+        if content is None:
+            key = (path, "")
+            if key not in seen:
+                seen.add(key)
+                bad.append((path, "(cited file)", "file not found in repo"))
+            continue
+        for tok in _CODE_TOKEN_RE.findall(claim_text):
+            t = tok.strip()
+            if not t:
+                continue
+            # Skip the file path itself — _verify_citations already
+            # handles file/line existence.
+            if t == path or t.rstrip(".,;:") == path:
+                continue
+            # Only verify tokens that look structural (dotted/called/
+            # underscored or contain a space like "except Exception").
+            # Bare words like `file`, `main`, `query` would produce
+            # noise — skip them.
+            if not re.search(r"[._():\s]", t):
+                continue
+            normalized = _normalize_construct(t)
+            if not normalized or len(normalized) < 3:
+                continue
+            if (path, normalized) in seen:
+                continue
+            seen.add((path, normalized))
+            # Accept either the normalized form or the raw token as
+            # substring evidence. Catches both `foo` and `foo(x)` when
+            # the file has `foo(x)`.
+            if normalized in content or t in content:
+                continue
+            # Also accept a stripped form (e.g. trailing colon removed)
+            # so that "`except Exception:`" matches "except Exception:"
+            # whether or not the trailing colon is in the source.
+            if normalized.rstrip(":") in content:
+                continue
+            bad.append((path, t, "not present in cited file"))
+    return bad
+
+
+def _annotate_grounding_issues(
+    text: str,
+    bad_cites: list[tuple[str, int, str]],
+    bad_patterns: list[tuple[str, str, str]],
 ) -> str:
-    """Prepend a grounding-warning block to a subtask's output so the
-    final report makes it visible which findings couldn't be verified.
-    Stripping findings automatically is too error-prone with free-form
-    markdown — annotation is the honest middle ground."""
-    if not bad:
+    """Prepend a grounding-warning block listing both kinds of
+    verification failure. Stripping fabricated findings automatically
+    is too brittle on free-form markdown — annotating is the honest
+    middle ground and keeps the synthesis subtask (which sees prior
+    results) aware of what to distrust."""
+    if not bad_cites and not bad_patterns:
         return text
     lines = [
-        "> ⚠️ **Grounding check failed for the following citations** — "
-        "treat findings that reference these locations as unverified:"
+        "> ⚠️ **Grounding check failed** — findings referencing the "
+        "following could not be verified against the repo; treat them "
+        "as suspect:"
     ]
-    for path, line, reason in bad:
+    for path, line, reason in bad_cites:
         lines.append(f"> - `{path}:{line}` — {reason}")
+    for path, tok, reason in bad_patterns:
+        lines.append(f"> - claim `{tok}` in `{path}` — {reason}")
     lines.append("")
     return "\n".join(lines) + "\n" + text
 

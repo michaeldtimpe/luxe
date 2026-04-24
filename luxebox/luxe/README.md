@@ -423,10 +423,13 @@ LUXE_CACHE_TTL_S=60 luxe   # refresh model metadata every minute
   (the `code` agent) reads 2–4 files per analysis — enough to catch
   structural issues, not enough for deep bug hunting. `review` and
   `refactor` moved to `qwen2.5:32b-instruct` and are guarded by a
-  three-layer anti-fabrication check (shallow-inspection retry →
-  orchestrator-run greps → `file:line` citation verification), but they
-  still aren't a replacement for human review. Treat agent output as a
-  first pass, not a final verdict.
+  four-layer anti-fabrication check (shallow-inspection retry →
+  orchestrator-run greps → `file:line` citation verification →
+  finding-level pattern verification that greps each claimed code
+  construct against the cited file). Suspect findings are annotated
+  with a `⚠️ Grounding check failed` block rather than silently
+  dropped. Still not a replacement for human review — treat agent
+  output as a first pass, not a final verdict.
 - **Writing agent uses llama-server.** It's a separate process — if
   port 8080 is unreachable, the writing agent 400s. `/context` shows
   the server's RSS and loaded context.
