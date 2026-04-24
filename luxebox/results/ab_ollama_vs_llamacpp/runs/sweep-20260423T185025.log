@@ -1,0 +1,18 @@
+# A/B sweep started 2026-04-23T18:50:25.219522
+# command: /Users/michaeltimpe/Downloads/local-llm/luxebox/.venv/bin/python3 -u /Users/michaeltimpe/Downloads/local-llm/luxebox/scripts/run_ab_benchmark.py --candidate qwen2.5-coder-14b --backends ollama,llamacpp --bench bfcl_v3 --ollama-url http://127.0.0.1:11434 --limit 5
+
+=== A/B sweep: 1 candidate(s) × 2 backend(s) × 1 bench(es) = 2 run(s) ===
+
+
+--- [1/1] Qwen2.5-Coder-14B-Instruct (qwen2.5-coder-14b) ---
+  [parity] qwen2.5-coder-14b: ollama prompt_tokens=37
+[18:50:25] using ollama daemon at http://127.0.0.1:11434 for qwen2.5-coder-14b (tag: qwen2.5-coder:14b-instruct)                                                         server.py:243
+  → ollama · bfcl_v3
+  [error] ollama run failed: ModuleNotFoundError: No module named 'bfcl_eval'
+[18:50:26] launching llamacpp server for qwen2.5-coder-14b · ab_q4km on :8088                                                                                            server.py:181
+             server log → results/server_logs/qwen2.5-coder-14b__ab_q4km.log                                                                                             server.py:184
+[18:50:41] waiting for server on :8088… 15s elapsed                                                                                                                       server.py:60
+[18:50:56] waiting for server on :8088… 30s elapsed                                                                                                                       server.py:60
+[18:51:12] waiting for server on :8088… 45s elapsed                                                                                                                       server.py:60
+[18:51:27] waiting for server on :8088… 60s elapsed                                                                                                                       server.py:60
+[18:51:42] waiting for server on :8088… 75s elapsed                                                                                                                       server.py:60
