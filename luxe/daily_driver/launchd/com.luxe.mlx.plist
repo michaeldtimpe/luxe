@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.luxe.mlx</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/uv</string>
+        <string>run</string>
+        <string>python</string>
+        <string>-m</string>
+        <string>mlx_lm.server</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8088</string>
+        <string>--model</string>
+        <string>mlx-community/Qwen2.5-Coder-32B-Instruct-4bit</string>
+        <string>--draft-model</string>
+        <string>mlx-community/Qwen2.5-Coder-1.5B-Instruct-4bit</string>
+        <string>--num-draft-tokens</string>
+        <string>3</string>
+        <string>--kv-bits</string>
+        <string>8</string>
+        <string>--kv-group-size</string>
+        <string>64</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/michaeltimpe/Downloads/luxe</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/michaeltimpe/Library/Logs/luxe/mlx.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/michaeltimpe/Library/Logs/luxe/mlx.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

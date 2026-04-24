@@ -26,20 +26,20 @@ env/
 !.env.example
 
 # Big local artifacts
-luxebox/models/
-luxebox/.venv/
+luxe/models/
+luxe/.venv/
 
 # Personal repo clones + ingested commit corpus — contains the user's
 # own private code; never push these anywhere.
-luxebox/personal_eval/cache/
-luxebox/personal_eval/corpus/
+luxe/personal_eval/cache/
+luxe/personal_eval/corpus/
 
 # Per-run evaluation artifacts. Generic model evals under luxe_eval/
 # (general, research, writing) are kept; everything else is local run
 # state or contains personal-repo analysis and stays local.
-luxebox/results/runs/
-luxebox/results/server_logs/
-luxebox/results/luxe_eval/code_analysis/
+luxe/results/runs/
+luxe/results/server_logs/
+luxe/results/luxe_eval/code_analysis/
 
 # Luxe-generated images (may include personal prompts / subjects)
 luxe-images/
@@ -55,8 +55,8 @@ luxe-images/
 # truth is elsewhere. Add new subdirectories here when /review clones
 # a new target into the cwd.
 /ecliptic/
-/luxebox/zoleb/
-/luxebox/elara/
+/luxe/zoleb/
+/luxe/elara/
 
 # Personal writing outside any tracked project (story drafts, outlines).
 /warrens/

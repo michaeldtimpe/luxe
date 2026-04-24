@@ -437,8 +437,8 @@ throughput improvement. Re-test if a future Ollama version regresses
 or if a model class shows up that one backend handles materially
 better.
 
-Suite lives at `luxebox/scripts/run_ab_full.py`; raw numbers under
-`luxebox/results/ab_ollama_vs_llamacpp/REPORT.md`.
+Suite lives at `luxe/scripts/run_ab_full.py`; raw numbers under
+`luxe/results/ab_ollama_vs_llamacpp/REPORT.md`.
 
 ---
 
@@ -461,7 +461,7 @@ only compression that works is *being more selective about which files
 to include*. Compressing the *contents* of selected files is a
 regression.
 
-Numbers (raw JSONL under `luxebox/results/runs/compression_strategies/`):
+Numbers (raw JSONL under `luxe/results/runs/compression_strategies/`):
 
 - **retrieve_oracle** (exactly the relevant files): 90% pass, 496
   prompt tokens on average.
@@ -489,17 +489,17 @@ systematically wrong `@@ -a,b +c,d @@` counts.
    review agents read raw files via `read_file`; no pre-filter, no
    summarization, no outline pass. Validated by data.
 2. The orchestrator pre-reads files cited in pasted tracebacks
-   (`_augment_with_trace_hints` in `luxebox/luxe/tasks/orchestrator
+   (`_augment_with_trace_hints` in `luxe/luxe/tasks/orchestrator
    .py`) — this is the one positive transfer from the benchmark.
    Oracle-style retrieval when the user has already named the file.
 3. **Do not add** a file-summarisation pass, AST outlining, or
    LLM-based context compression to any code-editing path. The data
    is loud: -50 to -70 pct pass rate vs. raw content.
 
-Shared trace parser at `luxebox/shared/trace_hints.py` is used by
+Shared trace parser at `luxe/shared/trace_hints.py` is used by
 both the orchestrator and the benchmark's `stack_trace_guided`
 strategy. The same selectivity principle is also applied structurally:
-`luxebox/luxe/import_graph.py` walks the repo's Python AST to build a
+`luxe/luxe/import_graph.py` walks the repo's Python AST to build a
 first-hop import / imported-by index, and `_augment_with_trace_hints`
 expands each cited file with up to `max_files − 1` neighbors. The
 agent's turn 1 starts with the cited module *plus* its closest
@@ -530,7 +530,7 @@ certainly losing older context silently.
 **Responses:**
 
 1. Bumped `medium` / `large` tiers in
-   `luxebox/luxe/repo_survey.py` from 16k → 24k. Costs ~5 GB more KV
+   `luxe/luxe/repo_survey.py` from 16k → 24k. Costs ~5 GB more KV
    cache on qwen2.5:32b Q4_K_M; gains the headroom the workload
    actually needs.
 2. The heuristic is now: if `sub.prompt_tokens ≥ 0.5 × num_ctx`, the
@@ -554,7 +554,7 @@ a traceback token, a file path with `.py`, `draft an essay`, `compute
 Running the LLM on those costs ~1–2 s per turn for no decision
 quality gain.
 
-`luxebox/luxe/heuristic_router.py` is a pure-regex scorer with
+`luxe/luxe/heuristic_router.py` is a pure-regex scorer with
 per-agent feature tables. It returns `(agent, confidence, scores)` or
 `None`, with the None triggering fallthrough to the LLM. Key design
 points:
