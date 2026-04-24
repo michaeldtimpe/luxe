@@ -18,8 +18,8 @@ DEFAULT_ALLOWLIST = (
     # Static-analysis binaries. The dedicated `lint`/`typecheck`/etc.
     # tools call these with narrow flags, but `bash` is the escape
     # hatch for unusual invocations (e.g. `ruff format`, `ruff
-    # --fix`, specific bandit plugins).
-    "ruff",
+    # --fix`, specific bandit plugins, a custom mypy config).
+    "ruff", "mypy", "bandit", "pip-audit",
 )
 
 _ALLOWLIST: tuple[str, ...] = DEFAULT_ALLOWLIST

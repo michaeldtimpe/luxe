@@ -35,6 +35,9 @@ ToolName = Literal[
     "git_log",
     "git_show",
     "lint",
+    "typecheck",
+    "security_scan",
+    "deps_audit",
 ]
 
 

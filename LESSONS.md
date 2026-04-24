@@ -290,12 +290,16 @@ and friends install via `uv sync --extra dev` into `.venv/bin/`,
 which isn't on the shell's PATH when luxe runs as a daemon — the
 lookup order handles that uniformly.
 
-Follow-ups planned (same file, same pattern): `typecheck` (mypy),
-`security_scan` (bandit), `deps_audit` (pip-audit), `security_taint`
-(semgrep), `secrets_scan` (gitleaks). The `run_binary` foundation
-keeps each new wrapper to ~30 lines. LSP-grade taint tracking (Pysa,
-CodeQL) stays out of scope; semgrep + rulesets cover the 80% case we
-care about.
+Follow-ups: `typecheck` (mypy), `security_scan` (bandit), `deps_audit`
+(pip-audit) landed in the same shape — each tool wraps its binary with
+`run_binary`, reshapes output into a `{findings: [...], count, note?}`
+payload, and caps at 150 items. Defaults are tuned to reduce noise —
+`security_scan` filters LOW-confidence by default (MEDIUM+), since
+bandit's highest-volume lints are usually import-site (`B404`) and
+subprocess-call (`B603`) notes that are "real but known-and-accepted"
+for most codebases. Remaining planned: `security_taint` (semgrep) and
+`secrets_scan` (gitleaks). LSP-grade taint (Pysa, CodeQL) stays out of
+scope; semgrep + rulesets cover the 80% case we care about.
 
 **Broader principle:** when a deterministic tool exists, the model
 should call it and summarize. Re-deriving it with greps is
