@@ -1,0 +1,11 @@
+{
+  "name": "baseline_retrieval_only",
+  "description": "No compression; naive keyword top-k retrieval of whole files.",
+  "stages": [
+    { "id": "preprocess", "enabled": false },
+    { "id": "index", "enabled": true, "params": { "method": "text_files" } },
+    { "id": "retrieve", "enabled": true, "params": { "top_k_files": 12 } },
+    { "id": "compress", "enabled": false },
+    { "id": "prompt_assembly", "enabled": true }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "stack_trace_guided_wf",
+  "description": "Retrieve by running pytest first and seeding from files mentioned in the traceback. Cheap, grounded, model-free retrieval.",
+  "stages": [
+    { "id": "preprocess", "enabled": false },
+    { "id": "index", "enabled": true, "params": { "method": "text_files" } },
+    { "id": "retrieve", "enabled": true, "params": { "method": "stack_trace", "top_k_files": 6 } },
+    { "id": "compress", "enabled": false },
+    { "id": "prompt_assembly", "enabled": true, "params": { "output_format": "whole_file" } }
+  ]
+}

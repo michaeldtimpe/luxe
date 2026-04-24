@@ -1,0 +1,11 @@
+{
+  "name": "retrieve_full_context",
+  "description": "Control: dump every indexed file into the prompt. Gap vs. retrieve_oracle tells whether irrelevant context hurts.",
+  "stages": [
+    { "id": "preprocess", "enabled": false },
+    { "id": "index", "enabled": true, "params": { "method": "text_files" } },
+    { "id": "retrieve", "enabled": true, "params": { "method": "full" } },
+    { "id": "compress", "enabled": false },
+    { "id": "prompt_assembly", "enabled": true }
+  ]
+}

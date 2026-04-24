@@ -1,0 +1,15 @@
+{
+  "id": "bugfix_slugify_whitespace",
+  "repo_id": "example_small_repo",
+  "description": "Fix `slugify` in strings.py: it currently leaves leading and trailing hyphens when the input has leading/trailing whitespace. The test expects 'hello-world' for input '  hello world  '.",
+  "entry_instruction": "You are helping fix a bug in this repository.",
+  "goal": "All tests in tests/test_strings.py pass when running `pytest -q tests/test_strings.py` from the repository root.",
+  "validation": {
+    "type": "pytest",
+    "command": ["pytest", "-q", "tests/test_strings.py"],
+    "success_criteria": { "exit_code": 0 }
+  },
+  "reference": {
+    "relevant_files": ["strings.py"]
+  }
+}
