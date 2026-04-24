@@ -38,11 +38,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from luxe.registry import load_config
-from luxe.session import Session
-from luxe.tasks import Orchestrator, Task, load, plan
-from luxe.tasks.model import task_id as new_task_id
-from luxe.tools import fs as _fs
+from cli.registry import load_config
+from cli.session import Session
+from cli.tasks import Orchestrator, Task, load, plan
+from cli.tasks.model import task_id as new_task_id
+from cli.tools import fs as _fs
 
 
 HISTORY_PATH = (

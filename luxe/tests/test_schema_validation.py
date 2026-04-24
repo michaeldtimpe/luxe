@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from harness.backends import ToolDef
 
-from luxe.agents.base import _validate_args
+from cli.agents.base import _validate_args
 
 
 def _def(required=(), props=None) -> ToolDef:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import luxe.cli as cli_module
+import cli.main as cli_module
 
 
 def test_analyze_review_routes_to_start_review_task(tmp_path, monkeypatch):
@@ -29,7 +29,7 @@ def test_analyze_review_routes_to_start_review_task(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli_module, "load_config", lambda: _Cfg())
     # Patch inside the module where the command imports it.
-    import luxe.review as review_module
+    import cli.review as review_module
     monkeypatch.setattr(review_module, "start_review_task", fake_start)
 
     repo = tmp_path / "repo"
@@ -64,7 +64,7 @@ def test_analyze_without_review_does_not_call_review_task(tmp_path, monkeypatch)
         ollama_base_url = "http://127.0.0.1:11434"
 
     monkeypatch.setattr(cli_module, "load_config", lambda: _Cfg())
-    import luxe.review as review_module
+    import cli.review as review_module
     monkeypatch.setattr(review_module, "start_review_task", fake_start)
 
     # Make the code-eval path bail immediately so we don't need a full
@@ -72,7 +72,7 @@ def test_analyze_without_review_does_not_call_review_task(tmp_path, monkeypatch)
     def _boom(*a, **kw):
         raise RuntimeError("code-eval path hit, stopping before side effects")
 
-    monkeypatch.setattr("luxe.backend.make_backend", _boom)
+    monkeypatch.setattr("cli.backend.make_backend", _boom)
 
     repo = tmp_path / "repo"
     repo.mkdir()
