@@ -7,9 +7,16 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from cli import repl
-from cli.registry import load_config
-from cli.session import Session, latest_session, list_sessions
+# Side-effect import: pulls ~/.luxe/secrets.env into os.environ before
+# any backend code reads OMLX_API_KEY. Must run before `from cli import
+# repl` since the REPL imports backend.py which captures the env var
+# at make_backend() call time.
+from cli.secrets import load_secrets, warn_missing_omlx_key
+load_secrets()
+
+from cli import repl  # noqa: E402
+from cli.registry import load_config  # noqa: E402
+from cli.session import Session, latest_session, list_sessions  # noqa: E402
 
 app = typer.Typer(add_completion=False, invoke_without_command=True, no_args_is_help=False)
 console = Console()
@@ -24,6 +31,9 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
     cfg = load_config()
+    warning = warn_missing_omlx_key(cfg)
+    if warning:
+        console.print(f"[yellow][!] {warning}[/yellow]")
     sess = _resolve_session(cfg, session_id)
     repl.start(cfg, session=sess)
 

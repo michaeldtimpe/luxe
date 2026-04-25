@@ -29,11 +29,26 @@ at a time). `oMLX` keeps `Qwen2.5-Coder-14B-Instruct-MLX-4bit` and
 combined). `llama-server` for the writing agent stays resident
 (Gemma 3 27B Q4_K_M + KV cache ≈ 17–22 GB at 32–64K context).
 
-Authentication: oMLX gates `/v1/*` on a Bearer token. Set
-`OMLX_API_KEY` in the shell that launches luxe. The `make_backend()`
-factory reads it at startup and forwards as `Authorization: Bearer …`
-on every request; Ollama and llama-server ignore the header
-harmlessly.
+Authentication: oMLX gates `/v1/*` on a Bearer token. Two ways to
+provide it (existing shell env always wins):
+
+1. **Recommended — `~/.luxe/secrets.env`** (auto-loaded at REPL/CLI
+   startup, persists across shells). `bash daily_driver/install_luxe.sh`
+   stages a template; edit it once:
+
+   ```bash
+   cp daily_driver/secrets.env.example ~/.luxe/secrets.env
+   chmod 600 ~/.luxe/secrets.env
+   $EDITOR ~/.luxe/secrets.env   # set OMLX_API_KEY=omlx-...
+   ```
+
+2. **Per-shell `export`** (e.g. in `.zshrc`) or **per-invocation
+   prefix** (`OMLX_API_KEY=omlx-... luxe`). Both override the file.
+
+`make_backend()` forwards the key as `Authorization: Bearer …` on
+every request; Ollama and llama-server ignore the header harmlessly.
+If the key is missing, the REPL prints a one-line warning at
+startup and oMLX-served agents 401 on the first call.
 
 ## Prereqs
 
