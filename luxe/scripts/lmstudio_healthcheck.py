@@ -15,8 +15,11 @@ Exit code 0 = all checks passed; 1 = any check failed.
 
 Environment knobs:
 - LMSTUDIO_PORT       — override the assumed port (default 1234)
-- LMSTUDIO_API_KEY    — bearer token if your LM Studio requires auth
-                        (newer builds may; older ones don't)
+- LM_API_TOKEN        — bearer token if you've enabled auth in LM
+                        Studio's Server Settings → Manage Tokens.
+                        Auth is OFF by default; most installs don't
+                        need this. (LMSTUDIO_API_KEY accepted as
+                        backward-compat fallback.)
 
 Unlike `omlx_healthcheck`, this script does NOT auto-install LM Studio.
 It's a desktop app — install path varies (.dmg drag, brew cask, App
@@ -38,7 +41,7 @@ DEFAULT_PORT = int(os.environ.get("LMSTUDIO_PORT", "1234"))
 DEFAULT_BASE_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
 ENDPOINT_TIMEOUT_S = 30.0
 HELLO_PROMPT = "Reply with the single word: ok"
-API_KEY = os.environ.get("LMSTUDIO_API_KEY", "")
+API_KEY = os.environ.get("LM_API_TOKEN") or os.environ.get("LMSTUDIO_API_KEY") or ""
 AUTH_HEADERS = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
 
 # Models the overnight test plan expects to find loaded. Token-based
@@ -99,8 +102,10 @@ def _step_models_present(base_url: str) -> tuple[StepResult, list[str], dict[str
         if r.status_code == 401:
             return (
                 StepResult("models", False,
-                    "401 Unauthorized — set LMSTUDIO_API_KEY to the key "
-                    "from LM Studio's Server settings, then re-run."),
+                    "401 Unauthorized — auth is enabled. Generate a "
+                    "token in LM Studio's Developer page → Server "
+                    "Settings → Manage Tokens, then `export "
+                    "LM_API_TOKEN=<token>` and re-run."),
                 [], {},
             )
         r.raise_for_status()
@@ -257,7 +262,12 @@ def main(
 
     ok = _print_summary(results)
     if not API_KEY:
-        typer.echo("\n[hint] LMSTUDIO_API_KEY env var is unset. If you saw 401, set it.")
+        typer.echo(
+            "\n[hint] LM_API_TOKEN env var is unset. That's fine — auth "
+            "is OFF in LM Studio by default. If you saw 401, generate "
+            "a token in Developer page → Server Settings → Manage "
+            "Tokens, then `export LM_API_TOKEN=<token>`."
+        )
     sys.exit(0 if ok else 1)
 
 

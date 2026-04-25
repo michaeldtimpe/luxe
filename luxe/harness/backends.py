@@ -101,7 +101,15 @@ class Backend:
         if self.kind == "omlx":
             self.api_key = os.environ.get("OMLX_API_KEY", "")
         elif self.kind == "lmstudio":
-            self.api_key = os.environ.get("LMSTUDIO_API_KEY", "")
+            # LM Studio's official env name is LM_API_TOKEN
+            # (per their auth docs). LMSTUDIO_API_KEY kept as a
+            # fallback for backward compat. Most installs don't need
+            # either — auth is OFF by default in the local server.
+            self.api_key = (
+                os.environ.get("LM_API_TOKEN")
+                or os.environ.get("LMSTUDIO_API_KEY")
+                or ""
+            )
 
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}

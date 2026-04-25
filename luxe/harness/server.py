@@ -485,12 +485,17 @@ def _yield_lmstudio(candidate: Candidate, base_url: str) -> Iterator[Backend]:
     """Treat an externally-managed LM Studio daemon as the backend.
 
     LM Studio exposes an OpenAI-compat server at /v1 (default port
-    1234). Auth is optional — recent builds may require a key, older
-    ones don't. We send Bearer if LMSTUDIO_API_KEY is set, omit it
-    otherwise. Backend's __post_init__ auto-loads the env var when
-    kind="lmstudio"."""
+    1234). Auth is OFF by default; per LM Studio's docs you only need
+    a token if you've enabled auth in Server Settings → Manage Tokens.
+    LM Studio's official env var name is LM_API_TOKEN; LMSTUDIO_API_KEY
+    accepted as fallback for backward compat. Backend's __post_init__
+    auto-loads the same vars when kind="lmstudio"."""
     import os
-    api_key = os.environ.get("LMSTUDIO_API_KEY", "")
+    api_key = (
+        os.environ.get("LM_API_TOKEN")
+        or os.environ.get("LMSTUDIO_API_KEY")
+        or ""
+    )
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     try:
@@ -501,7 +506,7 @@ def _yield_lmstudio(candidate: Candidate, base_url: str) -> Iterator[Backend]:
             f"LM Studio /v1/models not reachable at {base_url}: {e}. "
             f"Run `python scripts/lmstudio_healthcheck.py` to verify "
             f"install + auth + loaded models. If 401, set "
-            f"LMSTUDIO_API_KEY."
+            f"LM_API_TOKEN (LM Studio's official env var)."
         ) from e
 
     listed = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
