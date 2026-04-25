@@ -842,3 +842,50 @@ ANY input that affects the measurement and you need a new slot.
 **Principle:** when a benchmark runner is resumable, the config
 identity has to encode every dimension of the experiment. A config
 suffix per variant beats a single bucket per backend.
+
+---
+
+## Single-turn benchmarks miss the multi-turn growth regime
+
+The April 2026 oMLX migration was decided on HumanEval+ at 30 tasks ×
+~1k prompt tokens × ~50 output tokens per task. oMLX won by 1.54× on
+the 32B model. Migrated `review` and `refactor` agents same day.
+
+A real `/review` invocation regressed badly on oMLX — same agent,
+same model, same target repo:
+
+| Subtask | Ollama wall | oMLX wall | Notes |
+|---|---|---|---|
+| sub 01 (~7k prompt) | 1m 11s | 1m 07s | parity |
+| sub 02 (~10–13k prompt) | 2m 04s | 2m 53s | **+40%** |
+| sub 03 (~13k+ prompt) | 3m 49s total | **>8m** to first tool call | **catastrophic** |
+
+The reason: `/review`'s subtask 03 receives the concatenated outputs
+of subtasks 01 and 02 via `_augment_with_prior`, so its prompt is
+~13k tokens at start. The HumanEval+ benchmark prompts are ~1k. oMLX
+32B's TTFT at 1k was 1.6× slower than Ollama; at 13k it was 6× slower.
+Decode speed wins (which is what HumanEval+ measured) couldn't
+recover the prefill cost on a tool-heavy multi-turn loop.
+
+**Rollback:** `review` + `refactor` reverted to Ollama. `code`
+(14B, smaller prompt, milder TTFT regression) stayed on oMLX where
+the HumanEval+ pattern matches the actual workload (single-turn code
+generation, modest prompt growth).
+
+**Diagnosis was visible only in the per-tool-call event log:**
+`/tasks tail <id>` shows only subtask begin/end. To see the gap
+between subtask-begin and the first tool call, you have to crack
+open `~/.luxe/tasks/<id>/log.jsonl` and read the
+`tool_call_begin` events. The bench harness's metrics didn't capture
+this regime at all.
+
+**Principle:** when an agent's prompt grows monotonically over
+subtasks (orchestrator workflows, RAG, long-context reasoning), the
+benchmark prompt-length distribution must match the production one.
+A tool-heavy multi-turn workload measured against a single-turn
+benchmark is a different beast. Add a sweep tier at the actual
+prompt-length percentile (16k–32k for review/refactor) before
+trusting the migration call. See `benchmarks/prefix_cache_decay.py`
+for the 4k/16k/32k slicing — extend that pattern to
+`humaneval_plus_long_prefix` or similar before the next backend
+swap.

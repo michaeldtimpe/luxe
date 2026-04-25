@@ -383,13 +383,18 @@ agents:
 
   - name: review
     display: "Code review (read-only)"
-    # 2026-04-24: migrated from Ollama → oMLX after AB sweep showed
-    # 1.54× decode tok/s (12.30 vs 7.99 on HumanEval+) AND identical
-    # pass rate (93.3% both). Trade-off: TTFT is ~60% slower on oMLX
-    # than Ollama for this model (2.24s vs 1.40s) — matters for short
-    # interactive turns but the decode win dominates over the multi-
-    # paragraph findings this agent generates per subtask. See
-    # results/runs/ab_ollama_vs_omlx/qwen2.5-32b-instruct/ for data.
+    # 2026-04-24 PM: rolled back from oMLX → Ollama. The morning's
+    # migration was based on HumanEval+ (single-turn, ~1k prompt) which
+    # showed +54% decode for oMLX. Real /review is MULTI-TURN with the
+    # prompt growing each subtask via _augment_with_prior; by sub 03
+    # the prompt is ~13k tokens, and oMLX 32B's TTFT at that length
+    # regresses ~6× (sub 03 first tool call at +8m on oMLX vs +73s on
+    # Ollama, same task). The decode win can't recover that prefill
+    # cost on tool-heavy multi-turn workloads. See the AB sweep at
+    # results/runs/ab_ollama_vs_omlx/qwen2.5-32b-instruct/ for the
+    # numbers it DID measure (decode-only) and LESSONS.md for the
+    # benchmark-vs-real-workload gap. `code` (14B, smaller prompt,
+    # less TTFT impact) stayed on oMLX.
     #
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct — the 14b
     # coder was fabricating findings (quoted SQL that didn't exist in
@@ -397,8 +402,7 @@ agents:
     # agent reasons over code rather than writing it, so general-instruct
     # is a better fit; the 32b variant is the one `research` and `calc`
     # use, so tool-use stability is already validated.
-    model: "Qwen2.5-32B-Instruct-4bit"
-    endpoint: "http://127.0.0.1:8000"
+    model: "qwen2.5:32b-instruct"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
@@ -543,15 +547,14 @@ agents:
 
   - name: refactor
     display: "Refactor / optimization (read-only)"
-    # 2026-04-24: migrated from Ollama → oMLX alongside `review` — same
-    # underlying model + same workload shape, so the 1.54× decode win
-    # measured on review applies here too.
+    # 2026-04-24 PM: rolled back from oMLX alongside `review` — same
+    # workload shape (multi-turn growing prompt), same regression.
+    # See `review`'s comment + LESSONS.md.
     #
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct for the same
     # reason as `review` — this agent reads and reasons, never writes,
     # so general-instruct 32b is a better fit than the coder 14b.
-    model: "Qwen2.5-32B-Instruct-4bit"
-    endpoint: "http://127.0.0.1:8000"
+    model: "qwen2.5:32b-instruct"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
