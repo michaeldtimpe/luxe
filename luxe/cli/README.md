@@ -19,15 +19,15 @@ questions, plan-preview, and context forwarding between subtasks.
 | writing | `gemma-3-27b-it` | **llama-server** | Served via `llama-server --jinja`; native `tool_code` blocks parsed inline |
 | **code** | `Qwen2.5-Coder-14B-Instruct-MLX-4bit` | **oMLX** (port 8000) | Full tool surface; migrated from Ollama 2026-04-24 (+56% decode, +6.7pp pass rate on HumanEval+) |
 | image | `qwen2.5:7b-instruct` (prompt expander) + Draw Things | Ollama + HTTP | Draw Things API on 7859 |
-| review | `qwen2.5:32b-instruct` | Ollama | Read-only code review with git context; oMLX migration attempted 2026-04-24 then rolled back — multi-turn `/review` regressed catastrophically at ~13k+ prompts despite +54% on single-turn HumanEval+. See `LESSONS.md` ("Single-turn benchmarks miss the multi-turn growth regime") |
-| refactor | `qwen2.5:32b-instruct` | Ollama | Read-only optimization with git context; same workload shape + same rollback as `review` |
+| **review** | `Qwen2.5-32B-Instruct-4bit` | **oMLX** (port 8000) | Read-only code review with git context; migrated 2026-04-24 (+54% decode, parity pass rate). Multi-turn slowness at ~13k+ prompts is inherent to 32B + long prompts on either backend, not an oMLX artifact — see `LESSONS.md` |
+| **refactor** | `Qwen2.5-32B-Instruct-4bit` | **oMLX** (port 8000) | Read-only optimization with git context; same migration as `review` |
 | calc | `qwen2.5:32b-instruct` | Ollama | Multi-step arithmetic; `create_tool` + library-matched tools (DFlash candidate — see `LESSONS.md`) |
 
-**Backend layout:** Ollama hot-swaps the small + 32B models (only one
+**Backend layout:** Ollama hot-swaps the small models (only one
 resident at a time). `oMLX` keeps `Qwen2.5-Coder-14B-Instruct-MLX-4bit`
-resident (~8 GB) for the `code` agent. `llama-server` for the writing
-agent stays resident (Gemma 3 27B Q4_K_M + KV cache ≈ 17–22 GB at 32–64K
-context).
+and `Qwen2.5-32B-Instruct-4bit` co-resident with LRU eviction (~26 GB
+combined). `llama-server` for the writing agent stays resident
+(Gemma 3 27B Q4_K_M + KV cache ≈ 17–22 GB at 32–64K context).
 
 Authentication: oMLX gates `/v1/*` on a Bearer token. Two ways to
 provide it (existing shell env always wins):

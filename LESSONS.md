@@ -851,41 +851,50 @@ The April 2026 oMLX migration was decided on HumanEval+ at 30 tasks ×
 ~1k prompt tokens × ~50 output tokens per task. oMLX won by 1.54× on
 the 32B model. Migrated `review` and `refactor` agents same day.
 
-A real `/review` invocation regressed badly on oMLX — same agent,
-same model, same target repo:
+A real `/review` invocation looked like a regression on oMLX:
 
 | Subtask | Ollama wall | oMLX wall | Notes |
 |---|---|---|---|
 | sub 01 (~7k prompt) | 1m 11s | 1m 07s | parity |
-| sub 02 (~10–13k prompt) | 2m 04s | 2m 53s | **+40%** |
-| sub 03 (~13k+ prompt) | 3m 49s total | **>8m** to first tool call | **catastrophic** |
+| sub 02 (~10–13k prompt) | 2m 04s | 2m 53s | +40% |
+| sub 03 (~13k+ prompt) | 3m 49s total | >8m to first tool call | catastrophic |
 
-The reason: `/review`'s subtask 03 receives the concatenated outputs
-of subtasks 01 and 02 via `_augment_with_prior`, so its prompt is
-~13k tokens at start. The HumanEval+ benchmark prompts are ~1k. oMLX
-32B's TTFT at 1k was 1.6× slower than Ollama; at 13k it was 6× slower.
-Decode speed wins (which is what HumanEval+ measured) couldn't
-recover the prefill cost on a tool-heavy multi-turn loop.
+I rolled back review/refactor to Ollama based on this. **That was
+premature.** Re-running on the rolled-back Ollama setup showed the
+same multi-turn slowness — the 8-minute first-tool-call gap on sub 03
+isn't an oMLX property, it's inherent to running a 32B at ~13k
+prompt + multi-paragraph output. The morning's Ollama timing was
+likely benefiting from in-process prefix-cache state that didn't
+survive between sessions. Reverted the rollback the same day; oMLX
+keeps its measured +54% decode win on the comparable single-turn
+slice.
 
-**Rollback:** `review` + `refactor` reverted to Ollama. `code`
-(14B, smaller prompt, milder TTFT regression) stayed on oMLX where
-the HumanEval+ pattern matches the actual workload (single-turn code
-generation, modest prompt growth).
+**The lasting lesson is methodological, not directional:**
 
-**Diagnosis was visible only in the per-tool-call event log:**
-`/tasks tail <id>` shows only subtask begin/end. To see the gap
-between subtask-begin and the first tool call, you have to crack
-open `~/.luxe/tasks/<id>/log.jsonl` and read the
-`tool_call_begin` events. The bench harness's metrics didn't capture
-this regime at all.
+1. **One run isn't a measurement.** I compared the morning's Ollama
+   run to the evening's oMLX run as if they were a controlled A/B,
+   but they weren't — different cache state, different system load,
+   different recently-loaded-into-RAM models. A migration call
+   needs a back-to-back same-session comparison or it's noise.
+2. **Prompt-length distribution still matters for benchmarks.** The
+   `humaneval_plus`-shape (~1k prompt) doesn't predict behavior at
+   13k+ prompts on either backend. The decode-rate win is real and
+   does carry over; the *absolute wall time* at long prompts is
+   dominated by prefill compute regardless of backend, and that's
+   what I mistakenly attributed to oMLX.
+3. **Per-tool-call event log is the authoritative diagnostic.**
+   `/tasks tail <id>` shows only subtask begin/end. The gap between
+   `begin` and the first `tool_call_begin` event in
+   `~/.luxe/tasks/<id>/log.jsonl` is where you see the prefill cost.
+   That field is what told me the rollback was right; running the
+   same diagnostic on the rolled-back Ollama setup is what told me
+   it was wrong.
 
 **Principle:** when an agent's prompt grows monotonically over
-subtasks (orchestrator workflows, RAG, long-context reasoning), the
-benchmark prompt-length distribution must match the production one.
-A tool-heavy multi-turn workload measured against a single-turn
-benchmark is a different beast. Add a sweep tier at the actual
-prompt-length percentile (16k–32k for review/refactor) before
-trusting the migration call. See `benchmarks/prefix_cache_decay.py`
+subtasks (orchestrator workflows, RAG, long-context reasoning), add
+a sweep tier at the actual prompt-length percentile (16k–32k for
+review/refactor) AND test back-to-back in the same session before
+trusting a migration call. See `benchmarks/prefix_cache_decay.py`
 for the 4k/16k/32k slicing — extend that pattern to
-`humaneval_plus_long_prefix` or similar before the next backend
-swap.
+`humaneval_plus_long_prefix` for the next backend swap. And don't
+let one data point unwind a migration the benchmark earned.

@@ -65,26 +65,24 @@ Fuller walkthrough in **`luxe/README.md`**.
   subtasks without redoing completed ones; `/tasks tail <id> -v` adds
   per-tool-call lines to the live event stream.
 - **Code intelligence**: `/review` and `/refactor` run on
-  `qwen2.5:32b-instruct` (Ollama) with a 10-tool static-analysis
-  surface (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks`
-  for Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language).
+  `Qwen2.5-32B-Instruct-4bit` with a 10-tool static-analysis surface
+  (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for
+  Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language).
   Pre-flight repo survey sizes task wall + `num_ctx` per clone; a
   four-layer anti-fabrication check (shallow-retry → forced
   inspection → `file:line` citation verification → construct-
   presence verification) annotates suspect findings. `code` agent
-  on `Qwen2.5-Coder-14B-Instruct-MLX-4bit` (oMLX) with the same
-  analyzer tools — see AGENTS.md for the per-agent breakdown.
-- **Backend split**: as of 2026-04-24, only `code` migrated to
-  **oMLX** (port 8000) after an A/B sweep showed +56% decode tok/s
-  vs Ollama at +6.7pp HumanEval+ pass rate. `review`/`refactor`
-  attempted the same migration but rolled back same day after a real
-  `/review` regressed catastrophically on multi-turn workloads — the
-  benchmark missed the prompt-growth regime where oMLX 32B's TTFT
-  regression at ~13k+ prompts wipes out the decode win. `general`
-  / `lookup` / `image` / `router` stay on Ollama (low-leverage
-  workloads). `writing` continues on `llama-server` for Gemma 3's
-  native tool-call format. See `LESSONS.md` ("Single-turn
-  benchmarks miss the multi-turn growth regime") for the diagnosis.
+  on `Qwen2.5-Coder-14B-Instruct-MLX-4bit` with the same analyzer
+  tools — see AGENTS.md for the per-agent breakdown.
+- **Backend split**: as of 2026-04-24, `code` / `review` / `refactor`
+  serve through **oMLX** (port 8000, MLX-format weights) after an A/B
+  sweep showed +50–60% decode tok/s vs Ollama at parity-or-better
+  HumanEval+ pass rate. `general` / `lookup` / `image` / `router`
+  stay on Ollama (low-leverage workloads). `writing` continues on
+  `llama-server` for Gemma 3's native tool-call format. See
+  `LESSONS.md` for the measurement methodology — including the
+  premature-rollback episode that taught us to re-run the same-
+  session A/B before reversing a migration.
 - **Browser tool**: `research` and `lookup` agents can drive a real
   headless Chrome via `browse_navigate` + `browse_read` (CDP, allowlist-
   gated). Unblocks JS-rendered content where static `fetch_url` returns
