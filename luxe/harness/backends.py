@@ -16,7 +16,7 @@ from typing import Any, Literal
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-BackendKind = Literal["mlx", "llamacpp", "ollama", "omlx"]
+BackendKind = Literal["mlx", "llamacpp", "ollama", "omlx", "lmstudio"]
 
 
 @dataclass
@@ -93,8 +93,15 @@ class Backend:
 
     def __post_init__(self) -> None:
         import os
-        if not self.api_key and self.kind == "omlx":
+        if self.api_key:
+            return
+        # Auto-load the right env var per kind. Both keys are sent as
+        # `Authorization: Bearer <key>`; both Ollama + llama-server
+        # ignore the header when they don't need it.
+        if self.kind == "omlx":
             self.api_key = os.environ.get("OMLX_API_KEY", "")
+        elif self.kind == "lmstudio":
+            self.api_key = os.environ.get("LMSTUDIO_API_KEY", "")
 
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}

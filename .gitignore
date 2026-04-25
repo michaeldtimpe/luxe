@@ -41,6 +41,12 @@ luxe/results/runs/
 luxe/results/server_logs/
 luxe/results/luxe_eval/code_analysis/
 
+# Overnight autonomous-run output. Per-phase logs can be large and
+# contain repo content from external clones (elara, never-say-yes,
+# neon-rain). Distill findings to LESSONS.md or COMPOSITE_VERDICT.md
+# by hand if you want them committed.
+luxe/results/overnight_*/
+
 # Luxe-generated images (may include personal prompts / subjects)
 luxe-images/
 
@@ -65,6 +71,8 @@ luxe/scripts/results/
 /ecliptic/
 /luxe/zoleb/
 /luxe/elara/
+/luxe/never-say-yes/
+/luxe/neon-rain/
 
 # Personal writing outside any tracked project (story drafts, outlines).
 /warrens/

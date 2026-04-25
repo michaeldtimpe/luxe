@@ -203,6 +203,7 @@ def launch_server(
     log_dir: Path = Path("results/server_logs"),
     ollama_base_url: str = "http://127.0.0.1:11434",
     omlx_base_url: str = "http://127.0.0.1:8000",
+    lmstudio_base_url: str = "http://127.0.0.1:1234",
 ) -> Iterator[Backend]:
     if kind == "ollama":
         # Ollama runs as a long-lived daemon (launchd plist). The harness
@@ -218,6 +219,13 @@ def launch_server(
         # Here we just verify connectivity, preload the model, and
         # yield a Backend.
         yield from _yield_omlx(candidate, omlx_base_url)
+        return
+    if kind == "lmstudio":
+        # LM Studio runs as a long-lived desktop app (and `lms server`
+        # daemon). Externally managed like Ollama/oMLX. Default port
+        # 1234. Auth scheme isn't documented; we send Bearer if
+        # LMSTUDIO_API_KEY is set, harmless otherwise.
+        yield from _yield_lmstudio(candidate, lmstudio_base_url)
         return
 
     port = port or _free_port()
@@ -427,6 +435,109 @@ def _yield_omlx(candidate: Candidate, base_url: str) -> Iterator[Backend]:
 
     backend = Backend(
         kind="omlx",
+        base_url=base_url,
+        model_id=model_id,
+        api_key=api_key,
+    )
+
+    sampler: "RssSampler | None" = None  # type: ignore[name-defined]
+    pid = _ollama_pid(base_url)  # works for any process owning the port
+    if pid:
+        from harness.metrics import RssSampler
+
+        sampler = RssSampler(pid=pid, interval_s=2.0)
+        sampler.start()
+        backend._rss_sampler = sampler  # type: ignore[attr-defined]
+    try:
+        yield backend
+    finally:
+        if sampler is not None:
+            sampler.stop()
+
+
+def _resolve_lmstudio_model(candidate: Candidate, listed: list[str]) -> str | None:
+    """Pick the best /v1/models entry for `candidate` on LM Studio. LM
+    Studio's id naming varies — sometimes `mlx-community/<repo>`,
+    sometimes the bare model name, sometimes a custom alias. Match by
+    exact tail first, then by token-overlap (same fuzzy logic
+    `_resolve_omlx_model` uses)."""
+    if not listed:
+        return None
+    tail = (candidate.mlx_repo or candidate.hf_repo or "").split("/")[-1]
+    if not tail:
+        return None
+    if tail in listed:
+        return tail
+    # Some LM Studio installs prefix with publisher; check both forms.
+    for full_repo in (candidate.mlx_repo, candidate.hf_repo):
+        if full_repo and full_repo in listed:
+            return full_repo
+    tokens = [t for t in tail.split("-") if t and t.lower() not in {"4bit", "8bit", "mlx"}]
+    matches = [m for m in listed if all(t.lower() in m.lower() for t in tokens)]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        return sorted(matches, key=len)[0]
+    return None
+
+
+def _yield_lmstudio(candidate: Candidate, base_url: str) -> Iterator[Backend]:
+    """Treat an externally-managed LM Studio daemon as the backend.
+
+    LM Studio exposes an OpenAI-compat server at /v1 (default port
+    1234). Auth is optional — recent builds may require a key, older
+    ones don't. We send Bearer if LMSTUDIO_API_KEY is set, omit it
+    otherwise. Backend's __post_init__ auto-loads the env var when
+    kind="lmstudio"."""
+    import os
+    api_key = os.environ.get("LMSTUDIO_API_KEY", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    try:
+        r = httpx.get(f"{base_url}/v1/models", headers=headers, timeout=5.0)
+        r.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        raise ServerError(
+            f"LM Studio /v1/models not reachable at {base_url}: {e}. "
+            f"Run `python scripts/lmstudio_healthcheck.py` to verify "
+            f"install + auth + loaded models. If 401, set "
+            f"LMSTUDIO_API_KEY."
+        ) from e
+
+    listed = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
+    model_id = _resolve_lmstudio_model(candidate, listed)
+    if not model_id:
+        raise ServerError(
+            f"LM Studio has no model matching candidate {candidate.id} "
+            f"(tail={candidate.mlx_repo}). Listed: {listed}. Pull via "
+            f"`lms get {candidate.mlx_repo}` or use the LM Studio "
+            f"desktop app's model browser."
+        )
+
+    _console.log(
+        f"using lmstudio daemon at [bold]{base_url}[/] for "
+        f"[bold]{candidate.id}[/] (model: {model_id})"
+    )
+    try:
+        httpx.post(
+            f"{base_url}/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": model_id,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+                "temperature": 0,
+                "stream": False,
+            },
+            timeout=300.0,
+        ).raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        raise ServerError(
+            f"LM Studio failed to load {model_id}: {e}"
+        ) from e
+
+    backend = Backend(
+        kind="lmstudio",
         base_url=base_url,
         model_id=model_id,
         api_key=api_key,
