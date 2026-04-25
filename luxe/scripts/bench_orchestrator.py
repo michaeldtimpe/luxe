@@ -32,7 +32,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import math
+import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +46,20 @@ from cli.session import Session
 from cli.tasks import Orchestrator, Task, load, plan
 from cli.tasks.model import task_id as new_task_id
 from cli.tools import fs as _fs
+
+# cc-canary-style behavioral signal: which tool names count as
+# orientation/grounding (reads) vs. mutation (edits). The ratio of the
+# two catches drift the wall-time / token-count metrics can't see —
+# collapse to <1 means the agent is over-writing without grounding;
+# spike to >20 means it's spinning on lookup.
+_READ_TOOL_NAMES = frozenset({"read_file", "glob", "grep", "list_dir"})
+_EDIT_TOOL_NAMES = frozenset({"write_file", "edit_file"})
+
+# Inflection detection: composite_health is z-scored against the trailing
+# window of size W; a row whose value diverges by more than K stdevs is
+# flagged. Single sliding window; pure stdlib.
+_INFLECTION_WINDOW = 10
+_INFLECTION_K = 1.5
 
 
 HISTORY_PATH = (
@@ -65,6 +82,40 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _tool_behavior(tool_calls: list[Any]) -> dict[str, Any]:
+    """Derive cc-canary-style behavioral signal from a subtask's
+    ToolCall list: reads-per-edit and tool-loop ratio. Returns the
+    aggregate counts so callers can sum them across subtasks before
+    computing the ratio at the totals level (avoids ratio-of-means
+    bias)."""
+    reads = edits = repeated = total = 0
+    prev_key: str | None = None
+    for tc in tool_calls:
+        name = getattr(tc, "name", "") or ""
+        args = getattr(tc, "arguments", {}) or {}
+        try:
+            args_blob = json.dumps(args, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            args_blob = repr(args)
+        key = f"{name}|{hashlib.sha1(args_blob.encode()).hexdigest()[:12]}"
+        if name in _READ_TOOL_NAMES:
+            reads += 1
+        if name in _EDIT_TOOL_NAMES:
+            edits += 1
+        if prev_key is not None and key == prev_key:
+            repeated += 1
+        prev_key = key
+        total += 1
+    return {
+        "reads": reads,
+        "edits": edits,
+        "tool_loop_repeats": repeated,
+        "tool_calls_seen": total,
+        "reads_per_edit": round(reads / max(edits, 1), 2),
+        "tool_loop_ratio": round(repeated / total, 3) if total else 0.0,
+    }
+
+
 def _task_to_record(task: Task, *, target: str | None = None) -> dict[str, Any]:
     """Summarise a finished Task into a history record. Cross-cut
     totals at the top, per-subtask breakdown below for when a
@@ -79,11 +130,20 @@ def _task_to_record(task: Task, *, target: str | None = None) -> dict[str, Any]:
         "cache_misses": 0,
         "schema_rejects": 0,
         "near_cap_turns": 0,
+        # cc-canary-style behavioral aggregates. The ratio is computed
+        # from the summed numerators/denominators below to avoid the
+        # mean-of-ratios bias when subtasks have very different sizes.
+        "reads": 0,
+        "edits": 0,
+        "tool_loop_repeats": 0,
+        "reads_per_edit": 0.0,
+        "tool_loop_ratio": 0.0,
     }
     # Cache hits/misses are event-level — the orchestrator emits them
     # on "end" events; reconstruct from log.jsonl when available.
     cache_by_sub = _read_cache_events(task)
     for sub in task.subtasks:
+        beh = _tool_behavior(sub.tool_calls)
         entry: dict[str, Any] = {
             "index": sub.index,
             "title": sub.title,
@@ -96,6 +156,8 @@ def _task_to_record(task: Task, *, target: str | None = None) -> dict[str, Any]:
             "completion_tokens": sub.completion_tokens,
             "near_cap_turns": sub.near_cap_turns,
             "schema_rejects": getattr(sub, "schema_rejects", 0),
+            "reads_per_edit": beh["reads_per_edit"],
+            "tool_loop_ratio": beh["tool_loop_ratio"],
         }
         cache = cache_by_sub.get(sub.id)
         if cache:
@@ -110,7 +172,15 @@ def _task_to_record(task: Task, *, target: str | None = None) -> dict[str, Any]:
         totals["tool_calls"] += sub.tool_calls_total
         totals["schema_rejects"] += getattr(sub, "schema_rejects", 0)
         totals["near_cap_turns"] += sub.near_cap_turns
+        totals["reads"] += beh["reads"]
+        totals["edits"] += beh["edits"]
+        totals["tool_loop_repeats"] += beh["tool_loop_repeats"]
     totals["wall_s"] = round(totals["wall_s"], 1)
+    totals["reads_per_edit"] = round(totals["reads"] / max(totals["edits"], 1), 2)
+    totals["tool_loop_ratio"] = (
+        round(totals["tool_loop_repeats"] / totals["tool_calls"], 3)
+        if totals["tool_calls"] else 0.0
+    )
 
     return {
         "ts": dt.datetime.now().isoformat(timespec="seconds"),
@@ -234,33 +304,105 @@ def _fmt_delta(cur: float, prev: float, *, better_when_lower: bool = True) -> st
     return f"  ({direction}{abs(pct):4.1f}% {mark})"
 
 
+def _t(row: dict[str, Any] | None, key: str, default: float = 0.0) -> float:
+    """Read a totals field with backwards-compat. Old rows lack the new
+    behavioral fields; treat their absence as a neutral 0 so historical
+    rows render without crashing."""
+    if not row:
+        return default
+    val = (row.get("totals") or {}).get(key, default)
+    try:
+        return float(val) if val is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _composite_health(row: dict[str, Any]) -> float:
+    """Single-axis derived score in the same direction for every input
+    (higher = healthier). Ratios picked to keep magnitudes comparable
+    without needing per-feature normalization at compute time — the
+    inflection check normalizes against the trailing window."""
+    t = row.get("totals") or {}
+    wall_s = float(t.get("wall_s") or 0.0)
+    schema_rej = float(t.get("schema_rejects") or 0.0)
+    loop = float(t.get("tool_loop_ratio") or 0.0)
+    hits = float(t.get("cache_hits") or 0.0)
+    misses = float(t.get("cache_misses") or 0.0)
+    cache_rate = hits / (hits + misses) if (hits + misses) else 0.0
+    # Lower wall/schema_rej/loop = healthier, so subtract them; higher
+    # cache_rate = healthier, so add it. Wall scaled by /60 to put it on
+    # a per-minute axis comparable to the other 0-1ish ratios.
+    return cache_rate - (wall_s / 60.0) - schema_rej - loop
+
+
+def _inflection_flag(
+    rows: list[dict[str, Any]], idx: int
+) -> str:
+    """Return ' ⚠ INFLECTION' if row[idx]'s composite_health diverges
+    from the trailing window by more than K stdevs; '' otherwise.
+    Returns '' if the window has fewer than 3 prior rows (not enough
+    signal to compute a meaningful stdev)."""
+    window = rows[max(0, idx - _INFLECTION_WINDOW): idx]
+    if len(window) < 3:
+        return ""
+    prior = [_composite_health(r) for r in window]
+    mu = statistics.fmean(prior)
+    try:
+        sigma = statistics.stdev(prior)
+    except statistics.StatisticsError:
+        return ""
+    if math.isnan(sigma):
+        return ""
+    # Floor sigma so a perfectly-flat baseline still flags large
+    # absolute swings — without this, the first divergent row after a
+    # run of identical scores produces sigma=0 and is silently missed.
+    sigma_eff = max(sigma, abs(mu) * 0.05, 0.1)
+    cur = _composite_health(rows[idx])
+    if abs(cur - mu) > _INFLECTION_K * sigma_eff:
+        return f"  ⚠ INFLECTION (Δ={cur - mu:+.2f}, σ={sigma_eff:.2f})"
+    return ""
+
+
 def cmd_show(args: argparse.Namespace) -> int:
-    rows = _read_history()
-    if not rows:
+    all_rows = _read_history()
+    if not all_rows:
         print(f"no history yet — write to {HISTORY_PATH}")
         return 0
-    rows = rows[-args.n:]
+    rows = all_rows[-args.n:]
+    base_idx = len(all_rows) - len(rows)
     # Print oldest-first so deltas line up left→right, but flag the
     # most recent row at the bottom so grep-style tailing works.
     prev: dict[str, Any] | None = None
-    for row in rows:
+    for j, row in enumerate(rows):
         t = row["totals"]
         label = row.get("label") or row["task_id"]
         head = f"{row['ts']}  commit={row['commit']}  label={label}"
         if row.get("target"):
             head += f"  target={row['target']}"
+        # Inflection is computed against the *full* history, not just
+        # the tailed window, so a 1-row tail can still be flagged.
+        head += _inflection_flag(all_rows, base_idx + j)
         print(head)
         rows_out = [
-            ("wall_s       ", t["wall_s"], prev and prev["totals"]["wall_s"], True),
-            ("tool_calls   ", t["tool_calls"], prev and prev["totals"]["tool_calls"], True),
-            ("cache_hits   ", t["cache_hits"], prev and prev["totals"]["cache_hits"], False),
-            ("cache_misses ", t["cache_misses"], prev and prev["totals"]["cache_misses"], True),
-            ("schema_rejects", t["schema_rejects"], prev and prev["totals"]["schema_rejects"], True),
-            ("prompt_tok   ", t["prompt_tokens"], prev and prev["totals"]["prompt_tokens"], True),
-            ("completion_tok", t["completion_tokens"], prev and prev["totals"]["completion_tokens"], True),
+            ("wall_s        ", t["wall_s"], _t(prev, "wall_s"), True),
+            ("tool_calls    ", t["tool_calls"], _t(prev, "tool_calls"), True),
+            ("cache_hits    ", t["cache_hits"], _t(prev, "cache_hits"), False),
+            ("cache_misses  ", t["cache_misses"], _t(prev, "cache_misses"), True),
+            ("schema_rejects", t["schema_rejects"], _t(prev, "schema_rejects"), True),
+            ("prompt_tok    ", t["prompt_tokens"], _t(prev, "prompt_tokens"), True),
+            ("completion_tok", t["completion_tokens"], _t(prev, "completion_tokens"), True),
+            # cc-canary-style behavioral signals. Older rows render the
+            # value as — when the totals dict lacks the key.
+            ("reads_per_edit", t.get("reads_per_edit", "—"),
+             _t(prev, "reads_per_edit"), False),
+            ("tool_loop_ratio", t.get("tool_loop_ratio", "—"),
+             _t(prev, "tool_loop_ratio"), True),
         ]
         for name, cur, p, lower_better in rows_out:
-            delta = _fmt_delta(cur, p, better_when_lower=lower_better) if p else ""
+            if cur == "—":
+                print(f"  {name} —")
+                continue
+            delta = _fmt_delta(float(cur), p, better_when_lower=lower_better) if p else ""
             print(f"  {name} {cur}{delta}")
         print()
         prev = row

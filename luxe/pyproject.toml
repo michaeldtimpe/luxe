@@ -30,6 +30,14 @@ mlx = [
 evalplus = [
     "evalplus>=0.3.1",
 ]
+browser = [
+    # CDP client for the browser tool. Pure-Python, sync API,
+    # ~600 LOC. Optional because not every install needs JS-rendered
+    # web access — luxe's static `fetch_url` covers the common case.
+    # Headless Chrome itself must be installed separately
+    # (`brew install --cask google-chrome`).
+    "pychrome>=0.2.4",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",

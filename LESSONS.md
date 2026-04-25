@@ -668,3 +668,177 @@ Two things fell out of this:
 **Principle:** give observability a UX flag instead of conditional
 logging. Keep the persisted stream complete; let the viewer decide how
 much to show.
+
+---
+
+## The MLX engine itself wins, not the SSD cache
+
+Adopted oMLX in April 2026 expecting the SSD-paged KV cache to be the
+big win — that was the briefing's framing. The actual measurement said
+something different: oMLX's **mlx-lm engine** beats Ollama's vendored
+`llama.cpp` by **1.5×** on decode tok/s for every workload tested,
+*before* any cache or speculative-decoding configuration. Same Q4_K_M
+weights, same hardware (M1 Max 64 GB), same 30-task BFCL/HumanEval+
+sweep:
+
+| Model          | Ollama tok/s | oMLX tok/s | oMLX/Ollama |
+|----------------|-------------:|-----------:|------------:|
+| qwen2.5-coder-14b on HumanEval+ | 18.8 | **29.4** | 1.56× |
+| qwen2.5-32b-instruct on HumanEval+ | 8.0 | **12.3** | 1.54× |
+| qwen2.5-7b-instruct on decode_throughput | 32.2 | **49.4** | 1.53× |
+
+Pass rates are identical or slightly higher on oMLX. The migration
+playbook is just `endpoint: http://127.0.0.1:8000` plus
+`OMLX_API_KEY` set — no hyperparameter changes, no cache tuning.
+
+**Trade-off:** oMLX TTFT is ~60% slower than Ollama on the 32B model
+(2.2 s vs 1.4 s on HumanEval+). For agents that emit multi-paragraph
+outputs (`code`, `review`, `refactor`) the decode win dominates net
+wall time. For agents that emit one-shot snippets (`lookup`, the
+deterministic pre-router calls), the TTFT regression matters more —
+keep them on Ollama.
+
+**Principle:** measure the engine, not just the feature. The thing
+the marketing touted (SSD cache) was load-bearing for the adoption
+*decision* but turned out to be a footnote next to the unrelated
+engine-level perf delta.
+
+---
+
+## Cold/warm cache_benefit_ratio is meaningless against an SSD-paged cache
+
+The first version of `prefix_cache_decay`'s adoption gate compared
+`ttft_cold / ttft_warm` between backends. The intuition: a server with
+prefix caching should show a big ratio (cold first hit, fast warm
+subsequent hits); higher ratio = bigger cache win.
+
+Then I measured it on oMLX. The ratio collapsed to **~1.0×** —
+because oMLX's SSD-paged cache makes the supposedly-cold first
+request also hit a warm cache (it persists across processes, even
+across OS restarts). Meanwhile Ollama's in-memory cache showed a
+cold/warm ratio of **77×** because its first request actually was
+cold. The metric was telling me oMLX had *worse* prefix caching than
+Ollama, when in reality oMLX never goes cold in the first place.
+
+**Fix:** P3 now compares **absolute TTFT median** at 16k between
+backends (`omlx ≤ 50% × ollama`). The cold/warm ratio is still
+computed and surfaced as supplemental info — useful for *Ollama*
+where the cache is in-memory and process-bound, but useless as a
+gate against a persistent cache.
+
+**Principle:** the metric you reach for to measure a cache assumes
+the cache is invalidated between observations. If the cache survives
+your "reset," you're not measuring the cache, you're measuring the
+warm path twice.
+
+---
+
+## Speculative decoding is conditional, not a default
+
+Tested two implementations of draft-model speculative decoding on
+`qwen2.5-coder:14b` against baseline (HumanEval+, decode_throughput,
+prefix_cache_decay × 30 tasks each, 0.5B coder draft):
+
+| Workload | Output length | omlx +DFlash | llama-server +spec |
+|---|---|---|---|
+| decode_throughput (~1000 tok prose) | LONG | **1.64×** ✅ | 0.81× ❌ |
+| humaneval_plus (~50–100 tok code) | MEDIUM | 0.91× ❌ | **1.51×** ✅ |
+| prefix_cache_decay (~50 tok answers) | SHORT | 0.92× ≈ | 0.96× ≈ |
+
+Neither is a universal win, and the two implementations optimize for
+**opposite output-length regimes**. The reason is the per-request
+setup cost — drafting needs a small initial K/V scaffold, and that
+cost gets amortized across the decoded tokens. Long decodes amortize
+the setup; short decodes don't, and you go net-negative.
+
+DFlash's amortization curve is later — wins only on the 1000+ token
+range. llama-server's spec implementation pays its setup cost faster
+and hits the break-even point in the 50–100 tok range, which is the
+HumanEval+ shape. The "speculative decoding gives 2× decode" claim in
+the briefing assumed long outputs without saying so; the truth is
+shape-dependent and engine-dependent.
+
+**Practice:** spec decoding is per-agent / per-workload, not a
+backend-wide flag. Enable for `writing` (long-form prose) and `calc`
+(multi-step output); skip for `lookup` (one-shot answers) and `code`
+agents that emit short tool-call snippets.
+
+---
+
+## Bearer auth on `/v1/`, cookie auth on `/admin/api/`
+
+oMLX's `/v1/chat/completions` accepts an `Authorization: Bearer
+<key>` header — standard OpenAI-compat. Its `/admin/api/*` endpoints
+(used to configure DFlash, list models, trigger HF downloads) reject
+the same Bearer token with 401 and require a **session cookie**
+obtained by `POST /admin/api/login` with `{"api_key": "<key>"}`.
+
+This split isn't called out in the OpenAPI spec — the
+`securitySchemes` section only lists `HTTPBearer`. The first attempt
+at `omlx_configure_dflash.py` failed with a confusing 401 from the
+admin endpoint because the same key worked everywhere else.
+
+**Fix:** the admin client is a separate `httpx.Client` that does the
+login first and reuses the cookie jar. Keep it as a context manager
+so the cookie session is scoped to one CLI invocation.
+
+**Principle:** when one base URL serves both an OpenAI-compatible
+surface and a vendor-specific admin surface, assume the auth schemes
+diverge. Probe both before committing to a wiring.
+
+---
+
+## Adding a new tool name needs the Literal AND the agent runner
+
+The browser tool's first wiring shipped with `browse_navigate` /
+`browse_read` added to (a) `cli/tools/browser.py`, (b) `agents.yaml`'s
+tool list, and (c) the agent runners (`cli/agents/research.py` and
+`lookup.py`). It worked in isolation but broke `cli/registry.py:
+load_config()` with a Pydantic `literal_error` — the `ToolName`
+Literal type didn't include the new tool names, so config validation
+rejected every agent that listed them.
+
+The Literal exists deliberately: it catches typos in `agents.yaml` at
+load time rather than at first tool invocation. The cost is that
+adding a new tool requires touching four places, and the failure mode
+is a long Pydantic dump that doesn't immediately point at the missing
+Literal entry.
+
+**Principle:** when validation lives in a type rather than a runtime
+check, document the full add-a-tool checklist next to the type. The
+checklist for luxe:
+
+1. Implement the tool fn + `ToolDef` in `cli/tools/<name>.py`
+2. Add to `cli/registry.py:ToolName` Literal
+3. List in the relevant agent in `configs/agents.yaml`
+4. Import and merge `tool_defs` + `TOOL_FNS` in `cli/agents/<agent>.py`
+5. Update the agent's system prompt with usage guidance
+
+Skipping any one step has a different failure mode: missing the
+Literal kills config load entirely; missing the agent runner means
+the tool is registered in config but never available at dispatch.
+
+---
+
+## Cached benchmark slots are sticky — name them carefully
+
+`benchmarks/_common.py:run_benchmark()` skips task IDs already present
+in the JSONL log (it's resumable on purpose). That works fine for
+`--limit 30` re-runs of the *same* config — you pick up where you left
+off — but it silently no-ops when you re-run a sweep against the same
+`config_id` after changing the underlying backend setup.
+
+Hit this when configuring DFlash on the 14B coder: the second sweep
+(with DFlash on) wrote into `omlx_q4km/` — the same slot as the
+no-DFlash baseline — and the JSONL skipped every task. The DFlash
+measurements got mixed into the baseline file, the "comparison" was
+noise, and it took a re-run with `rm -rf <slot>` to recover.
+
+**Fix:** added `--config-suffix _dflash` to `run_ab_benchmark.py` so
+variant runs land in a distinct dir (`omlx_q4km_dflash/`) without
+polluting the baseline cache. The slot name is the identity — change
+ANY input that affects the measurement and you need a new slot.
+
+**Principle:** when a benchmark runner is resumable, the config
+identity has to encode every dimension of the experiment. A config
+suffix per variant beats a single bucket per backend.

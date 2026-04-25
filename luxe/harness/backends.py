@@ -16,7 +16,7 @@ from typing import Any, Literal
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-BackendKind = Literal["mlx", "llamacpp", "ollama"]
+BackendKind = Literal["mlx", "llamacpp", "ollama", "omlx"]
 
 
 @dataclass
@@ -85,6 +85,19 @@ class Backend:
     # per-subtask wall (15 min) so the wall check fires first
     # instead of a httpx ReadTimeout bubbling up.
     timeout_s: float = 1200.0
+    # Optional bearer token. Required by oMLX (which gates
+    # /v1/chat/completions on an API key); ignored by Ollama and the
+    # local llama-server defaults. Read from OMLX_API_KEY at
+    # construction time when kind="omlx" and not supplied explicitly.
+    api_key: str = ""
+
+    def __post_init__(self) -> None:
+        import os
+        if not self.api_key and self.kind == "omlx":
+            self.api_key = os.environ.get("OMLX_API_KEY", "")
+
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
     def client(self) -> httpx.Client:
         # Per-axis timeouts: short connect/write so a dead backend
@@ -95,7 +108,9 @@ class Backend:
             write=60.0,
             pool=30.0,
         )
-        return httpx.Client(base_url=self.base_url, timeout=timeout)
+        return httpx.Client(
+            base_url=self.base_url, timeout=timeout, headers=self._auth_headers()
+        )
 
     @retry(
         stop=stop_after_attempt(3),

@@ -29,6 +29,8 @@ ToolName = Literal[
     "web_search",
     "fetch_url",
     "fetch_urls",
+    "browse_navigate",
+    "browse_read",
     "draw_things_generate",
     "create_tool",
     "git_diff",

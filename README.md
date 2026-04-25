@@ -65,15 +65,34 @@ Fuller walkthrough in **`luxe/README.md`**.
   subtasks without redoing completed ones; `/tasks tail <id> -v` adds
   per-tool-call lines to the live event stream.
 - **Code intelligence**: `/review` and `/refactor` run on
-  `qwen2.5:32b-instruct` with a 10-tool static-analysis surface
+  `Qwen2.5-32B-Instruct-4bit` with a 10-tool static-analysis surface
   (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for
   Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language). Pre-
   flight repo survey sizes task wall + `num_ctx` per clone; a
   four-layer anti-fabrication check (shallow-retry → forced
   inspection → `file:line` citation verification → construct-
   presence verification) annotates suspect findings. `code` agent
-  stays on `qwen2.5-coder:14b-instruct` with the same analyzer
+  on `Qwen2.5-Coder-14B-Instruct-MLX-4bit` with the same analyzer
   tools — see AGENTS.md for the per-agent breakdown.
+- **Backend split**: as of 2026-04-24, `code` / `review` / `refactor`
+  serve through **oMLX** (port 8000, MLX-format weights) after an A/B
+  sweep showed +50–60% decode tok/s vs Ollama at parity HumanEval+
+  pass rate. `general` / `lookup` / `image` / `router` stay on Ollama
+  (low-leverage workloads where the migration adds operational cost
+  without measurable benefit). `writing` continues on `llama-server`
+  for Gemma 3's native tool-call format. See `LESSONS.md` for the
+  measurement methodology and the per-workload trade-offs (TTFT
+  regresses ~60% on 32B; decode dominates net wall time).
+- **Browser tool**: `research` and `lookup` agents can drive a real
+  headless Chrome via `browse_navigate` + `browse_read` (CDP, allowlist-
+  gated). Unblocks JS-rendered content where static `fetch_url` returns
+  empty. Read-only by design; `LUXE_BROWSER_ALLOWLIST` env var
+  overrides the default starter set. See `luxe/cli/README.md`.
+- **Bench-history metrics**: `bench_orchestrator.py` records per-task
+  `reads_per_edit` and `tool_loop_ratio`, plus a sliding-window
+  `composite_health` z-score that flags rows with `⚠ INFLECTION` when a
+  run diverges from the trailing 10-row baseline. Captures behavioral
+  drift the wall-time / token-count metrics can't see.
 
 ## Hardware target
 

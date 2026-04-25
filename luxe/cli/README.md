@@ -1,7 +1,7 @@
 # luxe — local multi-agent Claude-Code-alike
 
 A terminal REPL that takes a prompt, routes it to a specialist agent, and
-runs fully on your Mac via Ollama + llama.cpp + Draw Things. Nine
+runs fully on your Mac via Ollama + oMLX + llama.cpp + Draw Things. Nine
 specialists share a single router: **general**, **lookup**,
 **research**, **writing**, **code**, **image**, **review**,
 **refactor**, **calc**. A task orchestrator stitches specialists
@@ -14,29 +14,46 @@ questions, plan-preview, and context forwarding between subtasks.
 |---|---|---|---|
 | router | `qwen2.5:7b-instruct` | Ollama | Hands off to one specialist; up to 2 clarifying Qs |
 | general | `qwen2.5:7b-instruct` | Ollama | Concise chat, ~1–2 s typical |
-| lookup | `qwen2.5:7b-instruct` | Ollama | Single-snippet factual lookup (fast path before `research`) |
-| research | `qwen2.5:32b-instruct` | Ollama | DuckDuckGo + `trafilatura` extract, cited output; `fetch_urls` for parallel reads |
+| lookup | `qwen2.5:7b-instruct` | Ollama | Snippet-only factual lookup; browser tools as escape hatch |
+| research | `qwen2.5:32b-instruct` | Ollama | DuckDuckGo + `trafilatura` + browser fallback; `fetch_urls` for parallel reads |
 | writing | `gemma-3-27b-it` | **llama-server** | Served via `llama-server --jinja`; native `tool_code` blocks parsed inline |
-| code | `qwen2.5-coder:14b-instruct` | Ollama | Full tool surface; 32b variants had Ollama tool-use quirks |
+| **code** | `Qwen2.5-Coder-14B-Instruct-MLX-4bit` | **oMLX** (port 8000) | Full tool surface; migrated from Ollama 2026-04-24 (+56% decode, +6.7pp pass rate on HumanEval+) |
 | image | `qwen2.5:7b-instruct` (prompt expander) + Draw Things | Ollama + HTTP | Draw Things API on 7859 |
-| review | `qwen2.5:32b-instruct` | Ollama | Read-only code review with git context; driven by `/review <url>`. Orchestrator retries tool-shy agents, pre-runs canonical greps, and verifies every cited `file:line` exists before reporting |
-| refactor | `qwen2.5:32b-instruct` | Ollama | Read-only optimization suggestions with git context; driven by `/refactor <url>`. Same anti-fabrication guardrails as `review` |
-| calc | `qwen2.5:32b-instruct` | Ollama | Multi-step arithmetic; `create_tool` + library-matched tools for reusable formulas |
+| **review** | `Qwen2.5-32B-Instruct-4bit` | **oMLX** (port 8000) | Read-only code review with git context; migrated from Ollama 2026-04-24 (+54% decode, parity pass rate); see `LESSONS.md` |
+| **refactor** | `Qwen2.5-32B-Instruct-4bit` | **oMLX** (port 8000) | Read-only optimization with git context; same migration as `review` |
+| calc | `qwen2.5:32b-instruct` | Ollama | Multi-step arithmetic; `create_tool` + library-matched tools (DFlash candidate — see `LESSONS.md`) |
 
-Ollama hot-swaps, so only one Ollama-served model is resident at a time.
-`llama-server` for the writing agent stays resident (Gemma 3 27B Q4_K_M +
-KV cache ≈ 17–22 GB at 32–64K context).
+**Backend layout:** Ollama hot-swaps the small models (only one resident
+at a time). `oMLX` keeps `Qwen2.5-Coder-14B-Instruct-MLX-4bit` and
+`Qwen2.5-32B-Instruct-4bit` co-resident with LRU eviction (~26 GB
+combined). `llama-server` for the writing agent stays resident
+(Gemma 3 27B Q4_K_M + KV cache ≈ 17–22 GB at 32–64K context).
+
+Authentication: oMLX gates `/v1/*` on a Bearer token. Set
+`OMLX_API_KEY` in the shell that launches luxe. The `make_backend()`
+factory reads it at startup and forwards as `Authorization: Bearer …`
+on every request; Ollama and llama-server ignore the header
+harmlessly.
 
 ## Prereqs
 
 - macOS with Homebrew
-- `brew install ollama llama.cpp uv ripgrep`
+- `brew install ollama llama.cpp omlx uv ripgrep`
 - [Draw Things.app](https://drawthings.ai/) — enable **HTTP server** in
   the app's settings (default 7859 in newer versions; 7860 in older)
 - For research: no extra setup — DuckDuckGo runs in-process via `ddgs`
 - For writing: `llama-server` (comes with `llama.cpp`) serves Gemma 3
   27B with native function-call support; see **Starting llama-server**
   below
+- For code/review/refactor: oMLX serves the MLX-format weights at
+  `127.0.0.1:8000`. Start it as a brew service (`brew services start
+  omlx`), grab the API key from the admin dashboard at
+  `http://127.0.0.1:8000/admin`, and `export OMLX_API_KEY=omlx-…` in
+  the shell that launches luxe. Then pull the two coding models via
+  the dashboard's HF downloader (or POST `/admin/api/hf/download`):
+  `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` and
+  `mlx-community/Qwen2.5-32B-Instruct-4bit`. See `scripts/omlx_healthcheck.py`
+  to verify install + auth + models in one shot.
 
 ## Install
 
@@ -459,8 +476,8 @@ proves out.
 | Agent | Tools |
 |---|---|
 | general | — (chat only) |
-| lookup | `web_search` (snippets only — no fetch) |
-| research | `web_search`, `fetch_url`, `fetch_urls` (parallel, up to 4 URLs) |
+| lookup | `web_search` + `browse_navigate`/`browse_read` (browser is rare escape hatch) |
+| research | `web_search`, `fetch_url`, `fetch_urls` (parallel, up to 4 URLs), `browse_navigate`, `browse_read` |
 | writing | `read_file`, `list_dir`, `glob`, `grep`, `write_file`, `edit_file` — scoped to cwd |
 | image | `draw_things_generate` |
 | code | fs (read/write/edit) + `glob`/`grep`/`list_dir` + `bash` (allowlist) + `fetch_url` + 10 analyzers (see above) |
@@ -478,6 +495,49 @@ alternation.
 
 Code agent's bash allowlist: `cargo pytest go python python3 rustc
 node npm pnpm yarn git ls pwd cat head tail echo wc`.
+
+## Browser tool (research / lookup)
+
+The `browse_navigate` + `browse_read` tools drive a real headless Chrome
+via the Chrome DevTools Protocol (`pychrome`). They unblock JS-rendered
+content (SPAs, dashboards, paginated docs) where the static `fetch_url`
+returns an empty skeleton.
+
+**Install:**
+
+```bash
+brew install --cask google-chrome     # or your distro's chromium
+uv pip install -e '.[browser]'        # adds pychrome
+```
+
+Chrome launches lazily on first call (headless, port 9222) and shuts
+down at process exit.
+
+**Allowlist (mirrors the bash allowlist shape).** Default starter set
+is in `cli/tools/browser.py:DEFAULT_BROWSER_ALLOWLIST` —
+`github.com`, `*.github.com`, `developer.mozilla.org`, `docs.python.org`,
+`pypi.org`, `stackoverflow.com`, `*.stackexchange.com`,
+`wikipedia.org`, `*.wikipedia.org`, `readthedocs.io`,
+`*.readthedocs.io`. Override per-environment via env var (comma-
+separated `fnmatch` patterns):
+
+```bash
+export LUXE_BROWSER_ALLOWLIST="github.com,*.github.com,my-internal.dev"
+```
+
+Disallowed hosts return `[denied] host '<x>' not in browser allowlist`
+without launching Chrome.
+
+**Disable entirely.** Remove the `browse_navigate` / `browse_read`
+entries from the relevant agents in `configs/agents.yaml`, and drop the
+`browser` import + tool merge from `cli/agents/research.py` and
+`cli/agents/lookup.py`. Or simply set `LUXE_BROWSER_ALLOWLIST=""` to
+deny every host (the tools remain registered but every call fails
+fast).
+
+**v1 surface is read-only.** No click, no fill, no screenshot — those
+expand the permissions surface and aren't needed for the
+read-content-from-rendered-page use case that motivates the tool.
 
 ## Swapping models
 

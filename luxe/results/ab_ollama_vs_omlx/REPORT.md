@@ -1,0 +1,18 @@
+# A/B benchmark — `ollama_q4km` vs `omlx_q4km`
+## Per-candidate verdicts
+- **qwen2.5-32b-instruct** — TTFT favors `ollama_q4km`, decode tok/s favors `omlx_q4km`
+- **qwen2.5-7b-instruct** — TTFT favors `omlx_q4km`, decode tok/s favors `tie`
+- **qwen2.5-coder-14b** — `omlx_q4km` wins on both TTFT and decode tok/s
+
+## Detail (Δ% rows: TTFT lower-is-better; decode higher-is-better)
+
+| benchmark | candidate | decode_delta_pct | n | ollama_q4km_decode_tok_s | ollama_q4km_pass_pct | ollama_q4km_peak_rss_gb | ollama_q4km_ttft_s | omlx_q4km_decode_tok_s | omlx_q4km_pass_pct | omlx_q4km_peak_rss_gb | omlx_q4km_ttft_s | ttft_delta_pct |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| decode_throughput | qwen2.5-32b-instruct | +50% | 3 | 7.4 | 100.0 | 22.67 | 18.25 | 11.1 | 66.67 | 1.57 | 24.645 | +35% |
+| humaneval_plus | qwen2.5-32b-instruct | +55% | 30 | 8.0 | 96.67 | 22.69 | 1.551 | 12.4 | 95.0 | 1.57 | 2.178 | +40% |
+| decode_throughput | qwen2.5-7b-instruct | +62% | 3 | 32.2 | 100.0 | 17.13 | 3.797 | 52.2 | 100.0 | 14.35 | 0.369 | -90% |
+| humaneval_plus | qwen2.5-7b-instruct | -36% | 30 | 39.8 | 88.33 | 5.53 | 0.404 | 25.4 | 83.33 | 14.35 | 0.694 | +72% |
+| prefix_cache_decay | qwen2.5-7b-instruct | -36% | 30 | 24.7 | 100.0 | 17.39 | 5.324 | 15.7 | 100.0 | 15.62 | 0.686 | -87% |
+| decode_throughput | qwen2.5-coder-14b | -6% | 3 | 17.0 | 100.0 | 11.75 | 7.712 | 16.0 | 100.0 | 15.62 | 0.612 | -92% |
+| humaneval_plus | qwen2.5-coder-14b | +54% | 30 | 19.2 | 86.67 | 11.87 | 0.709 | 29.7 | 91.67 | 15.62 | 1.031 | +46% |
+| prefix_cache_decay | qwen2.5-coder-14b | +78% | 30 | 11.6 | 100.0 | 17.16 | 11.855 | 20.6 | 100.0 | 18.68 | 1.227 | -90% |

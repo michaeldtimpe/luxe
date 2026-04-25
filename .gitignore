@@ -47,6 +47,14 @@ luxe-images/
 # Local session history
 .luxe/
 
+# Claude Code local state (settings, plan files, scheduled-task locks)
+.claude/
+
+# Stray results dir created when scripts are run from inside scripts/
+# instead of from the project root. The real outputs live in
+# luxe/results/runs/ and luxe/results/server_logs/.
+luxe/scripts/results/
+
 # Uv / pip local state
 .uv/
 

@@ -94,17 +94,54 @@ def installed_by_family(models: list[str]) -> dict[str, set[str]]:
     return out
 
 
+# Known endpoints for the supported externally-managed backends. Used
+# by LUXE_BACKEND_OVERRIDE so a Phase 4 orchestrator run can be
+# redirected at oMLX or llama-server without editing agents.yaml.
+# Override either by setting LUXE_BACKEND_OVERRIDE=<kind>, or by
+# pointing LUXE_BACKEND_OVERRIDE_URL=http://127.0.0.1:<port> directly.
+_BACKEND_OVERRIDE_URLS: dict[str, str] = {
+    "ollama": "http://127.0.0.1:11434",
+    "llamacpp": "http://127.0.0.1:8088",
+    "omlx": "http://127.0.0.1:8000",
+}
+
+
+def _resolve_override(default_base_url: str) -> str:
+    """Honor LUXE_BACKEND_OVERRIDE_URL (full URL) first, then
+    LUXE_BACKEND_OVERRIDE (named kind). Unknown kind names fall through
+    to the caller-supplied default rather than raising — the caller's
+    invocation should still work even with a malformed env var."""
+    explicit = os.environ.get("LUXE_BACKEND_OVERRIDE_URL", "").strip()
+    if explicit:
+        return explicit
+    kind = os.environ.get("LUXE_BACKEND_OVERRIDE", "").strip().lower()
+    if kind and kind in _BACKEND_OVERRIDE_URLS:
+        return _BACKEND_OVERRIDE_URLS[kind]
+    return default_base_url
+
+
 def make_backend(model: str, base_url: str = "http://127.0.0.1:11434") -> Backend:
     # harness.backends.Backend posts to "/v1/chat/completions", so the
     # base_url must NOT include the /v1 suffix itself.
     #
     # `kind="mlx"` looks wrong when the default target is Ollama — it
     # isn't. `kind` is a label the harness uses for metrics/config
-    # routing, not a transport selector. Both MLX and Ollama expose
-    # OpenAI-compat endpoints, so the same Backend client drives both.
-    # Every caller in luxe uses this for Ollama; `kind` stays "mlx" for
-    # continuity with the harness's benchmark logging.
-    return Backend(kind="mlx", base_url=base_url, model_id=model, timeout_s=600.0)
+    # routing, not a transport selector. Ollama, MLX, llama-server, and
+    # oMLX all expose OpenAI-compat endpoints, so the same Backend
+    # client drives all four. `kind` stays "mlx" for continuity with the
+    # harness's benchmark logging.
+    #
+    # OMLX_API_KEY is forwarded as a Bearer token whenever set. Ollama
+    # and llama-server ignore unrecognized Authorization headers, so
+    # passing it unconditionally is safe — and necessary when the
+    # per-agent endpoint points at oMLX (which gates /v1/* on the key).
+    return Backend(
+        kind="mlx",
+        base_url=_resolve_override(base_url),
+        model_id=model,
+        timeout_s=600.0,
+        api_key=os.environ.get("OMLX_API_KEY", ""),
+    )
 
 
 def ping(base_url: str = "http://127.0.0.1:11434") -> bool:

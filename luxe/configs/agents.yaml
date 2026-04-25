@@ -52,7 +52,7 @@ agents:
     max_steps: 3
     max_tokens_per_turn: 1024
     max_wall_s: 60.0
-    tools: [web_search]
+    tools: [web_search, browse_navigate, browse_read]
     enabled: true
     system_prompt: |
       You are the quick-lookup agent inside luxe. You answer one-
@@ -64,11 +64,19 @@ agents:
       2. Read the returned snippets. If the specific fact the user
          asked for appears in a snippet, answer directly with [n]
          citations.
-      3. You do NOT have fetch_url. You cannot read full pages. If
-         the snippets don't contain the answer, say exactly:
-         "Snippets don't contain a specific answer; use /research
-         for deeper verification." Do not guess.
-      4. Answer format: one or two sentences with inline [n] markers,
+      3. You do NOT have fetch_url. You cannot read full pages from
+         a static HTTP fetch. If the snippets don't contain the
+         answer, prefer to say exactly: "Snippets don't contain a
+         specific answer; use /research for deeper verification."
+         Do not guess.
+      4. Browser escape hatch (rare): if the answer is on a
+         JS-rendered page (a SPA, a versioned doc viewer) and the
+         snippet truly cannot ground it, you MAY call
+         `browse_navigate` then `browse_read` — but only once per
+         question, and only if the URL host is on the browser
+         allowlist (you'll see [denied] otherwise). Most lookups
+         should not need this.
+      5. Answer format: one or two sentences with inline [n] markers,
          then a numbered source list with full URLs. No preamble.
 
       Do NOT call web_search more than twice. This agent is the
@@ -82,12 +90,12 @@ agents:
     max_steps: 10
     max_tokens_per_turn: 4096
     max_wall_s: 300.0
-    tools: [web_search, fetch_url, fetch_urls]
+    tools: [web_search, fetch_url, fetch_urls, browse_navigate, browse_read]
     enabled: true
     system_prompt: |
       You are the deep-research agent inside luxe. You answer questions
       thoroughly using live web data via the `web_search`, `fetch_url`,
-      and `fetch_urls` tools.
+      `fetch_urls`, `browse_navigate`, and `browse_read` tools.
 
       Protocol:
       1. Start with `web_search` to find relevant pages for any non-trivial
@@ -103,6 +111,13 @@ agents:
          when snippets only say "version X or later"), or (c) the
          question asks for an explanation/rationale/comparison that
          requires page-length context.
+      3a. JS-rendered pages: if `fetch_url` returns empty / skeletal
+         text on a page that obviously has content (a docs SPA, a
+         dashboard, a paginated app), call `browse_navigate` followed
+         by `browse_read` to get the rendered DOM. Browser tools are
+         allowlist-gated — you'll see [denied] for hosts not on the
+         list, in which case fall back to `web_search` + snippet
+         answer. Do not retry a denied host with a different path.
       4. Synthesize an answer that:
          - Starts with the direct answer, no preamble.
          - Supports each factual claim with inline [n] citations.
@@ -223,13 +238,21 @@ agents:
 
   - name: code
     display: "Coding (full tool surface)"
-    # Phase 6 selection: 14b was the only qwen2.5-coder variant that stayed
-    # stable on Ollama's tool-use flow. 32b/32b-8k hit timeouts or chat
-    # template leakage. For comparison runs, use `--model <alt>` on the
-    # CLI (analyze / REPL). Known-good alternatives tested earlier:
+    # 2026-04-24: migrated from Ollama → oMLX after AB sweep showed 1.56×
+    # decode tok/s (29.4 vs 18.8 on HumanEval+) AND a higher pass rate
+    # (90.0% vs 83.3%). oMLX's MLX-engine win is structural — present even
+    # without DFlash. DFlash itself is conditional (wins on long outputs,
+    # regresses on short ones) so leaving it OFF for the code agent which
+    # generates mixed-length output. See results/ab_ollama_vs_omlx for
+    # the underlying data.
+    #
+    # Pre-migration history: 14b was the only qwen2.5-coder variant that
+    # stayed stable on Ollama's tool-use flow. 32b/32b-8k hit timeouts or
+    # chat template leakage. Known-good alternatives tested earlier:
     #   - llama3.3-70b-4k:latest   (slower, clean tool use)
     #   - command-r:35b            (fast, clean tool use)
-    model: "qwen2.5-coder:14b-instruct"
+    model: "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 30
     max_tokens_per_turn: 4096
@@ -360,13 +383,22 @@ agents:
 
   - name: review
     display: "Code review (read-only)"
+    # 2026-04-24: migrated from Ollama → oMLX after AB sweep showed
+    # 1.54× decode tok/s (12.30 vs 7.99 on HumanEval+) AND identical
+    # pass rate (93.3% both). Trade-off: TTFT is ~60% slower on oMLX
+    # than Ollama for this model (2.24s vs 1.40s) — matters for short
+    # interactive turns but the decode win dominates over the multi-
+    # paragraph findings this agent generates per subtask. See
+    # results/runs/ab_ollama_vs_omlx/qwen2.5-32b-instruct/ for data.
+    #
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct — the 14b
     # coder was fabricating findings (quoted SQL that didn't exist in
     # the file, refused to use tools on 4/6 inspection subtasks). This
     # agent reasons over code rather than writing it, so general-instruct
     # is a better fit; the 32b variant is the one `research` and `calc`
     # use, so tool-use stability is already validated.
-    model: "qwen2.5:32b-instruct"
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
@@ -511,10 +543,15 @@ agents:
 
   - name: refactor
     display: "Refactor / optimization (read-only)"
+    # 2026-04-24: migrated from Ollama → oMLX alongside `review` — same
+    # underlying model + same workload shape, so the 1.54× decode win
+    # measured on review applies here too.
+    #
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct for the same
     # reason as `review` — this agent reads and reasons, never writes,
     # so general-instruct 32b is a better fit than the coder 14b.
-    model: "qwen2.5:32b-instruct"
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
