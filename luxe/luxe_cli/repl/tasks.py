@@ -194,7 +194,8 @@ def _tasks_tail(
     `prompt_tokens` / `completion_tokens` / `wall_s` into the REPL
     session totals as `end` events arrive (each subtask counts as one
     turn). A snapshot of `ctx` + `session totals` is printed under the
-    `following …` header and again on task finish.
+    `following …` header, after each completed subtask, and once more
+    on task finish.
     """
     import json as _json
     import time as _time
@@ -203,6 +204,23 @@ def _tasks_tail(
     if task is None:
         return
     log_path = task.dir() / "log.jsonl"
+
+    # Cold-start fix: if no foreground turn has populated state.last_model
+    # yet, fall back to the planned agent's model from the task itself so
+    # the initial snapshot shows the right ctx capacity instead of
+    # `0/0 (100% free) · (unknown)`.
+    if state is not None and cfg is not None and not state.last_model:
+        first_agent = next(
+            (s.agent for s in task.subtasks if getattr(s, "agent", "")),
+            "",
+        )
+        if first_agent:
+            try:
+                ag = cfg.get(first_agent)
+                state.last_model = ag.model
+                state.last_endpoint = cfg.resolve_endpoint(ag)
+            except Exception:  # noqa: BLE001
+                pass
 
     mode = " [dim](verbose)[/dim]" if verbose else ""
     console.print(
@@ -213,6 +231,7 @@ def _tasks_tail(
         _render_tail_totals(state, cfg)
 
     seen_subtasks: set[str] = set()
+    in_live_tail = False  # set True after disk replay; gates per-end re-render
 
     def _process_event(event: dict) -> None:
         _sync_event_printer(event, verbose=verbose)
@@ -244,6 +263,11 @@ def _tasks_tail(
             state.turns += 1
             if pt:
                 state.last_ctx_used = int(pt)
+            # Live re-render: skip during the disk-replay pass to avoid
+            # printing a stale snapshot per historical event; only the
+            # post-replay + post-each-end-during-live path is useful.
+            if in_live_tail:
+                _render_tail_totals(state, cfg)
 
     # Replay what's already on disk first so the user sees current state.
     if log_path.exists():
@@ -253,12 +277,18 @@ def _tasks_tail(
             except _json.JSONDecodeError:
                 continue
 
+    # Render once after the replay pass so resumed tails show the
+    # accumulated totals at the point of attachment, then flip the
+    # live-tail flag so subsequent end events trigger per-subtask
+    # re-renders.
+    if state is not None and cfg is not None and seen_subtasks:
+        _render_tail_totals(state, cfg)
+    in_live_tail = True
+
     # Early exit if the task is already finished.
     from luxe_cli.tasks import load as _load_task
     latest = _load_task(task.id)
     if latest and latest.finished():
-        if state is not None and cfg is not None:
-            _render_tail_totals(state, cfg)
         return
 
     # Incremental tail: reopen file on each poll, seek past what we've seen.
@@ -283,8 +313,8 @@ def _tasks_tail(
                     except _json.JSONDecodeError:
                         continue
             if latest and latest.finished():
-                if state is not None and cfg is not None:
-                    _render_tail_totals(state, cfg)
+                # Per-end render in _process_event already covered the
+                # final subtask's totals; no extra snapshot needed here.
                 return
             # Subprocess died without writing 'finish' → give up politely.
             if latest and latest.pid and not latest.is_alive() and not latest.finished():
@@ -292,6 +322,8 @@ def _tasks_tail(
                 return
     except KeyboardInterrupt:
         console.print("[dim]stopped watching[/dim]")
+        # User aborted mid-subtask — last render may be stale, so emit
+        # one more reflecting whatever's been folded in so far.
         if state is not None and cfg is not None:
             _render_tail_totals(state, cfg)
 
