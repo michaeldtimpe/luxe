@@ -8,9 +8,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 def _slug(text: str, limit: int = 40) -> str:
@@ -22,6 +23,11 @@ def _slug(text: str, limit: int = 40) -> str:
 class Session:
     path: Path
     session_id: str
+    # Active provider/base_url injected into every append() call inside a
+    # bind_backend() context. Keeps router.py and agents/base.py from
+    # having to plumb backend metadata through 15+ append callsites.
+    _backend_kind: str | None = field(default=None, repr=False)
+    _backend_url: str | None = field(default=None, repr=False)
 
     @classmethod
     def new(cls, root: Path, first_prompt: str = "") -> Session:
@@ -35,8 +41,28 @@ class Session:
     def load(cls, path: Path) -> Session:
         return cls(path=path, session_id=path.stem)
 
+    @contextmanager
+    def bind_backend(self, kind: str, base_url: str) -> Iterator[None]:
+        """Tag every append() inside this block with provider + base_url.
+
+        Nested binds restore the outer values on exit, so a sub-agent
+        running on a different backend doesn't bleed metadata into its
+        parent's events.
+        """
+        old_kind, old_url = self._backend_kind, self._backend_url
+        self._backend_kind, self._backend_url = kind, base_url
+        try:
+            yield
+        finally:
+            self._backend_kind, self._backend_url = old_kind, old_url
+
     def append(self, event: dict[str, Any]) -> None:
         event = {"ts": dt.datetime.now().isoformat(timespec="seconds"), **event}
+        # Don't overwrite explicit values in the event — caller intent wins.
+        if self._backend_kind and "provider" not in event:
+            event["provider"] = self._backend_kind
+        if self._backend_url and "base_url" not in event:
+            event["base_url"] = self._backend_url
         with self.path.open("a") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
 

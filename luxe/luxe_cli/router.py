@@ -176,6 +176,14 @@ def route(
         router_cfg.model, base_url=cfg.resolve_endpoint(router_cfg)
     )
 
+    # Tag every session.append() in this router run with the backend
+    # serving the routing call. Caller's bind_backend (e.g. dispatch)
+    # restores its own tag in its own finally; the router's tag only
+    # lives for the routing turn itself.
+    if session:
+        session._backend_kind = backend.kind
+        session._backend_url = backend.base_url
+
     tools = _build_tools(enabled)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _system_prompt(cfg)},

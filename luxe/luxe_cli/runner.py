@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from luxe_cli import prefs
 from luxe_cli.agents import (
     calc, code, general, image, lookup, refactor, research, review, writing,
@@ -65,18 +67,24 @@ def dispatch(
     endpoint = cfg.resolve_endpoint(agent_cfg)
     backend = make_backend(agent_cfg.model, base_url=endpoint)
     runner = _SPECIALISTS[decision.agent]
-    # Task-scoped memoization is only meaningful for agents that dispatch
-    # multiple read-only tool calls within one Task. Pass the cache only
-    # to those; the rest keep their simpler signatures.
-    if decision.agent in ("review", "refactor", "code") and tool_cache is not None:
+    bind = (
+        session.bind_backend(backend.kind, backend.base_url)
+        if session
+        else nullcontext()
+    )
+    with bind:
+        # Task-scoped memoization is only meaningful for agents that dispatch
+        # multiple read-only tool calls within one Task. Pass the cache only
+        # to those; the rest keep their simpler signatures.
+        if decision.agent in ("review", "refactor", "code") and tool_cache is not None:
+            return runner(
+                backend, agent_cfg,
+                task=decision.task, session=session,
+                on_tool_event=on_tool_event,
+                tool_cache=tool_cache,
+            )
         return runner(
             backend, agent_cfg,
             task=decision.task, session=session,
             on_tool_event=on_tool_event,
-            tool_cache=tool_cache,
         )
-    return runner(
-        backend, agent_cfg,
-        task=decision.task, session=session,
-        on_tool_event=on_tool_event,
-    )
