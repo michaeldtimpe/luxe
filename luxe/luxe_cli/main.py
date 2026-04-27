@@ -17,6 +17,7 @@ load_secrets()
 from luxe_cli import repl  # noqa: E402
 from luxe_cli.registry import load_config  # noqa: E402
 from luxe_cli.session import Session, latest_session, list_sessions  # noqa: E402
+from luxe_cli.venv_check import warn_if_venv_mismatch  # noqa: E402
 
 app = typer.Typer(add_completion=False, invoke_without_command=True, no_args_is_help=False)
 console = Console()
@@ -31,6 +32,9 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
     cfg = load_config()
+    venv_warning = warn_if_venv_mismatch()
+    if venv_warning:
+        console.print(f"[yellow][!] {venv_warning}[/yellow]")
     warning = warn_missing_omlx_key(cfg)
     if warning:
         console.print(f"[yellow][!] {warning}[/yellow]")

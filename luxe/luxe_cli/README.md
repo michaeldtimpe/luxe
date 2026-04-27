@@ -571,6 +571,23 @@ that `ollama list` shows is valid. Per-agent HTTP endpoint overrides
 (`endpoint: http://127.0.0.1:8080`) let a single agent point at
 llama-server while the rest stay on Ollama.
 
+## Working from another venv
+
+Activate any project venv before invoking `luxe` — the REPL banner
+prints a one-line warning if your active `$VIRTUAL_ENV` is missing
+luxe's runtime deps, with the exact command to install luxe into it:
+
+```
+[!] active venv (/path/to/your/.venv) is missing: httpx, pydantic, ...
+    To unify: cd /path/to/luxe && uv pip install -e .
+    (silence: export LUXE_NO_VENV_CHECK=1)
+```
+
+If your venv already has luxe's deps (or is the one luxe was
+installed into) the check stays silent. Subprocess tools
+(`lint`, `typecheck`, etc.) always pick up the active venv's
+binaries via PATH regardless of where luxe's Python lives.
+
 ## Provider migration (Ollama / oMLX / LM Studio)
 
 `agents.yaml` declares a top-level `providers:` map naming each
