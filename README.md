@@ -68,7 +68,12 @@ Fuller walkthrough in **`luxe/README.md`**.
   subtasks without redoing completed ones; `/tasks tail <id> -v` adds
   per-tool-call lines to the live event stream.
 - **Code intelligence**: `/review` and `/refactor` run on
-  `Qwen2.5-32B-Instruct-4bit` with a 10-tool static-analysis surface
+  `Qwen3-30B-A3B-Instruct-2507-4bit` (MoE, 3B active per token —
+  swapped 2026-04-27 from Qwen2.5-32B after a real `/review` ran in
+  9 min vs 57 min with much less fabrication; see LESSONS.md). The
+  same MoE was tried on `/research` and `/calc` and reverted same-
+  day — those agents need aggressive tool use, which the MoE Instruct
+  silently skips. Static-analysis surface is unchanged: 10 tools
   (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for
   Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language).
   Pre-flight repo survey sizes the task wall per clone (`num_ctx` is
@@ -78,15 +83,18 @@ Fuller walkthrough in **`luxe/README.md`**.
   presence verification) annotates suspect findings. `code` agent
   on `Qwen2.5-Coder-14B-Instruct-MLX-4bit` with the same analyzer
   tools — see AGENTS.md for the per-agent breakdown.
-- **Backend split**: as of 2026-04-24, `code` / `review` / `refactor`
-  serve through **oMLX** (port 8000, MLX-format weights) after an A/B
-  sweep showed +50–60% decode tok/s vs Ollama at parity-or-better
-  HumanEval+ pass rate. `general` / `lookup` / `image` / `router`
-  stay on Ollama (low-leverage workloads). `writing` continues on
-  `llama-server` for Gemma 3's native tool-call format. See
+- **Backend split**: as of 2026-04-27 every agent serves through
+  **oMLX** (port 8000, MLX-format weights). Initial migration
+  2026-04-24 moved `code` / `review` / `refactor` after a sweep
+  showed +50–60% decode tok/s vs Ollama at parity-or-better
+  HumanEval+ pass rate; the rest followed three days later. `writing`
+  uses Gemma 3 27B served via oMLX (still requires the
+  `tool_code` prelude in the writing agent prompt — Gemma's chat
+  template doesn't render the OpenAI `tools=` parameter). See
   `LESSONS.md` for the measurement methodology — including the
-  premature-rollback episode that taught us to re-run the same-
-  session A/B before reversing a migration.
+  premature-rollback episode and the 2026-04-27 asymmetric-MoE
+  finding (Qwen3-30B-A3B Instruct wins read-and-reason agents,
+  breaks tool-required ones).
 - **Browser tool**: `research` and `lookup` agents can drive a real
   headless Chrome via `browse_navigate` + `browse_read` (CDP, allowlist-
   gated). Unblocks JS-rendered content where static `fetch_url` returns

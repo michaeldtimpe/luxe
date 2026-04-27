@@ -908,3 +908,88 @@ trusting a migration call. See `benchmarks/prefix_cache_decay.py`
 for the 4k/16k/32k slicing — extend that pattern to
 `humaneval_plus_long_prefix` for the next backend swap. And don't
 let one data point unwind a migration the benchmark earned.
+
+---
+
+## A model swap is per-role, not per-stack — MoE Instruct-2507 wins read-and-reason, breaks tool-required
+
+Phase 2 of the Qwen2.5 → Qwen3 evaluation (2026-04-27) showed
+`mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit` as a clear win on the
+combined decode + HumanEval+ benchmark vs incumbent `Qwen2.5-32B-
+Instruct`:
+
+- **+137% decode tok/s** (25.1 vs 10.6) — MoE keeps active params at ~3B
+- **2.1× faster** mean wall on humaneval_plus n=20 (3.7s vs 7.9s)
+- **95% vs 100%** pass rate at n=20 (one task different — sampling noise)
+- **No `<think>` block pollution**: the `-Instruct-2507` checkpoint is
+  the non-thinking variant. The base `Qwen3-32B` and `Qwen3-8B`
+  checkpoints emit `<think>...</think>` reasoning blocks by default,
+  which inflates wall time 16-22× and drops accuracy 10–15pp because
+  the harness measures TTFT to first non-think token. Always sniff
+  for `<think>` tags before benchmarking a Qwen3 checkpoint; prefer
+  `-Instruct-2507`, `-Coder-*`, or any variant explicitly documented
+  as non-thinking.
+
+I swapped all four 32B-class agents (research, calc, review, refactor)
+to the new MoE based on this. Real-world testing surfaced the
+asymmetry the benchmarks missed:
+
+**`/review elara`** (MoE win, kept):
+- old Qwen2.5-32B run: **57m wall**, fabricated 30+ identical "Missing
+  error handling for `json.loads`" findings at evenly-spaced fake line
+  numbers (411, 421, 431, … 831)
+- new MoE run: **9m wall**, severity-grouped report with real lint-
+  grounded complexity findings, ~5 substantive issues vs ~50 padded ones
+
+**`/research`** (MoE regression, reverted):
+- two queries (immigration pathways, Bolt EV Cannonball) made **0 tool
+  calls** each. The model answered from training data with fabricated
+  `[1]–[n]` citations to plausible-but-invented source titles. One
+  factual error: "Bolt EV 60 kWh / 150 kW" (real spec is 65 kWh / ~55 kW).
+
+The MoE's lighter tool aggression matches the Phase 1 smoke-test
+observation about `Qwen3-Coder-30B-A3B`: when given an optional tool
+and a question answerable from training data, it answers without
+calling. That behavior is **fine** for review/refactor (read-and-
+reason; tool calls are sparse on purpose) and **production-breaking**
+for research (silent fake citations) and calc (skips mandatory
+`create_tool` for reusable computations).
+
+**Lessons:**
+
+1. **HumanEval+ doesn't predict tool aggression.** It's a single-shot
+   coding benchmark; it doesn't probe whether the model calls
+   `web_search` when offered. The agent's expected tool-use density
+   has to be benchmarked separately (e.g. luxe_replay or a tool-call
+   probe like the one in `/tmp/luxe-qwen3-pull/smoke.py`).
+
+2. **A clean win on pass rate + wall time is not enough to migrate
+   tool-required agents.** Add: "did the model use the tools the
+   system prompt requires?" as a non-negotiable signal before
+   swapping any agent that depends on `web_search` / `fetch_url` /
+   `create_tool` / etc.
+
+3. **Roles cluster by tool-use shape, not by base model class.** It
+   was tempting to treat research/calc/review/refactor as a unit
+   because they shared the same incumbent. They don't share the same
+   tool-use profile — review/refactor barely call tools beyond
+   `read_file`/`grep`, while research and calc fail without web/tool
+   calls. Always evaluate per-role.
+
+4. **Same-day partial revert is fine.** A migration is a hypothesis;
+   live use is the test; reverting half the agents the same day is
+   the right answer when the data splits. The `LESSONS.md` rule
+   "don't let one data point unwind a migration the benchmark earned"
+   still holds for the wins (review/refactor stayed swapped) — but
+   it doesn't override evidence of *correctness* failure (research
+   fabricating citations). Speed regressions need a benchmark run;
+   correctness regressions need a revert.
+
+5. **Smoke-test the bug pattern before benchmarking the speed.** The
+   Phase 1 5-task tool-call probe caught Qwen3-Coder-30B-A3B's tool-
+   shyness against an *optional* tool. I noted it as a behavioral
+   curiosity rather than a blocker, then watched the same pathology
+   take down `/research` two hours later. Next time, treat any
+   smoke-test "0 tool calls" as a *fail* for any role whose system
+   prompt mandates tool use, regardless of how the speed numbers
+   look.
