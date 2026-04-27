@@ -11,11 +11,13 @@
 |---|---|---|---|
 | router/general/lookup/image | Qwen2.5-7B-Instruct | Qwen3-8B | **HOLD** — accuracy regression + thinking mode |
 | code | Qwen2.5-Coder-14B-Instruct | Qwen3-Coder-30B-A3B-Instruct (MoE) | **HOLD** — n=20 too small; ~10pp gap |
-| review / refactor | Qwen2.5-32B-Instruct | Qwen3-30B-A3B-Instruct-2507 (MoE) | **SWAP** — 6× faster on a real `/review` (9m vs 57m), much less fabrication |
-| research / calc | Qwen2.5-32B-Instruct | (none) | **NO SWAP** — Qwen3-30B-A3B-Instruct-2507 silently skips tool calls and fabricates citations; production-breaking for tool-required agents |
+| review / refactor | Qwen2.5-32B-Instruct | Qwen3-30B-A3B-Instruct-2507 (MoE) | **NO SWAP** — won on a small Python repo (9m vs 57m, less fabrication) but produced 58 unverified file:line citations on a larger JS repo and exhausted the step budget |
+| research / calc | Qwen2.5-32B-Instruct | (none) | **NO SWAP** — Qwen3-30B-A3B-Instruct-2507 silently skips tool calls and fabricates citations |
 | writing | gemma-3-27b-it | (Qwen3.6 excluded this round) | no change |
 
-**Update (live test, 2026-04-27 17:40):** Initial swap moved all four reasoning agents (research/calc/review/refactor) to the MoE. Live `/research` runs on the user's machine showed 0 tool calls per query — the model answered from training data with fabricated `[1]–[n]` citations (e.g. "Immigration, Refugees and Citizenship Canada — Permanent Residence" with no URL; Bolt EV "60 kWh / 150 kW" when real spec is 65 kWh / ~55 kW). Same model on `/review elara` produced a clean 9-min report vs the prior 57-min Qwen2.5-32B run with 30+ duplicated `json.loads` findings. Conclusion: **swap helps the read-and-reason agents, hurts the tool-required agents**. Partial revert applied to research/calc.
+**Final outcome (2026-04-27, end-of-day):** All four 32B-class agents (research/calc/review/refactor) ended the day on `Qwen2.5-32B-Instruct-4bit`. The Qwen3-30B-A3B-Instruct-2507 MoE was tried twice — first on all four (reverted research/calc the same morning after live `/research` runs made 0 tool calls and fabricated citations), then on review/refactor only (reverted the same evening after `/review neon-rain` produced 58 unverified file:line citations across 5 subtasks and hit the 20-step budget).
+
+**Lesson:** the MoE looks fine on benchmarks (HumanEval+ n=20, decode_throughput) and on small real-world repos (`elara`, 7.7k LOC), but degrades on long accumulated tool-call context (≥100k cumulative prompt tokens per subtask). The synthetic benchmarks don't probe that regime. Any future per-role swap evaluation needs at least one large-repo `/review` smoke test before declaring the migration done — see LESSONS.md "One repo isn't a measurement either".
 
 ## Decode throughput (oMLX, 4-bit, 3-prompt sweep)
 

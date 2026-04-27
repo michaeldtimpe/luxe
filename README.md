@@ -68,14 +68,14 @@ Fuller walkthrough in **`luxe/README.md`**.
   subtasks without redoing completed ones; `/tasks tail <id> -v` adds
   per-tool-call lines to the live event stream.
 - **Code intelligence**: `/review` and `/refactor` run on
-  `Qwen3-30B-A3B-Instruct-2507-4bit` (MoE, 3B active per token —
-  swapped 2026-04-27 from Qwen2.5-32B after a real `/review` ran in
-  9 min vs 57 min with much less fabrication; see LESSONS.md). The
-  same MoE was tried on `/research` and `/calc` and reverted same-
-  day — those agents need aggressive tool use, which the MoE Instruct
-  silently skips. Static-analysis surface is unchanged: 10 tools
+  `Qwen2.5-32B-Instruct-4bit` with a 10-tool static-analysis surface
   (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for
-  Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language).
+  Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language). The
+  Qwen3-30B-A3B-Instruct-2507 MoE was evaluated as a swap target on
+  2026-04-27 — won decisively on a small Python repo (9m vs 57m,
+  cleaner output) but fabricated 58 unverified file:line citations
+  on a larger JS repo and exhausted the step budget on a docs-read
+  subtask. Reverted same-day; see LESSONS.md.
   Pre-flight repo survey sizes the task wall per clone (`num_ctx` is
   fixed per agent in `configs/agents.yaml`); a four-layer
   anti-fabrication check (shallow-retry → forced
@@ -92,9 +92,9 @@ Fuller walkthrough in **`luxe/README.md`**.
   `tool_code` prelude in the writing agent prompt — Gemma's chat
   template doesn't render the OpenAI `tools=` parameter). See
   `LESSONS.md` for the measurement methodology — including the
-  premature-rollback episode and the 2026-04-27 asymmetric-MoE
-  finding (Qwen3-30B-A3B Instruct wins read-and-reason agents,
-  breaks tool-required ones).
+  premature-rollback episode and the 2026-04-27 Qwen3-MoE evaluation
+  that landed and rolled back the same day after live tests on
+  larger repos surfaced fabrication the small-repo benchmark missed.
 - **Browser tool**: `research` and `lookup` agents can drive a real
   headless Chrome via `browse_navigate` + `browse_read` (CDP, allowlist-
   gated). Unblocks JS-rendered content where static `fetch_url` returns
