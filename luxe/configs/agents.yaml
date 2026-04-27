@@ -20,6 +20,7 @@ agents:
     temperature: 0.1
     max_steps: 4
     max_tokens_per_turn: 512
+    num_ctx: 8192
     tools: []
     enabled: true
     system_prompt: |
@@ -34,6 +35,7 @@ agents:
     temperature: 0.3
     max_steps: 3
     max_tokens_per_turn: 2048
+    num_ctx: 16384
     tools: []
     enabled: true
     system_prompt: |
@@ -61,6 +63,7 @@ agents:
     max_steps: 3
     max_tokens_per_turn: 1024
     max_wall_s: 60.0
+    num_ctx: 16384
     tools: [web_search, browse_navigate, browse_read]
     enabled: true
     system_prompt: |
@@ -102,6 +105,7 @@ agents:
     max_steps: 10
     max_tokens_per_turn: 4096
     max_wall_s: 300.0
+    num_ctx: 32768
     tools: [web_search, fetch_url, fetch_urls, browse_navigate, browse_read]
     enabled: true
     system_prompt: |
@@ -179,6 +183,7 @@ agents:
     temperature: 0.9
     max_steps: 8
     max_tokens_per_turn: 4096
+    num_ctx: 131072
     tools: [read_file, list_dir, glob, grep, write_file, edit_file]
     enabled: true
     system_prompt: |
@@ -235,6 +240,7 @@ agents:
     temperature: 0.5
     max_steps: 2
     max_tokens_per_turn: 1024
+    num_ctx: 8192
     tools: [draw_things_generate]
     enabled: true
     system_prompt: |
@@ -276,13 +282,9 @@ agents:
     max_steps: 30
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, write_file, edit_file, glob, grep, list_dir, bash, fetch_url, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
-    # Optional: raise the Ollama context window for this model
-    # (default is the server-loaded size, typically 8k). Passed as
-    # options.num_ctx on each request. Example for a large refactor
-    # that needs more history:
-    #   num_ctx: 16384
     enabled: true
     system_prompt: |
       You are the coding agent inside luxe. You work inside a local code
@@ -326,6 +328,7 @@ agents:
     max_steps: 4
     max_tokens_per_turn: 2048
     max_wall_s: 240.0
+    num_ctx: 32768
     # `create_tool` is always available; additional tools are auto-matched
     # from the user's saved tool library at dispatch time (see calc.py).
     tools: [create_tool]
@@ -426,6 +429,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
     enabled: true
@@ -579,6 +583,7 @@ agents:
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
     enabled: true

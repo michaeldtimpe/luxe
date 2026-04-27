@@ -87,14 +87,14 @@ def start_review_task(
     repo_label = repo_name_from_url(str(url_or_path)) or repo_path.name
     goal = build_review_goal(repo_label, repo_path, mode)
 
-    # Pre-flight repo survey sizes the task wall + num_ctx so tiny
-    # repos don't waste budget and large repos aren't starved of it.
+    # Pre-flight repo survey sizes the task wall so tiny repos don't
+    # waste budget and large repos aren't starved of it. ctx is fixed
+    # per-agent in configs/agents.yaml.
     survey, decision = survey_and_budget(repo_path)
     task = Task(
         id=task_id(),
         goal=goal,
         max_wall_s=decision.task_max_wall_s,
-        num_ctx_override=decision.num_ctx,
         analyzer_languages=sorted(survey.language_breakdown.keys()) or None,
     )
     task.subtasks = plan(

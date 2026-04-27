@@ -120,6 +120,15 @@ Trade-offs I settled on:
 **Rule of thumb:** for tool-heavy agents, scale down the model class
 before scaling down the context window.
 
+**Background reading on the KV-bits knob.** Both inference engines
+luxe drives expose KV-cache quantization (`mlx_lm.server --kv-bits`,
+`llama-server --cache-type-k q8_0`). For why those knobs exist and
+where the research is heading, see TurboQuant
+(https://arkaung.github.io/interactive-turboquant/) — a walkthrough
+of the DRIVE → EDEN → QJL → PolarQuant → TurboQuant lineage that
+gets KV vectors down to 2–4 bits/coord with near-optimal distortion.
+Not implemented in either engine yet; cited as background only.
+
 ---
 
 ## Small models confidently state false things
@@ -322,40 +331,38 @@ walks the clone (skipping `.git`, `.venv`, `node_modules`, `target/`,
 etc.), counts source files by extension, sums LOC, and maps to a
 tier:
 
-| Tier   | LOC             | task wall | num_ctx | Source basis                |
-|--------|-----------------|-----------|---------|-----------------------------|
-| tiny   | <500            | 30 min    | 8k      | matches zoleb (769 LOC=small) |
-| small  | 500–2 000       | 45 min    | 8k      |                              |
-| medium | 2 000–10 000    | 60 min    | 24k     | elara (7 797 LOC)            |
-| large  | 10 000–50 000   | 90 min    | 24k     | luxe itself (7 822 LOC=medium) |
-| huge   | 50 000+         | 120 min   | 32k     | watch KV-cache RAM          |
-
-Medium / large bumped from 16k → 24k after the 2026-04-24 elara rerun:
-one inspection subtask logged ~33k cumulative prompt tokens across 16
-tool calls, meaning the per-turn context kept pressing against the
-16k cap and Ollama was silently dropping the oldest messages (no log
-signal — the agent just quietly "forgot" earlier reads). 24k at
-qwen2.5:32b Q4_K_M costs ~5 GB more KV cache than 16k; acceptable on
-64 GB unified memory.
+| Tier   | LOC             | task wall | Source basis                   |
+|--------|-----------------|-----------|--------------------------------|
+| tiny   | <500            | 30 min    | matches zoleb (769 LOC=small)  |
+| small  | 500–2 000       | 45 min    |                                |
+| medium | 2 000–10 000    | 60 min    | elara (7 797 LOC)              |
+| large  | 10 000–50 000   | 90 min    | luxe itself                    |
+| huge   | 50 000+         | 120 min   |                                |
 
 Numbers grounded in two sources: the A/B decode data in
 `results/ab_ollama_vs_llamacpp/REPORT.md` (qwen2.5:32b ≈ 7.6 tok/s,
 so ~1500-token subtask output ≈ 3.3 min pure decode) and the 2026-
 04-23 elara run's observed 13-min/subtask inspection cost.
 
-Also added `Task.num_ctx_override` — the tier's ctx value threads
-through the orchestrator via `AgentConfig.model_copy(update={...})`
-without touching the static YAML defaults. Only applies to
-review/refactor agents; other specialists keep their configured ctx.
+**2026-04-27: ctx-per-tier dropped — fixed per-mode ctx instead.**
+Originally this table also picked `num_ctx` per tier (8k→32k by LOC),
+threaded through `Task.num_ctx_override`. With one model loaded at a
+time on oMLX and a known hardware budget, the tier-driven ctx sizing
+was solving a problem we don't have. Each agent now carries a fixed
+`num_ctx` value in `configs/agents.yaml` (router 8k, general/lookup
+16k, image 8k, code/review/refactor/research/calc 32k, writing 131k);
+the LM Studio Qwen-32B tool-loop bug also argued for capping
+tool-calling 32B at native 32k rather than YaRN-extending it. Wall-
+time tiering stays — that one still depends on input size.
 
 Printed rationale at plan time so the sizing is visible and
 challengeable:
 
-    repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min wall, 24k ctx
+    repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min wall
 
-**Principle:** static config is the wrong place for a decision that
-depends on the input. If you can compute the right value at task
-spawn, do that instead.
+**Principle:** static config is the right place for a decision that
+doesn't depend on the input. If a value can be picked once and lived
+with, don't keep recomputing it.
 
 ---
 

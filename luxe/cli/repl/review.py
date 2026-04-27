@@ -32,17 +32,17 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
     from cli.review import build_review_goal, survey_and_budget
     goal = build_review_goal(repo_label, repo_path, mode)
 
-    # Pre-flight survey: walk the repo once, pick a task wall + num_ctx
-    # tuned to its size, and capture language_breakdown so we can gate
-    # out analyzers whose language isn't represented (pure-Python repo
-    # doesn't need lint_js / vet_go / etc. on every turn).
+    # Pre-flight survey: walk the repo once, pick a task wall tuned to
+    # its size, and capture language_breakdown so we can gate out
+    # analyzers whose language isn't represented (pure-Python repo
+    # doesn't need lint_js / vet_go / etc. on every turn). ctx is fixed
+    # per-agent in configs/agents.yaml.
     survey, decision = survey_and_budget(repo_path)
     console.print(f"[dim]repo survey: {decision.rationale}[/dim]")
     task = Task(
         id=task_id(),
         goal=goal,
         max_wall_s=decision.task_max_wall_s,
-        num_ctx_override=decision.num_ctx,
         analyzer_languages=sorted(survey.language_breakdown.keys()) or None,
     )
     task.subtasks = plan(goal, cfg, task.id, cache_key=(str(repo_path), mode))

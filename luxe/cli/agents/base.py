@@ -347,7 +347,8 @@ def run_agent(
     # Extras for Ollama pass-throughs. `num_ctx` lets agents override the
     # loaded server context per-agent without touching modelfiles — most
     # useful for coder models where large contexts trade throughput for
-    # history depth.
+    # history depth. Ollama-effective; oMLX/llama-server ignore this and
+    # honor server-side --max-kv-size instead.
     extra_body: dict[str, Any] | None = None
     if cfg.num_ctx:
         extra_body = {"options": {"num_ctx": cfg.num_ctx}}

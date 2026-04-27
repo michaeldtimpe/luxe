@@ -68,8 +68,9 @@ Fuller walkthrough in **`luxe/README.md`**.
   `Qwen2.5-32B-Instruct-4bit` with a 10-tool static-analysis surface
   (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for
   Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language).
-  Pre-flight repo survey sizes task wall + `num_ctx` per clone; a
-  four-layer anti-fabrication check (shallow-retry → forced
+  Pre-flight repo survey sizes the task wall per clone (`num_ctx` is
+  fixed per agent in `configs/agents.yaml`); a four-layer
+  anti-fabrication check (shallow-retry → forced
   inspection → `file:line` citation verification → construct-
   presence verification) annotates suspect findings. `code` agent
   on `Qwen2.5-Coder-14B-Instruct-MLX-4bit` with the same analyzer

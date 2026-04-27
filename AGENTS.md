@@ -196,12 +196,13 @@ after the elara `/review` timed out a correctness subtask mid-retry).
 analyzer surface. `luxe analyze <path>` runs in read-only mode
 (no mutation tools) for code review.
 
-**Adaptive sizing:** on dispatch, `_resize_for_cwd()` runs
-`analyze_repo(fs.repo_root())` and bumps `num_ctx`/`max_wall_s` when
-the cwd is medium+ (see `luxe/repo_survey.py`'s tier table). Tiny
-and small repos keep the static config — 24k ctx (the medium/large
-tier) costs ~5 GB more KV cache than 16k on qwen2.5:32b Q4_K_M, RAM
-the agent doesn't need for a 500-LOC codebase.
+**Fixed ctx:** `num_ctx: 32768` set in `configs/agents.yaml` (the
+trained native for Coder-14B). Earlier versions adaptively bumped
+ctx for medium+ cwd via `_resize_for_cwd`; that hook was removed
+2026-04-27 in favor of one fixed value per agent. Wall-time still
+scales with repo size via the pre-flight survey on `/review` and
+`/refactor`; `code` itself is a single-turn dispatch and uses
+`max_wall_s` from the YAML.
 
 **Selection rationale:** tried 4 model configurations against 4 real
 personal repos.
@@ -273,9 +274,10 @@ agent.
   rules for eval/subprocess/`while True:`/missing-timeout patterns:
   check for sandbox, list-args, break conditions, actual kwargs
   before assigning severity.
-- **Pre-flight repo survey.** Task wall + `num_ctx` sized from the
-  target repo's LOC tier (see `luxe/repo_survey.py`; medium/large
-  land at 24k ctx). The survey's `language_breakdown` also gates the
+- **Pre-flight repo survey.** Task wall sized from the target repo's
+  LOC tier (see `luxe/repo_survey.py`). `num_ctx` is fixed per agent
+  in `configs/agents.yaml` (32k for review/refactor) — not picked
+  per-tier. The survey's `language_breakdown` also gates the
   analyzer surface (`AgentConfig.analyzer_languages`) — a pure-Python
   repo never sees `lint_js` / `vet_go` / etc.
 - **Per-agent wall budget:** 1500 s (25 min). The orchestrator's
@@ -345,9 +347,10 @@ data across every run in `~/.luxe/tasks/` as a CSV.
 4. Add a config entry to `configs/agents.yaml` with the model, prompt,
    budgets, and tools list. Optional knobs: `min_tool_calls` (refuse
    to finalize until the agent has made at least N tool calls),
-   `num_ctx` (Ollama `options.num_ctx` override, useful when the agent
-   needs a wider window than the loaded default), and `endpoint`
-   (per-agent base URL override, e.g. pointing at a llama-server
+   `num_ctx` (fixed per-mode context window — Ollama-effective via
+   `options.num_ctx`, oMLX/llama-server honor server-side
+   `--max-kv-size`), and `endpoint` (per-agent base URL override, e.g.
+   pointing at a llama-server
    instance).
 5. Add the agent name to `cli.registry.AgentName` enum and (if new
    tools) `ToolName` enum.

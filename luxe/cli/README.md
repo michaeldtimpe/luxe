@@ -355,33 +355,39 @@ background task, then prints the task id and a `/tasks tail` hint so
 you can pick it up in a REPL session later (or just watch the log
 file under `~/.luxe/tasks/<id>/`).
 
-**Adaptive budgets.** `/review` and `/refactor` pre-flight-survey the
-cloned repo (file count, LOC, language breakdown via
-`cli/repo_survey.py`) and pick a task wall + `num_ctx` tuned to its
-size tier:
+**Wall-time budgets.** `/review` and `/refactor` pre-flight-survey
+the cloned repo (file count, LOC, language breakdown via
+`cli/repo_survey.py`) and pick a task wall tuned to its size tier:
 
-| Tier   | Source LOC       | Task wall | `num_ctx` |
-|--------|------------------|-----------|-----------|
-| tiny   | < 500            | 30 min    | 8k        |
-| small  | 500–2 000        | 45 min    | 8k        |
-| medium | 2 000–10 000     | 60 min    | 24k       |
-| large  | 10 000–50 000    | 90 min    | 24k       |
-| huge   | 50 000+          | 120 min   | 32k       |
-
-Medium / large run at 24k ctx after observing a real review burn ~33k
-cumulative prompt tokens across 16 tool calls in one subtask at the
-prior 16k budget — which meant Ollama was silently dropping older
-messages (no warning in the log) whenever the agent's running context
-hit the cap. 24k on `qwen2.5:32b` Q4_K_M adds ~5 GB of KV cache over
-16k; acceptable on 64 GB unified memory.
+| Tier   | Source LOC       | Task wall |
+|--------|------------------|-----------|
+| tiny   | < 500            | 30 min    |
+| small  | 500–2 000        | 45 min    |
+| medium | 2 000–10 000     | 60 min    |
+| large  | 10 000–50 000    | 90 min    |
+| huge   | 50 000+          | 120 min   |
 
 The chosen decision prints at plan time:
 `repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min
-wall, 24k ctx`. Per-subtask overrides on top: the synthesis subtask
-gets a doubled `max_tokens_per_turn` so the severity-grouped report
-doesn't truncate mid-category. The `code` agent has the same
-self-sizing hook — dispatching in a medium+ cwd bumps its own
-`num_ctx`/`max_wall_s` for that turn.
+wall`. Per-subtask overrides on top: the synthesis subtask gets a
+doubled `max_tokens_per_turn` so the severity-grouped report doesn't
+truncate mid-category.
+
+**Fixed per-mode `num_ctx`.** Each agent carries one `num_ctx` value
+in `configs/agents.yaml`, picked once and held there:
+
+| Agent                          | `num_ctx` |
+|--------------------------------|-----------|
+| router, image                  | 8k        |
+| general, lookup                | 16k       |
+| code, calc, research, review, refactor | 32k |
+| writing                        | 131k      |
+
+The 32B and 14B agents stay at the model's trained native (32k) —
+not extended via YaRN, because tool-calling correctness degrades at
+extended ctx (the LM Studio Qwen-32B tool-loop bug was the
+precedent). Writing runs gemma-3-27b at its full native 128k window
+for long-form drafts.
 
 **Per-agent wall budgets** on `review` / `refactor` / `code` are
 1500 s (vs. the 600 s default). With one mid-run tool-depth retry and
@@ -631,16 +637,18 @@ without tool use are the main failure mode.
   max_steps: 12
 ```
 
-**`AgentConfig.num_ctx`** — optional per-agent Ollama context-window
-override in `configs/agents.yaml`. Passed to the chat request as
-`options.num_ctx` so you can raise the window for a single tool-heavy
-agent without rebuilding a modelfile. Leave unset to inherit whatever
-the server loaded (typically 8k for Ollama). Useful mainly for `code`
+**`AgentConfig.num_ctx`** — fixed per-agent context window in
+`configs/agents.yaml`. Passed to the chat request as
+`options.num_ctx` (Ollama-effective; oMLX/llama-server ignore the
+field and honor their server-side `--max-kv-size` instead). Picked
+once per agent rather than tuned per dispatch — the constraints are
+known and only one model is loaded at a time. Useful mainly for
+`code`
 / `review` / `refactor` when sessions accumulate large tool results.
 
 ```yaml
 - name: code
-  num_ctx: 16384   # more tool-result headroom
+  num_ctx: 32768   # Coder-14B trained native
 ```
 
 **Per-turn token cap — soft warning.** After every agent run, the
@@ -717,9 +725,9 @@ record per row, stamped with the short git rev.
   sandboxed eval and list-arg subprocess don't get false-flagged) —
   the agents are prompted to prefer them over regex when one applies.
   `/review` and `/refactor` pre-flight the target repo with
-  `repo_survey.analyze_repo()` and size the task wall + num_ctx
-  from the LOC tier (tiny=30m/8k → huge=120m/32k), so budgets
-  track repo size instead of a hardcoded hunch. Still not a
+  `repo_survey.analyze_repo()` and size the task wall from the LOC
+  tier (tiny=30m → huge=120m). `num_ctx` is fixed per agent in
+  `configs/agents.yaml`, not tier-driven. Still not a
   replacement for human review — treat agent output as a first pass,
   not a final verdict.
 - **Writing agent uses llama-server.** It's a separate process — if

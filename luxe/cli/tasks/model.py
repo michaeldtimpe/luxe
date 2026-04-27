@@ -61,12 +61,10 @@ class Subtask:
     schema_rejects: int = 0
     wall_s: float = 0.0
     error: str = ""
-    # Optional per-subtask overrides. Take precedence over Task-level
-    # overrides when set, which take precedence over the agent's
+    # Optional per-subtask override. Takes precedence over the agent's
     # static config. Used when a specific subtask has different needs
     # — e.g. the synthesis subtask wants more output tokens because
     # it assembles the final report.
-    num_ctx_override: int | None = None
     max_tokens_per_turn_override: int | None = None
 
     def short(self) -> str:
@@ -88,11 +86,6 @@ class Task:
     max_wall_s: float = 3600.0         # overall job cap; scope this up for big jobs
     retry_on_transport_error: bool = True
     pid: int = 0                       # subprocess pid when running in background
-    # Optional per-task override of the dispatched agent's num_ctx. Set
-    # by pre-flight repo survey in /review + /refactor so a big codebase
-    # gets a wider Ollama context window than the agent's default. None
-    # means "fall through to agent config".
-    num_ctx_override: int | None = None
     # Languages the dispatched review/refactor agent's analyzer surface
     # should target. Populated from RepoSurvey.language_breakdown in
     # /review + /refactor so a pure-Python repo doesn't see
@@ -155,6 +148,9 @@ def _subtask_to_dict(s: Subtask) -> dict[str, Any]:
 def _subtask_from_dict(d: dict[str, Any]) -> Subtask:
     tcs_raw = d.pop("tool_calls", []) or []
     tcs = [_tc_from_dict(t) if isinstance(t, dict) else t for t in tcs_raw]
+    # Older state.json files (pre fixed-per-mode ctx) carried this
+    # field; drop it on load so the Subtask init doesn't error.
+    d.pop("num_ctx_override", None)
     s = Subtask(**d)
     s.tool_calls = tcs
     return s
@@ -173,7 +169,6 @@ def persist(task: Task) -> None:
         "max_wall_s": task.max_wall_s,
         "retry_on_transport_error": task.retry_on_transport_error,
         "pid": task.pid,
-        "num_ctx_override": task.num_ctx_override,
         "analyzer_languages": task.analyzer_languages,
     }
     tmp = d / "state.json.tmp"
@@ -190,6 +185,9 @@ def load(task_id_full: str) -> Task | None:
         data = json.load(f)
     subs_raw = data.pop("subtasks", []) or []
     subs = [_subtask_from_dict(s) for s in subs_raw]
+    # Older state.json files (pre fixed-per-mode ctx) carried this
+    # field; drop it on load so the Task init doesn't error.
+    data.pop("num_ctx_override", None)
     return Task(subtasks=subs, **data)
 
 

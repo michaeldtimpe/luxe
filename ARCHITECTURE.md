@@ -191,9 +191,10 @@ Missing binaries or missing project markers produce a helpful
 - Top-level: `ollama_base_url`, `draw_things_url`, `image_output_dir`, `session_dir`
 - Per-agent: `model`, `system_prompt`, `temperature`, `max_steps`,
   `max_tokens_per_turn`, `max_wall_s`, `tools`, `enabled`,
-  `min_tool_calls` (investigation floor), `num_ctx` (Ollama
-  `options.num_ctx` override), `endpoint` (per-agent base URL, e.g.
-  llama-server for Gemma 3)
+  `min_tool_calls` (investigation floor), `num_ctx` (fixed
+  per-mode context window — Ollama-effective via `options.num_ctx`,
+  oMLX/llama-server honor server-side `--max-kv-size`), `endpoint`
+  (per-agent base URL, e.g. llama-server for Gemma 3)
 
 `LuxeConfig` (pydantic) validates on load. The runner applies cross-cutting
 settings (Draw Things endpoint, image output dir) once per dispatch before
@@ -201,25 +202,24 @@ invoking the specialist.
 
 ### Task-level and subtask-level budget overrides
 
-The static per-agent budgets above are the defaults. Two override
-axes sit on top:
+The static per-agent budgets above are the defaults. `num_ctx` is
+fixed per agent in `configs/agents.yaml` and not overridden at
+runtime — see "Per-mode ctx" below for the values and rationale.
 
-- **`Task.num_ctx_override`** (`luxe/tasks/model.py`). Set by
-  `/review` and `/refactor` based on a pre-flight repo survey
-  (`luxe/repo_survey.py:analyze_repo` → `size_budgets` → tier
-  table). Threads through `luxe/tasks/orchestrator.py:
-  _cfg_with_task_overrides`, which derives an
-  `AgentConfig.model_copy(update={"num_ctx": ...})` just for that
-  task's dispatches.
-- **`Subtask.num_ctx_override` / `Subtask.max_tokens_per_turn_override`**.
-  Populated by the planner at plan time — synthesis subtasks get a
-  doubled output cap so the severity-grouped report doesn't
-  truncate mid-category. Precedence: subtask > task > agent default.
+The remaining override axes:
 
-The `code` agent has its own `_resize_for_cwd()` hook in
-`luxe/agents/code.py` that surveys the current working directory at
-dispatch time and bumps `num_ctx`/`max_wall_s` for medium+ repos.
-No task wrapper needed — the hook runs before `run_agent()`.
+- **`Task.max_wall_s`**. Set by `/review` and `/refactor` based on a
+  pre-flight repo survey (`luxe/repo_survey.py:analyze_repo` →
+  `size_budgets` → tier table). Bigger repos get longer task walls;
+  ctx is unchanged.
+- **`Subtask.max_tokens_per_turn_override`**. Populated by the planner
+  at plan time — synthesis subtasks get a doubled output cap so the
+  severity-grouped report doesn't truncate mid-category.
+
+Both override axes thread through
+`luxe/tasks/orchestrator.py:_cfg_with_task_overrides`, which derives
+an `AgentConfig.model_copy(update={...})` just for that task's
+dispatches.
 
 ### Pre-retrieval for trace-bearing tasks
 

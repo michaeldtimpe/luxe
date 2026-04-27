@@ -1,11 +1,14 @@
-"""Pre-flight repo survey + budget heuristics for review/refactor tasks.
+"""Pre-flight repo survey + wall-time heuristics for review/refactor tasks.
 
 `/review` and `/refactor` used to run with a hardcoded 60-minute task
-wall and whatever `num_ctx` the agent's config specified, regardless
-of whether the target was a tiny prototype or a 20k-LOC codebase. This
-module turns a target repo into a compact `RepoSurvey` and then into
-a `BudgetDecision` (tier, task wall, num_ctx, rationale) the caller
+wall regardless of whether the target was a tiny prototype or a 20k-LOC
+codebase. This module turns a target repo into a compact `RepoSurvey`
+and then into a `BudgetDecision` (tier, task wall, rationale) the caller
 plugs into the Task at spawn time.
+
+`num_ctx` is no longer sized here — every agent carries a fixed
+`num_ctx` value in `configs/agents.yaml`. Wall-time-by-repo-size remains
+because long /review runs on big repos still need the headroom.
 
 Heuristics are grounded in the zoleb (tiny) and elara (medium) runs
 plus the Ollama A/B decode numbers in
@@ -195,57 +198,43 @@ class BudgetDecision:
 
     tier: str
     task_max_wall_s: float
-    num_ctx: int
     rationale: str
 
 
 # Tier thresholds expressed as (max_loc_exclusive, tier_name,
-# task_wall_s, num_ctx). Evaluated in order; first match wins.
-_TIER_TABLE: list[tuple[int, str, float, int]] = [
-    (500, "tiny", 1800.0, 8192),
-    (2_000, "small", 2700.0, 8192),
-    # Medium / large get 24k: prior 16k was too tight for multi-turn
-    # review — sub-task prompt_tokens totals observed at 33k across 16
-    # tool calls mean Ollama was silently dropping the oldest messages
-    # when num_ctx = 16k. 24k at qwen2.5:32b Q4_K_M adds ~5 GB of KV
-    # cache over 16k; acceptable on 64 GB unified memory.
-    (10_000, "medium", 3600.0, 24_576),
-    (50_000, "large", 5400.0, 24_576),
-    # Anything larger — including `hit_scan_cap` cases — gets the
-    # huge tier. 32k ctx on qwen2.5:32b Q4_K_M adds ~8 GB to KV
-    # cache; acceptable on a 64 GB machine but worth keeping in mind.
-    (10**9, "huge", 7200.0, 32_768),
+# task_wall_s). Evaluated in order; first match wins.
+_TIER_TABLE: list[tuple[int, str, float]] = [
+    (500, "tiny", 1800.0),
+    (2_000, "small", 2700.0),
+    (10_000, "medium", 3600.0),
+    (50_000, "large", 5400.0),
+    (10**9, "huge", 7200.0),
 ]
 
 
 def size_budgets(survey: RepoSurvey) -> BudgetDecision:
-    """Pick a (tier, wall, ctx) triple from the survey. See the
-    module docstring for the numbers' derivation."""
+    """Pick a (tier, wall) pair from the survey. See the module
+    docstring for the numbers' derivation."""
     loc = survey.total_loc
-    for ceiling, tier, wall_s, ctx in _TIER_TABLE:
+    for ceiling, tier, wall_s in _TIER_TABLE:
         if loc < ceiling:
-            rationale = _rationale(survey, tier, wall_s, ctx)
             return BudgetDecision(
                 tier=tier,
                 task_max_wall_s=wall_s,
-                num_ctx=ctx,
-                rationale=rationale,
+                rationale=_rationale(survey, tier, wall_s),
             )
     # Unreachable given the 10**9 ceiling on the last row, but keep
     # mypy happy.
-    return BudgetDecision("huge", 7200.0, 32_768, "fallback")
+    return BudgetDecision("huge", 7200.0, "fallback")
 
 
-def _rationale(
-    survey: RepoSurvey, tier: str, wall_s: float, ctx: int
-) -> str:
+def _rationale(survey: RepoSurvey, tier: str, wall_s: float) -> str:
     lang = survey.primary_language
     files = survey.source_files
     loc = survey.total_loc
     wall_min = int(round(wall_s / 60))
-    ctx_k = ctx // 1024
     cap_note = " (hit scan cap)" if survey.hit_scan_cap else ""
     return (
         f"{files} {lang} source file(s) · {loc:,} LOC · {tier}"
-        f"{cap_note} → {wall_min} min wall, {ctx_k}k ctx"
+        f"{cap_note} → {wall_min} min wall"
     )

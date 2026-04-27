@@ -381,24 +381,16 @@ class Orchestrator:
 def _cfg_with_task_overrides(
     cfg: LuxeConfig, agent_name: str, task: Task, sub: Subtask | None = None
 ) -> LuxeConfig:
-    """Apply per-task (and optionally per-subtask) overrides to the
-    dispatched agent's config.
-
-    Precedence: subtask override > task override > agent default.
-    Only applies to review/refactor (the agents with a pre-flight
-    survey behind their budgets). Returns the original cfg unchanged
-    when no override applies, so this is free on the common path."""
+    """Apply per-subtask + per-task overrides to the dispatched agent's
+    config. Only applies to review/refactor (the agents with a
+    pre-flight survey behind their budgets). Returns the original cfg
+    unchanged when no override applies, so this is free on the common
+    path."""
     if agent_name not in ("review", "refactor"):
         return cfg
     updates: dict[str, Any] = {}
-    # num_ctx: subtask first, then task.
-    if sub is not None and sub.num_ctx_override is not None:
-        updates["num_ctx"] = sub.num_ctx_override
-    elif task.num_ctx_override is not None:
-        updates["num_ctx"] = task.num_ctx_override
-    # max_tokens_per_turn: only subtask-level for now (Task has no
-    # equivalent yet — synthesis pass typically wants a generous
-    # per-turn cap so the full report fits in one decode).
+    # max_tokens_per_turn: subtask-level only — synthesis pass typically
+    # wants a generous per-turn cap so the full report fits in one decode.
     if sub is not None and sub.max_tokens_per_turn_override is not None:
         updates["max_tokens_per_turn"] = sub.max_tokens_per_turn_override
     # analyzer_languages: task-level, set by /review's repo survey so the
