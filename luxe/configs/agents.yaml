@@ -7,14 +7,41 @@ ollama_base_url: "http://127.0.0.1:11434"
 draw_things_url: "http://127.0.0.1:7859"    # Draw Things HTTP server port
 image_output_dir: "~/luxe-images"
 session_dir: "~/.luxe/sessions"
+# Where /review and /refactor clone target repos. Default is
+# `local-cache` relative to wherever you launched luxe; set to
+# `~/.luxe/cache` (or any absolute path) to keep clones out of the
+# project tree entirely.
+local_cache_dir: "local-cache"
+
+# Named backend providers. Agents reference these by key via the
+# `provider:` field. Each agent may also set `endpoint:` directly to
+# override; `endpoint:` takes precedence over `provider:` for the
+# migration window. Once every agent uses `provider:`, drop the
+# per-agent `endpoint:` overrides below.
+providers:
+  ollama:   { base_url: "http://127.0.0.1:11434", kind: ollama }
+  omlx:     { base_url: "http://127.0.0.1:8000",  kind: omlx }
+  lmstudio: { base_url: "http://127.0.0.1:1234",  kind: lmstudio }
+  llamacpp: { base_url: "http://127.0.0.1:8088",  kind: llamacpp }
+
+# Used when an agent doesn't set `provider:` or `endpoint:`.
+# Currently every agent sets `endpoint:` explicitly, so this is a
+# safety default for new agents that forget to.
+default_provider: omlx
 
 agents:
   - name: router
     display: "Interpreter / task router"
-    model: "qwen2.5:7b-instruct"    # Phase 1 primary candidate; fallback gemma3:12b
+    # 2026-04-27: migrated from Ollama → oMLX as part of "all Qwen → oMLX"
+    # commit. The planner reads this agent's model+endpoint via cfg.get(
+    # "router"); ignore_override is no longer needed because override and
+    # canonical now agree.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.1
     max_steps: 4
     max_tokens_per_turn: 512
+    num_ctx: 8192
     tools: []
     enabled: true
     system_prompt: |
@@ -23,10 +50,13 @@ agents:
 
   - name: general
     display: "General-purpose chat"
-    model: "qwen2.5:7b-instruct"    # selected after Phase 2 eval (1.7s avg, concise)
+    # 2026-04-27: migrated to oMLX. Same weights, MLX engine.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.3
     max_steps: 3
     max_tokens_per_turn: 2048
+    num_ctx: 16384
     tools: []
     enabled: true
     system_prompt: |
@@ -47,12 +77,15 @@ agents:
     # Small + fast; grounded by live search snippets so hallucinations
     # are bounded even on 7B. No fetch_url — if snippets don't have
     # the answer, the agent must say so rather than escalate.
-    model: "qwen2.5:7b-instruct"
+    # 2026-04-27: migrated to oMLX.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.1
     max_steps: 3
     max_tokens_per_turn: 1024
     max_wall_s: 60.0
-    tools: [web_search]
+    num_ctx: 16384
+    tools: [web_search, browse_navigate, browse_read]
     enabled: true
     system_prompt: |
       You are the quick-lookup agent inside luxe. You answer one-
@@ -64,11 +97,19 @@ agents:
       2. Read the returned snippets. If the specific fact the user
          asked for appears in a snippet, answer directly with [n]
          citations.
-      3. You do NOT have fetch_url. You cannot read full pages. If
-         the snippets don't contain the answer, say exactly:
-         "Snippets don't contain a specific answer; use /research
-         for deeper verification." Do not guess.
-      4. Answer format: one or two sentences with inline [n] markers,
+      3. You do NOT have fetch_url. You cannot read full pages from
+         a static HTTP fetch. If the snippets don't contain the
+         answer, prefer to say exactly: "Snippets don't contain a
+         specific answer; use /research for deeper verification."
+         Do not guess.
+      4. Browser escape hatch (rare): if the answer is on a
+         JS-rendered page (a SPA, a versioned doc viewer) and the
+         snippet truly cannot ground it, you MAY call
+         `browse_navigate` then `browse_read` — but only once per
+         question, and only if the URL host is on the browser
+         allowlist (you'll see [denied] otherwise). Most lookups
+         should not need this.
+      5. Answer format: one or two sentences with inline [n] markers,
          then a numbered source list with full URLs. No preamble.
 
       Do NOT call web_search more than twice. This agent is the
@@ -77,17 +118,21 @@ agents:
 
   - name: research
     display: "Deep research (web-enabled)"
-    model: "qwen2.5:32b-instruct"    # selected after Phase 3 eval (correct answers; 7b hallucinated, 70b OOM)
+    # 2026-04-27: migrated from Ollama → oMLX. Same weights as review/
+    # refactor/calc; oMLX shows decisive decode wins on this model class.
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 10
     max_tokens_per_turn: 4096
     max_wall_s: 300.0
-    tools: [web_search, fetch_url, fetch_urls]
+    num_ctx: 32768
+    tools: [web_search, fetch_url, fetch_urls, browse_navigate, browse_read]
     enabled: true
     system_prompt: |
       You are the deep-research agent inside luxe. You answer questions
       thoroughly using live web data via the `web_search`, `fetch_url`,
-      and `fetch_urls` tools.
+      `fetch_urls`, `browse_navigate`, and `browse_read` tools.
 
       Protocol:
       1. Start with `web_search` to find relevant pages for any non-trivial
@@ -103,6 +148,13 @@ agents:
          when snippets only say "version X or later"), or (c) the
          question asks for an explanation/rationale/comparison that
          requires page-length context.
+      3a. JS-rendered pages: if `fetch_url` returns empty / skeletal
+         text on a page that obviously has content (a docs SPA, a
+         dashboard, a paginated app), call `browse_navigate` followed
+         by `browse_read` to get the rendered DOM. Browser tools are
+         allowlist-gated — you'll see [denied] for hosts not on the
+         list, in which case fall back to `web_search` + snippet
+         answer. Do not retry a denied host with a different path.
       4. Synthesize an answer that:
          - Starts with the direct answer, no preamble.
          - Supports each factual claim with inline [n] citations.
@@ -139,15 +191,20 @@ agents:
 
   - name: writing
     display: "Creative writing"
-    # Phase 4 picked gemma3:27b for voice, but Ollama's gemma3 manifest has
-    # no `tools` capability — 400s whenever we pass a tool list. Served
-    # instead via llama-server with --jinja, which DOES render Gemma 3's
-    # native function-call format. See endpoint below.
-    model: "gemma-3-27b-it"    # label only; llama-server serves whatever -m we loaded
-    endpoint: "http://127.0.0.1:8080"
+    # Phase 4 picked gemma3:27b for voice. Ollama's gemma3 manifest has no
+    # `tools` capability, so until 2026-04-27 this agent ran on llama-server
+    # at :8080 (whose --jinja flag renders Gemma 3's native ```tool_code```
+    # format). 2026-04-27: migrated to oMLX. The luxe_cli/agents/writing.py
+    # prelude that injects Python signatures + the ```tool_code``` example
+    # is still required (oMLX returns Gemma's native format too — neither
+    # backend renders the OpenAI `tools=` parameter for this model). Keeping
+    # `endpoint:` set means the gemma_pycode tool style stays selected.
+    model: "gemma-3-27b-it-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.9
     max_steps: 8
     max_tokens_per_turn: 4096
+    num_ctx: 131072
     tools: [read_file, list_dir, glob, grep, write_file, edit_file]
     enabled: true
     system_prompt: |
@@ -197,10 +254,14 @@ agents:
 
   - name: image
     display: "Image generation (Draw Things)"
-    model: "qwen2.5:7b-instruct"    # small LLM expands the prompt; Draw Things does inference
+    # 2026-04-27: migrated to oMLX. Tiny prompt-expansion job; runs on the
+    # same 7B that the router uses, so the model stays warm.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.5
     max_steps: 2
     max_tokens_per_turn: 1024
+    num_ctx: 8192
     tools: [draw_things_generate]
     enabled: true
     system_prompt: |
@@ -223,24 +284,28 @@ agents:
 
   - name: code
     display: "Coding (full tool surface)"
-    # Phase 6 selection: 14b was the only qwen2.5-coder variant that stayed
-    # stable on Ollama's tool-use flow. 32b/32b-8k hit timeouts or chat
-    # template leakage. For comparison runs, use `--model <alt>` on the
-    # CLI (analyze / REPL). Known-good alternatives tested earlier:
+    # 2026-04-24: migrated from Ollama → oMLX after AB sweep showed 1.56×
+    # decode tok/s (29.4 vs 18.8 on HumanEval+) AND a higher pass rate
+    # (90.0% vs 83.3%). oMLX's MLX-engine win is structural — present even
+    # without DFlash. DFlash itself is conditional (wins on long outputs,
+    # regresses on short ones) so leaving it OFF for the code agent which
+    # generates mixed-length output. See results/ab_ollama_vs_omlx for
+    # the underlying data.
+    #
+    # Pre-migration history: 14b was the only qwen2.5-coder variant that
+    # stayed stable on Ollama's tool-use flow. 32b/32b-8k hit timeouts or
+    # chat template leakage. Known-good alternatives tested earlier:
     #   - llama3.3-70b-4k:latest   (slower, clean tool use)
     #   - command-r:35b            (fast, clean tool use)
-    model: "qwen2.5-coder:14b-instruct"
+    model: "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 30
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, write_file, edit_file, glob, grep, list_dir, bash, fetch_url, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
-    # Optional: raise the Ollama context window for this model
-    # (default is the server-loaded size, typically 8k). Passed as
-    # options.num_ctx on each request. Example for a large refactor
-    # that needs more history:
-    #   num_ctx: 16384
     enabled: true
     system_prompt: |
       You are the coding agent inside luxe. You work inside a local code
@@ -274,15 +339,17 @@ agents:
     # Was mixtral:8x7b-instruct-v0.1-q3_K_M — good at math but Ollama's
     # Q3_K_M manifest doesn't advertise `tools` capability, so any
     # request with `tools=[...]` (create_tool + matched library tools)
-    # 400s. qwen2.5:32b-instruct is the same model `research` uses,
-    # stays warm across a typical trip-planning task, and supports tool
-    # calls cleanly. Carries units well and is reliable on multi-step
-    # arithmetic.
-    model: "qwen2.5:32b-instruct"
+    # 400s. Qwen2.5-32B is the same model `research`/`review`/`refactor`
+    # use, stays warm across a typical trip-planning task, supports tool
+    # calls cleanly, and carries units well. 2026-04-27: migrated to
+    # oMLX alongside research; same weights, MLX engine.
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.1
     max_steps: 4
     max_tokens_per_turn: 2048
     max_wall_s: 240.0
+    num_ctx: 32768
     # `create_tool` is always available; additional tools are auto-matched
     # from the user's saved tool library at dispatch time (see calc.py).
     tools: [create_tool]
@@ -360,17 +427,30 @@ agents:
 
   - name: review
     display: "Code review (read-only)"
+    # 2026-04-24: migrated from Ollama → oMLX after AB sweep showed
+    # +54% decode tok/s (12.30 vs 7.99 on HumanEval+) AND parity pass
+    # rate (93.3% both). An afternoon attempt at rollback was reverted
+    # the same day after observing the same multi-turn slowness on the
+    # rolled-back Ollama setup — the ~8m sub-03 wall isn't oMLX-specific,
+    # it's inherent to running a 32B at ~13k prompt + multi-paragraph
+    # output. oMLX wins by +54% on the decode portion regardless. See
+    # LESSONS.md ("Single-turn benchmarks miss the multi-turn growth
+    # regime" — corrected note: the regime is real but the rollback
+    # was premature; both backends are slow there).
+    #
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct — the 14b
     # coder was fabricating findings (quoted SQL that didn't exist in
     # the file, refused to use tools on 4/6 inspection subtasks). This
     # agent reasons over code rather than writing it, so general-instruct
     # is a better fit; the 32b variant is the one `research` and `calc`
     # use, so tool-use stability is already validated.
-    model: "qwen2.5:32b-instruct"
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
     enabled: true
@@ -511,14 +591,20 @@ agents:
 
   - name: refactor
     display: "Refactor / optimization (read-only)"
+    # 2026-04-24: migrated to oMLX alongside `review` — same model,
+    # same workload shape, same +54% decode win. The afternoon
+    # rollback was reverted same-day; see `review`'s comment.
+    #
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct for the same
     # reason as `review` — this agent reads and reasons, never writes,
     # so general-instruct 32b is a better fit than the coder 14b.
-    model: "qwen2.5:32b-instruct"
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
     max_wall_s: 1500.0
+    num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
     enabled: true

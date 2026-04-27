@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cli.tasks.model import Subtask, Task
-from cli.tasks.orchestrator import _augment_with_trace_hints
+from luxe_cli.tasks.model import Subtask, Task
+from luxe_cli.tasks.orchestrator import _augment_with_trace_hints
 
 
 def _sub(title: str, index: int = 0) -> Subtask:

@@ -20,3 +20,8 @@ personal_eval/corpus/
 
 # Local overrides
 configs/local/
+
+# Runtime logs from nohup'd overnight / catchup runs
+nohup.out
+overnight.log
+catchup.log

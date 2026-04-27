@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cli.session import Session
+from luxe_cli.session import Session
 
 
 def _make(tmp_path: Path, n: int) -> Session:
@@ -82,3 +82,39 @@ def test_prune_is_atomic(tmp_path):
     # And the on-disk content roundtrips cleanly.
     reloaded = [json.loads(l) for l in sess.path.read_text().splitlines() if l.strip()]
     assert len(reloaded) == 50
+
+
+def test_bind_backend_tags_appended_events(tmp_path):
+    sess = Session.new(tmp_path, first_prompt="t")
+    with sess.bind_backend("ollama", "http://127.0.0.1:11434"):
+        sess.append({"role": "user", "content": "hello"})
+    events = sess.read_all()
+    assert events[0]["provider"] == "ollama"
+    assert events[0]["base_url"] == "http://127.0.0.1:11434"
+
+
+def test_bind_backend_restores_outer_on_exit(tmp_path):
+    sess = Session.new(tmp_path, first_prompt="t")
+    with sess.bind_backend("ollama", "http://127.0.0.1:11434"):
+        with sess.bind_backend("lmstudio", "http://127.0.0.1:1234"):
+            sess.append({"role": "user", "content": "inner"})
+        sess.append({"role": "user", "content": "outer-after-inner"})
+    events = sess.read_all()
+    assert events[0]["provider"] == "lmstudio"
+    assert events[1]["provider"] == "ollama"
+
+
+def test_append_outside_bind_omits_provider_fields(tmp_path):
+    sess = Session.new(tmp_path, first_prompt="t")
+    sess.append({"role": "user", "content": "untagged"})
+    events = sess.read_all()
+    assert "provider" not in events[0]
+    assert "base_url" not in events[0]
+
+
+def test_explicit_provider_in_event_wins_over_bind(tmp_path):
+    sess = Session.new(tmp_path, first_prompt="t")
+    with sess.bind_backend("ollama", "http://127.0.0.1:11434"):
+        sess.append({"role": "user", "content": "x", "provider": "manual-override"})
+    events = sess.read_all()
+    assert events[0]["provider"] == "manual-override"

@@ -29,8 +29,8 @@ configuration pattern:
 │                              │ _parse_text_tool_calls,                │
 │                              │ shared.trace_hints                     │
 │   ┌───────────────────────────────────────────────────────────────┐   │
-│   │  luxe/          multi-agent Claude-Code-alike                 │   │
-│   │   ├─ cli.py           `luxe` typer entry point                │   │
+│   │  luxe/luxe_cli/ multi-agent Claude-Code-alike                │   │
+│   │   ├─ main.py          `luxe` typer entry point                │   │
 │   │   ├─ repl/            REPL loop split by concern              │   │
 │   │   │   ├─ core.py      dispatch, stats line, sticky mode       │   │
 │   │   │   ├─ tasks.py     /tasks subcommands + tail printer       │   │
@@ -42,8 +42,13 @@ configuration pattern:
 │   │   │   └─ prompt.py    prompt_toolkit session setup            │   │
 │   │   ├─ registry.py      LuxeConfig (YAML) — per-agent model,    │   │
 │   │   │                   prompt, tools, budgets, num_ctx         │   │
-│   │   ├─ session.py       append-only JSONL per session           │   │
-│   │   ├─ backend.py       Ollama /v1 factory wrapping Backend     │   │
+│   │   ├─ session.py       append-only JSONL + bind_backend tag    │   │
+│   │   ├─ backend.py       Backend factory + URL→kind derivation   │   │
+│   │   ├─ providers/       BackendProvider protocol + concretes    │   │
+│   │   │   ├─ openai_compat.py  /v1/models base impl               │   │
+│   │   │   ├─ ollama.py    Ollama /api/* introspection             │   │
+│   │   │   ├─ lmstudio.py  LM Studio /api/v0 introspection         │   │
+│   │   │   └─ omlx.py      oMLX (OpenAI-compat, minimal metadata) │   │
 │   │   ├─ router.py        interpreter w/ dispatch + ask_user tools│   │
 │   │   ├─ heuristic_router.py keyword/regex pre-router             │   │
 │   │   ├─ import_graph.py   AST-walked Python imports + neighbors  │   │
@@ -127,17 +132,34 @@ user types prompt
 
 ## Backend abstraction
 
-`harness.backends.Backend` is the common interface. `cli.backend.make_backend`
-just points it at Ollama's `/v1`:
+Two layers:
+
+**Chat transport — `harness.backends.Backend`.** Every supported
+provider speaks `/v1/chat/completions`, so one Backend client drives
+all four. `luxe_cli.backend.make_backend(model, base_url=...)` wraps
+it; `kind` is derived from the resolved URL (matched against
+`_BACKEND_OVERRIDE_URLS`) so telemetry sees the truth instead of a
+hardcoded label.
 
 ```python
-Backend(kind="mlx", base_url="http://127.0.0.1:11434", model_id=<ollama_tag>)
+Backend(kind="lmstudio", base_url="http://127.0.0.1:1234", model_id=<id>)
 ```
 
-Benefits:
-- Same type works for MLX server, llama-server, Ollama.
-- `ToolDef.to_openai()` produces the standard `{type:"function", function:{…}}` schema; any OpenAI-compat server accepts it.
-- `_parse_tool_calls` handles both the structured `tool_calls` field and raw text JSON from models that skip the `<tool_call>` wrapper.
+**Introspection — `luxe_cli.providers.BackendProvider`.** Listing
+models, querying context length, server health, and prewarm differ
+per provider (`/api/show` vs `/v1/models` vs `/api/v0/models`). The
+protocol is the seam; concrete classes live in `providers/`:
+- `OllamaProvider` — wraps the existing `luxe_cli.backend` functions
+  (Ollama-specific endpoints).
+- `OpenAICompatProvider` — base for any `/v1/models`-style server.
+- `LMStudioProvider`, `OMLXProvider` — thin subclasses, each picking
+  the right auth env var (`LM_API_TOKEN` vs `OMLX_API_KEY`).
+- `get_provider(kind, base_url)` — single construction point.
+
+`ToolDef.to_openai()` produces the standard `{type:"function", function:{…}}`
+schema; any OpenAI-compat server accepts it. `_parse_tool_calls` handles
+both the structured `tool_calls` field and raw text JSON from models
+that skip the `<tool_call>` wrapper.
 
 ## Tool dispatch
 
@@ -183,17 +205,38 @@ Each tool reshapes its native JSON/JSONL/text output into a uniform
 `{findings: [...], count, note?}` payload capped at 150 items.
 Missing binaries or missing project markers produce a helpful
 `note` the model can read and adapt to rather than crashing. See
-`luxe/cli/README.md` for the full per-tool reference.
+`luxe/luxe_cli/README.md` for the full per-tool reference.
 
 ## Configuration
 
 `configs/agents.yaml` holds:
-- Top-level: `ollama_base_url`, `draw_things_url`, `image_output_dir`, `session_dir`
+- Top-level: `ollama_base_url` (legacy fallback URL),
+  `draw_things_url`, `image_output_dir`, `session_dir`,
+  `local_cache_dir` (where `/review` and `/refactor` clone target
+  repos — defaults to `local-cache` next to wherever luxe was launched;
+  blanket-ignored in `.gitignore` so clones never accidentally land in
+  a tracked tree)
+- `providers:` — named backend endpoints, e.g.
+  `lmstudio: { base_url: "http://127.0.0.1:1234", kind: lmstudio }`.
+  Agents reference these by key.
+- `default_provider:` — provider used when an agent doesn't set
+  `provider:` or `endpoint:`.
 - Per-agent: `model`, `system_prompt`, `temperature`, `max_steps`,
   `max_tokens_per_turn`, `max_wall_s`, `tools`, `enabled`,
-  `min_tool_calls` (investigation floor), `num_ctx` (Ollama
-  `options.num_ctx` override), `endpoint` (per-agent base URL, e.g.
-  llama-server for Gemma 3)
+  `min_tool_calls` (investigation floor), `num_ctx` (fixed
+  per-mode context window — Ollama-effective via `options.num_ctx`,
+  oMLX/llama-server honor server-side `--max-kv-size`), `provider`
+  (key in the providers map — preferred), `endpoint` (legacy
+  per-agent base URL — explicit URL wins over `provider` for the
+  migration window).
+
+`LuxeConfig.resolve_endpoint(agent)` is the single dispatch lookup:
+`agent.endpoint` → `providers[agent.provider]` →
+`providers[default_provider]` → `ollama_base_url` (legacy).
+Session JSONL records carry `provider` + `base_url` so cross-backend
+A/B comparisons can filter by which provider served each turn —
+tagged automatically by `Session.bind_backend(...)` wrapped around
+each dispatch.
 
 `LuxeConfig` (pydantic) validates on load. The runner applies cross-cutting
 settings (Draw Things endpoint, image output dir) once per dispatch before
@@ -201,25 +244,24 @@ invoking the specialist.
 
 ### Task-level and subtask-level budget overrides
 
-The static per-agent budgets above are the defaults. Two override
-axes sit on top:
+The static per-agent budgets above are the defaults. `num_ctx` is
+fixed per agent in `configs/agents.yaml` and not overridden at
+runtime — see "Per-mode ctx" below for the values and rationale.
 
-- **`Task.num_ctx_override`** (`luxe/tasks/model.py`). Set by
-  `/review` and `/refactor` based on a pre-flight repo survey
-  (`luxe/repo_survey.py:analyze_repo` → `size_budgets` → tier
-  table). Threads through `luxe/tasks/orchestrator.py:
-  _cfg_with_task_overrides`, which derives an
-  `AgentConfig.model_copy(update={"num_ctx": ...})` just for that
-  task's dispatches.
-- **`Subtask.num_ctx_override` / `Subtask.max_tokens_per_turn_override`**.
-  Populated by the planner at plan time — synthesis subtasks get a
-  doubled output cap so the severity-grouped report doesn't
-  truncate mid-category. Precedence: subtask > task > agent default.
+The remaining override axes:
 
-The `code` agent has its own `_resize_for_cwd()` hook in
-`luxe/agents/code.py` that surveys the current working directory at
-dispatch time and bumps `num_ctx`/`max_wall_s` for medium+ repos.
-No task wrapper needed — the hook runs before `run_agent()`.
+- **`Task.max_wall_s`**. Set by `/review` and `/refactor` based on a
+  pre-flight repo survey (`luxe/repo_survey.py:analyze_repo` →
+  `size_budgets` → tier table). Bigger repos get longer task walls;
+  ctx is unchanged.
+- **`Subtask.max_tokens_per_turn_override`**. Populated by the planner
+  at plan time — synthesis subtasks get a doubled output cap so the
+  severity-grouped report doesn't truncate mid-category.
+
+Both override axes thread through
+`luxe/tasks/orchestrator.py:_cfg_with_task_overrides`, which derives
+an `AgentConfig.model_copy(update={...})` just for that task's
+dispatches.
 
 ### Pre-retrieval for trace-bearing tasks
 

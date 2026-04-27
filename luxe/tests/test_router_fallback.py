@@ -6,7 +6,7 @@ docs / folders route to `writing` (it has the fs surface), everything
 else falls back to `general`.
 """
 
-from cli.router import _fallback_agent
+from luxe_cli.router import _fallback_agent
 
 ENABLED = ["general", "research", "writing", "image", "code"]
 

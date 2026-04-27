@@ -1,0 +1,35 @@
+name: luxe-tests
+
+on:
+  push:
+    paths:
+      - 'luxe/**'
+      - '.github/workflows/luxe-tests.yml'
+  pull_request:
+    paths:
+      - 'luxe/**'
+      - '.github/workflows/luxe-tests.yml'
+
+jobs:
+  pytest:
+    name: pytest (Python 3.11)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: luxe
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: latest
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync dev dependencies
+        run: uv sync --extra dev
+
+      - name: Run pytest
+        run: uv run pytest -x --tb=short

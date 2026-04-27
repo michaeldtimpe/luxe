@@ -16,7 +16,7 @@ from typing import Any, Literal
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-BackendKind = Literal["mlx", "llamacpp", "ollama"]
+BackendKind = Literal["mlx", "llamacpp", "ollama", "omlx", "lmstudio"]
 
 
 @dataclass
@@ -85,6 +85,34 @@ class Backend:
     # per-subtask wall (15 min) so the wall check fires first
     # instead of a httpx ReadTimeout bubbling up.
     timeout_s: float = 1200.0
+    # Optional bearer token. Required by oMLX (which gates
+    # /v1/chat/completions on an API key); ignored by Ollama and the
+    # local llama-server defaults. Read from OMLX_API_KEY at
+    # construction time when kind="omlx" and not supplied explicitly.
+    api_key: str = ""
+
+    def __post_init__(self) -> None:
+        import os
+        if self.api_key:
+            return
+        # Auto-load the right env var per kind. Both keys are sent as
+        # `Authorization: Bearer <key>`; both Ollama + llama-server
+        # ignore the header when they don't need it.
+        if self.kind == "omlx":
+            self.api_key = os.environ.get("OMLX_API_KEY", "")
+        elif self.kind == "lmstudio":
+            # LM Studio's official env name is LM_API_TOKEN
+            # (per their auth docs). LMSTUDIO_API_KEY kept as a
+            # fallback for backward compat. Most installs don't need
+            # either — auth is OFF by default in the local server.
+            self.api_key = (
+                os.environ.get("LM_API_TOKEN")
+                or os.environ.get("LMSTUDIO_API_KEY")
+                or ""
+            )
+
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
     def client(self) -> httpx.Client:
         # Per-axis timeouts: short connect/write so a dead backend
@@ -95,7 +123,9 @@ class Backend:
             write=60.0,
             pool=30.0,
         )
-        return httpx.Client(base_url=self.base_url, timeout=timeout)
+        return httpx.Client(
+            base_url=self.base_url, timeout=timeout, headers=self._auth_headers()
+        )
 
     @retry(
         stop=stop_after_attempt(3),

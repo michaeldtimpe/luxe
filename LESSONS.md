@@ -120,6 +120,15 @@ Trade-offs I settled on:
 **Rule of thumb:** for tool-heavy agents, scale down the model class
 before scaling down the context window.
 
+**Background reading on the KV-bits knob.** Both inference engines
+luxe drives expose KV-cache quantization (`mlx_lm.server --kv-bits`,
+`llama-server --cache-type-k q8_0`). For why those knobs exist and
+where the research is heading, see TurboQuant
+(https://arkaung.github.io/interactive-turboquant/) — a walkthrough
+of the DRIVE → EDEN → QJL → PolarQuant → TurboQuant lineage that
+gets KV vectors down to 2–4 bits/coord with near-optimal distortion.
+Not implemented in either engine yet; cited as background only.
+
 ---
 
 ## Small models confidently state false things
@@ -322,40 +331,38 @@ walks the clone (skipping `.git`, `.venv`, `node_modules`, `target/`,
 etc.), counts source files by extension, sums LOC, and maps to a
 tier:
 
-| Tier   | LOC             | task wall | num_ctx | Source basis                |
-|--------|-----------------|-----------|---------|-----------------------------|
-| tiny   | <500            | 30 min    | 8k      | matches zoleb (769 LOC=small) |
-| small  | 500–2 000       | 45 min    | 8k      |                              |
-| medium | 2 000–10 000    | 60 min    | 24k     | elara (7 797 LOC)            |
-| large  | 10 000–50 000   | 90 min    | 24k     | luxe itself (7 822 LOC=medium) |
-| huge   | 50 000+         | 120 min   | 32k     | watch KV-cache RAM          |
-
-Medium / large bumped from 16k → 24k after the 2026-04-24 elara rerun:
-one inspection subtask logged ~33k cumulative prompt tokens across 16
-tool calls, meaning the per-turn context kept pressing against the
-16k cap and Ollama was silently dropping the oldest messages (no log
-signal — the agent just quietly "forgot" earlier reads). 24k at
-qwen2.5:32b Q4_K_M costs ~5 GB more KV cache than 16k; acceptable on
-64 GB unified memory.
+| Tier   | LOC             | task wall | Source basis                   |
+|--------|-----------------|-----------|--------------------------------|
+| tiny   | <500            | 30 min    | matches zoleb (769 LOC=small)  |
+| small  | 500–2 000       | 45 min    |                                |
+| medium | 2 000–10 000    | 60 min    | elara (7 797 LOC)              |
+| large  | 10 000–50 000   | 90 min    | luxe itself                    |
+| huge   | 50 000+         | 120 min   |                                |
 
 Numbers grounded in two sources: the A/B decode data in
 `results/ab_ollama_vs_llamacpp/REPORT.md` (qwen2.5:32b ≈ 7.6 tok/s,
 so ~1500-token subtask output ≈ 3.3 min pure decode) and the 2026-
 04-23 elara run's observed 13-min/subtask inspection cost.
 
-Also added `Task.num_ctx_override` — the tier's ctx value threads
-through the orchestrator via `AgentConfig.model_copy(update={...})`
-without touching the static YAML defaults. Only applies to
-review/refactor agents; other specialists keep their configured ctx.
+**2026-04-27: ctx-per-tier dropped — fixed per-mode ctx instead.**
+Originally this table also picked `num_ctx` per tier (8k→32k by LOC),
+threaded through `Task.num_ctx_override`. With one model loaded at a
+time on oMLX and a known hardware budget, the tier-driven ctx sizing
+was solving a problem we don't have. Each agent now carries a fixed
+`num_ctx` value in `configs/agents.yaml` (router 8k, general/lookup
+16k, image 8k, code/review/refactor/research/calc 32k, writing 131k);
+the LM Studio Qwen-32B tool-loop bug also argued for capping
+tool-calling 32B at native 32k rather than YaRN-extending it. Wall-
+time tiering stays — that one still depends on input size.
 
 Printed rationale at plan time so the sizing is visible and
 challengeable:
 
-    repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min wall, 24k ctx
+    repo survey: 17 python source file(s) · 7,797 LOC · medium → 60 min wall
 
-**Principle:** static config is the wrong place for a decision that
-depends on the input. If you can compute the right value at task
-spawn, do that instead.
+**Principle:** static config is the right place for a decision that
+doesn't depend on the input. If a value can be picked once and lived
+with, don't keep recomputing it.
 
 ---
 
@@ -489,7 +496,7 @@ systematically wrong `@@ -a,b +c,d @@` counts.
    review agents read raw files via `read_file`; no pre-filter, no
    summarization, no outline pass. Validated by data.
 2. The orchestrator pre-reads files cited in pasted tracebacks
-   (`_augment_with_trace_hints` in `luxe/cli/tasks/orchestrator
+   (`_augment_with_trace_hints` in `luxe/luxe_cli/tasks/orchestrator
    .py`) — this is the one positive transfer from the benchmark.
    Oracle-style retrieval when the user has already named the file.
 3. **Do not add** a file-summarisation pass, AST outlining, or
@@ -499,7 +506,7 @@ systematically wrong `@@ -a,b +c,d @@` counts.
 Shared trace parser at `luxe/shared/trace_hints.py` is used by
 both the orchestrator and the benchmark's `stack_trace_guided`
 strategy. The same selectivity principle is also applied structurally:
-`luxe/cli/import_graph.py` walks the repo's Python AST to build a
+`luxe/luxe_cli/import_graph.py` walks the repo's Python AST to build a
 first-hop import / imported-by index, and `_augment_with_trace_hints`
 expands each cited file with up to `max_files − 1` neighbors. The
 agent's turn 1 starts with the cited module *plus* its closest
@@ -530,7 +537,7 @@ certainly losing older context silently.
 **Responses:**
 
 1. Bumped `medium` / `large` tiers in
-   `luxe/cli/repo_survey.py` from 16k → 24k. Costs ~5 GB more KV
+   `luxe/luxe_cli/repo_survey.py` from 16k → 24k. Costs ~5 GB more KV
    cache on qwen2.5:32b Q4_K_M; gains the headroom the workload
    actually needs.
 2. The heuristic is now: if `sub.prompt_tokens ≥ 0.5 × num_ctx`, the
@@ -554,7 +561,7 @@ a traceback token, a file path with `.py`, `draft an essay`, `compute
 Running the LLM on those costs ~1–2 s per turn for no decision
 quality gain.
 
-`luxe/cli/heuristic_router.py` is a pure-regex scorer with
+`luxe/luxe_cli/heuristic_router.py` is a pure-regex scorer with
 per-agent feature tables. It returns `(agent, confidence, scores)` or
 `None`, with the None triggering fallthrough to the LLM. Key design
 points:
@@ -668,3 +675,236 @@ Two things fell out of this:
 **Principle:** give observability a UX flag instead of conditional
 logging. Keep the persisted stream complete; let the viewer decide how
 much to show.
+
+---
+
+## The MLX engine itself wins, not the SSD cache
+
+Adopted oMLX in April 2026 expecting the SSD-paged KV cache to be the
+big win — that was the briefing's framing. The actual measurement said
+something different: oMLX's **mlx-lm engine** beats Ollama's vendored
+`llama.cpp` by **1.5×** on decode tok/s for every workload tested,
+*before* any cache or speculative-decoding configuration. Same Q4_K_M
+weights, same hardware (M1 Max 64 GB), same 30-task BFCL/HumanEval+
+sweep:
+
+| Model          | Ollama tok/s | oMLX tok/s | oMLX/Ollama |
+|----------------|-------------:|-----------:|------------:|
+| qwen2.5-coder-14b on HumanEval+ | 18.8 | **29.4** | 1.56× |
+| qwen2.5-32b-instruct on HumanEval+ | 8.0 | **12.3** | 1.54× |
+| qwen2.5-7b-instruct on decode_throughput | 32.2 | **49.4** | 1.53× |
+
+Pass rates are identical or slightly higher on oMLX. The migration
+playbook is just `provider: omlx` (preferred) or
+`endpoint: http://127.0.0.1:8000` (legacy) plus `OMLX_API_KEY` set —
+no hyperparameter changes, no cache tuning. See the "Provider
+migration" section in `luxe/luxe_cli/README.md` for the full
+playbook including LM Studio.
+
+**Trade-off:** oMLX TTFT is ~60% slower than Ollama on the 32B model
+(2.2 s vs 1.4 s on HumanEval+). For agents that emit multi-paragraph
+outputs (`code`, `review`, `refactor`) the decode win dominates net
+wall time. For agents that emit one-shot snippets (`lookup`, the
+deterministic pre-router calls), the TTFT regression matters more —
+keep them on Ollama.
+
+**Principle:** measure the engine, not just the feature. The thing
+the marketing touted (SSD cache) was load-bearing for the adoption
+*decision* but turned out to be a footnote next to the unrelated
+engine-level perf delta.
+
+---
+
+## Cold/warm cache_benefit_ratio is meaningless against an SSD-paged cache
+
+The first version of `prefix_cache_decay`'s adoption gate compared
+`ttft_cold / ttft_warm` between backends. The intuition: a server with
+prefix caching should show a big ratio (cold first hit, fast warm
+subsequent hits); higher ratio = bigger cache win.
+
+Then I measured it on oMLX. The ratio collapsed to **~1.0×** —
+because oMLX's SSD-paged cache makes the supposedly-cold first
+request also hit a warm cache (it persists across processes, even
+across OS restarts). Meanwhile Ollama's in-memory cache showed a
+cold/warm ratio of **77×** because its first request actually was
+cold. The metric was telling me oMLX had *worse* prefix caching than
+Ollama, when in reality oMLX never goes cold in the first place.
+
+**Fix:** P3 now compares **absolute TTFT median** at 16k between
+backends (`omlx ≤ 50% × ollama`). The cold/warm ratio is still
+computed and surfaced as supplemental info — useful for *Ollama*
+where the cache is in-memory and process-bound, but useless as a
+gate against a persistent cache.
+
+**Principle:** the metric you reach for to measure a cache assumes
+the cache is invalidated between observations. If the cache survives
+your "reset," you're not measuring the cache, you're measuring the
+warm path twice.
+
+---
+
+## Speculative decoding is conditional, not a default
+
+Tested two implementations of draft-model speculative decoding on
+`qwen2.5-coder:14b` against baseline (HumanEval+, decode_throughput,
+prefix_cache_decay × 30 tasks each, 0.5B coder draft):
+
+| Workload | Output length | omlx +DFlash | llama-server +spec |
+|---|---|---|---|
+| decode_throughput (~1000 tok prose) | LONG | **1.64×** ✅ | 0.81× ❌ |
+| humaneval_plus (~50–100 tok code) | MEDIUM | 0.91× ❌ | **1.51×** ✅ |
+| prefix_cache_decay (~50 tok answers) | SHORT | 0.92× ≈ | 0.96× ≈ |
+
+Neither is a universal win, and the two implementations optimize for
+**opposite output-length regimes**. The reason is the per-request
+setup cost — drafting needs a small initial K/V scaffold, and that
+cost gets amortized across the decoded tokens. Long decodes amortize
+the setup; short decodes don't, and you go net-negative.
+
+DFlash's amortization curve is later — wins only on the 1000+ token
+range. llama-server's spec implementation pays its setup cost faster
+and hits the break-even point in the 50–100 tok range, which is the
+HumanEval+ shape. The "speculative decoding gives 2× decode" claim in
+the briefing assumed long outputs without saying so; the truth is
+shape-dependent and engine-dependent.
+
+**Practice:** spec decoding is per-agent / per-workload, not a
+backend-wide flag. Enable for `writing` (long-form prose) and `calc`
+(multi-step output); skip for `lookup` (one-shot answers) and `code`
+agents that emit short tool-call snippets.
+
+---
+
+## Bearer auth on `/v1/`, cookie auth on `/admin/api/`
+
+oMLX's `/v1/chat/completions` accepts an `Authorization: Bearer
+<key>` header — standard OpenAI-compat. Its `/admin/api/*` endpoints
+(used to configure DFlash, list models, trigger HF downloads) reject
+the same Bearer token with 401 and require a **session cookie**
+obtained by `POST /admin/api/login` with `{"api_key": "<key>"}`.
+
+This split isn't called out in the OpenAPI spec — the
+`securitySchemes` section only lists `HTTPBearer`. The first attempt
+at `omlx_configure_dflash.py` failed with a confusing 401 from the
+admin endpoint because the same key worked everywhere else.
+
+**Fix:** the admin client is a separate `httpx.Client` that does the
+login first and reuses the cookie jar. Keep it as a context manager
+so the cookie session is scoped to one CLI invocation.
+
+**Principle:** when one base URL serves both an OpenAI-compatible
+surface and a vendor-specific admin surface, assume the auth schemes
+diverge. Probe both before committing to a wiring.
+
+---
+
+## Adding a new tool name needs the Literal AND the agent runner
+
+The browser tool's first wiring shipped with `browse_navigate` /
+`browse_read` added to (a) `luxe_cli/tools/browser.py`, (b) `agents.yaml`'s
+tool list, and (c) the agent runners (`luxe_cli/agents/research.py` and
+`lookup.py`). It worked in isolation but broke `luxe_cli/registry.py:
+load_config()` with a Pydantic `literal_error` — the `ToolName`
+Literal type didn't include the new tool names, so config validation
+rejected every agent that listed them.
+
+The Literal exists deliberately: it catches typos in `agents.yaml` at
+load time rather than at first tool invocation. The cost is that
+adding a new tool requires touching four places, and the failure mode
+is a long Pydantic dump that doesn't immediately point at the missing
+Literal entry.
+
+**Principle:** when validation lives in a type rather than a runtime
+check, document the full add-a-tool checklist next to the type. The
+checklist for luxe:
+
+1. Implement the tool fn + `ToolDef` in `luxe_cli/tools/<name>.py`
+2. Add to `luxe_cli/registry.py:ToolName` Literal
+3. List in the relevant agent in `configs/agents.yaml`
+4. Import and merge `tool_defs` + `TOOL_FNS` in `luxe_cli/agents/<agent>.py`
+5. Update the agent's system prompt with usage guidance
+
+Skipping any one step has a different failure mode: missing the
+Literal kills config load entirely; missing the agent runner means
+the tool is registered in config but never available at dispatch.
+
+---
+
+## Cached benchmark slots are sticky — name them carefully
+
+`benchmarks/_common.py:run_benchmark()` skips task IDs already present
+in the JSONL log (it's resumable on purpose). That works fine for
+`--limit 30` re-runs of the *same* config — you pick up where you left
+off — but it silently no-ops when you re-run a sweep against the same
+`config_id` after changing the underlying backend setup.
+
+Hit this when configuring DFlash on the 14B coder: the second sweep
+(with DFlash on) wrote into `omlx_q4km/` — the same slot as the
+no-DFlash baseline — and the JSONL skipped every task. The DFlash
+measurements got mixed into the baseline file, the "comparison" was
+noise, and it took a re-run with `rm -rf <slot>` to recover.
+
+**Fix:** added `--config-suffix _dflash` to `run_ab_benchmark.py` so
+variant runs land in a distinct dir (`omlx_q4km_dflash/`) without
+polluting the baseline cache. The slot name is the identity — change
+ANY input that affects the measurement and you need a new slot.
+
+**Principle:** when a benchmark runner is resumable, the config
+identity has to encode every dimension of the experiment. A config
+suffix per variant beats a single bucket per backend.
+
+---
+
+## Single-turn benchmarks miss the multi-turn growth regime
+
+The April 2026 oMLX migration was decided on HumanEval+ at 30 tasks ×
+~1k prompt tokens × ~50 output tokens per task. oMLX won by 1.54× on
+the 32B model. Migrated `review` and `refactor` agents same day.
+
+A real `/review` invocation looked like a regression on oMLX:
+
+| Subtask | Ollama wall | oMLX wall | Notes |
+|---|---|---|---|
+| sub 01 (~7k prompt) | 1m 11s | 1m 07s | parity |
+| sub 02 (~10–13k prompt) | 2m 04s | 2m 53s | +40% |
+| sub 03 (~13k+ prompt) | 3m 49s total | >8m to first tool call | catastrophic |
+
+I rolled back review/refactor to Ollama based on this. **That was
+premature.** Re-running on the rolled-back Ollama setup showed the
+same multi-turn slowness — the 8-minute first-tool-call gap on sub 03
+isn't an oMLX property, it's inherent to running a 32B at ~13k
+prompt + multi-paragraph output. The morning's Ollama timing was
+likely benefiting from in-process prefix-cache state that didn't
+survive between sessions. Reverted the rollback the same day; oMLX
+keeps its measured +54% decode win on the comparable single-turn
+slice.
+
+**The lasting lesson is methodological, not directional:**
+
+1. **One run isn't a measurement.** I compared the morning's Ollama
+   run to the evening's oMLX run as if they were a controlled A/B,
+   but they weren't — different cache state, different system load,
+   different recently-loaded-into-RAM models. A migration call
+   needs a back-to-back same-session comparison or it's noise.
+2. **Prompt-length distribution still matters for benchmarks.** The
+   `humaneval_plus`-shape (~1k prompt) doesn't predict behavior at
+   13k+ prompts on either backend. The decode-rate win is real and
+   does carry over; the *absolute wall time* at long prompts is
+   dominated by prefill compute regardless of backend, and that's
+   what I mistakenly attributed to oMLX.
+3. **Per-tool-call event log is the authoritative diagnostic.**
+   `/tasks tail <id>` shows only subtask begin/end. The gap between
+   `begin` and the first `tool_call_begin` event in
+   `~/.luxe/tasks/<id>/log.jsonl` is where you see the prefill cost.
+   That field is what told me the rollback was right; running the
+   same diagnostic on the rolled-back Ollama setup is what told me
+   it was wrong.
+
+**Principle:** when an agent's prompt grows monotonically over
+subtasks (orchestrator workflows, RAG, long-context reasoning), add
+a sweep tier at the actual prompt-length percentile (16k–32k for
+review/refactor) AND test back-to-back in the same session before
+trusting a migration call. See `benchmarks/prefix_cache_decay.py`
+for the 4k/16k/32k slicing — extend that pattern to
+`humaneval_plus_long_prefix` for the next backend swap. And don't
+let one data point unwind a migration the benchmark earned.

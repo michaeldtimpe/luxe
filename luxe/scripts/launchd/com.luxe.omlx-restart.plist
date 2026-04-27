@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+Daily restart of the brew-managed omlx service. Workaround for the
+latent MLX/Metal `gpu::check_error` crash that has historically taken
+the daemon down mid-overnight (see ~/.claude/.../project_omlx_metal_crashes.md).
+launchd's KeepAlive on homebrew.mxcl.omlx auto-recovers, but pre-crash
+restarts every 24h give the kernel/Metal driver a clean slate before
+long unattended runs.
+
+Install (one time):
+    cp scripts/launchd/com.luxe.omlx-restart.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.luxe.omlx-restart.plist
+
+Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.luxe.omlx-restart.plist
+    rm ~/Library/LaunchAgents/com.luxe.omlx-restart.plist
+
+Verify it's scheduled:
+    launchctl list | grep com.luxe.omlx-restart
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.luxe.omlx-restart</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/brew</string>
+        <string>services</string>
+        <string>restart</string>
+        <string>omlx</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOMEBREW_NO_AUTO_UPDATE</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/opt/homebrew/var/log/omlx-restart.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/homebrew/var/log/omlx-restart.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
