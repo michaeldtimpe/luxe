@@ -22,6 +22,27 @@ from __future__ import annotations
 
 from typing import Iterator, Protocol, runtime_checkable
 
+from luxe_cli.providers.lmstudio import LMStudioProvider
+from luxe_cli.providers.ollama import OllamaProvider
+
+
+def get_provider(kind: str, base_url: str | None = None) -> "BackendProvider":
+    """Construct the provider for a given kind. base_url defaults to the
+    canonical local port for that kind (see luxe_cli.backend._BACKEND_OVERRIDE_URLS)."""
+    from luxe_cli.backend import _BACKEND_OVERRIDE_URLS
+
+    url = base_url or _BACKEND_OVERRIDE_URLS.get(kind)
+    if url is None:
+        raise ValueError(f"unknown provider kind: {kind!r}")
+    if kind == "ollama":
+        return OllamaProvider(url)
+    if kind == "lmstudio":
+        return LMStudioProvider(url)
+    raise ValueError(f"no provider registered for kind: {kind!r}")
+
+
+__all__ = ["BackendProvider", "OllamaProvider", "LMStudioProvider", "get_provider"]
+
 
 @runtime_checkable
 class BackendProvider(Protocol):
