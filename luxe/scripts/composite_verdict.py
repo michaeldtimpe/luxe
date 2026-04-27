@@ -76,15 +76,51 @@ def _load_spec_verdict(out_dir: Path, candidate: str) -> dict | None:
 
 
 def _load_multi_turn(out_dir: Path) -> list[dict]:
-    """Pull Phase 3 /review run records from the overnight state.json."""
-    state_path = out_dir / "state.json"
-    if not state_path.exists():
-        return []
-    state = json.loads(state_path.read_text())
-    phase = state.get("phases", {}).get("multi_turn_reviews", {})
-    if phase.get("status") != "done":
-        return []
-    return phase.get("result", {}).get("runs", [])
+    """Pull Phase 3 /review run records.
+
+    Prefers `multi_turn_runs.jsonl` (produced by aggregate_multi_turn.py)
+    because state.json's `result.runs` only retains the LAST sub-chunk's
+    record — each `--only multi_turn_reviews` invocation overwrites it.
+    The jsonl is the authoritative cross-(repo, backend) view.
+
+    When multiple runs exist for the same (repo, backend) — e.g. a
+    pre-fix degenerate plan plus a post-fix real run — keep only the
+    "best" (most subtasks completed, ties broken by latest started_at).
+    That way verdicts use the most authoritative data without us having
+    to delete bad records from disk.
+    """
+    jsonl_path = out_dir / "multi_turn_runs.jsonl"
+    runs: list[dict] = []
+    if jsonl_path.exists():
+        for line in jsonl_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                runs.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    else:
+        # Fall back to state.json (legacy single-record path).
+        state_path = out_dir / "state.json"
+        if not state_path.exists():
+            return []
+        state = json.loads(state_path.read_text())
+        phase = state.get("phases", {}).get("multi_turn_reviews", {})
+        if phase.get("status") != "done":
+            return []
+        runs = phase.get("result", {}).get("runs", [])
+
+    # Dedupe per (repo, backend) — keep most subtasks_done, then latest.
+    best: dict[tuple[str, str], dict] = {}
+    for r in runs:
+        key = (r.get("repo", "?"), r.get("backend", "?"))
+        prev = best.get(key)
+        score = (r.get("subtasks_done", 0), r.get("started_at", ""))
+        if prev is None or score > (prev.get("subtasks_done", 0),
+                                     prev.get("started_at", "")):
+            best[key] = r
+    return list(best.values())
 
 
 def _wall_summary_per_backend(runs: list[dict]) -> dict[str, dict]:
