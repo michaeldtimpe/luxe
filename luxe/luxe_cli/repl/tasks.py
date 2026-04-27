@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -10,6 +11,9 @@ from rich.table import Table
 from rich.text import Text
 
 from luxe_cli.registry import LuxeConfig
+
+if TYPE_CHECKING:
+    from luxe_cli.repl.core import ReplState
 
 console = Console()
 
@@ -174,12 +178,24 @@ def _tasks_watch(partial: str | None) -> None:
         console.print(f"[red]watch failed:[/red] {e}")
 
 
-def _tasks_tail(partial: str | None, verbose: bool = False) -> None:
+def _tasks_tail(
+    partial: str | None,
+    verbose: bool = False,
+    state: "ReplState | None" = None,
+    cfg: LuxeConfig | None = None,
+) -> None:
     """Follow a task's log.jsonl in real time and render events with the
     same sync-mode formatter. When `verbose` is True, also surface
     per-tool-call begin/end events (name + args preview + duration).
     Exits when the task hits a `finish` event or the subprocess is no
-    longer alive."""
+    longer alive.
+
+    When `state` and `cfg` are passed, the tail folds each subtask's
+    `prompt_tokens` / `completion_tokens` / `wall_s` into the REPL
+    session totals as `end` events arrive (each subtask counts as one
+    turn). A snapshot of `ctx` + `session totals` is printed under the
+    `following …` header and again on task finish.
+    """
     import json as _json
     import time as _time
 
@@ -193,11 +209,47 @@ def _tasks_tail(partial: str | None, verbose: bool = False) -> None:
         f"[dim]following[/dim] [cyan]{task.id}[/cyan]{mode} "
         f"[dim](Ctrl-C to stop watching)[/dim]"
     )
+    if state is not None and cfg is not None:
+        _render_tail_totals(state, cfg)
+
+    seen_subtasks: set[str] = set()
+
+    def _process_event(event: dict) -> None:
+        _sync_event_printer(event, verbose=verbose)
+        if state is None or cfg is None:
+            return
+        kind = event.get("event", "")
+        if kind == "begin":
+            model = event.get("model") or ""
+            if model:
+                state.last_model = model
+            agent = event.get("agent") or ""
+            if agent and cfg is not None:
+                try:
+                    state.last_endpoint = cfg.resolve_endpoint(cfg.get(agent))
+                except Exception:  # noqa: BLE001
+                    pass
+        elif kind == "end":
+            sub_id = event.get("subtask") or ""
+            if sub_id and sub_id in seen_subtasks:
+                return  # replay-pass dedupe
+            if sub_id:
+                seen_subtasks.add(sub_id)
+            pt = event.get("prompt_tokens") or 0
+            ct = event.get("completion_tokens") or 0
+            wall = event.get("wall_s") or 0.0
+            state.total_prompt_tokens += int(pt)
+            state.total_completion_tokens += int(ct)
+            state.total_wall_s += float(wall)
+            state.turns += 1
+            if pt:
+                state.last_ctx_used = int(pt)
+
     # Replay what's already on disk first so the user sees current state.
     if log_path.exists():
         for line in log_path.read_text().splitlines():
             try:
-                _sync_event_printer(_json.loads(line), verbose=verbose)
+                _process_event(_json.loads(line))
             except _json.JSONDecodeError:
                 continue
 
@@ -205,6 +257,8 @@ def _tasks_tail(partial: str | None, verbose: bool = False) -> None:
     from luxe_cli.tasks import load as _load_task
     latest = _load_task(task.id)
     if latest and latest.finished():
+        if state is not None and cfg is not None:
+            _render_tail_totals(state, cfg)
         return
 
     # Incremental tail: reopen file on each poll, seek past what we've seen.
@@ -225,10 +279,12 @@ def _tasks_tail(partial: str | None, verbose: bool = False) -> None:
                 seen = size
                 for line in chunk.splitlines():
                     try:
-                        _sync_event_printer(_json.loads(line), verbose=verbose)
+                        _process_event(_json.loads(line))
                     except _json.JSONDecodeError:
                         continue
             if latest and latest.finished():
+                if state is not None and cfg is not None:
+                    _render_tail_totals(state, cfg)
                 return
             # Subprocess died without writing 'finish' → give up politely.
             if latest and latest.pid and not latest.is_alive() and not latest.finished():
@@ -236,6 +292,35 @@ def _tasks_tail(partial: str | None, verbose: bool = False) -> None:
                 return
     except KeyboardInterrupt:
         console.print("[dim]stopped watching[/dim]")
+        if state is not None and cfg is not None:
+            _render_tail_totals(state, cfg)
+
+
+def _render_tail_totals(state: "ReplState", cfg: LuxeConfig) -> None:
+    """Two-line snapshot — ctx + session totals — printed under the
+    `following …` header and again on task finish/abort. Mirrors the
+    format `_print_stats` uses after foreground turns so the eye
+    recognizes it without re-parsing."""
+    from luxe_cli.backend import context_length
+    from luxe_cli.repl.status import _fmt_wall
+
+    model = state.last_model or "(unknown)"
+    endpoint = state.last_endpoint or ""
+    ctx_total = context_length(model, endpoint) if endpoint else 0
+    used = state.last_ctx_used
+    free = max(ctx_total - used, 0) if ctx_total else 0
+    pct_free = (free / ctx_total * 100.0) if ctx_total else 100.0
+
+    console.print(
+        f"[dim]ctx: {used:,}/{ctx_total:,} ({pct_free:.0f}% free) · "
+        f"{model}[/dim]"
+    )
+    console.print(
+        f"[dim]session totals: {state.turns} turns · "
+        f"{_fmt_wall(state.total_wall_s)} · "
+        f"{state.total_prompt_tokens:,}↑ "
+        f"{state.total_completion_tokens:,}↓ tokens[/dim]"
+    )
 
 
 def _tasks_log(partial: str | None, tail: int = 20) -> None:
