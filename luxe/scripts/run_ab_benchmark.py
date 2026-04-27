@@ -60,7 +60,6 @@ _CONFIG_IDS = {
     "ollama": "ollama_q4km",
     "llamacpp": "llamacpp_q4km",
     "omlx": "omlx_q4km",
-    "lmstudio": "lmstudio_q4km",
 }
 
 ALL_BENCHES = {
@@ -135,7 +134,6 @@ def main(
     report_only: bool = typer.Option(False, "--report-only"),
     ollama_url: str = typer.Option("http://127.0.0.1:11434", "--ollama-url"),
     omlx_url: str = typer.Option("http://127.0.0.1:8000", "--omlx-url"),
-    lmstudio_url: str = typer.Option("http://127.0.0.1:1234", "--lmstudio-url"),
     phase: str = typer.Option(PHASE, "--phase",
         help="Override results phase dir (e.g. ab_ollama_vs_omlx)."),
     config_suffix: str = typer.Option("", "--config-suffix",
@@ -195,7 +193,6 @@ def main(
                     draft=None,
                     ollama_base_url=ollama_url,
                     omlx_base_url=omlx_url,
-                    lmstudio_base_url=lmstudio_url,
                 ) as backend:
                     cfg_id = _CONFIG_IDS[kind] + config_suffix
                     for bk in bench_keys:

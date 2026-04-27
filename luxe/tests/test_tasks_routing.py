@@ -18,9 +18,10 @@ def test_analyze_review_routes_to_start_review_task(tmp_path, monkeypatch):
     runner = CliRunner()
     called: dict = {}
 
-    def fake_start(url_or_path, mode, cfg):
+    def fake_start(url_or_path, mode, cfg, *, use_plan_cache=True):
         called["url_or_path"] = url_or_path
         called["mode"] = mode
+        called["use_plan_cache"] = use_plan_cache
         return "20260423T010203-fake-tid"
 
     # Fake the load_config so we don't parse the real agents.yaml.

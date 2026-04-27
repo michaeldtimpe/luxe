@@ -45,7 +45,7 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
         num_ctx_override=decision.num_ctx,
         analyzer_languages=sorted(survey.language_breakdown.keys()) or None,
     )
-    task.subtasks = plan(goal, cfg, task.id)
+    task.subtasks = plan(goal, cfg, task.id, cache_key=(str(repo_path), mode))
     # Pin every subtask to the dedicated agent — planner may default to
     # `code`, but we want the review-flavored system prompt on the whole
     # run.

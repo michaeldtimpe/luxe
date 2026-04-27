@@ -8,6 +8,7 @@ import re
 
 from cli.backend import make_backend
 from cli.registry import LuxeConfig
+from cli.tasks import plan_cache
 from cli.tasks.model import Subtask, subtask_id
 
 
@@ -113,35 +114,48 @@ def _extract_json_array(text: str) -> list | None:
         return None
 
 
-def plan(goal: str, cfg: LuxeConfig, task_id_full: str) -> list[Subtask]:
+def plan(
+    goal: str,
+    cfg: LuxeConfig,
+    task_id_full: str,
+    *,
+    cache_key: tuple[str, str] | None = None,
+    use_cache: bool = True,
+) -> list[Subtask]:
     """Ask the router LLM to decompose `goal`. Falls back to a single-subtask
-    pseudo-plan if the LLM misbehaves — orchestrator will route it."""
-    router_cfg = cfg.get("router")
-    # ignore_override: planner is meta-orchestration. When an overnight
-    # run sets LUXE_BACKEND_OVERRIDE to redirect the WORKLOAD agent to
-    # oMLX/LM Studio for comparison, the planner must keep using Ollama
-    # — its tiny router model (qwen2.5:7b-instruct) isn't tagged on
-    # those backends, and a misrouted plan request silently degrades
-    # into the 1-subtask fallback below.
-    backend = make_backend(
-        router_cfg.model, base_url=cfg.ollama_base_url, ignore_override=True
-    )
-    try:
-        resp = backend.chat(
-            [
-                {"role": "system", "content": _PLAN_SYSTEM_PROMPT},
-                {"role": "user", "content": goal},
-            ],
-            max_tokens=1024,
-            temperature=0.1,
-            stream=False,
-        )
-    except Exception:  # noqa: BLE001
-        resp = None
+    pseudo-plan if the LLM misbehaves — orchestrator will route it.
 
+    `cache_key` is `(repo_path, mode)` for /review and /refactor flows;
+    pass None for ad-hoc REPL goals (no cache lookup or store). Set
+    `use_cache=False` to force a fresh LLM decomposition while still
+    populating the cache on success.
+    """
     entries: list | None = None
-    if resp and resp.text:
-        entries = _extract_json_array(resp.text)
+    if cache_key and use_cache:
+        entries = plan_cache.lookup(*cache_key)
+
+    if entries is None:
+        router_cfg = cfg.get("router")
+        endpoint = router_cfg.endpoint or cfg.ollama_base_url
+        backend = make_backend(router_cfg.model, base_url=endpoint)
+        try:
+            resp = backend.chat(
+                [
+                    {"role": "system", "content": _PLAN_SYSTEM_PROMPT},
+                    {"role": "user", "content": goal},
+                ],
+                max_tokens=1024,
+                temperature=0.1,
+                stream=False,
+            )
+        except Exception:  # noqa: BLE001
+            resp = None
+
+        if resp and resp.text:
+            entries = _extract_json_array(resp.text)
+
+        if entries and cache_key:
+            plan_cache.store(*cache_key, entries)
 
     if not entries:
         entries = [{"title": goal, "agent": ""}]

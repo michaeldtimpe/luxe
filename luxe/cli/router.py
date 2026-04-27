@@ -172,7 +172,9 @@ def route(
                 })
             return RouterDecision(agent=agent, task=prompt, reasoning=reasoning)
 
-    backend = make_backend(router_cfg.model, base_url=cfg.ollama_base_url)
+    backend = make_backend(
+        router_cfg.model, base_url=router_cfg.endpoint or cfg.ollama_base_url
+    )
 
     tools = _build_tools(enabled)
     messages: list[dict[str, Any]] = [

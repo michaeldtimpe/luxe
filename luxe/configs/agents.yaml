@@ -11,7 +11,12 @@ session_dir: "~/.luxe/sessions"
 agents:
   - name: router
     display: "Interpreter / task router"
-    model: "qwen2.5:7b-instruct"    # Phase 1 primary candidate; fallback gemma3:12b
+    # 2026-04-27: migrated from Ollama → oMLX as part of "all Qwen → oMLX"
+    # commit. The planner reads this agent's model+endpoint via cfg.get(
+    # "router"); ignore_override is no longer needed because override and
+    # canonical now agree.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.1
     max_steps: 4
     max_tokens_per_turn: 512
@@ -23,7 +28,9 @@ agents:
 
   - name: general
     display: "General-purpose chat"
-    model: "qwen2.5:7b-instruct"    # selected after Phase 2 eval (1.7s avg, concise)
+    # 2026-04-27: migrated to oMLX. Same weights, MLX engine.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.3
     max_steps: 3
     max_tokens_per_turn: 2048
@@ -47,7 +54,9 @@ agents:
     # Small + fast; grounded by live search snippets so hallucinations
     # are bounded even on 7B. No fetch_url — if snippets don't have
     # the answer, the agent must say so rather than escalate.
-    model: "qwen2.5:7b-instruct"
+    # 2026-04-27: migrated to oMLX.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.1
     max_steps: 3
     max_tokens_per_turn: 1024
@@ -85,7 +94,10 @@ agents:
 
   - name: research
     display: "Deep research (web-enabled)"
-    model: "qwen2.5:32b-instruct"    # selected after Phase 3 eval (correct answers; 7b hallucinated, 70b OOM)
+    # 2026-04-27: migrated from Ollama → oMLX. Same weights as review/
+    # refactor/calc; oMLX shows decisive decode wins on this model class.
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 10
     max_tokens_per_turn: 4096
@@ -154,12 +166,16 @@ agents:
 
   - name: writing
     display: "Creative writing"
-    # Phase 4 picked gemma3:27b for voice, but Ollama's gemma3 manifest has
-    # no `tools` capability — 400s whenever we pass a tool list. Served
-    # instead via llama-server with --jinja, which DOES render Gemma 3's
-    # native function-call format. See endpoint below.
-    model: "gemma-3-27b-it"    # label only; llama-server serves whatever -m we loaded
-    endpoint: "http://127.0.0.1:8080"
+    # Phase 4 picked gemma3:27b for voice. Ollama's gemma3 manifest has no
+    # `tools` capability, so until 2026-04-27 this agent ran on llama-server
+    # at :8080 (whose --jinja flag renders Gemma 3's native ```tool_code```
+    # format). 2026-04-27: migrated to oMLX. The cli/agents/writing.py
+    # prelude that injects Python signatures + the ```tool_code``` example
+    # is still required (oMLX returns Gemma's native format too — neither
+    # backend renders the OpenAI `tools=` parameter for this model). Keeping
+    # `endpoint:` set means the gemma_pycode tool style stays selected.
+    model: "gemma-3-27b-it-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.9
     max_steps: 8
     max_tokens_per_turn: 4096
@@ -212,7 +228,10 @@ agents:
 
   - name: image
     display: "Image generation (Draw Things)"
-    model: "qwen2.5:7b-instruct"    # small LLM expands the prompt; Draw Things does inference
+    # 2026-04-27: migrated to oMLX. Tiny prompt-expansion job; runs on the
+    # same 7B that the router uses, so the model stays warm.
+    model: "Qwen2.5-7B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.5
     max_steps: 2
     max_tokens_per_turn: 1024
@@ -297,11 +316,12 @@ agents:
     # Was mixtral:8x7b-instruct-v0.1-q3_K_M — good at math but Ollama's
     # Q3_K_M manifest doesn't advertise `tools` capability, so any
     # request with `tools=[...]` (create_tool + matched library tools)
-    # 400s. qwen2.5:32b-instruct is the same model `research` uses,
-    # stays warm across a typical trip-planning task, and supports tool
-    # calls cleanly. Carries units well and is reliable on multi-step
-    # arithmetic.
-    model: "qwen2.5:32b-instruct"
+    # 400s. Qwen2.5-32B is the same model `research`/`review`/`refactor`
+    # use, stays warm across a typical trip-planning task, supports tool
+    # calls cleanly, and carries units well. 2026-04-27: migrated to
+    # oMLX alongside research; same weights, MLX engine.
+    model: "Qwen2.5-32B-Instruct-4bit"
+    endpoint: "http://127.0.0.1:8000"
     temperature: 0.1
     max_steps: 4
     max_tokens_per_turn: 2048

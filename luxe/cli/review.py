@@ -74,6 +74,8 @@ def start_review_task(
     url_or_path: str | Path,
     mode: str,
     cfg: LuxeConfig,
+    *,
+    use_plan_cache: bool = True,
 ) -> str:
     """Plan + persist + spawn a review/refactor task. Returns task id.
 
@@ -95,7 +97,11 @@ def start_review_task(
         num_ctx_override=decision.num_ctx,
         analyzer_languages=sorted(survey.language_breakdown.keys()) or None,
     )
-    task.subtasks = plan(goal, cfg, task.id)
+    task.subtasks = plan(
+        goal, cfg, task.id,
+        cache_key=(str(repo_path), mode),
+        use_cache=use_plan_cache,
+    )
     for s in task.subtasks:
         s.agent = mode
     persist(task)

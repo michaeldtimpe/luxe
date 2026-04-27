@@ -103,7 +103,6 @@ _BACKEND_OVERRIDE_URLS: dict[str, str] = {
     "ollama": "http://127.0.0.1:11434",
     "llamacpp": "http://127.0.0.1:8088",
     "omlx": "http://127.0.0.1:8000",
-    "lmstudio": "http://127.0.0.1:1234",
 }
 
 
@@ -126,8 +125,7 @@ def _resolve_model_override(default_model: str) -> str:
     not just the URL but the model name as well — necessary when the
     same logical candidate is served under different tags by different
     backends (e.g. oMLX `Qwen2.5-32B-Instruct-4bit` vs Ollama
-    `qwen2.5:32b-instruct` vs LM Studio `qwen2.5-32b-instruct`).
-    Empty/unset = no override."""
+    `qwen2.5:32b-instruct`). Empty/unset = no override."""
     override = os.environ.get("LUXE_MODEL_OVERRIDE", "").strip()
     return override or default_model
 
@@ -154,11 +152,10 @@ def make_backend(
     # per-agent endpoint points at oMLX (which gates /v1/* on the key).
     #
     # `ignore_override=True` opts out of LUXE_BACKEND_OVERRIDE / _URL /
-    # LUXE_MODEL_OVERRIDE. Use this for meta-orchestration callsites
-    # like the planner: when an overnight run redirects the WORKLOAD
-    # agent (review/refactor) to a different backend, the planner —
-    # which uses a tiny router model that's only reliably tagged on
-    # Ollama — should keep its own routing intact.
+    # LUXE_MODEL_OVERRIDE. As of 2026-04-27 no caller passes True — all
+    # agents (router/planner included) live on oMLX, so override and
+    # canonical agree. Kept for future meta-orchestration callsites
+    # that need to pin a model regardless of comparison-harness env vars.
     resolved_url = base_url if ignore_override else _resolve_override(base_url)
     resolved_model = model if ignore_override else _resolve_model_override(model)
     return Backend(

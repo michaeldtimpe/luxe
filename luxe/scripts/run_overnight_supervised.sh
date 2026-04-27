@@ -5,7 +5,6 @@
 #
 # Usage:
 #   export OMLX_API_KEY=omlx-...
-#   export LMSTUDIO_API_KEY=...    # or LM_API_TOKEN
 #   bash scripts/run_overnight_supervised.sh
 #
 # At each prompt: y = run, n = skip, q = quit. Skipped phases can be
@@ -24,8 +23,6 @@ PY=.venv/bin/python
 # ── env warnings (don't abort — preflight will surface real problems) ─
 [ -z "${OMLX_API_KEY:-}" ] && \
     echo "[warn] OMLX_API_KEY unset — oMLX phases will be skipped"
-[ -z "${LMSTUDIO_API_KEY:-}${LM_API_TOKEN:-}" ] && \
-    echo "[warn] LMSTUDIO_API_KEY/LM_API_TOKEN unset — LM Studio phases may fail"
 
 # ── helpers ─────────────────────────────────────────────────────────
 confirm() {
@@ -97,13 +94,13 @@ confirm "spec_decoding" "≤60 min" && run_phase spec_decoding
 
 # ── chunk 4: multi_turn_reviews — one (repo × backend) at a time ───
 echo
-echo "=== chunk 4/6: multi_turn_reviews (9 sub-chunks: 3 repos × 3 backends) ==="
+echo "=== chunk 4/6: multi_turn_reviews (6 sub-chunks: 3 repos × 2 backends) ==="
 echo "Each sub-chunk is its own /review run (~45–90 min). Skip ones you "
 echo "don't need. Sub-chunks share the same multi_turn_reviews phase entry "
 echo "in state.json — only the last one's status is kept (use the per-run "
 echo "result list inside that entry to see each)."
 for repo in elara never-say-yes neon-rain; do
-    for backend in ollama omlx lmstudio; do
+    for backend in ollama omlx; do
         echo
         echo "--- multi_turn_reviews: ${repo} x ${backend} ---"
         if confirm "multi_turn_reviews ${repo} x ${backend}" "45-90 min"; then

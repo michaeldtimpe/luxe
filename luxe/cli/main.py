@@ -159,6 +159,7 @@ def analyze(
     out: Path = typer.Option(None, "--out", help="Output markdown path"),
     model: str = typer.Option(None, "--model", help="Override code agent model"),
     review: bool = typer.Option(False, "--review", help="Route through the review agent (background task) instead of the code-eval pipeline"),
+    no_plan_cache: bool = typer.Option(False, "--no-plan-cache", help="Force a fresh planner decomposition instead of reusing the cached subtask list for (repo, mode)"),
 ) -> None:
     """Run a read-only code review on REPO. Produces a markdown report."""
     if review:
@@ -167,7 +168,9 @@ def analyze(
         cfg = load_config()
         console.print(f"[bold]Reviewing[/bold] [cyan]{repo}[/cyan]")
         try:
-            tid = start_review_task(repo, mode="review", cfg=cfg)
+            tid = start_review_task(
+                repo, mode="review", cfg=cfg, use_plan_cache=not no_plan_cache,
+            )
         except RuntimeError as e:
             console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
@@ -195,7 +198,9 @@ def analyze(
     console.print(f"[bold]Analyzing[/bold] [cyan]{repo}[/cyan] with [cyan]{code_cfg.model}[/cyan]")
     console.print(f"[dim]Output → {out}[/dim]")
 
-    backend = make_backend(code_cfg.model, base_url=cfg.ollama_base_url)
+    backend = make_backend(
+        code_cfg.model, base_url=code_cfg.endpoint or cfg.ollama_base_url
+    )
     with console.status("[cyan]code[/cyan] analyzing...", spinner="dots"):
         result = code.run(
             backend, code_cfg, task=task, read_only=True,

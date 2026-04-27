@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Unattended catch-up for the overnight_2026-04-26T11-46-44 run after
-# applying the bug fixes (LM Studio URL override, planner ignore_override,
-# synthetic_baseline budget bump). Runs only the slots that produced no
-# usable data the first time:
+# Unattended catch-up for an existing overnight_<TS> run. Re-runs only
+# the slots that produced no usable data the first time:
 #
 #   1. synthetic_baseline patch:  qwen2.5-32b-instruct × llamacpp × prefix_cache_decay
-#   2. multi_turn_reviews × {elara, never-say-yes, neon-rain} × omlx       (replan now works)
-#   3. multi_turn_reviews × {elara, never-say-yes, neon-rain} × lmstudio   (URL override now works)
-#   4. verdicts (re-run to absorb the new data)
+#   2. multi_turn_reviews × {elara, never-say-yes, neon-rain} × omlx
+#   3. verdicts (re-run to absorb the new data)
+#
+# LM Studio sub-chunks were dropped 2026-04-27 — the Qwen 32B tool-loop
+# bug is downstream-fixable only.
 #
 # Usage:
 #   export OMLX_API_KEY=omlx-...
-#   nohup bash scripts/run_overnight_catchup.sh > luxe/catchup.log 2>&1 &
+#   TS=overnight_<timestamp> nohup bash scripts/run_overnight_catchup.sh > luxe/catchup.log 2>&1 &
 #   tail -f luxe/catchup.log
 #
-# Estimated wall: 3-7 hours. Each step's stdout is captured in the
+# Estimated wall: 2-5 hours. Each step's stdout is captured in the
 # overnight results dir AND echoed to the catchup log. A failure in
 # any step does not abort the sequence — the next step starts anyway.
 
@@ -60,15 +60,7 @@ for repo in elara never-say-yes neon-rain; do
             --repo "$repo" --backend omlx
 done
 
-# ── 3. multi_turn_reviews × lmstudio (3 repos) ──────────────────────
-for repo in elara never-say-yes neon-rain; do
-    step "multi_turn_reviews ${repo} × lmstudio" \
-        "$PY" scripts/run_overnight.py \
-            --resume "$TS" --only multi_turn_reviews \
-            --repo "$repo" --backend lmstudio
-done
-
-# ── 4. re-run verdicts on the now-richer dataset ────────────────────
+# ── 3. re-run verdicts on the now-richer dataset ────────────────────
 step "verdicts" \
     "$PY" scripts/run_overnight.py --resume "$TS" --only verdicts
 
@@ -83,5 +75,5 @@ echo "  $RESULTS_DIR/VERDICT.md"
 echo "  $RESULTS_DIR/SPEC_DECODING_VERDICT.md"
 echo "  $RESULTS_DIR/COMPOSITE_VERDICT.md"
 echo
-echo "Multi-turn task records (all 9 sub-chunks span ~/.luxe/tasks/T-*):"
+echo "Multi-turn task records (all 6 sub-chunks span ~/.luxe/tasks/T-*):"
 ls -1 "$HOME/.luxe/tasks/" | grep "^T-2026" | tail -15

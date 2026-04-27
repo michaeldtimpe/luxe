@@ -1,8 +1,13 @@
-"""Day-long autonomous test runner — sweep ollama × omlx × lmstudio
+"""Day-long autonomous test runner — sweep ollama × omlx
 × (llamacpp where it matters), capture multi-turn /review wall on
 three real repos, configure-and-test DFlash for long-output agents,
 run all verdict scripts, walk away. Designed to run unattended for
 6–12 hours.
+
+LM Studio was previously a third comparison backend. Dropped 2026-04-27
+because Qwen 32B reproducibly loops on identical tool calls inside
+long-context multi-subtask agent loops; bug is downstream-fixable only.
+Diagnostic probes preserved under scripts/archive/ for future revisits.
 
 Self-recovery: per-phase try/except + signal-based timeout. A failed
 phase logs the failure and the runner continues to the next phase.
@@ -16,7 +21,7 @@ Dry run: --dry-run exits cleanly after Phase 0 (preflight).
 
 Usage:
 
-    OMLX_API_KEY=… LMSTUDIO_API_KEY=… \\
+    OMLX_API_KEY=… \\
         uv run python scripts/run_overnight.py
 
 Outputs:
@@ -55,15 +60,14 @@ REPOS = (
 # Model name the review/refactor agents must use, per backend. The
 # agents' agents.yaml-declared model ("Qwen2.5-32B-Instruct-4bit") is
 # the oMLX-internal tag; Ollama serves the same weights under
-# "qwen2.5:32b-instruct" and LM Studio under "qwen2.5-32b-instruct".
-# Set as LUXE_MODEL_OVERRIDE before launching a /review subprocess so
-# the cross-backend comparison actually compares the SAME weights, not
-# whatever happens to live at that tag on each backend. None = no
-# override (use the agents.yaml default — appropriate for oMLX).
+# "qwen2.5:32b-instruct". Set as LUXE_MODEL_OVERRIDE before launching
+# a /review subprocess so the cross-backend comparison actually
+# compares the SAME weights, not whatever happens to live at that tag
+# on each backend. None = no override (use the agents.yaml default —
+# appropriate for oMLX).
 _REVIEW_MODEL_BY_BACKEND: dict[str, str | None] = {
     "omlx": None,
     "ollama": "qwen2.5:32b-instruct",
-    "lmstudio": "qwen2.5-32b-instruct",
 }
 
 # Per-task wall budget for Phase 3 /review runs. Caps any single run
@@ -73,7 +77,6 @@ REVIEW_TASK_WALL_S = 5400.0
 
 OMLX_BASE_URL = os.environ.get("OMLX_BASE_URL", "http://127.0.0.1:8000")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-LMSTUDIO_BASE_URL = os.environ.get("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234")
 
 # Per-phase CLI filters (set in main()). These narrow what
 # multi_turn_reviews runs so a single (repo, backend) chunk can be
@@ -114,15 +117,49 @@ def _probe_backend(name: str) -> bool:
         if name == "ollama":
             r = httpx.get(f"{OLLAMA_BASE_URL}/api/version", timeout=3.0)
             return r.status_code == 200
-        if name == "lmstudio":
-            api_key = (os.environ.get("LMSTUDIO_API_KEY", "")
-                       or os.environ.get("LM_API_TOKEN", ""))
-            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            r = httpx.get(f"{LMSTUDIO_BASE_URL}/v1/models", headers=headers, timeout=3.0)
-            return r.status_code < 500
     except Exception:  # noqa: BLE001
         return False
     return False
+
+
+def _omlx_uptime_s() -> float | None:
+    """Best-effort age of the omlx daemon in seconds. None if the
+    process can't be located (no psutil, not running under brew, etc.).
+    Used by _maybe_proactive_restart to decide whether the daemon has
+    been alive long enough to risk hitting the latent Metal
+    `gpu::check_error` crash mid-task."""
+    try:
+        import psutil
+    except ImportError:
+        return None
+    for proc in psutil.process_iter(["name", "cmdline", "create_time"]):
+        try:
+            cmd = proc.info.get("cmdline") or []
+            if any("omlx" in c and "serve" in (proc.info.get("cmdline") or [""]) for c in cmd):
+                return time.time() - float(proc.info["create_time"])
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+    return None
+
+
+def _maybe_proactive_restart(log_path: Path, max_uptime_s: float = 4 * 3600.0) -> bool:
+    """If oMLX has been up longer than max_uptime_s (default 4h),
+    `brew services restart omlx` and re-probe. Cheap insurance against
+    the latent MLX/Metal crash that has historically taken the daemon
+    down mid-multi-turn slot. Returns True if oMLX is up afterward
+    (whether or not we restarted), False if the restart left it down."""
+    uptime = _omlx_uptime_s()
+    if uptime is None:
+        _log_line(log_path, "proactive_restart: skipped (uptime unknown)")
+        return _probe_backend("omlx")
+    if uptime < max_uptime_s:
+        _log_line(log_path, f"proactive_restart: skipped (uptime {uptime / 3600:.1f}h < 4h)")
+        return _probe_backend("omlx")
+    _log_line(log_path, f"proactive_restart: uptime {uptime / 3600:.1f}h ≥ 4h — restarting")
+    rc = _shell(["brew", "services", "restart", "omlx"], log_path)
+    if rc != 0:
+        _log_line(log_path, f"proactive_restart: brew exit={rc} — falling through to wait")
+    return _wait_for_backend("omlx", max_wait_s=180, log_path=log_path)
 
 
 def _wait_for_backend(name: str, max_wait_s: int = 300,
@@ -222,7 +259,6 @@ def run_phase_preflight(out_dir: Path, dry_run: bool = False) -> dict:
     # will skip themselves with a clear note.
     for name, cmd in (
         ("omlx", [sys.executable, "scripts/omlx_healthcheck.py", "--skip-install"]),
-        ("lmstudio", [sys.executable, "scripts/lmstudio_healthcheck.py"]),
     ):
         rc = _shell(cmd, log_path)
         snapshot["checks"][f"{name}_healthcheck"] = (rc == 0)
@@ -266,13 +302,13 @@ def run_phase_preflight(out_dir: Path, dry_run: bool = False) -> dict:
     # Hard prereq: at least Ollama OR oMLX must be reachable, OR every
     # phase will skip and the run is wasted.
     backends_ok = sum(
-        1 for k in ("ollama_alive", "omlx_healthcheck", "lmstudio_healthcheck")
+        1 for k in ("ollama_alive", "omlx_healthcheck")
         if snapshot["checks"].get(k)
     )
     if backends_ok == 0:
         raise RuntimeError(
-            "no backends reachable — abort. Check that Ollama, oMLX, "
-            "and/or LM Studio are running with the right env vars set."
+            "no backends reachable — abort. Check that Ollama and/or "
+            "oMLX are running with the right env vars set."
         )
 
     if dry_run:
@@ -293,8 +329,6 @@ def run_phase_synthetic_baseline(out_dir: Path) -> dict:
         candidates.append("ollama")
     if pre["checks"].get("omlx_healthcheck"):
         candidates.append("omlx")
-    if pre["checks"].get("lmstudio_healthcheck"):
-        candidates.append("lmstudio")
     if pre["checks"].get("llamacpp_binary"):
         candidates.append("llamacpp")
 
@@ -330,9 +364,7 @@ def run_phase_synthetic_baseline(out_dir: Path) -> dict:
 
 
 def run_phase_spec_decoding(out_dir: Path) -> dict:
-    """DFlash on oMLX + spec on llama-server, both for the 14B Coder.
-    LM Studio's spec support is unconfirmed — Phase 0 probed it; if
-    detected, run that variant too."""
+    """DFlash on oMLX + spec on llama-server, both for the 14B Coder."""
     pre = json.loads((out_dir / "preflight.json").read_text())
     phase_id = out_dir.name
     log_path = out_dir / "spec_decoding.log"
@@ -413,8 +445,6 @@ def run_phase_multi_turn_reviews(out_dir: Path) -> dict:
         backends.append("ollama")
     if pre["checks"].get("omlx_healthcheck"):
         backends.append("omlx")
-    if pre["checks"].get("lmstudio_healthcheck"):
-        backends.append("lmstudio")
 
     if _FILTER_BACKEND:
         backends = [b for b in backends if b == _FILTER_BACKEND]
@@ -451,6 +481,14 @@ def run_phase_multi_turn_reviews(out_dir: Path) -> dict:
             run_label = f"{repo_name}_{backend}"
             with log_path.open("ab") as f:
                 f.write(f"\n=== {_now()} run {run_label} ===\n".encode())
+
+            # Proactive oMLX restart: if the daemon has been up >4h,
+            # restart it before this slot. Defends against the latent
+            # MLX/Metal `gpu::check_error` crash that has historically
+            # taken oMLX down mid-multi-turn — cheaper to spend ~3min
+            # on a clean restart than to lose a 90-min /review wall.
+            if backend == "omlx":
+                _maybe_proactive_restart(log_path)
 
             # Re-probe THIS backend before each run. Cheap insurance
             # against the overnight 09:15:29 incident where every (repo,
