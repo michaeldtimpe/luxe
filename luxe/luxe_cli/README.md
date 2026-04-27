@@ -567,6 +567,50 @@ that `ollama list` shows is valid. Per-agent HTTP endpoint overrides
 (`endpoint: http://127.0.0.1:8080`) let a single agent point at
 llama-server while the rest stay on Ollama.
 
+## Provider migration (Ollama / oMLX / LM Studio)
+
+`agents.yaml` declares a top-level `providers:` map naming each
+backend endpoint:
+
+```yaml
+providers:
+  ollama:   { base_url: "http://127.0.0.1:11434", kind: ollama }
+  omlx:     { base_url: "http://127.0.0.1:8000",  kind: omlx }
+  lmstudio: { base_url: "http://127.0.0.1:1234",  kind: lmstudio }
+
+default_provider: omlx
+```
+
+Per-agent dispatch resolves in this order:
+1. `agent.endpoint` (explicit URL — legacy override)
+2. `providers[agent.provider]` (named lookup — preferred)
+3. `providers[default_provider]` (fallback)
+4. `ollama_base_url` (legacy)
+
+To migrate one agent to LM Studio:
+
+```diff
+ - name: lookup
+   model: qwen2.5-32b-instruct
+-  endpoint: "http://127.0.0.1:8000"
++  provider: lmstudio
+```
+
+Validation steps:
+- Start LM Studio + load the model. Confirm `curl :1234/v1/models`
+  returns 200.
+- Run `uv run pytest tests/test_lmstudio_smoke.py -v` — the live
+  half (`*_live` tests) should pass; the static half catches the
+  config wiring.
+- Open the REPL and confirm the session-start banner pings both oMLX
+  and LM Studio. A `/lookup` prompt should dispatch to LM Studio;
+  the session JSONL line for the routed turn carries
+  `"provider": "lmstudio"`.
+
+Migration is incremental: flip one agent at a time. Other agents
+keep working on whatever provider their `endpoint:` or `provider:`
+points at.
+
 Ad-hoc overrides via the REPL:
 
 ```
