@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from cli import tool_library as tl
+from luxe_cli import tool_library as tl
 
 
 @pytest.fixture(autouse=True)

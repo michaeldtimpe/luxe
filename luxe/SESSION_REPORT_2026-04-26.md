@@ -16,10 +16,10 @@ Session opened with an MLX/Metal GPU crash report from a 12-hour comparative tes
 ## Bugs found and fixed
 
 ### 1. Path-vs-URL in multi_turn_reviews (commit `e4f1a09`)
-`run_overnight.py` passed the local repo path to `start_review_task`, which expects a URL. `cli/git.py:resolve_repo` then derived a target path from the "URL" (interpreting the path as one), saw the path existed, and bailed with `target path X exists but origin does not match X` for every (repo, backend). **Symptom:** every multi_turn sub-chunk in the prior overnight ran 0 subtasks before this fix. **Fix:** pass the URL from the `REPOS` registry in `run_overnight.py`.
+`run_overnight.py` passed the local repo path to `start_review_task`, which expects a URL. `luxe_cli/git.py:resolve_repo` then derived a target path from the "URL" (interpreting the path as one), saw the path existed, and bailed with `target path X exists but origin does not match X` for every (repo, backend). **Symptom:** every multi_turn sub-chunk in the prior overnight ran 0 subtasks before this fix. **Fix:** pass the URL from the `REPOS` registry in `run_overnight.py`.
 
 ### 2. LM Studio missing from `_BACKEND_OVERRIDE_URLS` (commit `a5c2185`)
-`cli/backend.py` had `ollama`, `omlx`, `llamacpp` but no `lmstudio`. `LUXE_BACKEND_OVERRIDE=lmstudio` silently fell through to the agent's default endpoint (`:8000` = oMLX), which 404'd on the LM Studio model tag. **Symptom:** every lmstudio sub-chunk got "404 Not Found at :8000". **Fix:** add `"lmstudio": "http://127.0.0.1:1234"`.
+`luxe_cli/backend.py` had `ollama`, `omlx`, `llamacpp` but no `lmstudio`. `LUXE_BACKEND_OVERRIDE=lmstudio` silently fell through to the agent's default endpoint (`:8000` = oMLX), which 404'd on the LM Studio model tag. **Symptom:** every lmstudio sub-chunk got "404 Not Found at :8000". **Fix:** add `"lmstudio": "http://127.0.0.1:1234"`.
 
 ### 3. Backend override redirected URL but not model name (commit `a5c2185`)
 `agents.yaml` hardcodes the model with the oMLX-internal name (`Qwen2.5-32B-Instruct-4bit`); Ollama and LM Studio serve the same weights under `qwen2.5:32b-instruct` and `qwen2.5-32b-instruct` respectively. Without a model rename, redirecting just the URL hits the wrong tag. **Fix:** added `LUXE_MODEL_OVERRIDE` env var and per-backend translation in `run_overnight.py`.
@@ -91,4 +91,4 @@ LM Studio: every sub-chunk failed. Best post-loop-guard result was 3/7 subtasks 
   - `nohup bash scripts/run_overnight_catchup.sh > catchup.log 2>&1 &` — unattended
   - `bash scripts/tail_progress.sh` — live monitor
 - **Harness control flow:** `luxe/scripts/run_overnight.py` (phases, probes, sanity guards)
-- **Agent loop guard:** `luxe/cli/agents/base.py` (search for `LOOP_REPEAT_LIMIT`)
+- **Agent loop guard:** `luxe/luxe_cli/agents/base.py` (search for `LOOP_REPEAT_LIMIT`)

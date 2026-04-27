@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cli.tasks.cache import ToolCache, wrap_tool_fns
+from luxe_cli.tasks.cache import ToolCache, wrap_tool_fns
 
 
 def _counter_fn():

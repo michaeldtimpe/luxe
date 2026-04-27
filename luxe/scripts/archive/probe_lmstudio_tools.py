@@ -35,7 +35,7 @@ from typing import Any
 import httpx
 import typer
 
-# Tool-call format the agent loop sends. Identical to what cli/agents/base.py
+# Tool-call format the agent loop sends. Identical to what luxe_cli/agents/base.py
 # uses on the wire, just with a fake tool. We use list_dir because that's
 # the tool every blocked LM Studio /review subtask 01 was looping on.
 _TOOLS = [{

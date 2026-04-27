@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cli.session import Session
+from luxe_cli.session import Session
 
 
 def _make(tmp_path: Path, n: int) -> Session:

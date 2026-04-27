@@ -47,6 +47,17 @@ luxe/results/luxe_eval/code_analysis/
 # by hand if you want them committed.
 luxe/results/overnight_*/
 
+# Belt-and-suspenders for luxe/results/: tracked outputs are intentional
+# (REPORT.{csv,md}, VERDICT.{csv,md}, history.jsonl, eval markdown).
+# Anything ephemeral — sweep logs, in-flight bench artifacts, replay
+# fixtures regenerated each run — should not land in git even if
+# scripts drop them outside the directories already ignored above.
+luxe/results/**/*.log
+luxe/results/**/*.tmp
+luxe/results/**/*.partial
+luxe/results/**/replay_inputs/*
+!luxe/results/**/replay_inputs/.gitkeep
+
 # Luxe-generated images (may include personal prompts / subjects)
 luxe-images/
 

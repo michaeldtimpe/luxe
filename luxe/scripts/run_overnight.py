@@ -470,9 +470,9 @@ def run_phase_multi_turn_reviews(out_dir: Path) -> dict:
     results: dict = {"runs": []}
 
     # Lazy import — only loads luxe code if this phase actually runs.
-    from cli.registry import load_config
-    from cli.review import start_review_task
-    from cli.tasks.model import load as load_task
+    from luxe_cli.registry import load_config
+    from luxe_cli.review import start_review_task
+    from luxe_cli.tasks.model import load as load_task
 
     cfg = load_config()
 
@@ -542,13 +542,13 @@ def run_phase_multi_turn_reviews(out_dir: Path) -> dict:
                 t = load_task(task_id_str)
                 if t:
                     t.max_wall_s = REVIEW_TASK_WALL_S
-                    from cli.tasks.model import persist as persist_task
+                    from luxe_cli.tasks.model import persist as persist_task
                     persist_task(t)
             except Exception:  # noqa: BLE001
                 pass
 
             # Poll state.json until terminal.
-            from cli.tasks.model import TASKS_ROOT
+            from luxe_cli.tasks.model import TASKS_ROOT
             state_path = TASKS_ROOT / task_id_str / "state.json"
             deadline = time.monotonic() + REVIEW_TASK_WALL_S + 300  # +5min slack
             terminal_status = None

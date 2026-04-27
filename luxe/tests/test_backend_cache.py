@@ -7,8 +7,8 @@ wipes everything even after the wrapper change.
 
 from __future__ import annotations
 
-import cli.backend as backend
-from cli.backend import (
+import luxe_cli.backend as backend
+from luxe_cli.backend import (
     _CacheEntry,
     _cache_get,
     _cache_set,

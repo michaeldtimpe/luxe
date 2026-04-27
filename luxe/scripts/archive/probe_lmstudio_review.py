@@ -26,7 +26,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 
 # Curated subset of the real review-agent tool defs (full schemas would
-# need cli/tools/registry import; the harness loads them dynamically
+# need luxe_cli/tools/registry import; the harness loads them dynamically
 # from there). For this probe we only need the SHAPE (count, names,
 # descriptions) since the first failure we want to reproduce is the
 # loop, not a specific tool's behaviour.

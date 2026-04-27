@@ -1,5 +1,7 @@
 # luxe
 
+[![luxe-tests](https://github.com/michaeldtimpe/luxe/actions/workflows/luxe-tests.yml/badge.svg)](https://github.com/michaeldtimpe/luxe/actions/workflows/luxe-tests.yml)
+
 Two companion projects that run large-language-model workloads entirely on
 a MacBook Pro — no cloud, no API keys (beyond what you choose to use), no
 outbound calls except the web searches you explicitly allow.
@@ -15,7 +17,7 @@ outbound calls except the web searches you explicitly allow.
   - **`luxe/harness/`** — Apple-Silicon-friendly evaluation + optimization
     harness for local coding LLMs. OpenAI-compat backends (MLX /
     llama.cpp), candidate registry, benchmark runners, metrics.
-  - **`luxe/cli/`** — a local, multi-agent Claude-Code-alike CLI. A
+  - **`luxe/luxe_cli/`** — a local, multi-agent Claude-Code-alike CLI. A
     small router picks one of nine specialists (general / lookup /
     research / writing / code / image / review / refactor / calc) and
     hands off. Runs on Ollama + llama.cpp + Draw Things, with a task
@@ -31,7 +33,7 @@ bash daily_driver/install_luxe.sh
 luxe                       # interactive REPL
 ```
 
-Fuller walkthrough in **`luxe/cli/README.md`**.
+Fuller walkthrough in **`luxe/luxe_luxe_cli/README.md`**.
 
 ## Quick start (luxe evaluation harness)
 
@@ -88,7 +90,7 @@ Fuller walkthrough in **`luxe/README.md`**.
   headless Chrome via `browse_navigate` + `browse_read` (CDP, allowlist-
   gated). Unblocks JS-rendered content where static `fetch_url` returns
   empty. Read-only by design; `LUXE_BROWSER_ALLOWLIST` env var
-  overrides the default starter set. See `luxe/cli/README.md`.
+  overrides the default starter set. See `luxe/luxe_luxe_cli/README.md`.
 - **Bench-history metrics**: `bench_orchestrator.py` records per-task
   `reads_per_edit` and `tool_loop_ratio`, plus a sliding-window
   `composite_health` z-score that flags rows with `⚠ INFLECTION` when a

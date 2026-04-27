@@ -173,7 +173,7 @@ agents:
     # Phase 4 picked gemma3:27b for voice. Ollama's gemma3 manifest has no
     # `tools` capability, so until 2026-04-27 this agent ran on llama-server
     # at :8080 (whose --jinja flag renders Gemma 3's native ```tool_code```
-    # format). 2026-04-27: migrated to oMLX. The cli/agents/writing.py
+    # format). 2026-04-27: migrated to oMLX. The luxe_cli/agents/writing.py
     # prelude that injects Python signatures + the ```tool_code``` example
     # is still required (oMLX returns Gemma's native format too — neither
     # backend renders the OpenAI `tools=` parameter for this model). Keeping
