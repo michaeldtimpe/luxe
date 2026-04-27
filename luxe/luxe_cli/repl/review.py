@@ -14,11 +14,15 @@ console = Console()
 def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> None:
     """Shared entry point for /review and /refactor. Clone/pull into cwd,
     plan a review-flavored task pinned to the `review` or `refactor`
-    agent, then spawn it in the background."""
+    agent, spawn it as a background subprocess, then immediately tail
+    the live event stream. The subprocess survives Ctrl-C in the tail
+    (single-model deployments only ever serve one task at a time, so
+    foregrounding the tail is safe — but the spawn-then-tail split
+    keeps the task resumable via /tasks resume if the REPL crashes)."""
     from luxe_cli.git import repo_name_from_url, resolve_repo
     from luxe_cli.tasks import plan, spawn_background
     from luxe_cli.tasks.model import Task, persist, task_id
-    from luxe_cli.repl.tasks import _print_launch_hints
+    from luxe_cli.repl.tasks import _print_launch_hints, _tasks_tail
 
     console.print(f"[dim]resolving[/dim] [cyan]{url}[/cyan][dim]...[/dim]")
     with console.status("[dim]git[/dim]", spinner="dots"):
@@ -71,7 +75,18 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
         f"[green]→ launched[/green] [cyan]{task.id}[/cyan] "
         f"[dim](pid {pid}, cwd {repo_path})[/dim]"
     )
-    _print_launch_hints(task.id)
+    # Auto-tail by default. /review and /refactor are the only commands
+    # we expect to outlast the REPL prompt, and the user previously had
+    # to type `/tasks tail <id>` themselves. With a single-model oMLX
+    # backend there's no resource benefit to launching-then-detaching.
+    _tasks_tail(task.id, verbose=False, state=state, cfg=cfg)
+    # Fallback: if the tail returned without the task finishing
+    # (Ctrl-C, subprocess crash), surface the launch-hints block so
+    # the user can re-attach or abort without remembering the task id.
+    from luxe_cli.tasks import load as _load_task
+    final = _load_task(task.id)
+    if final is None or not final.finished():
+        _print_launch_hints(task.id)
 
 
 def _spawn_in_repo(task, repo_path: Path) -> int:

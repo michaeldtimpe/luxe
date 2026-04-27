@@ -321,7 +321,12 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         if sub == "tail":
             tail_args = [a for a in args[1:] if a not in ("-v", "--verbose")]
             verbose = any(a in ("-v", "--verbose") for a in args[1:])
-            _tasks_tail(tail_args[0] if tail_args else None, verbose=verbose)
+            _tasks_tail(
+                tail_args[0] if tail_args else None,
+                verbose=verbose,
+                state=state,
+                cfg=cfg,
+            )
             return "consumed"
         if sub == "watch":
             _tasks_watch(args[1] if len(args) > 1 else None)
