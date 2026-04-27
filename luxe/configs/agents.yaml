@@ -8,6 +8,22 @@ draw_things_url: "http://127.0.0.1:7859"    # Draw Things HTTP server port
 image_output_dir: "~/luxe-images"
 session_dir: "~/.luxe/sessions"
 
+# Named backend providers. Agents reference these by key via the
+# `provider:` field. Each agent may also set `endpoint:` directly to
+# override; `endpoint:` takes precedence over `provider:` for the
+# migration window. Once every agent uses `provider:`, drop the
+# per-agent `endpoint:` overrides below.
+providers:
+  ollama:   { base_url: "http://127.0.0.1:11434", kind: ollama }
+  omlx:     { base_url: "http://127.0.0.1:8000",  kind: omlx }
+  lmstudio: { base_url: "http://127.0.0.1:1234",  kind: lmstudio }
+  llamacpp: { base_url: "http://127.0.0.1:8088",  kind: llamacpp }
+
+# Used when an agent doesn't set `provider:` or `endpoint:`.
+# Currently every agent sets `endpoint:` explicitly, so this is a
+# safety default for new agents that forget to.
+default_provider: omlx
+
 agents:
   - name: router
     display: "Interpreter / task router"

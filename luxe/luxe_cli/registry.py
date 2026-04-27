@@ -49,12 +49,22 @@ ToolName = Literal[
 ]
 
 
+ProviderKind = Literal["ollama", "omlx", "lmstudio", "llamacpp", "mlx"]
+
+
+class ProviderConfig(BaseModel):
+    """Named backend endpoint. Multiple agents can point at the same provider."""
+
+    base_url: str
+    kind: ProviderKind
+
+
 class AgentConfig(BaseModel):
     """One specialist agent's configuration."""
 
     name: AgentName
     display: str
-    model: str  # Ollama model tag, e.g. "qwen2.5:7b-instruct"
+    model: str  # provider-specific model id (Ollama tag, oMLX tag, etc.)
     system_prompt: str
     tools: list[ToolName] = Field(default_factory=list)
     temperature: float = 0.2
@@ -65,7 +75,12 @@ class AgentConfig(BaseModel):
     min_tool_calls: int = 0  # if >0, nudge the agent back into tool use when a final answer arrives below this
     enabled: bool = True
     notes: str = ""
-    endpoint: str | None = None  # override top-level ollama_base_url (e.g. llama-server)
+    # Per-agent provider override. References a key in LuxeConfig.providers.
+    # When set, takes precedence over `endpoint`. When neither is set, the
+    # agent uses LuxeConfig.default_provider (or falls back to ollama_base_url
+    # for legacy configs that haven't been migrated).
+    provider: str | None = None
+    endpoint: str | None = None  # legacy: direct URL override; superseded by `provider`
     history_keep_last: int = 4  # how many prior session messages to replay on dispatch
     num_ctx: int | None = None  # Ollama num_ctx override — passed as `options.num_ctx`
     # Tool output byte cap. Applied to each tool result before it lands
@@ -93,6 +108,15 @@ class LuxeConfig(BaseModel):
     # to the LLM on low-confidence decisions. Disable for A/B testing.
     heuristic_router_enabled: bool = True
     heuristic_router_threshold: float = 0.35
+    # Named provider endpoints. Agents reference these by key via the
+    # `provider:` field. Empty by default for backward compatibility:
+    # legacy configs that only set ollama_base_url + per-agent `endpoint:`
+    # keep working unchanged.
+    providers: dict[str, ProviderConfig] = Field(default_factory=dict)
+    # Default provider key used when an agent doesn't specify `provider:`
+    # or `endpoint:`. None falls through to ollama_base_url for legacy
+    # behavior.
+    default_provider: str | None = None
     agents: list[AgentConfig]
 
     def get(self, name: str) -> AgentConfig:
@@ -103,6 +127,23 @@ class LuxeConfig(BaseModel):
 
     def enabled_specialists(self) -> list[AgentConfig]:
         return [a for a in self.agents if a.enabled and a.name != "router"]
+
+    def resolve_endpoint(self, agent: AgentConfig) -> str:
+        """Pick the base_url for an agent. Order of precedence:
+        1. agent.endpoint (legacy direct URL — explicit wins)
+        2. providers[agent.provider].base_url
+        3. providers[default_provider].base_url
+        4. ollama_base_url (legacy fallback, /v1 suffix stripped)
+        """
+        if agent.endpoint:
+            return agent.endpoint
+        key = agent.provider or self.default_provider
+        if key and key in self.providers:
+            return self.providers[key].base_url
+        if key and key not in self.providers:
+            raise KeyError(f"provider {key!r} referenced but not declared in providers map")
+        # Legacy fallback. Strip /v1 because Backend posts to /v1/chat/completions.
+        return self.ollama_base_url.removesuffix("/v1").rstrip("/")
 
 
 def load_config(path: Path | None = None) -> LuxeConfig:
