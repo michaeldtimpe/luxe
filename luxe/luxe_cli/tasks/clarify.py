@@ -40,7 +40,7 @@ Examples:
 def clarify(goal: str, cfg: LuxeConfig) -> list[str]:
     """Return up to 3 clarifying questions for `goal`, or [] if none needed."""
     router_cfg = cfg.get("router")
-    backend = make_backend(router_cfg.model, base_url=cfg.ollama_base_url)
+    backend = make_backend(router_cfg.model, base_url=cfg.resolve_endpoint(router_cfg))
     try:
         resp = backend.chat(
             [

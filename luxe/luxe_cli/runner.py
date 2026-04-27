@@ -62,7 +62,7 @@ def dispatch(
     if updates:
         agent_cfg = agent_cfg.model_copy(update=updates)
 
-    endpoint = agent_cfg.endpoint or cfg.ollama_base_url
+    endpoint = cfg.resolve_endpoint(agent_cfg)
     backend = make_backend(agent_cfg.model, base_url=endpoint)
     runner = _SPECIALISTS[decision.agent]
     # Task-scoped memoization is only meaningful for agents that dispatch

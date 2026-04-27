@@ -136,7 +136,7 @@ def plan(
 
     if entries is None:
         router_cfg = cfg.get("router")
-        endpoint = router_cfg.endpoint or cfg.ollama_base_url
+        endpoint = cfg.resolve_endpoint(router_cfg)
         backend = make_backend(router_cfg.model, base_url=endpoint)
         try:
             resp = backend.chat(

@@ -83,7 +83,7 @@ def _show_context_info(state: "ReplState", cfg: LuxeConfig) -> None:
 
     seen_endpoints: dict[str, float | None] = {}
     for a in agents:
-        endpoint = a.endpoint or cfg.ollama_base_url
+        endpoint = cfg.resolve_endpoint(a)
         ctx_now = context_length(a.model, endpoint)
         ctx_max = max_context_length(a.model, endpoint)
         kv_gb = estimate_kv_ram_gb(a.model, ctx_now, endpoint)
@@ -231,12 +231,12 @@ def _status_banner(
         mode = f"{state.sticky_agent}"
         agent_cfg = cfg.get(state.sticky_agent)
         model = state.pending_model or agent_cfg.model
-        endpoint = agent_cfg.endpoint or cfg.ollama_base_url
+        endpoint = cfg.resolve_endpoint(agent_cfg)
     else:
         mode = "router"
         router_cfg = cfg.get("router")
         model = state.pending_model or router_cfg.model
-        endpoint = cfg.ollama_base_url
+        endpoint = cfg.resolve_endpoint(router_cfg)
 
     params = state.param_override or parameter_size(model, endpoint)
     # "7.6B" reads as "7.68" in some fonts — add a space before B/M.

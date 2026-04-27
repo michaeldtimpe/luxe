@@ -199,7 +199,7 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         t.add_column()  # display label
         for a in cfg.agents:
             mark = f"\\[{'x' if a.enabled else ' '}]"
-            endpoint = a.endpoint or cfg.ollama_base_url
+            endpoint = cfg.resolve_endpoint(a)
             params = parameter_size(a.model, endpoint)
             t.add_row(mark, a.name, a.model, params, a.display)
         console.print(t)
@@ -463,7 +463,7 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
             state.sticky_agent = agent_name
             agent_cfg = cfg.get(agent_name)
             model = state.pending_model or agent_cfg.model
-            endpoint = agent_cfg.endpoint or cfg.ollama_base_url
+            endpoint = cfg.resolve_endpoint(agent_cfg)
             with console.status(f"[dim]loading {model}...[/dim]", spinner="dots"):
                 _prewarm(model, endpoint)
             console.print(f"[dim]→ sticky agent set to[/dim] [cyan]{agent_name}[/cyan]")
@@ -560,7 +560,7 @@ def _dispatch(
     state.turns += 1
     state.last_ctx_used = result.prompt_tokens
     state.last_model = override or cfg.get(decision.agent).model
-    state.last_endpoint = cfg.get(decision.agent).endpoint or cfg.ollama_base_url
+    state.last_endpoint = cfg.resolve_endpoint(cfg.get(decision.agent))
     state.sticky_agent = decision.agent
 
     _print_stats(decision, result, state, cfg)

@@ -199,7 +199,7 @@ def analyze(
     console.print(f"[dim]Output → {out}[/dim]")
 
     backend = make_backend(
-        code_cfg.model, base_url=code_cfg.endpoint or cfg.ollama_base_url
+        code_cfg.model, base_url=cfg.resolve_endpoint(code_cfg)
     )
     with console.status("[cyan]code[/cyan] analyzing...", spinner="dots"):
         result = code.run(

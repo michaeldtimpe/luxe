@@ -173,7 +173,7 @@ def route(
             return RouterDecision(agent=agent, task=prompt, reasoning=reasoning)
 
     backend = make_backend(
-        router_cfg.model, base_url=router_cfg.endpoint or cfg.ollama_base_url
+        router_cfg.model, base_url=cfg.resolve_endpoint(router_cfg)
     )
 
     tools = _build_tools(enabled)
