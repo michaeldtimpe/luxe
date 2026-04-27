@@ -14,9 +14,7 @@ from rich.table import Table
 from luxe_cli import prefs, router, runner
 from luxe_cli.backend import (
     context_length,
-    list_models,
     parameter_size,
-    ping,
     prewarm as _prewarm,
 )
 from luxe_cli.registry import LuxeConfig
@@ -109,13 +107,50 @@ class ReplState:
         self.param_override = None
 
 
+def _check_provider_health(cfg: LuxeConfig) -> dict:
+    """Ping every distinct base_url any enabled agent might use.
+
+    Returns {"reachable": [(url, kind), ...], "unreachable": [...]}
+    so callers can decide whether to bail (nothing reachable) or warn
+    (some up, some down).
+    """
+    from luxe_cli.backend import _kind_for_url
+    from luxe_cli.providers import get_provider
+
+    seen: dict[str, str] = {}
+    for agent in cfg.agents:
+        if not agent.enabled:
+            continue
+        url = cfg.resolve_endpoint(agent)
+        seen.setdefault(url, _kind_for_url(url))
+
+    reachable: list[tuple[str, str]] = []
+    unreachable: list[tuple[str, str]] = []
+    for url, kind in seen.items():
+        if get_provider(kind, url).ping():
+            reachable.append((url, kind))
+        else:
+            unreachable.append((url, kind))
+    return {"reachable": reachable, "unreachable": unreachable}
+
+
 def start(cfg: LuxeConfig, session: Session | None = None) -> None:
-    if not ping():
+    health = _check_provider_health(cfg)
+    if not health["reachable"]:
+        # Every provider any enabled agent could use is down. Bail.
         console.print(
-            "[red]Ollama is not reachable at http://127.0.0.1:11434.[/red] "
-            "Start it with [cyan]ollama serve[/cyan]."
+            "[red]No backend provider is reachable.[/red] "
+            "Start one of:"
         )
+        for url, kind in health["unreachable"]:
+            console.print(f"  [red]✗[/red] [cyan]{kind}[/cyan] at {url}")
         return
+    for url, kind in health["unreachable"]:
+        # Some providers are down but at least one works — warn and proceed.
+        console.print(
+            f"[yellow][!] {kind} at {url} unreachable — agents pointing at it "
+            "will fail on dispatch.[/yellow]"
+        )
 
     sess = session or Session.new(Path(cfg.session_dir).expanduser())
     state = ReplState(sess=sess)
