@@ -103,7 +103,15 @@ _BACKEND_OVERRIDE_URLS: dict[str, str] = {
     "ollama": "http://127.0.0.1:11434",
     "llamacpp": "http://127.0.0.1:8088",
     "omlx": "http://127.0.0.1:8000",
+    "lmstudio": "http://127.0.0.1:1234",
 }
+
+
+def _kind_for_url(url: str) -> str:
+    for kind, known_url in _BACKEND_OVERRIDE_URLS.items():
+        if url.rstrip("/") == known_url.rstrip("/"):
+            return kind
+    return "ollama"
 
 
 def _resolve_override(default_base_url: str) -> str:
@@ -139,12 +147,11 @@ def make_backend(
     # harness.backends.Backend posts to "/v1/chat/completions", so the
     # base_url must NOT include the /v1 suffix itself.
     #
-    # `kind="mlx"` looks wrong when the default target is Ollama — it
-    # isn't. `kind` is a label the harness uses for metrics/config
-    # routing, not a transport selector. Ollama, MLX, llama-server, and
-    # oMLX all expose OpenAI-compat endpoints, so the same Backend
-    # client drives all four. `kind` stays "mlx" for continuity with the
-    # harness's benchmark logging.
+    # `kind` is derived from the resolved URL via _kind_for_url so
+    # telemetry, A/B comparisons, and Backend.__post_init__'s per-kind
+    # auth-header loading all see the truth about which provider is
+    # actually serving the request. Defaults to "ollama" when the URL
+    # doesn't match a known provider port.
     #
     # OMLX_API_KEY is forwarded as a Bearer token whenever set. Ollama
     # and llama-server ignore unrecognized Authorization headers, so
@@ -159,7 +166,7 @@ def make_backend(
     resolved_url = base_url if ignore_override else _resolve_override(base_url)
     resolved_model = model if ignore_override else _resolve_model_override(model)
     return Backend(
-        kind="mlx",
+        kind=_kind_for_url(resolved_url),
         base_url=resolved_url,
         model_id=resolved_model,
         timeout_s=600.0,
