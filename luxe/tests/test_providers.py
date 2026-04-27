@@ -8,6 +8,8 @@ from luxe_cli.providers import (
     BackendProvider,
     LMStudioProvider,
     OllamaProvider,
+    OMLXProvider,
+    OpenAICompatProvider,
     get_provider,
 )
 
@@ -45,3 +47,26 @@ def test_lmstudio_pull_stream_raises_not_implemented():
     p = LMStudioProvider()
     with pytest.raises(NotImplementedError, match="GUI"):
         next(iter(p.pull_stream("anything")))
+
+
+def test_get_provider_omlx_returns_omlx_instance():
+    p = get_provider("omlx")
+    assert isinstance(p, OMLXProvider)
+    assert p.name == "omlx"
+    assert p.base_url == "http://127.0.0.1:8000"
+
+
+def test_get_provider_llamacpp_returns_generic_openai_compat():
+    p = get_provider("llamacpp")
+    assert isinstance(p, OpenAICompatProvider)
+    assert p.name == "llamacpp"
+    assert p.base_url == "http://127.0.0.1:8088"
+
+
+def test_default_provider_uses_yaml_default():
+    from luxe_cli.registry import load_config
+    from luxe_cli.repl.models import _default_provider
+
+    cfg = load_config()
+    p = _default_provider(cfg)
+    assert p.name == cfg.default_provider

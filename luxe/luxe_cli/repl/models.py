@@ -19,18 +19,49 @@ from luxe_cli.backend import (
     MODEL_VARIANTS,
     clear_caches,
     installed_by_family,
-    list_models,
-    pull_stream,
 )
+from luxe_cli.providers import BackendProvider, get_provider
 from luxe_cli.registry import LuxeConfig
 
 console = Console()
 
 
+def _default_provider(cfg: LuxeConfig) -> BackendProvider:
+    """Provider for /models, /variants, /pull global ops. Falls back to
+    Ollama on the legacy ollama_base_url when default_provider is unset."""
+    if cfg.default_provider and cfg.default_provider in cfg.providers:
+        p = cfg.providers[cfg.default_provider]
+        return get_provider(p.kind, p.base_url)
+    return get_provider("ollama", cfg.ollama_base_url.removesuffix("/v1").rstrip("/"))
+
+
 def _print_variants(family_filter: str | None, cfg: LuxeConfig) -> None:
-    """Render installed vs released variants per model family."""
-    installed = list_models(cfg.ollama_base_url)
+    """Render installed (live) vs released (catalog) variants per family.
+
+    The MODEL_VARIANTS catalog is Ollama-specific (curated list of
+    Ollama tag families and their published parameter sizes), so for
+    non-Ollama providers we drop the "available" column entirely and
+    just show what's loaded.
+    """
+    provider = _default_provider(cfg)
+    installed = provider.list_models()
     grouped = installed_by_family(installed)
+
+    if provider.name != "ollama":
+        # No catalog mapping for LM Studio / oMLX / llama-server. Show
+        # just the live list, one per row, so the user knows what's
+        # actually loadable on the active provider.
+        t = Table(show_header=True, box=None, padding=(0, 2), header_style="dim")
+        t.add_column(f"loaded on {provider.name} (live)")
+        for m in installed:
+            t.add_row(m)
+        console.print(t)
+        if not installed:
+            console.print(
+                f"[dim]no models reported by[/dim] [cyan]{provider.name}[/cyan] "
+                f"[dim]at {provider.base_url} — server down or empty?[/dim]"
+            )
+        return
 
     families = [family_filter] if family_filter else sorted(
         set(grouped) | set(MODEL_VARIANTS)
@@ -38,8 +69,8 @@ def _print_variants(family_filter: str | None, cfg: LuxeConfig) -> None:
 
     t = Table(show_header=True, box=None, padding=(0, 2), header_style="dim")
     t.add_column("family")
-    t.add_column("installed")
-    t.add_column("available")
+    t.add_column("installed (live)")
+    t.add_column("available (catalog)")
     for family in families:
         have = grouped.get(family, set())
         released = MODEL_VARIANTS.get(family)
@@ -63,7 +94,10 @@ def _print_variants(family_filter: str | None, cfg: LuxeConfig) -> None:
 
 def _pull_with_progress(tag: str, base_url: str) -> bool:
     """Stream Ollama pull and render per-layer progress bars. Returns True
-    on clean success. Ctrl-C aborts gracefully."""
+    on clean success. Ctrl-C aborts gracefully. Ollama-only: LM Studio
+    and oMLX don't expose a pull endpoint."""
+    from luxe_cli.backend import pull_stream
+
     console.print(f"[dim]pulling[/dim] [cyan]{tag}[/cyan][dim]...[/dim]")
     with Progress(
         TextColumn("[dim]{task.description}"),

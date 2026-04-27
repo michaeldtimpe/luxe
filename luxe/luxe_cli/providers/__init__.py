@@ -24,6 +24,17 @@ from typing import Iterator, Protocol, runtime_checkable
 
 from luxe_cli.providers.lmstudio import LMStudioProvider
 from luxe_cli.providers.ollama import OllamaProvider
+from luxe_cli.providers.omlx import OMLXProvider
+from luxe_cli.providers.openai_compat import OpenAICompatProvider
+
+
+_PROVIDER_CLASSES: dict[str, type] = {
+    "ollama": OllamaProvider,
+    "lmstudio": LMStudioProvider,
+    "omlx": OMLXProvider,
+    "llamacpp": OpenAICompatProvider,  # generic OpenAI-compat fallback
+    "mlx": OpenAICompatProvider,  # legacy alias for older configs
+}
 
 
 def get_provider(kind: str, base_url: str | None = None) -> "BackendProvider":
@@ -34,14 +45,26 @@ def get_provider(kind: str, base_url: str | None = None) -> "BackendProvider":
     url = base_url or _BACKEND_OVERRIDE_URLS.get(kind)
     if url is None:
         raise ValueError(f"unknown provider kind: {kind!r}")
-    if kind == "ollama":
-        return OllamaProvider(url)
-    if kind == "lmstudio":
-        return LMStudioProvider(url)
-    raise ValueError(f"no provider registered for kind: {kind!r}")
+    cls = _PROVIDER_CLASSES.get(kind)
+    if cls is None:
+        raise ValueError(f"no provider registered for kind: {kind!r}")
+    return cls(url) if cls is not OpenAICompatProvider else _generic(kind, url)
 
 
-__all__ = ["BackendProvider", "OllamaProvider", "LMStudioProvider", "get_provider"]
+def _generic(kind: str, url: str) -> OpenAICompatProvider:
+    p = OpenAICompatProvider(url)
+    p.name = kind
+    return p
+
+
+__all__ = [
+    "BackendProvider",
+    "OllamaProvider",
+    "LMStudioProvider",
+    "OMLXProvider",
+    "OpenAICompatProvider",
+    "get_provider",
+]
 
 
 @runtime_checkable

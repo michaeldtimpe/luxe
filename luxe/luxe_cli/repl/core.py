@@ -209,11 +209,14 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         console.print(f"  path: {state.sess.path}")
         return "consumed"
     if cmd == "/models":
+        from luxe_cli.repl.models import _default_provider as _picker_provider
+
+        provider = _picker_provider(cfg)
         t = Table(show_header=False, box=None, padding=(0, 2))
         t.add_column()  # model tag
         t.add_column(justify="right")  # params
-        for m in list_models():
-            t.add_row(m, parameter_size(m, cfg.ollama_base_url))
+        for m in provider.list_models():
+            t.add_row(m, provider.parameter_size(m) or "—")
         console.print(t)
         return "consumed"
 
@@ -225,8 +228,18 @@ def _handle_command(line: str, state: ReplState, cfg: LuxeConfig) -> str:
         if not args:
             console.print("[yellow]usage:[/yellow] /pull <tag>   e.g. /pull gemma3:4b")
             return "consumed"
+        from luxe_cli.repl.models import _default_provider as _picker_provider
+
+        provider = _picker_provider(cfg)
+        if provider.name != "ollama":
+            console.print(
+                f"[yellow]/pull is Ollama-only[/yellow] — active provider is "
+                f"[cyan]{provider.name}[/cyan]. Manage models in the LM Studio "
+                "GUI or use Ollama directly."
+            )
+            return "consumed"
         tag = args[0]
-        if _pull_with_progress(tag, cfg.ollama_base_url):
+        if _pull_with_progress(tag, provider.base_url):
             _prompt_assign_to_agent(tag, cfg)
         return "consumed"
 
