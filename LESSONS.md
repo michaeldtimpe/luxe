@@ -993,3 +993,86 @@ for research (silent fake citations) and calc (skips mandatory
    smoke-test "0 tool calls" as a *fail* for any role whose system
    prompt mandates tool use, regardless of how the speed numbers
    look.
+
+---
+
+## One repo isn't a measurement either — Qwen3 MoE fabricates as accumulated context grows
+
+Same-afternoon follow-up to the per-role lesson above. After research
+and calc reverted (silent skipped tool calls), I left review and
+refactor on `Qwen3-30B-A3B-Instruct-2507-4bit` based on one good
+`/review` run on `elara` (small Python, 7.7k LOC, 17 files): 9m wall
+vs the prior Qwen2.5-32B's 57m wall, with much less fabrication.
+
+The next `/review` on `neon-rain` (45 JS files, 11.4k LOC) told a
+different story:
+
+| Subtask | Wall | Tool calls | Tokens | Flag |
+|---|---|---|---|---|
+| 02 (read docs) | 4m | **28** | 377k↑ | step budget 20 exhausted |
+| 03 (security) | 5.5m | 17 | 139k↑ | **9 unverified claims** |
+| 04 (correctness) | 3m | 14 | 93k↑ | **23 unverified claims** |
+| 05 (robustness) | 5.5m | 16 | 144k↑ | 8 unverified |
+| 06 (maintain) | 2m | 8 | 62k↑ | 15 unverified |
+| 07 (synthesis) | 3.5m | 19 | 126k↑ | 3 unverified |
+
+**58 unverified file:line citations** across 5 subtasks. The
+orchestrator's anti-fabrication grounding check (in
+`luxe/tasks/orchestrator.py` — re-reads each cited file post-subtask
+and flags out-of-range or constructs-not-present claims) caught them,
+but the volume is a quality regression vs the Qwen2.5-32B incumbent
+which produces fewer citations and they're real. Task ended status
+`blocked` because sub 02 hit `max_steps: 20`.
+
+Reverted review and refactor back to Qwen2.5-32B-Instruct-4bit on the
+same day. The MoE has no agent in luxe right now.
+
+**Working hypothesis:** Qwen3-30B-A3B Instruct-2507 fabricates as
+*accumulated* tool-call context grows. On `elara` the conversation
+stayed ~10–60k tokens per subtask; on `neon-rain` it climbed past
+100k cumulative on three subtasks (377k, 144k, 139k). The MoE's 3B
+active params look fine at small scale and degrade at large scale —
+in the opposite direction from what you'd guess from architecture
+("MoE handles long context efficiently because only a few experts
+fire"). The empirical pattern: short read-and-reason → clean;
+multi-turn read-loop with growing message history → made-up
+citations.
+
+**Lessons:**
+
+1. **Repo size matters more than benchmark TTFT.** HumanEval+ at n=20
+   keeps each prompt ≤2k tokens. `/review` on a real repo accumulates
+   60k–400k cumulative prompt tokens across a 7-subtask plan. None of
+   the synthetic benches probe that regime. Add a
+   `humaneval_plus_long_prefix` slot (or just `luxe_replay` against a
+   recorded large-repo session) before the next per-role swap.
+
+2. **One small-repo win is not the migration signal.** The elara run
+   was a real win on a real repo, but a real *small* repo. The
+   "validated approach" memory (`feedback_validate_first.md`) is
+   about cheap probes before scaling — same principle applies after
+   the swap: validate on at least one repo at the upper end of the
+   distribution before declaring a swap done. luxe specifically
+   sees a wide distribution because users `/review` everything from
+   100-LOC scripts to 50k-LOC monoliths.
+
+3. **The grounding check is the canary, not the cure.** It flagged
+   the unverified claims correctly — that's why we caught the
+   regression at all. But "anti-fabrication caught a lot of
+   fabrication" is itself a quality signal: if a model needs the
+   guardrail to file a usable report, the model isn't ready for the
+   role. Treat per-subtask `unverified claim(s)` count as a first-
+   class metric for evaluating any new review/refactor candidate;
+   ≥5 per subtask is a fail.
+
+4. **Same-day re-revert is fine, again.** I reverted research/calc
+   in the morning and review/refactor in the evening, both on the
+   same evidence pattern (real-world use surfaces a regression the
+   benchmark missed). The "don't unwind a migration the benchmark
+   earned" rule from earlier in this file holds for *speed*
+   regressions — a benchmark earned the speed claim, so a one-off
+   wall-clock observation shouldn't unwind it. *Correctness*
+   regressions (silent fake citations, fabricated file:line claims)
+   are a different category: they're not a measurement noise issue,
+   they're the model failing at the actual task. Revert immediately
+   and write the lesson up.

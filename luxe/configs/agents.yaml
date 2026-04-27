@@ -454,15 +454,26 @@ agents:
     # regime" — corrected note: the regime is real but the rollback
     # was premature; both backends are slow there).
     #
-    # 2026-04-27 (later): same Qwen3-30B-A3B-Instruct-2507 swap as
-    # research/calc — see research agent comment for A/B data.
+    # 2026-04-27 (later still): REVERTED with research/calc — first live
+    # /review on a larger JS repo (neon-rain, 11.4k LOC, 45 files) under
+    # the MoE produced 58 unverified file:line claims across 5 subtasks
+    # and exhausted the 20-step budget on the docs-read subtask after 28
+    # tool calls (376k cumulative prompt tokens). The anti-fabrication
+    # grounding check caught them, but the volume of made-up citations
+    # is a quality regression vs Qwen2.5-32B. The earlier elara win
+    # (9m vs 57m, less fabrication) held only on a small Python repo.
+    # Working hypothesis: MoE's lighter active-param count degrades on
+    # long accumulated tool-call context — fine on short read-and-reason,
+    # fabricates as the conversation grows past ~100k cumulative tokens.
+    # 2026-04-27 (earlier): briefly swapped to Qwen3-30B-A3B-Instruct-
+    # 2507-4bit alongside research/calc; reverted same day.
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct — the 14b
     # coder was fabricating findings (quoted SQL that didn't exist in
     # the file, refused to use tools on 4/6 inspection subtasks). This
     # agent reasons over code rather than writing it, so general-instruct
     # is a better fit; the 32b variant is the one `research` and `calc`
     # use, so tool-use stability is already validated.
-    model: "Qwen3-30B-A3B-Instruct-2507-4bit"
+    model: "Qwen2.5-32B-Instruct-4bit"
     endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20
@@ -613,12 +624,13 @@ agents:
     # same workload shape, same +54% decode win. The afternoon
     # rollback was reverted same-day; see `review`'s comment.
     #
-    # 2026-04-27 (later): same Qwen3-30B-A3B-Instruct-2507 swap as
-    # research/calc/review — see research agent comment for A/B data.
+    # 2026-04-27 (later still): REVERTED with review — see review agent
+    # comment for the neon-rain fabrication finding. Briefly swapped to
+    # Qwen3-30B-A3B-Instruct-2507-4bit; reverted same day.
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct for the same
     # reason as `review` — this agent reads and reasons, never writes,
     # so general-instruct 32b is a better fit than the coder 14b.
-    model: "Qwen3-30B-A3B-Instruct-2507-4bit"
+    model: "Qwen2.5-32B-Instruct-4bit"
     endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20

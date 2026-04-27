@@ -245,18 +245,22 @@ parses, first token must be in the set.
 
 ## Review  — `luxe/agents/review.py`
 
-**Model:** `Qwen3-30B-A3B-Instruct-2507-4bit` (MoE, 3B active per
-token; ~17 GB on disk). Swapped 2026-04-27 from `Qwen2.5-32B-Instruct-
-4bit` after an A/B sweep + live `/review elara` run showed the new
-MoE produces a clean 9-minute report where the prior 32B took 57
-minutes and repeated the same `json.loads`-error-handling finding 30+
-times at fabricated line numbers. The MoE's lighter tool aggression
-is a feature here: review/refactor are read-and-reason agents and
-don't need the model to chain web/tool calls. Earlier history: moved
-off `qwen2.5-coder:14b` in April 2026 after the 14B coder fabricated
-findings on real repos. The Qwen2.5-32B intermediate stage stays in
-service for `research` and `calc`, where the same MoE silently skips
-required tool calls — see `research`/`calc` model notes.
+**Model:** `Qwen2.5-32B-Instruct-4bit` (19 GB). Held position after a
+brief 2026-04-27 evaluation of `Qwen3-30B-A3B-Instruct-2507-4bit`
+(MoE, 3B active). The MoE swap looked decisive on the first small-
+repo `/review elara` (9m vs 57m, cleaner output, less fabrication)
+but the next live run on a larger JS repo (`neon-rain`, 11.4k LOC)
+produced 58 unverified file:line citations across 5 subtasks and
+exhausted the 20-step budget on the docs-read subtask after 28
+tool calls and 376k cumulative prompt tokens. The orchestrator's
+anti-fabrication grounding check caught the citations after the
+fact, but the volume is a quality regression vs the incumbent.
+Working hypothesis: MoE Instruct's lighter active-param count
+degrades on long accumulated tool-call context — fine on short
+read-and-reason, fabricates as the conversation grows past ~100k
+cumulative tokens. Reverted same day. Earlier history: moved off
+`qwen2.5-coder:14b` in April 2026 after the 14B coder fabricated
+findings on real repos.
 
 **Tools:** read-only fs (`read_file`, `list_dir`, `glob`, `grep`) +
 read-only git (`git_diff`, `git_log`, `git_show`) + the full
@@ -307,9 +311,10 @@ agent.
 
 ## Refactor  — `luxe/agents/refactor.py`
 
-**Model:** `Qwen3-30B-A3B-Instruct-2507-4bit` (shared config rationale
-with `review` — same MoE swap on the same day). **Tools:** identical
-to review. **Driven by:**
+**Model:** `Qwen2.5-32B-Instruct-4bit` (shared config rationale with
+`review` — same brief MoE swap and same-day revert; see review for
+the neon-rain fabrication finding). **Tools:** identical to review.
+**Driven by:**
 `/refactor <git-url>`. Subtasks focus on performance → architecture
 → code size → idioms rather than security. Same anti-fabrication
 guardrails, same pre-flight survey, same 1500 s per-agent wall.
