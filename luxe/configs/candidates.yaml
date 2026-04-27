@@ -176,6 +176,93 @@ candidates:
       luxe's code/review/refactor agents. Also a Phase-A speed reference.
       Stays active by default in the A/B sweep.
 
+  # ─── Qwen3-family upgrade candidates (added 2026-04-27) ─────────────
+  # Targets: replace the Qwen2.5 stack across the four agent size classes.
+  # All MLX repos verified on HF prior to inclusion. Skipping Qwen3.6
+  # (Apr 2026 release) this round — too new given the open Qwen-32B
+  # tool-loop bug. Activated for the qwen25_vs_qwen3 A/B sweep.
+
+  - id: qwen3-8b
+    display: Qwen3-8B
+    active: true
+    family: qwen
+    params_b: 8
+    dense: true
+    hf_repo: Qwen/Qwen3-8B
+    mlx_repo: mlx-community/Qwen3-8B-4bit
+    chat_template: qwen
+    tool_call_format: hermes
+    context_native: 32768
+    context_target: 32768
+    mem_gb_q4: 5
+    draft_id: null
+    notes: |
+      Generation upgrade target for router/general/lookup/image (currently
+      Qwen2.5-7B). MLX repo size 4.61 GB. Same Hermes tool format.
+
+  - id: qwen3-32b
+    display: Qwen3-32B (dense)
+    active: true
+    family: qwen
+    params_b: 32
+    dense: true
+    hf_repo: Qwen/Qwen3-32B
+    mlx_repo: mlx-community/Qwen3-32B-4bit
+    chat_template: qwen
+    tool_call_format: hermes
+    context_native: 32768
+    context_target: 32768
+    mem_gb_q4: 19
+    draft_id: null
+    notes: |
+      Dense reasoning candidate for research/calc/review/refactor. Fallback
+      if the MoE 30B-A3B regresses on tool-call stability or accuracy. MLX
+      repo size 18.4 GB, mlx-lm 0.24.0.
+
+  - id: qwen3-30b-a3b-instruct-2507
+    display: Qwen3-30B-A3B-Instruct-2507 (MoE, 3B active)
+    active: true
+    family: qwen
+    params_b: 30.5
+    dense: false
+    active_params_b: 3.0
+    hf_repo: Qwen/Qwen3-30B-A3B-Instruct-2507
+    mlx_repo: mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit
+    chat_template: qwen
+    tool_call_format: hermes
+    context_native: 32768
+    context_target: 32768
+    mem_gb_q4: 17
+    draft_id: null
+    notes: |
+      Primary MoE reasoning candidate for research/calc/review/refactor.
+      ~3B active per token → expect large decode-tok/s win on Apple Silicon.
+      Phase 2 must include a ≥16K context turn to validate long-context
+      MoE behavior. MLX repo size 17.2 GB, mlx-lm 0.26.3.
+
+  - id: qwen3-coder-30b-a3b
+    display: Qwen3-Coder-30B-A3B-Instruct (MoE)
+    active: true
+    family: qwen
+    params_b: 30.5
+    dense: false
+    active_params_b: 3.3
+    hf_repo: Qwen/Qwen3-Coder-30B-A3B-Instruct
+    mlx_repo: mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit
+    chat_template: qwen
+    tool_call_format: hermes
+    context_native: 262144
+    context_target: 65536
+    mem_gb_q4: 18
+    draft_id: null
+    notes: |
+      Primary upgrade target for the code agent (currently Qwen2.5-Coder-14B).
+      Community benchmarks: ~127 tok/s on M4 Max with 4-bit. Native context
+      262K but capping to 65K to match incumbent. Don't promote to review/
+      refactor without separate validation — the 2026-04-23 fabrication
+      regression on 14B Coder may or may not have been fixed in Qwen3.
+      MLX repo size 17.2 GB, mlx-lm 0.26.3.
+
 drafts:
   - id: qwen2.5-coder-0.5b-draft
     hf_repo: Qwen/Qwen2.5-Coder-0.5B-Instruct

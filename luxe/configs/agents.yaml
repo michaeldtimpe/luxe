@@ -118,8 +118,18 @@ agents:
 
   - name: research
     display: "Deep research (web-enabled)"
-    # 2026-04-27: migrated from Ollama → oMLX. Same weights as review/
-    # refactor/calc; oMLX shows decisive decode wins on this model class.
+    # 2026-04-27 (later still): REVERTED to Qwen2.5-32B-Instruct-4bit
+    # after live test showed the Qwen3-30B-A3B-Instruct-2507 MoE silently
+    # skips web_search/fetch_url tool calls and answers from training
+    # data with fabricated [1]-[n] citations (e.g. "Immigration, Refugees
+    # and Citizenship Canada – Permanent Residence" with no URL; Bolt EV
+    # "60 kWh / 150 kW" when real spec is 65 kWh / ~55 kW). Phase 1
+    # smoke test had hinted at this regression — the MoE Instruct
+    # variants are weaker on aggressive tool use than Qwen2.5-32B.
+    # The MoE win is real for review/refactor (read-and-reason, sparse
+    # tool use OK), but research REQUIRES tools — keep on Qwen2.5-32B.
+    # 2026-04-27 (earlier): migrated from Ollama → oMLX. Same weights as
+    # review/refactor/calc; oMLX shows decisive decode wins on this class.
     model: "Qwen2.5-32B-Instruct-4bit"
     endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
@@ -341,8 +351,14 @@ agents:
     # request with `tools=[...]` (create_tool + matched library tools)
     # 400s. Qwen2.5-32B is the same model `research`/`review`/`refactor`
     # use, stays warm across a typical trip-planning task, supports tool
-    # calls cleanly, and carries units well. 2026-04-27: migrated to
-    # oMLX alongside research; same weights, MLX engine.
+    # calls cleanly, and carries units well. 2026-04-27 (later still):
+    # REVERTED with research — Qwen3-30B-A3B-Instruct-2507 silently
+    # skipped tool calls (notably create_tool, which is mandatory for
+    # reusable computations per the calc system prompt). Calc agent
+    # depends on aggressive tool use; the MoE Instruct's reduced tool
+    # aggression is a regression here even though it's a win for
+    # review/refactor. 2026-04-27 (earlier): migrated to oMLX
+    # alongside research; same weights, MLX engine.
     model: "Qwen2.5-32B-Instruct-4bit"
     endpoint: "http://127.0.0.1:8000"
     temperature: 0.1
@@ -438,13 +454,15 @@ agents:
     # regime" — corrected note: the regime is real but the rollback
     # was premature; both backends are slow there).
     #
+    # 2026-04-27 (later): same Qwen3-30B-A3B-Instruct-2507 swap as
+    # research/calc — see research agent comment for A/B data.
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct — the 14b
     # coder was fabricating findings (quoted SQL that didn't exist in
     # the file, refused to use tools on 4/6 inspection subtasks). This
     # agent reasons over code rather than writing it, so general-instruct
     # is a better fit; the 32b variant is the one `research` and `calc`
     # use, so tool-use stability is already validated.
-    model: "Qwen2.5-32B-Instruct-4bit"
+    model: "Qwen3-30B-A3B-Instruct-2507-4bit"
     endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20
@@ -595,10 +613,12 @@ agents:
     # same workload shape, same +54% decode win. The afternoon
     # rollback was reverted same-day; see `review`'s comment.
     #
+    # 2026-04-27 (later): same Qwen3-30B-A3B-Instruct-2507 swap as
+    # research/calc/review — see research agent comment for A/B data.
     # 2026-04-23: upgraded from qwen2.5-coder:14b-instruct for the same
     # reason as `review` — this agent reads and reasons, never writes,
     # so general-instruct 32b is a better fit than the coder 14b.
-    model: "Qwen2.5-32B-Instruct-4bit"
+    model: "Qwen3-30B-A3B-Instruct-2507-4bit"
     endpoint: "http://127.0.0.1:8000"
     temperature: 0.2
     max_steps: 20
