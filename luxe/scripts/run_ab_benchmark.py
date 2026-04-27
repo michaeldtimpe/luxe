@@ -36,6 +36,7 @@ from benchmarks.decode_throughput import DecodeThroughput  # noqa: E402
 from benchmarks.humaneval_plus import HumanEvalPlus  # noqa: E402
 from benchmarks.luxe_replay import LuxeReplay  # noqa: E402
 from benchmarks.mbpp_plus import MbppPlus  # noqa: E402
+from benchmarks.prefix_cache_decay import PrefixCacheDecay  # noqa: E402
 from harness.registry import (  # noqa: E402
     Candidate,
     OptimizationConfig,
@@ -50,8 +51,16 @@ RESULTS_DIR = ROOT / "results" / PHASE
 
 # A/B-specific config_id — keeps the directory layout
 # results/runs/<phase>/<candidate>/<config>/<bench>.jsonl distinct from
-# Phase A's `baseline` and friends.
-_CONFIG_IDS = {"ollama": "ollama_q4km", "llamacpp": "llamacpp_q4km"}
+# Phase A's `baseline` and friends. The omlx entry is plumbed through
+# even though the default --backends only lists ollama,llamacpp; pass
+# `--backends ollama,omlx` (or include omlx in any combination) to use
+# it. Phase 0 (omlx_healthcheck.py) must have run first so the
+# externally-managed daemon is up.
+_CONFIG_IDS = {
+    "ollama": "ollama_q4km",
+    "llamacpp": "llamacpp_q4km",
+    "omlx": "omlx_q4km",
+}
 
 ALL_BENCHES = {
     "decode_throughput": lambda: DecodeThroughput(),
@@ -59,6 +68,7 @@ ALL_BENCHES = {
     "humaneval_plus": lambda: HumanEvalPlus(),
     "mbpp_plus": lambda: MbppPlus(),
     "luxe_replay": lambda: LuxeReplay(),
+    "prefix_cache_decay": lambda: PrefixCacheDecay(),
 }
 
 DEFAULT_CANDIDATES = (
@@ -123,13 +133,24 @@ def main(
     limit: int | None = typer.Option(None, "--limit"),
     report_only: bool = typer.Option(False, "--report-only"),
     ollama_url: str = typer.Option("http://127.0.0.1:11434", "--ollama-url"),
+    omlx_url: str = typer.Option("http://127.0.0.1:8000", "--omlx-url"),
+    phase: str = typer.Option(PHASE, "--phase",
+        help="Override results phase dir (e.g. ab_ollama_vs_omlx)."),
+    config_suffix: str = typer.Option("", "--config-suffix",
+        help="Suffix appended to each backend's config_id "
+             "(e.g. --config-suffix _dflash → omlx_q4km_dflash). "
+             "Use to keep variant runs distinct from baseline."),
 ) -> None:
+    backend_kinds = [b.strip() for b in backends.split(",") if b.strip()]
+    results_dir = ROOT / "results" / phase
     if report_only:
-        out = RESULTS_DIR / "REPORT.md"
-        csv = RESULTS_DIR / "REPORT.csv"
+        out = results_dir / "REPORT.md"
+        csv = results_dir / "REPORT.csv"
         md = ab_report(
-            phase=PHASE,
-            backends=("ollama_q4km", "llamacpp_q4km"),
+            phase=phase,
+            backends=tuple(
+                _CONFIG_IDS[k] + config_suffix for k in backend_kinds if k in _CONFIG_IDS
+            ),
             output_md=out,
             output_csv=csv,
         )
@@ -144,7 +165,6 @@ def main(
             candidates.append(reg.get(cid))
         except KeyError:
             typer.echo(f"[skip] unknown candidate: {cid}")
-    backend_kinds = [b.strip() for b in backends.split(",") if b.strip()]
     bench_keys = [b.strip() for b in bench.split(",") if b.strip()]
 
     config = _make_ab_config()
@@ -161,6 +181,9 @@ def main(
         if "ollama" in backend_kinds:
             _validate_token_parity(cand, ollama_url)
         for kind in backend_kinds:
+            if kind not in _CONFIG_IDS:
+                typer.echo(f"  [skip] unknown backend: {kind} (known: {list(_CONFIG_IDS)})")
+                continue
             t0 = time.monotonic()
             try:
                 with launch_server(
@@ -169,34 +192,59 @@ def main(
                     config=config,
                     draft=None,
                     ollama_base_url=ollama_url,
+                    omlx_base_url=omlx_url,
                 ) as backend:
-                    cfg_id = _CONFIG_IDS[kind]
+                    cfg_id = _CONFIG_IDS[kind] + config_suffix
                     for bk in bench_keys:
                         if bk not in ALL_BENCHES:
                             typer.echo(f"  [skip] unknown bench: {bk}")
                             continue
                         typer.echo(f"  → {kind} · {bk}")
-                        run_benchmark(
-                            ALL_BENCHES[bk](),
-                            backend,
-                            phase=PHASE,
-                            candidate_id=cand.id,
-                            config_id=cfg_id,
-                            limit=limit,
-                        )
+                        # Per-bench try so a missing optional dep
+                        # (evalplus, bfcl_eval) skips that one bench
+                        # rather than killing remaining benches in the
+                        # backend.
+                        try:
+                            run_benchmark(
+                                ALL_BENCHES[bk](),
+                                backend,
+                                phase=phase,
+                                candidate_id=cand.id,
+                                config_id=cfg_id,
+                                limit=limit,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            typer.echo(
+                                f"  [error] {kind} · {bk} failed: "
+                                f"{type(e).__name__}: {e}"
+                            )
             except Exception as e:  # noqa: BLE001
-                typer.echo(f"  [error] {kind} run failed: {type(e).__name__}: {e}")
+                typer.echo(f"  [error] {kind} server-launch failed: {type(e).__name__}: {e}")
                 continue
             typer.echo(
                 f"  ← {kind} done in {time.monotonic() - t0:.0f}s"
             )
 
+    backend_cfg_ids = tuple(
+        _CONFIG_IDS[k] + config_suffix for k in backend_kinds if k in _CONFIG_IDS
+    )
+    if len(backend_cfg_ids) < 2:
+        typer.echo(
+            f"\n=== skipping AB report (only {len(backend_cfg_ids)} backend) ==="
+        )
+        typer.echo(
+            f"AB report requires two backends to compare. Re-run with both, or "
+            f"inspect raw JSONL under results/runs/{phase}/<candidate>/"
+            f"{backend_cfg_ids[0] if backend_cfg_ids else '<cfg>'}/."
+        )
+        return
+
     typer.echo("\n=== regenerating report ===")
-    out = RESULTS_DIR / "REPORT.md"
-    csv = RESULTS_DIR / "REPORT.csv"
+    out = results_dir / "REPORT.md"
+    csv = results_dir / "REPORT.csv"
     md = ab_report(
-        phase=PHASE,
-        backends=("ollama_q4km", "llamacpp_q4km"),
+        phase=phase,
+        backends=backend_cfg_ids,
         output_md=out,
         output_csv=csv,
     )

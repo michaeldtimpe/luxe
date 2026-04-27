@@ -7,7 +7,7 @@ tests is worth the small maintenance cost.
 
 from __future__ import annotations
 
-from cli.agents.base import (
+from luxe_cli.agents.base import (
     _parse_python_calls,
     _parse_text_tool_calls,
 )

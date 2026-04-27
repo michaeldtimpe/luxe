@@ -11,16 +11,17 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import cli.main as cli_module
+import luxe_cli.main as cli_module
 
 
 def test_analyze_review_routes_to_start_review_task(tmp_path, monkeypatch):
     runner = CliRunner()
     called: dict = {}
 
-    def fake_start(url_or_path, mode, cfg):
+    def fake_start(url_or_path, mode, cfg, *, use_plan_cache=True):
         called["url_or_path"] = url_or_path
         called["mode"] = mode
+        called["use_plan_cache"] = use_plan_cache
         return "20260423T010203-fake-tid"
 
     # Fake the load_config so we don't parse the real agents.yaml.
@@ -29,7 +30,7 @@ def test_analyze_review_routes_to_start_review_task(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli_module, "load_config", lambda: _Cfg())
     # Patch inside the module where the command imports it.
-    import cli.review as review_module
+    import luxe_cli.review as review_module
     monkeypatch.setattr(review_module, "start_review_task", fake_start)
 
     repo = tmp_path / "repo"
@@ -64,7 +65,7 @@ def test_analyze_without_review_does_not_call_review_task(tmp_path, monkeypatch)
         ollama_base_url = "http://127.0.0.1:11434"
 
     monkeypatch.setattr(cli_module, "load_config", lambda: _Cfg())
-    import cli.review as review_module
+    import luxe_cli.review as review_module
     monkeypatch.setattr(review_module, "start_review_task", fake_start)
 
     # Make the code-eval path bail immediately so we don't need a full
@@ -72,7 +73,7 @@ def test_analyze_without_review_does_not_call_review_task(tmp_path, monkeypatch)
     def _boom(*a, **kw):
         raise RuntimeError("code-eval path hit, stopping before side effects")
 
-    monkeypatch.setattr("cli.backend.make_backend", _boom)
+    monkeypatch.setattr("luxe_cli.backend.make_backend", _boom)
 
     repo = tmp_path / "repo"
     repo.mkdir()

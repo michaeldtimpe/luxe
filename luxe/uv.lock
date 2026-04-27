@@ -1438,6 +1438,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+browser = [
+    { name = "pychrome" },
+]
 dev = [
     { name = "bandit" },
     { name = "mypy" },
@@ -1469,6 +1472,7 @@ requires-dist = [
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "psutil", specifier = ">=6.0" },
+    { name = "pychrome", marker = "extra == 'browser'", specifier = ">=0.2.4" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -1480,7 +1484,7 @@ requires-dist = [
     { name = "trafilatura", specifier = ">=1.12" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["mlx", "evalplus", "dev"]
+provides-extras = ["mlx", "evalplus", "browser", "dev"]
 
 [[package]]
 name = "lxml"
@@ -2725,6 +2729,20 @@ wheels = [
 ]
 
 [[package]]
+name = "pychrome"
+version = "0.2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "requests" },
+    { name = "websocket-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/77/5e/e51089f733020ed96849f55803d46448ad1dc5fb1a5533013672dafdc90d/pychrome-0.2.4.tar.gz", hash = "sha256:70392b6592e4d0a00e91324efd9c89f6e6e47fa31e7b38a69973dc6489453478", size = 11709, upload-time = "2023-07-10T14:08:48.999Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4a/11/b88e0b351b86350849e874a5d5dc52be3dd9a85dbe6c7aab40111ba2b49c/pychrome-0.2.4-py2.py3-none-any.whl", hash = "sha256:5deeeaaf51609d8a3fb5e2961652981150c4eefb50e223848b0e7520c00e6366", size = 8166, upload-time = "2023-07-10T14:08:47.193Z" },
+]
+
+[[package]]
 name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3854,6 +3872,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/35/a2/8e3becb46433538a38726c948d3399905a4c7cabd0df578ede5dc51f0ec2/wcwidth-0.6.0.tar.gz", hash = "sha256:cdc4e4262d6ef9a1a57e018384cbeb1208d8abbc64176027e2c2455c81313159", size = 159684, upload-time = "2026-02-06T19:19:40.919Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/68/5a/199c59e0a824a3db2b89c5d2dade7ab5f9624dbf6448dc291b46d5ec94d3/wcwidth-0.6.0-py3-none-any.whl", hash = "sha256:1a3a1e510b553315f8e146c54764f4fb6264ffad731b3d78088cdb1478ffbdad", size = 94189, upload-time = "2026-02-06T19:19:39.646Z" },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]

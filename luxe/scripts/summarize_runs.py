@@ -5,9 +5,8 @@ top-level fields we'd need to recalibrate the Phase 7 budget tiers or
 measure tool-adoption trends over time:
 
   task_id, created_at, status, agent_kinds, num_subtasks, finished_subtasks,
-  max_wall_s, num_ctx_override, total_wall_s, total_prompt_tokens,
-  total_completion_tokens, analyzer_calls, reader_calls, orientation_calls,
-  other_calls, tool_breakdown
+  max_wall_s, total_wall_s, total_prompt_tokens, total_completion_tokens,
+  analyzer_calls, reader_calls, orientation_calls, other_calls, tool_breakdown
 
 The `tool_breakdown` column is a semicolon-separated `name=count@wall_s`
 list so you can pivot on specific tool adoption in a spreadsheet
@@ -112,7 +111,6 @@ def _summarize(state: dict) -> dict[str, object]:
         "num_subtasks": len(subs),
         "finished_subtasks": finished,
         "max_wall_s": state.get("max_wall_s", ""),
-        "num_ctx_override": state.get("num_ctx_override") or "",
         "total_wall_s": round(total_wall, 1),
         "total_prompt_tokens": prompt_tokens,
         "total_completion_tokens": completion_tokens,

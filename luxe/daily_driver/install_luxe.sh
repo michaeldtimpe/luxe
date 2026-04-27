@@ -60,10 +60,28 @@ install() {
     sleep 1
   done
 
+  # Stage ~/.luxe/secrets.env from the template if neither file exists.
+  # The CLI auto-loads this into os.environ at startup, so users don't
+  # have to `export OMLX_API_KEY=...` in every shell. Skipped when the
+  # user already has a secrets file (don't clobber configured keys).
+  SECRETS_DIR="$HOME/.luxe"
+  SECRETS_FILE="$SECRETS_DIR/secrets.env"
+  SECRETS_TEMPLATE="$REPO_ROOT/daily_driver/secrets.env.example"
+  if [[ ! -e "$SECRETS_FILE" && -f "$SECRETS_TEMPLATE" ]]; then
+    say "staging secrets template at $SECRETS_FILE (edit to add keys)"
+    mkdir -p "$SECRETS_DIR"
+    cp "$SECRETS_TEMPLATE" "$SECRETS_FILE"
+    chmod 600 "$SECRETS_FILE"
+  fi
+
   say "done. Try: luxe agents"
   if ! echo "$PATH" | tr ':' '\n' | grep -Fxq "$BIN_DIR"; then
     warn "$BIN_DIR is not on your PATH. Add to your shell rc:"
     warn "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+  fi
+  if [[ -f "$SECRETS_FILE" ]] && ! grep -E '^[^#]*OMLX_API_KEY=.+' "$SECRETS_FILE" >/dev/null 2>&1; then
+    warn "$SECRETS_FILE has no active OMLX_API_KEY — code/review/refactor"
+    warn "agents will 401. Edit it: \$EDITOR $SECRETS_FILE"
   fi
 }
 

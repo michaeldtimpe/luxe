@@ -7,8 +7,8 @@ wipes everything even after the wrapper change.
 
 from __future__ import annotations
 
-import cli.backend as backend
-from cli.backend import (
+import luxe_cli.backend as backend
+from luxe_cli.backend import (
     _CacheEntry,
     _cache_get,
     _cache_set,
@@ -74,3 +74,23 @@ def test_clear_caches_by_model_is_selective():
     assert "http://x::alpha" not in _PARAMS_CACHE
     assert _PARAMS_CACHE.get("http://x::beta") is not None
     assert _cache_get(_PARAMS_CACHE, "http://x::beta") == "13B"
+
+
+def test_kind_for_url_matches_known_providers():
+    assert backend._kind_for_url("http://127.0.0.1:11434") == "ollama"
+    assert backend._kind_for_url("http://127.0.0.1:8000") == "omlx"
+    assert backend._kind_for_url("http://127.0.0.1:8088") == "llamacpp"
+    assert backend._kind_for_url("http://127.0.0.1:1234") == "lmstudio"
+
+
+def test_kind_for_url_falls_back_to_ollama():
+    assert backend._kind_for_url("http://example.invalid:9999") == "ollama"
+
+
+def test_make_backend_derives_kind_from_url(monkeypatch):
+    monkeypatch.delenv("LUXE_BACKEND_OVERRIDE", raising=False)
+    monkeypatch.delenv("LUXE_BACKEND_OVERRIDE_URL", raising=False)
+    monkeypatch.delenv("LUXE_MODEL_OVERRIDE", raising=False)
+    assert backend.make_backend("m", base_url="http://127.0.0.1:8000").kind == "omlx"
+    assert backend.make_backend("m", base_url="http://127.0.0.1:1234").kind == "lmstudio"
+    assert backend.make_backend("m").kind == "ollama"

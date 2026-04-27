@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from cli.repl.help import _HELP_SECTIONS, _render_help
+from luxe_cli.repl.help import _HELP_SECTIONS, _render_help
 
 
 def _render_to_ansi() -> str:
