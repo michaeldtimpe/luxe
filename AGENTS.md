@@ -349,9 +349,11 @@ data across every run in `~/.luxe/tasks/` as a CSV.
    to finalize until the agent has made at least N tool calls),
    `num_ctx` (fixed per-mode context window — Ollama-effective via
    `options.num_ctx`, oMLX/llama-server honor server-side
-   `--max-kv-size`), and `endpoint` (per-agent base URL override, e.g.
-   pointing at a llama-server
-   instance).
+   `--max-kv-size`), `provider` (key in the top-level `providers:`
+   map — preferred), or `endpoint` (legacy direct URL override,
+   takes precedence over `provider:` if both are set). See the
+   "Provider migration" section in `luxe/luxe_cli/README.md` for
+   the full list of declared providers.
 5. Add the agent name to `luxe_cli.registry.AgentName` enum and (if new
    tools) `ToolName` enum.
 6. Update `router.py`'s `descriptions` dict with a one-line description

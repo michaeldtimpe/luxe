@@ -695,8 +695,11 @@ sweep:
 | qwen2.5-7b-instruct on decode_throughput | 32.2 | **49.4** | 1.53× |
 
 Pass rates are identical or slightly higher on oMLX. The migration
-playbook is just `endpoint: http://127.0.0.1:8000` plus
-`OMLX_API_KEY` set — no hyperparameter changes, no cache tuning.
+playbook is just `provider: omlx` (preferred) or
+`endpoint: http://127.0.0.1:8000` (legacy) plus `OMLX_API_KEY` set —
+no hyperparameter changes, no cache tuning. See the "Provider
+migration" section in `luxe/luxe_cli/README.md` for the full
+playbook including LM Studio.
 
 **Trade-off:** oMLX TTFT is ~60% slower than Ollama on the 32B model
 (2.2 s vs 1.4 s on HumanEval+). For agents that emit multi-paragraph

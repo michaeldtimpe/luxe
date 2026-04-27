@@ -20,8 +20,9 @@ outbound calls except the web searches you explicitly allow.
   - **`luxe/luxe_cli/`** — a local, multi-agent Claude-Code-alike CLI. A
     small router picks one of nine specialists (general / lookup /
     research / writing / code / image / review / refactor / calc) and
-    hands off. Runs on Ollama + llama.cpp + Draw Things, with a task
-    orchestrator for multi-step goals that runs background subprocesses
+    hands off. Runs on Ollama + oMLX + LM Studio + llama.cpp + Draw
+    Things via a per-agent provider config, with a task orchestrator
+    for multi-step goals that runs background subprocesses
     and stitches specialists together.
 
 ## Quick start (luxe CLI)
