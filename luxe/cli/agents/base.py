@@ -334,6 +334,16 @@ def run_agent(
     near_cap_turns = 0
     schema_rejects = 0
     tool_def_by_name = {d.name: d for d in (tool_defs or [])}
+    # Loop-detection: refuse to dispatch a tool call whose (name, args)
+    # signature has already been seen LOOP_REPEAT_LIMIT times in this
+    # subtask. The refusal is returned to the model as a `role=tool`
+    # error result — strong enough to break the loop because the model
+    # sees its prior call returned ERROR, not the same listing again.
+    # Observed against LM Studio's Qwen 32B: subtasks called the same
+    # tool 20× until step budget ran out. Ollama / oMLX never trip
+    # this so the guard is a no-op there.
+    LOOP_REPEAT_LIMIT = 3
+    sig_counts: dict[str, int] = {}
     # Extras for Ollama pass-throughs. `num_ctx` lets agents override the
     # loaded server context per-agent without touching modelfiles — most
     # useful for coder models where large contexts trade throughput for
@@ -485,9 +495,30 @@ def run_agent(
                 except Exception:  # noqa: BLE001
                     pass
             tool_start = time.monotonic()
+            # Loop guard: signature-and-count this exact call. Once a
+            # signature has been served LOOP_REPEAT_LIMIT times, refuse
+            # subsequent identical calls — return an explicit ERROR as
+            # the tool result so the model sees in-band that it's stuck.
+            try:
+                sig = f"{call.name}::{json.dumps(call.arguments, sort_keys=True)}"
+            except Exception:  # noqa: BLE001 — non-serializable arg
+                sig = f"{call.name}::{call.raw_arguments}"
+            sig_counts[sig] = sig_counts.get(sig, 0) + 1
+
             if not fn:
                 result: Any = None
                 err: str | None = f"unknown tool: {call.name}"
+            elif sig_counts[sig] > LOOP_REPEAT_LIMIT:
+                result = None
+                err = (
+                    f"refused: this exact call ({call.name} with these "
+                    f"arguments) has already been made "
+                    f"{LOOP_REPEAT_LIMIT} times. The result will be the "
+                    "same. STOP calling this tool. Either call a "
+                    "different tool, refine the arguments, or produce "
+                    "your final answer with what the previous results "
+                    "already told you."
+                )
             else:
                 schema_err = _validate_args(
                     tool_def_by_name.get(call.name), call.arguments
