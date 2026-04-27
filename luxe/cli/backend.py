@@ -103,6 +103,7 @@ _BACKEND_OVERRIDE_URLS: dict[str, str] = {
     "ollama": "http://127.0.0.1:11434",
     "llamacpp": "http://127.0.0.1:8088",
     "omlx": "http://127.0.0.1:8000",
+    "lmstudio": "http://127.0.0.1:1234",
 }
 
 
@@ -120,7 +121,23 @@ def _resolve_override(default_base_url: str) -> str:
     return default_base_url
 
 
-def make_backend(model: str, base_url: str = "http://127.0.0.1:11434") -> Backend:
+def _resolve_model_override(default_model: str) -> str:
+    """Honor LUXE_MODEL_OVERRIDE so an orchestrator run can redirect
+    not just the URL but the model name as well — necessary when the
+    same logical candidate is served under different tags by different
+    backends (e.g. oMLX `Qwen2.5-32B-Instruct-4bit` vs Ollama
+    `qwen2.5:32b-instruct` vs LM Studio `qwen2.5-32b-instruct`).
+    Empty/unset = no override."""
+    override = os.environ.get("LUXE_MODEL_OVERRIDE", "").strip()
+    return override or default_model
+
+
+def make_backend(
+    model: str,
+    base_url: str = "http://127.0.0.1:11434",
+    *,
+    ignore_override: bool = False,
+) -> Backend:
     # harness.backends.Backend posts to "/v1/chat/completions", so the
     # base_url must NOT include the /v1 suffix itself.
     #
@@ -135,10 +152,19 @@ def make_backend(model: str, base_url: str = "http://127.0.0.1:11434") -> Backen
     # and llama-server ignore unrecognized Authorization headers, so
     # passing it unconditionally is safe — and necessary when the
     # per-agent endpoint points at oMLX (which gates /v1/* on the key).
+    #
+    # `ignore_override=True` opts out of LUXE_BACKEND_OVERRIDE / _URL /
+    # LUXE_MODEL_OVERRIDE. Use this for meta-orchestration callsites
+    # like the planner: when an overnight run redirects the WORKLOAD
+    # agent (review/refactor) to a different backend, the planner —
+    # which uses a tiny router model that's only reliably tagged on
+    # Ollama — should keep its own routing intact.
+    resolved_url = base_url if ignore_override else _resolve_override(base_url)
+    resolved_model = model if ignore_override else _resolve_model_override(model)
     return Backend(
         kind="mlx",
-        base_url=_resolve_override(base_url),
-        model_id=model,
+        base_url=resolved_url,
+        model_id=resolved_model,
         timeout_s=600.0,
         api_key=os.environ.get("OMLX_API_KEY", ""),
     )

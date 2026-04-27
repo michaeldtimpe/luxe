@@ -117,7 +117,15 @@ def plan(goal: str, cfg: LuxeConfig, task_id_full: str) -> list[Subtask]:
     """Ask the router LLM to decompose `goal`. Falls back to a single-subtask
     pseudo-plan if the LLM misbehaves — orchestrator will route it."""
     router_cfg = cfg.get("router")
-    backend = make_backend(router_cfg.model, base_url=cfg.ollama_base_url)
+    # ignore_override: planner is meta-orchestration. When an overnight
+    # run sets LUXE_BACKEND_OVERRIDE to redirect the WORKLOAD agent to
+    # oMLX/LM Studio for comparison, the planner must keep using Ollama
+    # — its tiny router model (qwen2.5:7b-instruct) isn't tagged on
+    # those backends, and a misrouted plan request silently degrades
+    # into the 1-subtask fallback below.
+    backend = make_backend(
+        router_cfg.model, base_url=cfg.ollama_base_url, ignore_override=True
+    )
     try:
         resp = backend.chat(
             [
