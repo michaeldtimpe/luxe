@@ -111,15 +111,33 @@ def _load_multi_turn(out_dir: Path) -> list[dict]:
             return []
         runs = phase.get("result", {}).get("runs", [])
 
-    # Dedupe per (repo, backend) — keep most subtasks_done, then latest.
+    # Dedupe per (repo, backend). Primary: most subtasks_done. Secondary
+    # (tie-break among equally-complete runs): EARLIEST started_at —
+    # cold-cache wall is the fairer comparison vs backends that always
+    # cold-start (oMLX under launchd KeepAlive). The 2026-04-26 elara ×
+    # ollama set has both a 56-min cold run and a 31-min warm retry;
+    # prefer the cold one so the median isn't biased toward Ollama.
     best: dict[tuple[str, str], dict] = {}
     for r in runs:
         key = (r.get("repo", "?"), r.get("backend", "?"))
         prev = best.get(key)
-        score = (r.get("subtasks_done", 0), r.get("started_at", ""))
-        if prev is None or score > (prev.get("subtasks_done", 0),
-                                     prev.get("started_at", "")):
+        # Score: (more done is better, earlier is better → negate ts)
+        ts = r.get("started_at") or ""
+        score = (r.get("subtasks_done", 0), -1 * len(ts), ts)  # placeholder
+        # Simpler: explicit comparison.
+        if prev is None:
             best[key] = r
+        else:
+            r_done = r.get("subtasks_done", 0)
+            p_done = prev.get("subtasks_done", 0)
+            if r_done > p_done:
+                best[key] = r
+            elif r_done == p_done:
+                r_ts = r.get("started_at", "")
+                p_ts = prev.get("started_at", "")
+                # Earlier (lexicographic min) wins on ties.
+                if r_ts and (not p_ts or r_ts < p_ts):
+                    best[key] = r
     return list(best.values())
 
 
