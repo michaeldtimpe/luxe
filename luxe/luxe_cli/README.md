@@ -322,9 +322,13 @@ forceful and reconciles state to `aborted`.
 
 ## Code intelligence — `/review` and `/refactor`
 
-Both take a git URL. They scan the **current folder** for an existing
-clone matching the URL's `origin` (pulled via `git pull --ff-only`);
-if none found, they `git clone` into the cwd as a subdirectory.
+Both take a git URL. They scan **`local_cache_dir`** (default
+`local-cache/` under cwd) for an existing clone matching the URL's
+`origin` and `git pull --ff-only` it; otherwise `git clone` into
+`local_cache_dir/<repo-name>`. Set `local_cache_dir: ~/.luxe/cache`
+in `agents.yaml` to keep clones outside the project tree entirely.
+The default path is in `.gitignore` so clones never accidentally
+land in a tracked repo.
 
 The runtime wraps the repo in a background task that pins every
 subtask to the dedicated agent:

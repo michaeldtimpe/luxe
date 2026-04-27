@@ -211,7 +211,11 @@ Missing binaries or missing project markers produce a helpful
 
 `configs/agents.yaml` holds:
 - Top-level: `ollama_base_url` (legacy fallback URL),
-  `draw_things_url`, `image_output_dir`, `session_dir`
+  `draw_things_url`, `image_output_dir`, `session_dir`,
+  `local_cache_dir` (where `/review` and `/refactor` clone target
+  repos — defaults to `local-cache` next to wherever luxe was launched;
+  blanket-ignored in `.gitignore` so clones never accidentally land in
+  a tracked tree)
 - `providers:` — named backend endpoints, e.g.
   `lmstudio: { base_url: "http://127.0.0.1:1234", kind: lmstudio }`.
   Agents reference these by key.

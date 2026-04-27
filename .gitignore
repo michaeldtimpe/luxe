@@ -75,15 +75,14 @@ luxe/scripts/results/
 # Uv / pip local state
 .uv/
 
-# Local clones pulled in by `/review` and `/refactor`. These target
-# external repos the user happens to be analyzing; their source of
-# truth is elsewhere. Add new subdirectories here when /review clones
-# a new target into the cwd.
-/ecliptic/
-/luxe/zoleb/
-/luxe/elara/
-/luxe/never-say-yes/
-/luxe/neon-rain/
+# Local clones pulled in by `/review` and `/refactor`. Configured via
+# LuxeConfig.local_cache_dir (defaults to "local-cache" relative to
+# the cwd luxe was invoked from). One blanket rule replaces the
+# previous per-repo entries; set local_cache_dir to ~/.luxe/cache or
+# elsewhere if you'd rather keep clones outside the project tree.
+local-cache/
 
-# Personal writing outside any tracked project (story drafts, outlines).
+# Sibling projects that share this workspace but aren't part of luxe
+# (Godot game, personal writing). Not luxe-managed clones.
+/ecliptic/
 /warrens/

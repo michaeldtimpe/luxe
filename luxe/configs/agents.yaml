@@ -7,6 +7,11 @@ ollama_base_url: "http://127.0.0.1:11434"
 draw_things_url: "http://127.0.0.1:7859"    # Draw Things HTTP server port
 image_output_dir: "~/luxe-images"
 session_dir: "~/.luxe/sessions"
+# Where /review and /refactor clone target repos. Default is
+# `local-cache` relative to wherever you launched luxe; set to
+# `~/.luxe/cache` (or any absolute path) to keep clones out of the
+# project tree entirely.
+local_cache_dir: "local-cache"
 
 # Named backend providers. Agents reference these by key via the
 # `provider:` field. Each agent may also set `endpoint:` directly to

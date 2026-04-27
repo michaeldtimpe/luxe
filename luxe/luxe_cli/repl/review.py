@@ -22,7 +22,7 @@ def _start_review(url: str, mode: str, state: "ReplState", cfg: LuxeConfig) -> N
 
     console.print(f"[dim]resolving[/dim] [cyan]{url}[/cyan][dim]...[/dim]")
     with console.status("[dim]git[/dim]", spinner="dots"):
-        repo_path, status_msg = resolve_repo(url, Path.cwd())
+        repo_path, status_msg = resolve_repo(url, cfg.cache_dir())
     if repo_path is None:
         console.print(f"[red]{status_msg}[/red]")
         return

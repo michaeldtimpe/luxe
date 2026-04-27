@@ -103,6 +103,11 @@ class LuxeConfig(BaseModel):
     session_dir: str = "~/.luxe/sessions"
     draw_things_url: str = "http://127.0.0.1:7860"
     image_output_dir: str = "~/luxe-images"
+    # Where /review and /refactor clone target repos. Path is resolved
+    # relative to cwd unless absolute or using ~. Default keeps clones
+    # out of the project root (and out of git, via .gitignore) instead
+    # of dropping them next to the user's source tree.
+    local_cache_dir: str = "local-cache"
     # Deterministic pre-router: when enabled, a keyword/regex scorer
     # short-circuits the LLM router on decisive prompts. Falls through
     # to the LLM on low-confidence decisions. Disable for A/B testing.
@@ -118,6 +123,19 @@ class LuxeConfig(BaseModel):
     # behavior.
     default_provider: str | None = None
     agents: list[AgentConfig]
+
+    def cache_dir(self) -> Path:
+        """Resolve local_cache_dir to an absolute path and ensure it exists.
+
+        Absolute paths and ~/ paths are honored as-given; relative
+        paths resolve against the current working directory. The
+        directory is created if missing — clones land directly inside.
+        """
+        p = Path(self.local_cache_dir).expanduser()
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
     def get(self, name: str) -> AgentConfig:
         for a in self.agents:

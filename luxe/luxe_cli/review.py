@@ -80,7 +80,7 @@ def start_review_task(
     """Plan + persist + spawn a review/refactor task. Returns task id.
 
     Headless — no ReplState needed. Used by `luxe analyze --review`."""
-    repo_path, status_msg = resolve_repo(str(url_or_path), Path.cwd())
+    repo_path, status_msg = resolve_repo(str(url_or_path), cfg.cache_dir())
     if repo_path is None:
         raise RuntimeError(status_msg)
 
