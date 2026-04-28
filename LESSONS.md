@@ -1076,3 +1076,67 @@ citations.
    are a different category: they're not a measurement noise issue,
    they're the model failing at the actual task. Revert immediately
    and write the lesson up.
+
+---
+
+## Goal text that names files becomes a tool-call list the planner blindly executes
+
+After reverting the Qwen3-MoE evaluation, the next `/review neon-rain`
+on the restored Qwen2.5-32B *also* hit the 25-min wall budget on sub
+02 — same subtask the MoE blew up on, different model. Investigation:
+
+The original goal string in `luxe/luxe_cli/review.py:build_review_goal`
+said "read any README/ARCHITECTURE/CONTRIBUTING/SECURITY/docs files"
+on the assumption a smart model would interpret that as "the ones
+that exist". The planner ran the goal through the router (low temp,
+follow-the-instructions) and produced sub 02 verbatim: "Read the
+README, ARCHITECTURE, CONTRIBUTING, SECURITY, and docs files." The
+review agent then probed each of those filenames literally — three
+of which don't exist in typical JS/TS repos — taking ~10s each
+(prefill + decode + tool round-trip). Then it walked the `docs/`
+tree sequentially, reading every file. On neon-rain that was 16
+tool calls totaling 28 minutes.
+
+Two fixes:
+
+1. **Tighten the goal to one `list_dir` + README only.** Inspection
+   subtasks already read what they need (security/correctness/etc.
+   subtasks pull files relevant to their focus). Orientation doesn't
+   need to be exhaustive. New phrasing: "Orient with one `list_dir`
+   of the root, then read the README only — do NOT probe ARCHITECTURE
+   / CONTRIBUTING / SECURITY / docs/ unless `list_dir` shows they
+   exist, and then prefer reading only the most relevant 1–2."
+
+2. **Bump the wall budget from 1500 → 2400 s.** Even with the
+   tightened scope, prefill-bound subtasks on Qwen2.5-32B at ~11
+   tok/s can chew >25 min on a large repo. 40 min absorbs slow-
+   prefill + the orchestrator's shallow-inspection retry without
+   pushing into the task-level budget.
+
+3. **Plan cache keyed on goal version.** The plan cache in
+   `luxe/luxe_cli/tasks/plan_cache.py` previously hashed only
+   `(repo, mode)`. Cached plans for repos already reviewed within
+   the 24h TTL would have kept handing back the old over-broad
+   sub 02 even after the goal-text edit. Adding a `_GOAL_VERSION`
+   constant to the hash makes future goal edits auto-invalidate.
+
+**Lessons:**
+
+- **The planner is not a sanity check.** If the goal lists four
+  filenames, the plan will list four filenames, and the agent will
+  try to read all four. Goal text is executable — write it like a
+  prompt, not like a checklist.
+- **Orientation should default to "minimum viable context".**
+  Inspection subtasks know what they need; let them ask. Loading
+  every doc up front is the agent equivalent of `import *`.
+- **Wall budgets should be tier-2 fallbacks, not first-line
+  scope control.** If sub 02 needs 25 min on a typical run, the
+  scope is wrong. A budget bump should only be the safety net for
+  when the *correct* scope still occasionally exceeds the
+  expected envelope.
+- **Plan caching needs invalidation on prompt-shape edits.** Easy
+  miss — the cache key was (repo, mode) which doesn't capture
+  "I edited the goal text." Adding a `_GOAL_VERSION` bump-on-edit
+  pattern is the smallest fix; a more rigorous approach would
+  hash the goal text itself, but that re-invalidates on any
+  whitespace tweak.
