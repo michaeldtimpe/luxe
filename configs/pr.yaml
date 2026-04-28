@@ -1,0 +1,36 @@
+# PR cycle defaults — see src/luxe/pr.py.
+
+# Test command detection. First match wins. Detected via the listed marker
+# files; the command is run from the repo root with no arguments. Override
+# per-run by passing --test-cmd to `luxe maintain` (NOT YET IMPLEMENTED).
+test_commands:
+  - command: "pytest -q"
+    markers: [pytest.ini, pyproject.toml, setup.cfg, conftest.py]
+  - command: "npm test --silent"
+    markers: [package.json]
+  - command: "cargo test --quiet"
+    markers: [Cargo.toml]
+  - command: "go test ./..."
+    markers: [go.mod]
+  - command: "make test"
+    markers: [Makefile]
+
+# Behaviour flags.
+watch_ci:
+  enabled: false           # default off; enable per-run with --watch-ci
+  poll_interval_s: 30
+  total_wait_s: 300        # 5 minutes
+  convert_to_ready_on_green: true
+
+# Dirty-tree handling: hard-abort by default. `--allow-dirty` overrides;
+# on TTY it triggers a typed-yes confirmation, `--yes` skips that prompt.
+dirty_tree: abort          # abort | stash (planned: stash + auto-restore)
+
+# Branch naming. Slug is derived from the goal (lowercased, hyphenated, first 6 words).
+branch_prefix: "luxe"      # final form: luxe/<task_type>/<slug>[-<n>]
+
+# Test failure → PR opens as draft with stderr/stdout tail in body.
+draft_on_test_failure: true
+
+# Cap on the test output snippet pasted into the PR body.
+test_output_tail_lines: 200
