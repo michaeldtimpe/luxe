@@ -14,11 +14,17 @@ from rich.console import Console
 from luxe.agents.architect import run_architect
 from luxe.agents.loop import AgentResult
 from luxe.agents.synthesizer import run_synthesizer
-from luxe.agents.validator import ValidatorEnvelope, run_validator
+from luxe.agents.validator import (
+    ValidatorEnvelope,
+    ValidatorFinding,
+    ValidatorRemoved,
+    run_validator,
+)
 from luxe.agents.worker import run_worker
 from luxe.backend import Backend
 from luxe.config import PipelineConfig
 from luxe.pipeline.model import PipelineRun, StageMetrics, Status, Subtask
+from luxe.run_state import load_stage, save_stage
 from luxe.tools.base import ToolCache, ToolCall
 from luxe.tools.fs import set_repo_root
 
@@ -125,15 +131,134 @@ def _build_prior_findings(
     return "\n\n".join(parts)
 
 
+def _tool_call_to_dict(tc: ToolCall) -> dict:
+    return {
+        "id": tc.id, "name": tc.name, "arguments": tc.arguments,
+        "result": tc.result, "error": tc.error,
+        "cached": tc.cached, "duplicate": tc.duplicate,
+        "bytes_out": tc.bytes_out, "wall_s": tc.wall_s,
+    }
+
+
+def _tool_call_from_dict(d: dict) -> ToolCall:
+    return ToolCall(
+        id=d.get("id", ""), name=d.get("name", ""),
+        arguments=d.get("arguments", {}) or {},
+        result=d.get("result", ""), error=d.get("error"),
+        cached=bool(d.get("cached", False)),
+        duplicate=bool(d.get("duplicate", False)),
+        bytes_out=int(d.get("bytes_out", 0)),
+        wall_s=float(d.get("wall_s", 0.0)),
+    )
+
+
+def _stage_metrics_to_dict(m: StageMetrics) -> dict:
+    return {
+        "wall_s": m.wall_s, "prompt_tokens": m.prompt_tokens,
+        "completion_tokens": m.completion_tokens, "tool_calls": m.tool_calls,
+        "schema_rejects": m.schema_rejects,
+        "peak_context_pressure": m.peak_context_pressure,
+        "model": m.model, "model_swap_s": m.model_swap_s,
+        "cache_hits": m.cache_hits, "cache_misses": m.cache_misses,
+    }
+
+
+def _stage_metrics_from_dict(d: dict) -> StageMetrics:
+    return StageMetrics(
+        wall_s=float(d.get("wall_s", 0.0)),
+        prompt_tokens=int(d.get("prompt_tokens", 0)),
+        completion_tokens=int(d.get("completion_tokens", 0)),
+        tool_calls=int(d.get("tool_calls", 0)),
+        schema_rejects=int(d.get("schema_rejects", 0)),
+        peak_context_pressure=float(d.get("peak_context_pressure", 0.0)),
+        model=d.get("model", ""),
+        model_swap_s=float(d.get("model_swap_s", 0.0)),
+        cache_hits=int(d.get("cache_hits", 0)),
+        cache_misses=int(d.get("cache_misses", 0)),
+    )
+
+
+def _envelope_to_dict(env: ValidatorEnvelope) -> dict:
+    return {
+        "status": env.status,
+        "verified": [
+            {"path": f.path, "line": f.line, "snippet": f.snippet,
+             "severity": f.severity, "description": f.description}
+            for f in env.verified
+        ],
+        "removed": [
+            {"original": r.original, "reason": r.reason} for r in env.removed
+        ],
+        "summary": env.summary,
+    }
+
+
+def _envelope_from_dict(d: dict) -> ValidatorEnvelope:
+    return ValidatorEnvelope(
+        status=d.get("status", "cleared"),
+        verified=[ValidatorFinding(**v) for v in d.get("verified", []) if isinstance(v, dict)],
+        removed=[ValidatorRemoved(**r) for r in d.get("removed", []) if isinstance(r, dict)],
+        summary=d.get("summary", ""),
+    )
+
+
 class PipelineOrchestrator:
     def __init__(
         self,
         config: PipelineConfig,
         on_event: OnEvent | None = None,
+        run_id: str | None = None,
     ):
         self.config = config
         self.on_event = on_event
         self._backends: dict[str, Backend] = {}
+        # When set, each completed stage is checkpointed under
+        # ~/.luxe/runs/<run_id>/stages/. Stages already on disk are reloaded
+        # and skipped, enabling `luxe maintain --resume <run_id>`.
+        self.run_id = run_id
+
+    # --- checkpoint helpers ------------------------------------------------
+
+    def _ck_load(self, name: str) -> dict | None:
+        if not self.run_id:
+            return None
+        return load_stage(self.run_id, name)
+
+    def _ck_save(self, name: str, data: dict) -> None:
+        if not self.run_id:
+            return
+        save_stage(self.run_id, name, data)
+
+    def _ck_subtask_to_dict(self, sub: Subtask) -> dict:
+        return {
+            "index": sub.index,
+            "id": sub.id,
+            "title": sub.title,
+            "role": sub.role,
+            "scope": sub.scope,
+            "expected_tools": sub.expected_tools,
+            "status": sub.status.value,
+            "result_text": sub.result_text,
+            "escalated_from": sub.escalated_from,
+            "tool_calls": [_tool_call_to_dict(tc) for tc in sub.tool_calls],
+            "metrics": _stage_metrics_to_dict(sub.metrics),
+        }
+
+    def _ck_subtask_from_dict(self, d: dict) -> Subtask:
+        sub = Subtask(
+            id=d.get("id", ""),
+            index=int(d.get("index", 0)),
+            title=d.get("title", ""),
+            role=d.get("role", ""),
+            scope=d.get("scope", "."),
+            expected_tools=int(d.get("expected_tools", 3)),
+            status=Status(d.get("status", "pending")),
+            result_text=d.get("result_text", ""),
+            escalated_from=d.get("escalated_from"),
+        )
+        sub.tool_calls = [_tool_call_from_dict(tc) for tc in d.get("tool_calls", [])]
+        sub.metrics = _stage_metrics_from_dict(d.get("metrics", {}))
+        return sub
 
     def _get_backend(self, role_name: str) -> Backend:
         model = self.config.model_for_role(role_name)
@@ -186,33 +311,52 @@ class PipelineOrchestrator:
             run.status = Status.BLOCKED
             return run
 
-        console.print(f"\n[bold cyan]▶ Architect[/] — decomposing goal into micro-objectives"
-                      f"  [dim]{_ts()}[/]")
-        arch_backend = self._get_backend("architect")
-        arch_cfg = self.config.role("architect")
-        repo_summary = _survey_repo(repo_path)
+        cached = self._ck_load("architect")
+        if cached is not None:
+            arch_result = AgentResult(
+                final_text=cached.get("raw_text", ""),
+                prompt_tokens=int(cached.get("prompt_tokens", 0)),
+                completion_tokens=int(cached.get("completion_tokens", 0)),
+                wall_s=float(cached.get("wall_s", 0.0)),
+            )
+            objectives = cached.get("objectives", [])
+            run.architect_result = arch_result.final_text
+            console.print(f"\n[dim]· Architect[/] loaded from checkpoint "
+                          f"({len(objectives)} objectives)")
+            self._emit(run, "architect_resumed", objectives=len(objectives))
+        else:
+            console.print(f"\n[bold cyan]▶ Architect[/] — decomposing goal into micro-objectives"
+                          f"  [dim]{_ts()}[/]")
+            arch_backend = self._get_backend("architect")
+            arch_cfg = self.config.role("architect")
+            repo_summary = _survey_repo(repo_path)
 
-        swap_t0 = time.monotonic()
-        arch_result, objectives = run_architect(
-            arch_backend, arch_cfg,
-            goal=goal,
-            task_type_prompt=task_cfg.architect_prompt,
-            repo_summary=repo_summary,
-            initial_context=initial_context,
-        )
-        swap_wall = time.monotonic() - swap_t0
+            arch_result, objectives = run_architect(
+                arch_backend, arch_cfg,
+                goal=goal,
+                task_type_prompt=task_cfg.architect_prompt,
+                repo_summary=repo_summary,
+                initial_context=initial_context,
+            )
 
-        run.architect_result = arch_result.final_text
-        self._emit(run, "architect_done",
-                   objectives=len(objectives),
-                   wall_s=arch_result.wall_s,
-                   tokens=arch_result.prompt_tokens + arch_result.completion_tokens)
+            run.architect_result = arch_result.final_text
+            self._ck_save("architect", {
+                "raw_text": arch_result.final_text,
+                "objectives": objectives,
+                "prompt_tokens": arch_result.prompt_tokens,
+                "completion_tokens": arch_result.completion_tokens,
+                "wall_s": arch_result.wall_s,
+            })
+            self._emit(run, "architect_done",
+                       objectives=len(objectives),
+                       wall_s=arch_result.wall_s,
+                       tokens=arch_result.prompt_tokens + arch_result.completion_tokens)
 
-        console.print(f"  → {len(objectives)} micro-objectives planned "
-                      f"({arch_result.wall_s:.1f}s, "
-                      f"{_fmt_tok(arch_result.prompt_tokens, arch_result.completion_tokens)})")
-        for i, obj in enumerate(objectives):
-            console.print(f"    {i+1}. [{obj['role']}] {obj['title']}")
+            console.print(f"  → {len(objectives)} micro-objectives planned "
+                          f"({arch_result.wall_s:.1f}s, "
+                          f"{_fmt_tok(arch_result.prompt_tokens, arch_result.completion_tokens)})")
+            for i, obj in enumerate(objectives):
+                console.print(f"    {i+1}. [{obj['role']}] {obj['title']}")
 
         # --- BUILD SUBTASKS ---
         for i, obj in enumerate(objectives):
@@ -230,6 +374,28 @@ class PipelineOrchestrator:
         for sub in run.subtasks:
             if should_abort and should_abort():
                 sub.status = Status.SKIPPED
+                continue
+
+            stage_name = f"worker_{sub.index}"
+            cached_w = self._ck_load(stage_name)
+            if cached_w is not None:
+                # Restore subtask state from checkpoint; skip the worker call.
+                restored = self._ck_subtask_from_dict(cached_w)
+                sub.id = restored.id or sub.id
+                sub.title = restored.title or sub.title
+                sub.role = restored.role or sub.role
+                sub.scope = restored.scope or sub.scope
+                sub.expected_tools = restored.expected_tools or sub.expected_tools
+                sub.status = restored.status
+                sub.result_text = restored.result_text
+                sub.escalated_from = restored.escalated_from
+                sub.tool_calls = restored.tool_calls
+                sub.metrics = restored.metrics
+                console.print(f"\n[dim]· Worker {sub.index + 1}/{len(run.subtasks)}[/] "
+                              f"[{sub.role}] loaded from checkpoint "
+                              f"({len(sub.tool_calls)} tool calls, status={sub.status.value})")
+                self._emit(run, "worker_resumed", index=sub.index,
+                           status=sub.status.value)
                 continue
 
             sub.status = Status.RUNNING
@@ -297,6 +463,7 @@ class PipelineOrchestrator:
                              f"{wtok} | {wctx}"
                              f"  [dim]{_ts()}[/]")
 
+            self._ck_save(stage_name, self._ck_subtask_to_dict(sub))
             self._emit(run, "worker_end",
                        index=sub.index, status=sub.status.value,
                        wall_s=worker_result.wall_s,
@@ -312,7 +479,25 @@ class PipelineOrchestrator:
         worker_findings = self._collect_worker_findings(run)
         val_result = None
         envelope = ValidatorEnvelope(status="cleared", summary="No worker findings.")
-        if worker_findings.strip():
+
+        cached_v = self._ck_load("validator")
+        if cached_v is not None:
+            val_result = AgentResult(
+                final_text=cached_v.get("raw_text", ""),
+                prompt_tokens=int(cached_v.get("prompt_tokens", 0)),
+                completion_tokens=int(cached_v.get("completion_tokens", 0)),
+                wall_s=float(cached_v.get("wall_s", 0.0)),
+            )
+            envelope = _envelope_from_dict(cached_v.get("envelope", {}))
+            run.validator_result = val_result.final_text
+            run.validator_envelope = envelope
+            console.print(f"\n[dim]· Validator[/] loaded from checkpoint "
+                          f"(status={envelope.status}, "
+                          f"{len(envelope.verified)} verified, {len(envelope.removed)} removed)")
+            self._emit(run, "validator_resumed",
+                       status=envelope.status,
+                       verified_count=len(envelope.verified))
+        elif worker_findings.strip():
             console.print(f"\n[bold magenta]▶ Validator[/] — verifying citations"
                           f"  [dim]{_ts()}[/]")
             val_backend = self._get_backend("validator")
@@ -329,6 +514,13 @@ class PipelineOrchestrator:
 
             run.validator_result = val_result.final_text
             run.validator_envelope = envelope
+            self._ck_save("validator", {
+                "raw_text": val_result.final_text,
+                "envelope": _envelope_to_dict(envelope),
+                "prompt_tokens": val_result.prompt_tokens,
+                "completion_tokens": val_result.completion_tokens,
+                "wall_s": val_result.wall_s,
+            })
             self._emit(run, "validator_done",
                        wall_s=val_result.wall_s,
                        tool_calls=val_result.tool_calls_total,
@@ -359,26 +551,47 @@ class PipelineOrchestrator:
             run.total_wall_s = time.monotonic() - t0
             return run
 
-        console.print(f"\n[bold blue]▶ Synthesizer[/] — assembling final report"
-                      f"  [dim]{_ts()}[/]")
-        synth_backend = self._get_backend("synthesizer")
-        synth_cfg = self.config.role("synthesizer")
+        cached_s = self._ck_load("synthesizer")
+        if cached_s is not None:
+            synth_result = AgentResult(
+                final_text=cached_s.get("final_report", ""),
+                prompt_tokens=int(cached_s.get("prompt_tokens", 0)),
+                completion_tokens=int(cached_s.get("completion_tokens", 0)),
+                wall_s=float(cached_s.get("wall_s", 0.0)),
+            )
+            run.synthesizer_result = synth_result.final_text
+            run.final_report = synth_result.final_text
+            console.print(f"\n[dim]· Synthesizer[/] loaded from checkpoint "
+                          f"({len(synth_result.final_text)} chars)")
+            self._emit(run, "synthesizer_resumed",
+                       chars=len(synth_result.final_text))
+        else:
+            console.print(f"\n[bold blue]▶ Synthesizer[/] — assembling final report"
+                          f"  [dim]{_ts()}[/]")
+            synth_backend = self._get_backend("synthesizer")
+            synth_cfg = self.config.role("synthesizer")
 
-        synth_result = run_synthesizer(
-            synth_backend, synth_cfg,
-            envelope=envelope,
-            task_type=task_type,
-            goal=goal,
-        )
+            synth_result = run_synthesizer(
+                synth_backend, synth_cfg,
+                envelope=envelope,
+                task_type=task_type,
+                goal=goal,
+            )
 
-        run.synthesizer_result = synth_result.final_text
-        run.final_report = synth_result.final_text
-        self._emit(run, "synthesizer_done",
-                   wall_s=synth_result.wall_s,
-                   tokens=synth_result.prompt_tokens + synth_result.completion_tokens)
-        console.print(f"  [green]✓[/] Report assembled "
-                      f"({synth_result.wall_s:.1f}s, "
-                      f"{_fmt_tok(synth_result.prompt_tokens, synth_result.completion_tokens)})")
+            run.synthesizer_result = synth_result.final_text
+            run.final_report = synth_result.final_text
+            self._ck_save("synthesizer", {
+                "final_report": synth_result.final_text,
+                "prompt_tokens": synth_result.prompt_tokens,
+                "completion_tokens": synth_result.completion_tokens,
+                "wall_s": synth_result.wall_s,
+            })
+            self._emit(run, "synthesizer_done",
+                       wall_s=synth_result.wall_s,
+                       tokens=synth_result.prompt_tokens + synth_result.completion_tokens)
+            console.print(f"  [green]✓[/] Report assembled "
+                          f"({synth_result.wall_s:.1f}s, "
+                          f"{_fmt_tok(synth_result.prompt_tokens, synth_result.completion_tokens)})")
 
         # --- DONE ---
         run.status = Status.DONE
