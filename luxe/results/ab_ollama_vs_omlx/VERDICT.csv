@@ -1,5 +1,0 @@
-candidate,verdict,gate,measured,threshold,passed,severity,note
-qwen2.5-7b-instruct,INCONCLUSIVE,P1: BFCL functional parity,—,omlx ≥ 95% × ollama success,False,hard,bfcl_v3: no data on either backend
-qwen2.5-7b-instruct,INCONCLUSIVE,P2: raw decode perf (no cache adv.),"decode=1.59×, ttft=0.42×, rss=0.84×","decode ≥ 0.85, ttft ≤ 1.5, rss ≤ 1.25",True,hard,
-qwen2.5-7b-instruct,INCONCLUSIVE,P3: prefix-cache TTFT advantage (16k),"ollama=0.54s, omlx=0.56s, ratio=1.04× (cold/warm ratio: omlx=1.03×, ollama=70.61×)",omlx TTFT ≤ 50% × ollama (≥ 2× faster),False,hard,
-qwen2.5-7b-instruct,INCONCLUSIVE,P5: stability soak,—,errors < 1.0%,False,hard,soak results missing (run 50 iterations of decode_throughput against omlx)

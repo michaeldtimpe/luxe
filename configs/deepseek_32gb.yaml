@@ -1,0 +1,136 @@
+omlx_base_url: "http://127.0.0.1:8000"
+
+profile:
+  name: "DeepSeek Family (32 GB)"
+  description: "DeepSeek pipeline using R1-Distill-Qwen + Coder-V2-Lite, optimized for 32 GB RAM"
+  memory_budget_gb: 32
+  peak_model_gb: 17.17
+
+models:
+  architect:      "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
+  worker_read:    "DeepSeek-Coder-V2-Lite-Instruct-4bit-mlx"
+  worker_code:    "DeepSeek-R1-Distill-Qwen-14B-4bit"
+  worker_analyze: "DeepSeek-R1-Distill-Qwen-7B-4bit"
+  validator:      "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
+  synthesizer:    "DeepSeek-R1-Distill-Qwen-32B-4bit"
+
+# Model memory footprint (4-bit quantized):
+#   DeepSeek-R1-Distill-Qwen-1.5B-4bit        ~0.93 GB  (architect, validator)
+#   DeepSeek-Coder-V2-Lite-Instruct-4bit-mlx   ~8.23 GB  (worker_read) — MoE 16B/2.4B active
+#   DeepSeek-R1-Distill-Qwen-7B-4bit           ~3.99 GB  (worker_analyze)
+#   DeepSeek-R1-Distill-Qwen-14B-4bit          ~7.74 GB  (worker_code)
+#   DeepSeek-R1-Distill-Qwen-32B-4bit          ~17.17 GB (synthesizer)
+#   Peak single-model memory: 17.17 GB + OS/oMLX overhead (~5 GB) = ~22 GB
+#
+# Notes:
+#   - R1-Distill models use <think> blocks for chain-of-thought reasoning
+#   - DeepSeek-Coder-V2-Lite is MoE (16B total, 2.4B active per token) — fast inference
+#   - Coder-V2-Lite lacks native tool calling template; relies on text-recovery parsing
+
+roles:
+  architect:
+    model_key: architect
+    num_ctx: 8192
+    max_steps: 3
+    max_tokens_per_turn: 2048
+    temperature: 0.3
+    tools: []
+
+  worker_read:
+    model_key: worker_read
+    num_ctx: 16384
+    max_steps: 12
+    max_tokens_per_turn: 2048
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show]
+
+  worker_code:
+    model_key: worker_code
+    num_ctx: 32768
+    max_steps: 15
+    max_tokens_per_turn: 4096
+    temperature: 0.2
+    tools: [read_file, write_file, edit_file, list_dir, glob, grep, git_diff, git_log, bash]
+
+  worker_analyze:
+    model_key: worker_analyze
+    num_ctx: 16384
+    max_steps: 14
+    max_tokens_per_turn: 4096
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, lint, typecheck, security_scan, deps_audit]
+
+  validator:
+    model_key: validator
+    num_ctx: 8192
+    max_steps: 6
+    max_tokens_per_turn: 2048
+    temperature: 0.1
+    tools: [read_file, grep]
+
+  synthesizer:
+    model_key: synthesizer
+    num_ctx: 16384
+    max_steps: 3
+    max_tokens_per_turn: 8192
+    temperature: 0.3
+    tools: []
+
+task_types:
+  review:
+    description: "Code review — find bugs, security issues, quality problems"
+    pipeline: [architect, worker_read, worker_analyze, validator, synthesizer]
+    architect_prompt: >
+      You are a code review architect. Decompose the review goal into focused
+      micro-objectives. Each should require at most 10 tool calls. Tag each with
+      a role: worker_read (for file reading, grepping, structure analysis) or
+      worker_analyze (for linting, type checking, security scanning).
+
+  implement:
+    description: "Feature implementation — write code to fulfill a requirement"
+    pipeline: [architect, worker_read, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are an implementation architect. Decompose the feature request into
+      focused micro-objectives. Start with worker_read tasks to understand the
+      existing code, then worker_code tasks to implement changes. Each task
+      should require at most 5 tool calls.
+
+  bugfix:
+    description: "Bug investigation and fix"
+    pipeline: [architect, worker_read, worker_analyze, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are a debugging architect. Decompose the bug report into focused
+      micro-objectives. Start with worker_read to locate relevant code,
+      worker_analyze to run static analysis, then worker_code to implement
+      fixes. Each task should require at most 5 tool calls.
+
+  document:
+    description: "Documentation generation or update"
+    pipeline: [architect, worker_read, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are a documentation architect. Decompose the documentation goal into
+      focused micro-objectives. Start with worker_read tasks to understand the
+      code, then worker_code tasks to write or update documentation files.
+      Each task should require at most 5 tool calls.
+
+  summarize:
+    description: "Codebase summarization and analysis"
+    pipeline: [architect, worker_read, synthesizer]
+    architect_prompt: >
+      You are a codebase analysis architect. Decompose the summarization goal
+      into focused micro-objectives. Use only worker_read tasks to gather
+      information. Each task should require at most 5 tool calls.
+
+  manage:
+    description: "Repository management — dependency updates, config cleanup, CI fixes"
+    pipeline: [architect, worker_read, worker_analyze, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are a repository management architect. Decompose the management goal
+      into focused micro-objectives. Use worker_read for inspection,
+      worker_analyze for auditing, and worker_code for changes. Each task
+      should require at most 5 tool calls.
+
+escalation:
+  worker_read: worker_analyze
+  worker_analyze: worker_code
+  max_retries: 1
