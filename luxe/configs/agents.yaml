@@ -478,7 +478,14 @@ agents:
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
-    max_wall_s: 1500.0
+    # 2026-04-27: bumped 1500 → 2400 after a neon-rain /review run hit
+    # the budget on sub 02 (orientation/docs read). Qwen2.5-32B at
+    # ~11 tok/s is prefill-bound on a JS repo with 11k LOC + nested
+    # docs/ tree; even with the new build_review_goal scope-tightening
+    # (read README only, skip absent files), the worst-case I/O subtask
+    # can still chew 30+ min on this hardware. 40 min absorbs that
+    # without pushing into the orchestrator's task-level wall budget.
+    max_wall_s: 2400.0
     num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]
@@ -635,7 +642,10 @@ agents:
     temperature: 0.2
     max_steps: 20
     max_tokens_per_turn: 4096
-    max_wall_s: 1500.0
+    # 2026-04-27: bumped 1500 → 2400 to match the review agent — same
+    # workload shape, same prefill-bound profile. See review's comment
+    # for the neon-rain budget-exhaust incident.
+    max_wall_s: 2400.0
     num_ctx: 32768
     tool_output_trim_bytes: 8000  # analyzer JSON payloads lose signal at 4k
     tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show, lint, typecheck, security_scan, deps_audit, security_taint, secrets_scan, lint_js, typecheck_ts, lint_rust, vet_go]

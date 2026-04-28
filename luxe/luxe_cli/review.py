@@ -38,35 +38,52 @@ def build_review_goal(repo_label: str, repo_path: Path, mode: str) -> str:
     """Single source of truth for the review/refactor goal prompt.
 
     Keep in sync with repl._start_review's goal strings — both call into
-    this helper."""
+    this helper.
+
+    Note on the orientation step: earlier wording asked the agent to
+    "read any README/ARCHITECTURE/CONTRIBUTING/SECURITY/docs files",
+    which the planner faithfully turned into a sub 02 like "Read the
+    README, ARCHITECTURE, CONTRIBUTING, SECURITY, and docs files."
+    Agents then probed each filename one by one — three usually don't
+    exist in JS/TS repos — and walked any `docs/` tree sequentially.
+    A neon-rain run hit 28 minutes and exhausted the wall budget on
+    sub 02 alone. New phrasing scopes the orientation to one
+    `list_dir` plus the README only; later subtasks read what they
+    actually need. Saves ~20 min on a 11k-LOC repo.
+    """
     if mode == "review":
         return (
             f"Review the `{repo_label}` repository at {repo_path!s}. "
             f"Start all file reads relative to this path. "
-            f"Start by listing the root with `list_dir` and reading any "
-            f"README/ARCHITECTURE/CONTRIBUTING/SECURITY/docs files. Then "
-            f"systematically look for: (1) security issues — input handling, "
-            f"auth, secrets, injection, deserialization, path traversal, "
-            f"dependency vulns; (2) correctness bugs — error handling, race "
-            f"conditions, resource leaks, silent failures; (3) robustness — "
-            f"missing timeouts/retries, unbounded loops; (4) maintainability "
-            f"issues that mask real risk. End with a severity-grouped "
-            f"markdown report. Ground every finding in code you read via "
-            f"tools — no invented filenames or quotes."
+            f"Orient with one `list_dir` of the root, then read the "
+            f"README only — do NOT probe ARCHITECTURE / CONTRIBUTING / "
+            f"SECURITY / docs/ unless `list_dir` shows they exist, and "
+            f"then prefer reading only the most relevant 1–2. Inspection "
+            f"subtasks below read what they need. "
+            f"Then systematically look for: (1) security issues — input "
+            f"handling, auth, secrets, injection, deserialization, path "
+            f"traversal, dependency vulns; (2) correctness bugs — error "
+            f"handling, race conditions, resource leaks, silent failures; "
+            f"(3) robustness — missing timeouts/retries, unbounded loops; "
+            f"(4) maintainability issues that mask real risk. End with a "
+            f"severity-grouped markdown report. Ground every finding in "
+            f"code you read via tools — no invented filenames or quotes."
         )
     return (
         f"Analyze the `{repo_label}` repository at {repo_path!s} for "
         f"optimization and refactor opportunities. "
         f"Start all file reads relative to this path. "
-        f"Start by listing the root with `list_dir` and reading the README "
-        f"and core entry points. Then systematically identify: (1) "
-        f"performance — obvious algorithmic inefficiency, missing caching, "
-        f"unbatched I/O; (2) architectural issues — leaky "
-        f"abstractions, modules that should split or merge, painful "
-        f"API surfaces; (3) code-size wins — duplication, dead code; "
-        f"(4) idiomatic improvements that cut real complexity. End "
-        f"with an impact-ranked markdown report of recommended changes. "
-        f"Ground every suggestion in code you actually read."
+        f"Orient with one `list_dir` of the root, then read the README "
+        f"only. Skip ARCHITECTURE / CONTRIBUTING / SECURITY / docs/ "
+        f"unless `list_dir` shows them; analysis subtasks read what they "
+        f"need. Then systematically identify: (1) performance — obvious "
+        f"algorithmic inefficiency, missing caching, unbatched I/O; (2) "
+        f"architectural issues — leaky abstractions, modules that should "
+        f"split or merge, painful API surfaces; (3) code-size wins — "
+        f"duplication, dead code; (4) idiomatic improvements that cut "
+        f"real complexity. End with an impact-ranked markdown report of "
+        f"recommended changes. Ground every suggestion in code you "
+        f"actually read."
     )
 
 

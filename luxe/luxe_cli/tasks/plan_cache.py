@@ -25,9 +25,16 @@ from pathlib import Path
 CACHE_DIR = Path.home() / ".luxe" / "plan_cache"
 DEFAULT_TTL_S = 24 * 60 * 60
 
+# Bump when build_review_goal text changes meaningfully so existing
+# cached plans auto-invalidate. Without this, a goal-text edit (e.g.
+# tightening sub 02 to skip absent docs files) would have no effect on
+# repos already planned within the 24h TTL — the cache would keep
+# handing back the old decomposition.
+_GOAL_VERSION = "v2-2026-04-27-tighten-orient"
+
 
 def _path_for(repo: str, mode: str) -> Path:
-    h = hashlib.sha1(f"{repo}|{mode}".encode("utf-8")).hexdigest()[:16]
+    h = hashlib.sha1(f"{repo}|{mode}|{_GOAL_VERSION}".encode("utf-8")).hexdigest()[:16]
     return CACHE_DIR / f"{h}.json"
 
 

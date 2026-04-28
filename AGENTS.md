@@ -300,12 +300,27 @@ agent.
   per-tier. The survey's `language_breakdown` also gates the
   analyzer surface (`AgentConfig.analyzer_languages`) — a pure-Python
   repo never sees `lint_js` / `vet_go` / etc.
-- **Per-agent wall budget:** 1500 s (25 min). The orchestrator's
-  shallow-retry can consume the first 400–600 s, so the budget needs
-  to be wide enough to fit `initial attempt + retry + productive
-  work`. Subtasks that still time out now survive via `/tasks
-  resume <id>`, which flips blocked/skipped subs back to `pending`
-  without discarding completed ones.
+- **Per-agent wall budget:** 2400 s (40 min) as of 2026-04-27. The
+  orchestrator's shallow-retry can consume the first 400–600 s, so
+  the budget needs to be wide enough to fit `initial attempt +
+  retry + productive work`. Bumped from 1500 s after a neon-rain
+  `/review` (11.4k LOC, 45 JS files) hit the budget on sub 02 alone —
+  Qwen2.5-32B at ~11 tok/s is prefill-bound on long context, and the
+  orientation subtask was probing every filename plus walking
+  `docs/` sequentially. Subtasks that still time out survive via
+  `/tasks resume <id>`, which flips blocked/skipped subs back to
+  `pending` without discarding completed ones.
+- **Orientation-subtask scope:** the goal text that drives
+  `build_review_goal` (`luxe/luxe_cli/review.py`) used to instruct
+  the agent to "read any README/ARCHITECTURE/CONTRIBUTING/SECURITY/
+  docs files", which the planner faithfully replicated as sub 02.
+  The agent then probed each filename one by one — three usually
+  don't exist in JS/TS repos — and walked `docs/` sequentially. New
+  phrasing (2026-04-27) scopes orientation to one `list_dir` + the
+  README; inspection subtasks below read what they actually need.
+  Plan cache keyed on a goal-version string in
+  `luxe/luxe_cli/tasks/plan_cache.py` so future goal edits auto-
+  invalidate cached plans.
 
 ---
 
@@ -317,7 +332,7 @@ the neon-rain fabrication finding). **Tools:** identical to review.
 **Driven by:**
 `/refactor <git-url>`. Subtasks focus on performance → architecture
 → code size → idioms rather than security. Same anti-fabrication
-guardrails, same pre-flight survey, same 1500 s per-agent wall.
+guardrails, same pre-flight survey, same 2400 s per-agent wall.
 
 ---
 
