@@ -1,117 +1,174 @@
-# luxe
+# Swarm
 
-[![luxe-tests](https://github.com/michaeldtimpe/luxe/actions/workflows/luxe-tests.yml/badge.svg)](https://github.com/michaeldtimpe/luxe/actions/workflows/luxe-tests.yml)
+Specialist swarm pipeline for multi-model code task orchestration. A proof-of-concept that tests whether decomposing code tasks across right-sized local models outperforms single-model approaches.
 
-Two companion projects that run large-language-model workloads entirely on
-a MacBook Pro — no cloud, no API keys (beyond what you choose to use), no
-outbound calls except the web searches you explicitly allow.
+## Why This Exists
 
-> **New here?** [LESSONS.md](LESSONS.md) captures the hard-won findings
-> behind the choices below — model selection, tool-use quirks per agent,
-> prompt-cache vs. context-size trade-offs, Ollama vs. llama-server A/B
-> results. Start there if you want the *why* before the *what*.
+The [luxe](https://github.com/michaeldtimpe/luxe) CLI runs code review and refactor tasks on a single Qwen2.5-32B model. When a task generates 28+ tool calls, the model accumulates 60k–376k tokens against a 32k context window. Ollama silently truncates, causing re-reads and fabricated citations. A 40-minute review producing 58 unverified citations wastes more time than a pipeline of focused agents that each take 2 minutes.
 
-## Contents
+Swarm tests the hypothesis: **a pipeline of role-scoped specialists using smaller, faster models avoids context exhaustion and produces higher-quality results.**
 
-- **`luxe/`** — the core workspace.
-  - **`luxe/harness/`** — Apple-Silicon-friendly evaluation + optimization
-    harness for local coding LLMs. OpenAI-compat backends (MLX /
-    llama.cpp), candidate registry, benchmark runners, metrics.
-  - **`luxe/luxe_cli/`** — a local, multi-agent Claude-Code-alike CLI. A
-    small router picks one of nine specialists (general / lookup /
-    research / writing / code / image / review / refactor / calc) and
-    hands off. Runs on Ollama + oMLX + LM Studio + llama.cpp + Draw
-    Things via a per-agent provider config, with a task orchestrator
-    for multi-step goals that runs background subprocesses
-    and stitches specialists together.
+## Model Roster
 
-## Quick start (luxe CLI)
+All models run locally via oMLX on Apple Silicon (64 GB target).
+
+| Role | Model | Size | Context | Throughput |
+|------|-------|------|---------|------------|
+| Architect | Qwen2.5-7B-Instruct-4bit | 5 GB | 8k | ~37 tok/s |
+| Worker (reads) | DeepSeek-Coder-V2-Lite-4bit | 8.8 GB | 16k | ~45 tok/s |
+| Worker (code) | Qwen2.5-Coder-14B-4bit | 8 GB | 32k | ~22 tok/s |
+| Worker (analyze) | Qwen2.5-Coder-14B-4bit | 8 GB | 32k | ~22 tok/s |
+| Validator | Qwen2.5-7B-Instruct-4bit | 5 GB | 8k | ~37 tok/s |
+| Synthesizer | Qwen2.5-32B-Instruct-4bit | 19 GB | 32k | ~10 tok/s |
+
+Pipeline stages are sequential — only one model loaded at a time. oMLX handles model swapping.
+
+## Installation
 
 ```bash
-cd luxe
-uv sync
-bash daily_driver/install_luxe.sh
-luxe                       # interactive REPL
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-Fuller walkthrough in **`luxe/luxe_luxe_cli/README.md`**.
+Requires Python 3.11+ and a running [oMLX](https://github.com/nicholasgasior/omlx) server on `localhost:8000`.
 
-## Quick start (luxe evaluation harness)
+## Quick Start
 
 ```bash
-cd luxe
-uv sync --extra mlx --extra evalplus
-uv run python scripts/smoke_test.py     # no weights needed
-uv run python scripts/run_phase_a.py --limit 20
+# Verify oMLX is running and models are available
+swarm check
+
+# Review a local repository
+swarm run /path/to/repo "review for security issues and code quality" --type review
+
+# Review a GitHub repo (auto-clones)
+swarm run https://github.com/user/repo "find bugs and security vulnerabilities" --type review
+
+# Implement a feature
+swarm run /path/to/repo "add input validation to the user API endpoints" --type implement
+
+# Bug investigation and fix
+swarm run /path/to/repo "investigate the race condition in session handling" --type bugfix
+
+# Generate documentation
+swarm run /path/to/repo "update README and add docstrings to public API" --type document
+
+# Summarize a codebase
+swarm run /path/to/repo "summarize the architecture and key modules" --type summarize
+
+# Repository management
+swarm run /path/to/repo "audit dependencies and update CI config" --type manage
+
+# Save report and metrics
+swarm run /path/to/repo "full security audit" --type review --save-report --output ./runs
+
+# Compare multiple runs
+swarm compare ./runs
 ```
 
-Fuller walkthrough in **`luxe/README.md`**.
+## Task Types
 
-## Docs
+Each task type configures a different pipeline shape — only the stages needed for that kind of work.
 
-- [README.md](README.md) — this file
-- [ARCHITECTURE.md](ARCHITECTURE.md) — cross-cutting system design
-- [AGENTS.md](AGENTS.md) — per-specialist details (models, prompts, tools)
-- [LESSONS.md](LESSONS.md) — what I learned building this
+| Type | Pipeline | Use Case |
+|------|----------|----------|
+| `review` | Architect → Read + Analyze → Validator → Synthesizer | Code review, security audit, quality check |
+| `implement` | Architect → Read → Code → Validator → Synthesizer | Feature development, adding functionality |
+| `bugfix` | Architect → Read → Analyze → Code → Validator → Synthesizer | Bug investigation and patching |
+| `document` | Architect → Read → Code → Validator → Synthesizer | Documentation generation and updates |
+| `summarize` | Architect → Read → Synthesizer | Codebase analysis and overview |
+| `manage` | Architect → Read → Analyze → Code → Validator → Synthesizer | Dependency updates, config cleanup, CI fixes |
 
-## Status
+## Pipeline Architecture
 
-- **luxe harness**: Phase A–D runners, daily-driver launchd plists,
-  `lux` CLI. Tested with MLX + Ollama; llama.cpp supported.
-- **luxe CLI**: router + 9 specialists live. Task orchestrator with
-  background execution, clarifying questions, plan-preview, and
-  context forwarding between subtasks. Writing agent served via
-  `llama-server` for Gemma 3 27B with native tool-call support.
-  Deterministic keyword/regex pre-router short-circuits the LLM router
-  on decisive prompts (path + code verb → `code`, draft + essay →
-  `writing`, etc.). `/tasks resume <id>` re-runs blocked/skipped
-  subtasks without redoing completed ones; `/tasks tail <id> -v` adds
-  per-tool-call lines to the live event stream.
-- **Code intelligence**: `/review` and `/refactor` run on
-  `Qwen2.5-32B-Instruct-4bit` with a 10-tool static-analysis surface
-  (`ruff`/`mypy`/`bandit`/`pip-audit`/`semgrep`/`gitleaks` for
-  Python, `eslint`/`tsc`/`clippy`/`go vet` cross-language). The
-  Qwen3-30B-A3B-Instruct-2507 MoE was evaluated as a swap target on
-  2026-04-27 — won decisively on a small Python repo (9m vs 57m,
-  cleaner output) but fabricated 58 unverified file:line citations
-  on a larger JS repo and exhausted the step budget on a docs-read
-  subtask. Reverted same-day; see LESSONS.md.
-  Pre-flight repo survey sizes the task wall per clone (`num_ctx` is
-  fixed per agent in `configs/agents.yaml`); a four-layer
-  anti-fabrication check (shallow-retry → forced
-  inspection → `file:line` citation verification → construct-
-  presence verification) annotates suspect findings. `code` agent
-  on `Qwen2.5-Coder-14B-Instruct-MLX-4bit` with the same analyzer
-  tools — see AGENTS.md for the per-agent breakdown.
-- **Backend split**: as of 2026-04-27 every agent serves through
-  **oMLX** (port 8000, MLX-format weights). Initial migration
-  2026-04-24 moved `code` / `review` / `refactor` after a sweep
-  showed +50–60% decode tok/s vs Ollama at parity-or-better
-  HumanEval+ pass rate; the rest followed three days later. `writing`
-  uses Gemma 3 27B served via oMLX (still requires the
-  `tool_code` prelude in the writing agent prompt — Gemma's chat
-  template doesn't render the OpenAI `tools=` parameter). See
-  `LESSONS.md` for the measurement methodology — including the
-  premature-rollback episode and the 2026-04-27 Qwen3-MoE evaluation
-  that landed and rolled back the same day after live tests on
-  larger repos surfaced fabrication the small-repo benchmark missed.
-- **Browser tool**: `research` and `lookup` agents can drive a real
-  headless Chrome via `browse_navigate` + `browse_read` (CDP, allowlist-
-  gated). Unblocks JS-rendered content where static `fetch_url` returns
-  empty. Read-only by design; `LUXE_BROWSER_ALLOWLIST` env var
-  overrides the default starter set. See `luxe/luxe_luxe_cli/README.md`.
-- **Bench-history metrics**: `bench_orchestrator.py` records per-task
-  `reads_per_edit` and `tool_loop_ratio`, plus a sliding-window
-  `composite_health` z-score that flags rows with `⚠ INFLECTION` when a
-  run diverges from the trailing 10-row baseline. Captures behavioral
-  drift the wall-time / token-count metrics can't see.
+```
+                ┌─────────────┐
+                │  Architect   │  Decomposes goal into 4–12 micro-objectives
+                │    (7B)      │  with role tags and scope hints
+                └──────┬───────┘
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+  ┌───────────┐  ┌───────────┐  ┌───────────┐
+  │ Worker     │  │ Worker     │  │ Worker     │  Role-specific tool surfaces
+  │ (read)     │  │ (analyze)  │  │ (code)     │  Fresh context per task
+  │ 2.4B       │  │ 14B        │  │ 14B        │  Cached tool results
+  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘
+        └──────────────┬──────────────┘
+                       ▼
+                ┌─────────────┐
+                │  Validator   │  Checks file:line citations
+                │    (7B)      │  Removes unverified findings
+                └──────┬───────┘
+                       ▼
+                ┌─────────────┐
+                │ Synthesizer  │  Severity-grouped final report
+                │   (32B)      │  No tools — pure synthesis
+                └──────────────┘
+```
 
-## Hardware target
+## Configuration
 
-MacBook Pro with **64 GB unified memory**. Models up to ~40 GB (e.g.
-`llama3.3:70b` quantized Q4_K_M) run but need care around context size;
-see `LESSONS.md` for the specifics.
+Pipeline behavior is driven by `configs/pipeline.yaml`. Key sections:
 
-## License
+- **models** — Model ID mapping per role
+- **roles** — Per-role config: context window, max steps, temperature, tool allowlist
+- **task_types** — Pipeline shape and architect prompt per task type
+- **escalation** — Fallback chain when a worker fails (read → analyze → code)
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+## Metrics
+
+Every run produces structured metrics saved to `./runs/run_<id>.json`:
+
+- **Wall time** per stage and total
+- **Token usage** (prompt + completion) per role
+- **Throughput** (tok/s) per model
+- **Context pressure** peak per subtask
+- **Tool calls** count, cache hit rate
+- **Escalations** and blocked subtasks
+
+Use `swarm compare ./runs` to see side-by-side comparisons across runs.
+
+## Testing
+
+```bash
+pytest tests/ -v
+```
+
+30 tests covering config loading, tool execution, context pressure, architect parsing, and pipeline data models. Tests run without a live oMLX server — they validate the framework logic, not model inference.
+
+## Project Structure
+
+```
+swarm/
+├── configs/pipeline.yaml           # Model roster, role configs, task types
+├── src/swarm/
+│   ├── backend.py                  # oMLX client (OpenAI-compatible API)
+│   ├── config.py                   # Pydantic config loading + validation
+│   ├── context.py                  # Token estimation, pressure monitoring, elision
+│   ├── cli.py                      # Click CLI: run, check, compare
+│   ├── tools/
+│   │   ├── base.py                 # ToolDef, ToolCall, ToolCache, dispatch, validation
+│   │   ├── fs.py                   # read_file, list_dir, glob, grep, write_file, edit_file
+│   │   ├── git.py                  # git_diff, git_log, git_show
+│   │   ├── analysis.py             # Language-gated: ruff, mypy, bandit, eslint, tsc, clippy
+│   │   └── shell.py                # Allowlisted bash execution
+│   ├── agents/
+│   │   ├── loop.py                 # Shared agent loop with tool dispatch + telemetry
+│   │   ├── architect.py            # Goal → micro-objectives with role tags
+│   │   ├── worker.py               # 3 variants with role-specific tool surfaces
+│   │   ├── validator.py            # Citation verification
+│   │   └── synthesizer.py          # Final report assembly
+│   ├── pipeline/
+│   │   ├── model.py                # PipelineRun, Subtask, StageMetrics
+│   │   └── orchestrator.py         # Full pipeline driver
+│   └── metrics/
+│       ├── collector.py            # Extract RunMetrics from completed runs
+│       └── report.py               # Rich tables for summaries + comparisons
+└── tests/                          # 30 tests
+```
+
+## Relationship to luxe
+
+Swarm is a standalone testing ground. If the pipeline approach proves viable, the architecture ports back to luxe as a new dispatch mode alongside the existing single-model approach. The tool interfaces (`ToolDef`, `ToolFn`, `ToolCache`), agent loop, and config patterns were designed to mirror luxe's existing code so the integration path is straightforward.

@@ -1,0 +1,130 @@
+omlx_base_url: "http://127.0.0.1:8000"
+
+profile:
+  name: "Qwen Family (32 GB)"
+  description: "All-Qwen pipeline using Qwen2.5 and Qwen2.5-Coder models, optimized for 32 GB RAM"
+  memory_budget_gb: 32
+  peak_model_gb: 7.74
+
+models:
+  architect:      "Qwen2.5-3B-Instruct-4bit"
+  worker_read:    "Qwen2.5-Coder-7B-Instruct-4bit"
+  worker_code:    "Qwen2.5-Coder-14B-Instruct-4bit"
+  worker_analyze: "Qwen2.5-Coder-7B-Instruct-4bit"
+  validator:      "Qwen2.5-3B-Instruct-4bit"
+  synthesizer:    "Qwen2.5-14B-Instruct-4bit"
+
+# Model memory footprint (4-bit quantized):
+#   Qwen2.5-3B-Instruct-4bit       ~1.62 GB  (architect, validator)
+#   Qwen2.5-Coder-7B-Instruct-4bit ~3.99 GB  (worker_read, worker_analyze)
+#   Qwen2.5-Coder-14B-Instruct-4bit ~7.74 GB (worker_code)
+#   Qwen2.5-14B-Instruct-4bit      ~7.74 GB  (synthesizer)
+#   Peak single-model memory: 7.74 GB + OS/oMLX overhead (~5 GB) = ~13 GB
+
+roles:
+  architect:
+    model_key: architect
+    num_ctx: 8192
+    max_steps: 3
+    max_tokens_per_turn: 2048
+    temperature: 0.3
+    tools: []
+
+  worker_read:
+    model_key: worker_read
+    num_ctx: 16384
+    max_steps: 12
+    max_tokens_per_turn: 2048
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show]
+
+  worker_code:
+    model_key: worker_code
+    num_ctx: 32768
+    max_steps: 15
+    max_tokens_per_turn: 4096
+    temperature: 0.2
+    tools: [read_file, write_file, edit_file, list_dir, glob, grep, git_diff, git_log, bash]
+
+  worker_analyze:
+    model_key: worker_analyze
+    num_ctx: 16384
+    max_steps: 14
+    max_tokens_per_turn: 4096
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep, git_diff, git_log, lint, typecheck, security_scan, deps_audit]
+
+  validator:
+    model_key: validator
+    num_ctx: 8192
+    max_steps: 6
+    max_tokens_per_turn: 2048
+    temperature: 0.1
+    tools: [read_file, grep]
+
+  synthesizer:
+    model_key: synthesizer
+    num_ctx: 16384
+    max_steps: 3
+    max_tokens_per_turn: 8192
+    temperature: 0.3
+    tools: []
+
+task_types:
+  review:
+    description: "Code review — find bugs, security issues, quality problems"
+    pipeline: [architect, worker_read, worker_analyze, validator, synthesizer]
+    architect_prompt: >
+      You are a code review architect. Decompose the review goal into focused
+      micro-objectives. Each should require at most 10 tool calls. Tag each with
+      a role: worker_read (for file reading, grepping, structure analysis) or
+      worker_analyze (for linting, type checking, security scanning).
+
+  implement:
+    description: "Feature implementation — write code to fulfill a requirement"
+    pipeline: [architect, worker_read, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are an implementation architect. Decompose the feature request into
+      focused micro-objectives. Start with worker_read tasks to understand the
+      existing code, then worker_code tasks to implement changes. Each task
+      should require at most 5 tool calls.
+
+  bugfix:
+    description: "Bug investigation and fix"
+    pipeline: [architect, worker_read, worker_analyze, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are a debugging architect. Decompose the bug report into focused
+      micro-objectives. Start with worker_read to locate relevant code,
+      worker_analyze to run static analysis, then worker_code to implement
+      fixes. Each task should require at most 5 tool calls.
+
+  document:
+    description: "Documentation generation or update"
+    pipeline: [architect, worker_read, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are a documentation architect. Decompose the documentation goal into
+      focused micro-objectives. Start with worker_read tasks to understand the
+      code, then worker_code tasks to write or update documentation files.
+      Each task should require at most 5 tool calls.
+
+  summarize:
+    description: "Codebase summarization and analysis"
+    pipeline: [architect, worker_read, synthesizer]
+    architect_prompt: >
+      You are a codebase analysis architect. Decompose the summarization goal
+      into focused micro-objectives. Use only worker_read tasks to gather
+      information. Each task should require at most 5 tool calls.
+
+  manage:
+    description: "Repository management — dependency updates, config cleanup, CI fixes"
+    pipeline: [architect, worker_read, worker_analyze, worker_code, validator, synthesizer]
+    architect_prompt: >
+      You are a repository management architect. Decompose the management goal
+      into focused micro-objectives. Use worker_read for inspection,
+      worker_analyze for auditing, and worker_code for changes. Each task
+      should require at most 5 tool calls.
+
+escalation:
+  worker_read: worker_analyze
+  worker_analyze: worker_code
+  max_retries: 1
