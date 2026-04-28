@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from luxe.agents.validator import ValidatorEnvelope
 from luxe.tools.base import ToolCall
 
 
@@ -64,6 +65,7 @@ class PipelineRun:
     subtasks: list[Subtask] = field(default_factory=list)
     architect_result: str = ""
     validator_result: str = ""
+    validator_envelope: ValidatorEnvelope | None = None
     synthesizer_result: str = ""
     final_report: str = ""
     total_wall_s: float = 0.0

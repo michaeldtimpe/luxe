@@ -46,14 +46,22 @@ def run_architect(
     goal: str,
     task_type_prompt: str,
     repo_summary: str = "",
+    initial_context: str = "",
 ) -> tuple[AgentResult, list[dict[str, Any]]]:
     """Run the architect and parse micro-objectives from its output.
+
+    `initial_context` (optional) — extra context appended to the task prompt,
+    typically the rendered EscalationContext from a single→swarm hand-off so
+    the architect can seed its decomposition from prior tool calls instead of
+    re-discovering the repo.
 
     Returns (agent_result, micro_objectives).
     """
     task_prompt_parts = [task_type_prompt, "", f"Goal: {goal}"]
     if repo_summary:
         task_prompt_parts.extend(["", f"Repository summary:\n{repo_summary}"])
+    if initial_context:
+        task_prompt_parts.extend(["", initial_context])
 
     result = run_agent(
         backend, role_cfg,

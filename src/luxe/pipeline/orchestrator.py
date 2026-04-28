@@ -14,7 +14,7 @@ from rich.console import Console
 from luxe.agents.architect import run_architect
 from luxe.agents.loop import AgentResult
 from luxe.agents.synthesizer import run_synthesizer
-from luxe.agents.validator import run_validator
+from luxe.agents.validator import ValidatorEnvelope, run_validator
 from luxe.agents.worker import run_worker
 from luxe.backend import Backend
 from luxe.config import PipelineConfig
@@ -155,8 +155,13 @@ class PipelineOrchestrator:
         task_type: str,
         repo_path: str,
         should_abort: Callable[[], bool] | None = None,
+        initial_context: str = "",
     ) -> PipelineRun:
-        """Execute the full pipeline: Architect → Workers → Validator → Synthesizer."""
+        """Execute the full pipeline: Architect → Workers → Validator → Synthesizer.
+
+        `initial_context` (optional) — passed to the architect, typically the
+        rendered EscalationContext from a single→swarm hand-off.
+        """
 
         set_repo_root(repo_path)
         task_cfg = self.config.task_type(task_type)
@@ -186,6 +191,7 @@ class PipelineOrchestrator:
             goal=goal,
             task_type_prompt=task_cfg.architect_prompt,
             repo_summary=repo_summary,
+            initial_context=initial_context,
         )
         swap_wall = time.monotonic() - swap_t0
 
@@ -298,13 +304,14 @@ class PipelineOrchestrator:
 
         worker_findings = self._collect_worker_findings(run)
         val_result = None
+        envelope = ValidatorEnvelope(status="cleared", summary="No worker findings.")
         if worker_findings.strip():
             console.print(f"\n[bold magenta]▶ Validator[/] — verifying citations"
                           f"  [dim]{_ts()}[/]")
             val_backend = self._get_backend("validator")
             val_cfg = self.config.role("validator")
 
-            val_result = run_validator(
+            val_result, envelope = run_validator(
                 val_backend, val_cfg,
                 worker_findings=worker_findings,
                 cache=cache,
@@ -314,14 +321,30 @@ class PipelineOrchestrator:
             )
 
             run.validator_result = val_result.final_text
+            run.validator_envelope = envelope
             self._emit(run, "validator_done",
                        wall_s=val_result.wall_s,
-                       tool_calls=val_result.tool_calls_total)
+                       tool_calls=val_result.tool_calls_total,
+                       status=envelope.status,
+                       verified_count=len(envelope.verified),
+                       removed_count=len(envelope.removed))
+            if envelope.is_ambiguous:
+                self._emit(run, "validator_ambiguous_warning",
+                           verified_count=len(envelope.verified),
+                           removed_count=len(envelope.removed),
+                           summary=envelope.summary)
+                console.print(
+                    f"  [yellow]! Validator status ambiguous[/] — "
+                    f"{len(envelope.verified)} verified, {len(envelope.removed)} removed"
+                )
             console.print(f"  [green]✓[/] Validation complete "
                           f"({val_result.wall_s:.1f}s, "
-                          f"{_fmt_tok(val_result.prompt_tokens, val_result.completion_tokens)})")
+                          f"{_fmt_tok(val_result.prompt_tokens, val_result.completion_tokens)}) "
+                          f"— status: {envelope.status}")
         else:
             run.validator_result = "(no findings to validate)"
+            envelope = ValidatorEnvelope(status="cleared", summary="No worker findings.")
+            run.validator_envelope = envelope
 
         # --- SYNTHESIZER ---
         if should_abort and should_abort():
@@ -336,7 +359,7 @@ class PipelineOrchestrator:
 
         synth_result = run_synthesizer(
             synth_backend, synth_cfg,
-            validated_findings=run.validator_result,
+            envelope=envelope,
             task_type=task_type,
             goal=goal,
         )

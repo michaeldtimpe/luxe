@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -91,7 +92,166 @@ def run(repo: str, goal: str, task_type: str, config_path: str | None,
 
 
 @main.command()
-@click.option("--config", "config_path", default=None, help="Path to pipeline.yaml")
+@click.argument("repo")
+@click.argument("goal")
+@click.option("--mode", "mode_flag", default="auto",
+              type=click.Choice(["auto", "single", "swarm"]),
+              help="Execution mode (default: auto picks based on goal + repo size)")
+@click.option("--task", "task_type", default=None,
+              type=click.Choice(["review", "implement", "bugfix", "document", "summarize", "manage"]),
+              help="Task type (default: auto-detected from goal)")
+@click.option("--swarm-config", "swarm_config_path", default=None,
+              help="Path to swarm config YAML (default: configs/swarm_64gb.yaml)")
+@click.option("--single-config", "single_config_path", default=None,
+              help="Path to single-mode config YAML (default: configs/single_64gb.yaml)")
+@click.option("--output", "output_dir", default="./runs", help="Directory for run artefacts")
+@click.option("--save-report", is_flag=True, help="Save final report as markdown")
+def maintain(
+    repo: str, goal: str, mode_flag: str, task_type: str | None,
+    swarm_config_path: str | None, single_config_path: str | None,
+    output_dir: str, save_report: bool,
+):
+    """Run a luxe maintain pipeline against a repository.
+
+    REPO: Local path or git URL to clone.
+    GOAL: What to accomplish (e.g., "fix the off-by-one in pagination").
+
+    Mode selection (when --mode is auto):
+      1. Goal-keyword pre-classifier — "implement"/"refactor"/etc. → swarm;
+         "review"/"summarize"/etc. → single.
+      2. Source-byte fallback — repos with >500 KB of source go swarm.
+    """
+    from luxe.agents.single import did_escalate, run_single
+    from luxe.backend import Backend
+    from luxe.citations import lint_report
+    from luxe.escalation import capture_from_single
+    from luxe.mode_select import RunMode, select_mode
+    from luxe.tools.fs import set_repo_root
+
+    repo_path = _resolve_repo(repo)
+    decision = select_mode(goal=goal, repo_root=Path(repo_path), override=mode_flag)
+    detected_task = task_type or _infer_task_type(goal)
+
+    console.print(f"\n[bold]luxe maintain[/]")
+    console.print(f"Repo: {repo_path}")
+    console.print(f"Goal: {goal}")
+    console.print(f"Mode: [cyan]{decision.mode.value}[/]  ([dim]{decision.reason}[/])")
+    console.print(f"Task: {detected_task}\n")
+
+    base_sha = _git_head_sha(repo_path)
+
+    if decision.mode == RunMode.SINGLE:
+        cfg = load_config(single_config_path or _default_single_config())
+        set_repo_root(repo_path)
+        backend = Backend(base_url=cfg.omlx_base_url, model=cfg.model_for_role("monolith"))
+        languages = _detect_languages_for_repo(repo_path)
+
+        console.print(f"[bold cyan]▶ Single mode[/]  (model: {cfg.model_for_role('monolith')})")
+        single_result = run_single(
+            backend, cfg.role("monolith"),
+            goal=goal,
+            task_type=detected_task,
+            languages=languages,
+        )
+
+        if did_escalate(single_result):
+            console.print("[yellow]↑ Single mode escalated to swarm[/]  "
+                          f"({single_result.tool_calls_total} tool calls)")
+            esc_ctx = capture_from_single(
+                single_result.tool_calls,
+                final_text=single_result.final_text,
+                abort_reason="single-mode escalated to swarm",
+            )
+            swarm_cfg = load_config(swarm_config_path)
+            orch = PipelineOrchestrator(swarm_cfg)
+            pipeline_run = orch.run(goal, detected_task, repo_path,
+                                    initial_context=esc_ctx.render())
+            final_report = pipeline_run.final_report or ""
+        else:
+            final_report = single_result.final_text or ""
+            pipeline_run = None
+    else:
+        cfg = load_config(swarm_config_path)
+        orch = PipelineOrchestrator(cfg)
+        pipeline_run = orch.run(goal, detected_task, repo_path)
+        final_report = pipeline_run.final_report or ""
+
+    # --- citation lint ---
+    if final_report:
+        envelope = pipeline_run.validator_envelope if pipeline_run else None
+        lint = lint_report(final_report, repo_path, base_sha=base_sha, envelope=envelope)
+        if lint.is_blocking:
+            console.print(f"\n[red]✗ Citation lint failed[/] — "
+                          f"{len(lint.unresolved)} unresolved citations: {lint.summary()}")
+            for r in lint.unresolved[:10]:
+                console.print(f"    - `{r.citation.path}:{r.citation.line}` — "
+                              f"[red]{r.status}[/]: {r.detail}")
+        else:
+            console.print(f"\n[green]✓ Citation lint passed[/] "
+                          f"({len(lint.citations)} citations: {lint.summary()})")
+
+    if save_report and final_report:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        report_path = out / f"report_{int(time.time())}.md"
+        report_path.write_text(final_report)
+        console.print(f"[dim]Report saved: {report_path}[/]")
+
+    if final_report:
+        console.print(f"\n{'='*60}")
+        console.print(final_report)
+
+
+def _default_single_config() -> str:
+    return str(Path(__file__).parent.parent.parent / "configs" / "single_64gb.yaml")
+
+
+def _git_head_sha(repo_path: str) -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_path,
+            capture_output=True, text=True, check=False,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except OSError:
+        return ""
+
+
+def _infer_task_type(goal: str) -> str:
+    g = goal.lower()
+    if any(k in g for k in ("implement", "add ", "build", "create", "introduce")):
+        return "implement"
+    if any(k in g for k in ("fix", "bug", "broken", "regression")):
+        return "bugfix"
+    if any(k in g for k in ("document", "docs", "readme", "docstring")):
+        return "document"
+    if any(k in g for k in ("update deps", "upgrade", "ci", "config")):
+        return "manage"
+    if any(k in g for k in ("summarize", "summary", "explain", "describe")):
+        return "summarize"
+    return "review"
+
+
+def _detect_languages_for_repo(repo_path: str) -> frozenset[str]:
+    p = Path(repo_path)
+    lang_map = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript",
+        ".tsx": "typescript", ".jsx": "javascript", ".rs": "rust",
+        ".go": "go",
+    }
+    found: set[str] = set()
+    import os as _os
+    for root, dirs, files in _os.walk(p):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv"}]
+        for f in files:
+            ext = Path(f).suffix.lower()
+            if ext in lang_map:
+                found.add(lang_map[ext])
+    return frozenset(found)
+
+
+@main.command()
+@click.option("--config", "config_path", default=None, help="Path to swarm_64gb.yaml")
 def check(config_path: str | None):
     """Check oMLX connectivity and model availability."""
     from luxe.backend import Backend

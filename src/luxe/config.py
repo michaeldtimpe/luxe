@@ -62,7 +62,7 @@ class PipelineConfig(BaseModel):
 
 def load_config(path: str | Path | None = None) -> PipelineConfig:
     if path is None:
-        path = Path(__file__).parent.parent.parent / "configs" / "pipeline.yaml"
+        path = Path(__file__).parent.parent.parent / "configs" / "swarm_64gb.yaml"
     path = Path(path)
     raw: dict[str, Any] = yaml.safe_load(path.read_text())
     return PipelineConfig.model_validate(raw)
