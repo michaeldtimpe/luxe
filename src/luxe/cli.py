@@ -239,7 +239,7 @@ def maintain(
                     abort_reason="single-mode escalated to swarm",
                 )
                 swarm_cfg = load_config(swarm_config_path)
-                orch = PipelineOrchestrator(swarm_cfg)
+                orch = PipelineOrchestrator(swarm_cfg, run_id=spec.run_id)
                 pipeline_run = orch.run(goal, detected_task, repo_path,
                                         initial_context=esc_ctx.render())
                 final_report = pipeline_run.final_report or ""
@@ -248,7 +248,7 @@ def maintain(
                 final_report = single_result.final_text or ""
         else:
             cfg = load_config(swarm_config_path)
-            orch = PipelineOrchestrator(cfg)
+            orch = PipelineOrchestrator(cfg, run_id=spec.run_id)
             pipeline_run = orch.run(goal, detected_task, repo_path)
             final_report = pipeline_run.final_report or ""
 
@@ -348,6 +348,156 @@ def pr_cmd(run_id: str, push_only: bool, watch_ci: bool):
                       f" {'(draft)' if state.is_draft else ''}")
     else:
         console.print(f"[green]✓ Resume complete[/] (no PR created)")
+
+
+@main.command(name="resume")
+@click.argument("run_id")
+@click.option("--force-resume", is_flag=True,
+              help="Resume even if HEAD has moved since the checkpoint "
+                   "(invalidates cached worker findings).")
+@click.option("--allow-dirty", is_flag=True, help="Permit a dirty working tree on resume")
+@click.option("--yes", "skip_confirm", is_flag=True, help="Skip TTY confirmations")
+@click.option("--watch-ci", is_flag=True, help="Poll gh pr checks after the PR is opened")
+def resume_cmd(run_id: str, force_resume: bool, allow_dirty: bool,
+               skip_confirm: bool, watch_ci: bool):
+    """Resume a paused/failed luxe maintain run from its last completed stage.
+
+    Architect / worker / validator / synthesizer outputs are loaded from
+    ~/.luxe/runs/<run-id>/stages/ when present; only stages without a
+    checkpoint are re-run. The PR cycle resumes via pr.py with the same
+    checkpointed step ledger.
+
+    By default, the run is rejected if HEAD has moved since the checkpoint
+    was created — cached worker findings may not match current state. Pass
+    `--force-resume` to clear the stage cache and re-run from scratch
+    while keeping the original RunSpec (goal, mode, branch name, etc.).
+    """
+    from luxe.locks import LockHeld, acquire_repo_lock
+    from luxe import pr as pr_mod
+    from luxe.run_state import (
+        append_event,
+        clear_stages,
+        list_completed_stages,
+        load_run_spec,
+        run_dir,
+    )
+
+    spec = load_run_spec(run_id)
+    if spec is None:
+        console.print(f"[red]✗ unknown run_id {run_id}[/]")
+        sys.exit(1)
+
+    # Drift detection (Reviewer R2.1 round 2)
+    current = _git_head_sha(spec.repo_path)
+    drifted = current and current != spec.base_sha
+    if drifted and not force_resume:
+        console.print(
+            f"\n[red]✗ Repo has changed since checkpoint[/]\n"
+            f"  base_sha: {spec.base_sha[:12]}\n"
+            f"  current : {current[:12]}\n"
+            f"Cached worker findings may not match the current code. Re-run "
+            f"from scratch, or pass `--force-resume` to invalidate the cache "
+            f"and resume with the same RunSpec (goal, mode, branch_name)."
+        )
+        sys.exit(6)
+    if drifted and force_resume:
+        n = clear_stages(run_id)
+        console.print(f"[yellow]· Stage cache invalidated ({n} files)[/] — "
+                      f"resuming with fresh worker pass")
+        append_event(run_id, "resume_with_drift", removed=n,
+                     base_sha=spec.base_sha[:12], current=current[:12])
+
+    # Pre-flight (lighter than fresh run — branch name comes from pr_state)
+    confirm_callback: Callable[[], bool] | None = None
+    if skip_confirm:
+        confirm_callback = lambda: True
+    elif sys.stdin.isatty():
+        def _confirm() -> bool:
+            click.echo("Type 'yes' to continue with --allow-dirty.")
+            return click.prompt("→", default="", show_default=False).strip() == "yes"
+        confirm_callback = _confirm
+
+    try:
+        pr_mod.assert_gh_auth()
+        pr_mod.assert_clean_tree(spec.repo_path, allow_dirty=allow_dirty,
+                                 confirm_callback=confirm_callback)
+    except pr_mod.GhAuthError as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(2)
+    except pr_mod.DirtyTreeError as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(2)
+
+    completed = list_completed_stages(run_id)
+    console.print(f"\n[bold]luxe resume[/]  [dim]run_id={run_id}[/]")
+    console.print(f"Goal: {spec.goal}")
+    console.print(f"Mode: {spec.actual_mode or spec.mode}")
+    console.print(f"Stages on disk: {', '.join(completed) or '(none)'}")
+
+    try:
+        ctx = acquire_repo_lock(spec.repo_path, spec.run_id)
+        ctx.__enter__()
+    except LockHeld as e:
+        console.print(f"\n[red]✗ {e}[/]")
+        sys.exit(3)
+
+    try:
+        # Re-run pipeline (cached stages skipped automatically by checkpoints)
+        # Single-mode resume not supported in v1.0 — single mode crashes are
+        # cheap to redo (one model, <30 turns); only swarm runs need stage-level
+        # resume for the 40-min jobs.
+        if (spec.actual_mode or spec.mode) == "single":
+            console.print("[yellow]· Single-mode resume is not supported "
+                          "(re-run from scratch instead).[/]")
+            sys.exit(7)
+
+        from luxe.tools.fs import set_repo_root
+        set_repo_root(spec.repo_path)
+        cfg = load_config(None)  # default swarm config
+        orch = PipelineOrchestrator(cfg, run_id=spec.run_id)
+        pipeline_run = orch.run(
+            spec.goal, spec.task_type, spec.repo_path,
+        )
+        final_report = pipeline_run.final_report or ""
+
+        # Persist report copy for downstream pr.py resume.
+        if final_report:
+            (run_dir(spec.run_id) / "synthesizer.md").write_text(final_report)
+
+        # Citation lint
+        if final_report:
+            from luxe.citations import lint_report
+            lint = lint_report(final_report, spec.repo_path,
+                               base_sha=spec.base_sha,
+                               envelope=pipeline_run.validator_envelope)
+            if lint.is_blocking:
+                console.print(f"\n[red]✗ Citation lint failed[/] — "
+                              f"{len(lint.unresolved)} unresolved: {lint.summary()}")
+            else:
+                console.print(f"\n[green]✓ Citation lint passed[/] "
+                              f"({len(lint.citations)} citations)")
+
+        # PR cycle if applicable
+        if spec.task_type in _WRITE_TASKS:
+            try:
+                pr_state = pr_mod.resume_pr(
+                    spec.run_id, watch_ci=watch_ci,
+                    on_event=lambda kind, data: console.print(
+                        f"[dim]· pr {kind}: {data}[/]"
+                    ),
+                )
+                if pr_state.pr_url:
+                    console.print(f"\n[bold green]✓ PR ready:[/] {pr_state.pr_url}"
+                                  f" {'(draft)' if pr_state.is_draft else ''}")
+            except pr_mod.PRError as e:
+                console.print(f"\n[red]✗ PR cycle blocked: {e}[/]")
+                console.print(f"[dim]Resume with: luxe pr {spec.run_id}[/]")
+                sys.exit(5)
+    finally:
+        try:
+            ctx.__exit__(None, None, None)
+        except Exception:
+            pass
 
 
 @main.group(name="runs")

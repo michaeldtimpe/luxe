@@ -1,15 +1,22 @@
-"""Run-state primitives — RunSpec, run directories, event log.
-
-Phase 3 scope: enough state for pr.py to checkpoint commit/push/create/ci-watch
-steps and be resumed via `luxe pr <run-id>`. Per-stage pipeline checkpointing
-(stage_<n>.json + drift detection on resume) is Phase 4.
+"""Run-state primitives — RunSpec, stage checkpoints, run directories, event log.
 
 Layout under ~/.luxe/runs/<run-id>/:
-  run.json      — RunSpec (immutable for the life of the run)
-  pr_state.json — pr.py step ledger (mutated as the PR cycle progresses)
-  events.jsonl  — append-only log
+  run.json         — RunSpec (immutable for the life of the run)
+  stages/<n>.json  — per-stage checkpoint outputs (architect, worker_<i>,
+                     validator, synthesizer)
+  pr_state.json    — pr.py step ledger
+  events.jsonl     — append-only log
+  synthesizer.md   — final report (also stored as a stage; this is a
+                     convenience copy for `luxe pr <id>` resume)
 
 run_id is a 12-char hex (uuid4 truncated) consistent with PipelineRun.id.
+
+Resume model:
+- `load_stage(run_id, name)` returns the saved dict or None.
+- The orchestrator checks each stage on entry; if a checkpoint exists, it
+  loads the result and skips that stage.
+- `clear_stages(run_id)` is invoked by --force-resume to invalidate the
+  cache when HEAD has drifted from RunSpec.base_sha.
 """
 
 from __future__ import annotations
@@ -124,6 +131,53 @@ def load_pr_state(run_id: str) -> PRState | None:
     if not p.is_file():
         return None
     return PRState.from_dict(json.loads(p.read_text()))
+
+
+def stages_dir(run_id: str) -> Path:
+    return run_dir(run_id) / "stages"
+
+
+def save_stage(run_id: str, name: str, data: dict) -> Path:
+    """Write a stage checkpoint to stages/<name>.json (atomic write)."""
+    d = stages_dir(run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{name}.json"
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, default=str))
+    tmp.replace(p)
+    return p
+
+
+def load_stage(run_id: str, name: str) -> dict | None:
+    p = stages_dir(run_id) / f"{name}.json"
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except json.JSONDecodeError:
+        return None
+
+
+def list_completed_stages(run_id: str) -> list[str]:
+    d = stages_dir(run_id)
+    if not d.is_dir():
+        return []
+    return sorted(p.stem for p in d.glob("*.json"))
+
+
+def clear_stages(run_id: str) -> int:
+    """Delete all stage checkpoints for a run. Returns count removed."""
+    d = stages_dir(run_id)
+    if not d.is_dir():
+        return 0
+    removed = 0
+    for p in d.glob("*.json"):
+        try:
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def append_event(run_id: str, kind: str, **data) -> None:
