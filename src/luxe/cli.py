@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable
 
 import click
 from rich.console import Console
@@ -91,6 +92,9 @@ def run(repo: str, goal: str, task_type: str, config_path: str | None,
         console.print(pipeline_run.final_report)
 
 
+_WRITE_TASKS = {"implement", "bugfix", "document", "manage"}
+
+
 @main.command()
 @click.argument("repo")
 @click.argument("goal")
@@ -104,11 +108,20 @@ def run(repo: str, goal: str, task_type: str, config_path: str | None,
               help="Path to swarm config YAML (default: configs/swarm_64gb.yaml)")
 @click.option("--single-config", "single_config_path", default=None,
               help="Path to single-mode config YAML (default: configs/single_64gb.yaml)")
+@click.option("--allow-dirty", is_flag=True,
+              help="Permit running with an uncommitted working tree (foot-gun; "
+                   "PR diff WILL include your changes)")
+@click.option("--yes", "skip_confirm", is_flag=True,
+              help="Skip TTY confirmations (e.g. for --allow-dirty in scripts)")
+@click.option("--watch-ci", is_flag=True,
+              help="After PR is opened, poll `gh pr checks` and convert "
+                   "draft→ready (or vice versa) based on CI result")
 @click.option("--output", "output_dir", default="./runs", help="Directory for run artefacts")
-@click.option("--save-report", is_flag=True, help="Save final report as markdown")
+@click.option("--save-report", is_flag=True, help="Save final report as markdown to --output")
 def maintain(
     repo: str, goal: str, mode_flag: str, task_type: str | None,
     swarm_config_path: str | None, single_config_path: str | None,
+    allow_dirty: bool, skip_confirm: bool, watch_ci: bool,
     output_dir: str, save_report: bool,
 ):
     """Run a luxe maintain pipeline against a repository.
@@ -125,81 +138,260 @@ def maintain(
     from luxe.backend import Backend
     from luxe.citations import lint_report
     from luxe.escalation import capture_from_single
+    from luxe.locks import LockHeld, acquire_repo_lock
     from luxe.mode_select import RunMode, select_mode
+    from luxe import pr as pr_mod
+    from luxe.run_state import RunSpec, append_event, init_run_dir, run_dir
     from luxe.tools.fs import set_repo_root
 
     repo_path = _resolve_repo(repo)
     decision = select_mode(goal=goal, repo_root=Path(repo_path), override=mode_flag)
     detected_task = task_type or _infer_task_type(goal)
 
-    console.print(f"\n[bold]luxe maintain[/]")
+    # --- preflight (BEFORE acquiring the lock; cheap checks first) ----------
+    confirm_callback: Callable[[], bool] | None
+    if skip_confirm:
+        confirm_callback = lambda: True
+    elif sys.stdin.isatty():
+        def _confirm() -> bool:
+            click.echo(
+                "Type 'yes' to continue with --allow-dirty. Your uncommitted "
+                "changes WILL be included in the PR diff."
+            )
+            return click.prompt("→", default="", show_default=False).strip() == "yes"
+        confirm_callback = _confirm
+    else:
+        confirm_callback = None
+
+    pr_cfg = pr_mod.load_pr_config()
+    try:
+        prep = pr_mod.preflight(
+            repo_path,
+            task_type=detected_task,
+            goal=goal,
+            allow_dirty=allow_dirty,
+            confirm_callback=confirm_callback,
+            cfg=pr_cfg,
+        )
+    except pr_mod.GhAuthError as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(2)
+    except pr_mod.DirtyTreeError as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(2)
+
+    # --- run state & lock ---------------------------------------------------
+    spec = RunSpec(
+        goal=goal,
+        mode=mode_flag,
+        actual_mode=decision.mode.value,
+        task_type=detected_task,
+        repo_path=str(Path(repo_path).resolve()),
+        base_sha=prep.base_sha,
+        base_branch=prep.base_branch,
+    )
+    init_run_dir(spec)
+    append_event(spec.run_id, "preflight_ok",
+                 base_branch=prep.base_branch, branch_name=prep.branch_name,
+                 test_command=prep.test_command, mode=decision.mode.value)
+
+    console.print(f"\n[bold]luxe maintain[/]  [dim]run_id={spec.run_id}[/]")
     console.print(f"Repo: {repo_path}")
     console.print(f"Goal: {goal}")
     console.print(f"Mode: [cyan]{decision.mode.value}[/]  ([dim]{decision.reason}[/])")
-    console.print(f"Task: {detected_task}\n")
-
-    base_sha = _git_head_sha(repo_path)
-
-    if decision.mode == RunMode.SINGLE:
-        cfg = load_config(single_config_path or _default_single_config())
-        set_repo_root(repo_path)
-        backend = Backend(base_url=cfg.omlx_base_url, model=cfg.model_for_role("monolith"))
-        languages = _detect_languages_for_repo(repo_path)
-
-        console.print(f"[bold cyan]▶ Single mode[/]  (model: {cfg.model_for_role('monolith')})")
-        single_result = run_single(
-            backend, cfg.role("monolith"),
-            goal=goal,
-            task_type=detected_task,
-            languages=languages,
-        )
-
-        if did_escalate(single_result):
-            console.print("[yellow]↑ Single mode escalated to swarm[/]  "
-                          f"({single_result.tool_calls_total} tool calls)")
-            esc_ctx = capture_from_single(
-                single_result.tool_calls,
-                final_text=single_result.final_text,
-                abort_reason="single-mode escalated to swarm",
-            )
-            swarm_cfg = load_config(swarm_config_path)
-            orch = PipelineOrchestrator(swarm_cfg)
-            pipeline_run = orch.run(goal, detected_task, repo_path,
-                                    initial_context=esc_ctx.render())
-            final_report = pipeline_run.final_report or ""
-        else:
-            final_report = single_result.final_text or ""
-            pipeline_run = None
+    console.print(f"Task: {detected_task}")
+    console.print(f"Branch: [dim]{prep.branch_name}[/]  Base: [dim]{prep.base_branch}@{prep.base_sha[:8]}[/]")
+    if prep.test_command:
+        console.print(f"Tests: [dim]{prep.test_command}[/]")
     else:
-        cfg = load_config(swarm_config_path)
-        orch = PipelineOrchestrator(cfg)
-        pipeline_run = orch.run(goal, detected_task, repo_path)
-        final_report = pipeline_run.final_report or ""
+        console.print(f"Tests: [dim](none detected)[/]")
 
-    # --- citation lint ---
-    if final_report:
-        envelope = pipeline_run.validator_envelope if pipeline_run else None
-        lint = lint_report(final_report, repo_path, base_sha=base_sha, envelope=envelope)
-        if lint.is_blocking:
-            console.print(f"\n[red]✗ Citation lint failed[/] — "
-                          f"{len(lint.unresolved)} unresolved citations: {lint.summary()}")
-            for r in lint.unresolved[:10]:
-                console.print(f"    - `{r.citation.path}:{r.citation.line}` — "
-                              f"[red]{r.status}[/]: {r.detail}")
+    try:
+        ctx = acquire_repo_lock(spec.repo_path, spec.run_id)
+        lock_path = ctx.__enter__()  # acquire
+    except LockHeld as e:
+        console.print(f"\n[red]✗ {e}[/]")
+        sys.exit(3)
+
+    try:
+        # --- pipeline -------------------------------------------------------
+        pipeline_run = None
+        if decision.mode == RunMode.SINGLE:
+            cfg = load_config(single_config_path or _default_single_config())
+            set_repo_root(repo_path)
+            backend = Backend(base_url=cfg.omlx_base_url, model=cfg.model_for_role("monolith"))
+            languages = _detect_languages_for_repo(repo_path)
+
+            console.print(f"\n[bold cyan]▶ Single mode[/]  (model: {cfg.model_for_role('monolith')})")
+            single_result = run_single(
+                backend, cfg.role("monolith"),
+                goal=goal,
+                task_type=detected_task,
+                languages=languages,
+            )
+
+            if did_escalate(single_result):
+                console.print("[yellow]↑ Single mode escalated to swarm[/]  "
+                              f"({single_result.tool_calls_total} tool calls)")
+                esc_ctx = capture_from_single(
+                    single_result.tool_calls,
+                    final_text=single_result.final_text,
+                    abort_reason="single-mode escalated to swarm",
+                )
+                swarm_cfg = load_config(swarm_config_path)
+                orch = PipelineOrchestrator(swarm_cfg)
+                pipeline_run = orch.run(goal, detected_task, repo_path,
+                                        initial_context=esc_ctx.render())
+                final_report = pipeline_run.final_report or ""
+                spec.actual_mode = "swarm"  # record the actual path taken
+            else:
+                final_report = single_result.final_text or ""
         else:
-            console.print(f"\n[green]✓ Citation lint passed[/] "
-                          f"({len(lint.citations)} citations: {lint.summary()})")
+            cfg = load_config(swarm_config_path)
+            orch = PipelineOrchestrator(cfg)
+            pipeline_run = orch.run(goal, detected_task, repo_path)
+            final_report = pipeline_run.final_report or ""
 
-    if save_report and final_report:
-        out = Path(output_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        report_path = out / f"report_{int(time.time())}.md"
-        report_path.write_text(final_report)
-        console.print(f"[dim]Report saved: {report_path}[/]")
+        # Persist the synthesizer/single report so resume_pr can find it.
+        if final_report:
+            (run_dir(spec.run_id) / "synthesizer.md").write_text(final_report)
 
-    if final_report:
-        console.print(f"\n{'='*60}")
-        console.print(final_report)
+        # --- citation lint --------------------------------------------------
+        envelope = pipeline_run.validator_envelope if pipeline_run else None
+        if final_report:
+            lint = lint_report(final_report, repo_path, base_sha=prep.base_sha,
+                               envelope=envelope)
+            if lint.is_blocking:
+                console.print(f"\n[red]✗ Citation lint failed[/] — "
+                              f"{len(lint.unresolved)} unresolved: {lint.summary()}")
+                for r in lint.unresolved[:10]:
+                    console.print(f"    - `{r.citation.path}:{r.citation.line}` — "
+                                  f"[red]{r.status}[/]: {r.detail}")
+                append_event(spec.run_id, "citation_lint_blocked",
+                             unresolved=len(lint.unresolved), summary=lint.summary())
+            else:
+                console.print(f"\n[green]✓ Citation lint passed[/] "
+                              f"({len(lint.citations)} citations: {lint.summary()})")
+                append_event(spec.run_id, "citation_lint_passed",
+                             count=len(lint.citations), summary=lint.summary())
+
+        # --- PR cycle for write-tasks --------------------------------------
+        if detected_task in _WRITE_TASKS:
+            try:
+                pr_state = pr_mod.open_pr(
+                    spec,
+                    report_text=final_report,
+                    task_type=detected_task,
+                    goal=goal,
+                    test_command=prep.test_command,
+                    branch_name=prep.branch_name,
+                    cfg=pr_cfg,
+                    watch_ci=watch_ci,
+                    on_event=lambda kind, data: console.print(
+                        f"[dim]· pr {kind}: {data}[/]"
+                    ),
+                )
+                if pr_state.pr_url:
+                    console.print(f"\n[bold green]✓ PR opened:[/] {pr_state.pr_url}"
+                                  f" {'(draft)' if pr_state.is_draft else ''}")
+                else:
+                    console.print(f"\n[yellow]· No PR opened (no diff produced)[/]")
+            except pr_mod.NoMutationsError as e:
+                console.print(f"\n[red]✗ {e}[/]")
+                console.print(f"[dim]Status: failed_no_mutations_produced. "
+                              f"Resume not applicable.[/]")
+                sys.exit(4)
+            except pr_mod.PRError as e:
+                console.print(f"\n[red]✗ PR cycle blocked: {e}[/]")
+                console.print(f"[dim]Resume with: luxe pr {spec.run_id}[/]")
+                sys.exit(5)
+        elif detected_task in {"review", "summarize"}:
+            console.print(f"\n[dim](read-only task; no PR)[/]")
+
+        # --- optional save-report --------------------------------------------
+        if save_report and final_report:
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            report_path = out / f"report_{spec.run_id}.md"
+            report_path.write_text(final_report)
+            console.print(f"[dim]Report also saved: {report_path}[/]")
+
+        if final_report:
+            console.print(f"\n{'='*60}")
+            console.print(final_report)
+    finally:
+        try:
+            ctx.__exit__(None, None, None)  # release lock
+        except Exception:
+            pass
+
+
+@main.command(name="pr")
+@click.argument("run_id")
+@click.option("--push-only", is_flag=True, help="Only do the push step (no PR create)")
+@click.option("--watch-ci", is_flag=True, help="Poll gh pr checks after create")
+def pr_cmd(run_id: str, push_only: bool, watch_ci: bool):
+    """Resume a partially-completed PR cycle by run_id."""
+    from luxe import pr as pr_mod
+
+    try:
+        state = pr_mod.resume_pr(
+            run_id, push_only=push_only, watch_ci=watch_ci,
+            on_event=lambda kind, data: console.print(f"[dim]· pr {kind}: {data}[/]"),
+        )
+    except pr_mod.PRError as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(5)
+
+    if state.pr_url:
+        console.print(f"[bold green]✓ PR ready:[/] {state.pr_url}"
+                      f" {'(draft)' if state.is_draft else ''}")
+    else:
+        console.print(f"[green]✓ Resume complete[/] (no PR created)")
+
+
+@main.group(name="runs")
+def runs_group():
+    """Manage luxe run state."""
+
+
+@runs_group.command(name="list")
+def runs_list_cmd():
+    """List all known luxe runs (most recent first)."""
+    from luxe.run_state import list_runs
+    from luxe.pr import _first_incomplete  # type: ignore
+    from luxe.run_state import load_pr_state
+
+    runs = list_runs()
+    if not runs:
+        console.print("[dim]No runs found.[/]")
+        return
+    console.print(f"\n[bold]luxe runs[/]  ({len(runs)} total)")
+    for spec in sorted(runs, key=lambda s: s.started_at, reverse=True)[:50]:
+        prs = load_pr_state(spec.run_id)
+        next_step = _first_incomplete(prs) if prs else "(no pr_state)"
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(spec.started_at))
+        console.print(f"  [cyan]{spec.run_id}[/]  {when}  "
+                      f"{spec.actual_mode or spec.mode}/{spec.task_type}  "
+                      f"[dim]{spec.goal[:60]}[/]  next:[yellow]{next_step}[/]")
+
+
+@runs_group.command(name="gc")
+@click.option("--days", default=7, help="Retention window (default 7 days)")
+@click.option("--dry-run", is_flag=True, help="Show what would be removed without deleting")
+def runs_gc_cmd(days: int, dry_run: bool):
+    """Remove run directories older than --days."""
+    from luxe.run_state import gc_runs, list_runs
+
+    if dry_run:
+        cutoff = time.time() - (days * 86400)
+        old = [s for s in list_runs() if s.started_at < cutoff]
+        console.print(f"Would remove {len(old)} runs older than {days} days:")
+        for s in old:
+            console.print(f"  {s.run_id}  {time.strftime('%Y-%m-%d', time.localtime(s.started_at))}")
+        return
+    n = gc_runs(retention_days=days)
+    console.print(f"[green]Removed {n} runs older than {days} days.[/]")
 
 
 def _default_single_config() -> str:
