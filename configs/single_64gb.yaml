@@ -1,0 +1,58 @@
+omlx_base_url: "http://127.0.0.1:8000"
+
+profile:
+  name: "Single-model 64 GB"
+  description: "One capable model drives the whole task with the full tool surface."
+  memory_budget_gb: 64
+  peak_model_gb: 19.0
+
+models:
+  monolith: "Qwen2.5-32B-Instruct-4bit"
+
+# Single mode runs ONE role: the monolith. Full tool surface, agentic loop.
+# Used for smaller repos and quick fixes; escalates to swarm when the model
+# determines the task needs >10 file edits or sustained multi-component planning.
+roles:
+  monolith:
+    model_key: monolith
+    num_ctx: 32768
+    max_steps: 30
+    max_tokens_per_turn: 8192
+    temperature: 0.2
+    tools:
+      - read_file
+      - list_dir
+      - glob
+      - grep
+      - write_file
+      - edit_file
+      - git_diff
+      - git_log
+      - git_show
+      - bash
+      - lint
+      - typecheck
+      - security_scan
+      - deps_audit
+
+# Single mode does not have task-type pipelines — the monolith handles the
+# task end-to-end. Task type still influences the system prompt framing.
+task_types:
+  review:
+    description: "Code review — single-model agentic loop"
+    pipeline: [monolith]
+  implement:
+    description: "Feature implementation — single-model agentic loop"
+    pipeline: [monolith]
+  bugfix:
+    description: "Bug investigation and fix — single-model agentic loop"
+    pipeline: [monolith]
+  document:
+    description: "Documentation generation — single-model agentic loop"
+    pipeline: [monolith]
+  summarize:
+    description: "Codebase summarization — single-model agentic loop"
+    pipeline: [monolith]
+  manage:
+    description: "Repository management — single-model agentic loop"
+    pipeline: [monolith]

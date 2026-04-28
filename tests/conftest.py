@@ -26,4 +26,4 @@ def tmp_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def config_path() -> Path:
-    return Path(__file__).parent.parent / "configs" / "pipeline.yaml"
+    return Path(__file__).parent.parent / "configs" / "swarm_64gb.yaml"
