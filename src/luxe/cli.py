@@ -261,9 +261,13 @@ def check(config_path: str | None):
 
     if not backend.health():
         console.print(f"[red]Cannot reach oMLX at {config.omlx_base_url}[/]")
+        console.print("[dim]Run `brew services start omlx` and re-run.[/]")
         sys.exit(1)
 
     console.print(f"[green]oMLX is healthy[/] at {config.omlx_base_url}")
+
+    required = list(config.models.values())
+    missing = backend.assert_models_available(required)
 
     available = set(backend.list_models())
     console.print(f"\nAvailable models ({len(available)}):")
@@ -271,16 +275,14 @@ def check(config_path: str | None):
         console.print(f"  {m}")
 
     console.print(f"\nPipeline model requirements:")
-    all_ok = True
     for role_name, model_id in config.models.items():
         found = model_id in available
         status = "[green]✓[/]" if found else "[red]✗[/]"
         console.print(f"  {status} {role_name}: {model_id}")
-        if not found:
-            all_ok = False
 
-    if not all_ok:
-        console.print("\n[yellow]Some models are missing. Load them in oMLX before running.[/]")
+    if missing:
+        console.print(f"\n[yellow]Missing models: {', '.join(missing)}[/]")
+        console.print("[dim]Load them in oMLX before running.[/]")
         sys.exit(1)
     else:
         console.print("\n[green]All pipeline models available.[/]")

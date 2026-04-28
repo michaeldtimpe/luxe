@@ -142,6 +142,13 @@ class PipelineOrchestrator:
                 base_url=self.config.omlx_base_url,
                 model=model,
             )
+            # First time we touch this model: thermal guard. oMLX may need a
+            # moment to load it. Skip if /v1/models is unreachable — chat()
+            # will then fail-fast or retry per its own rules.
+            try:
+                self._backends[model].thermal_guard(model, settle_s=2.0, max_wait_s=30.0)
+            except Exception:
+                pass
         return self._backends[model]
 
     def _emit(self, run: PipelineRun, kind: str, **data: Any) -> None:
