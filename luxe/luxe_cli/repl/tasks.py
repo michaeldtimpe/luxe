@@ -217,6 +217,7 @@ def _tasks_tail(
         if first_agent:
             try:
                 ag = cfg.get(first_agent)
+                state.last_agent = first_agent
                 state.last_model = ag.model
                 state.last_endpoint = cfg.resolve_endpoint(ag)
             except Exception:  # noqa: BLE001
@@ -243,11 +244,13 @@ def _tasks_tail(
             if model:
                 state.last_model = model
             agent = event.get("agent") or ""
-            if agent and cfg is not None:
-                try:
-                    state.last_endpoint = cfg.resolve_endpoint(cfg.get(agent))
-                except Exception:  # noqa: BLE001
-                    pass
+            if agent:
+                state.last_agent = agent
+                if cfg is not None:
+                    try:
+                        state.last_endpoint = cfg.resolve_endpoint(cfg.get(agent))
+                    except Exception:  # noqa: BLE001
+                        pass
         elif kind == "end":
             sub_id = event.get("subtask") or ""
             if sub_id and sub_id in seen_subtasks:
@@ -333,12 +336,11 @@ def _render_tail_totals(state: "ReplState", cfg: LuxeConfig) -> None:
     `following …` header and again on task finish/abort. Mirrors the
     format `_print_stats` uses after foreground turns so the eye
     recognizes it without re-parsing."""
-    from luxe_cli.backend import context_length
+    from luxe_cli.repl.core import _resolve_ctx_total
     from luxe_cli.repl.status import _fmt_wall
 
     model = state.last_model or "(unknown)"
-    endpoint = state.last_endpoint or ""
-    ctx_total = context_length(model, endpoint) if endpoint else 0
+    ctx_total = _resolve_ctx_total(state, cfg) if state.last_endpoint or state.last_agent else 0
     used = state.last_ctx_used
     free = max(ctx_total - used, 0) if ctx_total else 0
     pct_free = (free / ctx_total * 100.0) if ctx_total else 100.0
