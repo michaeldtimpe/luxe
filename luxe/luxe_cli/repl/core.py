@@ -619,8 +619,27 @@ def _dispatch(
     _print_stats(decision, result, state, cfg)
 
 
+def _resolve_ctx_total(state: ReplState, cfg: LuxeConfig) -> int:
+    """Pick the right ctx denominator for the totals/snapshot lines.
+
+    Prefer the agent's explicit `num_ctx` override from agents.yaml,
+    fall back to backend introspection. Server-side metadata is the
+    only authoritative source for stock Ollama tags but isn't returned
+    by oMLX (which would otherwise show the hardcoded 8192 default
+    even for an agent configured with num_ctx: 32768)."""
+    agent_name = state.last_agent or state.sticky_agent
+    if agent_name:
+        try:
+            num_ctx = cfg.get(agent_name).num_ctx
+            if num_ctx:
+                return int(num_ctx)
+        except KeyError:
+            pass
+    return context_length(state.last_model, state.last_endpoint)
+
+
 def _print_stats(decision, result, state: ReplState, cfg: LuxeConfig) -> None:
-    ctx_total = context_length(state.last_model, state.last_endpoint)
+    ctx_total = _resolve_ctx_total(state, cfg)
     used = state.last_ctx_used
     free = max(ctx_total - used, 0)
     pct_free = (free / ctx_total * 100.0) if ctx_total else 100.0
