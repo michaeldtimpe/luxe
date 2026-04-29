@@ -291,6 +291,47 @@ class Backend:
         available = set(self.list_models())
         return [m for m in required if m not in available]
 
+    def loaded_models(self) -> list[str]:
+        """Return the list of model IDs currently loaded in memory.
+
+        Distinct from list_models() — that returns *available* models;
+        this returns only those actually in RAM. Uses /v1/models/status,
+        which oMLX exposes alongside the OpenAI-compatible /v1/models.
+        """
+        try:
+            r = self._client.get("/v1/models/status")
+            r.raise_for_status()
+            data = r.json()
+        except (httpx.HTTPError, ValueError):
+            return []
+        return [m.get("id", "") for m in data.get("models", []) if m.get("loaded")]
+
+    def unload_model(self, model_id: str) -> bool:
+        """Free memory for one model. Returns True on success.
+
+        oMLX endpoint: POST /v1/models/{model_id}/unload. Idempotent —
+        unloading an already-unloaded model returns 200. Errors are
+        swallowed (best-effort) since unload is a cleanup-time concern.
+        """
+        try:
+            r = self._client.post(f"/v1/models/{model_id}/unload")
+            return r.status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    def unload_all_loaded(self, *, except_for: list[str] | None = None) -> dict[str, bool]:
+        """Best-effort unload of every currently-loaded model. Returns a map
+        of model_id → success. Models in `except_for` stay resident — useful
+        for keeping a small "always-warm" set across runs.
+        """
+        keep = set(except_for or [])
+        results: dict[str, bool] = {}
+        for mid in self.loaded_models():
+            if mid in keep:
+                continue
+            results[mid] = self.unload_model(mid)
+        return results
+
     def thermal_guard(self, target_model: str, settle_s: float = 2.0,
                       max_wait_s: float = 30.0) -> bool:
         """Sleep briefly after a model swap and confirm the target is loaded.
