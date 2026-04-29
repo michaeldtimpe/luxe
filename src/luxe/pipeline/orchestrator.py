@@ -43,46 +43,19 @@ def _fmt_tok(prompt: int, completion: int) -> str:
 
 
 def _survey_repo(repo_path: str) -> str:
-    """Quick repo survey: languages, LOC, file count."""
-    p = Path(repo_path)
-    if not p.is_dir():
-        return f"Repo path not found: {repo_path}"
+    """Token-budgeted repo summary for the architect.
 
-    extensions: dict[str, int] = {}
-    file_count = 0
-    total_lines = 0
-
-    for root, dirs, files in os.walk(p):
-        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}]
-        for f in files:
-            fp = Path(root) / f
-            ext = fp.suffix.lower()
-            if ext in {".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".java", ".rb", ".c", ".cpp", ".h"}:
-                file_count += 1
-                extensions[ext] = extensions.get(ext, 0) + 1
-                try:
-                    total_lines += sum(1 for _ in fp.open(errors="replace"))
-                except OSError:
-                    pass
-
-    lang_map = {
-        ".py": "python", ".js": "javascript", ".ts": "typescript",
-        ".tsx": "typescript", ".jsx": "javascript", ".rs": "rust",
-        ".go": "go", ".java": "java", ".rb": "ruby",
-        ".c": "c", ".cpp": "cpp", ".h": "c",
-    }
-    languages = set()
-    for ext in extensions:
-        if ext in lang_map:
-            languages.add(lang_map[ext])
-
-    ext_summary = ", ".join(f"{ext}: {n}" for ext, n in sorted(extensions.items(), key=lambda x: -x[1]))
-
-    return (
-        f"Files: {file_count} | LOC: {total_lines:,} | "
-        f"Languages: {', '.join(sorted(languages))} | "
-        f"Extensions: {ext_summary}"
-    )
+    Uses repo_index.build_repo_summary which surfaces symbol_index_coverage
+    so the architect knows when to fall back to bm25_search vs find_symbol.
+    The pipeline's session-level symbol index is consulted via the module
+    global; if the index hasn't been built, coverage is reported as empty
+    and the architect treats every language as BM25-only.
+    """
+    from luxe import symbols as symbols_mod
+    from luxe.repo_index import build_repo_summary
+    coverage = symbols_mod._index.coverage if symbols_mod._index else {}
+    summary = build_repo_summary(repo_path, symbol_coverage=coverage)
+    return summary.render()
 
 
 def _detect_languages(repo_path: str) -> frozenset[str]:

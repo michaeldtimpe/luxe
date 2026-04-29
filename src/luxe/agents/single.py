@@ -17,6 +17,8 @@ from luxe.backend import Backend
 from luxe.config import RoleConfig
 from luxe.tools import analysis, fs, git, shell
 from luxe.tools.base import ToolCache, ToolDef, ToolFn
+from luxe import search as search_mod
+from luxe import symbols as symbols_mod
 
 ESCALATE_SIGNAL = "escalate_to_swarm"
 
@@ -68,6 +70,14 @@ def _build_full_tool_surface(
     defs.extend(fs.read_only_defs())
     fns.update(fs.READ_ONLY_FNS)
     cacheable.update(fs.CACHEABLE)
+
+    defs.append(search_mod.bm25_search_def())
+    fns.update(search_mod.TOOL_FNS)
+    cacheable.update(search_mod.CACHEABLE)
+
+    defs.append(symbols_mod.find_symbol_def())
+    fns.update(symbols_mod.TOOL_FNS)
+    cacheable.update(symbols_mod.CACHEABLE)
 
     defs.extend(fs.mutation_defs())
     fns.update(fs.MUTATION_FNS)
