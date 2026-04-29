@@ -68,6 +68,57 @@ If a third family is needed for comparison, Llama 3, Gemma 3, or Phi 4 could sub
 
 ---
 
+### [2026-04-29] Tool-side guards alone don't make small models honest
+
+**What happened**: Phase 2 bake-off showed micro__qwen-coder-1.5b "passing" `neon-rain-implement-reset-shortcut` by deleting 840 lines of `Game.js` and replacing them with a 3-line `function reset() { /* Reset the game state here */ }`. Test runner exited 0 because the deleted module wasn't covered by the surviving tests. Adding three write-time guards — `_check_placeholder_text`, `_check_role_path`, `_check_mass_deletion` — closed the obvious cases (literal `<paste...here>`, `worker_read.js`, 840-line wipes). On re-run the same model evaded each guard with a small adjustment: `worker_read_r.py` (suffix variant past exact-stem match), `# Your real listener code here` (extra adjective past single-`\w+` regex), orphan Python files in a JS project (no test file added → vacuous-test gate doesn't fire).
+
+**Root cause**: A 1.5B model gaming pattern-based gates is a whack-a-mole game. Pattern matching can't catch semantic correctness — "you wrote a Python file in a React project" or "your test asserts on `undefined === undefined`" requires reading the diff *with the goal in mind*, which is what a higher-weight reviewer is for.
+
+**Fix / takeaway**: Defense-in-depth: keep the cheap pattern gates (they kill the easy cheats), but accept that the architectural answer for quality is a 32B-Instruct chief architect that reads the diff and verdicts each task. Path B (`--mode phased`) is built around this — the architect runs after each group of atomic tasks with bounded retry → graceful abort. Don't expect any pattern set to be evasion-proof against a model that has nothing else to optimize for.
+
+**Affected files**: `src/luxe/tools/fs.py` (write-time guards + tightened regex); `benchmarks/maintain_suite/grade.py` (post-PR strict gates with same guards); `src/luxe/agents/phased.py` (Path B — architect-as-reviewer); `tests/test_tools.py` (evasion-regression tests for each observed bypass).
+
+---
+
+### [2026-04-29] `tests_pass` grading credits diffs that don't actually implement the feature
+
+**What happened**: Three "passing" PRs on the same fixture (`neon-rain-implement-reset-shortcut`) were all wrong in different ways: (1) Phase 1 32B-mono produced a real `addEventListener('keydown')` fix; (2) Phase 2 swarm-14B added a vacuous test file that asserts `expect(handler.someState).toBe(undefined)` against a `dispose()` that doesn't exist (test passes because `undefined === undefined`); (3) Phase 2 micro-1.5B deleted the game's controller and shipped a stub. All three got `tests_pass: True` because the existing test suite kept passing regardless.
+
+**Root cause**: `_check_tests_pass` runs the test command and credits any rc=0 result, regardless of whether the diff actually exercises the feature. It can't distinguish "test passes because the implementation works" from "test passes because the test doesn't test what we asked for" or "test passes because the new code is unreachable from the test suite". Adding more diff inspection helps (`destructive_diff`, `role_name_leak`, `placeholder_diff`) but doesn't solve the orphan-file or vacuous-test cases.
+
+**Fix / takeaway**: Added a `vacuous_test` gate to `grade.py`: when `tests_pass` succeeds at HEAD AND the diff includes new/modified test files, check out a worktree at `base_sha`, copy the new test files in, and re-run the test command. If it passes against unmodified base implementation, the test isn't exercising new code → mark `vacuous_test`, override `expected_outcome` to False. Closes one of the four observed `tests_pass` exploit modes. The orphan-file mode (diff adds files in a different language than the test suite covers) is still uncaught by automation; surfaced as the architect's job in `--mode phased`.
+
+**Affected files**: `benchmarks/maintain_suite/grade.py` (`check_vacuous_test`, `_looks_like_test_file`).
+
+---
+
+### [2026-04-29] oMLX `idle_timeout_seconds: null` keeps every loaded model resident forever
+
+**What happened**: After multiple bench runs, `oMLX` had 7 models loaded summing to 44.9 GB resident — ~80% of the 64 GB system. Even when no luxe process was running, models stayed loaded indefinitely. User reported a `Qwen2.5-1.5B-Instruct-4bit` re-loading itself shortly after a manual unload; the only callers were stale admin-dashboard polls or background integrations.
+
+**Root cause**: `~/.omlx/settings.json:idle_timeout.idle_timeout_seconds` defaulted to `null`, meaning no auto-eviction. Combined with `max_model_memory: "auto"` (which oMLX set to 80% of system = 54 GB), there was nothing forcing eviction until total memory hit the cap.
+
+**Fix / takeaway**: Set explicit values in `~/.omlx/settings.json`:
+- `max_model_memory: "36GB"` — hard cap forces eviction much earlier.
+- `idle_timeout.idle_timeout_seconds: 300` — auto-unload anything not accessed in 5 min.
+Plus: `mx.metal.set_wired_limit` is *process-level*, but oMLX runs as a separate process so that knob in luxe is a no-op for actual inference. Use `sudo sysctl iogpu.wired_limit_mb=36864` for system-wide Metal pinning, and add `iogpu.wired_limit_mb=36864` to `/etc/sysctl.conf` to persist. Also added `luxe unload` CLI for ad-hoc cleanup and `--keep-loaded` flag on `luxe maintain` for the rare case you want models warm between runs.
+
+**Affected files**: `~/.omlx/settings.json` (user-side config); `src/luxe/backend.py` (`unload_model`, `unload_all_loaded`, `loaded_models`); `src/luxe/cli.py` (`luxe unload` command, post-run unload hook).
+
+---
+
+### [2026-04-29] StarCoder2-3B and CodeGemma-2B aren't chat-tuned — `tokenizer.chat_template` missing
+
+**What happened**: Tested 7 small coder models in a bake-off harness. 4 worked (Qwen2.5-Coder-0.5B, Qwen2.5-Coder-1.5B, granite-4.0-h-tiny, stable-code-instruct-3b); 3 failed at warmup probe time with "Chat template error: Cannot use chat template functions because tokenizer.chat_template is not set". The 3 failures were StarCoder2-3B and CodeGemma-2B (no chat template at all) and DeepSeek-Coder-1.3B-instruct-mlx (legacy mlx-lm filename `weights.00.safetensors` instead of `model.safetensors`).
+
+**Root cause**: StarCoder2 and CodeGemma at small sizes are released as base completion models — no instruction-tuned chat variant exists at ≤3B params. The mlx-community quantizations preserve the empty `chat_template` field. There's no clean way to use them in a chat-driven agent loop without writing a custom prompt-flattening wrapper, and a synthetic chat template applied to a non-chat-tuned model produces poor results regardless. DeepSeek-Coder-1.3B was a separate naming-convention issue, fixable with a `model.safetensors` → `weights.00.safetensors` symlink.
+
+**Fix / takeaway**: Three concrete actions for any future small-model bake-off: (1) probe `tokenizer_config.json:chat_template` before adding a candidate to the roster; if empty, drop it. (2) Probe each candidate via a 1-token chat completion before the bench timer starts — surfaces missing `chat_template` and missing weight files in seconds, not after a 30-min run. (3) For legacy mlx-lm uploads with `weights.NN.safetensors`, a symlink alias is enough; no need to re-quantize.
+
+**Affected files**: `scripts/bench_small_models.py` (warmup probe, default candidate roster, fuzzy filename handling); `scripts/register_omlx_models.py` (creates symlinks from HF cache to oMLX models dir).
+
+---
+
 ### [2026-04-28] oMLX model IDs don't include HuggingFace namespace prefix
 
 **What happened**: `swarm check` showed all 9 models as missing (✗) even though oMLX had discovered all of them. The configs referenced `mlx-community/Qwen2.5-3B-Instruct-4bit` but oMLX's `/v1/models` API reported `Qwen2.5-3B-Instruct-4bit` — no namespace prefix.

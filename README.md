@@ -23,18 +23,30 @@ diff-aware citation lint (zero unresolved fabrications)
 git checkout -b → commit → tests → push → gh pr create
 ```
 
-Two execution modes share one agent loop:
+Four execution modes share one agent loop:
 
 - **single** — one capable model (Qwen2.5-32B), full read+write+shell+git
   surface, agentic loop. Small/familiar repos, summaries, quick fixes.
 - **swarm** — architect → workers → validator → synthesizer pipeline.
   Larger repos, multi-step changes, anything where context exhaustion
   would bite a single model.
+- **micro** — same outer pipeline as swarm, but each worker subtask is
+  decomposed into atomic micro-steps with a draft → verify → retry loop
+  and a structured blackboard (`~/.luxe/runs/<id>/blackboard/`). Designed
+  for "many fast small-model inferences > one slow big-model pass" on
+  memory-bound hardware. Explicit opt-in via `--mode micro`.
+- **phased** — quality-first orchestration where a 32B Instruct chief
+  architect plans + reviews and a 14B Coder executes atomic tasks.
+  Architect re-loads between phases to verify work; bounded retry with
+  graceful abort if a task can't be made right. Trades wall time for
+  reliability. Explicit opt-in via `--mode phased`.
 
-Mode is picked deterministically: goal-keyword classifier first
-(`implement`/`refactor` → swarm; `review`/`summarize` → single), source-byte
-threshold as fallback (>500 KB of source → swarm; one 3000-line file in a
-49-file repo would still go to swarm).
+Mode is picked deterministically by `--mode auto`: goal-keyword classifier
+first (`implement`/`refactor` → swarm; `review`/`summarize` → single),
+source-byte threshold as fallback (>500 KB of source → swarm; one
+3000-line file in a 49-file repo would still go to swarm). `micro` and
+`phased` are explicit-opt-in only — they're for benchmark comparisons and
+quality-critical runs respectively.
 
 ## Why MLX-only
 
@@ -61,11 +73,13 @@ Requires:
 ## CLI
 
 ```
-luxe maintain <repo> "<goal>" [--mode auto|single|swarm] [--task <type>]
-                              [--allow-dirty] [--yes] [--watch-ci]
+luxe maintain <repo> "<goal>" [--mode auto|single|swarm|micro|phased]
+                              [--task <type>] [--allow-dirty] [--yes]
+                              [--watch-ci] [--keep-loaded]
 luxe resume  <run-id> [--force-resume]      # resume a paused/failed run
 luxe pr      <run-id> [--push-only]         # resume just the PR cycle
 luxe runs list | luxe runs gc               # housekeeping
+luxe unload  [--except <model-id>]          # free oMLX RAM (auto-runs after maintain)
 luxe serve   [--transport stdio|sse] [--unsafe]  # MCP server (read-only by default)
 luxe check                                  # oMLX + models + gh auth
 ```
@@ -236,7 +250,35 @@ The runner has three layers of recovery — kill it any time, restart picks up:
 3. **PR-step ledger** at `~/.luxe/runs/<run-id>/pr_state.json`. `luxe resume`
    replays only the incomplete PR steps.
 
-### 4. Diagnostics
+### 4. Multi-variant comparison (mode × model bake-offs)
+
+To compare modes or models against the same fixture set, write a variants
+file — each row is one `(mode, model)` cell — and pass it via `--variants`:
+
+```bash
+# Compare a 14B coder run as mono vs swarm vs micro vs phased
+python -m benchmarks.maintain_suite.run \
+    --variants benchmarks/maintain_suite/variants_phase2_compare.yaml \
+    --output acceptance/phase2 \
+    --per-fixture-timeout 1200 \
+    --all
+```
+
+`acceptance/<output>/<variant_id>/<fixture_id>/` namespaces per-cell state +
+results so cells don't collide. After the run, `comparison.json` and the
+printed table show pass/fail/wall/tokens/µ-rejects/no-diff per variant.
+
+Helper scripts:
+- `scripts/bench_small_models.py` — quick small-model bake-off harness
+  (drafter/worker tier swap-in across multiple candidates).
+- `scripts/generate_phase2_variants.py` — picks the Phase 1 mono winner
+  and emits the Phase 2 head-to-head variants file.
+- `scripts/regrade_phase2.py` — apply strict gates (destructive_diff,
+  role_name_leak, placeholder_diff, vacuous_test) to existing results.
+- `scripts/register_omlx_models.py` — symlink HF-cached MLX weights into
+  `~/.omlx/models/` so oMLX picks them up on restart.
+
+### 5. Diagnostics
 
 After a bench run, `acceptance/summary.json` includes a `diagnostics` block
 with tuning hints — e.g. "validator_status=ambiguous in 4/10 fixtures →
@@ -248,7 +290,7 @@ Per-fixture `acceptance/<id>/diagnostics.json` has the granular telemetry:
 stages completed, stages resumed (from cache), token totals, validator
 status, citation lint summary, PR draft state.
 
-### 5. v1.0 release gate
+### 6. v1.0 release gate
 
 `luxe maintain` ships at v1.0 when:
 - ≥8 of ≥10 fixtures pass automated grading (≥4/5 points each)
