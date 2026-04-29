@@ -146,6 +146,12 @@ class Backend:
         self.model = model
         self.timeout_s = timeout_s
         self.max_attempts = max_attempts
+        # Pick api_key from arg first, then OMLX_API_KEY env. Many oMLX
+        # deployments require auth; without a key, every chat call 401s.
+        import os as _os
+        if not api_key:
+            api_key = _os.environ.get("OMLX_API_KEY", "")
+        self.api_key = api_key
         headers = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"

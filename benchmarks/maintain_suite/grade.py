@@ -13,9 +13,12 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
+
+
+_WRITE_TASK_TYPES = {"implement", "bugfix", "document", "manage"}
 
 
 @dataclass
@@ -30,9 +33,13 @@ class FixtureResult:
     expected_outcome_detail: str = ""
     citations_unresolved: int = 0
     citations_total: int = 0
+    diff_produced: bool = False    # True iff git diff base..HEAD is non-empty
+    diff_files: int = 0            # count of changed files (informational)
     skipped: bool = False
     skipped_reason: str = ""
     error: str = ""
+    # Per-criterion breakdown so the verdict shows what passed/failed and why.
+    criteria_breakdown: list[dict] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -149,38 +156,67 @@ def grade_fixture(
     citations_total: int,
     base_sha: str,
 ) -> FixtureResult:
-    """Run all three grading checks against an already-completed run."""
+    """Run all three grading checks against an already-completed run.
+
+    Scoring (5 pts max, pass = ≥4/5):
+      1 pt  — pr.py opened a PR
+      3 pts — expected_outcome check passed AGAINST A LUXE-MODIFIED REPO
+              (write tasks must produce a non-empty diff vs base_sha; the
+              outcome credit is gated on this so passing tests on the
+              unchanged base SHA isn't a false positive)
+      1 pt  — citation linter found zero unresolved citations
+    """
     result = FixtureResult(fixture_id=fixture.id)
     result.pr_url = pr_url
     result.pr_opened = pr_opened
     result.citations_unresolved = citations_unresolved
     result.citations_total = citations_total
 
+    # Compute the diff up front — used both for outcome gating and as a
+    # diagnostic surface. Empty list = luxe made no changes.
+    changed = _changed_files(repo_path, base_sha) if base_sha else []
+    result.diff_files = len(changed)
+    result.diff_produced = bool(changed)
+
+    is_write_task = fixture.task_type in _WRITE_TASK_TYPES
+
+    # Criterion 1: PR opened
     if pr_opened:
         result.score += 1
+    result.criteria_breakdown.append({
+        "criterion": "pr_opened",
+        "weight": 1,
+        "earned": 1 if pr_opened else 0,
+        "detail": (f"PR: {pr_url}" if pr_opened
+                   else "no PR opened (no diff or PR cycle blocked)"),
+    })
 
+    # Criterion 2: expected_outcome — gated on diff for write tasks
     eo = fixture.expected_outcome
     kind = eo.get("kind", "")
-    if kind == "tests_pass":
+    earned_outcome = 0
+    if is_write_task and not result.diff_produced:
+        # Refuse to credit: passing tests on unchanged code is a false positive.
+        result.expected_outcome_passed = False
+        result.expected_outcome_detail = (
+            f"luxe produced no diff vs base_sha — "
+            f"{kind} outcome NOT credited for write task"
+        )
+    elif kind == "tests_pass":
         passed, detail = _check_tests_pass(repo_path, eo.get("command", ""))
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail
-        if passed:
-            result.score += 3
+        earned_outcome = 3 if passed else 0
     elif kind == "regex_present":
-        changed = _changed_files(repo_path, base_sha)
         passed, detail = _check_regex_present(repo_path, eo.get("pattern", ""), changed)
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail
-        if passed:
-            result.score += 3
+        earned_outcome = 3 if passed else 0
     elif kind == "regex_absent":
-        changed = _changed_files(repo_path, base_sha)
         passed, detail = _check_regex_absent(repo_path, eo.get("pattern", ""), changed)
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail
-        if passed:
-            result.score += 3
+        earned_outcome = 3 if passed else 0
     elif kind == "manual_review":
         result.expected_outcome_passed = None
         result.expected_outcome_detail = (
@@ -192,8 +228,28 @@ def grade_fixture(
         result.expected_outcome_passed = False
         result.expected_outcome_detail = f"unknown outcome kind: {kind}"
 
-    if citations_unresolved == 0:
+    result.score += earned_outcome
+    result.criteria_breakdown.append({
+        "criterion": f"expected_outcome ({kind})",
+        "weight": 3,
+        "earned": earned_outcome,
+        "detail": result.expected_outcome_detail[:200],
+        "diff_files": result.diff_files,
+    })
+
+    # Criterion 3: zero unresolved citations
+    citations_clean = (citations_unresolved == 0)
+    if citations_clean:
         result.score += 1
+    result.criteria_breakdown.append({
+        "criterion": "citations_resolved",
+        "weight": 1,
+        "earned": 1 if citations_clean else 0,
+        "detail": (f"all {citations_total} citations resolved"
+                   if citations_clean and citations_total > 0
+                   else "no citations" if citations_total == 0 and citations_unresolved == 0
+                   else f"{citations_unresolved} unresolved"),
+    })
 
     return result
 
