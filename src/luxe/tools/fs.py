@@ -16,6 +16,126 @@ _MAX_FILE_SIZE = 256 * 1024  # 256 KB read limit
 _MAX_RESULTS = 150
 
 
+# --- write-time honesty guards --------------------------------------------
+# Catch the three failure modes Phase 2 surfaced — placeholder text,
+# role-name leaks, mass-deletion overwrites — at the moment of write rather
+# than after the PR is opened. Cheaper feedback loop for the model: the
+# tool returns an error, the agent gets a chance to retry with real code.
+
+# Multi-word placeholder coverage — the model has been seen evading the
+# tight 1-word "your X code here" form by writing "your real listener code
+# here". \w+(\s+\w+){0,5} allows up to 6 noun phrases between trigger words.
+_PLACEHOLDER_PATTERNS = (
+    re.compile(r"<paste\b[^<>]*\bhere\s*>", re.IGNORECASE),
+    re.compile(
+        r"(?://|#)\s*your\s+(?:real\s+|own\s+|actual\s+)?\w+(?:\s+\w+){0,5}\s+(?:code|here|implementation|logic)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?://|#)\s*(?:add|implement|insert|paste|reset|attach|wire|hook)\s+"
+        r"(?:the\s+|a\s+|an\s+)?\w+(?:\s+\w+){0,5}\s+here\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?://|#)\s*(?:fill\s+in|put|place)\s+(?:the\s+|your\s+)?\w+(?:\s+\w+){0,3}\s+here\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?://|#)\s*todo:?\s*(?:implement|add|finish|complete|fill|wire|hook)\s",
+               re.IGNORECASE),
+    re.compile(r"(?://|#)\s*real\s+\w+(?:\s+\w+){0,3}\s+(?:goes|belongs)\s+here\b",
+               re.IGNORECASE),
+)
+# Agent role names. Matching is fuzzy — the model has been seen writing
+# `worker_read_r.py` to sneak past exact-stem matching, so we also flag any
+# path component whose tokens (split on _ and -) contain a role-name token.
+_ROLE_NAME_TOKENS = frozenset({
+    "worker_read", "worker_code", "worker_analyze",
+    "drafter", "coder", "verifier", "linter",
+    "architect", "micro_architect", "synthesizer", "validator",
+})
+# Single-token leak detection — split path components on `_` and `-`, then
+# look for these multi-word role names AS substrings of the joined token list.
+_ROLE_FUZZY_NEEDLES = (
+    "worker_read", "worker_code", "worker_analyze",
+    "micro_architect",
+    # Single-word roles get added with prefix/suffix flexibility below.
+)
+_ROLE_SINGLE_TOKENS = frozenset({
+    "drafter", "verifier", "linter", "architect", "synthesizer", "validator",
+    # NOTE: "coder" intentionally omitted — too common in legitimate names
+    # ("encoder", "decoder", "transcoder"). Compose with prefixes if needed.
+})
+# Mass-deletion thresholds: refuse to collapse a non-trivial file into a
+# stub. Old must have ≥ N lines, new must have ≤ M lines, AND the size drop
+# must be at least 10× — otherwise legitimate refactor-shrinks still pass.
+_MASS_DELETE_OLD_LINES = 50
+_MASS_DELETE_NEW_LINES = 5
+_MASS_DELETE_RATIO = 10.0
+
+
+def _check_placeholder_text(content: str) -> str | None:
+    """Return error string if `content` contains a placeholder pattern."""
+    for pat in _PLACEHOLDER_PATTERNS:
+        m = pat.search(content)
+        if m:
+            return (
+                f"refusing to write placeholder text {m.group(0)[:80]!r}. "
+                "Replace with the real implementation, or read the existing "
+                "code first if you don't know what to write."
+            )
+    return None
+
+
+def _check_role_path(rel_path: str) -> str | None:
+    """Return error if any path component contains an agent role label —
+    fuzzy: catches `worker_read.js`, `worker_read_r.py`, `drafter_helper.js`,
+    `my_verifier.py`, etc. Doesn't catch substrings inside other words
+    (`coder` inside `encoder.py` is fine).
+    """
+    for part in rel_path.split("/"):
+        stem = part.split(".", 1)[0].lower()
+        # Normalize: tokenize on _ and -; reassemble for substring match
+        # against multi-word needles like "worker_read".
+        tokens = re.split(r"[-_]+", stem)
+        joined = "_".join(tokens)
+        # Multi-word role labels (substring match against rejoined form).
+        for needle in _ROLE_FUZZY_NEEDLES:
+            if needle in joined:
+                return (
+                    f"refusing to write to {rel_path!r}: path contains agent "
+                    f"role label {needle!r}. Agent role names are internal "
+                    "orchestration concepts; pick a project-appropriate name."
+                )
+        # Single-word role labels (must appear as a discrete token, not a
+        # substring of an unrelated word).
+        for tok in tokens:
+            if tok in _ROLE_SINGLE_TOKENS:
+                return (
+                    f"refusing to write to {rel_path!r}: path token {tok!r} "
+                    "is an agent role label. Agent role names are internal "
+                    "orchestration concepts; pick a project-appropriate name."
+                )
+    return None
+
+
+def _check_mass_deletion(old_text: str, new_text: str, rel: str) -> str | None:
+    """Refuse to collapse a substantial file into a tiny stub."""
+    old_lines = old_text.count("\n") + (1 if old_text and not old_text.endswith("\n") else 0)
+    new_lines = new_text.count("\n") + (1 if new_text and not new_text.endswith("\n") else 0)
+    if old_lines < _MASS_DELETE_OLD_LINES:
+        return None
+    if new_lines > _MASS_DELETE_NEW_LINES:
+        return None
+    if new_lines > 0 and (old_lines / new_lines) < _MASS_DELETE_RATIO:
+        return None
+    return (
+        f"refusing to overwrite {rel!r}: would collapse {old_lines}-line "
+        f"file to {new_lines}-line stub (mass-deletion blocked). Use "
+        "edit_file for surgical changes, or write the FULL replacement "
+        "content if rewriting is genuinely intended."
+    )
+
+
 def set_repo_root(path: str | Path) -> None:
     global _REPO_ROOT
     _REPO_ROOT = Path(path).resolve()
@@ -116,33 +236,64 @@ def _grep(args: dict[str, Any]) -> tuple[str, str | None]:
 
 
 def _write_file(args: dict[str, Any]) -> tuple[str, str | None]:
-    path = _safe(args["path"])
+    rel = args["path"]
+    content = args["content"]
+
+    # Honesty guards — applied before any I/O so a refusal costs nothing.
+    if (err := _check_role_path(rel)):
+        return "", err
+    if (err := _check_placeholder_text(content)):
+        return "", err
+
+    path = _safe(rel)
+    # Mass-deletion check needs the existing content (if file exists).
+    if path.is_file():
+        try:
+            existing = path.read_text(errors="replace")
+        except OSError:
+            existing = ""
+        if (err := _check_mass_deletion(existing, content, rel)):
+            return "", err
+
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        path.write_text(args["content"])
+        path.write_text(content)
     except Exception as e:
         return "", str(e)
-    return f"Wrote {len(args['content'])} bytes to {args['path']}", None
+    return f"Wrote {len(content)} bytes to {rel}", None
 
 
 def _edit_file(args: dict[str, Any]) -> tuple[str, str | None]:
-    path = _safe(args["path"])
+    rel = args["path"]
+    if (err := _check_role_path(rel)):
+        return "", err
+
+    path = _safe(rel)
     if not path.is_file():
-        return "", f"File not found: {args['path']}"
+        return "", f"File not found: {rel}"
     try:
         text = path.read_text()
     except Exception as e:
         return "", str(e)
     old = args["old_string"]
     new = args["new_string"]
+
+    # Block placeholder text from sneaking in via edits.
+    if (err := _check_placeholder_text(new)):
+        return "", err
+
     count = text.count(old)
     if count == 0:
-        return "", f"old_string not found in {args['path']}"
+        return "", f"old_string not found in {rel}"
     if count > 1 and not args.get("replace_all", False):
         return "", f"old_string matches {count} times — use replace_all or provide more context"
-    text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
-    path.write_text(text)
-    return f"Edited {args['path']} ({count} replacement{'s' if count > 1 else ''})", None
+    new_text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
+
+    if (err := _check_mass_deletion(text, new_text, rel)):
+        return "", err
+
+    path.write_text(new_text)
+    return f"Edited {rel} ({count} replacement{'s' if count > 1 else ''})", None
 
 
 def read_only_defs() -> list[ToolDef]:
