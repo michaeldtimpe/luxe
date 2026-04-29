@@ -385,7 +385,7 @@ def test_heal_stale_silent_failure_done_to_error(tmp_path):
     assert state.status == FixtureStatus.ERROR
     assert state.luxe_run_id == ""
     assert "silent failure" in state.last_error
-    assert "force a fresh run" in state.last_error
+    assert "retry runs fresh" in state.last_error
     # Persisted to disk
     reloaded = load_state(out, fid)
     assert reloaded.status == FixtureStatus.ERROR
@@ -422,6 +422,44 @@ def test_heal_no_op_without_cached_diag(tmp_path):
     state = load_state(out, fid)
     assert not br._heal_stale_silent_failure(state, out)
     assert state.status == FixtureStatus.DONE
+
+
+def test_heal_fires_on_error_with_stale_run_id(tmp_path):
+    """Idempotent heal: an already-ERROR state with luxe_run_id set and
+    cached silent-failure diagnostics gets the run_id cleared so retry runs
+    fresh. Covers the case where a prior heal version reclassified DONE→
+    ERROR but forgot to clear luxe_run_id."""
+    out = tmp_path / "acc"
+    fid = "stale-error"
+    save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.ERROR,
+                                  luxe_run_id="orphan42",
+                                  last_error="prior heal"))
+    diag_path = out / fid / "diagnostics.json"
+    diag_path.write_text(json.dumps({
+        "fixture_id": fid, "run_id": "orphan42", "wall_s": 0.0,
+        "tokens_total": 0,
+        "stages_completed": [], "stages_resumed": [],
+        "validator_status": "", "validator_verified": 0, "validator_removed": 0,
+        "citations_unresolved": 0, "citations_total": 0,
+        "pr_url": "", "pr_opened": False, "is_draft": False,
+        "test_passed": None, "events_kinds": {},
+    }))
+    state = load_state(out, fid)
+    assert br._heal_stale_silent_failure(state, out)
+    assert state.luxe_run_id == ""
+    reloaded = load_state(out, fid)
+    assert reloaded.luxe_run_id == ""
+
+
+def test_heal_idempotent_when_run_id_already_cleared(tmp_path):
+    """Once heal has cleared luxe_run_id, a second invocation is a no-op."""
+    out = tmp_path / "acc"
+    fid = "already-cleared"
+    save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.ERROR,
+                                  luxe_run_id="",
+                                  last_error="cleared"))
+    state = load_state(out, fid)
+    assert not br._heal_stale_silent_failure(state, out)
 
 
 def test_run_fixture_silent_failure_marks_state_error(tmp_path, monkeypatch):
