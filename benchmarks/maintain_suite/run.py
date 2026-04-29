@@ -574,36 +574,43 @@ def _load_cached_diag(output: Path, fixture_id: str) -> Diagnostics | None:
 
 
 def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
-    """If a previously-DONE fixture's cached diagnostics show a silent
-    failure (wall<5s + tokens=0), reclassify the state to ERROR AND
-    clear luxe_run_id so the next decide() picks RUN_FRESH instead of
-    RUN_RESUME. Returns True if reclassified.
+    """If a fixture's cached diagnostics show a silent failure (wall<5s +
+    tokens=0), reclassify state to ERROR AND clear luxe_run_id so the next
+    decide() picks RUN_FRESH instead of RUN_RESUME. Idempotent: re-runs
+    safely if the heal already fired.
+
+    Triggers on status ∈ {DONE, ERROR} (DONE is the pre-fix-build state;
+    ERROR is the post-fix state, where an earlier heal version may have
+    forgotten to clear luxe_run_id). Forward-path silent-failure detection
+    in run_fixture handles new failures and is unaffected.
 
     Why clear luxe_run_id: when luxe silent-fails, it still writes stage
     checkpoints to ~/.luxe/runs/<id>/stages/ (architect, worker_0, etc.)
     but those stages reflect 0-token blocked runs. `luxe resume` would
     happily load them as complete and exit in 0 seconds without re-trying.
-    Clearing the run id forces a fresh pipeline run with the (presumably
-    now-working) backend config. The old stage dir remains on disk for
-    forensics; `luxe runs gc` will clean it up.
+    Clearing the run id forces a fresh pipeline run.
     """
-    if state.status != FixtureStatus.DONE:
+    if state.status not in (FixtureStatus.DONE, FixtureStatus.ERROR):
+        return False
+    if not state.luxe_run_id:
+        # Already cleared. No further heal needed.
         return False
     diag = _load_cached_diag(output, state.fixture_id)
     if diag is None:
         return False
-    if diag.tokens_total == 0 and diag.wall_s < 5.0:
-        old_id = state.luxe_run_id
-        state.status = FixtureStatus.ERROR
-        state.luxe_run_id = ""
-        state.last_error = (
-            f"silent failure detected from cached diagnostics "
-            f"(wall={diag.wall_s:.1f}s, tokens=0); cleared luxe_run_id "
-            f"(was {old_id or '(none)'}) to force a fresh run on retry"
-        )
-        save_state(output, state)
-        return True
-    return False
+    if not (diag.tokens_total == 0 and diag.wall_s < 5.0):
+        return False
+    old_id = state.luxe_run_id
+    prev_status = state.status.value
+    state.status = FixtureStatus.ERROR
+    state.luxe_run_id = ""
+    state.last_error = (
+        f"silent failure (cached diag: wall={diag.wall_s:.1f}s, tokens=0); "
+        f"cleared luxe_run_id (was {old_id}) so retry runs fresh "
+        f"(was status={prev_status})"
+    )
+    save_state(output, state)
+    return True
 
 
 def run_fixture(
