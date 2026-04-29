@@ -1,0 +1,15 @@
+# Phase 1: Mono shootout — find the best ≥7B Qwen-Coder model running solo.
+#
+# Each variant runs the full fixture suite under mono mode (single-model
+# agentic loop, configs/single_64gb.yaml with the monolith re-pointed). The
+# winner becomes the mono baseline for Phase 2.
+#
+# Run:  python -m benchmarks.maintain_suite.run \
+#         --variants benchmarks/maintain_suite/variants_phase1_mono.yaml --all
+#
+# Estimated wall: 3 cells × 5 fixtures ≈ 2-4 hours (32B is the long pole).
+
+variants:
+  - {mode: mono, model_label: qwen-coder-7b,  model_id: Qwen2.5-Coder-7B-Instruct-4bit}
+  - {mode: mono, model_label: qwen-coder-14b, model_id: Qwen2.5-Coder-14B-Instruct-4bit}
+  - {mode: mono, model_label: qwen-coder-32b, model_id: Qwen2.5-Coder-32B-Instruct-4bit}

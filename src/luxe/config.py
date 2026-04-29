@@ -44,6 +44,10 @@ class PipelineConfig(BaseModel):
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
     task_types: dict[str, TaskTypeConfig] = Field(default_factory=dict)
     escalation: EscalationConfig = Field(default_factory=EscalationConfig)
+    # "swarm" = sequential specialist pipeline; "microloop" = small-agent
+    # feedback loop dispatched per worker subtask. Per-call override via
+    # PipelineOrchestrator(execution_mode=...).
+    execution: str = "swarm"
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:

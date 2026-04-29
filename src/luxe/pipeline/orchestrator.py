@@ -13,6 +13,7 @@ from rich.console import Console
 
 from luxe.agents.architect import run_architect
 from luxe.agents.loop import AgentResult
+from luxe.agents.microloop import run_microloop
 from luxe.agents.synthesizer import run_synthesizer
 from luxe.agents.validator import (
     ValidatorEnvelope,
@@ -133,6 +134,10 @@ def _stage_metrics_to_dict(m: StageMetrics) -> dict:
         "peak_context_pressure": m.peak_context_pressure,
         "model": m.model, "model_swap_s": m.model_swap_s,
         "cache_hits": m.cache_hits, "cache_misses": m.cache_misses,
+        "microstep_count": m.microstep_count,
+        "microstep_rejects": m.microstep_rejects,
+        "blackboard_bytes": m.blackboard_bytes,
+        "decode_tok_per_s_avg": m.decode_tok_per_s_avg,
     }
 
 
@@ -148,6 +153,10 @@ def _stage_metrics_from_dict(d: dict) -> StageMetrics:
         model_swap_s=float(d.get("model_swap_s", 0.0)),
         cache_hits=int(d.get("cache_hits", 0)),
         cache_misses=int(d.get("cache_misses", 0)),
+        microstep_count=int(d.get("microstep_count", 0)),
+        microstep_rejects=int(d.get("microstep_rejects", 0)),
+        blackboard_bytes=int(d.get("blackboard_bytes", 0)),
+        decode_tok_per_s_avg=float(d.get("decode_tok_per_s_avg", 0.0)),
     )
 
 
@@ -183,6 +192,7 @@ class PipelineOrchestrator:
         run_id: str | None = None,
         extra_tool_defs: list[Any] | None = None,
         extra_tool_fns: dict[str, Any] | None = None,
+        execution_mode: str | None = None,
     ):
         self.config = config
         self.on_event = on_event
@@ -196,6 +206,9 @@ class PipelineOrchestrator:
         # native tools, and they are NOT added to ToolCache.
         self.extra_tool_defs = extra_tool_defs or []
         self.extra_tool_fns = extra_tool_fns or {}
+        # Per-call override beats config default. "swarm" → run_worker per
+        # subtask; "microloop" → run_microloop (small-agent feedback loop).
+        self.execution_mode = execution_mode or config.execution
 
     # --- checkpoint helpers ------------------------------------------------
 
@@ -398,17 +411,40 @@ class PipelineOrchestrator:
                 else:
                     console.print(f"    🔧 {tc.name} — {tc.bytes_out} bytes, {tc.wall_s:.2f}s")
 
-            worker_result = run_worker(
-                worker_backend, role_cfg,
-                role=sub.role,
-                task_prompt=f"Objective: {sub.title}\nScope: {sub.scope}",
-                prior_findings=prior,
-                languages=languages,
-                extra_tool_defs=self.extra_tool_defs or None,
-                extra_tool_fns=self.extra_tool_fns or None,
-                cache=cache,
-                on_tool_event=_on_tool,
+            micro_telem: dict[str, Any] = {}
+            use_microloop = (
+                self.execution_mode == "microloop"
+                and sub.role in {"worker_read", "worker_code", "worker_analyze"}
             )
+            if use_microloop:
+                worker_result, micro_telem = run_microloop(
+                    backend_for=self._get_backend,
+                    config=self.config,
+                    role=sub.role,
+                    task_prompt=f"Objective: {sub.title}\nScope: {sub.scope}",
+                    objective_title=sub.title,
+                    scope=sub.scope,
+                    prior_findings=prior,
+                    languages=languages,
+                    extra_tool_defs=self.extra_tool_defs or None,
+                    extra_tool_fns=self.extra_tool_fns or None,
+                    cache=cache,
+                    on_tool_event=_on_tool,
+                    run_id=self.run_id,
+                    subtask_idx=sub.index,
+                )
+            else:
+                worker_result = run_worker(
+                    worker_backend, role_cfg,
+                    role=sub.role,
+                    task_prompt=f"Objective: {sub.title}\nScope: {sub.scope}",
+                    prior_findings=prior,
+                    languages=languages,
+                    extra_tool_defs=self.extra_tool_defs or None,
+                    extra_tool_fns=self.extra_tool_fns or None,
+                    cache=cache,
+                    on_tool_event=_on_tool,
+                )
 
             sub.result_text = worker_result.final_text
             sub.tool_calls = worker_result.tool_calls
@@ -422,6 +458,10 @@ class PipelineOrchestrator:
                 model=self.config.model_for_role(sub.role),
                 cache_hits=cache.hits,
                 cache_misses=cache.misses,
+                microstep_count=int(micro_telem.get("microstep_count", 0)),
+                microstep_rejects=int(micro_telem.get("microstep_rejects", 0)),
+                blackboard_bytes=int(micro_telem.get("blackboard_bytes", 0)),
+                decode_tok_per_s_avg=float(micro_telem.get("decode_tok_per_s_avg", 0.0)),
             )
 
             wtok = _fmt_tok(worker_result.prompt_tokens, worker_result.completion_tokens)
@@ -451,6 +491,32 @@ class PipelineOrchestrator:
                        wall_s=worker_result.wall_s,
                        tool_calls=worker_result.tool_calls_total,
                        context_pressure=worker_result.peak_context_pressure)
+
+        # --- SILENT-DIFF GATE ---
+        # When a write-mode task type ran but no worker invoked a mutation
+        # tool, the synthesizer would otherwise produce a plausible-looking
+        # report claiming success despite zero edits. Surface that as an
+        # explicit warning event so upstream callers (bench grader, PR cycle)
+        # can detect the silent failure without grepping diffs.
+        WRITE_MODE_TASKS = {"implement", "bugfix", "document", "manage"}
+        MUTATION_TOOLS = {"write_file", "edit_file", "bash"}
+        if task_type in WRITE_MODE_TASKS:
+            wrote = any(
+                tc.name in MUTATION_TOOLS and not tc.error and not tc.duplicate
+                for sub in run.subtasks for tc in sub.tool_calls
+            )
+            if not wrote:
+                self._emit(run, "pipeline_no_diff_warning",
+                           task_type=task_type,
+                           subtasks_total=len(run.subtasks),
+                           subtasks_done=sum(1 for s in run.subtasks
+                                              if s.status == Status.DONE))
+                console.print(
+                    f"  [yellow]⚠ pipeline_no_diff_warning[/] — "
+                    f"task_type={task_type} but no worker invoked "
+                    f"write_file/edit_file/bash. Synthesizer report below "
+                    f"will not reflect actual file changes."
+                )
 
         # --- VALIDATOR ---
         if should_abort and should_abort():

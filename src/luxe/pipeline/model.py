@@ -32,6 +32,11 @@ class StageMetrics:
     model_swap_s: float = 0.0
     cache_hits: int = 0
     cache_misses: int = 0
+    # Microloop-only telemetry (zero when the stage ran via run_worker).
+    microstep_count: int = 0
+    microstep_rejects: int = 0
+    blackboard_bytes: int = 0
+    decode_tok_per_s_avg: float = 0.0
 
     @property
     def decode_tok_per_s(self) -> float:
