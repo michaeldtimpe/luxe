@@ -1,0 +1,32 @@
+# Mono-precision bake-off — does higher quantization precision change
+# real-world quality on the v1.0 fixture set?
+#
+# Hypothesis the user wants to test: 4-bit may be hurting output quality
+# enough that the architecture-level work (swarm/micro/phased) was masking
+# what's really a quantization issue. If the 8-bit/6-bit variants pass
+# substantially more fixtures than 4-bit at the same parameter count,
+# the answer is "yes, throw bits at it" before throwing more orchestration.
+#
+# Run (from repo root):
+#   brew services restart omlx
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_mono_precision.yaml \
+#       --output acceptance/mono_precision \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# 4 cells × 5 fixtures = 20 runs.
+#
+# Memory budget per cell (peak resident, single model in mono):
+#   14B-4bit:  ~7.7 GB  (existing baseline)
+#   14B-8bit: ~15.7 GB  (NEW)
+#   32B-4bit: ~17 GB    (existing baseline)
+#   32B-6bit: ~26.6 GB  (NEW — close to oMLX 36 GB cap)
+# All fit under the 36 GB max_model_memory cap, but the 32B-6bit run
+# leaves ~9 GB headroom, so don't add other variants alongside it.
+
+variants:
+  - {mode: mono, model_label: qwen-coder-14b-4bit, model_id: Qwen2.5-Coder-14B-Instruct-4bit}
+  - {mode: mono, model_label: qwen-coder-14b-8bit, model_id: Qwen2.5-Coder-14B-Instruct-8bit}
+  - {mode: mono, model_label: qwen-coder-32b-4bit, model_id: Qwen2.5-Coder-32B-Instruct-4bit}
+  - {mode: mono, model_label: qwen-coder-32b-6bit, model_id: Qwen2.5-Coder-32B-Instruct-6bit}
