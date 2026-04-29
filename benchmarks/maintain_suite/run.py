@@ -561,6 +561,43 @@ def decide(
 
 # --- per-fixture orchestration --------------------------------------------
 
+def _load_cached_diag(output: Path, fixture_id: str) -> Diagnostics | None:
+    p = _fixture_dir(output, fixture_id) / "diagnostics.json"
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return Diagnostics(**{k: v for k, v in d.items()
+                          if k in Diagnostics.__dataclass_fields__})
+
+
+def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
+    """If a previously-DONE fixture's cached diagnostics show a silent
+    failure (wall<5s + tokens=0), reclassify the state to ERROR so
+    --retry-errors picks it up automatically. Returns True if reclassified.
+
+    This fixes a pre-fix-build state ledger: runs from before the silent-
+    failure→ERROR change were saved as DONE, which prevents --retry-errors
+    from targeting them. We retro-apply the classification on load.
+    """
+    if state.status != FixtureStatus.DONE:
+        return False
+    diag = _load_cached_diag(output, state.fixture_id)
+    if diag is None:
+        return False
+    if diag.tokens_total == 0 and diag.wall_s < 5.0:
+        state.status = FixtureStatus.ERROR
+        state.last_error = (
+            "silent failure detected from cached diagnostics "
+            f"(wall={diag.wall_s:.1f}s, tokens=0); reclassified for retry"
+        )
+        save_state(output, state)
+        return True
+    return False
+
+
 def run_fixture(
     fixture: Fixture,
     output: Path,
@@ -576,6 +613,12 @@ def run_fixture(
     fdir = _fixture_dir(output, fixture.id)
     state = load_state(output, fixture.id)
     state.fixture_id = fixture.id
+
+    # Self-heal: if the prior run silent-failed but was saved as DONE
+    # (pre-fix builds did this), reclassify to ERROR so retry semantics work.
+    if _heal_stale_silent_failure(state, output):
+        log(f"  ↻ reclassified prior DONE → ERROR (silent failure detected "
+            "in cached diagnostics)")
 
     decision, reason = decide(
         fixture, state,
@@ -681,17 +724,33 @@ def run_fixture(
     )
     diag = build_diagnostics(state, artefacts)
 
-    # Persist
+    # Persist artefacts even on silent failure — the result.json + diag are
+    # useful breadcrumbs.
     (fdir / "result.json").write_text(json.dumps(fr.to_dict(), indent=2))
     (fdir / "diagnostics.json").write_text(json.dumps(asdict(diag), indent=2,
                                                       default=str))
-    state.status = FixtureStatus.DONE
-    state.last_error = ""
+
+    # State classification: a "silent failure" (wall<5s + tokens=0) means
+    # luxe terminated cleanly but never reached the model. We mark it ERROR
+    # rather than DONE so `--retry-errors` automatically picks it up next
+    # time without the user needing --force.
+    if _is_silent_failure(diag):
+        notes = _diagnose_silent_failure(diag, fdir)
+        state.status = FixtureStatus.ERROR
+        state.last_error = (
+            "silent failure (luxe never reached the model): "
+            + (notes[0] if notes else f"wall={diag.wall_s:.1f}s, tokens=0")
+        )
+    else:
+        state.status = FixtureStatus.DONE
+        state.last_error = ""
+
     save_state(output, state)
     append_history(output, {
         "fixture": fixture.id, "decision": decision.value,
         "rc": rc, "score": fr.score, "passed": fr.passed,
         "run_id": run_id, "wall_s": diag.wall_s,
+        "status": state.status.value,
     })
     return fr, diag
 
@@ -812,11 +871,20 @@ def main() -> int:
                 d = Diagnostics(fixture_id=f.id)
             results.append(r)
             diags.append(d)
+            # Differentiate cached-skip from a fresh run so warnings/diagnostics
+            # below aren't read as live information when they're stale.
+            cached_skip = (r.skipped and "already done" in (r.skipped_reason or ""))
             print(f"  {_verdict(r):5s}  score={r.score}/{r.max_score}  "
                   f"wall={d.wall_s:.0f}s  tokens={d.tokens_total}  "
                   f"diff={r.diff_files}f  "
                   f"validator={d.validator_status or '-'}  "
-                  f"cite={d.citations_unresolved}/{d.citations_total}")
+                  f"cite={d.citations_unresolved}/{d.citations_total}"
+                  + ("  [cached]" if cached_skip else ""))
+            if cached_skip:
+                # Cached display: just the score, don't pretend the cached
+                # warnings/criteria are from this invocation.
+                print(f"        (cached from prior run; --force to re-run)")
+                continue
             # Per-criterion breakdown so the verdict reasoning is visible.
             for c in r.criteria_breakdown:
                 mark = "✓" if c["earned"] == c["weight"] else (
@@ -826,7 +894,7 @@ def main() -> int:
                       f"({c['earned']}/{c['weight']})  {c['detail'][:90]}")
             if d.stages_resumed:
                 print(f"        resumed: {','.join(d.stages_resumed)}")
-            # Silent-failure diagnostics: surface backend issues prominently.
+            # Silent-failure diagnostics for this run only.
             if _is_silent_failure(d) and not r.skipped and not r.error:
                 fdir = output / f.id
                 for note in _diagnose_silent_failure(d, fdir):
