@@ -184,6 +184,7 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
         "tokens_total": 0,
         "wall_s_total": 0.0,
         "events_kinds": {},
+        "backend_failures": [],   # most recent backend errors surfaced from events
     }
     pr_state = rd / "pr_state.json"
     if pr_state.is_file():
@@ -342,6 +343,40 @@ def _stderr_excerpt(text: str, max_chars: int = 400) -> str:
     if len(text) <= max_chars:
         return text
     return "...(truncated) " + text[-max_chars:]
+
+
+def _diagnose_silent_failure(diag, log_dir: Path) -> list[str]:
+    """When luxe ran but produced no work, scan logs for the actual cause and
+    return a list of human-readable diagnostic lines for the verdict block."""
+    notes: list[str] = []
+    if diag.tokens_total == 0 and diag.wall_s < 5.0:
+        notes.append(
+            f"luxe ran for {diag.wall_s:.1f}s with 0 tokens — model calls "
+            "never landed; likely a backend-config issue upstream of luxe"
+        )
+    # Scan stderr for known failure signatures.
+    se = (log_dir / "stderr.log")
+    if se.is_file():
+        text = se.read_text(errors="replace")
+        for pat, msg in [
+            ("4xx-401", "oMLX is rejecting auth — set OMLX_API_KEY env var "
+                        "and re-run"),
+            ("4xx-403", "oMLX returned 403 forbidden — check API key permissions"),
+            ("ConnectError", "couldn't reach oMLX — is `brew services start omlx` running?"),
+            ("model is loading", "oMLX was still loading models — give it a minute "
+                                  "and re-run"),
+            ("out of memory", "oMLX hit OOM — model roster may be too large for RAM"),
+            ("ModuleNotFoundError", "Python import error — check the .venv setup"),
+        ]:
+            if pat in text:
+                notes.append(msg)
+    return notes
+
+
+def _is_silent_failure(diag) -> bool:
+    """Heuristic: luxe terminated 'cleanly' but did no real work.
+    Distinguishes a config/auth problem from a genuine grade-failure."""
+    return diag.tokens_total == 0 and diag.wall_s < 5.0
 
 
 def _extract_run_id(text: str) -> str:
@@ -675,6 +710,21 @@ def _verdict(r: FixtureResult) -> str:
     return "FAIL"
 
 
+def _describe_outcome(fixture: Fixture) -> str:
+    """One-line summary of how the fixture is graded."""
+    eo = fixture.expected_outcome
+    kind = eo.get("kind", "?")
+    if kind == "tests_pass":
+        return f"diff non-empty AND `{eo.get('command', '?')}` returns rc=0"
+    if kind == "regex_present":
+        return f"changed files contain regex `{eo.get('pattern', '?')}`"
+    if kind == "regex_absent":
+        return f"changed files do NOT contain regex `{eo.get('pattern', '?')}`"
+    if kind == "manual_review":
+        return f"manual_review: {eo.get('criteria', '')[:70]}"
+    return f"unknown outcome kind: {kind}"
+
+
 def main() -> int:
     _ensure_luxe_importable()
     parser = argparse.ArgumentParser(prog="luxe acceptance suite")
@@ -744,6 +794,7 @@ def main() -> int:
     try:
         for f in fixtures:
             print(f"\n━━━ {f.id}  [{f.task_type}]  {f.goal[:80]}")
+            print(f"      grading: {_describe_outcome(f)}")
             try:
                 r, d = run_fixture(
                     f, output, work_dir,
@@ -763,18 +814,53 @@ def main() -> int:
             diags.append(d)
             print(f"  {_verdict(r):5s}  score={r.score}/{r.max_score}  "
                   f"wall={d.wall_s:.0f}s  tokens={d.tokens_total}  "
+                  f"diff={r.diff_files}f  "
                   f"validator={d.validator_status or '-'}  "
                   f"cite={d.citations_unresolved}/{d.citations_total}")
-            if r.expected_outcome_detail:
-                print(f"        outcome: {r.expected_outcome_detail[:120]}")
+            # Per-criterion breakdown so the verdict reasoning is visible.
+            for c in r.criteria_breakdown:
+                mark = "✓" if c["earned"] == c["weight"] else (
+                    "·" if c["earned"] == 0 and c["weight"] == 0 else "✗"
+                )
+                print(f"        {mark} {c['criterion']}  "
+                      f"({c['earned']}/{c['weight']})  {c['detail'][:90]}")
             if d.stages_resumed:
                 print(f"        resumed: {','.join(d.stages_resumed)}")
+            # Silent-failure diagnostics: surface backend issues prominently.
+            if _is_silent_failure(d) and not r.skipped and not r.error:
+                fdir = output / f.id
+                for note in _diagnose_silent_failure(d, fdir):
+                    print(f"        ⚠ {note}")
 
         summary = summarize(results)
         summary["diagnostics"] = aggregate_diagnostics(diags, results)
+
+        # Global silent-failure alert: when most fixtures had wall<5s+tokens=0
+        # the issue is upstream of luxe (auth, network, oMLX) — surface it
+        # ABOVE the per-fixture grades so it's the first thing the user sees.
+        attempted = [(r, d) for r, d in zip(results, diags)
+                     if not r.skipped and not r.error]
+        n_silent = sum(1 for _, d in attempted if _is_silent_failure(d))
+        upstream_issue = attempted and n_silent >= max(1, len(attempted) // 2)
+
         (output / "summary.json").write_text(json.dumps(summary, indent=2))
 
         print(f"\n━━━ Summary")
+        if upstream_issue:
+            print(f"  ⚠ {n_silent}/{len(attempted)} attempted fixtures had "
+                  "near-zero wall time and zero tokens — luxe never reached "
+                  "the model. Likely upstream config issue.")
+            # Aggregate diagnostic notes from the silent failures.
+            seen: set[str] = set()
+            for r, d in attempted:
+                if not _is_silent_failure(d):
+                    continue
+                fdir = output / r.fixture_id
+                for note in _diagnose_silent_failure(d, fdir):
+                    if note not in seen:
+                        seen.add(note)
+                        print(f"    → {note}")
+            print()
         print(f"  fixtures   : {summary['fixtures']}")
         print(f"  passed     : {summary['passed']}")
         print(f"  failed     : {summary['failed']}")

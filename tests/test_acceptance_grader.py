@@ -39,9 +39,18 @@ def _base_sha(repo: Path) -> str:
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def _f(id_: str, kind: str, **eo) -> Fixture:
-    return Fixture(id=id_, goal="g", task_type="bugfix",
+def _f(id_: str, kind: str, task_type: str = "bugfix", **eo) -> Fixture:
+    return Fixture(id=id_, goal="g", task_type=task_type,
                    expected_outcome={"kind": kind, **eo})
+
+
+def _make_diff(repo: Path, content: str = "# noop\n") -> None:
+    """Commit a non-empty diff so write-task gating treats this as 'luxe edited'."""
+    target = repo / "src" / "main.py"
+    target.write_text(target.read_text() + content)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "noop diff for grading test"],
+                   cwd=repo, check=True)
 
 
 # --- threshold --
@@ -86,13 +95,13 @@ def test_regex_present_no_match(git_repo: Path):
 
 def test_regex_absent_clean(git_repo: Path):
     base = _base_sha(git_repo)
-    (git_repo / "src" / "main.py").write_text("def add(a, b):\n    return a + b\n")
-    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "noop"], cwd=git_repo, check=True)
+    _make_diff(git_repo)
     fix = _f("f3", "regex_absent", pattern=r"TODO")
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
     assert r.expected_outcome_passed
     assert r.score == 5
+    assert r.diff_produced
 
 
 def test_regex_absent_violated(git_repo: Path):
@@ -110,6 +119,7 @@ def test_regex_absent_violated(git_repo: Path):
 
 def test_tests_pass_command_succeeds(git_repo: Path):
     base = _base_sha(git_repo)
+    _make_diff(git_repo)
     fix = _f("f5", "tests_pass", command="true")
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
@@ -118,6 +128,7 @@ def test_tests_pass_command_succeeds(git_repo: Path):
 
 def test_tests_pass_command_fails(git_repo: Path):
     base = _base_sha(git_repo)
+    _make_diff(git_repo)
     fix = _f("f6", "tests_pass", command="false")
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
@@ -129,6 +140,7 @@ def test_tests_pass_command_fails(git_repo: Path):
 
 def test_manual_review_awards_zero(git_repo: Path):
     base = _base_sha(git_repo)
+    _make_diff(git_repo)
     fix = _f("f7", "manual_review", criteria="judge by hand")
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
@@ -141,6 +153,7 @@ def test_manual_review_awards_zero(git_repo: Path):
 
 def test_unresolved_citations_dock_one_point(git_repo: Path):
     base = _base_sha(git_repo)
+    _make_diff(git_repo)
     fix = _f("f8", "regex_absent", pattern=r"banana")
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=2, citations_total=5, base_sha=base)
@@ -153,11 +166,68 @@ def test_unresolved_citations_dock_one_point(git_repo: Path):
 
 def test_no_pr_docks_one_point(git_repo: Path):
     base = _base_sha(git_repo)
+    _make_diff(git_repo)
     fix = _f("f9", "regex_absent", pattern=r"banana")
     r = grade_fixture(fix, git_repo, pr_url="", pr_opened=False,
                       citations_unresolved=0, citations_total=0, base_sha=base)
     # No PR (0) + outcome (3) + zero unresolved (1) = 4
     assert r.score == 4
+
+
+# --- diff-gating fix (the false-positive bug from neon-rain run) --
+
+def test_write_task_no_diff_refuses_outcome_credit(git_repo: Path):
+    """The bug we hit on neon-rain's first run: tests_pass on UNCHANGED code
+    earned 3 outcome points. After fix, write tasks with no diff get 0."""
+    base = _base_sha(git_repo)
+    fix = _f("nx", "tests_pass", task_type="bugfix", command="true")
+    r = grade_fixture(fix, git_repo, pr_url="", pr_opened=False,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    # noPR(0) + outcome refused(0) + cite(1) = 1; not 4 like the false positive
+    assert r.score == 1
+    assert not r.diff_produced
+    assert not r.expected_outcome_passed
+    assert "no diff" in r.expected_outcome_detail
+    # And it should not pass overall.
+    assert not r.passed
+
+
+def test_write_task_no_diff_refuses_regex_credit_too(git_repo: Path):
+    base = _base_sha(git_repo)
+    fix = _f("nx2", "regex_present", task_type="implement",
+             pattern=r"anything")
+    r = grade_fixture(fix, git_repo, pr_url="", pr_opened=False,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.score == 1
+    assert not r.expected_outcome_passed
+
+
+@pytest.mark.parametrize("task_type", ["review", "summarize"])
+def test_read_only_task_no_diff_still_credits_outcome(git_repo: Path,
+                                                       task_type: str):
+    """Read-only tasks (review/summarize) legitimately produce no diff.
+    The grader must not gate them on diff_produced."""
+    base = _base_sha(git_repo)
+    fix = _f("rx", "regex_absent", task_type=task_type, pattern=r"banana")
+    r = grade_fixture(fix, git_repo, pr_url="", pr_opened=False,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    # Read-only: no diff is fine; outcome credited normally → 0+3+1 = 4
+    assert r.score == 4
+    assert r.expected_outcome_passed
+
+
+def test_criteria_breakdown_records_each_check(git_repo: Path):
+    base = _base_sha(git_repo)
+    _make_diff(git_repo)
+    fix = _f("cx", "tests_pass", command="true")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=2, base_sha=base)
+    names = [c["criterion"] for c in r.criteria_breakdown]
+    assert "pr_opened" in names
+    assert any("expected_outcome" in n for n in names)
+    assert "citations_resolved" in names
+    weights = [c["weight"] for c in r.criteria_breakdown]
+    assert sum(weights) == 5
 
 
 # --- summary --
