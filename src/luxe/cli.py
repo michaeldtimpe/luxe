@@ -385,6 +385,87 @@ def pr_cmd(run_id: str, push_only: bool, watch_ci: bool):
         console.print(f"[green]✓ Resume complete[/] (no PR created)")
 
 
+@main.command(name="serve")
+@click.option("--transport", default="stdio",
+              type=click.Choice(["stdio", "sse"]),
+              help="MCP transport (stdio for Claude Desktop subprocess; "
+                   "sse for HTTP)")
+@click.option("--port", default=8765, help="Port for sse transport")
+@click.option("--unsafe", is_flag=True,
+              help="Expose luxe_maintain (writes files, opens PRs). "
+                   "Requires LUXE_MCP_UNSAFE=1 and LUXE_MCP_TOKEN env vars; "
+                   "callers must pass a matching confirm_token.")
+def serve_cmd(transport: str, port: int, unsafe: bool):
+    """Run luxe as an MCP server (read-only by default)."""
+    from luxe.mcp.server import build_server, load_server_policy, server_tool_names
+
+    policy = load_server_policy()
+
+    def _readonly_runner(tool_name: str, args: dict) -> str:
+        """Map MCP tool name to the corresponding luxe pipeline."""
+        repo_path = args.get("repo_path", "")
+        goal = args.get("goal", "") or args.get("query", "")
+        task_type = {"luxe_review": "review", "luxe_summarize": "summarize",
+                     "luxe_explain": "summarize"}.get(tool_name, "review")
+        return _run_pipeline_readonly(repo_path, goal, task_type)
+
+    def _maintain_runner(args: dict) -> str:
+        return _run_pipeline_maintain(
+            args["repo_path"], args["goal"], args.get("mode", "swarm"))
+
+    server = build_server(
+        unsafe=unsafe, policy=policy,
+        readonly_runner=_readonly_runner,
+        maintain_runner=_maintain_runner if unsafe else None,
+    )
+
+    tool_list = server_tool_names(unsafe, policy)
+    console.print(f"[bold]luxe serve[/]  transport={transport} "
+                  f"unsafe={unsafe}", file=sys.stderr) if False else None
+    # Print to stderr so stdio MCP traffic isn't polluted on stdout.
+    sys.stderr.write(
+        f"luxe serve: transport={transport} unsafe={unsafe} "
+        f"tools={tool_list}\n"
+    )
+    sys.stderr.flush()
+
+    if transport == "stdio":
+        server.run(transport="stdio")
+    elif transport == "sse":
+        server.run(transport="sse")
+    else:
+        sys.stderr.write(f"unknown transport: {transport}\n")
+        sys.exit(1)
+
+
+def _run_pipeline_readonly(repo_path: str, goal: str, task_type: str) -> str:
+    """Helper: drive a swarm-mode pipeline with mutation tools stripped."""
+    from luxe.mcp.server import make_read_only_role
+    from luxe.tools.fs import set_repo_root
+
+    repo_path = _resolve_repo(repo_path)
+    set_repo_root(repo_path)
+    cfg = load_config(None)
+    # Patch every role's allowlist so workers can't write/edit/bash.
+    for role_name, role_cfg in cfg.roles.items():
+        cfg.roles[role_name] = make_read_only_role(role_cfg)
+    orch = PipelineOrchestrator(cfg)
+    pipeline_run = orch.run(goal, task_type, repo_path)
+    return pipeline_run.final_report or "(no report produced)"
+
+
+def _run_pipeline_maintain(repo_path: str, goal: str, mode: str) -> str:
+    """Helper: drive a full maintain pipeline. ONLY invoked when --unsafe."""
+    from luxe.tools.fs import set_repo_root
+
+    repo_path = _resolve_repo(repo_path)
+    set_repo_root(repo_path)
+    cfg = load_config(None)
+    orch = PipelineOrchestrator(cfg)
+    pipeline_run = orch.run(goal, "implement", repo_path)
+    return pipeline_run.final_report or "(no report produced)"
+
+
 @main.command(name="resume")
 @click.argument("run_id")
 @click.option("--force-resume", is_flag=True,
