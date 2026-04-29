@@ -1,0 +1,34 @@
+# luxe v1.0 acceptance fixtures.
+#
+# Schema (one entry per fixture):
+#
+#   - id: <unique-string>
+#     repo_url: <public git URL>     # OR repo_path: <local checkout>
+#     base_sha: <40-char hex>        # deterministic starting point
+#     goal: "<one sentence>"
+#     task_type: bugfix | implement | document | manage
+#     expected_outcome:
+#       kind: tests_pass | regex_present | regex_absent | manual_review
+#       command: "<shell>"           # for tests_pass
+#       pattern: "<regex>"           # for regex_*
+#       criteria: "<text>"           # for manual_review
+#     required_env: [GITHUB_TOKEN]   # optional; missing → skipped
+#     notes: "<freeform>"            # documentation, not graded
+#
+# Rubric (per plan §10):
+#   - Mix: 3 bugfix, 3 implement, 2 document, 2 manage.
+#   - Difficulty: 4 trivial-medium (≤50 file repos),
+#                 4 medium (50-500 files),
+#                 2 hard (>500 files; ≥1 must be >100k LOC).
+#   - Diversity: ≥3 fixtures from repos with no prior luxe history.
+#   - manual_review cap: ≤2 of 10 fixtures.
+#
+# v1.0 release gate:
+#   - ≥8 of 10 fixtures pass (≥4/5 pts each)
+#   - Zero unresolved citations across all runs
+#   - Largest fixture passes without context exhaustion or backend crash
+#
+# This file ships empty. Curate fixtures locally; do NOT push private repos
+# to GitHub via this file unless they're public.
+
+fixtures: []
