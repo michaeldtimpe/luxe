@@ -263,6 +263,19 @@ def maintain(
                 extra_tool_defs=extra_tool_defs or None,
                 extra_tool_fns=extra_tool_fns or None,
             )
+            # Persist single-mode telemetry so the bench runner / `luxe runs`
+            # see real wall + token + tool-call counts (not 0 0 0 because
+            # single mode lives outside the swarm orchestrator's event loop).
+            append_event(spec.run_id, "single_mode_done",
+                         wall_s=single_result.wall_s,
+                         prompt_tokens=single_result.prompt_tokens,
+                         completion_tokens=single_result.completion_tokens,
+                         tool_calls_total=single_result.tool_calls_total,
+                         schema_rejects=single_result.schema_rejects,
+                         aborted=single_result.aborted,
+                         abort_reason=single_result.abort_reason,
+                         escalated=did_escalate(single_result),
+                         final_text_chars=len(single_result.final_text or ""))
 
             if did_escalate(single_result):
                 console.print("[yellow]↑ Single mode escalated to swarm[/]  "
