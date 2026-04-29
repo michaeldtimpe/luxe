@@ -564,6 +564,10 @@ def _luxe_maintain(
         str(repo), fixture.goal,
         "--task", fixture.task_type, "--mode", mode,
         "--yes",
+        # Keep models warm across fixtures. Without this, every fixture
+        # pays cold-load tax on its first model touch (3-5s per model).
+        # The bench harness explicitly unloads at end-of-run instead.
+        "--keep-loaded",
     ]
     if swarm_config:
         cmd.extend(["--swarm-config", str(swarm_config)])
@@ -1348,6 +1352,19 @@ def main() -> int:
             print(f"\n  Per-fixture mode breakdown saved: {output}/comparison.json")
         return 0 if summary["v1_release_gate"] else 1
     finally:
+        # End-of-bench unload — releases models the per-fixture --keep-loaded
+        # leaves resident. Without this the user's RAM stays occupied after
+        # the bench completes. Best-effort: failures here don't block the
+        # exit code or the work-dir cleanup.
+        try:
+            from luxe.backend import Backend as _UnloadBackend
+            _ub = _UnloadBackend(model="(bench-end-unload)")
+            results = _ub.unload_all_loaded()
+            if results:
+                n_ok = sum(1 for v in results.values() if v)
+                print(f"\n[bench end] unloaded {n_ok}/{len(results)} model(s) from oMLX")
+        except Exception as e:
+            print(f"\n[bench end] model unload skipped: {e}")
         if cleanup_work_dir:
             import shutil
             shutil.rmtree(work_dir, ignore_errors=True)
