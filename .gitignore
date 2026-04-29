@@ -47,3 +47,9 @@ results/**/*.partial
 # Sibling projects in this workspace that aren't part of luxe
 /ecliptic/
 /warrens/
+
+# Bench artefacts — fixture state lives in acceptance/; per-suite JSON
+# dumps are timestamped and not source-of-truth.
+acceptance/
+benchmarks/bench_*.json
+benchmarks/small_models_*.json
