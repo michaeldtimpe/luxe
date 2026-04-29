@@ -1,12 +1,25 @@
 omlx_base_url: "http://127.0.0.1:8000"
 
+# Pipeline execution mode default. CLI --mode micro|phased overrides this.
+execution: "swarm"
+
 models:
-  architect:    "Qwen2.5-7B-Instruct-4bit"
-  worker_read:  "DeepSeek-Coder-V2-Lite-Instruct-4bit"
-  worker_code:  "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
-  worker_analyze: "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
-  validator:    "Qwen2.5-7B-Instruct-4bit"
-  synthesizer:  "Qwen2.5-32B-Instruct-4bit"
+  architect:       "Qwen2.5-7B-Instruct-4bit"
+  worker_read:     "DeepSeek-Coder-V2-Lite-Instruct-4bit"
+  worker_code:     "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
+  worker_analyze:  "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
+  validator:       "Qwen2.5-7B-Instruct-4bit"
+  synthesizer:     "Qwen2.5-32B-Instruct-4bit"
+  # Microloop specialists (used with --mode micro). Alias already-loaded
+  # models so backend registry reuses weights — zero swap cost vs swarm.
+  micro_architect: "Qwen2.5-7B-Instruct-4bit"
+  drafter:         "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
+  linter:          "Qwen2.5-7B-Instruct-4bit"
+  verifier:        "Qwen2.5-7B-Instruct-4bit"
+  coder:           "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
+  # Phased chief architect (used with --mode phased) — high-weight 32B
+  # Instruct for planning + reviewing the 14B Coder's output.
+  chief_architect: "Qwen2.5-32B-Instruct-4bit"
 
 roles:
   architect:
@@ -56,6 +69,62 @@ roles:
     max_tokens_per_turn: 8192
     temperature: 0.3
     tools: []
+
+  # --- Microloop specialists (used when --mode micro) -------------------
+  # Tight num_ctx values keep each step inside the high-attention zone.
+  # All five reuse already-loaded weights from the swarm roles above.
+
+  micro_architect:
+    model_key: micro_architect
+    num_ctx: 4096
+    max_steps: 1
+    max_tokens_per_turn: 1024
+    temperature: 0.3
+    tools: []
+
+  drafter:
+    model_key: drafter
+    num_ctx: 4096
+    max_steps: 3
+    max_tokens_per_turn: 1024
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep]
+
+  linter:
+    model_key: linter
+    num_ctx: 2048
+    max_steps: 2
+    max_tokens_per_turn: 512
+    temperature: 0.1
+    tools: [read_file, grep]
+
+  verifier:
+    model_key: verifier
+    num_ctx: 2048
+    max_steps: 2
+    max_tokens_per_turn: 512
+    temperature: 0.1
+    tools: []
+
+  coder:
+    model_key: coder
+    num_ctx: 8192
+    max_steps: 4
+    max_tokens_per_turn: 2048
+    temperature: 0.2
+    tools: [read_file, write_file, edit_file, grep]
+
+  # --- Phased chief architect (used when --mode phased) -----------------
+  # Larger num_ctx than the swarm architect so it can hold the blackboard
+  # for a full review group. Read-only tool surface by default; runnable
+  # verification (lint/typecheck) escalates inside run_phased's review.
+  chief_architect:
+    model_key: chief_architect
+    num_ctx: 16384
+    max_steps: 12
+    max_tokens_per_turn: 4096
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep, lint, typecheck]
 
 task_types:
   review:
