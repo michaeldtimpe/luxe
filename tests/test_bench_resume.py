@@ -360,6 +360,101 @@ def test_stderr_excerpt_long_truncates_to_tail():
     assert len(out) <= len("...(truncated) ") + 100
 
 
+def test_heal_stale_silent_failure_done_to_error(tmp_path):
+    """A DONE state with cached diagnostics showing wall<5s + tokens=0 must
+    be reclassified to ERROR so --retry-errors picks it up. Pre-fix builds
+    produced this state for every silent-failed fixture."""
+    out = tmp_path / "acc"
+    fid = "stale-silent"
+    save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.DONE,
+                                  luxe_run_id="r1"))
+    diag_path = out / fid / "diagnostics.json"
+    diag_path.write_text(json.dumps({
+        "fixture_id": fid, "run_id": "r1", "wall_s": 0.0, "tokens_total": 0,
+        "stages_completed": [], "stages_resumed": [],
+        "validator_status": "", "validator_verified": 0, "validator_removed": 0,
+        "citations_unresolved": 0, "citations_total": 0,
+        "pr_url": "", "pr_opened": False, "is_draft": False,
+        "test_passed": None, "events_kinds": {},
+    }))
+    state = load_state(out, fid)
+    assert state.status == FixtureStatus.DONE
+    healed = br._heal_stale_silent_failure(state, out)
+    assert healed
+    assert state.status == FixtureStatus.ERROR
+    assert "silent failure" in state.last_error
+    # Persisted to disk too
+    reloaded = load_state(out, fid)
+    assert reloaded.status == FixtureStatus.ERROR
+
+
+def test_heal_does_not_reclassify_real_done(tmp_path):
+    """A DONE state with cached diagnostics showing real work (tokens > 0)
+    must NOT be reclassified — it was a legitimate completed run."""
+    out = tmp_path / "acc"
+    fid = "real-done"
+    save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.DONE,
+                                  luxe_run_id="r1"))
+    diag_path = out / fid / "diagnostics.json"
+    diag_path.write_text(json.dumps({
+        "fixture_id": fid, "run_id": "r1", "wall_s": 87.5, "tokens_total": 42810,
+        "stages_completed": ["architect", "worker_0"], "stages_resumed": [],
+        "validator_status": "verified", "validator_verified": 3,
+        "validator_removed": 0,
+        "citations_unresolved": 0, "citations_total": 3,
+        "pr_url": "https://...", "pr_opened": True, "is_draft": False,
+        "test_passed": True, "events_kinds": {},
+    }))
+    state = load_state(out, fid)
+    healed = br._heal_stale_silent_failure(state, out)
+    assert not healed
+    assert state.status == FixtureStatus.DONE
+
+
+def test_heal_no_op_without_cached_diag(tmp_path):
+    out = tmp_path / "acc"
+    fid = "no-diag"
+    save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.DONE))
+    state = load_state(out, fid)
+    assert not br._heal_stale_silent_failure(state, out)
+    assert state.status == FixtureStatus.DONE
+
+
+def test_run_fixture_silent_failure_marks_state_error(tmp_path, monkeypatch):
+    """Going forward, when run_fixture grades a silent-failed run, it must
+    save state as ERROR so subsequent --retry-errors picks it up."""
+    out = tmp_path / "acc"
+    monkeypatch.setattr(br, "_resolve_repo",
+                        lambda fix, wd: (Path("/tmp"), ""))
+    monkeypatch.setattr(br, "_head_sha", lambda repo: "abc" * 13 + "d")
+    monkeypatch.setattr(br, "_luxe_maintain",
+                        lambda repo, fix, log_dir: (0, "abcdef123456", ""))
+    # Read artefacts returns a silent-failure shape
+    monkeypatch.setattr(br, "_read_run_artefacts",
+                        lambda rid: {
+                            "pr_url": "", "pr_opened": False, "is_draft": False,
+                            "test_passed": None,
+                            "citations_unresolved": 0, "citations_total": 0,
+                            "validator_status": "", "validator_verified": 0,
+                            "validator_removed": 0,
+                            "stages_completed": [], "stages_resumed": [],
+                            "tokens_total": 0, "wall_s_total": 0.0,
+                            "events_kinds": {},
+                        })
+    # grade_fixture is real — uses the real repo (any directory works since
+    # diff is empty). Avoid the gh / git calls by patching _changed_files.
+    from benchmarks.maintain_suite import grade as grade_mod
+    monkeypatch.setattr(grade_mod, "_changed_files", lambda repo, sha: [])
+
+    fr, diag = run_fixture(_f(), out, tmp_path / "wd")
+    state = load_state(out, "f1")
+    assert state.status == FixtureStatus.ERROR
+    assert "silent failure" in state.last_error
+    # Result + diag artefacts ARE persisted (useful breadcrumbs)
+    assert (out / "f1" / "result.json").is_file()
+    assert (out / "f1" / "diagnostics.json").is_file()
+
+
 def test_run_fixture_surfaces_stderr_excerpt(tmp_path, monkeypatch):
     """When luxe.cli fails to start, the stderr should be captured into
     state.last_error so the user sees what broke without grepping logs."""
