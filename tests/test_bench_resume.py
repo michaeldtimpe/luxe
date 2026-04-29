@@ -362,8 +362,9 @@ def test_stderr_excerpt_long_truncates_to_tail():
 
 def test_heal_stale_silent_failure_done_to_error(tmp_path):
     """A DONE state with cached diagnostics showing wall<5s + tokens=0 must
-    be reclassified to ERROR so --retry-errors picks it up. Pre-fix builds
-    produced this state for every silent-failed fixture."""
+    be reclassified to ERROR so --retry-errors picks it up. AND the
+    luxe_run_id must be cleared so next decide() picks RUN_FRESH instead
+    of RUN_RESUME on the cached BAD stage data."""
     out = tmp_path / "acc"
     fid = "stale-silent"
     save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.DONE,
@@ -382,10 +383,13 @@ def test_heal_stale_silent_failure_done_to_error(tmp_path):
     healed = br._heal_stale_silent_failure(state, out)
     assert healed
     assert state.status == FixtureStatus.ERROR
+    assert state.luxe_run_id == ""
     assert "silent failure" in state.last_error
-    # Persisted to disk too
+    assert "force a fresh run" in state.last_error
+    # Persisted to disk
     reloaded = load_state(out, fid)
     assert reloaded.status == FixtureStatus.ERROR
+    assert reloaded.luxe_run_id == ""
 
 
 def test_heal_does_not_reclassify_real_done(tmp_path):
@@ -450,6 +454,9 @@ def test_run_fixture_silent_failure_marks_state_error(tmp_path, monkeypatch):
     state = load_state(out, "f1")
     assert state.status == FixtureStatus.ERROR
     assert "silent failure" in state.last_error
+    # luxe_run_id cleared so next --retry-errors picks RUN_FRESH (not
+    # RUN_RESUME on the empty stages)
+    assert state.luxe_run_id == ""
     # Result + diag artefacts ARE persisted (useful breadcrumbs)
     assert (out / "f1" / "result.json").is_file()
     assert (out / "f1" / "diagnostics.json").is_file()

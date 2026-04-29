@@ -575,12 +575,17 @@ def _load_cached_diag(output: Path, fixture_id: str) -> Diagnostics | None:
 
 def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
     """If a previously-DONE fixture's cached diagnostics show a silent
-    failure (wall<5s + tokens=0), reclassify the state to ERROR so
-    --retry-errors picks it up automatically. Returns True if reclassified.
+    failure (wall<5s + tokens=0), reclassify the state to ERROR AND
+    clear luxe_run_id so the next decide() picks RUN_FRESH instead of
+    RUN_RESUME. Returns True if reclassified.
 
-    This fixes a pre-fix-build state ledger: runs from before the silent-
-    failure→ERROR change were saved as DONE, which prevents --retry-errors
-    from targeting them. We retro-apply the classification on load.
+    Why clear luxe_run_id: when luxe silent-fails, it still writes stage
+    checkpoints to ~/.luxe/runs/<id>/stages/ (architect, worker_0, etc.)
+    but those stages reflect 0-token blocked runs. `luxe resume` would
+    happily load them as complete and exit in 0 seconds without re-trying.
+    Clearing the run id forces a fresh pipeline run with the (presumably
+    now-working) backend config. The old stage dir remains on disk for
+    forensics; `luxe runs gc` will clean it up.
     """
     if state.status != FixtureStatus.DONE:
         return False
@@ -588,10 +593,13 @@ def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
     if diag is None:
         return False
     if diag.tokens_total == 0 and diag.wall_s < 5.0:
+        old_id = state.luxe_run_id
         state.status = FixtureStatus.ERROR
+        state.luxe_run_id = ""
         state.last_error = (
-            "silent failure detected from cached diagnostics "
-            f"(wall={diag.wall_s:.1f}s, tokens=0); reclassified for retry"
+            f"silent failure detected from cached diagnostics "
+            f"(wall={diag.wall_s:.1f}s, tokens=0); cleared luxe_run_id "
+            f"(was {old_id or '(none)'}) to force a fresh run on retry"
         )
         save_state(output, state)
         return True
@@ -731,12 +739,14 @@ def run_fixture(
                                                       default=str))
 
     # State classification: a "silent failure" (wall<5s + tokens=0) means
-    # luxe terminated cleanly but never reached the model. We mark it ERROR
-    # rather than DONE so `--retry-errors` automatically picks it up next
-    # time without the user needing --force.
+    # luxe terminated cleanly but never reached the model. Mark ERROR (not
+    # DONE) AND clear the luxe_run_id so the next --retry-errors run starts
+    # fresh — `luxe resume` would otherwise load the 0-token stage cache
+    # this run just produced and exit immediately again.
     if _is_silent_failure(diag):
         notes = _diagnose_silent_failure(diag, fdir)
         state.status = FixtureStatus.ERROR
+        state.luxe_run_id = ""
         state.last_error = (
             "silent failure (luxe never reached the model): "
             + (notes[0] if notes else f"wall={diag.wall_s:.1f}s, tokens=0")
