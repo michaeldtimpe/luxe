@@ -458,8 +458,154 @@ def test_heal_idempotent_when_run_id_already_cleared(tmp_path):
     save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.ERROR,
                                   luxe_run_id="",
                                   last_error="cleared"))
+    # Without cached diag, no-op.
     state = load_state(out, fid)
     assert not br._heal_stale_silent_failure(state, out)
+
+
+def _write_diag(out: Path, fid: str, **overrides):
+    base = {
+        "fixture_id": fid, "run_id": "", "wall_s": 0.0, "tokens_total": 0,
+        "stages_completed": [], "stages_resumed": [],
+        "validator_status": "", "validator_verified": 0, "validator_removed": 0,
+        "citations_unresolved": 0, "citations_total": 0,
+        "pr_url": "", "pr_opened": False, "is_draft": False,
+        "test_passed": None, "events_kinds": {},
+    }
+    base.update(overrides)
+    p = (out / fid)
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "diagnostics.json").write_text(json.dumps(base))
+
+
+def _write_result(out: Path, fid: str, **overrides):
+    base = {
+        "fixture_id": fid, "score": 0, "max_score": 5,
+        "pr_opened": False, "pr_url": "", "expected_outcome_passed": None,
+        "expected_outcome_detail": "", "citations_unresolved": 0,
+        "citations_total": 0, "diff_produced": False, "diff_files": 0,
+        "skipped": False, "skipped_reason": "", "error": "",
+        "criteria_breakdown": [],
+    }
+    base.update(overrides)
+    p = (out / fid)
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "result.json").write_text(json.dumps(base))
+
+
+def test_heal_does_not_classify_real_pass_as_silent(tmp_path):
+    """The lpe-rope-calc bug: single-mode telemetry was missing so wall=0
+    + tokens=0, but the run produced a diff and opened a PR. That's a
+    PASS, not a silent failure — heal must NOT clear luxe_run_id."""
+    out = tmp_path / "acc"
+    fid = "real-pass"
+    save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.DONE,
+                                  luxe_run_id="real42"))
+    _write_diag(out, fid, wall_s=0.0, tokens_total=0)
+    # Result shows a real PR + diff → not a silent failure
+    _write_result(out, fid, score=5, pr_opened=True,
+                  pr_url="https://github.com/.../pull/1",
+                  diff_produced=True, diff_files=1)
+    state = load_state(out, fid)
+    assert not br._heal_stale_silent_failure(state, out)
+    assert state.status == FixtureStatus.DONE
+    assert state.luxe_run_id == "real42"
+
+
+def test_heal_inverse_recovers_misclassified_pass(tmp_path):
+    """If a prior runner version (with worse heuristic) marked a real pass
+    as ERROR, the new heal must reclassify ERROR→DONE rather than clear
+    the run id."""
+    out = tmp_path / "acc"
+    fid = "misclassified"
+    save_state(out, FixtureState(fixture_id=fid, status=FixtureStatus.ERROR,
+                                  luxe_run_id="real7",
+                                  last_error="silent failure (wrong)"))
+    _write_diag(out, fid, wall_s=0.0, tokens_total=0)
+    _write_result(out, fid, score=5, pr_opened=True,
+                  pr_url="https://github.com/.../pull/9",
+                  diff_produced=True, diff_files=2)
+    state = load_state(out, fid)
+    healed = br._heal_stale_silent_failure(state, out)
+    assert healed
+    assert state.status == FixtureStatus.DONE
+    assert state.luxe_run_id == "real7"  # preserved
+    assert state.last_error == ""
+
+
+# --- _is_silent_failure with the result override --
+
+def test_is_silent_failure_diff_produced_overrides():
+    diag = Diagnostics(fixture_id="x", wall_s=0.0, tokens_total=0)
+    from benchmarks.maintain_suite.grade import FixtureResult
+    result = FixtureResult(fixture_id="x", diff_produced=True, diff_files=3)
+    assert not br._is_silent_failure(diag, result)
+
+
+def test_is_silent_failure_pr_opened_overrides():
+    diag = Diagnostics(fixture_id="x", wall_s=0.0, tokens_total=0)
+    from benchmarks.maintain_suite.grade import FixtureResult
+    result = FixtureResult(fixture_id="x", pr_opened=True, pr_url="...")
+    assert not br._is_silent_failure(diag, result)
+
+
+def test_is_silent_failure_with_result_truly_silent():
+    diag = Diagnostics(fixture_id="x", wall_s=0.0, tokens_total=0)
+    from benchmarks.maintain_suite.grade import FixtureResult
+    result = FixtureResult(fixture_id="x")  # no diff, no PR
+    assert br._is_silent_failure(diag, result)
+
+
+def test_is_silent_failure_back_compat_no_result():
+    diag = Diagnostics(fixture_id="x", wall_s=0.0, tokens_total=0)
+    assert br._is_silent_failure(diag)  # legacy single-arg call
+
+
+# --- _diagnose_no_tool_calls --
+
+def test_diagnose_no_tool_calls_single_mode_text_only(tmp_path):
+    diag = Diagnostics(
+        fixture_id="x", wall_s=120.0, tokens_total=15000,
+        single_mode={"tool_calls_total": 0, "schema_rejects": 0,
+                     "aborted": False, "abort_reason": "",
+                     "final_text_chars": 4500, "escalated": False},
+    )
+    from benchmarks.maintain_suite.grade import FixtureResult
+    result = FixtureResult(fixture_id="x", diff_produced=False, pr_opened=False)
+    notes = br._diagnose_no_tool_calls(diag, result, tmp_path)
+    assert any("ZERO tools" in n for n in notes)
+    assert any("MUST call edit_file" in n or "edit_file" in n for n in notes)
+
+
+def test_diagnose_no_tool_calls_single_mode_aborted(tmp_path):
+    diag = Diagnostics(
+        fixture_id="x", wall_s=10.0, tokens_total=5000,
+        single_mode={"tool_calls_total": 5, "schema_rejects": 4,
+                     "aborted": True, "abort_reason": "Max steps reached",
+                     "final_text_chars": 200, "escalated": False},
+    )
+    from benchmarks.maintain_suite.grade import FixtureResult
+    result = FixtureResult(fixture_id="x", diff_produced=False, pr_opened=False)
+    notes = br._diagnose_no_tool_calls(diag, result, tmp_path)
+    assert any("aborted" in n.lower() and "Max steps" in n for n in notes)
+
+
+def test_diagnose_no_tool_calls_swarm_workers_no_diff(tmp_path):
+    diag = Diagnostics(
+        fixture_id="x", wall_s=200.0, tokens_total=12000,
+        events_kinds={"worker_end": 3, "validator_done": 1},
+    )
+    from benchmarks.maintain_suite.grade import FixtureResult
+    result = FixtureResult(fixture_id="x", diff_produced=False, pr_opened=False)
+    notes = br._diagnose_no_tool_calls(diag, result, tmp_path)
+    assert any("workers ran but no edits committed" in n for n in notes)
+
+
+def test_diagnose_no_tool_calls_no_op_when_diff_produced(tmp_path):
+    diag = Diagnostics(fixture_id="x", wall_s=120.0, tokens_total=5000)
+    from benchmarks.maintain_suite.grade import FixtureResult
+    result = FixtureResult(fixture_id="x", diff_produced=True, pr_opened=True)
+    assert br._diagnose_no_tool_calls(diag, result, tmp_path) == []
 
 
 def test_run_fixture_silent_failure_marks_state_error(tmp_path, monkeypatch):

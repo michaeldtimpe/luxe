@@ -234,6 +234,19 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
                 pass
             elif kind == "synthesizer_done":
                 out["tokens_total"] += int(ev.get("tokens", 0))
+            elif kind == "single_mode_done":
+                # Single-mode telemetry — emitted by cli.py after run_single.
+                out["wall_s_total"] = float(ev.get("wall_s", 0.0))
+                out["tokens_total"] += int(ev.get("prompt_tokens", 0))
+                out["tokens_total"] += int(ev.get("completion_tokens", 0))
+                out["single_mode"] = {
+                    "tool_calls_total": int(ev.get("tool_calls_total", 0)),
+                    "schema_rejects": int(ev.get("schema_rejects", 0)),
+                    "aborted": bool(ev.get("aborted", False)),
+                    "abort_reason": ev.get("abort_reason", "") or "",
+                    "final_text_chars": int(ev.get("final_text_chars", 0)),
+                    "escalated": bool(ev.get("escalated", False)),
+                }
         out["events_kinds"] = kind_counts
 
     # Per-stage tokens come from the stage checkpoints.
@@ -373,10 +386,47 @@ def _diagnose_silent_failure(diag, log_dir: Path) -> list[str]:
     return notes
 
 
-def _is_silent_failure(diag) -> bool:
+def _is_silent_failure(diag, result=None) -> bool:
     """Heuristic: luxe terminated 'cleanly' but did no real work.
-    Distinguishes a config/auth problem from a genuine grade-failure."""
+
+    Three positive signals that luxe ACTUALLY did work — any one rules out
+    a silent-failure verdict:
+      - tokens > 0 (some model call succeeded)
+      - wall > 5s (luxe was busy, even if telemetry is incomplete)
+      - diff produced or PR opened (the surest signal — luxe edited code)
+
+    Without `result`, falls back to tokens+wall only (prior behaviour).
+    """
+    if result is not None and (result.diff_produced or result.pr_opened):
+        return False
     return diag.tokens_total == 0 and diag.wall_s < 5.0
+
+
+def _diagnose_no_tool_calls(diag, result, log_dir: Path) -> list[str]:
+    """When luxe ran (tokens > 0 OR wall > 5s) but produced no diff in a
+    write task, the model probably produced text-only output without tool
+    calls. Surface this as actionable info for tuning prompts/configs."""
+    notes: list[str] = []
+    if result.diff_produced or result.pr_opened:
+        return notes
+    sm = diag.single_mode or {}
+    if sm and sm.get("tool_calls_total", 0) == 0 and sm.get("final_text_chars", 0) > 0:
+        notes.append(
+            f"single mode: model emitted {sm['final_text_chars']} chars of "
+            "final text but called ZERO tools — model accepted the task "
+            "in prose without invoking edit_file/write_file. "
+            "Prompt may need stronger 'you MUST call edit_file' framing."
+        )
+    elif sm and sm.get("aborted"):
+        notes.append(f"single mode aborted: {sm.get('abort_reason', '?')}")
+    elif diag.events_kinds.get("worker_end", 0) > 0 and not result.diff_produced:
+        # Swarm with workers that ran but produced no diff
+        notes.append(
+            "swarm workers ran but no edits committed — workers may be "
+            "blocked on backend/tool errors. Check ~/.luxe/runs/<run_id>/"
+            "events.jsonl for `worker_end` status entries"
+        )
+    return notes
 
 
 def _extract_run_id(text: str) -> str:
@@ -426,6 +476,7 @@ class Diagnostics:
     is_draft: bool = False
     test_passed: bool | None = None
     events_kinds: dict[str, int] = field(default_factory=dict)
+    single_mode: dict | None = None  # populated when single_mode_done event present
 
 
 def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
@@ -446,6 +497,7 @@ def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
         is_draft=bool(artefacts.get("is_draft", False)),
         test_passed=artefacts.get("test_passed"),
         events_kinds=dict(artefacts.get("events_kinds", {})),
+        single_mode=artefacts.get("single_mode"),
     )
 
 
@@ -573,41 +625,66 @@ def _load_cached_diag(output: Path, fixture_id: str) -> Diagnostics | None:
                           if k in Diagnostics.__dataclass_fields__})
 
 
+def _load_cached_result(output: Path, fixture_id: str):
+    p = _fixture_dir(output, fixture_id) / "result.json"
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return FixtureResult(**{k: v for k, v in d.items()
+                            if k in FixtureResult.__dataclass_fields__})
+
+
 def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
     """If a fixture's cached diagnostics show a silent failure (wall<5s +
-    tokens=0), reclassify state to ERROR AND clear luxe_run_id so the next
-    decide() picks RUN_FRESH instead of RUN_RESUME. Idempotent: re-runs
-    safely if the heal already fired.
+    tokens=0) AND it didn't actually do real work (no diff, no PR),
+    reclassify state to ERROR AND clear luxe_run_id so the next decide()
+    picks RUN_FRESH instead of RUN_RESUME. Also heals the inverse case:
+    a previously-ERROR-marked run that DID produce a diff/PR (false-
+    positive single-mode silent-failure) gets reclassified back to DONE.
+    Idempotent.
 
-    Triggers on status ∈ {DONE, ERROR} (DONE is the pre-fix-build state;
-    ERROR is the post-fix state, where an earlier heal version may have
-    forgotten to clear luxe_run_id). Forward-path silent-failure detection
-    in run_fixture handles new failures and is unaffected.
-
-    Why clear luxe_run_id: when luxe silent-fails, it still writes stage
-    checkpoints to ~/.luxe/runs/<id>/stages/ (architect, worker_0, etc.)
+    Why clear luxe_run_id when truly silent: luxe still writes stage
+    checkpoints to ~/.luxe/runs/<id>/stages/ during a silent-failed run,
     but those stages reflect 0-token blocked runs. `luxe resume` would
     happily load them as complete and exit in 0 seconds without re-trying.
-    Clearing the run id forces a fresh pipeline run.
     """
     if state.status not in (FixtureStatus.DONE, FixtureStatus.ERROR):
-        return False
-    if not state.luxe_run_id:
-        # Already cleared. No further heal needed.
         return False
     diag = _load_cached_diag(output, state.fixture_id)
     if diag is None:
         return False
-    if not (diag.tokens_total == 0 and diag.wall_s < 5.0):
+    cached_result = _load_cached_result(output, state.fixture_id)
+    truly_silent = (diag.tokens_total == 0 and diag.wall_s < 5.0
+                    and (cached_result is None
+                         or (not cached_result.diff_produced
+                             and not cached_result.pr_opened)))
+
+    # Inverse heal: ERROR-flagged but actually a real pass (single-mode
+    # telemetry was missing in the prior runner version). Fix the state.
+    if (state.status == FixtureStatus.ERROR and cached_result is not None
+            and (cached_result.diff_produced or cached_result.pr_opened)
+            and cached_result.passed):
+        state.status = FixtureStatus.DONE
+        state.last_error = ""
+        save_state(output, state)
+        return True
+
+    if not truly_silent:
+        return False
+    if not state.luxe_run_id and state.status == FixtureStatus.ERROR:
+        # Already cleared and ERROR — nothing more to heal.
         return False
     old_id = state.luxe_run_id
     prev_status = state.status.value
     state.status = FixtureStatus.ERROR
     state.luxe_run_id = ""
     state.last_error = (
-        f"silent failure (cached diag: wall={diag.wall_s:.1f}s, tokens=0); "
-        f"cleared luxe_run_id (was {old_id}) so retry runs fresh "
-        f"(was status={prev_status})"
+        f"silent failure (cached diag: wall={diag.wall_s:.1f}s, tokens=0, "
+        f"no diff, no PR); cleared luxe_run_id (was {old_id or '(none)'}) "
+        f"so retry runs fresh (was status={prev_status})"
     )
     save_state(output, state)
     return True
@@ -745,12 +822,14 @@ def run_fixture(
     (fdir / "diagnostics.json").write_text(json.dumps(asdict(diag), indent=2,
                                                       default=str))
 
-    # State classification: a "silent failure" (wall<5s + tokens=0) means
-    # luxe terminated cleanly but never reached the model. Mark ERROR (not
-    # DONE) AND clear the luxe_run_id so the next --retry-errors run starts
-    # fresh — `luxe resume` would otherwise load the 0-token stage cache
-    # this run just produced and exit immediately again.
-    if _is_silent_failure(diag):
+    # State classification: a "silent failure" means luxe terminated
+    # cleanly but never reached the model AND did no real work (no diff,
+    # no PR, no tokens, no time). Mark ERROR (not DONE) AND clear the
+    # luxe_run_id so the next --retry-errors run starts fresh. The diff/PR
+    # check is critical: a successful single-mode run shows tokens=0/wall=0
+    # in the runner because single mode emits no per-stage events — but if
+    # it produced a diff or a PR, that's a successful run, not silent.
+    if _is_silent_failure(diag, fr):
         notes = _diagnose_silent_failure(diag, fdir)
         state.status = FixtureStatus.ERROR
         state.luxe_run_id = ""
@@ -912,10 +991,14 @@ def main() -> int:
             if d.stages_resumed:
                 print(f"        resumed: {','.join(d.stages_resumed)}")
             # Silent-failure diagnostics for this run only.
-            if _is_silent_failure(d) and not r.skipped and not r.error:
-                fdir = output / f.id
+            fdir = output / f.id
+            if _is_silent_failure(d, r) and not r.skipped and not r.error:
                 for note in _diagnose_silent_failure(d, fdir):
                     print(f"        ⚠ {note}")
+            # Did-work-but-no-diff diagnostics: model emitted text without
+            # tool calls, or workers ran but didn't commit edits.
+            for note in _diagnose_no_tool_calls(d, r, fdir):
+                print(f"        ⓘ {note}")
 
         summary = summarize(results)
         summary["diagnostics"] = aggregate_diagnostics(diags, results)
@@ -925,7 +1008,7 @@ def main() -> int:
         # ABOVE the per-fixture grades so it's the first thing the user sees.
         attempted = [(r, d) for r, d in zip(results, diags)
                      if not r.skipped and not r.error]
-        n_silent = sum(1 for _, d in attempted if _is_silent_failure(d))
+        n_silent = sum(1 for r, d in attempted if _is_silent_failure(d, r))
         upstream_issue = attempted and n_silent >= max(1, len(attempted) // 2)
 
         (output / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -938,7 +1021,7 @@ def main() -> int:
             # Aggregate diagnostic notes from the silent failures.
             seen: set[str] = set()
             for r, d in attempted:
-                if not _is_silent_failure(d):
+                if not _is_silent_failure(d, r):
                     continue
                 fdir = output / r.fixture_id
                 for note in _diagnose_silent_failure(d, fdir):
