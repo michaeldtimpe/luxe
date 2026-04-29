@@ -166,9 +166,15 @@ def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
         for role_name, role in cfg.get("roles", {}).items():
             if role.get("model_key") in worker_keys:
                 role["num_ctx"] = min(int(role.get("num_ctx", 4096)), 4096)
-        # Pin execution_mode so `--mode swarm` and `--mode micro` are explicit
-        # against this overlay. CLI's --mode flag overrides this anyway.
-        cfg["execution"] = "microloop" if variant.mode == "micro" else "swarm"
+        # Pin execution_mode so each --mode flag is explicit against this
+        # overlay. CLI's --mode flag overrides this anyway, but the field's
+        # presence is a useful breadcrumb when reading saved overlays.
+        if variant.mode == "micro":
+            cfg["execution"] = "microloop"
+        elif variant.mode == "phased":
+            cfg["execution"] = "phased"
+        else:
+            cfg["execution"] = "swarm"
 
     out_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     return out_path
@@ -1083,7 +1089,7 @@ def _load_variants(path: Path) -> list[Variant]:
         mode = str(v["mode"]).lower()
         if mode == "single":
             mode = "mono"
-        if mode not in ("mono", "swarm", "micro"):
+        if mode not in ("mono", "swarm", "micro", "phased"):
             raise ValueError(f"variants.yaml: unknown mode {mode!r}")
         out.append(Variant(
             mode=mode,
