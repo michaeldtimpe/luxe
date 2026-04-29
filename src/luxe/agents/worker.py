@@ -95,13 +95,26 @@ def run_worker(
     task_prompt: str,
     prior_findings: str = "",
     languages: frozenset[str] | None = None,
+    extra_tool_defs: list[ToolDef] | None = None,
+    extra_tool_fns: dict[str, ToolFn] | None = None,
     cache: ToolCache | None = None,
     on_tool_event: OnToolEvent | None = None,
 ) -> AgentResult:
-    """Run a worker agent with role-appropriate tools."""
+    """Run a worker agent with role-appropriate tools.
+
+    `extra_tool_defs/extra_tool_fns` (e.g. MCP-discovered tools) are appended
+    to the role's native tool surface. They are NOT added to the cacheable
+    set — external tools may be stateful or non-deterministic, so caching
+    would be unsafe.
+    """
 
     system_prompt = _ROLE_PROMPTS.get(role, _WORKER_READ_PROMPT)
     defs, fns, cacheable_set = _build_tools_for_role(role, languages)
+
+    if extra_tool_defs:
+        defs = defs + list(extra_tool_defs)
+    if extra_tool_fns:
+        fns = {**fns, **extra_tool_fns}
 
     full_prompt_parts = [task_prompt]
     if prior_findings:

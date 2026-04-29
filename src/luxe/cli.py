@@ -213,6 +213,26 @@ def maintain(
         console.print(f"\n[red]✗ {e}[/]")
         sys.exit(3)
 
+    # --- MCP client (opt-in via configs/mcp.yaml) -----------------------
+    from luxe.mcp.client import MCPClientManager, load_mcp_config
+    mcp_cfg = load_mcp_config()
+    mcp_mgr: MCPClientManager | None = None
+    extra_tool_defs: list = []
+    extra_tool_fns: dict = {}
+    if mcp_cfg.servers:
+        mcp_mgr = MCPClientManager(mcp_cfg).start()
+        extra_tool_defs, extra_tool_fns = mcp_mgr.discover_tools(
+            only_for_task=detected_task,
+        )
+        if extra_tool_defs:
+            console.print(f"[dim]· MCP: {len(extra_tool_defs)} tool(s) "
+                          f"from {len([s for s in mcp_mgr.server_status() if not s['down']])} "
+                          f"server(s)[/]")
+        for s in mcp_mgr.server_status():
+            if s["down"]:
+                console.print(f"[yellow]· MCP server {s['name']} DOWN: "
+                              f"{s['down_reason']}[/]")
+
     try:
         # --- pipeline -------------------------------------------------------
         pipeline_run = None
@@ -228,6 +248,8 @@ def maintain(
                 goal=goal,
                 task_type=detected_task,
                 languages=languages,
+                extra_tool_defs=extra_tool_defs or None,
+                extra_tool_fns=extra_tool_fns or None,
             )
 
             if did_escalate(single_result):
@@ -239,7 +261,11 @@ def maintain(
                     abort_reason="single-mode escalated to swarm",
                 )
                 swarm_cfg = load_config(swarm_config_path)
-                orch = PipelineOrchestrator(swarm_cfg, run_id=spec.run_id)
+                orch = PipelineOrchestrator(
+                    swarm_cfg, run_id=spec.run_id,
+                    extra_tool_defs=extra_tool_defs or None,
+                    extra_tool_fns=extra_tool_fns or None,
+                )
                 pipeline_run = orch.run(goal, detected_task, repo_path,
                                         initial_context=esc_ctx.render())
                 final_report = pipeline_run.final_report or ""
@@ -248,7 +274,11 @@ def maintain(
                 final_report = single_result.final_text or ""
         else:
             cfg = load_config(swarm_config_path)
-            orch = PipelineOrchestrator(cfg, run_id=spec.run_id)
+            orch = PipelineOrchestrator(
+                cfg, run_id=spec.run_id,
+                extra_tool_defs=extra_tool_defs or None,
+                extra_tool_fns=extra_tool_fns or None,
+            )
             pipeline_run = orch.run(goal, detected_task, repo_path)
             final_report = pipeline_run.final_report or ""
 
@@ -320,6 +350,11 @@ def maintain(
             console.print(f"\n{'='*60}")
             console.print(final_report)
     finally:
+        if mcp_mgr is not None:
+            try:
+                mcp_mgr.close()
+            except Exception:
+                pass
         try:
             ctx.__exit__(None, None, None)  # release lock
         except Exception:
