@@ -1,5 +1,14 @@
 # Architecture
 
+> **Note:** This document describes the swarm pipeline's design principles
+> and was carried over from the prototype era. It accurately covers the
+> swarm half of luxe v1.0 but does not document the additions (single-mode,
+> mode selection, citation linter, PR cycle, MCP, BM25/AST retrieval,
+> per-stage checkpointing). The README is authoritative for the v1.0 surface;
+> see also [`.claude/plans/linked-leaping-curry.md`](.claude/plans/linked-leaping-curry.md).
+> Where this document says `swarm run`, read `luxe maintain --mode swarm`;
+> where it says `src/swarm/`, read `src/luxe/`.
+
 ## Design Thesis
 
 A specialist swarm replaces one general-purpose model handling an unbounded number of tool calls with a pipeline of focused agents, each scoped narrowly enough that context is never the bottleneck.

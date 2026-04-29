@@ -15,20 +15,96 @@
 #     required_env: [GITHUB_TOKEN]   # optional; missing → skipped
 #     notes: "<freeform>"            # documentation, not graded
 #
-# Rubric (per plan §10):
-#   - Mix: 3 bugfix, 3 implement, 2 document, 2 manage.
-#   - Difficulty: 4 trivial-medium (≤50 file repos),
-#                 4 medium (50-500 files),
-#                 2 hard (>500 files; ≥1 must be >100k LOC).
-#   - Diversity: ≥3 fixtures from repos with no prior luxe history.
-#   - manual_review cap: ≤2 of 10 fixtures.
+# These five are the seed set: bench data collection across language /
+# size / task-type diversity. Iterate via:
+#   python -m benchmarks.maintain_suite.run --all --work-dir ~/luxe-bench-clones
 #
-# v1.0 release gate:
-#   - ≥8 of 10 fixtures pass (≥4/5 pts each)
-#   - Zero unresolved citations across all runs
-#   - Largest fixture passes without context exhaustion or backend crash
-#
-# This file ships empty. Curate fixtures locally; do NOT push private repos
-# to GitHub via this file unless they're public.
+# Authentication for private repos relies on `gh auth setup-git` having
+# configured the GitHub CLI as git's credential helper. If clones fail,
+# run that once and re-try.
 
-fixtures: []
+fixtures:
+
+  # 1) lpe-rope-calc — single-file Python utility (20 KB). Trivial-medium
+  #    target: easy win that validates the harness end-to-end. Should pass
+  #    in single mode and complete in <2 minutes once oMLX is warm.
+  - id: lpe-rope-calc-document-typing
+    repo_url: https://github.com/michaeldtimpe/lpe-rope-calc.git
+    base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
+    goal: "Add a module docstring at the top of pe_scan.py and add type hints to every top-level function signature, preserving existing behaviour"
+    task_type: document
+    expected_outcome:
+      kind: regex_present
+      pattern: "def \\w+\\([^)]*: ?(?:str|int|float|bool|Path|list|dict|Optional|None)"
+    notes: |
+      Easy-win document task. Single-file repo, so no decomposition needed —
+      single mode should handle this.
+
+  # 2) the-game — small JS movie randomizer (74 KB). Implement-style task
+  #    on a non-Python repo to exercise tree-sitter JS coverage and
+  #    BM25 fallback for HTML/CSS.
+  - id: the-game-implement-shuffle-shortcut
+    repo_url: https://github.com/michaeldtimpe/the-game.git
+    base_sha: 514d22d95dbbc55b8ad73d158d311f507f8a7b51
+    goal: "Add a keyboard shortcut: pressing the 'r' key should re-randomize the current movie pick. Bind the listener once on page load; do not interfere with text inputs"
+    task_type: implement
+    expected_outcome:
+      kind: regex_present
+      pattern: "addEventListener.*['\"](key(down|up|press))['\"]"
+    notes: |
+      Small JS feature add. Tests luxe's ability to find the existing
+      randomization handler and wire a new keyboard input.
+
+  # 3) neon-rain — Vite browser game; ~440 KB of JS+CSS+Shell across
+  #    src/{actions,ai,data,debug,input,phases,render,state,ui}. The repo
+  #    is 591 MB on disk because of the assets/ image directory; the
+  #    BM25 + AST indices skip non-source extensions so images don't
+  #    pollute retrieval. Has a real test suite.
+  - id: neon-rain-implement-reset-shortcut
+    repo_url: https://github.com/michaeldtimpe/neon-rain.git
+    base_sha: ef953cc85bead2f09147b99c2a1a2cb2f7d813d0
+    goal: "Add a 'reset run' keyboard shortcut: pressing Shift+R restarts the current game without reloading the page. Use the existing input system in src/input/"
+    task_type: implement
+    expected_outcome:
+      kind: tests_pass
+      command: "npm test"
+    notes: |
+      Mid-sized JS implement task. The existing test suite (npm test runs
+      tests/all-personas.test.js) must still pass after the change — this
+      catches regressions in the input/state systems. Image-heavy assets/
+      directory is correctly skipped by both BM25 and AST indices.
+
+  # 4) isomer — Flask compliance tracker. 64 KB HTML templates + 46 KB
+  #    of Python (mostly app.py at 45 KB). Document task exercises
+  #    luxe's ability to navigate one large Python file alongside a
+  #    templates/ directory.
+  - id: isomer-document-quickstart
+    repo_url: https://github.com/michaeldtimpe/isomer.git
+    base_sha: 33da2bc14869bc252901cb199ba73b2fa776e33f
+    goal: "Update README.md to add a 'Quickstart' section showing how to run the app locally with docker-compose and how to access the dashboard. Reference docker-compose.yml and the default port from app.py"
+    task_type: document
+    expected_outcome:
+      kind: regex_present
+      pattern: "(?i)#+\\s*Quickstart"
+    notes: |
+      Document task on a mid-sized Flask app. The model needs to read app.py
+      (one ~45 KB file — exercises BM25 / AST navigation) and docker-compose.yml
+      to know what port the dashboard binds to.
+
+  # 5) nothing-ever-happens — Polymarket trading bot fork (907 KB).
+  #    Large Python; manage task tests luxe's ability to do dependency
+  #    hygiene without breaking the project. Should route to swarm mode
+  #    via byte threshold.
+  - id: nothing-ever-happens-manage-deps-audit
+    repo_url: https://github.com/michaeldtimpe/nothing-ever-happens.git
+    base_sha: 59b8874a8e87164f0ebec25b43ae2cc1a0086f7a
+    goal: "Audit requirements.txt: identify any pinned dependencies with known security advisories, document them in a SECURITY-AUDIT.md file, and propose pinned-version upgrades that preserve API compatibility. Do not modify requirements.txt itself"
+    task_type: manage
+    expected_outcome:
+      kind: regex_present
+      pattern: "(?i)# SECURITY"
+    notes: |
+      Largest Python repo in the seed set. Should trigger swarm mode via
+      byte threshold. The "do not modify requirements.txt" constraint
+      means this is a read+document hybrid — checks luxe's ability to
+      respect explicit scope limits.
