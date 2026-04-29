@@ -123,56 +123,61 @@ class PhasedTelemetry:
 # --- prompts ---------------------------------------------------------------
 
 _PLAN_SYSTEM = """\
-You are a chief architect for a code-modification pipeline. Decompose the
-user's goal into atomic tasks that a focused coder can execute one at a
-time. Group related tasks into review checkpoints — after each group, you
-will personally inspect the work.
+You are a chief architect. Output ONLY a JSON array of atomic tasks. No
+preamble. No markdown fences. No restating the goal. JSON only.
 
-Each task must:
-- Be expressible in ≤ 3 tool calls (read_file, edit_file, write_file, grep).
-- Have a clear success criterion that you can verify by reading code.
-- Reference exact file paths or symbols when possible.
+Hard constraints — violating these wastes the coder's budget:
+- MAX 6 atomic tasks across all groups. Pick the most important ones.
+- Each task: ≤ 3 tool calls to execute, ≤ 1 file modified.
+- Each task's `scope` MUST be an exact file path or symbol that exists in
+  the repo summary. No speculative paths like "app/models/user.py" if
+  the repo summary doesn't list it.
+- Read tasks (worker_read) before write tasks (worker_code) within a group.
+- Each task's `success_criterion` is a single verifiable claim about the
+  repo state after the task runs (e.g., "pe_scan.py line 1 starts with
+  triple-quoted module docstring").
 
-Group tasks so that:
-- Each group can be reviewed end-to-end without needing intermediate context.
-- Read-and-understand tasks come before write tasks.
-- A failed task in a group does not silently break later groups.
-
-Respond with ONLY a JSON array. Each entry has:
-{
-  "id": "t1",
-  "title": "<short imperative>",
-  "role": "worker_read" | "worker_code" | "worker_analyze",
-  "scope": "<file or module hint>",
-  "success_criterion": "<what done looks like, verifiable by re-reading>",
-  "group": 1
-}
+Schema:
+[{"id":"t1","title":"<imperative>","role":"worker_read|worker_code|worker_analyze",
+  "scope":"<exact path or symbol>","success_criterion":"<verifiable claim>",
+  "group":1}]
 """
 
 
 _REVIEW_SYSTEM = """\
-You are a chief architect reviewing a coder's work. You have read the
-blackboard for a group of completed tasks. For each task, decide:
+You are a chief architect REVIEWING a coder's work. The coder's self-report
+is unreliable — you MUST verify by reading the actual files. Default to
+RETRY when in doubt; PASS only with concrete evidence.
 
-- PASS: the work satisfies the success criterion. Verifiable from the
-  files in the repo right now.
-- RETRY: the work is incomplete, wrong, or bypasses the spirit of the
-  task (e.g., placeholder code, wrong language, orphan files that aren't
-  imported anywhere). Provide a concrete reason the coder can act on.
-- ABORT: the task is impossible as specified, or the model has exhausted
-  its retry budget without producing usable code. Document why.
+For EACH task in the input, you MUST:
+1. Use read_file on every file the task claims to touch. Read the *actual*
+   current content, not the coder's summary.
+2. Use grep to verify any cross-file references the diff makes:
+   - For new modules/classes/functions: grep for the identifier across the
+     repo. If it's only defined and never imported, mark RETRY (orphan
+     module — adds nothing).
+   - For cited file paths in docs/comments: confirm each path exists with
+     read_file. If a path doesn't exist, mark RETRY (fabrication).
+3. Check the diff against the original goal — not against the coder's
+   restatement. Common ways the coder cheats:
+   - Wrong idiom: spec said `addEventListener` but coder used React
+     `onKeyDown` prop, or vice versa.
+   - Wrong key: spec said `Shift+R` but coder mapped just `R` or `KeyR`.
+   - Wrong language: coder added .py files in a JS/TS project (or vice versa).
+   - Undefined identifiers: coder calls a function that doesn't exist.
+   - Fabricated facts: coder mentions versions, files, or APIs that aren't
+     in the repo summary.
 
-Rules:
-- Verify by reading the actual files (use read_file / grep). Do not trust
-  the coder's self-report.
-- Reject placeholder text, role-named files (worker_*, drafter_*,
-  verifier_*), and orphan modules that aren't imported anywhere in the
-  project's primary language.
-- Reject diffs that delete substantial code without equivalent additions.
-- Quality is paramount. Do not approve borderline work to make progress.
+Vote per task:
+- PASS only when (a) you read the files, (b) all three checks above
+  came up clean, AND (c) the success_criterion is now true. Provide a
+  one-line `reason` citing what you verified.
+- RETRY when ANY of the checks failed. Provide a concrete `reason` the
+  coder can act on (filename + what's wrong + what to do instead).
+- ABORT only when the task is impossible as specified.
 
-Respond with ONLY a JSON array, one entry per task:
-[{"id": "t1", "decision": "PASS" | "RETRY" | "ABORT", "reason": "..."}]
+Output ONLY a JSON array. No preamble. No markdown fences.
+Schema: [{"id":"t1","decision":"PASS|RETRY|ABORT","reason":"<evidence>"}]
 """
 
 
@@ -323,19 +328,24 @@ def _review_group(
     review_role = "worker_analyze" if needs_runnable else "worker_read"
     defs, fns, cacheable = _build_tools_for_role(review_role, languages=None)
 
+    # Keep last_output snippets short — too much of the coder's prose biases
+    # the architect into pattern-matching on plausibility instead of
+    # verifying. The coder's claim is "what to check"; the files are "the
+    # truth".
     summary_lines: list[str] = []
     for t in tasks:
+        snippet = (t.last_output or "")[:240].replace("\n", " ⏎ ")
         summary_lines.append(
-            f"- id={t.id} title={t.title!r} status={t.status} "
-            f"scope={t.scope!r} retries={t.retries}\n"
-            f"  success_criterion: {t.success_criterion}\n"
-            f"  last_output: {t.last_output[:600]!r}"
+            f"- id={t.id}  title={t.title}\n"
+            f"  scope={t.scope}\n"
+            f"  success_criterion={t.success_criterion}\n"
+            f"  coder_claim_snippet={snippet!r}\n"
+            f"  status={t.status}  retries={t.retries}/2"
         )
     prompt = (
-        f"Review the following {len(tasks)} task(s) executed by the coder. "
-        "Verify each by reading the actual files in the repo. Be strict: "
-        "reject placeholder code, role-named files, orphan modules, and "
-        "language-mismatched files (e.g. .py in a JS project).\n\n"
+        f"Verify {len(tasks)} task(s). For EACH task: read the file at scope, "
+        "grep for any new identifiers across the repo, then decide. Default "
+        "to RETRY if you didn't read the files yourself.\n\n"
         + "\n".join(summary_lines)
     )
 
