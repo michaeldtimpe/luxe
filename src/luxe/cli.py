@@ -213,6 +213,18 @@ def maintain(
         console.print(f"\n[red]✗ {e}[/]")
         sys.exit(3)
 
+    # --- session indices (BM25 + AST) ---------------------------------------
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+    console.print("[dim]· Building BM25 + symbol indices…[/]")
+    bm25 = search_mod.build_bm25_index(repo_path)
+    sym_idx = symbols_mod.build_symbol_index(repo_path)
+    search_mod.set_index(bm25)
+    symbols_mod.set_index(sym_idx)
+    console.print(f"[dim]  BM25: {len(bm25.paths)} files | "
+                  f"symbols: {len(sym_idx.symbols)} symbols across "
+                  f"{sorted(sym_idx.coverage)}[/]")
+
     # --- MCP client (opt-in via configs/mcp.yaml) -----------------------
     from luxe.mcp.client import MCPClientManager, load_mcp_config
     mcp_cfg = load_mcp_config()
@@ -355,6 +367,8 @@ def maintain(
                 mcp_mgr.close()
             except Exception:
                 pass
+        search_mod.reset_index()
+        symbols_mod.reset_index()
         try:
             ctx.__exit__(None, None, None)  # release lock
         except Exception:

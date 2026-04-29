@@ -23,7 +23,7 @@ roles:
     max_steps: 12
     max_tokens_per_turn: 2048
     temperature: 0.2
-    tools: [read_file, list_dir, glob, grep, git_diff, git_log, git_show]
+    tools: [read_file, list_dir, glob, grep, bm25_search, find_symbol, git_diff, git_log, git_show]
 
   worker_code:
     model_key: worker_code
@@ -31,7 +31,7 @@ roles:
     max_steps: 15
     max_tokens_per_turn: 4096
     temperature: 0.2
-    tools: [read_file, write_file, edit_file, list_dir, glob, grep, git_diff, git_log, bash]
+    tools: [read_file, write_file, edit_file, list_dir, glob, grep, bm25_search, find_symbol, git_diff, git_log, bash]
 
   worker_analyze:
     model_key: worker_analyze
@@ -39,7 +39,7 @@ roles:
     max_steps: 14
     max_tokens_per_turn: 4096
     temperature: 0.2
-    tools: [read_file, list_dir, glob, grep, git_diff, git_log, lint, typecheck, security_scan, deps_audit]
+    tools: [read_file, list_dir, glob, grep, bm25_search, find_symbol, git_diff, git_log, lint, typecheck, security_scan, deps_audit]
 
   validator:
     model_key: validator

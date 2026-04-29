@@ -9,6 +9,8 @@ from luxe.backend import Backend
 from luxe.config import RoleConfig
 from luxe.tools.base import ToolCache, ToolDef, ToolFn
 from luxe.tools import fs, git, analysis, shell
+from luxe import search as search_mod
+from luxe import symbols as symbols_mod
 
 _WORKER_READ_PROMPT = """\
 You are a code reader specialist. Your job is to gather specific information from
@@ -65,6 +67,13 @@ def _build_tools_for_role(
         defs.extend(fs.read_only_defs())
         fns.update(fs.READ_ONLY_FNS)
         cacheable.update(fs.CACHEABLE)
+        # BM25 and AST symbol search are universal read-only retrieval tools.
+        defs.append(search_mod.bm25_search_def())
+        fns.update(search_mod.TOOL_FNS)
+        cacheable.update(search_mod.CACHEABLE)
+        defs.append(symbols_mod.find_symbol_def())
+        fns.update(symbols_mod.TOOL_FNS)
+        cacheable.update(symbols_mod.CACHEABLE)
 
     if role in ("worker_read", "worker_code", "worker_analyze"):
         defs.extend(git.tool_defs())

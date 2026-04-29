@@ -24,6 +24,8 @@ roles:
       - list_dir
       - glob
       - grep
+      - bm25_search
+      - find_symbol
       - write_file
       - edit_file
       - git_diff
