@@ -208,6 +208,8 @@ class PipelineOrchestrator:
         config: PipelineConfig,
         on_event: OnEvent | None = None,
         run_id: str | None = None,
+        extra_tool_defs: list[Any] | None = None,
+        extra_tool_fns: dict[str, Any] | None = None,
     ):
         self.config = config
         self.on_event = on_event
@@ -216,6 +218,11 @@ class PipelineOrchestrator:
         # ~/.luxe/runs/<run_id>/stages/. Stages already on disk are reloaded
         # and skipped, enabling `luxe maintain --resume <run_id>`.
         self.run_id = run_id
+        # MCP-discovered tools, injected into every worker invocation. They
+        # are namespaced (mcp__server__tool) so they cannot collide with
+        # native tools, and they are NOT added to ToolCache.
+        self.extra_tool_defs = extra_tool_defs or []
+        self.extra_tool_fns = extra_tool_fns or {}
 
     # --- checkpoint helpers ------------------------------------------------
 
@@ -424,6 +431,8 @@ class PipelineOrchestrator:
                 task_prompt=f"Objective: {sub.title}\nScope: {sub.scope}",
                 prior_findings=prior,
                 languages=languages,
+                extra_tool_defs=self.extra_tool_defs or None,
+                extra_tool_fns=self.extra_tool_fns or None,
                 cache=cache,
                 on_tool_event=_on_tool,
             )
@@ -654,6 +663,8 @@ class PipelineOrchestrator:
             task_prompt=f"Objective: {sub.title}\nScope: {sub.scope}",
             prior_findings=prior,
             languages=languages,
+            extra_tool_defs=self.extra_tool_defs or None,
+            extra_tool_fns=self.extra_tool_fns or None,
             cache=cache,
         )
 
