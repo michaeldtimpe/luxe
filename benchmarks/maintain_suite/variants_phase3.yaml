@@ -1,0 +1,23 @@
+# Phase 3: phased mode probe.
+#
+# After Phase 2 closed with mono-14B as the practical winner and revealed the
+# microloop/swarm runs were partly gaming the grader, Phase 3 tests whether
+# the new phased mode (32B Instruct chief architect + 14B Coder, with
+# bounded retry → graceful abort) actually catches quality issues that
+# pattern-based gates can't.
+#
+# Workers' tier is the 14B Coder (overridden via model_id below). The
+# chief_architect role stays on whatever the config specifies (32B Instruct
+# in qwen_32gb.yaml).
+#
+# Compare against the Phase 2 results in acceptance/phase2/ — same fixtures.
+#
+# Run:
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_phase3.yaml \
+#       --output acceptance/phase3 \
+#       --per-fixture-timeout 1500 \
+#       --all
+
+variants:
+  - {mode: phased, model_label: qwen-coder-14b, model_id: Qwen2.5-Coder-14B-Instruct-4bit}
