@@ -616,7 +616,7 @@ def test_run_fixture_silent_failure_marks_state_error(tmp_path, monkeypatch):
                         lambda fix, wd: (Path("/tmp"), ""))
     monkeypatch.setattr(br, "_head_sha", lambda repo: "abc" * 13 + "d")
     monkeypatch.setattr(br, "_luxe_maintain",
-                        lambda repo, fix, log_dir: (0, "abcdef123456", ""))
+                        lambda repo, fix, log_dir, **_: (0, "abcdef123456", ""))
     # Read artefacts returns a silent-failure shape
     monkeypatch.setattr(br, "_read_run_artefacts",
                         lambda rid: {
@@ -654,7 +654,7 @@ def test_run_fixture_surfaces_stderr_excerpt(tmp_path, monkeypatch):
                         lambda fix, wd: (Path("/tmp"), ""))
     monkeypatch.setattr(br, "_head_sha", lambda repo: "deadbeef" * 5)
 
-    def fake_maintain(repo, fixture, log_dir):
+    def fake_maintain(repo, fixture, log_dir, **_):
         return 1, "", "ModuleNotFoundError: No module named 'luxe'"
     monkeypatch.setattr(br, "_luxe_maintain", fake_maintain)
 

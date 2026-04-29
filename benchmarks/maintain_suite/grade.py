@@ -21,6 +21,211 @@ from typing import Any
 _WRITE_TASK_TYPES = {"implement", "bugfix", "document", "manage"}
 
 
+# --- strict gates ----------------------------------------------------------
+# When any of these triggers on a write-mode task, the run is marked ERROR
+# regardless of test/regex outcome. Each gate closes a specific failure mode
+# observed in Phase 2: models passing checks via destruction, role-name leaks,
+# or placeholder text gaming the test runner.
+
+# Threshold for the destructive-deletion gate: lines_deleted / max(1, lines_added).
+# A write-mode PR that deletes 10× more than it adds is almost always a model
+# wiping a working file rather than implementing a feature.
+_DESTRUCTIVE_DELETION_RATIO = 5.0
+# Below this threshold, allow any deletion ratio — small diffs (e.g. removing
+# a 12-line dead function) shouldn't trip the gate.
+_DESTRUCTIVE_MIN_DELETIONS = 30
+
+# Role names that the orchestrator uses internally; if any leaks into a path
+# component of a changed file, the model has confused agent role labels with
+# project module names. Seen in Phase 2: src/worker_read.js,
+# src/input/worker_analyze/reset.py.
+# Multi-word role labels — substring match after tokenizing on _ and -.
+_ROLE_FUZZY_NEEDLES = (
+    "worker_read", "worker_code", "worker_analyze", "micro_architect",
+)
+# Single-token role labels — discrete-token match (so "encoder" doesn't
+# trip "coder"). "coder" is intentionally excluded.
+_ROLE_SINGLE_TOKENS = frozenset({
+    "drafter", "verifier", "linter", "architect", "synthesizer", "validator",
+})
+
+# Placeholder strings the model has emitted as "implementations". Wider
+# patterns than the v1 set — Phase 2 showed the model evading by adding
+# extra adjectives ("your real listener code here") or trigger verb variants
+# ("attach the listener here").
+_PLACEHOLDER_PATTERNS = [
+    re.compile(r"<paste\b[^<>]*\bhere\s*>", re.IGNORECASE),
+    re.compile(
+        r"(?://|#)\s*your\s+(?:real\s+|own\s+|actual\s+)?\w+(?:\s+\w+){0,5}\s+(?:code|here|implementation|logic)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?://|#)\s*(?:add|implement|insert|paste|reset|attach|wire|hook)\s+"
+        r"(?:the\s+|a\s+|an\s+)?\w+(?:\s+\w+){0,5}\s+here\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?://|#)\s*(?:fill\s+in|put|place)\s+(?:the\s+|your\s+)?\w+(?:\s+\w+){0,3}\s+here\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?://|#)\s*todo:?\s*(?:implement|add|finish|complete|fill|wire|hook)\s",
+               re.IGNORECASE),
+    re.compile(r"(?://|#)\s*real\s+\w+(?:\s+\w+){0,3}\s+(?:goes|belongs)\s+here\b",
+               re.IGNORECASE),
+]
+
+
+def check_destructive_deletion(additions: int, deletions: int) -> tuple[bool, str]:
+    """True if the diff is dominated by deletions. Returns (triggered, detail)."""
+    if deletions < _DESTRUCTIVE_MIN_DELETIONS:
+        return False, ""
+    if additions == 0:
+        return True, f"deleted {deletions} lines, added 0"
+    ratio = deletions / max(1, additions)
+    if ratio >= _DESTRUCTIVE_DELETION_RATIO:
+        return True, f"deleted {deletions}, added {additions} (ratio {ratio:.1f}× — destructive)"
+    return False, ""
+
+
+def check_role_name_leak(file_paths: list[str]) -> tuple[bool, str]:
+    """True if any path component contains an agent role label (fuzzy)."""
+    leaks: list[str] = []
+    for path in file_paths:
+        for part in path.split("/"):
+            stem = part.split(".", 1)[0].lower()
+            tokens = re.split(r"[-_]+", stem)
+            joined = "_".join(tokens)
+            if any(needle in joined for needle in _ROLE_FUZZY_NEEDLES):
+                leaks.append(path)
+                break
+            if any(t in _ROLE_SINGLE_TOKENS for t in tokens):
+                leaks.append(path)
+                break
+    if leaks:
+        return True, f"role-name leak in {len(leaks)} path(s): {leaks[:3]}"
+    return False, ""
+
+
+def check_placeholder_text(diff_added_text: str) -> tuple[bool, str]:
+    """True if any added line matches a known placeholder pattern."""
+    for pat in _PLACEHOLDER_PATTERNS:
+        m = pat.search(diff_added_text)
+        if m:
+            return True, f"placeholder match: {m.group(0)[:80]!r}"
+    return False, ""
+
+
+def _looks_like_test_file(path: str) -> bool:
+    """Heuristic: matches common test conventions across JS/TS/Python.
+
+    Catches *test*.{js,ts,jsx,tsx,py}, files in tests/__tests__/spec dirs,
+    test_*.py, *_test.{py,go}. Tight enough to skip non-test files like
+    "src/utils/test-helpers.js" (which lives under src/ not tests/).
+    """
+    p = path.lower()
+    parts = p.split("/")
+    test_dirs = {"tests", "test", "__tests__", "spec", "specs", "__test__"}
+    if any(part in test_dirs for part in parts[:-1]):
+        return True
+    name = parts[-1]
+    if name.startswith("test_") and name.endswith((".py", ".go", ".rs")):
+        return True
+    for suffix in (".test.js", ".test.jsx", ".test.ts", ".test.tsx",
+                   ".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx",
+                   "_test.py", "_test.go", "_test.rs"):
+        if name.endswith(suffix):
+            return True
+    return False
+
+
+def check_vacuous_test(
+    repo_path: Path,
+    base_sha: str,
+    command: str,
+    changed_files: list[str],
+    timeout: float = 600.0,
+) -> tuple[bool, str]:
+    """Vacuous-test gate: a new test that passes against the unmodified base
+    isn't actually testing the implementation.
+
+    Strategy: spin up a git worktree at base_sha, copy the new/modified test
+    files from HEAD into it, then run the test command. If rc=0, the test
+    file isn't exercising any new behaviour — mark vacuous.
+
+    Returns (vacuous, detail). Returns (False, "...") on infrastructure
+    errors (worktree creation failed, etc.) — fail-open so a flaky check
+    doesn't downgrade legitimate passes.
+    """
+    if not base_sha or not command:
+        return False, ""
+    test_paths = [p for p in changed_files if _looks_like_test_file(p)]
+    if not test_paths:
+        # No test files in the diff — the implementation must be carrying
+        # the existing test suite. Not a vacuous-test concern.
+        return False, ""
+
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="luxe-vacuous-") as td:
+        wt = Path(td) / "worktree"
+        rc, _out = _run(["git", "worktree", "add", "--detach",
+                         str(wt), base_sha], cwd=repo_path, timeout=60)
+        if rc != 0:
+            return False, ""  # fail-open
+
+        try:
+            # Copy each new/modified test file from HEAD into the worktree.
+            # Existing tests at base SHA stay as-is (the gate cares whether
+            # the *new* test passes against unmodified base implementation).
+            for rel in test_paths:
+                src = repo_path / rel
+                if not src.is_file():
+                    continue
+                dst = wt / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(src.read_bytes())
+
+            rc, out = _run(["bash", "-lc", command], cwd=wt, timeout=timeout)
+            tail = "\n".join((out or "").splitlines()[-15:])[:600]
+            if rc == 0:
+                return True, (
+                    f"new test files {test_paths!r} passed against base SHA "
+                    f"({base_sha[:8]}) — test isn't exercising new code; tail:\n{tail}"
+                )
+            return False, ""
+        finally:
+            # Best-effort cleanup; tempdir context will reap whatever's left.
+            _run(["git", "worktree", "remove", "--force", str(wt)],
+                 cwd=repo_path, timeout=60)
+
+
+def apply_strict_gates(
+    *,
+    task_type: str,
+    file_paths: list[str],
+    additions: int,
+    deletions: int,
+    diff_added_text: str,
+) -> list[tuple[str, str]]:
+    """Run all three gates; return list of (gate_name, detail) for each
+    triggered gate. Empty list = no gates triggered. Read-mode tasks
+    (review, summarize) skip these checks since they shouldn't produce
+    diffs in the first place.
+    """
+    if task_type not in _WRITE_TASK_TYPES:
+        return []
+    triggered: list[tuple[str, str]] = []
+    ok, detail = check_destructive_deletion(additions, deletions)
+    if ok:
+        triggered.append(("destructive_diff", detail))
+    ok, detail = check_role_name_leak(file_paths)
+    if ok:
+        triggered.append(("role_name_leak", detail))
+    ok, detail = check_placeholder_text(diff_added_text)
+    if ok:
+        triggered.append(("placeholder_diff", detail))
+    return triggered
+
+
 @dataclass
 class FixtureResult:
     """One fixture's grading record. Persisted as JSON next to the run dir."""
@@ -40,6 +245,10 @@ class FixtureResult:
     error: str = ""
     # Per-criterion breakdown so the verdict shows what passed/failed and why.
     criteria_breakdown: list[dict] = field(default_factory=list)
+    # Strict-grading additions (default empty for back-compat with v1 records).
+    gates_triggered: list[dict] = field(default_factory=list)
+    diff_additions: int = 0
+    diff_deletions: int = 0
 
     @property
     def passed(self) -> bool:
@@ -207,6 +416,23 @@ def grade_fixture(
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail
         earned_outcome = 3 if passed else 0
+        # Vacuous-test gate: a passing test that also passes against the
+        # unmodified base SHA isn't exercising the implementation. Closes
+        # the hole that let swarm__14b's neon-rain pass slip through.
+        if passed:
+            vacuous, vac_detail = check_vacuous_test(
+                repo_path, base_sha, eo.get("command", ""), changed,
+            )
+            if vacuous:
+                result.expected_outcome_passed = False
+                result.expected_outcome_detail = (
+                    f"{detail}\n\n[vacuous_test gate] {vac_detail}"
+                )
+                result.gates_triggered.append({
+                    "gate": "vacuous_test",
+                    "detail": vac_detail[:500],
+                })
+                earned_outcome = 0
     elif kind == "regex_present":
         passed, detail = _check_regex_present(repo_path, eo.get("pattern", ""), changed)
         result.expected_outcome_passed = passed
