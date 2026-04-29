@@ -1,0 +1,11 @@
+# Standalone Phase 2 cell — the missing micro__qwen-coder-1.5b row.
+# Run alongside (or after) the main Phase 2 file with --output acceptance/phase2;
+# previously-cached cells (mono__14b, swarm__14b, swarm__1.5b, micro__14b) will
+# skip via the maintain_suite's normal DONE-cache; only this row runs fresh.
+#
+# This is the actual microloop thesis test: 1.5B as the drafter, with
+# verification turning a small-model draft loop into something more reliable
+# than 1.5B-as-worker (which we already know fails at 0/5 in swarm).
+
+variants:
+  - {mode: micro, model_label: qwen-coder-1.5b, model_id: Qwen2.5-Coder-1.5B-Instruct-4bit}

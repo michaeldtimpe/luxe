@@ -96,14 +96,86 @@ class FixtureState:
         )
 
 
-def _fixture_dir(output: Path, fixture_id: str) -> Path:
-    d = output / fixture_id
+def _fixture_dir(output: Path, fixture_id: str, variant_id: str = "") -> Path:
+    """Per-fixture artefact dir. When variant_id is set, namespaces under it
+    so multi-mode comparison runs don't collide on state/result/diag files.
+    """
+    d = output / variant_id / fixture_id if variant_id else output / fixture_id
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def load_state(output: Path, fixture_id: str) -> FixtureState:
-    p = _fixture_dir(output, fixture_id) / "state.json"
+# --- multi-variant: mode × model overlay generator ------------------------
+
+@dataclass
+class Variant:
+    """One (mode, model) test cell. variant_id is the directory namespace."""
+    mode: str            # "mono" | "swarm" | "micro" (user-facing label)
+    model_label: str     # short human-readable label, e.g. "qwen-coder-1.5b"
+    model_id: str        # oMLX model ID, e.g. "Qwen2.5-Coder-1.5B-Instruct-4bit"
+
+    @property
+    def variant_id(self) -> str:
+        return f"{self.mode}__{self.model_label}"
+
+    @property
+    def cli_mode(self) -> str:
+        """The --mode value to pass to `luxe maintain`. "mono" is the
+        user-facing alias; the CLI still expects "single"."""
+        return "single" if self.mode == "mono" else self.mode
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
+    """Write an overlay YAML pinning the candidate model into the right slots.
+
+    For swarm/micro: re-points worker_read/worker_code/worker_analyze and
+    the microloop drafter/coder to the candidate. Architect/validator/
+    synthesizer/verifier/linter stay on the canonical baselines.
+
+    For single (mono): re-points the monolith model.
+
+    The overlay is written to a tempdir; its filename stem becomes the
+    config_name visible in luxe maintain logs.
+    """
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    out_path = overlay_dir / f"{variant.variant_id}.yaml"
+
+    if variant.cli_mode == "single":
+        base_path = _project_root() / "configs" / "single_64gb.yaml"
+        cfg = yaml.safe_load(base_path.read_text())
+        cfg.setdefault("models", {})["monolith"] = variant.model_id
+        # Cap context for tiny models. 0.5B / 1.5B can't usefully drive a
+        # 32k-token agentic loop end-to-end; keeping the per-step ctx tighter
+        # avoids attention-cliff failures.
+        cfg.setdefault("roles", {}).setdefault("monolith", {})
+        cfg["roles"]["monolith"]["num_ctx"] = min(
+            int(cfg["roles"]["monolith"].get("num_ctx", 8192)), 8192,
+        )
+    else:
+        base_path = _project_root() / "configs" / "qwen_32gb.yaml"
+        cfg = yaml.safe_load(base_path.read_text())
+        worker_keys = {"worker_read", "worker_code", "worker_analyze",
+                       "drafter", "coder"}
+        for k in worker_keys:
+            if k in cfg["models"]:
+                cfg["models"][k] = variant.model_id
+        for role_name, role in cfg.get("roles", {}).items():
+            if role.get("model_key") in worker_keys:
+                role["num_ctx"] = min(int(role.get("num_ctx", 4096)), 4096)
+        # Pin execution_mode so `--mode swarm` and `--mode micro` are explicit
+        # against this overlay. CLI's --mode flag overrides this anyway.
+        cfg["execution"] = "microloop" if variant.mode == "micro" else "swarm"
+
+    out_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return out_path
+
+
+def load_state(output: Path, fixture_id: str, variant_id: str = "") -> FixtureState:
+    p = _fixture_dir(output, fixture_id, variant_id) / "state.json"
     if not p.is_file():
         return FixtureState(fixture_id=fixture_id)
     try:
@@ -112,8 +184,8 @@ def load_state(output: Path, fixture_id: str) -> FixtureState:
         return FixtureState(fixture_id=fixture_id)
 
 
-def save_state(output: Path, state: FixtureState) -> None:
-    p = _fixture_dir(output, state.fixture_id) / "state.json"
+def save_state(output: Path, state: FixtureState, variant_id: str = "") -> None:
+    p = _fixture_dir(output, state.fixture_id, variant_id) / "state.json"
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state.to_dict(), indent=2))
     tmp.replace(p)
@@ -185,6 +257,12 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
         "wall_s_total": 0.0,
         "events_kinds": {},
         "backend_failures": [],   # most recent backend errors surfaced from events
+        # Microloop-only telemetry, aggregated across all worker subtasks.
+        # All zero for swarm/single runs (microstep fields default to 0).
+        "microstep_count_total": 0,
+        "microstep_rejects_total": 0,
+        "blackboard_bytes_total": 0,
+        "no_diff_warning": False,
     }
     pr_state = rd / "pr_state.json"
     if pr_state.is_file():
@@ -261,6 +339,14 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
             m = sd["metrics"]
             out["tokens_total"] += int(m.get("prompt_tokens", 0))
             out["tokens_total"] += int(m.get("completion_tokens", 0))
+            # Microloop-specific aggregates (zero for swarm-mode workers).
+            out["microstep_count_total"] += int(m.get("microstep_count", 0))
+            out["microstep_rejects_total"] += int(m.get("microstep_rejects", 0))
+            out["blackboard_bytes_total"] += int(m.get("blackboard_bytes", 0))
+
+    # Silent-diff signal: an event emitted by orchestrator when a write-mode
+    # task type ran with no mutation tool calls anywhere in workers.
+    out["no_diff_warning"] = out["events_kinds"].get("pipeline_no_diff_warning", 0) > 0
 
     return out
 
@@ -338,10 +424,29 @@ def _ensure_luxe_importable() -> None:
 
 
 def _run_capture(cmd: list[str], log_dir: Path,
-                 env: dict | None = None) -> tuple[int, str, str]:
-    """Run cmd; tee stdout/stderr to log files; return (rc, stdout, stderr)."""
+                 env: dict | None = None,
+                 timeout_s: float | None = None) -> tuple[int, str, str]:
+    """Run cmd; tee stdout/stderr to log files; return (rc, stdout, stderr).
+
+    `timeout_s` (when set) kills the subprocess if it exceeds the budget and
+    returns rc=124 (matches GNU `timeout` convention) plus a synthetic stderr
+    so the caller can surface the timeout cleanly. Without this, a single
+    runaway luxe invocation freezes the whole suite.
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False,
+                              env=env, timeout=timeout_s)
+    except subprocess.TimeoutExpired as e:
+        # Kill leaves us with whatever output the child wrote before SIGKILL.
+        stdout = (e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes)
+                  else (e.stdout or ""))
+        stderr = (e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes)
+                  else (e.stderr or ""))
+        stderr = (stderr + f"\n\n[--per-fixture-timeout] killed after {timeout_s:.0f}s\n").lstrip()
+        (log_dir / "stdout.log").write_text(stdout)
+        (log_dir / "stderr.log").write_text(stderr)
+        return 124, stdout, stderr
     (log_dir / "stdout.log").write_text(proc.stdout or "")
     (log_dir / "stderr.log").write_text(proc.stderr or "")
     return proc.returncode, proc.stdout or "", proc.stderr or ""
@@ -434,24 +539,40 @@ def _extract_run_id(text: str) -> str:
     return m.group(1) if m else ""
 
 
-def _luxe_maintain(repo: Path, fixture: Fixture, log_dir: Path
-                   ) -> tuple[int, str, str]:
-    """Returns (rc, run_id, stderr_excerpt). stderr_excerpt is set when rc != 0."""
+def _luxe_maintain(
+    repo: Path, fixture: Fixture, log_dir: Path,
+    *,
+    mode: str = "auto",
+    swarm_config: Path | None = None,
+    single_config: Path | None = None,
+    timeout_s: float | None = None,
+) -> tuple[int, str, str]:
+    """Spawn `luxe maintain`. Returns (rc, run_id, stderr_excerpt).
+
+    `mode` ∈ {"auto", "single", "swarm", "micro"} — passed to `--mode`.
+    `swarm_config`/`single_config` override the default configs and are how
+    multi-variant runs pin per-candidate model overlays.
+    """
     cmd = [
         sys.executable, "-m", "luxe.cli", "maintain",
         str(repo), fixture.goal,
-        "--task", fixture.task_type, "--mode", "auto",
-        "--yes",  # script-mode; --allow-dirty would still prompt if dirty
+        "--task", fixture.task_type, "--mode", mode,
+        "--yes",
     ]
-    rc, out, err = _run_capture(cmd, log_dir)
+    if swarm_config:
+        cmd.extend(["--swarm-config", str(swarm_config)])
+    if single_config:
+        cmd.extend(["--single-config", str(single_config)])
+    rc, out, err = _run_capture(cmd, log_dir, timeout_s=timeout_s)
     excerpt = _stderr_excerpt(err) if rc != 0 else ""
     return rc, _extract_run_id(out + err), excerpt
 
 
-def _luxe_resume(run_id: str, log_dir: Path) -> tuple[int, str]:
+def _luxe_resume(run_id: str, log_dir: Path,
+                 timeout_s: float | None = None) -> tuple[int, str]:
     """Returns (rc, stderr_excerpt). stderr_excerpt is set when rc != 0."""
     cmd = [sys.executable, "-m", "luxe.cli", "resume", run_id, "--yes"]
-    rc, _, err = _run_capture(cmd, log_dir)
+    rc, _, err = _run_capture(cmd, log_dir, timeout_s=timeout_s)
     return rc, _stderr_excerpt(err) if rc != 0 else ""
 
 
@@ -477,6 +598,11 @@ class Diagnostics:
     test_passed: bool | None = None
     events_kinds: dict[str, int] = field(default_factory=dict)
     single_mode: dict | None = None  # populated when single_mode_done event present
+    # Microloop aggregates — zero for swarm/single runs.
+    microstep_count: int = 0
+    microstep_rejects: int = 0
+    blackboard_bytes: int = 0
+    no_diff_warning: bool = False
 
 
 def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
@@ -498,6 +624,10 @@ def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
         test_passed=artefacts.get("test_passed"),
         events_kinds=dict(artefacts.get("events_kinds", {})),
         single_mode=artefacts.get("single_mode"),
+        microstep_count=int(artefacts.get("microstep_count_total", 0)),
+        microstep_rejects=int(artefacts.get("microstep_rejects_total", 0)),
+        blackboard_bytes=int(artefacts.get("blackboard_bytes_total", 0)),
+        no_diff_warning=bool(artefacts.get("no_diff_warning", False)),
     )
 
 
@@ -613,8 +743,8 @@ def decide(
 
 # --- per-fixture orchestration --------------------------------------------
 
-def _load_cached_diag(output: Path, fixture_id: str) -> Diagnostics | None:
-    p = _fixture_dir(output, fixture_id) / "diagnostics.json"
+def _load_cached_diag(output: Path, fixture_id: str, variant_id: str = "") -> Diagnostics | None:
+    p = _fixture_dir(output, fixture_id, variant_id) / "diagnostics.json"
     if not p.is_file():
         return None
     try:
@@ -625,8 +755,8 @@ def _load_cached_diag(output: Path, fixture_id: str) -> Diagnostics | None:
                           if k in Diagnostics.__dataclass_fields__})
 
 
-def _load_cached_result(output: Path, fixture_id: str):
-    p = _fixture_dir(output, fixture_id) / "result.json"
+def _load_cached_result(output: Path, fixture_id: str, variant_id: str = ""):
+    p = _fixture_dir(output, fixture_id, variant_id) / "result.json"
     if not p.is_file():
         return None
     try:
@@ -637,7 +767,8 @@ def _load_cached_result(output: Path, fixture_id: str):
                             if k in FixtureResult.__dataclass_fields__})
 
 
-def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
+def _heal_stale_silent_failure(state: FixtureState, output: Path,
+                                variant_id: str = "") -> bool:
     """If a fixture's cached diagnostics show a silent failure (wall<5s +
     tokens=0) AND it didn't actually do real work (no diff, no PR),
     reclassify state to ERROR AND clear luxe_run_id so the next decide()
@@ -653,10 +784,10 @@ def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
     """
     if state.status not in (FixtureStatus.DONE, FixtureStatus.ERROR):
         return False
-    diag = _load_cached_diag(output, state.fixture_id)
+    diag = _load_cached_diag(output, state.fixture_id, variant_id)
     if diag is None:
         return False
-    cached_result = _load_cached_result(output, state.fixture_id)
+    cached_result = _load_cached_result(output, state.fixture_id, variant_id)
     truly_silent = (diag.tokens_total == 0 and diag.wall_s < 5.0
                     and (cached_result is None
                          or (not cached_result.diff_produced
@@ -669,7 +800,7 @@ def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
             and cached_result.passed):
         state.status = FixtureStatus.DONE
         state.last_error = ""
-        save_state(output, state)
+        save_state(output, state, variant_id)
         return True
 
     if not truly_silent:
@@ -686,7 +817,7 @@ def _heal_stale_silent_failure(state: FixtureState, output: Path) -> bool:
         f"no diff, no PR); cleared luxe_run_id (was {old_id or '(none)'}) "
         f"so retry runs fresh (was status={prev_status})"
     )
-    save_state(output, state)
+    save_state(output, state, variant_id)
     return True
 
 
@@ -700,15 +831,24 @@ def run_fixture(
     retry_skipped: bool = False,
     dry_run: bool = False,
     log: callable = print,
+    variant: Variant | None = None,
+    overlay_dir: Path | None = None,
+    per_fixture_timeout_s: float | None = None,
 ) -> tuple[FixtureResult, Diagnostics]:
-    """Execute one fixture with full recovery semantics. Persists state."""
-    fdir = _fixture_dir(output, fixture.id)
-    state = load_state(output, fixture.id)
+    """Execute one fixture with full recovery semantics. Persists state.
+
+    When `variant` is set, the fixture runs under that (mode, model) cell:
+    state/result/diags namespace under output/<variant_id>/, and the CLI
+    is invoked with the right --mode and per-variant overlay configs.
+    """
+    variant_id = variant.variant_id if variant else ""
+    fdir = _fixture_dir(output, fixture.id, variant_id)
+    state = load_state(output, fixture.id, variant_id=variant_id)
     state.fixture_id = fixture.id
 
     # Self-heal: if the prior run silent-failed but was saved as DONE
     # (pre-fix builds did this), reclassify to ERROR so retry semantics work.
-    if _heal_stale_silent_failure(state, output):
+    if _heal_stale_silent_failure(state, output, variant_id):
         log(f"  ↻ reclassified prior DONE → ERROR (silent failure detected "
             "in cached diagnostics)")
 
@@ -724,7 +864,7 @@ def run_fixture(
     if decision == Decision.SKIP_REQUIRED_ENV:
         state.status = FixtureStatus.SKIPPED
         state.last_error = reason
-        save_state(output, state)
+        save_state(output, state, variant_id)
         append_history(output, {
             "fixture": fixture.id, "decision": decision.value, "reason": reason,
         })
@@ -767,7 +907,7 @@ def run_fixture(
         state.last_error = err
         state.attempts += 1
         state.last_attempt_ts = time.time()
-        save_state(output, state)
+        save_state(output, state, variant_id)
         append_history(output, {"fixture": fixture.id, "error": err})
         return (FixtureResult(fixture_id=fixture.id, error=err),
                 Diagnostics(fixture_id=fixture.id))
@@ -777,25 +917,71 @@ def run_fixture(
     state.attempts += 1
     state.last_attempt_ts = time.time()
     state.status = FixtureStatus.RUNNING
-    save_state(output, state)
+    save_state(output, state, variant_id)
+
+    # Resolve per-variant config overlays (set when running mono/swarm/micro
+    # against a specific candidate model).
+    overlay_path: Path | None = None
+    if variant is not None:
+        if overlay_dir is None:
+            overlay_dir = output / "_overlays"
+        overlay_path = make_overlay(variant, overlay_dir)
+    cli_mode = "auto"
+    swarm_cfg: Path | None = None
+    single_cfg: Path | None = None
+    if variant is not None:
+        cli_mode = variant.cli_mode
+        if variant.cli_mode == "single":
+            single_cfg = overlay_path
+        else:
+            swarm_cfg = overlay_path
 
     # Spawn the right command.
     if decision == Decision.RUN_RESUME:
         log(f"  → invoking `luxe resume {state.luxe_run_id}`")
-        rc, err_excerpt = _luxe_resume(state.luxe_run_id, fdir)
+        rc, err_excerpt = _luxe_resume(state.luxe_run_id, fdir,
+                                       timeout_s=per_fixture_timeout_s)
         run_id = state.luxe_run_id
         if rc != 0 and err_excerpt:
             log(f"  ! luxe resume rc={rc}: {err_excerpt[:200]}")
     else:
-        log(f"  → invoking `luxe maintain` (fresh)")
-        rc, run_id, err_excerpt = _luxe_maintain(repo, fixture, fdir)
+        if variant is not None:
+            log(f"  → invoking `luxe maintain --mode {cli_mode}` "
+                f"({variant.model_label})")
+        else:
+            log(f"  → invoking `luxe maintain` (fresh)")
+        rc, run_id, err_excerpt = _luxe_maintain(
+            repo, fixture, fdir,
+            mode=cli_mode, swarm_config=swarm_cfg, single_config=single_cfg,
+            timeout_s=per_fixture_timeout_s,
+        )
+        if rc == 124:
+            # Killed by --per-fixture-timeout; mark ERROR (not RUNNING) so the
+            # next --retry-errors picks it up cleanly. Don't re-classify as
+            # RUNNING — that would deadlock the resume path on stages that
+            # never completed.
+            state.status = FixtureStatus.ERROR
+            state.last_error = (
+                f"per-fixture timeout after {per_fixture_timeout_s:.0f}s; "
+                "luxe killed mid-run"
+            )
+            state.luxe_run_id = ""  # discard partial; next retry runs fresh
+            save_state(output, state, variant_id)
+            append_history(output, {
+                "fixture": fixture.id, "rc": rc,
+                "error": state.last_error, "variant": variant_id,
+            })
+            log(f"  ! per-fixture timeout — fixture marked ERROR")
+            return (FixtureResult(fixture_id=fixture.id,
+                                  error=state.last_error),
+                    Diagnostics(fixture_id=fixture.id))
         if not run_id:
             state.status = FixtureStatus.ERROR
             state.last_error = (
                 f"no run_id captured (rc={rc}); stderr: {err_excerpt}"
                 if err_excerpt else f"no run_id captured (rc={rc})"
             )
-            save_state(output, state)
+            save_state(output, state, variant_id)
             append_history(output, {
                 "fixture": fixture.id, "rc": rc, "error": state.last_error,
             })
@@ -803,7 +989,7 @@ def run_fixture(
             return (FixtureResult(fixture_id=fixture.id, error=state.last_error),
                     Diagnostics(fixture_id=fixture.id))
         state.luxe_run_id = run_id
-        save_state(output, state)
+        save_state(output, state, variant_id)
 
     artefacts = _read_run_artefacts(run_id)
     fr = grade_fixture(
@@ -841,12 +1027,13 @@ def run_fixture(
         state.status = FixtureStatus.DONE
         state.last_error = ""
 
-    save_state(output, state)
+    save_state(output, state, variant_id)
     append_history(output, {
         "fixture": fixture.id, "decision": decision.value,
         "rc": rc, "score": fr.score, "passed": fr.passed,
         "run_id": run_id, "wall_s": diag.wall_s,
         "status": state.status.value,
+        "variant": variant_id,
     })
     return fr, diag
 
@@ -880,6 +1067,32 @@ def _describe_outcome(fixture: Fixture) -> str:
     return f"unknown outcome kind: {kind}"
 
 
+def _load_variants(path: Path) -> list[Variant]:
+    """Load a (mode, model_label, model_id) variant matrix from YAML.
+
+    Schema:
+        variants:
+          - {mode: mono|swarm|micro, model_label: <short>, model_id: <oMLX-id>}
+
+    "single" is also accepted as a synonym for "mono" (Variant translates
+    to "single" on the CLI side via cli_mode).
+    """
+    raw = yaml.safe_load(path.read_text()) or {}
+    out: list[Variant] = []
+    for v in raw.get("variants") or []:
+        mode = str(v["mode"]).lower()
+        if mode == "single":
+            mode = "mono"
+        if mode not in ("mono", "swarm", "micro"):
+            raise ValueError(f"variants.yaml: unknown mode {mode!r}")
+        out.append(Variant(
+            mode=mode,
+            model_label=str(v["model_label"]),
+            model_id=str(v["model_id"]),
+        ))
+    return out
+
+
 def main() -> int:
     _ensure_luxe_importable()
     parser = argparse.ArgumentParser(prog="luxe acceptance suite")
@@ -904,6 +1117,17 @@ def main() -> int:
     parser.add_argument("--work-dir", default=None,
                         help="Persistent clone dir (default: temp). Reuse to "
                              "avoid re-cloning between invocations")
+    parser.add_argument("--variants", default=None,
+                        help="Path to a variants.yaml that defines (mode × model) "
+                             "test cells. When set, each fixture runs once per "
+                             "variant under output/<variant_id>/<fixture_id>/. "
+                             "Default: single-variant mode=auto, no overlay.")
+    parser.add_argument("--per-fixture-timeout", type=float, default=None,
+                        help="Wall-clock cap (seconds) per fixture. If exceeded, "
+                             "luxe is killed and the fixture is marked ERROR with "
+                             "luxe_run_id cleared so --retry-errors restarts it "
+                             "fresh. Recommended for long-running runs (e.g. "
+                             "--per-fixture-timeout 1200 = 20 min).")
     args = parser.parse_args()
 
     fixtures_path = Path(args.fixtures) if args.fixtures else \
@@ -939,16 +1163,46 @@ def main() -> int:
         work_dir = Path(td)
         cleanup_work_dir = True
 
+    # Variant matrix — when set, each fixture runs once per (mode, model) cell.
+    variants: list[Variant] = []
+    if args.variants:
+        variants = _load_variants(Path(args.variants))
+        if not variants:
+            print(f"variants file {args.variants} loaded zero variants — nothing to do.")
+            return 2
+
     print(f"\n━━━ luxe acceptance suite")
     print(f"fixtures: {fixtures_path}  ({len(fixtures)} selected)")
     print(f"output:   {output}")
     print(f"work_dir: {work_dir}")
+    if variants:
+        print(f"variants: {len(variants)} cells × {len(fixtures)} fixtures = "
+              f"{len(variants) * len(fixtures)} runs")
+        for v in variants:
+            print(f"  - {v.variant_id}  ({v.model_id})")
+
+    overlay_dir = output / "_overlays" if variants else None
+    # Per-variant aggregation buckets so we can emit a comparison table
+    # at the end without re-reading from disk.
+    by_variant: dict[str, list[tuple[FixtureResult, Diagnostics]]] = {}
+
+    # Iteration plan: flat list of (variant|None, fixture) pairs. Single-
+    # variant mode preserves the legacy output layout (no variant subdir).
+    plan: list[tuple[Variant | None, Fixture]] = []
+    if variants:
+        for v in variants:
+            for f in fixtures:
+                plan.append((v, f))
+    else:
+        for f in fixtures:
+            plan.append((None, f))
 
     results: list[FixtureResult] = []
     diags: list[Diagnostics] = []
     try:
-        for f in fixtures:
-            print(f"\n━━━ {f.id}  [{f.task_type}]  {f.goal[:80]}")
+        for variant, f in plan:
+            tag = f"[{variant.variant_id}] " if variant else ""
+            print(f"\n━━━ {tag}{f.id}  [{f.task_type}]  {f.goal[:80]}")
             print(f"      grading: {_describe_outcome(f)}")
             try:
                 r, d = run_fixture(
@@ -957,6 +1211,9 @@ def main() -> int:
                     retry_errors=args.retry_errors,
                     retry_skipped=args.retry_skipped,
                     dry_run=args.dry_run,
+                    variant=variant,
+                    overlay_dir=overlay_dir,
+                    per_fixture_timeout_s=args.per_fixture_timeout,
                 )
             except KeyboardInterrupt:
                 print(f"  [interrupted by user; state preserved]")
@@ -967,6 +1224,8 @@ def main() -> int:
                 d = Diagnostics(fixture_id=f.id)
             results.append(r)
             diags.append(d)
+            if variant is not None:
+                by_variant.setdefault(variant.variant_id, []).append((r, d))
             # Differentiate cached-skip from a fresh run so warnings/diagnostics
             # below aren't read as live information when they're stale.
             cached_skip = (r.skipped and "already done" in (r.skipped_reason or ""))
@@ -991,7 +1250,7 @@ def main() -> int:
             if d.stages_resumed:
                 print(f"        resumed: {','.join(d.stages_resumed)}")
             # Silent-failure diagnostics for this run only.
-            fdir = output / f.id
+            fdir = (output / variant.variant_id / f.id) if variant else (output / f.id)
             if _is_silent_failure(d, r) and not r.skipped and not r.error:
                 for note in _diagnose_silent_failure(d, fdir):
                     print(f"        ⚠ {note}")
@@ -1042,6 +1301,45 @@ def main() -> int:
             print(f"\n  Tuning hints:")
             for h in d_agg["tuning_hints"]:
                 print(f"    - {h}")
+
+        # Per-variant comparison table (only when --variants was set).
+        if by_variant:
+            print(f"\n━━━ Mode × Model comparison")
+            header = (f"  {'variant':30s}  {'pass':>4}  {'fail':>4}  {'err':>3}  "
+                      f"{'avg_wall':>8}  {'avg_tok':>8}  "
+                      f"{'µ-rej':>6}  {'no-diff':>7}")
+            print(header)
+            print(f"  {'-' * (len(header) - 2)}")
+            cmp_rows: dict[str, dict] = {}
+            for vid, pairs in by_variant.items():
+                ok = [(r, d) for r, d in pairs if not r.error]
+                passed = sum(1 for r, _ in ok if r.passed)
+                failed = sum(1 for r, _ in ok if not r.passed and not r.skipped)
+                errored = sum(1 for r, _ in pairs if r.error)
+                attempted_v = [(r, d) for r, d in ok if not r.skipped]
+                avg_wall = (sum(d.wall_s for _, d in attempted_v) / len(attempted_v)
+                            if attempted_v else 0.0)
+                avg_tok = (sum(d.tokens_total for _, d in attempted_v) / len(attempted_v)
+                           if attempted_v else 0.0)
+                # Microloop-specific signals — zero on swarm/mono variants,
+                # so they don't pollute the table for non-micro rows.
+                total_rej = sum(d.microstep_rejects for _, d in attempted_v)
+                n_no_diff = sum(1 for _, d in attempted_v if d.no_diff_warning)
+                print(f"  {vid:30s}  {passed:>4}  {failed:>4}  {errored:>3}  "
+                      f"{avg_wall:>7.1f}s  {avg_tok:>8.0f}  "
+                      f"{total_rej:>6}  {n_no_diff:>7}")
+                cmp_rows[vid] = {
+                    "passed": passed, "failed": failed, "errored": errored,
+                    "avg_wall_s": round(avg_wall, 1),
+                    "avg_tokens": int(avg_tok),
+                    "microstep_rejects_total": total_rej,
+                    "no_diff_warnings": n_no_diff,
+                    "fixtures": len(pairs),
+                }
+            (output / "comparison.json").write_text(json.dumps({
+                "variants": cmp_rows, "fixtures": len(fixtures),
+            }, indent=2))
+            print(f"\n  Per-fixture mode breakdown saved: {output}/comparison.json")
         return 0 if summary["v1_release_gate"] else 1
     finally:
         if cleanup_work_dir:

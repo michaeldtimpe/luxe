@@ -23,6 +23,16 @@ import yaml
 class RunMode(str, Enum):
     SINGLE = "single"
     SWARM = "swarm"
+    # Micro: PipelineOrchestrator with execution_mode="microloop". Not picked
+    # by `select_mode()` automatically — only via explicit `--mode micro`,
+    # primarily for the benchmark comparison harness.
+    MICRO = "micro"
+    # Phased: high-quality two-tier orchestration where a 32B Instruct
+    # architect plans + reviews and a 14B Coder executes atomic tasks. The
+    # architect explicitly checkpoints the work between phases; if a task
+    # exhausts its retry budget the run gracefully aborts with a report
+    # rather than ship broken or hallucinated code. Quality > speed.
+    PHASED = "phased"
 
 
 @dataclass

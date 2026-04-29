@@ -1,5 +1,10 @@
 omlx_base_url: "http://127.0.0.1:8000"
 
+# Pipeline execution mode:
+#   "swarm"     — sequential specialist pipeline (architect → workers → validator → synthesizer)
+#   "microloop" — small-agent draft/verify feedback loop dispatched per worker subtask
+execution: "swarm"
+
 profile:
   name: "DeepSeek Family (32 GB)"
   description: "DeepSeek pipeline using R1-Distill-Qwen + Coder-V2-Lite, optimized for 32 GB RAM"
@@ -7,12 +12,23 @@ profile:
   peak_model_gb: 17.17
 
 models:
-  architect:      "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
-  worker_read:    "DeepSeek-Coder-V2-Lite-Instruct-4bit-mlx"
-  worker_code:    "DeepSeek-R1-Distill-Qwen-14B-4bit"
-  worker_analyze: "DeepSeek-R1-Distill-Qwen-7B-4bit"
-  validator:      "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
-  synthesizer:    "DeepSeek-R1-Distill-Qwen-32B-4bit"
+  architect:       "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
+  worker_read:     "DeepSeek-Coder-V2-Lite-Instruct-4bit-mlx"
+  worker_code:     "DeepSeek-R1-Distill-Qwen-14B-4bit"
+  worker_analyze:  "DeepSeek-R1-Distill-Qwen-7B-4bit"
+  validator:       "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
+  synthesizer:     "DeepSeek-R1-Distill-Qwen-32B-4bit"
+  # Microloop specialists — alias already-loaded models for zero swap cost.
+  # Drafter uses the 7B analyze model (not Coder-V2-Lite, which lacks native
+  # tool-call template and is more brittle in tight loops).
+  micro_architect: "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
+  drafter:         "DeepSeek-R1-Distill-Qwen-7B-4bit"
+  linter:          "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
+  verifier:        "DeepSeek-R1-Distill-Qwen-1.5B-4bit"
+  coder:           "DeepSeek-R1-Distill-Qwen-14B-4bit"
+  # Phased-mode chief architect — uses the 32B distill (highest-quality
+  # planner the deepseek roster has). Symmetry with qwen_32gb.yaml.
+  chief_architect: "DeepSeek-R1-Distill-Qwen-32B-4bit"
 
 # Model memory footprint (4-bit quantized):
 #   DeepSeek-R1-Distill-Qwen-1.5B-4bit        ~0.93 GB  (architect, validator)
@@ -75,6 +91,58 @@ roles:
     max_tokens_per_turn: 8192
     temperature: 0.3
     tools: []
+
+  # --- Microloop specialists (used when execution: "microloop") ---------
+  # Small num_ctx values keep each step inside the high-attention zone.
+  # All five reuse already-loaded weights from the swarm roles above.
+
+  micro_architect:
+    model_key: micro_architect
+    num_ctx: 4096
+    max_steps: 1
+    max_tokens_per_turn: 1024
+    temperature: 0.3
+    tools: []
+
+  drafter:
+    model_key: drafter
+    num_ctx: 4096
+    max_steps: 3
+    max_tokens_per_turn: 1024
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep]
+
+  linter:
+    model_key: linter
+    num_ctx: 2048
+    max_steps: 2
+    max_tokens_per_turn: 512
+    temperature: 0.1
+    tools: [read_file, grep]
+
+  verifier:
+    model_key: verifier
+    num_ctx: 2048
+    max_steps: 2
+    max_tokens_per_turn: 512
+    temperature: 0.1
+    tools: []
+
+  coder:
+    model_key: coder
+    num_ctx: 8192
+    max_steps: 4
+    max_tokens_per_turn: 2048
+    temperature: 0.2
+    tools: [read_file, write_file, edit_file, grep]
+
+  chief_architect:
+    model_key: chief_architect
+    num_ctx: 16384
+    max_steps: 12
+    max_tokens_per_turn: 4096
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep, lint, typecheck]
 
 task_types:
   review:

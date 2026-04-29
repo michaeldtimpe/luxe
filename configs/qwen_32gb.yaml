@@ -1,5 +1,10 @@
 omlx_base_url: "http://127.0.0.1:8000"
 
+# Pipeline execution mode:
+#   "swarm"     — sequential specialist pipeline (architect → workers → validator → synthesizer)
+#   "microloop" — small-agent draft/verify feedback loop dispatched per worker subtask
+execution: "swarm"
+
 profile:
   name: "Qwen Family (32 GB)"
   description: "All-Qwen pipeline using Qwen2.5 and Qwen2.5-Coder models, optimized for 32 GB RAM"
@@ -7,12 +12,23 @@ profile:
   peak_model_gb: 7.74
 
 models:
-  architect:      "Qwen2.5-3B-Instruct-4bit"
-  worker_read:    "Qwen2.5-Coder-7B-Instruct-4bit"
-  worker_code:    "Qwen2.5-Coder-14B-Instruct-4bit"
-  worker_analyze: "Qwen2.5-Coder-7B-Instruct-4bit"
-  validator:      "Qwen2.5-3B-Instruct-4bit"
-  synthesizer:    "Qwen2.5-14B-Instruct-4bit"
+  architect:       "Qwen2.5-3B-Instruct-4bit"
+  worker_read:     "Qwen2.5-Coder-7B-Instruct-4bit"
+  worker_code:     "Qwen2.5-Coder-14B-Instruct-4bit"
+  worker_analyze:  "Qwen2.5-Coder-7B-Instruct-4bit"
+  validator:       "Qwen2.5-3B-Instruct-4bit"
+  synthesizer:     "Qwen2.5-14B-Instruct-4bit"
+  # Microloop specialists — alias the same physical models, so backend
+  # registry reuses already-loaded weights (zero swap cost vs swarm).
+  micro_architect: "Qwen2.5-3B-Instruct-4bit"
+  drafter:         "Qwen2.5-Coder-7B-Instruct-4bit"
+  linter:          "Qwen2.5-3B-Instruct-4bit"
+  verifier:        "Qwen2.5-3B-Instruct-4bit"
+  coder:           "Qwen2.5-Coder-14B-Instruct-4bit"
+  # Phased mode — chief_architect plans + reviews using a high-weight
+  # general Instruct model (better at planning + spec-grading than the
+  # Coder variants); coder is the existing Coder-14B worker_code role.
+  chief_architect: "Qwen2.5-32B-Instruct-4bit"
 
 # Model memory footprint (4-bit quantized):
 #   Qwen2.5-3B-Instruct-4bit       ~1.62 GB  (architect, validator)
@@ -69,6 +85,63 @@ roles:
     max_tokens_per_turn: 8192
     temperature: 0.3
     tools: []
+
+  # --- Microloop specialists (used when execution: "microloop") ---------
+  # Small num_ctx values keep each step inside the high-attention zone
+  # (~2-4K). All five reuse already-loaded weights from the swarm roles
+  # above so the microloop adds zero net model swaps.
+
+  micro_architect:
+    model_key: micro_architect
+    num_ctx: 4096
+    max_steps: 1
+    max_tokens_per_turn: 1024
+    temperature: 0.3
+    tools: []
+
+  drafter:
+    model_key: drafter
+    num_ctx: 4096
+    max_steps: 3
+    max_tokens_per_turn: 1024
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep]
+
+  linter:
+    model_key: linter
+    num_ctx: 2048
+    max_steps: 2
+    max_tokens_per_turn: 512
+    temperature: 0.1
+    tools: [read_file, grep]
+
+  verifier:
+    model_key: verifier
+    num_ctx: 2048
+    max_steps: 2
+    max_tokens_per_turn: 512
+    temperature: 0.1
+    tools: []
+
+  coder:
+    model_key: coder
+    num_ctx: 8192
+    max_steps: 4
+    max_tokens_per_turn: 2048
+    temperature: 0.2
+    tools: [read_file, write_file, edit_file, grep]
+
+  # Phased-mode chief architect — plans + reviews with the 32B Instruct.
+  # Larger num_ctx than the swarm architect so it can hold the blackboard
+  # for a full review group. tools: [] at plan time; populated dynamically
+  # in run_phased's review phase.
+  chief_architect:
+    model_key: chief_architect
+    num_ctx: 16384
+    max_steps: 12
+    max_tokens_per_turn: 4096
+    temperature: 0.2
+    tools: [read_file, list_dir, glob, grep, lint, typecheck]
 
 task_types:
   review:
