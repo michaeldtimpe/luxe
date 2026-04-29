@@ -25,6 +25,7 @@ from benchmarks.maintain_suite.run import (
     FixtureState,
     FixtureStatus,
     _luxe_run_dir,
+    _stderr_excerpt,
     decide,
     load_state,
     run_fixture,
@@ -338,3 +339,42 @@ def test_tuning_hints_test_failures():
     diags = [Diagnostics(fixture_id="x", test_passed=False)]
     hints = br._tuning_hints(diags, [])
     assert any("failing tests" in h for h in hints)
+
+
+# --- stderr excerpt --
+
+def test_stderr_excerpt_short_passthrough():
+    assert _stderr_excerpt("boom") == "boom"
+
+
+def test_stderr_excerpt_empty():
+    assert _stderr_excerpt("") == ""
+    assert _stderr_excerpt(None) == ""
+
+
+def test_stderr_excerpt_long_truncates_to_tail():
+    long = "header\n" + "x" * 1000 + "\nlast meaningful line"
+    out = _stderr_excerpt(long, max_chars=100)
+    assert out.startswith("...(truncated)")
+    assert "last meaningful line" in out
+    assert len(out) <= len("...(truncated) ") + 100
+
+
+def test_run_fixture_surfaces_stderr_excerpt(tmp_path, monkeypatch):
+    """When luxe.cli fails to start, the stderr should be captured into
+    state.last_error so the user sees what broke without grepping logs."""
+    out = tmp_path / "acc"
+    monkeypatch.setattr(br, "_resolve_repo",
+                        lambda fix, wd: (Path("/tmp"), ""))
+    monkeypatch.setattr(br, "_head_sha", lambda repo: "deadbeef" * 5)
+
+    def fake_maintain(repo, fixture, log_dir):
+        return 1, "", "ModuleNotFoundError: No module named 'luxe'"
+    monkeypatch.setattr(br, "_luxe_maintain", fake_maintain)
+
+    fr, diag = run_fixture(_f(), out, tmp_path / "wd")
+    assert fr.error
+    assert "ModuleNotFoundError" in fr.error
+    state = load_state(out, "f1")
+    assert state.status == FixtureStatus.ERROR
+    assert "ModuleNotFoundError" in state.last_error

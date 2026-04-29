@@ -296,6 +296,33 @@ def _head_sha(repo: Path) -> str:
 
 # --- subprocess helpers ----------------------------------------------------
 
+def _ensure_luxe_importable() -> None:
+    """Fail fast if `luxe` isn't importable from the active Python environment.
+
+    The runner spawns `<sys.executable> -m luxe.cli` per fixture; if luxe isn't
+    installed in the same env, every fixture errors with ModuleNotFoundError
+    and 0 wall time. Surface this once, up front, with venv guidance.
+    """
+    try:
+        import luxe  # noqa: F401
+    except ImportError as e:
+        repo_root = Path(__file__).parent.parent.parent
+        candidate = repo_root / ".venv" / "bin" / "python"
+        msg = [
+            f"luxe is not importable from this Python ({sys.executable}).",
+            f"  ImportError: {e}",
+            "",
+            "Activate the project venv first:",
+            f"  source {repo_root}/.venv/bin/activate",
+            "  python -m benchmarks.maintain_suite.run ...",
+            "",
+            "Or invoke the venv's python directly:",
+            f"  {candidate} -m benchmarks.maintain_suite.run ...",
+        ]
+        sys.stderr.write("\n".join(msg) + "\n")
+        sys.exit(2)
+
+
 def _run_capture(cmd: list[str], log_dir: Path,
                  env: dict | None = None) -> tuple[int, str, str]:
     """Run cmd; tee stdout/stderr to log files; return (rc, stdout, stderr)."""
@@ -306,13 +333,25 @@ def _run_capture(cmd: list[str], log_dir: Path,
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
+def _stderr_excerpt(text: str, max_chars: int = 400) -> str:
+    """Last few lines of stderr — used in state.last_error so the user sees
+    *what* broke without grepping through log files."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return "...(truncated) " + text[-max_chars:]
+
+
 def _extract_run_id(text: str) -> str:
     m = re.search(r"run_id=([0-9a-f]{8,})", text)
     return m.group(1) if m else ""
 
 
 def _luxe_maintain(repo: Path, fixture: Fixture, log_dir: Path
-                   ) -> tuple[int, str]:
+                   ) -> tuple[int, str, str]:
+    """Returns (rc, run_id, stderr_excerpt). stderr_excerpt is set when rc != 0."""
     cmd = [
         sys.executable, "-m", "luxe.cli", "maintain",
         str(repo), fixture.goal,
@@ -320,13 +359,15 @@ def _luxe_maintain(repo: Path, fixture: Fixture, log_dir: Path
         "--yes",  # script-mode; --allow-dirty would still prompt if dirty
     ]
     rc, out, err = _run_capture(cmd, log_dir)
-    return rc, _extract_run_id(out + err)
+    excerpt = _stderr_excerpt(err) if rc != 0 else ""
+    return rc, _extract_run_id(out + err), excerpt
 
 
-def _luxe_resume(run_id: str, log_dir: Path) -> int:
+def _luxe_resume(run_id: str, log_dir: Path) -> tuple[int, str]:
+    """Returns (rc, stderr_excerpt). stderr_excerpt is set when rc != 0."""
     cmd = [sys.executable, "-m", "luxe.cli", "resume", run_id, "--yes"]
-    rc, _, _ = _run_capture(cmd, log_dir)
-    return rc
+    rc, _, err = _run_capture(cmd, log_dir)
+    return rc, _stderr_excerpt(err) if rc != 0 else ""
 
 
 # --- diagnostics ----------------------------------------------------------
@@ -571,18 +612,24 @@ def run_fixture(
     # Spawn the right command.
     if decision == Decision.RUN_RESUME:
         log(f"  → invoking `luxe resume {state.luxe_run_id}`")
-        rc = _luxe_resume(state.luxe_run_id, fdir)
+        rc, err_excerpt = _luxe_resume(state.luxe_run_id, fdir)
         run_id = state.luxe_run_id
+        if rc != 0 and err_excerpt:
+            log(f"  ! luxe resume rc={rc}: {err_excerpt[:200]}")
     else:
         log(f"  → invoking `luxe maintain` (fresh)")
-        rc, run_id = _luxe_maintain(repo, fixture, fdir)
+        rc, run_id, err_excerpt = _luxe_maintain(repo, fixture, fdir)
         if not run_id:
             state.status = FixtureStatus.ERROR
-            state.last_error = f"no run_id captured (rc={rc}); see {fdir}/stderr.log"
+            state.last_error = (
+                f"no run_id captured (rc={rc}); stderr: {err_excerpt}"
+                if err_excerpt else f"no run_id captured (rc={rc})"
+            )
             save_state(output, state)
             append_history(output, {
                 "fixture": fixture.id, "rc": rc, "error": state.last_error,
             })
+            log(f"  ! {state.last_error[:200]}")
             return (FixtureResult(fixture_id=fixture.id, error=state.last_error),
                     Diagnostics(fixture_id=fixture.id))
         state.luxe_run_id = run_id
@@ -629,6 +676,7 @@ def _verdict(r: FixtureResult) -> str:
 
 
 def main() -> int:
+    _ensure_luxe_importable()
     parser = argparse.ArgumentParser(prog="luxe acceptance suite")
     parser.add_argument("--fixtures", default=None,
                         help="Path to fixtures.yaml (default: alongside this file)")
