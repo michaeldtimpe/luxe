@@ -99,7 +99,7 @@ _WRITE_TASKS = {"implement", "bugfix", "document", "manage"}
 @click.argument("repo")
 @click.argument("goal")
 @click.option("--mode", "mode_flag", default="auto",
-              type=click.Choice(["auto", "single", "swarm"]),
+              type=click.Choice(["auto", "single", "swarm", "micro", "phased"]),
               help="Execution mode (default: auto picks based on goal + repo size)")
 @click.option("--task", "task_type", default=None,
               type=click.Choice(["review", "implement", "bugfix", "document", "summarize", "manage"]),
@@ -118,11 +118,16 @@ _WRITE_TASKS = {"implement", "bugfix", "document", "manage"}
                    "draft→ready (or vice versa) based on CI result")
 @click.option("--output", "output_dir", default="./runs", help="Directory for run artefacts")
 @click.option("--save-report", is_flag=True, help="Save final report as markdown to --output")
+@click.option("--keep-loaded", is_flag=True, default=False,
+              help="Skip the post-run model unload. By default luxe maintain "
+                   "unloads every model it touched once the run completes, "
+                   "freeing oMLX RAM. Pass --keep-loaded to keep them warm "
+                   "for a follow-up run.")
 def maintain(
     repo: str, goal: str, mode_flag: str, task_type: str | None,
     swarm_config_path: str | None, single_config_path: str | None,
     allow_dirty: bool, skip_confirm: bool, watch_ci: bool,
-    output_dir: str, save_report: bool,
+    output_dir: str, save_report: bool, keep_loaded: bool,
 ):
     """Run a luxe maintain pipeline against a repository.
 
@@ -297,12 +302,50 @@ def maintain(
                 spec.actual_mode = "swarm"  # record the actual path taken
             else:
                 final_report = single_result.final_text or ""
+        elif decision.mode == RunMode.PHASED:
+            from luxe.agents.phased import run_phased
+            cfg = load_config(swarm_config_path)
+            set_repo_root(repo_path)
+            languages = _detect_languages_for_repo(repo_path)
+            console.print(f"\n[bold magenta]▶ Phased mode[/]  "
+                          f"(architect: {cfg.model_for_role('chief_architect')}, "
+                          f"coder: {cfg.model_for_role('worker_code')})")
+
+            # Lightweight backend factory — used by phased to swap roles.
+            _backends: dict[str, Backend] = {}
+            def _backend_for(role_name: str) -> Backend:
+                model = cfg.model_for_role(role_name)
+                if model not in _backends:
+                    _backends[model] = Backend(
+                        base_url=cfg.omlx_base_url, model=model,
+                    )
+                return _backends[model]
+
+            from luxe.repo_index import build_repo_summary
+            summary = build_repo_summary(repo_path).render()
+
+            phased_result, phased_telem = run_phased(
+                _backend_for, cfg,
+                goal=goal, task_type=detected_task,
+                repo_summary=summary,
+                languages=languages,
+                extra_tool_defs=extra_tool_defs or None,
+                extra_tool_fns=extra_tool_fns or None,
+                run_id=spec.run_id,
+            )
+            append_event(spec.run_id, "phased_done", **phased_telem.to_dict())
+            final_report = phased_result.final_text or ""
         else:
             cfg = load_config(swarm_config_path)
+            # Map RunMode → orchestrator execution_mode. SWARM is the default
+            # (sequential specialist pipeline); MICRO runs the same pipeline
+            # but dispatches each worker subtask through run_microloop().
+            exec_mode = "microloop" if decision.mode == RunMode.MICRO else "swarm"
             orch = PipelineOrchestrator(
                 cfg, run_id=spec.run_id,
                 extra_tool_defs=extra_tool_defs or None,
                 extra_tool_fns=extra_tool_fns or None,
+                execution_mode=exec_mode,
             )
             pipeline_run = orch.run(goal, detected_task, repo_path)
             final_report = pipeline_run.final_report or ""
@@ -382,10 +425,58 @@ def maintain(
                 pass
         search_mod.reset_index()
         symbols_mod.reset_index()
+        # Unload models from oMLX so they don't sit resident between runs.
+        # On a 64GB Mac the small chat tier + Coder-14B + Coder-32B can
+        # quickly accumulate to 40+GB resident otherwise.
+        if not keep_loaded:
+            try:
+                from luxe.backend import Backend as _UnloadBackend
+                _ub = _UnloadBackend(model="(unload-probe)")
+                results = _ub.unload_all_loaded()
+                if results:
+                    n_ok = sum(1 for v in results.values() if v)
+                    console.print(
+                        f"[dim]· Unloaded {n_ok}/{len(results)} model(s) "
+                        f"from oMLX (use --keep-loaded to skip)[/]"
+                    )
+            except Exception as e:
+                console.print(f"[dim]· Model unload skipped: {e}[/]")
         try:
             ctx.__exit__(None, None, None)  # release lock
         except Exception:
             pass
+
+
+@main.command(name="unload")
+@click.option("--except", "except_for", multiple=True,
+              help="Model ID(s) to keep resident (repeatable). Default: unload all.")
+def unload_models(except_for: tuple[str, ...]):
+    """Unload all currently-loaded models from oMLX to free RAM.
+
+    Best run between bench phases or after long sessions. Models are
+    re-loaded automatically on next chat call (cold-load latency applies).
+    """
+    from luxe.backend import Backend
+    b = Backend(model="(unload-cli)")
+    if not b.health():
+        console.print("[red]oMLX unreachable — is `brew services start omlx` running?[/]")
+        sys.exit(2)
+    loaded = b.loaded_models()
+    if not loaded:
+        console.print("[dim]No models currently loaded — nothing to unload.[/]")
+        return
+    keep = set(except_for or [])
+    console.print(f"Loaded models: {len(loaded)}")
+    for m in loaded:
+        marker = "[dim](kept)[/]" if m in keep else ""
+        console.print(f"  · {m} {marker}")
+    results = b.unload_all_loaded(except_for=list(keep))
+    n_ok = sum(1 for v in results.values() if v)
+    console.print(f"\n[bold]Unloaded {n_ok}/{len(results)} model(s)[/]")
+    if n_ok < len(results):
+        for mid, ok in results.items():
+            if not ok:
+                console.print(f"  [yellow]✗ {mid} — unload failed[/]")
 
 
 @main.command(name="pr")
@@ -806,8 +897,14 @@ def compare(metrics_dir: str):
 @click.option("--tags", multiple=True, help="Filter tasks by tag (security, python, core, etc.)")
 @click.option("--output", "output_dir", default="./benchmarks", help="Output directory")
 @click.option("--fixtures", "fixture_dir", default=None, help="Directory for test repos (default: temp)")
+@click.option("--execution", "execution",
+              type=click.Choice(["swarm", "microloop"]), default=None,
+              help="Override pipeline execution mode for all configs.")
+@click.option("--compare", "compare_modes", is_flag=True, default=False,
+              help="Run each config under both 'swarm' and 'microloop' for side-by-side A/B.")
 def benchmark(configs: tuple[str, ...], task_ids: tuple[str, ...], tags: tuple[str, ...],
-              output_dir: str, fixture_dir: str | None):
+              output_dir: str, fixture_dir: str | None,
+              execution: str | None, compare_modes: bool):
     """Run benchmark tasks across multiple pipeline configs.
 
     CONFIGS: One or more paths to pipeline YAML configs.
@@ -816,9 +913,17 @@ def benchmark(configs: tuple[str, ...], task_ids: tuple[str, ...], tags: tuple[s
         luxe benchmark configs/qwen_32gb.yaml configs/deepseek_32gb.yaml
         luxe benchmark configs/*.yaml --tags security --output ./results
         luxe benchmark configs/qwen_32gb.yaml --tasks review-python-security
+        luxe benchmark configs/qwen_32gb.yaml --compare --tasks <id>
     """
     from luxe.benchmark.compare import print_suite_summary
     from luxe.benchmark.runner import run_benchmark
+
+    if compare_modes:
+        execution_modes = ["swarm", "microloop"]
+    elif execution:
+        execution_modes = [execution]
+    else:
+        execution_modes = None
 
     suite = run_benchmark(
         config_paths=list(configs),
@@ -826,6 +931,7 @@ def benchmark(configs: tuple[str, ...], task_ids: tuple[str, ...], tags: tuple[s
         task_tags=list(tags) or None,
         output_dir=output_dir,
         fixture_dir=fixture_dir,
+        execution_modes=execution_modes,
     )
 
     console.print(f"\n{'='*60}")
