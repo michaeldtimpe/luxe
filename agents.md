@@ -1,5 +1,11 @@
 # Agent Reference
 
+> **Note:** This document describes the swarm pipeline's per-stage agents
+> and predates the v1.0 additions (single-mode monolith, validator's
+> structured envelope contract, BM25/AST tools added to worker surfaces).
+> See the README for the v1.0 surface and tool list. Where this document
+> says `src/swarm/agents/loop.py:run_agent`, read `src/luxe/agents/loop.py`.
+
 Each pipeline stage uses a specialized agent with a distinct system prompt, tool surface, and model assignment. This document details what each agent does, what it has access to, and how it interacts with the pipeline.
 
 ## Agent Loop

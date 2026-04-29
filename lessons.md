@@ -1,5 +1,11 @@
 # Lessons Learned
 
+> **Note:** Entries below pre-date the v1.0 implementation work. New
+> lessons from the v1.0 acceptance bench (Phase 8) belong in this file
+> as they're observed; see the README's [Benchmark workflow](README.md#benchmark-workflow)
+> section for context. Old entries reference `swarm`/`src/swarm/`; mentally
+> substitute `luxe`/`src/luxe/` when reading.
+
 A running log of mistakes, surprises, and hard-won insights from building and testing the swarm pipeline. Each entry records what happened, why it happened, and what we changed.
 
 ---
