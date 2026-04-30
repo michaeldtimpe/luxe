@@ -109,13 +109,37 @@ class Variant:
     mode against `configs/single_64gb.yaml` with the model swapped in
     via overlay. The variant_id keeps the legacy `mono__<label>` prefix
     so existing acceptance/<run>/ output dirs remain readable.
+
+    Optional fields support the prompt-shaping bake-off (see
+    `~/.claude/plans/jiggly-baking-kahan.md`):
+      - system_prompt_id / task_prompt_id select PromptVariants from
+        `src/luxe/agents/prompts.py`
+      - temperature / repeat_penalty override the role's sampling params
+    Cells that vary any of these get a distinct `variant_id` namespace
+    so the resumable runner doesn't collide cached results.
     """
     model_label: str     # short human-readable label, e.g. "qwen3.6-35b-a3b-6bit"
     model_id: str        # oMLX model ID, e.g. "Qwen3.6-35B-A3B-6bit"
+    system_prompt_id: str = "baseline"
+    task_prompt_id: str = "baseline"
+    temperature: float | None = None
+    repeat_penalty: float | None = None
 
     @property
     def variant_id(self) -> str:
-        return f"mono__{self.model_label}"
+        parts = [f"mono__{self.model_label}"]
+        # Suffix only the non-default knobs so baseline cells keep their
+        # legacy directory names.
+        if self.system_prompt_id != "baseline":
+            parts.append(f"sys-{self.system_prompt_id}")
+        if self.task_prompt_id != "baseline":
+            parts.append(f"task-{self.task_prompt_id}")
+        if self.temperature is not None:
+            parts.append(f"t{self.temperature:g}")
+        if self.repeat_penalty is not None:
+            # 1.05 → "rp105"; keeps filenames sortable + filesystem-safe
+            parts.append(f"rp{int(round(self.repeat_penalty * 100))}")
+        return "__".join(parts)
 
 
 def _project_root() -> Path:
@@ -126,7 +150,9 @@ def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
     """Write an overlay YAML pinning the candidate model into single_64gb.
 
     The overlay is written to a tempdir; its filename stem becomes the
-    config_name visible in luxe maintain logs.
+    config_name visible in luxe maintain logs. When a Variant carries
+    prompt/sampling overrides, they land in the `roles.monolith` block
+    so RoleConfig picks them up at load time.
     """
     overlay_dir.mkdir(parents=True, exist_ok=True)
     out_path = overlay_dir / f"{variant.variant_id}.yaml"
@@ -140,6 +166,16 @@ def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
     cfg["roles"]["monolith"]["num_ctx"] = min(
         int(cfg["roles"]["monolith"].get("num_ctx", 8192)), 32768,
     )
+    # Prompt + sampling overlays — only written when the variant differs
+    # from the default so unchanged cells are byte-equivalent to legacy.
+    if variant.system_prompt_id != "baseline":
+        cfg["roles"]["monolith"]["system_prompt_id"] = variant.system_prompt_id
+    if variant.task_prompt_id != "baseline":
+        cfg["roles"]["monolith"]["task_prompt_id"] = variant.task_prompt_id
+    if variant.temperature is not None:
+        cfg["roles"]["monolith"]["temperature"] = variant.temperature
+    if variant.repeat_penalty is not None:
+        cfg["roles"]["monolith"]["repeat_penalty"] = variant.repeat_penalty
 
     out_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     return out_path
@@ -1083,11 +1119,17 @@ def _describe_outcome(fixture: Fixture) -> str:
 
 
 def _load_variants(path: Path) -> list[Variant]:
-    """Load a (model_label, model_id) variant matrix from YAML.
+    """Load a variant matrix from YAML.
 
-    Schema:
+    Required schema:
         variants:
           - {model_label: <short>, model_id: <oMLX-id>}
+
+    Optional per-cell overrides (prompt-shaping bake-off):
+        system_prompt_id: baseline | cot | sot | hads_persona | combined
+        task_prompt_id:   baseline | cot | sot | hads_persona | combined
+        temperature:      float
+        repeat_penalty:   float
 
     Legacy entries with `mode: mono|single` are accepted (mode is ignored;
     luxe is mono-only as of v1.0). Entries with mode in {swarm, micro,
@@ -1106,6 +1148,12 @@ def _load_variants(path: Path) -> list[Variant]:
         out.append(Variant(
             model_label=str(v["model_label"]),
             model_id=str(v["model_id"]),
+            system_prompt_id=str(v.get("system_prompt_id", "baseline")),
+            task_prompt_id=str(v.get("task_prompt_id", "baseline")),
+            temperature=(float(v["temperature"])
+                          if v.get("temperature") is not None else None),
+            repeat_penalty=(float(v["repeat_penalty"])
+                             if v.get("repeat_penalty") is not None else None),
         ))
     return out
 

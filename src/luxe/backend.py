@@ -169,6 +169,7 @@ class Backend:
         max_tokens: int = 2048,
         temperature: float = 0.2,
         num_ctx: int | None = None,
+        repeat_penalty: float | None = None,
         on_retry: Callable[[RetryDecision, int], None] | None = None,
     ) -> ChatResponse:
         body: dict[str, Any] = {
@@ -182,6 +183,8 @@ class Backend:
             body["tools"] = tools
         if num_ctx is not None:
             body.setdefault("extra_body", {})["num_ctx"] = num_ctx
+        if repeat_penalty is not None:
+            body.setdefault("extra_body", {})["repeat_penalty"] = repeat_penalty
 
         attempt = 0
         last_decision: RetryDecision | None = None
