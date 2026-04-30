@@ -311,10 +311,39 @@ def _check_tests_pass(repo_path: Path, command: str,
 
 
 def _check_regex_present(repo_path: Path, pattern: str,
-                         changed_files: list[str]) -> tuple[bool, str]:
+                         changed_files: list[str],
+                         base_sha: str = "") -> tuple[bool, str]:
+    """Pattern must appear in the diff's *added* lines, not in pre-existing
+    content. Closes the lpe-rope-calc loophole where a model touched a file
+    that already contained the pattern (regex passed without doing the work).
+
+    Falls back to whole-file scan when base_sha isn't provided (back-compat
+    with callers that don't have it). The maintain_suite passes base_sha,
+    so this is the strict path in production.
+    """
     if not pattern:
         return False, "no pattern"
     rx = re.compile(pattern)
+
+    if base_sha and changed_files:
+        rc, out = _run(["git", "diff", base_sha, "HEAD", "--",
+                        *changed_files], cwd=repo_path)
+        if rc == 0 and out:
+            added_lines: list[tuple[str, str]] = []  # (file, line)
+            current_file = ""
+            for line in out.splitlines():
+                if line.startswith("+++"):
+                    # +++ b/path/to/file
+                    current_file = line[6:] if line.startswith("+++ b/") else line[4:]
+                elif line.startswith("+") and not line.startswith("+++"):
+                    added_lines.append((current_file, line[1:]))
+            for fname, body in added_lines:
+                if rx.search(body):
+                    return True, f"matched in added line of {fname}"
+            return False, (f"pattern not found in {len(added_lines)} added "
+                           f"lines across {len(changed_files)} changed file(s)")
+        # If git diff failed for any reason, fall through to file scan.
+
     for rel in changed_files:
         p = repo_path / rel
         if not p.is_file():
@@ -324,7 +353,7 @@ def _check_regex_present(repo_path: Path, pattern: str,
         except OSError:
             continue
         if rx.search(text):
-            return True, f"matched in {rel}"
+            return True, f"matched in {rel} (whole-file fallback)"
     return False, f"pattern not found in {len(changed_files)} changed files"
 
 
@@ -434,7 +463,9 @@ def grade_fixture(
                 })
                 earned_outcome = 0
     elif kind == "regex_present":
-        passed, detail = _check_regex_present(repo_path, eo.get("pattern", ""), changed)
+        passed, detail = _check_regex_present(
+            repo_path, eo.get("pattern", ""), changed, base_sha=base_sha,
+        )
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail
         earned_outcome = 3 if passed else 0

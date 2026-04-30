@@ -88,6 +88,12 @@ def _parse_text_tool_calls(
 
 _MAX_CONSECUTIVE_REPEAT_STEPS = 2
 
+# Emit a progress line each time cumulative completion tokens crosses a
+# multiple of this threshold. Useful for spotting bailout vs full-engagement
+# patterns mid-run. Set to 0 to disable. Configurable via env.
+import os as _os_for_logging
+_TOKEN_LOG_INTERVAL = int(_os_for_logging.environ.get("LUXE_TOKEN_LOG_INTERVAL", "5000"))
+
 
 def _call_key(name: str, args: dict[str, Any]) -> str:
     return f"{name}:{json.dumps(args, sort_keys=True)}"
@@ -121,6 +127,7 @@ def run_agent(
 
     seen_calls: set[str] = set()
     consecutive_repeat_steps = 0
+    next_token_log_threshold = _TOKEN_LOG_INTERVAL  # 0 = disabled
 
     for step in range(role_cfg.max_steps):
         result.steps = step + 1
@@ -145,6 +152,23 @@ def run_agent(
 
         result.prompt_tokens += resp.timing.prompt_tokens
         result.completion_tokens += resp.timing.completion_tokens
+
+        # Token-interval progress logging — fires when cumulative completion
+        # tokens crosses each LUXE_TOKEN_LOG_INTERVAL multiple. Lets us see
+        # whether a model is steadily generating with tool calls (engaged)
+        # vs bursting prose without tools (bailing).
+        if (next_token_log_threshold > 0
+                and result.completion_tokens >= next_token_log_threshold):
+            print(
+                f"    [token-progress] step={step+1} "
+                f"completion_tokens={result.completion_tokens} "
+                f"prompt_tokens={result.prompt_tokens} "
+                f"tool_calls={result.tool_calls_total} "
+                f"ctx_pressure={pressure:.0%}",
+                flush=True,
+            )
+            while next_token_log_threshold <= result.completion_tokens:
+                next_token_log_threshold += _TOKEN_LOG_INTERVAL
 
         tool_calls = resp.tool_calls
         if not tool_calls and resp.text and tool_defs:
