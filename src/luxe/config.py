@@ -24,12 +24,6 @@ class TaskTypeConfig(BaseModel):
     architect_prompt: str = ""
 
 
-class EscalationConfig(BaseModel):
-    worker_read: str = "worker_analyze"
-    worker_analyze: str = "worker_code"
-    max_retries: int = 1
-
-
 class ProfileConfig(BaseModel):
     name: str = ""
     description: str = ""
@@ -43,11 +37,6 @@ class PipelineConfig(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
     task_types: dict[str, TaskTypeConfig] = Field(default_factory=dict)
-    escalation: EscalationConfig = Field(default_factory=EscalationConfig)
-    # "swarm" = sequential specialist pipeline; "microloop" = small-agent
-    # feedback loop dispatched per worker subtask. Per-call override via
-    # PipelineOrchestrator(execution_mode=...).
-    execution: str = "swarm"
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:
@@ -66,7 +55,7 @@ class PipelineConfig(BaseModel):
 
 def load_config(path: str | Path | None = None) -> PipelineConfig:
     if path is None:
-        path = Path(__file__).parent.parent.parent / "configs" / "swarm_64gb.yaml"
+        path = Path(__file__).parent.parent.parent / "configs" / "single_64gb.yaml"
     path = Path(path)
     raw: dict[str, Any] = yaml.safe_load(path.read_text())
     return PipelineConfig.model_validate(raw)

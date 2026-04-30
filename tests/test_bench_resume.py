@@ -150,28 +150,7 @@ def test_decide_run_fresh_for_pending():
     assert "new run" in reason
 
 
-def test_decide_run_resume_when_run_dir_has_stages(tmp_path):
-    _seed_run_dir(tmp_path, "r99", stages=("architect",))
-    f = _f()
-    s = FixtureState(fixture_id="f1", status=FixtureStatus.RUNNING,
-                     luxe_run_id="r99")
-    d, reason = decide(f, s, force=False, retry_errors=False, retry_skipped=False)
-    assert d == Decision.RUN_RESUME
-    assert "architect" in reason
-
-
-def test_decide_run_resume_when_pipeline_complete_but_pr_incomplete(tmp_path):
-    _seed_run_dir(tmp_path, "r88",
-                  stages=("architect", "worker_0", "validator", "synthesizer"))
-    f = _f()
-    s = FixtureState(fixture_id="f1", status=FixtureStatus.RUNNING,
-                     luxe_run_id="r88")
-    d, _ = decide(f, s, force=False, retry_errors=False, retry_skipped=False)
-    assert d == Decision.RUN_RESUME
-
-
-def test_decide_force_clears_cached_run(tmp_path):
-    _seed_run_dir(tmp_path, "rOLD", stages=("architect",))
+def test_decide_force_runs_fresh(tmp_path):
     f = _f()
     s = FixtureState(fixture_id="f1", status=FixtureStatus.DONE,
                      luxe_run_id="rOLD")
@@ -290,27 +269,6 @@ def test_read_run_artefacts_resumed_stages(tmp_path):
     assert "architect" in a["stages_resumed"]
     assert "worker_0" in a["stages_resumed"]
     assert "validator" in a["stages_resumed"]
-
-
-# --- pipeline-completion gates --
-
-def test_luxe_pipeline_complete_only_when_synthesizer_present(tmp_path):
-    _seed_run_dir(tmp_path, "rE", stages=("architect", "worker_0"))
-    assert not br._luxe_pipeline_complete("rE")
-    _seed_run_dir(tmp_path, "rF", stages=("architect", "worker_0",
-                                            "validator", "synthesizer"))
-    assert br._luxe_pipeline_complete("rF")
-
-
-def test_luxe_pr_complete_when_no_pr_state(tmp_path):
-    _seed_run_dir(tmp_path, "rG", stages=("synthesizer",))
-    # No pr_state.json → considered complete (read-only task)
-    assert br._luxe_pr_complete("rG")
-
-
-def test_luxe_pr_complete_all_steps_done(tmp_path):
-    _seed_run_dir(tmp_path, "rH", stages=("synthesizer",), pr_steps_done=True)
-    assert br._luxe_pr_complete("rH")
 
 
 # --- aggregate diagnostics tuning hints --

@@ -312,14 +312,23 @@ def _check_tests_pass(repo_path: Path, command: str,
 
 def _check_regex_present(repo_path: Path, pattern: str,
                          changed_files: list[str],
-                         base_sha: str = "") -> tuple[bool, str]:
+                         base_sha: str = "",
+                         min_matches: int = 1,
+                         min_added_lines: int = 0) -> tuple[bool, str]:
     """Pattern must appear in the diff's *added* lines, not in pre-existing
     content. Closes the lpe-rope-calc loophole where a model touched a file
-    that already contained the pattern (regex passed without doing the work).
+    that already contained the pattern.
 
-    Falls back to whole-file scan when base_sha isn't provided (back-compat
-    with callers that don't have it). The maintain_suite passes base_sha,
-    so this is the strict path in production.
+    Two thresholds beyond a single match:
+    - `min_matches` — pattern must hit in at least N distinct added lines.
+      Defends against "type one function and call it done" gaming when the
+      task scope spans many call sites (e.g., "type EVERY top-level function").
+    - `min_added_lines` — diff must add at least N total lines across changed
+      files. Defends against rename-only or one-line edits that pass the
+      regex without doing substantive work (e.g., the isomer "Quick Start"
+      → "Quickstart" rename that stripped the ISOMER_SECRET setup).
+
+    Falls back to whole-file scan when base_sha isn't provided.
     """
     if not pattern:
         return False, "no pattern"
@@ -333,16 +342,28 @@ def _check_regex_present(repo_path: Path, pattern: str,
             current_file = ""
             for line in out.splitlines():
                 if line.startswith("+++"):
-                    # +++ b/path/to/file
                     current_file = line[6:] if line.startswith("+++ b/") else line[4:]
                 elif line.startswith("+") and not line.startswith("+++"):
                     added_lines.append((current_file, line[1:]))
+
+            if min_added_lines and len(added_lines) < min_added_lines:
+                return False, (f"only {len(added_lines)} added lines, "
+                               f"need ≥{min_added_lines} (substantive-edit gate)")
+
+            matches: list[str] = []
             for fname, body in added_lines:
                 if rx.search(body):
-                    return True, f"matched in added line of {fname}"
-            return False, (f"pattern not found in {len(added_lines)} added "
-                           f"lines across {len(changed_files)} changed file(s)")
-        # If git diff failed for any reason, fall through to file scan.
+                    matches.append(fname)
+                    if len(matches) >= min_matches:
+                        break
+            if len(matches) >= min_matches:
+                if min_matches == 1:
+                    return True, f"matched in added line of {matches[0]}"
+                return True, (f"matched in {len(matches)} added lines "
+                              f"(needed ≥{min_matches}); first: {matches[0]}")
+            return False, (f"pattern matched {len(matches)}× in {len(added_lines)} "
+                           f"added lines (needed ≥{min_matches}) across "
+                           f"{len(changed_files)} changed file(s)")
 
     for rel in changed_files:
         p = repo_path / rel
@@ -352,8 +373,9 @@ def _check_regex_present(repo_path: Path, pattern: str,
             text = p.read_text(errors="replace")
         except OSError:
             continue
-        if rx.search(text):
-            return True, f"matched in {rel} (whole-file fallback)"
+        hits = rx.findall(text)
+        if len(hits) >= min_matches:
+            return True, f"matched {len(hits)}× in {rel} (whole-file fallback)"
     return False, f"pattern not found in {len(changed_files)} changed files"
 
 
@@ -465,6 +487,8 @@ def grade_fixture(
     elif kind == "regex_present":
         passed, detail = _check_regex_present(
             repo_path, eo.get("pattern", ""), changed, base_sha=base_sha,
+            min_matches=int(eo.get("min_matches", 1)),
+            min_added_lines=int(eo.get("min_added_lines", 0)),
         )
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail

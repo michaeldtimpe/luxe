@@ -11,23 +11,24 @@
 #       kind: tests_pass | regex_present | regex_absent | manual_review
 #       command: "<shell>"           # for tests_pass
 #       pattern: "<regex>"           # for regex_*
+#       min_matches: <int>           # OPTIONAL (regex_present); default 1.
+#                                    # Pattern must hit in ≥N distinct ADDED
+#                                    # lines. Use ≥2 to defeat single-edit
+#                                    # gaming on multi-call-site tasks.
+#       min_added_lines: <int>       # OPTIONAL (regex_present); default 0.
+#                                    # Diff must add ≥N total lines across
+#                                    # changed files. Use 5-30 to defeat
+#                                    # rename-only or one-line "edits" that
+#                                    # technically match the regex.
 #       criteria: "<text>"           # for manual_review
 #     required_env: [GITHUB_TOKEN]   # optional; missing → skipped
 #     notes: "<freeform>"            # documentation, not graded
 #
-# These five are the seed set: bench data collection across language /
-# size / task-type diversity. Iterate via:
-#   python -m benchmarks.maintain_suite.run --all --work-dir ~/luxe-bench-clones
-#
-# Authentication for private repos relies on `gh auth setup-git` having
-# configured the GitHub CLI as git's credential helper. If clones fail,
-# run that once and re-try.
+# v1.0 release gate: ≥8 of ≥10 fixtures pass (≥4/5 score each).
 
 fixtures:
 
-  # 1) lpe-rope-calc — single-file Python utility (20 KB). Trivial-medium
-  #    target: easy win that validates the harness end-to-end. Should pass
-  #    in single mode and complete in <2 minutes once oMLX is warm.
+  # --- 1) lpe-rope-calc — single-file Python utility (20 KB) ---------------
   - id: lpe-rope-calc-document-typing
     repo_url: https://github.com/michaeldtimpe/lpe-rope-calc.git
     base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
@@ -36,13 +37,29 @@ fixtures:
     expected_outcome:
       kind: regex_present
       pattern: "def \\w+\\([^)]*: ?(?:str|int|float|bool|Path|list|dict|Optional|None)"
+      min_matches: 4          # task says "every top-level function"; pe_scan.py
+                              # has ~6 top-level fns. ≥4 catches partial work.
+      min_added_lines: 6      # docstring + several signature edits
     notes: |
-      Easy-win document task. Single-file repo, so no decomposition needed —
-      single mode should handle this.
+      Easy-win document task. Single-file repo; mono mode handles in <2 min once warm.
 
-  # 2) the-game — small JS movie randomizer (74 KB). Implement-style task
-  #    on a non-Python repo to exercise tree-sitter JS coverage and
-  #    BM25 fallback for HTML/CSS.
+  - id: lpe-rope-calc-implement-strict-flag
+    repo_url: https://github.com/michaeldtimpe/lpe-rope-calc.git
+    base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
+    goal: "Add a `--strict` CLI flag to pe_scan.py: when set, the script exits with non-zero status if any scanned GGUF file has missing or unreadable header metadata. Keep the default behaviour (exit 0 on any error) when --strict is not passed"
+    task_type: implement
+    expected_outcome:
+      kind: regex_present
+      pattern: "(?:add_argument|--strict|args\\.strict)"
+      min_matches: 2          # arg registration + usage site
+      min_added_lines: 6
+    notes: |
+      Implement task on a small Python utility. Tests argparse navigation +
+      flag-conditioned exit code. Outcome regex is broad (any of three
+      argparse idioms) so a working implementation will pass regardless of
+      style; min_matches=2 forces both registration and usage.
+
+  # --- 2) the-game — small JS movie randomizer (74 KB) ---------------------
   - id: the-game-implement-shuffle-shortcut
     repo_url: https://github.com/michaeldtimpe/the-game.git
     base_sha: 514d22d95dbbc55b8ad73d158d311f507f8a7b51
@@ -51,15 +68,25 @@ fixtures:
     expected_outcome:
       kind: regex_present
       pattern: "addEventListener.*['\"](key(down|up|press))['\"]"
+      min_added_lines: 5
     notes: |
       Small JS feature add. Tests luxe's ability to find the existing
-      randomization handler and wire a new keyboard input.
+      randomization handler and wire a keyboard input.
 
-  # 3) neon-rain — Vite browser game; ~440 KB of JS+CSS+Shell across
-  #    src/{actions,ai,data,debug,input,phases,render,state,ui}. The repo
-  #    is 591 MB on disk because of the assets/ image directory; the
-  #    BM25 + AST indices skip non-source extensions so images don't
-  #    pollute retrieval. Has a real test suite.
+  - id: the-game-document-architecture
+    repo_url: https://github.com/michaeldtimpe/the-game.git
+    base_sha: 514d22d95dbbc55b8ad73d158d311f507f8a7b51
+    goal: "Update README.md to add a 'How it works' section that describes the movie randomization algorithm in src/App.jsx (where the list is sourced and how the next pick is chosen). Reference at least one file path and the function or hook responsible"
+    task_type: document
+    expected_outcome:
+      kind: regex_present
+      pattern: "(?i)#+\\s*how\\s*it\\s*works"
+      min_added_lines: 8      # forces real prose, not just a header rename
+    notes: |
+      Document task complementing the existing implement fixture. The model
+      must read App.jsx and explain its logic, not just add a header line.
+
+  # --- 3) neon-rain — Vite browser game (440 KB src) -----------------------
   - id: neon-rain-implement-reset-shortcut
     repo_url: https://github.com/michaeldtimpe/neon-rain.git
     base_sha: ef953cc85bead2f09147b99c2a1a2cb2f7d813d0
@@ -69,42 +96,85 @@ fixtures:
       kind: tests_pass
       command: "npm test"
     notes: |
-      Mid-sized JS implement task. The existing test suite (npm test runs
-      tests/all-personas.test.js) must still pass after the change — this
-      catches regressions in the input/state systems. Image-heavy assets/
-      directory is correctly skipped by both BM25 and AST indices.
+      Mid-sized JS implement task. Existing test suite must still pass.
+      Image-heavy assets/ directory is correctly skipped by BM25/AST indices.
 
-  # 4) isomer — Flask compliance tracker. 64 KB HTML templates + 46 KB
-  #    of Python (mostly app.py at 45 KB). Document task exercises
-  #    luxe's ability to navigate one large Python file alongside a
-  #    templates/ directory.
+  - id: neon-rain-document-modules
+    repo_url: https://github.com/michaeldtimpe/neon-rain.git
+    base_sha: ef953cc85bead2f09147b99c2a1a2cb2f7d813d0
+    goal: "Create ARCHITECTURE.md at the repo root listing each src/ subdirectory (actions, ai, data, debug, input, phases, render, state, ui) and describing in 1-2 sentences what each one is responsible for. Mention the EventBus or its equivalent if present"
+    task_type: document
+    expected_outcome:
+      kind: regex_present
+      pattern: "(?i)\\b(actions|phases|render|state|input)\\b"
+      min_matches: 5          # forces coverage of multiple subdirs, not 1
+      min_added_lines: 18     # an architecture doc with 9 sections
+    notes: |
+      Document task requiring directory-tree exploration. min_matches=5
+      defends against a single-line file. Multi-file mid-size repo so the
+      model has to navigate, not read one file end-to-end.
+
+  # --- 4) isomer — Flask compliance tracker (~110 KB) ----------------------
   - id: isomer-document-quickstart
     repo_url: https://github.com/michaeldtimpe/isomer.git
     base_sha: 33da2bc14869bc252901cb199ba73b2fa776e33f
-    goal: "Update README.md to add a 'Quickstart' section showing how to run the app locally with docker-compose and how to access the dashboard. Reference docker-compose.yml and the default port from app.py"
+    goal: "Update README.md to add a 'Quickstart' section showing how to run the app locally with docker-compose and how to access the dashboard. Reference docker-compose.yml and the default port from app.py. Preserve any existing setup steps already documented; do not strip the ISOMER_SECRET / .env setup"
     task_type: document
     expected_outcome:
       kind: regex_present
       pattern: "(?i)#+\\s*Quickstart"
+      min_added_lines: 8      # closes the rename-only / strip-key-content gaming
     notes: |
-      Document task on a mid-sized Flask app. The model needs to read app.py
-      (one ~45 KB file — exercises BM25 / AST navigation) and docker-compose.yml
-      to know what port the dashboard binds to.
+      Document task on a mid-sized Flask app. Goal explicitly preserves the
+      existing ISOMER_SECRET setup — prior bake-off saw a model rename
+      "Quick Start" → "Quickstart" while stripping the secret-generation
+      step, leaving a non-functional Quickstart. min_added_lines=8 makes
+      the rename-only diff fail the gate.
 
-  # 5) nothing-ever-happens — Polymarket trading bot fork (907 KB).
-  #    Large Python; manage task tests luxe's ability to do dependency
-  #    hygiene without breaking the project. Should route to swarm mode
-  #    via byte threshold.
+  - id: isomer-implement-healthcheck
+    repo_url: https://github.com/michaeldtimpe/isomer.git
+    base_sha: 33da2bc14869bc252901cb199ba73b2fa776e33f
+    goal: "Add a /health HTTP endpoint to app.py that returns JSON {\"status\": \"ok\"} with HTTP 200. Wire it into the existing Flask app instance so it answers GET /health"
+    task_type: implement
+    expected_outcome:
+      kind: regex_present
+      pattern: "(?:@app\\.route|@bp\\.route).*['\"]/health['\"]"
+      min_matches: 1
+      min_added_lines: 4      # decorator + handler + return body
+    notes: |
+      Implement task on a 45-KB Flask app. Tests model's ability to find
+      the Flask app instance and add a route in idiomatic style. Pattern
+      matches both bare-app and blueprint registration.
+
+  # --- 5) nothing-ever-happens — Polymarket trading bot (907 KB) -----------
   - id: nothing-ever-happens-manage-deps-audit
     repo_url: https://github.com/michaeldtimpe/nothing-ever-happens.git
     base_sha: 59b8874a8e87164f0ebec25b43ae2cc1a0086f7a
-    goal: "Audit requirements.txt: identify any pinned dependencies with known security advisories, document them in a SECURITY-AUDIT.md file, and propose pinned-version upgrades that preserve API compatibility. Do not modify requirements.txt itself"
+    goal: "Audit requirements.txt: identify any pinned dependencies with known security advisories, document them in a SECURITY-AUDIT.md file with at least three concrete findings (CVE id, version range, or upstream advisory link), and propose pinned-version upgrades that preserve API compatibility. Do not modify requirements.txt itself"
     task_type: manage
     expected_outcome:
       kind: regex_present
-      pattern: "(?i)# SECURITY"
+      pattern: "(?i)(CVE-\\d{4}-\\d{4,}|GHSA-[\\w-]+|advisory|vulnerability|>=\\s?\\d|<\\s?\\d)"
+      min_matches: 3          # forces ≥3 concrete-finding lines, defeats
+                              # vacuous "no known issues" surveys
+      min_added_lines: 12     # an audit with 3+ findings + upgrade rationale
     notes: |
-      Largest Python repo in the seed set. Should trigger swarm mode via
-      byte threshold. The "do not modify requirements.txt" constraint
-      means this is a read+document hybrid — checks luxe's ability to
-      respect explicit scope limits.
+      Largest Python repo in the seed set. min_matches=3 + version-string /
+      CVE pattern defends against "no critical vulnerabilities found"
+      vacuous-audit gaming seen in the 8-bit completion bake-off.
+
+  - id: nothing-ever-happens-document-config
+    repo_url: https://github.com/michaeldtimpe/nothing-ever-happens.git
+    base_sha: 59b8874a8e87164f0ebec25b43ae2cc1a0086f7a
+    goal: "Add a CONFIG.md at the repo root that documents every environment variable the bot reads at startup. For each variable, list its name, default value (if any), and a one-sentence description of what it controls. Cross-reference where in the codebase it is read"
+    task_type: document
+    expected_outcome:
+      kind: regex_present
+      pattern: "(?i)\\b(os\\.environ|getenv|env\\[|process\\.env)"
+      min_matches: 3          # forces enumeration of multiple env vars
+      min_added_lines: 20     # a real config doc, not a stub
+    notes: |
+      Document/manage hybrid on the largest Python repo. The model must
+      grep for env reads across the codebase, not pattern-match on a single
+      file. min_matches=3 + 20 added lines defends against listing one var
+      in a sentence and stopping.

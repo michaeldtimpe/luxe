@@ -37,7 +37,6 @@ def _spec(repo: Path, task_type: str, run_id: str = "test01") -> RunSpec:
     return RunSpec(
         run_id=run_id, goal="g", task_type=task_type,
         repo_path=str(repo), base_sha="", base_branch="main",
-        actual_mode="single",
     )
 
 

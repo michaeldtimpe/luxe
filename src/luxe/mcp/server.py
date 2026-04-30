@@ -9,7 +9,7 @@ worker allowlist regardless of the YAML config, so even a malicious prompt
 can't escape into the host environment via luxe.
 
 Mutation mode (`luxe serve --unsafe`):
-- Adds `luxe_maintain(repo_path, goal, confirm_token, mode="swarm")`.
+- Adds `luxe_maintain(repo_path, goal, confirm_token)`.
 - Both `LUXE_MCP_UNSAFE=1` env AND a `confirm_token` matching env-set
   `LUXE_MCP_TOKEN` are required at call time. Token mismatch logs the
   attempt and returns an error. The user picks the token; treat as a
@@ -277,14 +277,13 @@ def build_server(*, unsafe: bool = False, policy: ServerPolicy | None = None,
             pass
 
         @mcp_server.tool(name="luxe_maintain")
-        def luxe_maintain(repo_path: str, goal: str, confirm_token: str,
-                          mode: str = "swarm") -> str:
+        def luxe_maintain(repo_path: str, goal: str, confirm_token: str) -> str:
             """Run a full luxe maintain pipeline (writes files, opens PRs).
 
             Requires LUXE_MCP_UNSAFE=1 environment AND confirm_token matching
             LUXE_MCP_TOKEN.
             """
-            args = {"repo_path": repo_path, "goal": goal, "mode": mode,
+            args = {"repo_path": repo_path, "goal": goal,
                     "confirm_token": confirm_token}
             if not _unsafe_enabled():
                 append_audit("luxe_maintain", args, "rejected",

@@ -40,7 +40,6 @@ def _spec(repo: Path) -> RunSpec:
     return RunSpec(
         run_id="resume01", goal="fix x", task_type="bugfix",
         repo_path=str(repo), base_sha="", base_branch="main",
-        actual_mode="single",
     )
 
 
