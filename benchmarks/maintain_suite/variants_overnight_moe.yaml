@@ -1,0 +1,34 @@
+# Overnight MoE bake-off — Qwen3.6 + Gemma-4 active-expert architectures.
+#
+# Goal: see whether the bimodal pattern observed in qwen3-coder-30b-a3b-6bit
+# (full engagement vs prose-only-no-tools) is consistent across the
+# Qwen3.6-35B-A3B size variants AND in a different family (Gemma-4-26B-A4B).
+# If the bailouts are consistent across model families, the issue is
+# architectural; if Gemma-4 doesn't bail, it may be Qwen-specific.
+#
+# Memory peak per variant (weights + ~5-8 GB KV cache):
+#   Qwen3.6-35B-A3B-4bit:    ~20 GB +   8 GB =  ~28 GB
+#   Qwen3.6-35B-A3B-6bit:    ~29 GB +   8 GB =  ~37 GB  ← right at cap
+#   Gemma-4-26B-A4B-4bit:    ~15 GB +   5 GB =  ~20 GB
+#   Gemma-4-26B-A4B-8bit:    ~28 GB +   8 GB =  ~36 GB  ← near cap
+# Bump max_model_memory to 48GB before running so peaks don't page.
+#
+# NOTE: Qwen3.6-35B-A3B-8bit is NOT in this file — HF cache is missing it
+# at the time of writing. Run `hf download mlx-community/Qwen3.6-35B-A3B-8bit`
+# (~38 GB) first if you want all 5 variants; then add the cell:
+#   - {mode: mono, model_label: qwen3.6-35b-a3b-8bit, model_id: Qwen3.6-35B-A3B-8bit}
+#
+# Run (after restart):
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_overnight_moe.yaml \
+#       --output acceptance/overnight_moe \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# 4 cells × 5 fixtures = 20 runs, expect ~3-5 hours wall time.
+
+variants:
+  - {mode: mono, model_label: qwen3.6-35b-a3b-4bit, model_id: Qwen3.6-35B-A3B-4bit}
+  - {mode: mono, model_label: qwen3.6-35b-a3b-6bit, model_id: Qwen3.6-35B-A3B-6bit}
+  - {mode: mono, model_label: gemma-4-26b-a4b-4bit, model_id: Gemma-4-26B-A4B-4bit}
+  - {mode: mono, model_label: gemma-4-26b-a4b-8bit, model_id: Gemma-4-26B-A4B-8bit}

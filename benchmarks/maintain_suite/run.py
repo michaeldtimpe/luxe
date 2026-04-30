@@ -613,9 +613,83 @@ class Diagnostics:
     microstep_rejects: int = 0
     blackboard_bytes: int = 0
     no_diff_warning: bool = False
+    # Bailout categorization — when a fixture FAILed, why? Useful signal
+    # for distinguishing "model refused" from "model exhausted retries"
+    # from "model emitted prose without ever calling tools".
+    bailout_type: str = ""    # "" = no bailout (success/normal fail);
+                              # "refusal" | "prose_only" | "stuck_loop" |
+                              # "schema_confusion" | "context_overflow" |
+                              # "no_engagement" | "no_diff_writes"
+    bailout_reason: str = ""  # human-readable evidence
+
+
+_REFUSAL_PATTERNS = [
+    re.compile(r"\bI\s+(?:cannot|can't|won't|will\s+not|am\s+unable\s+to)\b", re.IGNORECASE),
+    re.compile(r"\bI'm\s+(?:unable|not\s+able)\s+to\b", re.IGNORECASE),
+    re.compile(r"\b(?:cannot|can not)\s+(?:help|assist|provide|do)\b", re.IGNORECASE),
+    re.compile(r"\bsorry,?\s+(?:I|but)\s+(?:cannot|can't|won't|am\s+unable)\b", re.IGNORECASE),
+    re.compile(r"\bnot\s+possible\s+(?:to|for\s+me)\b", re.IGNORECASE),
+]
+
+
+def _classify_bailout(state: FixtureState, artefacts: dict) -> tuple[str, str]:
+    """Categorize WHY a fixture went sideways. Returns (type, reason).
+
+    Inspects the single_mode_done event (when present) and the run's
+    synthesizer.md for refusal language. Empty type means "no bailout"
+    (i.e., the run produced normal output — pass or fail by other means).
+    """
+    sm = artefacts.get("single_mode")
+    if not sm:
+        # Swarm/micro/phased path — no single_mode event. Best signal is
+        # whether any worker invoked a mutation tool (no_diff_warning).
+        if artefacts.get("no_diff_warning"):
+            return "no_diff_writes", "write-mode task ran with no mutation tool calls"
+        return "", ""
+
+    aborted = bool(sm.get("aborted"))
+    abort_reason = (sm.get("abort_reason") or "").lower()
+    tool_calls = int(sm.get("tool_calls_total", 0))
+    schema_rejects = int(sm.get("schema_rejects", 0))
+    final_chars = int(sm.get("final_text_chars", 0))
+
+    if aborted:
+        if "stuck" in abort_reason and "loop" in abort_reason:
+            return "stuck_loop", abort_reason[:160]
+        if "max steps" in abort_reason:
+            return "context_overflow", abort_reason[:160]
+        if "schema" in abort_reason or schema_rejects > 3:
+            return "schema_confusion", f"schema_rejects={schema_rejects}; {abort_reason[:120]}"
+        return "aborted", abort_reason[:160] or "unspecified abort"
+
+    if tool_calls == 0:
+        # Read the synthesizer/single-mode report to check for refusal
+        # language before classifying as plain prose-only.
+        try:
+            run_id = state.luxe_run_id
+            if run_id:
+                report_path = _luxe_run_dir(run_id) / "synthesizer.md"
+                if report_path.is_file():
+                    text = report_path.read_text(errors="replace")[:4000]
+                    for pat in _REFUSAL_PATTERNS:
+                        m = pat.search(text)
+                        if m:
+                            return ("refusal",
+                                    f"refusal phrase {m.group(0)!r} in report; "
+                                    f"final_text_chars={final_chars}")
+        except OSError:
+            pass
+        if final_chars < 100:
+            return "no_engagement", f"final_text_chars={final_chars}, 0 tool calls"
+        return ("prose_only",
+                f"final_text_chars={final_chars}, 0 tool calls — emitted prose "
+                "without invoking edit_file/write_file")
+
+    return "", ""
 
 
 def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
+    bailout_type, bailout_reason = _classify_bailout(state, artefacts)
     return Diagnostics(
         fixture_id=state.fixture_id,
         run_id=state.luxe_run_id,
@@ -638,6 +712,8 @@ def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
         microstep_rejects=int(artefacts.get("microstep_rejects_total", 0)),
         blackboard_bytes=int(artefacts.get("blackboard_bytes_total", 0)),
         no_diff_warning=bool(artefacts.get("no_diff_warning", False)),
+        bailout_type=bailout_type,
+        bailout_reason=bailout_reason,
     )
 
 
@@ -1315,9 +1391,9 @@ def main() -> int:
         # Per-variant comparison table (only when --variants was set).
         if by_variant:
             print(f"\n━━━ Mode × Model comparison")
-            header = (f"  {'variant':30s}  {'pass':>4}  {'fail':>4}  {'err':>3}  "
+            header = (f"  {'variant':32s}  {'pass':>4}  {'fail':>4}  {'err':>3}  "
                       f"{'avg_wall':>8}  {'avg_tok':>8}  "
-                      f"{'µ-rej':>6}  {'no-diff':>7}")
+                      f"{'bailouts':<28}")
             print(header)
             print(f"  {'-' * (len(header) - 2)}")
             cmp_rows: dict[str, dict] = {}
@@ -1331,19 +1407,28 @@ def main() -> int:
                             if attempted_v else 0.0)
                 avg_tok = (sum(d.tokens_total for _, d in attempted_v) / len(attempted_v)
                            if attempted_v else 0.0)
-                # Microloop-specific signals — zero on swarm/mono variants,
-                # so they don't pollute the table for non-micro rows.
+                # Bailout breakdown per variant — counts each bailout type
+                # so the table at-a-glance shows whether failures are
+                # refusals, prose-only, stuck-loops, etc.
+                bailout_counts: dict[str, int] = {}
+                for _, d in attempted_v:
+                    if d.bailout_type:
+                        bailout_counts[d.bailout_type] = (
+                            bailout_counts.get(d.bailout_type, 0) + 1)
+                bailout_summary = (", ".join(f"{t}×{n}" for t, n in
+                                              sorted(bailout_counts.items()))
+                                   or "—")
+                # Microloop-specific signals — non-zero only on micro runs.
                 total_rej = sum(d.microstep_rejects for _, d in attempted_v)
-                n_no_diff = sum(1 for _, d in attempted_v if d.no_diff_warning)
-                print(f"  {vid:30s}  {passed:>4}  {failed:>4}  {errored:>3}  "
+                print(f"  {vid:32s}  {passed:>4}  {failed:>4}  {errored:>3}  "
                       f"{avg_wall:>7.1f}s  {avg_tok:>8.0f}  "
-                      f"{total_rej:>6}  {n_no_diff:>7}")
+                      f"{bailout_summary:<28}")
                 cmp_rows[vid] = {
                     "passed": passed, "failed": failed, "errored": errored,
                     "avg_wall_s": round(avg_wall, 1),
                     "avg_tokens": int(avg_tok),
                     "microstep_rejects_total": total_rej,
-                    "no_diff_warnings": n_no_diff,
+                    "bailouts": bailout_counts,
                     "fixtures": len(pairs),
                 }
             (output / "comparison.json").write_text(json.dumps({
