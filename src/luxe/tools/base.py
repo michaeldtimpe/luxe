@@ -88,11 +88,19 @@ def dispatch_tool(
     fn = tool_fns[name]
     t0 = time.monotonic()
 
-    if cache and cacheable and name in cacheable:
-        result, err, was_cached = cache.get_or_run(name, args, fn)
-        tc.cached = was_cached
-    else:
-        result, err = fn(args)
+    # Capture exceptions so the agent loop can surface them to the model
+    # as retry-able errors instead of crashing luxe. A tool that raises
+    # (e.g. fs._safe rejecting an absolute path) used to escape run_agent
+    # entirely; now the model sees a normal tool-error message and can
+    # self-correct on the next turn.
+    try:
+        if cache and cacheable and name in cacheable:
+            result, err, was_cached = cache.get_or_run(name, args, fn)
+            tc.cached = was_cached
+        else:
+            result, err = fn(args)
+    except Exception as e:
+        result, err = "", f"{type(e).__name__}: {e}"
 
     tc.wall_s = time.monotonic() - t0
     tc.result = result

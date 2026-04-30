@@ -232,6 +232,76 @@ def test_criteria_breakdown_records_each_check(git_repo: Path):
 
 # --- summary --
 
+# --- regex_present failure-message priority (P0.3) --
+# When both min_matches and min_added_lines fail, report the more informative
+# floor (matches deficit > lines deficit). Before this reorder, the error
+# message mis-attributed the lpe-rope-calc-document-typing baseline failure to
+# "only 4 added lines" when the deeper issue was that the model only typed 3
+# of N functions (min_matches: 4 would have caught it regardless).
+
+def _setup_repo_with_n_added_lines(repo: Path, n_lines: int,
+                                    matching_lines: int = 0,
+                                    pattern_text: str = "MATCH") -> str:
+    """Create a commit on top of git_repo with exactly n_lines added lines,
+    of which `matching_lines` contain `pattern_text`. Returns base_sha."""
+    base = _base_sha(repo)
+    target = repo / "src" / "main.py"
+    body = []
+    for i in range(matching_lines):
+        body.append(f"# {pattern_text} {i}")
+    for i in range(n_lines - matching_lines):
+        body.append(f"# benign line {i}")
+    target.write_text(target.read_text() + "\n" + "\n".join(body) + "\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "n added"], cwd=repo, check=True)
+    return base
+
+
+def test_regex_present_reports_match_deficit_when_both_floors_fail(git_repo: Path):
+    """4 added lines + 3 matches against min_matches=4, min_added_lines=6:
+    both floors fail. Failure detail must mention matches, not lines."""
+    base = _setup_repo_with_n_added_lines(git_repo, n_lines=4, matching_lines=3)
+    fix = _f("rg1", "regex_present", task_type="document",
+             pattern=r"MATCH", min_matches=4, min_added_lines=6)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    detail = r.expected_outcome_detail
+    assert "matched" in detail.lower(), \
+        f"expected match-count message, got: {detail!r}"
+    assert "needed ≥4" in detail
+    assert "added lines, need" not in detail, \
+        f"min_added_lines message leaked: {detail!r}"
+
+
+def test_regex_present_reports_match_deficit_when_only_matches_fail(git_repo: Path):
+    """8 added lines + 1 match against min_matches=4, min_added_lines=6:
+    lines floor passes, matches floor fails. Must report matches deficit."""
+    base = _setup_repo_with_n_added_lines(git_repo, n_lines=8, matching_lines=1)
+    fix = _f("rg2", "regex_present", task_type="document",
+             pattern=r"MATCH", min_matches=4, min_added_lines=6)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    detail = r.expected_outcome_detail
+    assert "needed ≥4" in detail
+    assert "matched 1×" in detail or "1×" in detail
+
+
+def test_regex_present_passes_when_both_floors_cleared(git_repo: Path):
+    """8 added lines + 1 match against min_matches=1, min_added_lines=6:
+    both floors satisfied. Must pass — confirms the reorder didn't break
+    the OR semantics."""
+    base = _setup_repo_with_n_added_lines(git_repo, n_lines=8, matching_lines=1)
+    fix = _f("rg3", "regex_present", task_type="document",
+             pattern=r"MATCH", min_matches=1, min_added_lines=6)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed, \
+        f"expected pass with both floors cleared, got: {r.expected_outcome_detail!r}"
+    assert r.score == 5
+
+
 # --- orphan-file gate --
 
 def _commit_added_files(repo: Path, files: dict[str, str], message: str) -> None:
