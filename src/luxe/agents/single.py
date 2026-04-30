@@ -1,13 +1,9 @@
-"""Single-mode agent — one capable model, full tool surface, agentic loop.
+"""Single-mode (mono) agent — one capable model, full tool surface, agentic loop.
 
-Used for smaller repos and quick fixes where the swarm pipeline would be
-overkill. Reuses agents/loop.py:run_agent — the only difference from a worker
-is the system prompt (frames the task end-to-end) and the tool surface (full
-read+write+analyze+shell+git, plus MCP tools when injected).
-
-Emits an `escalate_to_swarm` signal in `final_text` if the model determines
-the task needs >10 file edits or sustained multi-component planning. The CLI
-detects that signal and re-launches as swarm with an EscalationContext.
+The only execution mode in v1.0. Reuses agents/loop.py:run_agent; the
+distinguishing pieces are the system prompt (frames the task end-to-end)
+and the tool surface (full read+write+analyze+shell+git, plus MCP tools
+when injected).
 """
 
 from __future__ import annotations
@@ -19,8 +15,6 @@ from luxe.tools import analysis, fs, git, shell
 from luxe.tools.base import ToolCache, ToolDef, ToolFn
 from luxe import search as search_mod
 from luxe import symbols as symbols_mod
-
-ESCALATE_SIGNAL = "escalate_to_swarm"
 
 _SYSTEM_PROMPT = """\
 You are a code maintenance specialist working on a single repository. Your job
@@ -35,23 +29,13 @@ Operating principles:
 - When you finish, output a final report summarising what you changed,
   what tests you ran, and any open questions.
 
-Escalation:
-- If you determine this task needs more than 10 file edits, multi-component
-  planning, or systematic decomposition you cannot hold in one context window,
-  STOP making changes and emit a single line containing the literal string
-  "{escalate}" followed by a brief reason. Do NOT continue piecemeal — escalation
-  is not a failure, it routes the task to the multi-stage swarm pipeline.
-- If you have already made coherent partial changes, summarise them in your
-  last assistant message before emitting "{escalate}" — your tool-call history
-  becomes the swarm architect's seed context.
-
 Citation contract:
 - Every file:line citation in your final report MUST resolve in the current
   repo state. The post-synthesis citation linter will verify each one.
 - If you cite a line in a file you also edited, include a 1–3 line snippet of
   the cited code verbatim alongside the citation; the linter uses fuzzy snippet
   matching to forgive line-shift after edits.
-""".format(escalate=ESCALATE_SIGNAL)
+"""
 
 
 def _build_full_tool_surface(
@@ -102,11 +86,6 @@ def _build_full_tool_surface(
         cacheable = cacheable & allowed
 
     return defs, fns, cacheable
-
-
-def did_escalate(result: AgentResult) -> bool:
-    """True if the single-mode result indicates the model wants swarm."""
-    return ESCALATE_SIGNAL in (result.final_text or "")
 
 
 def run_single(

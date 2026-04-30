@@ -474,21 +474,36 @@ def _check_regex_present(repo_path: Path, pattern: str,
                 elif line.startswith("+") and not line.startswith("+++"):
                     added_lines.append((current_file, line[1:]))
 
-            if min_added_lines and len(added_lines) < min_added_lines:
-                return False, (f"only {len(added_lines)} added lines, "
-                               f"need ≥{min_added_lines} (substantive-edit gate)")
-
+            # Count matches across ALL added lines (no early-break) so the
+            # error message can report the true match count when min_matches
+            # is the deeper failure.
             matches: list[str] = []
             for fname, body in added_lines:
                 if rx.search(body):
                     matches.append(fname)
-                    if len(matches) >= min_matches:
-                        break
+
+            # When min_matches > 1, evaluate it BEFORE min_added_lines so the
+            # more informative message wins. The lpe-rope-calc-document-typing
+            # v1 baseline failure (2026-04-30) reported a misleading
+            # "min_added_lines" message when the deeper issue was the model
+            # only typing 3 of N functions. OR-failure semantics preserved:
+            # either floor failing makes the outcome fail.
+            if min_matches > 1 and len(matches) < min_matches:
+                return False, (f"pattern matched {len(matches)}× in "
+                               f"{len(added_lines)} added lines "
+                               f"(needed ≥{min_matches}) across "
+                               f"{len(changed_files)} changed file(s)")
+
+            if min_added_lines and len(added_lines) < min_added_lines:
+                return False, (f"only {len(added_lines)} added lines, "
+                               f"need ≥{min_added_lines} (substantive-edit gate)")
+
             if len(matches) >= min_matches:
                 if min_matches == 1:
                     return True, f"matched in added line of {matches[0]}"
                 return True, (f"matched in {len(matches)} added lines "
                               f"(needed ≥{min_matches}); first: {matches[0]}")
+            # min_matches == 1 case where 0 matches found.
             return False, (f"pattern matched {len(matches)}× in {len(added_lines)} "
                            f"added lines (needed ≥{min_matches}) across "
                            f"{len(changed_files)} changed file(s)")

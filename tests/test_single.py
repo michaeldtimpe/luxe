@@ -1,18 +1,12 @@
-"""Tests for src/luxe/agents/single.py — single-mode tool surface assembly.
+"""Tests for src/luxe/agents/single.py — mono-mode tool surface assembly.
 
 Full integration tests require a running oMLX backend; these unit tests cover
-the deterministic parts: tool surface assembly with allowlist, escalation
-signal detection.
+the deterministic parts: tool surface assembly with allowlist.
 """
 
 from __future__ import annotations
 
-from luxe.agents.loop import AgentResult
-from luxe.agents.single import (
-    ESCALATE_SIGNAL,
-    _build_full_tool_surface,
-    did_escalate,
-)
+from luxe.agents.single import _build_full_tool_surface
 
 
 def test_full_tool_surface_includes_read_write_shell_git_analysis():
@@ -44,19 +38,3 @@ def test_allowlist_strips_disallowed_tools():
     names = {d.name for d in defs}
     assert names == {"read_file", "grep"}
     assert set(fns.keys()) == {"read_file", "grep"}
-
-
-def test_escalation_signal_detected():
-    r = AgentResult(final_text=f"Working on this... {ESCALATE_SIGNAL} too many components")
-    assert did_escalate(r)
-
-
-def test_escalation_signal_not_present():
-    r = AgentResult(final_text="All done. PR opened.")
-    assert not did_escalate(r)
-
-
-def test_escalation_signal_in_final_only():
-    # Empty final_text → no escalation
-    r = AgentResult(final_text="")
-    assert not did_escalate(r)

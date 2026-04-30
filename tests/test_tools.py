@@ -238,6 +238,68 @@ class TestToolCache:
         assert not cached
 
 
+class TestDispatchToolErrorCapture:
+    """Regression: tools that raise must NOT escape dispatch_tool.
+
+    Before the fix, an unhandled PermissionError from fs._safe (raised
+    when the model passes an absolute path to read_file) escaped
+    run_agent and killed luxe with wall=0s/tokens=0 — see the
+    neon-rain-document-modules failure in acceptance/v1_default.
+    Tools should now return the error string in ToolCall.error so the
+    model can self-correct on the next turn.
+    """
+
+    def test_tool_raising_permissionerror_returns_error_not_exception(self):
+        def raising_fn(args):
+            raise PermissionError("Path escapes repo root: /src/foo.js")
+        tc = dispatch_tool("read_file", {"path": "/src/foo.js"},
+                           {"read_file": raising_fn})
+        assert tc.error
+        assert "PermissionError" in tc.error
+        assert "Path escapes repo root" in tc.error
+        assert tc.result == ""
+
+    def test_tool_raising_filenotfound_returns_error_not_exception(self):
+        def raising_fn(args):
+            raise FileNotFoundError("missing config")
+        tc = dispatch_tool("read_file", {"path": "missing.yaml"},
+                           {"read_file": raising_fn})
+        assert tc.error
+        assert "FileNotFoundError" in tc.error
+        assert tc.result == ""
+
+    def test_normal_tool_return_path_unaffected(self):
+        """Tools that return (result, err) must keep working unchanged."""
+        def normal_fn(args):
+            return "hello", None
+        tc = dispatch_tool("read_file", {"path": "x"},
+                           {"read_file": normal_fn})
+        assert tc.error is None
+        assert tc.result == "hello"
+
+    def test_cached_tool_exception_not_poisoned_into_cache(self):
+        """An exception during the first call must not be cached as a
+        successful result — the cache stays empty so retries can succeed."""
+        call_count = {"n": 0}
+        def flaky_fn(args):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise ValueError("transient")
+            return "ok", None
+        cache = ToolCache()
+        tc1 = dispatch_tool("read_file", {"path": "x"},
+                            {"read_file": flaky_fn},
+                            cache=cache, cacheable={"read_file"})
+        assert tc1.error and "ValueError" in tc1.error
+        # Retry should re-invoke fn (cache miss), now succeed.
+        tc2 = dispatch_tool("read_file", {"path": "x"},
+                            {"read_file": flaky_fn},
+                            cache=cache, cacheable={"read_file"})
+        assert tc2.error is None
+        assert tc2.result == "ok"
+        assert call_count["n"] == 2  # both calls hit fn, exception not cached
+
+
 class TestValidation:
     def test_valid_args(self):
         defn = fs.read_only_defs()[0]  # read_file
