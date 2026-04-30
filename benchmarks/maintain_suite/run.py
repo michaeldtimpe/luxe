@@ -617,9 +617,10 @@ class Diagnostics:
     # for distinguishing "model refused" from "model exhausted retries"
     # from "model emitted prose without ever calling tools".
     bailout_type: str = ""    # "" = no bailout (success/normal fail);
-                              # "refusal" | "prose_only" | "stuck_loop" |
+                              # "refusal" | "prose_only" | "no_engagement" |
+                              # "stuck_after_done" | "stuck_no_output" |
                               # "schema_confusion" | "context_overflow" |
-                              # "no_engagement" | "no_diff_writes"
+                              # "no_diff_writes" | "aborted"
     bailout_reason: str = ""  # human-readable evidence
 
 
@@ -654,8 +655,17 @@ def _classify_bailout(state: FixtureState, artefacts: dict) -> tuple[str, str]:
     final_chars = int(sm.get("final_text_chars", 0))
 
     if aborted:
+        # Did the run produce a PR? If yes, the model finished real work and
+        # only got stuck on follow-up cleanup tool calls — different from a
+        # truly broken run that produced nothing actionable.
+        produced_output = bool(artefacts.get("pr_opened") or artefacts.get("pr_url"))
         if "stuck" in abort_reason and "loop" in abort_reason:
-            return "stuck_loop", abort_reason[:160]
+            if produced_output:
+                return ("stuck_after_done",
+                        f"work shipped (PR opened) but agent then "
+                        f"tripped stuck-loop on cleanup; {abort_reason[:120]}")
+            return ("stuck_no_output",
+                    f"stuck-loop with no PR produced; {abort_reason[:120]}")
         if "max steps" in abort_reason:
             return "context_overflow", abort_reason[:160]
         if "schema" in abort_reason or schema_rejects > 3:

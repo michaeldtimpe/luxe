@@ -4,10 +4,17 @@ profile:
   name: "Single-model 64 GB"
   description: "One capable model drives the whole task with the full tool surface."
   memory_budget_gb: 64
-  peak_model_gb: 19.0
+  peak_model_gb: 30.0
 
 models:
-  monolith: "Qwen2.5-32B-Instruct-4bit"
+  # Default monolith — promoted to Qwen3.6-35B-A3B-6bit after the overnight
+  # bake-off (2026-04-29). It produced the first production-quality
+  # implementations of `the-game` and `neon-rain` (passing tests via the
+  # existing event bus), beat all prior model/architecture combinations
+  # on real-PASS rate, and the 6-bit variant edges the 4-bit on quality.
+  # Earlier baseline (Qwen2.5-32B-Instruct-4bit) preserved below for
+  # rollback; switch via --single-config to pin to the old default.
+  monolith: "Qwen3.6-35B-A3B-6bit"
 
 # Single mode runs ONE role: the monolith. Full tool surface, agentic loop.
 # Used for smaller repos and quick fixes; escalates to swarm when the model
