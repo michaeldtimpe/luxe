@@ -232,6 +232,120 @@ def test_criteria_breakdown_records_each_check(git_repo: Path):
 
 # --- summary --
 
+# --- orphan-file gate --
+
+def _commit_added_files(repo: Path, files: dict[str, str], message: str) -> None:
+    for rel, content in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True)
+
+
+def _seed_js_repo(repo: Path) -> None:
+    """Replace the default Python repo state with a JS project that
+    already contains an HtmlInputHandler.js, mirroring the neon-rain shape."""
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "input").mkdir(parents=True, exist_ok=True)
+    (repo / "src" / "input" / "HtmlInputHandler.js").write_text(
+        "export class HtmlInputHandler {\n  constructor() {}\n}\n"
+    )
+    (repo / "src" / "Game.js").write_text(
+        "import { HtmlInputHandler } from './input/HtmlInputHandler.js';\n"
+        "export class Game { constructor() { this.input = new HtmlInputHandler(); } }\n"
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "js project base"],
+                   cwd=repo, check=True)
+
+
+def test_orphan_file_gate_flags_duplicate_stem_in_same_dir(git_repo: Path):
+    """Reproduces the granite-3b neon-rain exploit: model adds
+    HtmlInputHandler.ts next to existing HtmlInputHandler.js. Tests pass
+    against the unchanged JS implementation; the new TS file is orphan."""
+    _seed_js_repo(git_repo)
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "src/input/HtmlInputHandler.ts":
+            "export default class HtmlInputHandler {\n  bindEvents() {}\n}\n"
+    }, "orphan ts duplicate")
+    fix = _f("orph1", "tests_pass", task_type="implement", command="true")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+    assert "duplicates existing" in r.expected_outcome_detail
+
+
+def test_orphan_file_gate_flags_unreferenced_new_source(git_repo: Path):
+    """Model adds a brand-new source file that nothing imports."""
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "src/healthcheck.py":
+            "def health_endpoint():\n    return {'status': 'ok'}\n"
+    }, "unwired new file")
+    fix = _f("orph2", "regex_present", task_type="implement",
+             pattern=r"def health_endpoint")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+
+
+def test_orphan_file_gate_does_not_fire_when_new_file_is_imported(git_repo: Path):
+    """A new source file that's wired into existing code is NOT orphan."""
+    base = _base_sha(git_repo)
+    # main.py already exists from the git_repo fixture; modify it to import
+    # the new module and add the new module itself.
+    main = git_repo / "src" / "main.py"
+    main.write_text(main.read_text()
+                    + "from src.helper import compute\n")
+    _commit_added_files(git_repo, {
+        "src/helper.py": "def compute(x): return x * 2\n",
+    }, "new module wired in")
+    fix = _f("orph3", "regex_present", task_type="implement",
+             pattern=r"def compute")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed
+    assert not any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+
+
+def test_orphan_file_gate_skips_document_tasks(git_repo: Path):
+    """document tasks legitimately add standalone files (e.g. CONFIG.md,
+    or a brand-new module that's just a code reference). The gate only
+    applies to implement/bugfix."""
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "src/standalone_doc.py":
+            '"""Module-level docstring referenced from README only."""\n'
+    }, "doc-task addition")
+    fix = _f("orph4", "regex_present", task_type="document",
+             pattern=r"docstring")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    # Doc tasks pass even when the new file is technically an orphan.
+    assert r.expected_outcome_passed
+    assert not any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+
+
+def test_orphan_file_gate_skips_non_source_additions(git_repo: Path):
+    """Implement task that adds a markdown or yaml is not a source-orphan."""
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "NOTES.md": "# Implementation notes\n\nSee src/main.py.\n",
+        "src/main.py": (git_repo / "src" / "main.py").read_text()
+                       + "def health(): return 'ok'\n",
+    }, "real impl + notes file")
+    fix = _f("orph5", "regex_present", task_type="implement",
+             pattern=r"def health")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed
+    assert not any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+
+
 def test_summarize_counts_pass_fail():
     results = [
         FixtureResult(fixture_id=f"f{i}", score=5) for i in range(8)

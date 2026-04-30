@@ -158,3 +158,20 @@ Plus: `mx.metal.set_wired_limit` is *process-level*, but oMLX runs as a separate
 Updated all 5 v1 fixtures with appropriate values (lpe-rope-calc `min_matches: 4`, isomer `min_added_lines: 8`, nothing-ever-happens `min_matches: 3` + version-string-or-CVE pattern). Added 5 new fixtures (10 total, the v1 release-gate floor) calibrated with these thresholds. The thresholds are fixture-author choices — fixtures with substantive scope set them aggressively; trivial single-edit fixtures leave them at defaults.
 
 **Affected files**: `benchmarks/maintain_suite/grade.py` (`_check_regex_present` signature), `benchmarks/maintain_suite/fixtures.yaml` (5 existing tightened, 5 new fixtures added).
+
+---
+
+### [2026-04-30] Orphan-file gate — close the last "tests pass for the wrong reason" hole
+
+**What happened**: The granite-4.1-3b-bf16 bake-off (2026-04-30) raw-passed `neon-rain-implement-reset-shortcut` at 5/5. Hand inspection: the model created a NEW file `src/input/HtmlInputHandler.ts` next to the existing `HtmlInputHandler.js` in a JavaScript-only project. Nothing imported the new TypeScript file — `Game.js` still imports the original `.js` handler. `npm test` passed because the existing implementation was unchanged. The vacuous_test gate didn't fire because vacuous_test only inspects NEW *test* files, not new *source* files. This is exactly the orphan-file mode flagged in the [2026-04-29] entry as "uncaught by automation; surfaced as the architect's job in --mode phased" — and we deleted phased mode in the v1 simplification.
+
+**Root cause**: A successful test run plus a non-empty diff plus a new file in the diff doesn't mean the new file is on the executed code path. The model can satisfy "added a file matching the pattern" and "tests pass" simultaneously by adding parallel-language duplicates (`.ts` next to `.js`, `.py` in a JS project) or by adding bare modules nothing wires in. Tests pass against the unchanged existing implementation.
+
+**Fix / takeaway**: Added `check_orphan_file` in `benchmarks/maintain_suite/grade.py`. Only applies to `implement`/`bugfix` tasks (document/manage legitimately add standalone files like CONFIG.md or SECURITY-AUDIT.md). Two-prong detection — a NEW source file is orphan iff EITHER:
+  1. A sibling file with the same stem exists in the same directory (e.g. `Foo.ts` next to `Foo.js`). Strong duplicate signal — catches the granite-3b case.
+  2. The file's stem isn't referenced anywhere else in the post-edit repo (no import/require/path-string mentions it).
+The gate fires on both `tests_pass` and `regex_present` outcomes — the regex case mattered too because a model can match a regex by adding an unwired source file just as easily as by adding the right edit. Five tests in `test_acceptance_grader.py` cover: duplicate stem, unreferenced new file, properly-wired new file (must NOT fire), document tasks (must NOT fire), and non-source additions like markdown (must NOT fire).
+
+This closes the last automated grader hole identified across all bake-offs. The remaining false-positive surface area is fundamentally a hand-inspection problem (semantic correctness), not pattern matching.
+
+**Affected files**: `benchmarks/maintain_suite/grade.py` (`check_orphan_file`, `_added_files_in_diff`, `_is_source_path`, plus integration in `grade_fixture`'s `tests_pass` and `regex_present` branches), `tests/test_acceptance_grader.py` (5 new tests).
