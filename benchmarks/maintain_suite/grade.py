@@ -198,6 +198,134 @@ def check_vacuous_test(
                  cwd=repo_path, timeout=60)
 
 
+# Source-code extensions for the orphan-file gate. Files outside this set
+# (markdown, configs, lockfiles, etc.) are legitimate standalone additions
+# and aren't subject to the orphan check.
+_SOURCE_EXTS = frozenset({
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".rs", ".go", ".java", ".kt", ".swift",
+    ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp",
+    ".rb", ".php", ".cs", ".scala",
+})
+
+
+def _is_source_path(path: str) -> bool:
+    """A code source file (not a test, doc, or config)."""
+    if _looks_like_test_file(path):
+        return False
+    return Path(path).suffix.lower() in _SOURCE_EXTS
+
+
+def _added_files_in_diff(repo_path: Path, base_sha: str) -> list[str]:
+    """Return paths of files newly added (status A) in base_sha..HEAD."""
+    rc, out = _run(["git", "diff", "--name-status", base_sha, "HEAD"],
+                   cwd=repo_path)
+    if rc != 0:
+        return []
+    added: list[str] = []
+    for line in out.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2 and parts[0] == "A":
+            added.append(parts[1].strip())
+    return added
+
+
+def check_orphan_file(
+    repo_path: Path,
+    base_sha: str,
+    task_type: str,
+) -> tuple[bool, str]:
+    """Detect new source files that nothing imports.
+
+    Catches the "orphan-file" exploit where a model adds a from-scratch
+    source file (often in a parallel language to the project's actual
+    stack) that satisfies the regex/test grader, but nothing imports it
+    and the existing tests still pass because the existing implementation
+    is unchanged. Seen in the granite-3b bake-off (2026-04-30): model
+    added `src/input/HtmlInputHandler.ts` next to the existing `.js`
+    file in a JS-only project; npm test passed because nothing references
+    the new TypeScript file.
+
+    Two-prong detection. A NEW source file is orphan iff EITHER:
+      1. A sibling file with the same stem in the same directory already
+         existed (e.g. `Foo.ts` next to `Foo.js`). Strong duplicate signal.
+      2. The file's stem isn't referenced anywhere else in the post-edit
+         repo — no import, require, or path-string mentions it.
+
+    Only applies to implement/bugfix tasks. document/manage tasks
+    legitimately add standalone files (CONFIG.md, ARCHITECTURE.md,
+    SECURITY-AUDIT.md) that aren't expected to be imported.
+
+    Returns (triggered, detail). Fail-open on infrastructure errors.
+    """
+    if task_type not in ("implement", "bugfix"):
+        return False, ""
+    if not base_sha:
+        return False, ""
+
+    new_files = [p for p in _added_files_in_diff(repo_path, base_sha)
+                 if _is_source_path(p)]
+    if not new_files:
+        return False, ""
+
+    orphans: list[str] = []
+    for new_path in new_files:
+        new_stem = Path(new_path).stem
+        if not new_stem or new_stem.startswith("_"):
+            # __init__.py, _internal.py, etc. — legitimate bare-stem cases.
+            continue
+
+        # Prong 1: same-directory sibling with same stem (different ext).
+        new_dir = (repo_path / new_path).parent
+        if new_dir.is_dir():
+            for sibling in new_dir.iterdir():
+                if not sibling.is_file():
+                    continue
+                try:
+                    rel = str(sibling.relative_to(repo_path))
+                except ValueError:
+                    continue
+                if rel == new_path:
+                    continue
+                if sibling.stem == new_stem and _is_source_path(rel):
+                    orphans.append(
+                        f"{new_path} duplicates existing {rel} "
+                        "(same stem, same dir — orphan duplicate)"
+                    )
+                    break
+            else:
+                # No same-stem sibling — fall through to Prong 2.
+                pass
+            if orphans and orphans[-1].startswith(new_path):
+                continue
+
+        # Prong 2: any reference to the stem elsewhere in source files?
+        # `git grep -w` does a whole-word match on the stem across tracked
+        # source files. If the only match is the new file itself, it's
+        # orphan; if zero matches, also orphan.
+        rc, out = _run(
+            ["git", "grep", "-l", "-w", "--", new_stem,
+             "*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs", "*.cjs",
+             "*.rs", "*.go", "*.java", "*.kt", "*.swift",
+             "*.cpp", "*.cc", "*.cxx", "*.c", "*.h", "*.hpp",
+             "*.rb", "*.php", "*.cs", "*.scala"],
+            cwd=repo_path,
+        )
+        matches: set[str] = set()
+        if rc == 0 and out.strip():
+            matches = {l.strip() for l in out.splitlines() if l.strip()}
+        matches.discard(new_path)
+        if not matches:
+            orphans.append(
+                f"{new_path} (stem `{new_stem}` not referenced anywhere "
+                "else in the post-edit repo — orphan)"
+            )
+
+    if orphans:
+        return True, "; ".join(orphans[:3])
+    return False, ""
+
+
 def apply_strict_gates(
     *,
     task_type: str,
@@ -468,8 +596,7 @@ def grade_fixture(
         result.expected_outcome_detail = detail
         earned_outcome = 3 if passed else 0
         # Vacuous-test gate: a passing test that also passes against the
-        # unmodified base SHA isn't exercising the implementation. Closes
-        # the hole that let swarm__14b's neon-rain pass slip through.
+        # unmodified base SHA isn't exercising the implementation.
         if passed:
             vacuous, vac_detail = check_vacuous_test(
                 repo_path, base_sha, eo.get("command", ""), changed,
@@ -484,6 +611,24 @@ def grade_fixture(
                     "detail": vac_detail[:500],
                 })
                 earned_outcome = 0
+            else:
+                # Orphan-file gate: a NEW source file added by an
+                # implement/bugfix task that nothing imports. Tests pass
+                # against the unchanged existing implementation; the new
+                # file is a phantom satisfying the grader.
+                orphan, orph_detail = check_orphan_file(
+                    repo_path, base_sha, fixture.task_type,
+                )
+                if orphan:
+                    result.expected_outcome_passed = False
+                    result.expected_outcome_detail = (
+                        f"{detail}\n\n[orphan_file gate] {orph_detail}"
+                    )
+                    result.gates_triggered.append({
+                        "gate": "orphan_file",
+                        "detail": orph_detail[:500],
+                    })
+                    earned_outcome = 0
     elif kind == "regex_present":
         passed, detail = _check_regex_present(
             repo_path, eo.get("pattern", ""), changed, base_sha=base_sha,
@@ -493,6 +638,23 @@ def grade_fixture(
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail
         earned_outcome = 3 if passed else 0
+        # Orphan-file gate also applies to regex_present passes on
+        # implement/bugfix tasks — the model could match a regex by
+        # adding an unwired source file just as readily.
+        if passed:
+            orphan, orph_detail = check_orphan_file(
+                repo_path, base_sha, fixture.task_type,
+            )
+            if orphan:
+                result.expected_outcome_passed = False
+                result.expected_outcome_detail = (
+                    f"{detail}\n\n[orphan_file gate] {orph_detail}"
+                )
+                result.gates_triggered.append({
+                    "gate": "orphan_file",
+                    "detail": orph_detail[:500],
+                })
+                earned_outcome = 0
     elif kind == "regex_absent":
         passed, detail = _check_regex_absent(repo_path, eo.get("pattern", ""), changed)
         result.expected_outcome_passed = passed
