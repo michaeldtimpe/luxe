@@ -389,7 +389,7 @@ def _format_pr_body(spec: RunSpec, state: PRState, report_text: str,
     sections.append("## Run details")
     sections.append(f"- run_id: `{spec.run_id}`")
     sections.append(f"- task_type: `{task_type}`")
-    sections.append(f"- mode: `{spec.actual_mode or spec.mode}`")
+    sections.append(f"- mode: `mono`")
     sections.append(f"- base_sha: `{spec.base_sha[:12]}`")
     if state.test_command:
         verdict = "✓ pass" if state.test_passed else "✗ fail"

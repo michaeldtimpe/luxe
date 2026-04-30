@@ -131,13 +131,30 @@ Plus: `mx.metal.set_wired_limit` is *process-level*, but oMLX runs as a separate
 
 ---
 
-<!--
-Anticipated categories based on the research doc:
+### [2026-04-30] Mono-only pivot — swarm/micro/phased deleted in the v1.0 simplification
 
-- **Context management**: Issues with token estimation, elision timing, pressure thresholds
-- **Model behavior**: Unexpected tool-call formats, fabrication patterns, role confusion
-- **Tool dispatch**: Schema validation edge cases, tool-call recovery failures
-- **Pipeline flow**: Architect decomposition quality, escalation loops, validator coverage
-- **Performance**: Model swap latency, throughput surprises, cache effectiveness
-- **Configuration**: Threshold tuning, role config adjustments, temperature effects
--->
+**What happened**: After the 8-bit completion bake-off (2026-04-30) confirmed `mono__qwen3.6-35b-a3b-6bit` as the strongest configuration we'd produced (2/5 real PASSes, including the only production-quality `the-game` and `neon-rain` JS implementations across every prior bake-off), we ripped out the swarm, microloop, and phased execution modes entirely. The codebase shrank by ~3000 lines: deleted `src/luxe/agents/{microloop,phased,architect,synthesizer,validator,worker}.py`, `src/luxe/pipeline/`, `src/luxe/benchmark/`, `src/luxe/metrics/`, `src/luxe/escalation.py`, `src/luxe/mode_select.py`, `configs/{swarm,qwen,deepseek,mode}.yaml`, and 6 test files. `luxe maintain` no longer takes `--mode`; it always runs the monolith.
+
+**Root cause**: Across 6 bake-offs with strict regrade + hand inspection, mono won at every model size we tested ≥14B. swarm tied at 14B (one swarm "pass" was flagged by strict gates and downgraded by hand) and lost outright at every other scale. micro hit 0/5 real at every scale. phased hit 0/5 real even with bounded retry — the architect rubber-stamped fabrication. The multi-agent designs were trying to compensate for small-model weaknesses; once the champion was a 35B-A3B MoE that can drive the agentic loop alone, the decomposition layer added latency and exploit surface (vacuous tests, role-name leaks, mass-deletion gaming) without quality gains.
+
+**Fix / takeaway**: The architecture is now `Backend → run_single → run_agent` and the only config knob is which monolith model to load. The bench harness was simplified in lockstep: variant YAML now takes only `(model_label, model_id)` pairs (legacy `mode: mono` is accepted; `mode: swarm|micro|phased` raises a clear error). Three lessons we paid in real time:
+  1. Don't keep "fallback" execution modes around as escape hatches when the data shows they don't beat the primary — they accumulate maintenance debt and confuse experiments.
+  2. Once a champion model exists, the right move is to invest in fixture coverage and grader strictness, not in alternate orchestration topologies.
+  3. The `ValidatorEnvelope` data classes (used by the citation linter) outlived their producer (the swarm validator); we moved them into `citations.py` rather than keep an empty `validator.py` shell. When a module is mostly dead but a sibling needs a sliver, inline the sliver and delete the module.
+
+**Affected files**: `src/luxe/cli.py` (rewrite, ~40% smaller), `src/luxe/citations.py` (inlined ValidatorEnvelope), `src/luxe/run_state.py` (dropped stage/blackboard helpers + mode fields), `src/luxe/config.py` (default → `single_64gb.yaml`), `benchmarks/maintain_suite/run.py` (variant matrix simplified), `tests/conftest.py`. New default variant file: `benchmarks/maintain_suite/variants_v1_default.yaml`.
+
+---
+
+### [2026-04-30] Regex-present grader gamed three ways — added min_matches and min_added_lines
+
+**What happened**: The 8-bit completion bake-off produced 6 raw PASSes across two variants. Hand-inspection downgraded 4 of them: (1) lpe-rope-calc — task asked for a module docstring + type hints on EVERY top-level function, model added zero docstrings and typed ONE parameter on ONE function; the regex `def \w+\(...: (str|int|...)` matched once and the test "passed". (2) isomer — task said "ADD a Quickstart section", model RENAMED "Quick Start" → "Quickstart" and stripped the ISOMER_SECRET setup the app requires to start; the regex `(?i)#+\s*Quickstart` matched. (3) nothing-ever-happens — task said "identify dependencies with KNOWN security advisories", model created a 2-file audit doc with "no known issues" listed for every dependency; the regex `(?i)# SECURITY` matched on the doc header. None of these three diffs implemented the asked task; all three matched the regex on the first added line.
+
+**Root cause**: A regex against added diff lines verifies *something added* matches *a pattern*. It cannot verify *the task is complete*. For multi-call-site tasks ("type every function") a single match is the same as zero work. For document tasks, a one-line edit (or a section rename that matches the header pattern) is indistinguishable from a substantive write. For audit/manage tasks, header-keyword matching admits "I looked but found nothing" surveys as if they were findings.
+
+**Fix / takeaway**: Added two optional fields to `expected_outcome` for `regex_present` checks in `benchmarks/maintain_suite/grade.py`:
+  - `min_matches` (default 1) — pattern must hit in at least N distinct added lines. Defeats single-edit gaming on multi-call-site tasks.
+  - `min_added_lines` (default 0) — diff must add at least N total lines across changed files. Defeats rename-only or one-line edits that technically match the regex.
+Updated all 5 v1 fixtures with appropriate values (lpe-rope-calc `min_matches: 4`, isomer `min_added_lines: 8`, nothing-ever-happens `min_matches: 3` + version-string-or-CVE pattern). Added 5 new fixtures (10 total, the v1 release-gate floor) calibrated with these thresholds. The thresholds are fixture-author choices — fixtures with substantive scope set them aggressively; trivial single-edit fixtures leave them at defaults.
+
+**Affected files**: `benchmarks/maintain_suite/grade.py` (`_check_regex_present` signature), `benchmarks/maintain_suite/fixtures.yaml` (5 existing tightened, 5 new fixtures added).

@@ -14,10 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from luxe.agents.validator import ValidatorEnvelope, ValidatorFinding
 from luxe.citations import (
     Citation,
     LintResult,
+    ValidatorEnvelope,
+    ValidatorFinding,
     extract_citations,
     lint_report,
 )

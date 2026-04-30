@@ -1,17 +1,10 @@
-"""Acceptance suite runner — drives `luxe maintain` for each fixture, with
-three-layer recovery so an interrupted suite resumes cleanly.
+"""Acceptance suite runner — drives `luxe maintain` for each fixture.
 
-Recovery layers:
-  1. Per-fixture state (`acceptance/<id>/state.json`):
-     PENDING → RUNNING → DONE | ERROR | SKIPPED. On restart, DONE/SKIPPED
-     fixtures are skipped; RUNNING/ERROR/PENDING fixtures execute or resume.
-  2. Per-stage checkpoints inside luxe (~/.luxe/runs/<run-id>/stages/):
-     when state.luxe_run_id is set and the stage cache has architect/worker_*/
-     validator/synthesizer entries, we call `luxe resume` instead of
-     `luxe maintain` so worker findings aren't recomputed.
-  3. PR-cycle step ledger (~/.luxe/runs/<run-id>/pr_state.json):
-     `luxe resume` already replays only the incomplete commit/test/push/
-     create/watch_ci steps — no extra wiring needed.
+Per-fixture state lives in `acceptance/<id>/state.json` with the lifecycle
+PENDING → RUNNING → DONE | ERROR | SKIPPED. DONE/SKIPPED fixtures are
+skipped on restart; RUNNING/ERROR/PENDING fixtures re-run from scratch
+(luxe is mono-only as of v1.0; there are no mid-pipeline checkpoints to
+resume from — each fixture is one short single-mode run).
 
 Usage:
   python -m benchmarks.maintain_suite.run --all
@@ -19,11 +12,12 @@ Usage:
   python -m benchmarks.maintain_suite.run --all --retry-errors
   python -m benchmarks.maintain_suite.run --force fix-1
   python -m benchmarks.maintain_suite.run --all --dry-run
+  python -m benchmarks.maintain_suite.run --variants <yaml> --all
 
 Outputs under --output (default ./acceptance/):
-  <id>/state.json     — current fixture status (resumable)
+  <id>/state.json     — current fixture status
   <id>/result.json    — FixtureResult once status==DONE
-  <id>/diagnostics.json — stage timings, tokens, validator status, etc.
+  <id>/diagnostics.json — wall, tokens, validator status, etc.
   <id>/stdout.log     — captured luxe stdout
   <id>/stderr.log     — captured luxe stderr
   summary.json        — last-run aggregate
@@ -109,20 +103,19 @@ def _fixture_dir(output: Path, fixture_id: str, variant_id: str = "") -> Path:
 
 @dataclass
 class Variant:
-    """One (mode, model) test cell. variant_id is the directory namespace."""
-    mode: str            # "mono" | "swarm" | "micro" (user-facing label)
-    model_label: str     # short human-readable label, e.g. "qwen-coder-1.5b"
-    model_id: str        # oMLX model ID, e.g. "Qwen2.5-Coder-1.5B-Instruct-4bit"
+    """One model test cell. variant_id is the directory namespace.
+
+    Mono-only as of v1.0: every variant runs `luxe maintain` in single
+    mode against `configs/single_64gb.yaml` with the model swapped in
+    via overlay. The variant_id keeps the legacy `mono__<label>` prefix
+    so existing acceptance/<run>/ output dirs remain readable.
+    """
+    model_label: str     # short human-readable label, e.g. "qwen3.6-35b-a3b-6bit"
+    model_id: str        # oMLX model ID, e.g. "Qwen3.6-35B-A3B-6bit"
 
     @property
     def variant_id(self) -> str:
-        return f"{self.mode}__{self.model_label}"
-
-    @property
-    def cli_mode(self) -> str:
-        """The --mode value to pass to `luxe maintain`. "mono" is the
-        user-facing alias; the CLI still expects "single"."""
-        return "single" if self.mode == "mono" else self.mode
+        return f"mono__{self.model_label}"
 
 
 def _project_root() -> Path:
@@ -130,13 +123,7 @@ def _project_root() -> Path:
 
 
 def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
-    """Write an overlay YAML pinning the candidate model into the right slots.
-
-    For swarm/micro: re-points worker_read/worker_code/worker_analyze and
-    the microloop drafter/coder to the candidate. Architect/validator/
-    synthesizer/verifier/linter stay on the canonical baselines.
-
-    For single (mono): re-points the monolith model.
+    """Write an overlay YAML pinning the candidate model into single_64gb.
 
     The overlay is written to a tempdir; its filename stem becomes the
     config_name visible in luxe maintain logs.
@@ -144,37 +131,15 @@ def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
     overlay_dir.mkdir(parents=True, exist_ok=True)
     out_path = overlay_dir / f"{variant.variant_id}.yaml"
 
-    if variant.cli_mode == "single":
-        base_path = _project_root() / "configs" / "single_64gb.yaml"
-        cfg = yaml.safe_load(base_path.read_text())
-        cfg.setdefault("models", {})["monolith"] = variant.model_id
-        # Cap context for tiny models. 0.5B / 1.5B can't usefully drive a
-        # 32k-token agentic loop end-to-end; keeping the per-step ctx tighter
-        # avoids attention-cliff failures.
-        cfg.setdefault("roles", {}).setdefault("monolith", {})
-        cfg["roles"]["monolith"]["num_ctx"] = min(
-            int(cfg["roles"]["monolith"].get("num_ctx", 8192)), 8192,
-        )
-    else:
-        base_path = _project_root() / "configs" / "qwen_32gb.yaml"
-        cfg = yaml.safe_load(base_path.read_text())
-        worker_keys = {"worker_read", "worker_code", "worker_analyze",
-                       "drafter", "coder"}
-        for k in worker_keys:
-            if k in cfg["models"]:
-                cfg["models"][k] = variant.model_id
-        for role_name, role in cfg.get("roles", {}).items():
-            if role.get("model_key") in worker_keys:
-                role["num_ctx"] = min(int(role.get("num_ctx", 4096)), 4096)
-        # Pin execution_mode so each --mode flag is explicit against this
-        # overlay. CLI's --mode flag overrides this anyway, but the field's
-        # presence is a useful breadcrumb when reading saved overlays.
-        if variant.mode == "micro":
-            cfg["execution"] = "microloop"
-        elif variant.mode == "phased":
-            cfg["execution"] = "phased"
-        else:
-            cfg["execution"] = "swarm"
+    base_path = _project_root() / "configs" / "single_64gb.yaml"
+    cfg = yaml.safe_load(base_path.read_text())
+    cfg.setdefault("models", {})["monolith"] = variant.model_id
+    # Cap context for tiny models. <2B can't usefully drive a 32k-token
+    # agentic loop; clamping the per-step ctx avoids attention-cliff failures.
+    cfg.setdefault("roles", {}).setdefault("monolith", {})
+    cfg["roles"]["monolith"]["num_ctx"] = min(
+        int(cfg["roles"]["monolith"].get("num_ctx", 8192)), 32768,
+    )
 
     out_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     return out_path
@@ -548,42 +513,28 @@ def _extract_run_id(text: str) -> str:
 def _luxe_maintain(
     repo: Path, fixture: Fixture, log_dir: Path,
     *,
-    mode: str = "auto",
-    swarm_config: Path | None = None,
-    single_config: Path | None = None,
+    config: Path | None = None,
     timeout_s: float | None = None,
 ) -> tuple[int, str, str]:
     """Spawn `luxe maintain`. Returns (rc, run_id, stderr_excerpt).
 
-    `mode` ∈ {"auto", "single", "swarm", "micro"} — passed to `--mode`.
-    `swarm_config`/`single_config` override the default configs and are how
-    multi-variant runs pin per-candidate model overlays.
+    `config` overrides the default config (used by multi-variant runs to
+    pin per-candidate model overlays).
     """
     cmd = [
         sys.executable, "-m", "luxe.cli", "maintain",
         str(repo), fixture.goal,
-        "--task", fixture.task_type, "--mode", mode,
+        "--task", fixture.task_type,
         "--yes",
         # Keep models warm across fixtures. Without this, every fixture
-        # pays cold-load tax on its first model touch (3-5s per model).
-        # The bench harness explicitly unloads at end-of-run instead.
+        # pays cold-load tax (3-5s) on its first model touch.
         "--keep-loaded",
     ]
-    if swarm_config:
-        cmd.extend(["--swarm-config", str(swarm_config)])
-    if single_config:
-        cmd.extend(["--single-config", str(single_config)])
+    if config:
+        cmd.extend(["--config", str(config)])
     rc, out, err = _run_capture(cmd, log_dir, timeout_s=timeout_s)
     excerpt = _stderr_excerpt(err) if rc != 0 else ""
     return rc, _extract_run_id(out + err), excerpt
-
-
-def _luxe_resume(run_id: str, log_dir: Path,
-                 timeout_s: float | None = None) -> tuple[int, str]:
-    """Returns (rc, stderr_excerpt). stderr_excerpt is set when rc != 0."""
-    cmd = [sys.executable, "-m", "luxe.cli", "resume", run_id, "--yes"]
-    rc, _, err = _run_capture(cmd, log_dir, timeout_s=timeout_s)
-    return rc, _stderr_excerpt(err) if rc != 0 else ""
 
 
 # --- diagnostics ----------------------------------------------------------
@@ -807,7 +758,6 @@ class Decision(str, Enum):
     SKIP_REQUIRED_ENV = "skip_required_env"
     SKIP_DRY_RUN = "skip_dry_run"
     RUN_FRESH = "run_fresh"
-    RUN_RESUME = "run_resume"
 
 
 def decide(
@@ -825,15 +775,6 @@ def decide(
     missing = [v for v in fixture.required_env if not os.environ.get(v)]
     if missing:
         return Decision.SKIP_REQUIRED_ENV, f"missing env: {', '.join(missing)}"
-    if state.luxe_run_id and _luxe_run_exists(state.luxe_run_id):
-        if _luxe_pipeline_complete(state.luxe_run_id) and \
-                _luxe_pr_complete(state.luxe_run_id):
-            # Pipeline + PR both done; just grade.
-            return Decision.RUN_RESUME, "all stages complete; will only grade"
-        return Decision.RUN_RESUME, (
-            "resuming from stage cache: "
-            f"{','.join(_luxe_completed_stages(state.luxe_run_id)) or '(none)'}"
-        )
     return Decision.RUN_FRESH, "new run"
 
 
@@ -868,7 +809,7 @@ def _heal_stale_silent_failure(state: FixtureState, output: Path,
     """If a fixture's cached diagnostics show a silent failure (wall<5s +
     tokens=0) AND it didn't actually do real work (no diff, no PR),
     reclassify state to ERROR AND clear luxe_run_id so the next decide()
-    picks RUN_FRESH instead of RUN_RESUME. Also heals the inverse case:
+    picks RUN_FRESH instead of skipping. Also heals the inverse case:
     a previously-ERROR-marked run that DID produce a diff/PR (false-
     positive single-mode silent-failure) gets reclassified back to DONE.
     Idempotent.
@@ -953,7 +894,7 @@ def run_fixture(
         force=force, retry_errors=retry_errors, retry_skipped=retry_skipped,
     )
     log(f"  → decision: {decision.value}  ({reason})")
-    if dry_run and decision in (Decision.RUN_FRESH, Decision.RUN_RESUME):
+    if dry_run and decision == Decision.RUN_FRESH:
         return (FixtureResult(fixture_id=fixture.id, skipped=True,
                               skipped_reason="dry_run"),
                 Diagnostics(fixture_id=fixture.id))
@@ -993,7 +934,7 @@ def run_fixture(
                 pass
         return fr, diag
 
-    # RUN_FRESH or RUN_RESUME
+    # RUN_FRESH
     if force:
         state.luxe_run_id = ""  # discard cached run
 
@@ -1015,77 +956,55 @@ def run_fixture(
     state.status = FixtureStatus.RUNNING
     save_state(output, state, variant_id)
 
-    # Resolve per-variant config overlays (set when running mono/swarm/micro
-    # against a specific candidate model).
+    # Resolve per-variant config overlay (when running against a specific model).
     overlay_path: Path | None = None
     if variant is not None:
         if overlay_dir is None:
             overlay_dir = output / "_overlays"
         overlay_path = make_overlay(variant, overlay_dir)
-    cli_mode = "auto"
-    swarm_cfg: Path | None = None
-    single_cfg: Path | None = None
-    if variant is not None:
-        cli_mode = variant.cli_mode
-        if variant.cli_mode == "single":
-            single_cfg = overlay_path
-        else:
-            swarm_cfg = overlay_path
 
-    # Spawn the right command.
-    if decision == Decision.RUN_RESUME:
-        log(f"  → invoking `luxe resume {state.luxe_run_id}`")
-        rc, err_excerpt = _luxe_resume(state.luxe_run_id, fdir,
-                                       timeout_s=per_fixture_timeout_s)
-        run_id = state.luxe_run_id
-        if rc != 0 and err_excerpt:
-            log(f"  ! luxe resume rc={rc}: {err_excerpt[:200]}")
+    if variant is not None:
+        log(f"  → invoking `luxe maintain` ({variant.model_label})")
     else:
-        if variant is not None:
-            log(f"  → invoking `luxe maintain --mode {cli_mode}` "
-                f"({variant.model_label})")
-        else:
-            log(f"  → invoking `luxe maintain` (fresh)")
-        rc, run_id, err_excerpt = _luxe_maintain(
-            repo, fixture, fdir,
-            mode=cli_mode, swarm_config=swarm_cfg, single_config=single_cfg,
-            timeout_s=per_fixture_timeout_s,
+        log(f"  → invoking `luxe maintain` (default config)")
+    rc, run_id, err_excerpt = _luxe_maintain(
+        repo, fixture, fdir,
+        config=overlay_path,
+        timeout_s=per_fixture_timeout_s,
+    )
+    if rc == 124:
+        # Killed by --per-fixture-timeout; mark ERROR so --retry-errors
+        # picks it up cleanly on the next pass.
+        state.status = FixtureStatus.ERROR
+        state.last_error = (
+            f"per-fixture timeout after {per_fixture_timeout_s:.0f}s; "
+            "luxe killed mid-run"
         )
-        if rc == 124:
-            # Killed by --per-fixture-timeout; mark ERROR (not RUNNING) so the
-            # next --retry-errors picks it up cleanly. Don't re-classify as
-            # RUNNING — that would deadlock the resume path on stages that
-            # never completed.
-            state.status = FixtureStatus.ERROR
-            state.last_error = (
-                f"per-fixture timeout after {per_fixture_timeout_s:.0f}s; "
-                "luxe killed mid-run"
-            )
-            state.luxe_run_id = ""  # discard partial; next retry runs fresh
-            save_state(output, state, variant_id)
-            append_history(output, {
-                "fixture": fixture.id, "rc": rc,
-                "error": state.last_error, "variant": variant_id,
-            })
-            log(f"  ! per-fixture timeout — fixture marked ERROR")
-            return (FixtureResult(fixture_id=fixture.id,
-                                  error=state.last_error),
-                    Diagnostics(fixture_id=fixture.id))
-        if not run_id:
-            state.status = FixtureStatus.ERROR
-            state.last_error = (
-                f"no run_id captured (rc={rc}); stderr: {err_excerpt}"
-                if err_excerpt else f"no run_id captured (rc={rc})"
-            )
-            save_state(output, state, variant_id)
-            append_history(output, {
-                "fixture": fixture.id, "rc": rc, "error": state.last_error,
-            })
-            log(f"  ! {state.last_error[:200]}")
-            return (FixtureResult(fixture_id=fixture.id, error=state.last_error),
-                    Diagnostics(fixture_id=fixture.id))
-        state.luxe_run_id = run_id
+        state.luxe_run_id = ""
         save_state(output, state, variant_id)
+        append_history(output, {
+            "fixture": fixture.id, "rc": rc,
+            "error": state.last_error, "variant": variant_id,
+        })
+        log(f"  ! per-fixture timeout — fixture marked ERROR")
+        return (FixtureResult(fixture_id=fixture.id,
+                              error=state.last_error),
+                Diagnostics(fixture_id=fixture.id))
+    if not run_id:
+        state.status = FixtureStatus.ERROR
+        state.last_error = (
+            f"no run_id captured (rc={rc}); stderr: {err_excerpt}"
+            if err_excerpt else f"no run_id captured (rc={rc})"
+        )
+        save_state(output, state, variant_id)
+        append_history(output, {
+            "fixture": fixture.id, "rc": rc, "error": state.last_error,
+        })
+        log(f"  ! {state.last_error[:200]}")
+        return (FixtureResult(fixture_id=fixture.id, error=state.last_error),
+                Diagnostics(fixture_id=fixture.id))
+    state.luxe_run_id = run_id
+    save_state(output, state, variant_id)
 
     artefacts = _read_run_artefacts(run_id)
     fr = grade_fixture(
@@ -1164,25 +1083,27 @@ def _describe_outcome(fixture: Fixture) -> str:
 
 
 def _load_variants(path: Path) -> list[Variant]:
-    """Load a (mode, model_label, model_id) variant matrix from YAML.
+    """Load a (model_label, model_id) variant matrix from YAML.
 
     Schema:
         variants:
-          - {mode: mono|swarm|micro, model_label: <short>, model_id: <oMLX-id>}
+          - {model_label: <short>, model_id: <oMLX-id>}
 
-    "single" is also accepted as a synonym for "mono" (Variant translates
-    to "single" on the CLI side via cli_mode).
+    Legacy entries with `mode: mono|single` are accepted (mode is ignored;
+    luxe is mono-only as of v1.0). Entries with mode in {swarm, micro,
+    phased} are rejected with an error pointing at the deletion.
     """
     raw = yaml.safe_load(path.read_text()) or {}
     out: list[Variant] = []
     for v in raw.get("variants") or []:
-        mode = str(v["mode"]).lower()
-        if mode == "single":
-            mode = "mono"
-        if mode not in ("mono", "swarm", "micro", "phased"):
-            raise ValueError(f"variants.yaml: unknown mode {mode!r}")
+        mode = str(v.get("mode", "mono")).lower()
+        if mode in ("swarm", "micro", "phased"):
+            raise ValueError(
+                f"variants.yaml: mode={mode!r} is no longer supported "
+                "(swarm/micro/phased deleted in v1.0; luxe is mono-only). "
+                "Drop the `mode` key or set it to `mono`."
+            )
         out.append(Variant(
-            mode=mode,
             model_label=str(v["model_label"]),
             model_id=str(v["model_id"]),
         ))

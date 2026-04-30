@@ -18,15 +18,23 @@
 # 4 cells × 5 fixtures = 20 runs.
 #
 # Memory budget per cell (peak resident, single model in mono):
-#   14B-4bit:  ~7.7 GB  (existing baseline)
-#   14B-8bit: ~15.7 GB  (NEW)
-#   32B-4bit: ~17 GB    (existing baseline)
-#   32B-6bit: ~26.6 GB  (NEW — close to oMLX 36 GB cap)
-# All fit under the 36 GB max_model_memory cap, but the 32B-6bit run
-# leaves ~9 GB headroom, so don't add other variants alongside it.
+#   14B-abliterated-6bit:  ~11 GB  (estimate — verify after download finishes)
+#   14B-8bit:              ~15.7 GB
+#   32B-6bit:              ~26.6 GB  (closest to oMLX 36 GB cap)
+#   Qwen3-30B-A3B-6bit:    ~24.8 GB  (MoE — 30B total, 3B active)
+# All fit under the 36 GB max_model_memory cap. Each variant runs solo
+# in mono mode so no co-resident pressure.
 
 variants:
-  - {mode: mono, model_label: qwen-coder-14b-4bit, model_id: Qwen2.5-Coder-14B-Instruct-4bit}
-  - {mode: mono, model_label: qwen-coder-14b-8bit, model_id: Qwen2.5-Coder-14B-Instruct-8bit}
-  - {mode: mono, model_label: qwen-coder-32b-4bit, model_id: Qwen2.5-Coder-32B-Instruct-4bit}
-  - {mode: mono, model_label: qwen-coder-32b-6bit, model_id: Qwen2.5-Coder-32B-Instruct-6bit}
+  # Same model, ablated refusal layer, 6-bit quant — does removing the
+  # safety-tuning layer change behaviour on coding tasks?
+  - {mode: mono, model_label: qwen-coder-14b-abliterated-6bit, model_id: Qwen2.5-Coder-14B-Instruct-abliterated-6bit}
+  # Standard 14B Coder at higher precision than the 4-bit baseline.
+  - {mode: mono, model_label: qwen-coder-14b-8bit,             model_id: Qwen2.5-Coder-14B-Instruct-8bit}
+  # Bigger model at moderate precision — same memory neighborhood as the
+  # 14B-8bit but more parameters at lower bits-per-weight.
+  - {mode: mono, model_label: qwen-coder-32b-6bit,             model_id: Qwen2.5-Coder-32B-Instruct-6bit}
+  # Qwen3 MoE — 30B total / 3B active per token. Different architecture
+  # entirely, included to see whether the MoE active-set inference
+  # advantage shows up in real PR work.
+  - {mode: mono, model_label: qwen3-coder-30b-a3b-6bit,        model_id: Qwen3-Coder-30B-A3B-Instruct-6bit}

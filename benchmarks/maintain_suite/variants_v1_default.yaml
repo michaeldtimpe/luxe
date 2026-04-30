@@ -1,0 +1,21 @@
+# v1.0 default variant — Qwen3.6-35B-A3B-6bit alone.
+#
+# Selected after the 8-bit completion bake-off (2026-04-30). The 6-bit
+# variant is the only model that produces production-quality JS/UI
+# implementations (the-game keyboard handler + neon-rain Shift+R via the
+# existing event bus); 8-bit candidates either matched or regressed on
+# real-PASS quality after hand-inspection. swarm/micro/phased modes were
+# deleted in the same release; luxe is mono-only.
+#
+# Run:
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_v1_default.yaml \
+#       --output acceptance/v1_default \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# 1 variant × 10 fixtures = 10 runs. Expect ~30-90 minutes wall depending
+# on cold-load timing.
+
+variants:
+  - {model_label: qwen3.6-35b-a3b-6bit, model_id: Qwen3.6-35B-A3B-6bit}

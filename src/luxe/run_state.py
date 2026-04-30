@@ -1,22 +1,10 @@
-"""Run-state primitives — RunSpec, stage checkpoints, run directories, event log.
+"""Run-state primitives — RunSpec, run directories, event log.
 
 Layout under ~/.luxe/runs/<run-id>/:
   run.json         — RunSpec (immutable for the life of the run)
-  stages/<n>.json  — per-stage checkpoint outputs (architect, worker_<i>,
-                     validator, synthesizer)
   pr_state.json    — pr.py step ledger
   events.jsonl     — append-only log
-  synthesizer.md   — final report (also stored as a stage; this is a
-                     convenience copy for `luxe pr <id>` resume)
-
-run_id is a 12-char hex (uuid4 truncated) consistent with PipelineRun.id.
-
-Resume model:
-- `load_stage(run_id, name)` returns the saved dict or None.
-- The orchestrator checks each stage on entry; if a checkpoint exists, it
-  loads the result and skips that stage.
-- `clear_stages(run_id)` is invoked by --force-resume to invalidate the
-  cache when HEAD has drifted from RunSpec.base_sha.
+  synthesizer.md   — final report (kept for `luxe pr <id>` resume)
 """
 
 from __future__ import annotations
@@ -40,14 +28,11 @@ def run_dir(run_id: str) -> Path:
 class RunSpec:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     goal: str = ""
-    mode: str = "auto"          # auto | single | swarm
-    actual_mode: str = ""       # resolved mode (single/swarm)
     task_type: str = "review"
     repo_path: str = ""
     base_sha: str = ""
     base_branch: str = ""
     started_at: float = field(default_factory=time.time)
-    execution_mode: str = "swarm"  # swarm | microloop
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -132,116 +117,6 @@ def load_pr_state(run_id: str) -> PRState | None:
     if not p.is_file():
         return None
     return PRState.from_dict(json.loads(p.read_text()))
-
-
-def stages_dir(run_id: str) -> Path:
-    return run_dir(run_id) / "stages"
-
-
-def save_stage(run_id: str, name: str, data: dict) -> Path:
-    """Write a stage checkpoint to stages/<name>.json (atomic write)."""
-    d = stages_dir(run_id)
-    d.mkdir(parents=True, exist_ok=True)
-    p = d / f"{name}.json"
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
-    tmp.replace(p)
-    return p
-
-
-def load_stage(run_id: str, name: str) -> dict | None:
-    p = stages_dir(run_id) / f"{name}.json"
-    if not p.is_file():
-        return None
-    try:
-        return json.loads(p.read_text())
-    except json.JSONDecodeError:
-        return None
-
-
-def blackboard_dir(run_id: str) -> Path:
-    return run_dir(run_id) / "blackboard"
-
-
-def save_blackboard(run_id: str, subtask_idx: int, data: dict) -> Path:
-    """Atomic-write a microloop blackboard for one subtask.
-
-    Layout: ~/.luxe/runs/<run_id>/blackboard/<subtask_idx>.json
-    Mirrors save_stage's tmp+rename atomicity.
-    """
-    d = blackboard_dir(run_id)
-    d.mkdir(parents=True, exist_ok=True)
-    p = d / f"{subtask_idx}.json"
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
-    tmp.replace(p)
-    return p
-
-
-_BLACKBOARD_REQUIRED_KEYS = {"subtask_idx", "version", "micro_steps"}
-_BLACKBOARD_KNOWN_VERSIONS = {1}
-
-
-def _validate_blackboard_shape(data: object) -> tuple[bool, str]:
-    """Minimal schema check — protects against corrupt writes or hallucinated
-    structure quietly poisoning downstream micro-steps.
-
-    Returns (ok, error_message). Cheap structural check; not a full schema
-    validator. The microloop runner is the only writer, so this is mostly a
-    defence against partial-write corruption (atomic rename should prevent
-    that, but the read path stays paranoid).
-    """
-    if not isinstance(data, dict):
-        return False, f"top-level must be dict, got {type(data).__name__}"
-    missing = _BLACKBOARD_REQUIRED_KEYS - set(data.keys())
-    if missing:
-        return False, f"missing required keys: {sorted(missing)}"
-    if data.get("version") not in _BLACKBOARD_KNOWN_VERSIONS:
-        return False, f"unknown blackboard version: {data.get('version')!r}"
-    if not isinstance(data.get("micro_steps"), list):
-        return False, "micro_steps must be a list"
-    return True, ""
-
-
-def load_blackboard(run_id: str, subtask_idx: int) -> dict | None:
-    """Read a blackboard JSON. Returns None if the file is missing, corrupt,
-    or fails schema validation — the microloop runner treats None as "no
-    prior state" and resumes from a fresh slate, which is safer than
-    propagating a bad blackboard through downstream micro-steps.
-    """
-    p = blackboard_dir(run_id) / f"{subtask_idx}.json"
-    if not p.is_file():
-        return None
-    try:
-        data = json.loads(p.read_text())
-    except json.JSONDecodeError:
-        return None
-    ok, _err = _validate_blackboard_shape(data)
-    if not ok:
-        return None
-    return data
-
-
-def list_completed_stages(run_id: str) -> list[str]:
-    d = stages_dir(run_id)
-    if not d.is_dir():
-        return []
-    return sorted(p.stem for p in d.glob("*.json"))
-
-
-def clear_stages(run_id: str) -> int:
-    """Delete all stage checkpoints for a run. Returns count removed."""
-    d = stages_dir(run_id)
-    if not d.is_dir():
-        return 0
-    removed = 0
-    for p in d.glob("*.json"):
-        try:
-            p.unlink()
-            removed += 1
-        except OSError:
-            pass
-    return removed
 
 
 def append_event(run_id: str, kind: str, **data) -> None:

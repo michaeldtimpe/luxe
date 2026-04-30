@@ -5,7 +5,7 @@ across all acceptance fixtures is a release requirement.
 
 Diff-aware: when workers edit a file, the original line numbers shift. Strict
 line-existence checking would fail those runs spuriously. Instead we use the
-validator's `snippet` field — workers and the synthesizer carry the snippet
+ValidatorEnvelope `snippet` field — workers and the synthesizer carry the snippet
 verbatim alongside `path:line`, and the linter does a fuzzy snippet match
 within ±20 lines of the cited line in the post-edit file.
 
@@ -26,7 +26,36 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from luxe.agents.validator import ValidatorEnvelope, ValidatorFinding
+
+@dataclass
+class ValidatorFinding:
+    path: str
+    line: int
+    snippet: str
+    severity: str = "info"
+    description: str = ""
+
+
+@dataclass
+class ValidatorRemoved:
+    original: str
+    reason: str = ""
+
+
+@dataclass
+class ValidatorEnvelope:
+    status: str = "cleared"  # cleared | verified | ambiguous
+    verified: list[ValidatorFinding] = field(default_factory=list)
+    removed: list[ValidatorRemoved] = field(default_factory=list)
+    summary: str = ""
+
+    @property
+    def is_ambiguous(self) -> bool:
+        return self.status == "ambiguous"
+
+    @property
+    def is_cleared(self) -> bool:
+        return self.status == "cleared"
 
 
 _CITATION_RE = re.compile(
