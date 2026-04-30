@@ -144,6 +144,7 @@ def run_agent(
                 max_tokens=role_cfg.max_tokens_per_turn,
                 temperature=role_cfg.temperature,
                 num_ctx=role_cfg.num_ctx,
+                repeat_penalty=role_cfg.repeat_penalty,
             )
         except Exception as e:
             result.aborted = True

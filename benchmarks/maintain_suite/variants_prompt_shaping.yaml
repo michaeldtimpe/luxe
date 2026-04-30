@@ -1,0 +1,57 @@
+# Prompt-shaping bake-off — Qwen3.6-35B-A3B-6bit fixed, prompts vary.
+# See ~/.claude/plans/jiggly-baking-kahan.md for the experimental design
+# and ~/.claude/plans/v1-ship-and-prompt-sweep.md for the wrapping plan.
+#
+# 6 cells × 10 fixtures = 60 runs. Research sweep — does NOT gate v1.0.
+# A winner only gets promoted if it clears Gate A (modified):
+# ≥2 fixture passes over baseline AND at least one is a document or
+# manage task (the categories where the champion is currently weak).
+#
+# Note on `repeat_penalty`: code-gen legitimately repeats tokens
+# (`self.`, brackets, indentation, common identifiers); aggressive
+# penalties push the model to invent divergent names. We use 1.05 —
+# small enough to be unlikely to corrupt syntax, large enough to pull
+# on the stuck-loop signal. `champ-baseline-rp` deconfounds this knob
+# from prompt structure so the combined cell is interpretable.
+#
+# Run (after Phase 0 verification + strict-flag re-run verdict):
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_prompt_shaping.yaml \
+#       --output acceptance/prompt_shaping \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# Smoke-probe first per `feedback_validate_first` user memory:
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_prompt_shaping.yaml \
+#       --output acceptance/prompt_shaping_smoke \
+#       --per-fixture-timeout 1800 \
+#       --id lpe-rope-calc-implement-strict-flag
+# Inspect acceptance/prompt_shaping_smoke/<champ-cot variant>/<fixture>/
+# stdout.log for a literal `<plan>` block + non-zero tool_calls_total.
+
+variants:
+  # Control — exactly the v1 default cell, repeated here for the deconfound.
+  - {model_label: champ-baseline,    model_id: Qwen3.6-35B-A3B-6bit}
+
+  # Sampling-only deconfound. If `champ-combined-rp` wins big, this cell
+  # tells us whether the win came from prompt structure or the rp knob alone.
+  - {model_label: champ-baseline-rp, model_id: Qwen3.6-35B-A3B-6bit, repeat_penalty: 1.05}
+
+  # Chain-of-Thought <plan> directive in the task prompt. Targets the
+  # prose-only / no-engagement bailouts (e.g. isomer-document-quickstart).
+  - {model_label: champ-cot,         model_id: Qwen3.6-35B-A3B-6bit, system_prompt_id: cot,          task_prompt_id: cot}
+
+  # Skeleton-of-Thought signature-first directive in the system prompt.
+  # Targets edit-drift on multi-step implements.
+  - {model_label: champ-sot,         model_id: Qwen3.6-35B-A3B-6bit, system_prompt_id: sot,          task_prompt_id: sot}
+
+  # HADS-style XML restructuring of the baseline content. Tests whether
+  # Qwen3-family alignment with structured tags helps distinguish must-do
+  # from should-do.
+  - {model_label: champ-hads,        model_id: Qwen3.6-35B-A3B-6bit, system_prompt_id: hads_persona, task_prompt_id: baseline}
+
+  # Kitchen-sink: HADS persona + SoT skeleton-first + CoT <plan> + rp.
+  # Tests whether the techniques compose. If this cell wins big and
+  # `champ-baseline-rp` doesn't, the win is structural.
+  - {model_label: champ-combined-rp, model_id: Qwen3.6-35B-A3B-6bit, system_prompt_id: combined,     task_prompt_id: combined, repeat_penalty: 1.05}

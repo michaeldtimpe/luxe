@@ -4,38 +4,22 @@ The only execution mode in v1.0. Reuses agents/loop.py:run_agent; the
 distinguishing pieces are the system prompt (frames the task end-to-end)
 and the tool surface (full read+write+analyze+shell+git, plus MCP tools
 when injected).
+
+Prompts come from src/luxe/agents/prompts.py via RoleConfig.system_prompt_id
+and RoleConfig.task_prompt_id; see that module's docstring for the editing
+norm.
 """
 
 from __future__ import annotations
 
 from luxe.agents.loop import AgentResult, OnToolEvent, run_agent
+from luxe.agents.prompts import get as get_prompt
 from luxe.backend import Backend
 from luxe.config import RoleConfig
 from luxe.tools import analysis, fs, git, shell
 from luxe.tools.base import ToolCache, ToolDef, ToolFn
 from luxe import search as search_mod
 from luxe import symbols as symbols_mod
-
-_SYSTEM_PROMPT = """\
-You are a code maintenance specialist working on a single repository. Your job
-is to take a goal end-to-end: read what's relevant, plan the change, edit code
-when needed, run tests if available, and produce a final report.
-
-Operating principles:
-- Read first. Understand the repo before you edit it.
-- Make minimal, focused changes — only what the goal requires.
-- Cite every file you read with file:path syntax; cite every file you modify.
-- Preserve existing style and conventions.
-- When you finish, output a final report summarising what you changed,
-  what tests you ran, and any open questions.
-
-Citation contract:
-- Every file:line citation in your final report MUST resolve in the current
-  repo state. The post-synthesis citation linter will verify each one.
-- If you cite a line in a file you also edited, include a 1–3 line snippet of
-  the cited code verbatim alongside the citation; the linter uses fuzzy snippet
-  matching to forgive line-shift after edits.
-"""
 
 
 def _build_full_tool_surface(
@@ -113,16 +97,17 @@ def run_single(
     if extra_tool_fns:
         fns = {**fns, **extra_tool_fns}
 
+    sys_variant = get_prompt(role_cfg.system_prompt_id)
+    task_variant = get_prompt(role_cfg.task_prompt_id)
     task_prompt = (
         f"Task type: {task_type}\n"
         f"Goal: {goal}\n\n"
-        "Begin by reading what's relevant to plan your change. "
-        "When you're done, end with a final report."
+        f"{task_variant.task_prefix}"
     )
 
     return run_agent(
         backend, role_cfg,
-        system_prompt=_SYSTEM_PROMPT,
+        system_prompt=sys_variant.system,
         task_prompt=task_prompt,
         tool_defs=defs,
         tool_fns=fns,

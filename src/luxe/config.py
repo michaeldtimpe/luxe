@@ -16,6 +16,14 @@ class RoleConfig(BaseModel):
     max_tokens_per_turn: int = 2048
     temperature: float = 0.2
     tools: list[str] = Field(default_factory=list)
+    # Prompt-shaping bake-off levers (default to baseline-equivalent).
+    # See src/luxe/agents/prompts.py for the registry.
+    system_prompt_id: str = "baseline"
+    task_prompt_id: str = "baseline"
+    # Sampling penalty forwarded as oMLX extra_body. None = omit (current
+    # behaviour). Small values (1.02-1.10) discourage repeated tokens; too
+    # aggressive corrupts code-gen by forcing identifier divergence.
+    repeat_penalty: float | None = None
 
 
 class TaskTypeConfig(BaseModel):
