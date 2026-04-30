@@ -1,0 +1,34 @@
+# Final hardware-tier bake-off — fills in the 3 missing 8-bit cells from
+# the prior overnight runs so every model in the roster has a comparable
+# benchmark on the v1.0 fixture set.
+#
+# Hypothesis: these 8-bit variants probably won't beat
+# Qwen3.6-35B-A3B-6bit (the new default monolith). Worth running anyway —
+# we need a fallback model for the bimodal-bailout case (when 35B-A3B
+# produces 220 chars of prose without tool calls), and the 8-bit variants
+# at this size are the natural candidates.
+#
+# Memory peak per variant (weights + ~5-8 GB KV cache):
+#   Qwen3.6-35B-A3B-8bit:                   ~38 GB +  6 GB =  ~44 GB
+#   Qwen2.5-Coder-32B-Instruct-8bit:        ~35 GB +  6 GB =  ~41 GB
+#   Qwen3-Coder-30B-A3B-Instruct-8bit:      ~33 GB +  6 GB =  ~39 GB
+# All fit under the 48 GB max_model_memory cap (bumped from 36 GB).
+# wired_limit is already at 49152 MB (48 GB) at the OS level.
+#
+# Run:
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_8bit_completion.yaml \
+#       --output acceptance/8bit_completion \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# 3 cells × 5 fixtures = 15 runs. Expect ~3-5 hours wall.
+
+variants:
+  # The missing 8-bit Qwen3.6 — completes the precision sweep.
+  - {mode: mono, model_label: qwen3.6-35b-a3b-8bit,        model_id: Qwen3.6-35B-A3B-8bit}
+  # 32B Coder at 8-bit — the dense-model 8-bit case for comparison.
+  - {mode: mono, model_label: qwen-coder-32b-8bit,         model_id: Qwen2.5-Coder-32B-Instruct-8bit}
+  # 30B-A3B Coder at 8-bit — paired test against the 6-bit variant we
+  # already know hits the bimodal pattern (160k tokens or 220 chars).
+  - {mode: mono, model_label: qwen3-coder-30b-a3b-8bit,    model_id: Qwen3-Coder-30B-A3B-Instruct-8bit}
