@@ -84,10 +84,12 @@ benchmark,architect,resume_drift}.py`. Also: `--mode`, `luxe run`,
 "idle_timeout": { "idle_timeout_seconds": 1800 }
 ```
 
-System-level Metal wired ceiling:
+System-level Metal wired ceiling — kept aligned with `max_model_memory`
+above so the GPU wired pool exactly fits the largest model + KV cache
+without leaving idle wired memory on the table:
 ```bash
-sudo sysctl iogpu.wired_limit_mb=49152
-echo "iogpu.wired_limit_mb=49152" | sudo tee -a /etc/sysctl.conf
+sudo sysctl iogpu.wired_limit_mb=36864
+echo "iogpu.wired_limit_mb=36864" | sudo tee -a /etc/sysctl.conf
 ```
 
 `~/.omlx/model_settings.json` has explicit per-model entries for every
