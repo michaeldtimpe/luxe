@@ -1264,10 +1264,24 @@ def main() -> int:
 
     results: list[FixtureResult] = []
     diags: list[Diagnostics] = []
+    total_runs = len(plan)
+    completed_walls: list[float] = []  # rolling ETA window
     try:
-        for variant, f in plan:
+        for run_idx, (variant, f) in enumerate(plan, start=1):
             tag = f"[{variant.variant_id}] " if variant else ""
-            print(f"\n━━━ {tag}{f.id}  [{f.task_type}]  {f.goal[:80]}")
+            run_start = time.monotonic()
+            start_ts = time.strftime("%H:%M:%S", time.localtime())
+            # ETA from the running average of completed fresh runs (cached
+            # ones don't burn wall, so they'd skew the estimate low).
+            if completed_walls:
+                avg_s = sum(completed_walls) / len(completed_walls)
+                remaining = total_runs - run_idx + 1
+                eta_min = (avg_s * remaining) / 60
+                eta_str = f"  ETA ~{eta_min:.0f}min"
+            else:
+                eta_str = ""
+            print(f"\n━━━ run {run_idx}/{total_runs}  [{start_ts}]"
+                  f"{eta_str}  {tag}{f.id}  [{f.task_type}]  {f.goal[:80]}")
             print(f"      grading: {_describe_outcome(f)}")
             try:
                 r, d = run_fixture(
@@ -1287,6 +1301,8 @@ def main() -> int:
                 print(f"  [unexpected error: {type(e).__name__}: {e}]")
                 r = FixtureResult(fixture_id=f.id, error=f"{type(e).__name__}: {e}")
                 d = Diagnostics(fixture_id=f.id)
+            run_elapsed = time.monotonic() - run_start
+            end_ts = time.strftime("%H:%M:%S", time.localtime())
             results.append(r)
             diags.append(d)
             if variant is not None:
@@ -1294,7 +1310,14 @@ def main() -> int:
             # Differentiate cached-skip from a fresh run so warnings/diagnostics
             # below aren't read as live information when they're stale.
             cached_skip = (r.skipped and "already done" in (r.skipped_reason or ""))
-            print(f"  {_verdict(r):5s}  score={r.score}/{r.max_score}  "
+            # Cached skips finish in <1s and shouldn't poison the ETA.
+            if not cached_skip and not r.skipped:
+                completed_walls.append(run_elapsed)
+            # Format elapsed as M:SS for legibility on long runs.
+            mm, ss = divmod(int(run_elapsed), 60)
+            elapsed_str = f"{mm}:{ss:02d}"
+            print(f"  {_verdict(r):5s}  [{end_ts} +{elapsed_str}]  "
+                  f"score={r.score}/{r.max_score}  "
                   f"wall={d.wall_s:.0f}s  tokens={d.tokens_total}  "
                   f"diff={r.diff_files}f  "
                   f"validator={d.validator_status or '-'}  "
