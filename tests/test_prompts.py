@@ -47,11 +47,28 @@ def test_get_raises_keyerror_with_available_list_on_miss():
     assert "baseline" in msg
 
 
-def test_cot_task_prefix_includes_plan_directive():
-    """CoT cell's value comes from the <plan> directive — verify it's there."""
+def test_cot_task_prefix_uses_markdown_not_xml():
+    """CoT v2 uses a `## Plan` markdown header instead of `<plan>` XML tags.
+    Smoke probe (2026-04-30) showed Qwen3 collided XML tags with its native
+    tool-call format and emitted `</parameter></function></tool_call>` in
+    place of `</plan>`, dropping tool_calls_total to zero. Regression guard:
+    no XML plan tags in the directive."""
     cot = get("cot")
-    assert "<plan>" in cot.task_prefix
-    assert "</plan>" in cot.task_prefix
+    assert "## Plan" in cot.task_prefix
+    # The XML form must NOT come back — it's the failure mode we fixed.
+    assert "<plan>" not in cot.task_prefix
+    assert "</plan>" not in cot.task_prefix
+
+
+def test_cot_task_prefix_marks_plan_as_scaffolding():
+    """The plan-as-deliverable trap was the second CoT v1 failure: the
+    model treated the plan AS the response and stopped. v2 explicitly
+    frames the plan as scaffolding and adds a prose cap."""
+    cot = get("cot")
+    pf = cot.task_prefix
+    assert "scaffolding" in pf or "NOT the deliverable" in pf
+    # Anti-deliberation guard.
+    assert "200 words" in pf or "tool call" in pf
 
 
 def test_sot_system_includes_skeleton_first():
@@ -70,8 +87,8 @@ def test_hads_persona_uses_xml_tags():
 
 
 def test_combined_composes_hads_sot_cot():
-    """combined = HADS persona + SoT skeleton-first appendix + CoT
-    <plan> task prefix. If any of those drops out, the variant becomes
+    """combined = HADS persona + SoT skeleton-first appendix + CoT plan
+    directive (v2 markdown form). If any drops out, the variant becomes
     indistinguishable from a smaller cell and the bake-off result is
     uninterpretable."""
     combined = get("combined")
@@ -79,8 +96,23 @@ def test_combined_composes_hads_sot_cot():
     assert "<spec>" in combined.system
     # SoT skeleton-first appendix
     assert "Skeleton first" in combined.system
-    # CoT plan directive
-    assert "<plan>" in combined.task_prefix
+    # CoT v2 plan directive — markdown header, NOT XML
+    assert "## Plan" in combined.task_prefix
+    assert "<plan>" not in combined.task_prefix
+
+
+def test_hads_spec_orders_actions_before_prose():
+    """HADS v2 reorders the <spec> as strict FIRST/THEN/ONLY-AFTER steps
+    so the model can't deliberate before its first tool call. Smoke probe
+    (2026-04-30) showed v1 spent 471s churning self-talk without ever
+    calling a tool; this test guards the FIRST/THEN structure."""
+    hads = get("hads_persona")
+    spec = hads.system
+    assert "FIRST" in spec
+    assert "THEN" in spec
+    assert "ONLY AFTER" in spec
+    # The key anti-deliberation line.
+    assert "BEFORE producing" in spec or "before producing" in spec.lower()
 
 
 def test_no_baseline_system_duplication_outside_registry():
