@@ -8,13 +8,12 @@ This script symlinks each candidate's HF snapshot directory into
 re-scan.
 
 Usage:
-  python scripts/register_omlx_models.py --dry-run        # show what would change
-  python scripts/register_omlx_models.py                  # create symlinks
-  python scripts/register_omlx_models.py --restart-omlx   # also restart brew service
-  python scripts/register_omlx_models.py --remove         # remove the registered symlinks
+  python scripts/register_omlx_models.py --models-file roster.json --dry-run
+  python scripts/register_omlx_models.py --models-file roster.json
+  python scripts/register_omlx_models.py --models-file roster.json --restart-omlx
+  python scripts/register_omlx_models.py --models-file roster.json --remove
 
-Companion to scripts/bench_small_models.py — defaults to the same 7-candidate
-roster. Override via --models-file <json> with the same shape.
+The roster JSON is a list of {label, model, hf_repo, params_b} entries.
 """
 
 from __future__ import annotations
@@ -34,13 +33,10 @@ from rich.console import Console  # noqa: E402
 
 console = Console()
 
-# Pull the same default roster the bake-off uses, so registration ↔ bench
-# stay in sync.
-import importlib.util  # noqa: E402
-_spec = importlib.util.spec_from_file_location("bsm", str(Path(__file__).parent / "bench_small_models.py"))
-_bsm = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_bsm)
-DEFAULT_CANDIDATES = _bsm.DEFAULT_CANDIDATES
+# bench_small_models.py was retired in the v1.0 mono-only simplification
+# (2026-04-30). Pass --models-file <path> with a JSON list of
+# {label, model, hf_repo, params_b} to register a custom roster.
+DEFAULT_CANDIDATES: list[dict] = []
 
 OMLX_MODELS_DIR = Path.home() / ".omlx" / "models"
 HF_HUB_DIR = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
