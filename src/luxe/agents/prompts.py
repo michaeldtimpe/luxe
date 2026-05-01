@@ -65,27 +65,51 @@ Skeleton first:
   on a new file and to edit_file when you are adding a new function body.
 """
 
-# CoT <plan> directive — replaces baseline task prefix for CoT variant.
+# CoT plan-first directive — replaces baseline task prefix for CoT variant.
+#
+# v2 (2026-04-30): the original used `<plan>...</plan>` XML tags. Smoke
+# probe revealed Qwen3 collided that with its tool-call format and
+# emitted `</parameter></function></tool_call>` instead of `</plan>`,
+# making the response unparseable. Tool calls dropped to zero, the run
+# bailed in 15s with `prose_only`. v2 uses a markdown header instead and
+# adds an explicit "plan is not the deliverable" framing plus a 200-word
+# prose cap to break the plan-as-deliverable trap.
 _COT_TASK_PREFIX = (
-    "Before any tool call, emit a `<plan>` block on its own listing: (a) the "
-    "files you intend to read, (b) the edit you intend to make, (c) the "
-    "verification you intend to run. Close the block (`</plan>`) before "
-    "invoking any tool. Update the plan if your understanding changes after "
-    "reading.\n\n"
+    "Plan-first protocol: open your response with a `## Plan` markdown "
+    "section listing (a) files you intend to read, (b) edits you intend "
+    "to make, (c) verification you intend to run. Then IMMEDIATELY "
+    "invoke read_file or another tool — the plan is internal scaffolding, "
+    "NOT the deliverable. If you write more than 200 words of prose "
+    "without a tool call, stop the prose and emit your next tool call. "
+    "Update the plan if your understanding changes after reading.\n\n"
 ) + _BASELINE_TASK_PREFIX
 
 # HADS-style XML restructuring — same content as baseline, structured for
 # Qwen3-family training to distinguish hard requirements from softer guidance.
+#
+# v2 (2026-04-30): smoke probe showed v1 reframed the imperative bullets as
+# a "specification document" the model deliberated over (471s/47k tokens
+# of "Let me implement this now. OK, let me write the code now…" loop
+# without ever calling a tool). v2 keeps the XML tag structure for the
+# Qwen3-alignment hypothesis but reorders the spec as strict FIRST/THEN/
+# ONLY-AFTER ordering — anti-deliberation guard. The "BEFORE producing
+# any prose, call read_file" line is the key fix.
 _HADS_SYSTEM = """\
 <role>Staff Software Engineer assigned to take a goal end-to-end on a single repository.</role>
 
 <spec>
-You MUST:
-- Read what's relevant to the goal before editing.
-- Make minimal, focused changes — only what the goal requires.
+You MUST act in this exact order:
+1. FIRST: BEFORE producing any prose, call read_file to inspect the files
+   relevant to the goal. Do not deliberate before this first tool call.
+2. THEN: call edit_file or write_file as needed to satisfy the goal.
+   Make minimal, focused changes — only what the goal requires.
+3. ONLY AFTER editing: produce a final report summarising what you
+   changed, what tests you ran, and any open questions.
+
+You MUST also:
 - Cite every file you read and every file you modify with `path:line` syntax.
-- Output a final report summarising what you changed, what tests you ran,
-  and any open questions.
+- Stop and report scope problems if the goal would need more than 10 file
+  edits or systematic decomposition you cannot hold in one context window.
 </spec>
 
 <context>
