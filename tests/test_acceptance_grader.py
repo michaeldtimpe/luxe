@@ -443,3 +443,48 @@ def test_v1_release_gate_requires_at_least_10_total():
     s = summarize(nine_all_pass)
     assert s["passed"] == 9
     assert not s["v1_release_gate"]
+
+
+# --- multi-variant v1_release_gate (Phase 1 prompt-shaping bug) --
+
+def test_v1_release_gate_multi_variant_no_cell_cleared():
+    """The Phase 1 prompt-shaping sweep (60 runs) had 33 total passes,
+    which crossed the old `passed >= 8` flat check, producing a false
+    "v1 release: YES" verdict despite no individual cell hitting 8/10.
+    The fix: when `per_variant` is passed, gate is True iff some cell
+    has ≥8 fresh passes."""
+    # 6 cells × 10 fixtures, each cell with 4-7 passes (none clear 8).
+    cell_a = [FixtureResult(fixture_id=f"a{i}", score=5) for i in range(7)] + \
+             [FixtureResult(fixture_id=f"a{i}", score=2) for i in range(3)]
+    cell_b = [FixtureResult(fixture_id=f"b{i}", score=5) for i in range(6)] + \
+             [FixtureResult(fixture_id=f"b{i}", score=2) for i in range(4)]
+    cell_c = [FixtureResult(fixture_id=f"c{i}", score=5) for i in range(4)] + \
+             [FixtureResult(fixture_id=f"c{i}", score=2) for i in range(6)]
+    flat = cell_a + cell_b + cell_c  # 17 total passes — old logic says YES
+    s = summarize(flat, per_variant={"a": cell_a, "b": cell_b, "c": cell_c})
+    assert s["passed"] == 17  # flat count is correct
+    # But the per-cell gate must be NO — no cell hit 8.
+    assert not s["v1_release_gate"]
+    assert s["v1_release_gate_per_variant"] == {"a": False, "b": False, "c": False}
+
+
+def test_v1_release_gate_multi_variant_one_cell_cleared():
+    """If ONE cell hits 8/10, the multi-variant gate is YES (we have a
+    promotable variant). The total-passes flat check is irrelevant."""
+    winner = [FixtureResult(fixture_id=f"w{i}", score=5) for i in range(8)] + \
+             [FixtureResult(fixture_id=f"w{i}", score=2) for i in range(2)]
+    loser = [FixtureResult(fixture_id=f"l{i}", score=2) for i in range(10)]
+    flat = winner + loser  # 8 total — same as old single-variant gate
+    s = summarize(flat, per_variant={"winner": winner, "loser": loser})
+    assert s["v1_release_gate"]
+    assert s["v1_release_gate_per_variant"] == {"winner": True, "loser": False}
+
+
+def test_v1_release_gate_single_variant_unchanged():
+    """No per_variant arg → uses the original flat threshold. Existing
+    callers (older single-variant runs) keep working unchanged."""
+    ten_all_pass = [FixtureResult(fixture_id=f"f{i}", score=5) for i in range(10)]
+    s = summarize(ten_all_pass)
+    assert s["v1_release_gate"]
+    # Empty per-variant dict in the output for back-compat.
+    assert s["v1_release_gate_per_variant"] == {}

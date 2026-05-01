@@ -1,0 +1,35 @@
+# Branch B — task-type prompt overlays.
+#
+# Phase 1 (variants_prompt_shaping.yaml) lifted `implement` to 4/4 with
+# structural prompts (CoT, SoT, HADS) but regressed `document` and
+# `manage`. This sweep tests the natural composition: apply CoT framing
+# only on implement+bugfix tasks; keep baseline on doc/manage/review.
+#
+# 2 cells × 10 fixtures = 20 runs. Expect 1-3h wall.
+#
+# See ~/.claude/plans/task-type-overlays.md for the experimental design
+# and promotion criterion.
+#
+# Run:
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_task_type_overlay.yaml \
+#       --output acceptance/task_type_overlay \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# Promotion: champ-implement-via-cot real-PASS ≥ 8/10 AND beats
+# champ-baseline-control by ≥1 fixture pass. If both clear, promote
+# task_overlay_id: implement_via_cot into configs/single_64gb.yaml and
+# bump pyproject.toml to 1.0.0.
+
+variants:
+  # Control — re-runs baseline alongside the overlay so the noise floor
+  # is captured in the same wall window. Phase 1 showed baseline can
+  # swing ±2 fixtures between identical runs; the control surfaces that
+  # variance without a separate scheduling pass.
+  - {model_label: champ-baseline-control,    model_id: Qwen3.6-35B-A3B-6bit}
+
+  # The overlay test: CoT framing for implement+bugfix; baseline (the
+  # role default) for everything else. Composes the Phase 1 implement
+  # ceiling with baseline's doc+manage performance.
+  - {model_label: champ-implement-via-cot,   model_id: Qwen3.6-35B-A3B-6bit, task_overlay_id: implement_via_cot}

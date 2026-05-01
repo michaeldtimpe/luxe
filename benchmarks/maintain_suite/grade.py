@@ -712,13 +712,44 @@ def grade_fixture(
     return result
 
 
-def summarize(results: list[FixtureResult]) -> dict[str, Any]:
+def summarize(
+    results: list[FixtureResult],
+    *,
+    per_variant: dict[str, list[FixtureResult]] | None = None,
+) -> dict[str, Any]:
+    """Aggregate per-fixture results into a release-gate summary.
+
+    `per_variant` is the multi-cell breakdown when the bench ran a
+    --variants matrix. The v1 release gate is per-cell, NOT aggregate:
+    a 6-cell × 10-fixture matrix with 33 total passes is NOT a release
+    pass if no individual cell hits ≥8/10. We compute the gate as
+    True iff ANY variant has ≥8 fresh passes over ≥10 fixtures.
+
+    Single-variant (or no-variant) runs use the flat results list.
+    """
     total = len(results)
     skipped = sum(1 for r in results if r.skipped)
     errored = sum(1 for r in results if r.error)
     passed = sum(1 for r in results if r.passed)
     total_pts = sum(r.score for r in results)
     max_pts = sum(r.max_score for r in results)
+
+    if per_variant:
+        # Multi-variant: gate is True iff some variant clears 8/10.
+        per_variant_gate: dict[str, bool] = {}
+        any_cleared = False
+        for vid, vresults in per_variant.items():
+            v_passed = sum(1 for r in vresults if r.passed)
+            v_total = len(vresults)
+            cleared = v_passed >= 8 and v_total >= 10
+            per_variant_gate[vid] = cleared
+            if cleared:
+                any_cleared = True
+        gate = any_cleared
+    else:
+        per_variant_gate = {}
+        gate = passed >= 8 and total >= 10
+
     return {
         "fixtures": total,
         "passed": passed,
@@ -727,7 +758,8 @@ def summarize(results: list[FixtureResult]) -> dict[str, Any]:
         "errored": errored,
         "score": total_pts,
         "max_score": max_pts,
-        "v1_release_gate": passed >= 8 and total >= 10,
+        "v1_release_gate": gate,
+        "v1_release_gate_per_variant": per_variant_gate,
     }
 
 

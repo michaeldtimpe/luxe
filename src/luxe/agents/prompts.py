@@ -170,3 +170,70 @@ def get(prompt_id: str) -> PromptVariant:
             f"available: {sorted(PROMPT_REGISTRY)}"
         )
     return PROMPT_REGISTRY[prompt_id]
+
+
+# --- task-type overlays (Branch B) --
+# A TaskOverlay routes per-task-type to a specific PromptVariant id.
+# The Phase 1 sweep (jiggly-baking-kahan.md) lifted `implement` to 4/4
+# with structural prompts but regressed `document` and `manage`. The
+# overlay lets us apply implement-friendly framing only on
+# implement/bugfix tasks while keeping baseline framing on docs/manage.
+# See ~/.claude/plans/task-type-overlays.md.
+
+
+@dataclass(frozen=True)
+class TaskOverlay:
+    """Per-task-type prompt selection.
+
+    `by_task` maps task_type → PromptVariant id. The named id is used
+    for BOTH system_prompt_id and task_prompt_id when the overlay
+    activates. Task types not in `by_task` fall back to the role's
+    role-level system_prompt_id / task_prompt_id (i.e. baseline if
+    those are also defaults).
+    """
+    by_task: dict[str, str]
+
+
+TASK_OVERLAYS: dict[str, TaskOverlay] = {
+    # implement_via_cot — apply CoT structural framing to implement and
+    # bugfix tasks; document/manage/review/summarize fall through to the
+    # role-level default (baseline by default). Phase 1 data showed CoT
+    # cleared 4/4 implements; this composition projects to 8/10 if
+    # baseline's doc+manage performance holds.
+    "implement_via_cot": TaskOverlay(by_task={
+        "implement": "cot",
+        "bugfix": "cot",
+    }),
+}
+
+
+def get_overlay(overlay_id: str) -> TaskOverlay | None:
+    """Look up a TaskOverlay by id. Returns None for empty string or
+    unknown id — overlays are opt-in (unlike PromptVariants, which are
+    required and surface typos via KeyError). Empty string is the
+    "no overlay" sentinel that RoleConfig.task_overlay_id defaults to."""
+    if not overlay_id:
+        return None
+    return TASK_OVERLAYS.get(overlay_id)
+
+
+def resolve_prompt_ids(
+    task_type: str,
+    *,
+    system_prompt_id: str,
+    task_prompt_id: str,
+    task_overlay_id: str = "",
+) -> tuple[str, str]:
+    """Pure resolver: figure out which (system_id, task_id) pair to use
+    for a given task_type given the role's prompt + overlay settings.
+
+    If an overlay is set AND it has an entry for `task_type`, the
+    overlay's variant id wins for both system and task. Otherwise
+    falls back to the role-level ids. Centralised so single.py and
+    tests share the same logic.
+    """
+    overlay = get_overlay(task_overlay_id)
+    if overlay and task_type in overlay.by_task:
+        variant_id = overlay.by_task[task_type]
+        return variant_id, variant_id
+    return system_prompt_id, task_prompt_id
