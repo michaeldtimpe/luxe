@@ -13,7 +13,7 @@ norm.
 from __future__ import annotations
 
 from luxe.agents.loop import AgentResult, OnToolEvent, run_agent
-from luxe.agents.prompts import get as get_prompt
+from luxe.agents.prompts import get as get_prompt, resolve_prompt_ids
 from luxe.backend import Backend
 from luxe.config import RoleConfig
 from luxe.tools import analysis, fs, git, shell
@@ -97,8 +97,14 @@ def run_single(
     if extra_tool_fns:
         fns = {**fns, **extra_tool_fns}
 
-    sys_variant = get_prompt(role_cfg.system_prompt_id)
-    task_variant = get_prompt(role_cfg.task_prompt_id)
+    sys_id, task_id = resolve_prompt_ids(
+        task_type,
+        system_prompt_id=role_cfg.system_prompt_id,
+        task_prompt_id=role_cfg.task_prompt_id,
+        task_overlay_id=role_cfg.task_overlay_id,
+    )
+    sys_variant = get_prompt(sys_id)
+    task_variant = get_prompt(task_id)
     task_prompt = (
         f"Task type: {task_type}\n"
         f"Goal: {goal}\n\n"

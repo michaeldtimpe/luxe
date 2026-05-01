@@ -122,6 +122,7 @@ class Variant:
     model_id: str        # oMLX model ID, e.g. "Qwen3.6-35B-A3B-6bit"
     system_prompt_id: str = "baseline"
     task_prompt_id: str = "baseline"
+    task_overlay_id: str = ""
     temperature: float | None = None
     repeat_penalty: float | None = None
 
@@ -134,6 +135,8 @@ class Variant:
             parts.append(f"sys-{self.system_prompt_id}")
         if self.task_prompt_id != "baseline":
             parts.append(f"task-{self.task_prompt_id}")
+        if self.task_overlay_id:
+            parts.append(f"overlay-{self.task_overlay_id}")
         if self.temperature is not None:
             parts.append(f"t{self.temperature:g}")
         if self.repeat_penalty is not None:
@@ -172,6 +175,8 @@ def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
         cfg["roles"]["monolith"]["system_prompt_id"] = variant.system_prompt_id
     if variant.task_prompt_id != "baseline":
         cfg["roles"]["monolith"]["task_prompt_id"] = variant.task_prompt_id
+    if variant.task_overlay_id:
+        cfg["roles"]["monolith"]["task_overlay_id"] = variant.task_overlay_id
     if variant.temperature is not None:
         cfg["roles"]["monolith"]["temperature"] = variant.temperature
     if variant.repeat_penalty is not None:
@@ -1150,6 +1155,7 @@ def _load_variants(path: Path) -> list[Variant]:
             model_id=str(v["model_id"]),
             system_prompt_id=str(v.get("system_prompt_id", "baseline")),
             task_prompt_id=str(v.get("task_prompt_id", "baseline")),
+            task_overlay_id=str(v.get("task_overlay_id", "") or ""),
             temperature=(float(v["temperature"])
                           if v.get("temperature") is not None else None),
             repeat_penalty=(float(v["repeat_penalty"])
@@ -1347,7 +1353,16 @@ def main() -> int:
             for note in _diagnose_no_tool_calls(d, r, fdir):
                 print(f"        ⓘ {note}")
 
-        summary = summarize(results)
+        # Multi-variant runs gate per cell, not in aggregate. Pass the
+        # per-variant breakdown to summarize so the v1_release_gate flag
+        # reflects "any cell ≥8/10", not "total passes ≥8 across all cells."
+        per_variant_results: dict[str, list[FixtureResult]] = {}
+        for vid, pairs in by_variant.items():
+            per_variant_results[vid] = [r for r, _ in pairs]
+        summary = summarize(
+            results,
+            per_variant=per_variant_results if per_variant_results else None,
+        )
         summary["diagnostics"] = aggregate_diagnostics(diags, results)
 
         # Global silent-failure alert: when most fixtures had wall<5s+tokens=0
@@ -1382,8 +1397,18 @@ def main() -> int:
         print(f"  errored    : {summary['errored']}")
         print(f"  skipped    : {summary['skipped']}")
         print(f"  score      : {summary['score']}/{summary['max_score']}")
-        print(f"  v1 release : {'YES' if summary['v1_release_gate'] else 'NO'} "
-              f"(needs ≥8 of ≥10 passing)")
+        if summary.get("v1_release_gate_per_variant"):
+            cleared_cells = [vid for vid, ok
+                             in summary["v1_release_gate_per_variant"].items()
+                             if ok]
+            verdict = "YES" if cleared_cells else "NO"
+            detail = (f" (cleared by: {', '.join(cleared_cells)})"
+                      if cleared_cells
+                      else " (per-cell ≥8/10 — no cell cleared)")
+            print(f"  v1 release : {verdict}{detail}")
+        else:
+            print(f"  v1 release : {'YES' if summary['v1_release_gate'] else 'NO'} "
+                  f"(needs ≥8 of ≥10 passing)")
         d_agg = summary.get("diagnostics", {})
         if d_agg.get("tuning_hints"):
             print(f"\n  Tuning hints:")

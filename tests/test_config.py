@@ -74,6 +74,33 @@ def test_existing_yaml_loads_without_new_fields(config_path: Path):
     assert mono.repeat_penalty is None
 
 
+def test_role_config_task_overlay_id_default():
+    """task_overlay_id defaults to empty string (no overlay)."""
+    rc = RoleConfig(model_key="x")
+    assert rc.task_overlay_id == ""
+
+
+def test_role_config_task_overlay_id_round_trip(tmp_path: Path):
+    """A YAML overlay setting `task_overlay_id: implement_via_cot` must
+    parse and round-trip — mirrors what `make_overlay()` writes for
+    Branch B variant cells."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "omlx_base_url: http://127.0.0.1:8000\n"
+        "models: {monolith: Test-Model}\n"
+        "roles:\n"
+        "  monolith:\n"
+        "    model_key: monolith\n"
+        "    tools: [read_file]\n"
+        "    task_overlay_id: implement_via_cot\n"
+        "task_types:\n"
+        "  implement: {description: x, pipeline: [monolith]}\n"
+    )
+    cfg = load_config(overlay)
+    mono = cfg.role("monolith")
+    assert mono.task_overlay_id == "implement_via_cot"
+
+
 def test_role_config_repeat_penalty_accepts_float(tmp_path: Path):
     """A YAML overlay setting `repeat_penalty: 1.05` must parse as float
     (mirrors what `make_overlay()` writes for prompt-shaping cells)."""

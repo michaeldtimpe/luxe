@@ -154,3 +154,97 @@ def test_variant_systems_are_non_empty():
     for vid, v in PROMPT_REGISTRY.items():
         assert v.system.strip(), f"variant {vid!r} has empty system prompt"
         assert v.task_prefix.strip(), f"variant {vid!r} has empty task_prefix"
+
+
+# --- task-type overlays (Branch B) --
+
+def test_get_overlay_returns_none_for_empty_string():
+    """Empty string is the no-overlay sentinel that RoleConfig defaults
+    to; must not raise."""
+    from luxe.agents.prompts import get_overlay
+    assert get_overlay("") is None
+
+
+def test_get_overlay_returns_none_for_unknown_id():
+    """Unknown overlay ids return None rather than raising — overlays
+    are opt-in (unlike PromptVariants which surface typos via KeyError).
+    A missing overlay just falls through to role defaults."""
+    from luxe.agents.prompts import get_overlay
+    assert get_overlay("does_not_exist") is None
+
+
+def test_implement_via_cot_overlay_is_registered():
+    """The Branch B sweep variant references implement_via_cot — must
+    exist in TASK_OVERLAYS or the bench cell can't load."""
+    from luxe.agents.prompts import TASK_OVERLAYS, get_overlay
+    assert "implement_via_cot" in TASK_OVERLAYS
+    overlay = get_overlay("implement_via_cot")
+    assert overlay is not None
+    assert overlay.by_task["implement"] == "cot"
+    assert overlay.by_task["bugfix"] == "cot"
+
+
+def test_resolve_prompt_ids_no_overlay_returns_role_defaults():
+    """When no overlay is set, role-level system_prompt_id /
+    task_prompt_id win regardless of task_type."""
+    from luxe.agents.prompts import resolve_prompt_ids
+    sys_id, task_id = resolve_prompt_ids(
+        "implement",
+        system_prompt_id="baseline",
+        task_prompt_id="baseline",
+        task_overlay_id="",
+    )
+    assert sys_id == "baseline"
+    assert task_id == "baseline"
+
+
+def test_resolve_prompt_ids_overlay_hits_for_matching_task_type():
+    """implement_via_cot maps `implement` → cot. With that overlay
+    active, an implement task picks up cot for both system and task."""
+    from luxe.agents.prompts import resolve_prompt_ids
+    sys_id, task_id = resolve_prompt_ids(
+        "implement",
+        system_prompt_id="baseline",
+        task_prompt_id="baseline",
+        task_overlay_id="implement_via_cot",
+    )
+    assert sys_id == "cot"
+    assert task_id == "cot"
+
+
+def test_resolve_prompt_ids_overlay_misses_falls_back_to_role():
+    """implement_via_cot has no `document` entry — a document task with
+    that overlay active must fall through to role-level defaults."""
+    from luxe.agents.prompts import resolve_prompt_ids
+    sys_id, task_id = resolve_prompt_ids(
+        "document",
+        system_prompt_id="baseline",
+        task_prompt_id="baseline",
+        task_overlay_id="implement_via_cot",
+    )
+    assert sys_id == "baseline"
+    assert task_id == "baseline"
+
+
+def test_resolve_prompt_ids_unknown_overlay_acts_as_no_overlay():
+    """Typo'd overlay id resolves to None and falls through to role
+    defaults — surfaces as the role's prompts being used (no error)."""
+    from luxe.agents.prompts import resolve_prompt_ids
+    sys_id, task_id = resolve_prompt_ids(
+        "implement",
+        system_prompt_id="sot",  # role-level non-default
+        task_prompt_id="baseline",
+        task_overlay_id="typo_does_not_exist",
+    )
+    # Unknown overlay → no override → role defaults win.
+    assert sys_id == "sot"
+    assert task_id == "baseline"
+
+
+def test_task_overlay_is_frozen():
+    """TaskOverlay must be immutable so a runtime mutation can't change
+    behaviour mid-sweep."""
+    from luxe.agents.prompts import TaskOverlay
+    overlay = TaskOverlay(by_task={"implement": "cot"})
+    with pytest.raises(Exception):
+        overlay.by_task = {"implement": "sot"}  # type: ignore[misc]

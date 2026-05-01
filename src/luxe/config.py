@@ -20,6 +20,11 @@ class RoleConfig(BaseModel):
     # See src/luxe/agents/prompts.py for the registry.
     system_prompt_id: str = "baseline"
     task_prompt_id: str = "baseline"
+    # Per-task-type overlay (Branch B). Empty string = no overlay; use
+    # the role-level prompt ids above for every task type. When set,
+    # the overlay's by_task mapping wins for matching task types.
+    # See ~/.claude/plans/task-type-overlays.md.
+    task_overlay_id: str = ""
     # Sampling penalty forwarded as oMLX extra_body. None = omit (current
     # behaviour). Small values (1.02-1.10) discourage repeated tokens; too
     # aggressive corrupts code-gen by forcing identifier divergence.
