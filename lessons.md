@@ -175,3 +175,39 @@ The gate fires on both `tests_pass` and `regex_present` outcomes — the regex c
 This closes the last automated grader hole identified across all bake-offs. The remaining false-positive surface area is fundamentally a hand-inspection problem (semantic correctness), not pattern matching.
 
 **Affected files**: `benchmarks/maintain_suite/grade.py` (`check_orphan_file`, `_added_files_in_diff`, `_is_source_path`, plus integration in `grade_fixture`'s `tests_pass` and `regex_present` branches), `tests/test_acceptance_grader.py` (5 new tests).
+
+---
+
+### [2026-05-01] Phase 1 prompt-shaping outcome — structural prompts trade implement for doc/manage; Branch B is the natural next step
+
+**What happened**: Ran the 60-run prompt-shaping sweep specified in `~/.claude/plans/jiggly-baking-kahan.md` against the 10 v1 fixtures with 6 cells: `champ-baseline`, `champ-baseline-rp__rp105`, `champ-cot`, `champ-sot`, `champ-hads`, `champ-combined-rp`. None of the structural variants beat baseline overall — baseline scored 7/10, the others ranged 4-6/10. But hidden inside the totals: every prompt-shaped variant (cot, sot, hads, combined-rp) cleared a 4/4 implement ceiling, beating baseline's 3/4 on the implement category. The wins came at a cost: every structural variant lost 1-2 documents and 0-1 manage tasks vs baseline. Per-task-type breakdown:
+
+| Cell | impl (4) | doc (5) | manage (1) | Total |
+|---|---|---|---|---|
+| baseline | 3 | 3 | 1 | 7 |
+| cot/sot/hads/combined-rp | 4 | 1-2 | 0-1 | 5-6 |
+| baseline-rp | 3 | 1 | 0 | 4 |
+
+**Root cause**: the structural prompts (CoT plan-first, SoT skeleton-first, HADS strict FIRST/THEN/ONLY-AFTER) all push the model toward action — call `edit_file`, plan-then-act, stop deliberating. That framing is exactly right for implement work and exactly wrong for documents (which need prose deliberation) and manage tasks (which need analytical depth before any edit). The action push was one-size-fits-all when the right answer is per-task-type.
+
+A side observation: `champ-baseline-rp__rp105` (sampling-only, no prompt change) scored WORSE than baseline at 4/10. `repeat_penalty=1.05` on a code-gen workload pushed the model to invent identifier divergence (per the risk we'd flagged in `jiggly-baking-kahan.md`). Sampling penalties hurt without prompt-shaping help; they don't compose the way the rp+structural cell hoped.
+
+**Fix / takeaway**: Branch B (per-task-type overlays). Implemented in commit `b81b628`: `prompts.py` gains a `TaskOverlay` dataclass + `TASK_OVERLAYS` registry; `RoleConfig` gains a `task_overlay_id` field; `run_single` resolves prompt ids per task type via `resolve_prompt_ids()`. The seed overlay `implement_via_cot` maps `implement` and `bugfix` to the `cot` PromptVariant; document/manage/review/summarize fall through to baseline. New variant file `variants_task_type_overlay.yaml` runs a 2-cell sweep: `champ-baseline-control` + `champ-implement-via-cot`. The control cell deliberately re-runs baseline alongside the overlay so the noise floor is captured in the same wall window — Phase 1 baseline swung 5→7 between identical runs, so single-run deltas of 1 fixture are noise.
+
+The hypothesis is testable in 1-3 hours of bench wall: if the overlay composes baseline's doc+manage performance with the structural-variant implement ceiling, the cell projects to 8/10 and ships v1.0. If it ties baseline at 7/10, sampling variance is dominating and we either re-run for sample size or fall through to Branch C (calibration relax). If it scores below baseline, the overlay leaks structural framing into doc/manage somehow and the implementation needs revisiting.
+
+**Affected files**: `~/.claude/plans/task-type-overlays.md` (new), `src/luxe/agents/prompts.py` (TaskOverlay + registry + resolve_prompt_ids), `src/luxe/config.py` (task_overlay_id field), `src/luxe/agents/single.py` (dispatch), `benchmarks/maintain_suite/run.py` (Variant + overlay write + loader), `benchmarks/maintain_suite/variants_task_type_overlay.yaml` (new), `tests/test_prompts.py` + `tests/test_config.py` (overlay tests).
+
+---
+
+### [2026-05-01] Multi-variant `v1_release_gate` was checking total passes across all cells
+
+**What happened**: The Phase 1 sweep finished with 33 total passes across 60 runs and the bench summary printed `v1 release : YES (needs ≥8 of ≥10 passing)`. That was wrong — no single cell hit 8/10, so no variant is promotable. The gate was telling us we could ship when we can't.
+
+**Root cause**: `summarize()` in `benchmarks/maintain_suite/grade.py` set `v1_release_gate = passed >= 8 and total >= 10` against the FLAT results list. For multi-variant runs that flat list aggregates across cells. 33 passes ≥ 8 and 60 ≥ 10 → gate says YES even though every individual cell is below 8/10. The bug was latent in single-variant runs (where the flat list IS one cell) but surfaced as soon as we ran the prompt-shaping matrix.
+
+**Fix / takeaway**: `summarize()` now takes an optional `per_variant: dict[str, list[FixtureResult]]` argument. When provided, the gate is True iff some cell has ≥8/10 fresh passes. When omitted (single-variant or no-variant runs), the original flat threshold still applies for back-compat. The print site in `run.py` shows which cells cleared (`cleared by: <vid>`) or reports `per-cell ≥8/10 — no cell cleared`. `summary.json` now carries `v1_release_gate_per_variant` for downstream tooling. Three new regression tests in `tests/test_acceptance_grader.py`: no cell cleared (the actual Phase 1 case), one cell cleared, and single-variant unchanged.
+
+The lesson behind the lesson: aggregate metrics over a variant matrix are often nonsense for ship decisions. The same shape of bug would apply to any "≥X total" gate run over multi-cell sweeps — average wall, average tokens, etc. None of those should be summed across variants without thought.
+
+**Affected files**: `benchmarks/maintain_suite/grade.py` (`summarize()`), `benchmarks/maintain_suite/run.py` (call site + print site), `tests/test_acceptance_grader.py` (3 regression tests).
