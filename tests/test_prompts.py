@@ -184,6 +184,71 @@ def test_implement_via_cot_overlay_is_registered():
     assert overlay.by_task["bugfix"] == "cot"
 
 
+def test_document_strict_variant_is_registered():
+    """Phase v1.1 B1: document_strict variant must exist for the
+    document_strict_only overlay to resolve. Has baseline system
+    (no persona change) + a stricter task_prefix demanding tool calls
+    and component completeness."""
+    from luxe.agents.prompts import PROMPT_REGISTRY, get
+    assert "document_strict" in PROMPT_REGISTRY
+    v = get("document_strict")
+    # Baseline-system parity — overlay should not change the agent's persona,
+    # only its task-completion expectations.
+    assert v.system == PROMPT_REGISTRY["baseline"].system
+    # Task prefix must contain the "MUST call edit_file/write_file" directive
+    # (the load-bearing piece — this targets the lpe-typing under-engagement
+    # pattern where the model adds 1 line of imports and stops).
+    assert "edit_file" in v.task_prefix
+    assert "write_file" in v.task_prefix
+    # Task prefix must mention component-completeness — the second piece of
+    # the gating intent (don't just satisfy ONE half of a multi-deliverable goal).
+    assert "EVERY component" in v.task_prefix or "every component" in v.task_prefix
+
+
+def test_document_strict_only_overlay_is_registered():
+    """The doc-task overlay variant references document_strict_only —
+    must exist in TASK_OVERLAYS. Maps document → document_strict only;
+    other task types fall through to role-level defaults (no leakage of
+    the strict directive into implement/manage/review tasks)."""
+    from luxe.agents.prompts import TASK_OVERLAYS, get_overlay
+    assert "document_strict_only" in TASK_OVERLAYS
+    overlay = get_overlay("document_strict_only")
+    assert overlay is not None
+    assert overlay.by_task == {"document": "document_strict"}
+    # Crucially: implement, bugfix, manage, review are NOT in by_task —
+    # the overlay must miss for them and fall through to role default.
+    assert "implement" not in overlay.by_task
+    assert "manage" not in overlay.by_task
+
+
+def test_document_strict_only_overlay_fires_only_on_document_tasks():
+    """Resolve sanity check: with document_strict_only active, document
+    routes to document_strict; every other task type routes to the
+    role-level defaults. Defends against accidental leakage of the
+    strict directive (which would regress Phase 1's finding that
+    structural prompts hurt non-doc tasks)."""
+    from luxe.agents.prompts import resolve_prompt_ids
+    # Document → overlay fires.
+    sys_id, task_id = resolve_prompt_ids(
+        "document",
+        system_prompt_id="baseline",
+        task_prompt_id="baseline",
+        task_overlay_id="document_strict_only",
+    )
+    assert sys_id == "document_strict"
+    assert task_id == "document_strict"
+    # Implement, bugfix, manage, review → fall through to role default.
+    for task_type in ("implement", "bugfix", "manage", "review"):
+        sys_id, task_id = resolve_prompt_ids(
+            task_type,
+            system_prompt_id="baseline",
+            task_prompt_id="baseline",
+            task_overlay_id="document_strict_only",
+        )
+        assert sys_id == "baseline", f"{task_type} leaked to overlay"
+        assert task_id == "baseline", f"{task_type} leaked to overlay"
+
+
 def test_resolve_prompt_ids_no_overlay_returns_role_defaults():
     """When no overlay is set, role-level system_prompt_id /
     task_prompt_id win regardless of task_type."""

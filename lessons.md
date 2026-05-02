@@ -417,3 +417,38 @@ The deeper takeaway: **probes with binary thresholds beat probes with vibes**. T
 **Logged for future re-investigation**: oMLX version 0.3.8 stable; Qwen3.6-35B-A3B-6bit at HF snapshot `cb7e092ef8efe540bc3672c8929c4adbe5f4f759`. If a future oMLX bumps the speculative-decoding stack, re-running this probe is reasonable. Until then, leave the flag off.
 
 **Affected files**: `~/.omlx/model_settings.json` (specprefill_enabled flipped on then back off — net zero), `~/.claude/projects/.../memory/project_gh_auth_flake.md` (new — tracks the open auth-flake issue), `~/.claude/projects/.../memory/feedback_offer_long_running_commands.md` (new — established preference: offer commands for >~5 min runs rather than auto-backgrounding).
+
+---
+
+### [2026-05-02] Phase v1.1 B1 — `document_strict` overlay: negative result on the lpe-typing target
+
+**What happened**: Added a `document_strict` PromptVariant + `document_strict_only` overlay (route `document` task type → strict variant only). Strict task_prefix demands tool-call commitment ("MUST call `edit_file` or `write_file`") AND component completeness ("MUST address EVERY component of the goal ... A diff with fewer than ~4 added lines on a multi-component goal almost certainly means you stopped before finishing"). System prompt unchanged from baseline; overlay fires only on `document` task type so non-doc tasks are untouched (regression-defended in `test_document_strict_only_overlay_fires_only_on_document_tasks`). 5-fixture × 2-cell smoke probe (4 control + 4 overlay completed after a `gh auth` flake retry).
+
+| Fixture | Control | Overlay |
+|---|---|---|
+| `isomer-document-quickstart` | PASS (+9/-3) | PASS (+8/-4) |
+| `lpe-rope-calc-document-typing` | FAIL (+1/0) | **FAIL (+2/-2)** |
+| `neon-rain-document-modules` | PASS (+14/0) | PASS (+20/0) |
+| `nothing-ever-happens-document-config` | FAIL (no diff) | PASS (+141/0) |
+| `the-game-document-architecture` | PASS (+19/0) | PASS (+12/-1) |
+
+Cell totals: control 3/5, overlay 4/5.
+
+**Root cause / interpretation**: the overlay nudged lpe-typing from +1 → +2 added lines but didn't unblock the under-engagement pattern that B1 was designed to fix. The model added `from io import IOBase` (control) or `from io import IOBase` + a typed `f` parameter (overlay) — both stopped before writing the requested module docstring. The strict directive's "MUST call edit_file" clause fired (the model did call edit_file) but the "MUST address EVERY component of the goal" clause did NOT shift behavior — the model considers the typing edit "done" and the docstring half is invisible to it. The directive can't disambiguate "I think I'm finished" from "you actually have more to do."
+
+The overlay's nothing-config flip (FAIL → PASS) is *not* a real v1.1 gain, because nothing-config already PASSed in v1.0's ship confirmation. This run's control regressing nothing-config to FAIL is small temp=0 environmental variance (cross-run prefix-cache state, fixture order, etc.) — the overlay recovered from a transient miss but didn't add new capability above the v1.0 baseline.
+
+**Pass criteria evaluation (plan B1):**
+- ❌ lpe-typing PASS (the explicit target).
+- ✅ No regression on 4 other doc fixtures (3 equal, 1 transient-recovery).
+- N/A no-op-edit spot check (moot since lpe-typing didn't pass).
+
+The plan said "if pass criteria met → keep the overlay; if not → document the negative result." Following the negative-result branch.
+
+**Fix / takeaway**: Keep the `document_strict` PromptVariant + `document_strict_only` overlay registered (the infrastructure is tested, composable, and zero-cost for non-document tasks per the fire-only-on-document overlay semantics). **Don't promote to production** — `configs/single_64gb.yaml` stays unchanged. The variant file `variants_v1_doctask_overlay_probe.yaml` stays as a probe artifact for future experiments.
+
+The deeper takeaway for Phase 1's "structural prompts regress doc/manage" finding: that finding was at temp=0.2 on an inflated grader (re-graded 8/60 in A1). At temp=0 with the honest grader, *targeted* doc-only structural prompting at least doesn't regress doc tasks — the no-leakage overlay design is the right shape. But the lpe-typing under-engagement pattern isn't fixable via prompt directives at this model scale; it's a model-side limit on noticing "the goal asks for two things and I only did one." Future work in this direction would need either a different model, a stronger prompt that includes worked examples of multi-component completion (few-shot), or a runtime check that re-prompts the model when a submitted diff doesn't match all the goal's named deliverables.
+
+For Workstream C: B1 closed 0 of the v1.0 FAILs. If B2 also fails, QUAL=8; per the plan's MECE matrix with HIT=LOW (A2 inconclusive default), we land at Path 1 (Phased Mode v2). If B2 closes, QUAL=9; still Path 1. The 10/10 "ship v1.1, log v1.2 target" outcome (Path 2a) requires both B1 and B2 closing; B1 already locked us out of that.
+
+**Affected files**: `src/luxe/agents/prompts.py` (new `document_strict` PromptVariant + `document_strict_only` overlay), `tests/test_prompts.py` (3 new regression tests), `benchmarks/maintain_suite/variants_v1_doctask_overlay_probe.yaml` (new probe variant file), `acceptance/v1_doc_overlay_probe/` (smoke probe results — kept on disk for future re-grade if pattern of doc-task variance becomes a separate investigation).

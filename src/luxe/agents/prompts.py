@@ -136,6 +136,26 @@ _COMBINED_SYSTEM = _HADS_SYSTEM + _SOT_APPENDIX
 _COMBINED_TASK_PREFIX = _COT_TASK_PREFIX
 
 
+# Document-task strict directive — addresses under-engagement on doc tasks
+# (Phase v1.1 B1). The lpe-rope-calc-document-typing failure mode at temp=0:
+# model adds 1 line and stops, even though the task explicitly asks for two
+# components (docstring + type hints). The overlay pushes for tool-call
+# commitment AND component-completeness coverage.
+_DOC_STRICT_TASK_PREFIX = (
+    "This is a documentation task. Before you finish:\n"
+    "- You MUST call `edit_file` or `write_file` at least once to commit a "
+    "real change to disk. Reading and producing prose alone does not "
+    "satisfy this task.\n"
+    "- You MUST address EVERY component of the goal. If the goal mentions "
+    "multiple deliverables (e.g. 'add a module docstring AND type hints'), "
+    "each one needs to land in the committed diff. A diff with fewer than "
+    "~4 added lines on a multi-component goal almost certainly means you "
+    "stopped before finishing.\n"
+    "- Your final report should explicitly note which components you "
+    "completed.\n\n"
+) + _BASELINE_TASK_PREFIX
+
+
 PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "baseline": PromptVariant(
         system=_BASELINE_SYSTEM,
@@ -156,6 +176,10 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "combined": PromptVariant(
         system=_COMBINED_SYSTEM,
         task_prefix=_COMBINED_TASK_PREFIX,
+    ),
+    "document_strict": PromptVariant(
+        system=_BASELINE_SYSTEM,
+        task_prefix=_DOC_STRICT_TASK_PREFIX,
     ),
 }
 
@@ -203,6 +227,13 @@ TASK_OVERLAYS: dict[str, TaskOverlay] = {
     "implement_via_cot": TaskOverlay(by_task={
         "implement": "cot",
         "bugfix": "cot",
+    }),
+    # document_strict_only — applies the document_strict variant on document
+    # tasks specifically. Phase v1.1 B1: addresses lpe-rope-calc-document-
+    # typing's under-engagement (model adds 1 line and stops despite a
+    # multi-component goal). Other task types fall through to role default.
+    "document_strict_only": TaskOverlay(by_task={
+        "document": "document_strict",
     }),
 }
 
