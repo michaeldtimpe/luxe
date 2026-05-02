@@ -391,3 +391,29 @@ The deeper takeaway: **infrastructure-availability matters for measurement plans
 **Fix / takeaway**: Both are house-keeping; no model or grader logic changed. The Gemma-4 cleanup is a small example of **dead config compounds over time** — one model's bad chat_template would have kept showing up in roster lookups indefinitely. Periodically pruning model_settings.json is cheap insurance.
 
 **Affected files**: `~/.omlx/model_settings.json` (Gemma-4 entries removed), `RESUME.md` (gotcha entry for offline 4/5 cap).
+
+---
+
+### [2026-05-02] Phase v1.1 A3 — specprefill probe partial: ~5% wall improvement, doesn't clear 15% gate
+
+**What happened**: Enabled `specprefill_enabled: true` for Qwen3.6-35B-A3B-6bit in `~/.omlx/model_settings.json`, restarted oMLX (0.3.8 stable, model digest `cb7e092ef8efe540bc3672c8929c4adbe5f4f759`), ran the 5-fixture A3 probe. The bench hit the gh-auth flake (see `project_gh_auth_flake.md`) on runs 4 + 5; only 3 of 5 fixtures completed. Of the 3 that did:
+
+| Fixture | Baseline (v1 ship confirmation) | A3 (specprefill on) | Δ |
+|---|---|---|---|
+| `lpe-rope-calc-implement-strict-flag` | 311s | 290s | -7% |
+| `the-game-implement-shuffle-shortcut` | 60s | 60s | 0% |
+| `neon-rain-implement-reset-shortcut` | 145s | 134s | -8% |
+
+Mean ~5% wall improvement. All three fixtures matched their baseline pass/fail (no quality regression on the data we have).
+
+**Root cause / interpretation**: Per the v1.1 plan's A3 gate, the pass criteria require **median wall ≥15% drop** AND no quality regression AND no raw-text drift. Even imagining the 2 missing fixtures hit a generous 15% lift, the mean across all 5 wouldn't clear 15%. The probe came in with a small positive but it doesn't clear the threshold the plan explicitly committed to (the threshold is intentionally tight — it's there to make the "tried, didn't work" outcome cheap to recognize).
+
+The plan also called out this expected outcome explicitly: *"Treat 'no win' or 'small win' as the likely outcome. Field reports on Qwen3.6-35B-A3B + oMLX show speculative decoding is sometimes silently disabled or buggy when flags don't line up, and is sometimes net-neutral or slightly negative when the draft config is off or the prefix cache is already doing heavy lifting."* That framing held up.
+
+**Fix / takeaway**: Reverted `specprefill_enabled: false` in `~/.omlx/model_settings.json`. Restarted oMLX. Net change to the repo: zero — settings.json is system config, not tracked. The lesson lands here so future-us doesn't waste cycles re-running this probe without checking what changed in oMLX or mlx-lm first.
+
+The deeper takeaway: **probes with binary thresholds beat probes with vibes**. The 15%-or-revert rule made this decision crisp despite incomplete data. If the rule had been "any improvement is good," this would have been a discussion ("but it's *5%*, isn't that worth keeping?") and we'd have shipped a flag with unknown long-term cost. The math: a flag that adds 5% wall improvement but introduces *any* probability of subtle output drift is a net negative on a build-trust-with-the-grader workload like this. Either it's clearly worth it or revert.
+
+**Logged for future re-investigation**: oMLX version 0.3.8 stable; Qwen3.6-35B-A3B-6bit at HF snapshot `cb7e092ef8efe540bc3672c8929c4adbe5f4f759`. If a future oMLX bumps the speculative-decoding stack, re-running this probe is reasonable. Until then, leave the flag off.
+
+**Affected files**: `~/.omlx/model_settings.json` (specprefill_enabled flipped on then back off — net zero), `~/.claude/projects/.../memory/project_gh_auth_flake.md` (new — tracks the open auth-flake issue), `~/.claude/projects/.../memory/feedback_offer_long_running_commands.md` (new — established preference: offer commands for >~5 min runs rather than auto-backgrounding).
