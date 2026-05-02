@@ -1214,8 +1214,17 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="Print decisions without invoking luxe")
     parser.add_argument("--work-dir", default=None,
-                        help="Persistent clone dir (default: temp). Reuse to "
-                             "avoid re-cloning between invocations")
+                        help="Persistent clone dir. Default: ~/.luxe/bench-workspace "
+                             "(pinned to keep the random-tempdir variance source out "
+                             "of the model's prompts; see the 2026-05-02 lessons.md "
+                             "entry on temp=0 variance). Pass an explicit path to "
+                             "override; pass --ephemeral-work-dir to restore the "
+                             "old fresh-tempdir behaviour.")
+    parser.add_argument("--ephemeral-work-dir", action="store_true",
+                        help="Use a fresh tempfile.mkdtemp for this run, cleaned up "
+                             "at exit. The old default behaviour — restored for "
+                             "callers that explicitly want process isolation. "
+                             "Trades reproducibility for cleanliness.")
     parser.add_argument("--variants", default=None,
                         help="Path to a variants.yaml that defines (mode × model) "
                              "test cells. When set, each fixture runs once per "
@@ -1252,15 +1261,24 @@ def main() -> int:
         print("No matching fixtures.")
         return 2
 
-    # Work dir: persistent (clones are reused) or temp (fresh each run)
+    # Work dir: pinned default (clones are reused; deterministic across runs)
+    # vs explicit path vs --ephemeral-work-dir (fresh tempdir, cleaned at exit).
+    # The pinned default is load-bearing for temp=0 reproducibility — random
+    # tempdir paths leak into bash/git tool output, which contaminates the
+    # model's prompt and produces different output even at greedy decoding.
+    # See the 2026-05-02 lessons.md entry + project_workdir_variance_leak.md
+    # in the project memory.
     cleanup_work_dir = False
-    if args.work_dir:
-        work_dir = Path(args.work_dir).expanduser().resolve()
-        work_dir.mkdir(parents=True, exist_ok=True)
-    else:
+    if args.ephemeral_work_dir:
         td = tempfile.mkdtemp(prefix="luxe-acceptance-")
         work_dir = Path(td)
         cleanup_work_dir = True
+    elif args.work_dir:
+        work_dir = Path(args.work_dir).expanduser().resolve()
+        work_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        work_dir = (Path.home() / ".luxe" / "bench-workspace").resolve()
+        work_dir.mkdir(parents=True, exist_ok=True)
 
     # Variant matrix — when set, each fixture runs once per (mode, model) cell.
     variants: list[Variant] = []
