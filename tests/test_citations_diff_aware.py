@@ -190,3 +190,39 @@ def test_dedupe_citations():
     text = "`src/foo.py:1` and `src/foo.py:1` again"
     cs = extract_citations(text)
     assert len(cs) == 1
+
+
+def test_extract_citations_rejects_ipv4_host_port():
+    """`127.0.0.1:8000` is a host:port reference (deployment doc), not a
+    file:line citation. The extractor must skip IPv4-shaped paths so the
+    citation linter doesn't flag dashboard URLs as unresolved.
+
+    Regression: isomer-quickstart synthesizer reports referenced
+    `127.0.0.1:27001` for the dashboard and the build-breaking citation
+    gate then docked the fixture's score (Phase 1 ship-confirmation
+    2026-05-02). Surgical fix at extractor: reject paths matching
+    `^\\d+\\.\\d+\\.\\d+\\.\\d+$`.
+    """
+    text = (
+        "Run with `docker compose up`; the dashboard is at "
+        "`http://127.0.0.1:27001/`. The mapping `127.0.0.1:27001:27001` "
+        "is in `docker-compose.yml`. A real citation: `app.py:42`."
+    )
+    cs = extract_citations(text)
+    paths = {c.path for c in cs}
+    assert "127.0.0.1" not in paths
+    # The legitimate file:line reference should still be extracted.
+    assert "app.py" in paths
+    # Both IP-shaped strings rejected; only the real one survives.
+    assert len(cs) == 1
+
+
+def test_extract_citations_keeps_dotted_filenames_with_digits():
+    """`v1.2.3.py:10` is a real (if unusual) filename; the IPv4 guard
+    must NOT reject it. Only paths that fully match `\\d+\\.\\d+\\.\\d+\\.\\d+`
+    (no extension) are dropped — `v1.2.3.py` has a `.py` extension and
+    a non-digit prefix in the leading segment."""
+    text = "See `v1.2.3.py:10` for the override."
+    cs = extract_citations(text)
+    assert len(cs) == 1
+    assert cs[0].path == "v1.2.3.py"

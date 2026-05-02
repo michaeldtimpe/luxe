@@ -61,6 +61,15 @@ class ValidatorEnvelope:
 _CITATION_RE = re.compile(
     r"`?(?P<path>[\w./_-]+\.[\w]+):(?P<line>\d+)(?:-(?P<line_end>\d+))?`?"
 )
+# Reject IPv4-shaped paths — `127.0.0.1:8000` matches the citation regex
+# (path=127.0.0.1 because `.1` looks like a `.ext` suffix, line=8000) but is
+# almost always a host:port reference in deployment docs, not a file:line
+# citation. Without this guard, isomer-quickstart's synthesizer report
+# (which mentions `127.0.0.1:27001` for the dashboard URL) reports 2
+# unresolved citations and fails the build-breaking gate. Anchor handles
+# both bare `127.0.0.1` and URL-form `//127.0.0.1` (the citation regex's
+# path group greedily eats leading `/` characters from `http://...`).
+_IPV4_PATH_RE = re.compile(r"(?:^|/)\d+\.\d+\.\d+\.\d+$")
 _FUZZY_WINDOW = 20
 
 
@@ -117,6 +126,9 @@ def extract_citations(text: str) -> list[Citation]:
         # (the regex already enforces a .ext suffix, but version strings like
         # 1.2.3:4 would never match because they lack a letter in the extension).
         if "." not in path:
+            continue
+        # Skip IPv4-shaped paths (`127.0.0.1:8000` is a host:port, not file:line).
+        if _IPV4_PATH_RE.search(path):
             continue
         key = (path, line, line_end)
         if key in seen:
