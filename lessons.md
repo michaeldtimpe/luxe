@@ -296,3 +296,44 @@ The substantive-edit gate (`min_added_lines: 20`) remains untouched. It does the
 The deeper takeaway is about gate-pattern composition: **a regex that lists implementation idioms is sometimes too narrow for a documentation task**. Implementation-idiom patterns are good for code-style tasks (the strict-flag fixture, where `add_argument` / `args.strict` SHOULD appear in the diff). For documentation tasks, the test should be content-shape, not implementation-shape. Future doc-task fixtures should consider: what does the *output* look like, not what *code* it references.
 
 **Affected files**: `benchmarks/maintain_suite/fixtures.yaml` (one regex pattern updated on `nothing-ever-happens-document-config`).
+
+---
+
+### [2026-05-02] v1.0 ship — 8/10 cleared on production config
+
+**What happened**: After the Phase 0 grader fix, fixture surgery on three fixtures, Branch C calibration on `nothing-config`, and a citation-linter IPv4 fix discovered during ship confirmation, the 10-fixture acceptance suite cleared the ≥8/10 gate against `configs/single_64gb.yaml`. Per task type: **implement 4/4, document 4/5, manage 0/1**. Champion: `Qwen3.6-35B-A3B-6bit` at temperature=0.0.
+
+The two remaining fails are model-side limitations:
+- `lpe-rope-calc-document-typing`: model added 1 line (`from io import IOBase`) and stopped — didn't write the requested module docstring nor type the `f` parameter. The fixture is winnable; the model under-engaged.
+- `nothing-ever-happens-manage-deps-audit`: stuck-in-loop bailout (repeated identical tool calls), no diff produced. The model can't navigate this fixture's audit task on the largest repo (907 KB Python).
+
+**Path through the plan** (Phase 0 → Phase 1 fixtures → Branch C → ship):
+
+1. **Phase 0 — grader fix**. Bug 1 (`diff_additions`/`diff_deletions` never populated) + Bug 2 (`apply_strict_gates` defined but never invoked from `grade_fixture`) silently inflated every prior bake-off result. Fixed in commits `0ab2127` + helpers. Sidecar tool `scripts/regrade_local.py` enabled fast iteration.
+2. **Variance probe — temp=0 collapses sampling variance**. Three baseline runs at temp=0.2 ranged 4-7/10 (±2 fixtures); two back-to-back runs at temp=0 produced identical pass/fail vectors. Greedy decoding also lifted implement to 4/4 baseline ceiling, which obsoleted Branch B's `implement_via_cot` overlay (it had nothing to lift). Promoted in commit `8fd0fe4`-equivalent (this commit set).
+3. **Fixture surgery — `lpe-typing`, `neon-rain-modules`, `isomer-quickstart`** (commits `48e6577` + `8d1fcd3` + this set). All three were misaligned with their `base_sha`: pe_scan.py was already mostly typed; ARCHITECTURE.md and README.md's Quick Start section already existed at base. Goal wording realigned + thresholds calibrated. None of the surgery weakened anti-gaming defense — the destructive_diff gate (Phase 0) does the heavy lifting now, freeing the per-fixture regex/threshold pair to focus on content shape.
+4. **Branch C calibration — `nothing-config`** (commit `eb2bdf0`). Confirmed gate-side miss: model produced a textbook 136-line CONFIG.md with file:line citations; original regex required Python idiom quotes. Replaced with a composite that accepts either Python idioms OR markdown UPPER_SNAKE env var names. Per the master-plan §Branch C gate, lessons.md (a)/(b)/(c) entry written *before* fixtures.yaml edit.
+5. **Citation linter IPv4 fix** (this commit set). Discovered during ship confirmation: synthesizer reports legitimately mention `127.0.0.1:port` for dashboard URLs, and the citation extractor's regex `[\w./_-]+\.[\w]+:\d+` was matching IPv4-shaped tokens as `path:line` citations. Two unresolved citations on isomer-quickstart's report blocked the fixture's PASS. Surgical fix: reject paths matching `(?:^|/)\d+\.\d+\.\d+\.\d+$`. Two unit tests added (rejects host:port; preserves filenames-with-digits).
+
+**The Branch B obsolescence** is worth recording explicitly: Phase 1's "structural prompts hit 4/4 implement" finding was at temp=0.2 — almost certainly a baseline-variance artifact. At temp=0, baseline already gets 4/4 implement out of the box, so the `implement_via_cot` overlay had nothing to lift. The plans in `~/.claude/plans/task-type-overlays.md` and `~/.claude/plans/v1-ship-and-prompt-sweep.md` retain Branch B/C structure for future task-type-specific overlays (e.g., a doc/manage overlay), but the v1 ship path didn't need them.
+
+**Confirmation result** — `acceptance/v1_default_ship_confirmation/`, cumulative across the initial 10-fixture run + 3-fixture retry (gh auth flake at 01:48) + 1-fixture isomer-quickstart re-run (post-citation-fix):
+
+| Fixture | Type | Verdict |
+|---|---|---|
+| lpe-rope-calc-implement-strict-flag | implement | PASS |
+| the-game-implement-shuffle-shortcut | implement | PASS |
+| neon-rain-implement-reset-shortcut | implement | PASS |
+| isomer-implement-healthcheck | implement | PASS |
+| the-game-document-architecture | document | PASS |
+| neon-rain-document-modules | document | PASS |
+| isomer-document-quickstart | document | PASS |
+| nothing-ever-happens-document-config | document | PASS |
+| lpe-rope-calc-document-typing | document | FAIL |
+| nothing-ever-happens-manage-deps-audit | manage | FAIL |
+
+**Fix / takeaway**: Bump `pyproject.toml` from `1.0.0.dev0` to `1.0.0`. Tag `v1.0.0`. The ship gate is the model's ceiling on this fixture set at temp=0 — the implement category is genuinely saturated, doc has one fixture-design-resistant case (typing under-engagement at temp=0), and manage has one model-can't-navigate case. Future improvement to v1.1 would target the manage stuck-loop pattern (likely a context-management or tool-loop-detection issue, not a fixture issue) or add a doc-task overlay (Phase 1's structural prompts regressed doc/manage; an overlay tuned for prose tasks specifically is the next experiment, but out of v1 scope).
+
+The deeper meta-takeaway: **infrastructure quality dominates result quality**. Phase 0 fixed grader bugs that had been silently inflating PASS counts since 04-29. Once the grader was honest, the remaining levers (variance pinning, fixture surgery, gate calibration, one citation-linter fix) added up to a gap closure of 5/10 → 8/10 without changing the model or its prompts. The model is the same Qwen3.6-35B-A3B-6bit it was on 04-29. What changed was: (a) the grader stopped lying, (b) sampling stopped being random, (c) fixtures matched their base_sha, (d) gates measured the right thing. Future bench cycles should expect: every "we added a gate" claim needs a regression test that asserts the gate fires from the expected entry point on the expected inputs (Phase 0 Bug 2's lesson, applied universally).
+
+**Affected files**: `pyproject.toml` (1.0.0.dev0 → 1.0.0), `configs/single_64gb.yaml` (temperature 0.2 → 0.0), `src/luxe/citations.py` (`_IPV4_PATH_RE` guard in `extract_citations`), `tests/test_citations_diff_aware.py` (2 new tests), plus the cumulative grader/fixture work referenced above.
