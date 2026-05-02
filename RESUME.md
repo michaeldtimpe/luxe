@@ -20,19 +20,22 @@ of v1.0** — single model, single agent loop, single `luxe maintain`
 command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
 **What's in flight:** v1.0 release path. The 10-fixture acceptance
-suite needs **≥8/10 PASSes** to ship. The post-grader-fix temp=0
-baseline is **5/10 stable** (variance was sampling-driven; pinning
-temp=0 collapsed the 4-7 spread to a deterministic vector). Per task
-type: implement 4/4, document 1/5, manage 0/1.
+suite needs **≥8/10 PASSes** to ship. After Phase 0 grader fixes,
+fixture surgery on `lpe-typing` and `neon-rain-modules`, and Branch C
+calibration on `nothing-config`, sidecar regrade against probe_b
+shows **6/10** with the current grader + current fixtures. A fresh
+full run is the E2E confirmation step — expected 6-8/10 (the surgered
+neon-rain-modules will pass on a fresh "Update" run since the model
+won't be forced into a destructive rewrite; lpe-typing depends on
+whether the model writes both halves of the task — typing AND a
+docstring — this time).
 
-**Open questions:** (a) whether the destructive_diff gate firing on
-`neon-rain-document-modules` is a true positive or a fixture-design
-defect (file existed at base despite "Create" task — Phase 2 fixture
-surgery), (b) whether `nothing-ever-happens-document-config`'s
-gate-side miss (real CONFIG.md, regex too narrow) warrants Branch C
-calibration, (c) whether the doc/manage bottleneck is reachable at
-all by prompt overlays since Phase 1 showed structural prompts
-*regress* doc/manage.
+**The remaining gap to ship**: 2-3 passes (6/10 → 8/10). Levers
+remaining: (a) overlay for doc/manage if a fresh run still tops out at
+6-7/10, (b) more fixture surgery on `isomer-document-quickstart`
+(prior runs were destructive — model rewrote 148 lines of README), or
+(c) `pr_opened`-as-1pt question (every offline run currently caps at
+4/5 because `gh pr create` fails without a GitHub remote).
 
 **Iteration model:** all grader iteration uses the sidecar regrade
 tool (`scripts/regrade_local.py`) against existing acceptance dirs.
