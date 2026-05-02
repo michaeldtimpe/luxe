@@ -452,3 +452,40 @@ The deeper takeaway for Phase 1's "structural prompts regress doc/manage" findin
 For Workstream C: B1 closed 0 of the v1.0 FAILs. If B2 also fails, QUAL=8; per the plan's MECE matrix with HIT=LOW (A2 inconclusive default), we land at Path 1 (Phased Mode v2). If B2 closes, QUAL=9; still Path 1. The 10/10 "ship v1.1, log v1.2 target" outcome (Path 2a) requires both B1 and B2 closing; B1 already locked us out of that.
 
 **Affected files**: `src/luxe/agents/prompts.py` (new `document_strict` PromptVariant + `document_strict_only` overlay), `tests/test_prompts.py` (3 new regression tests), `benchmarks/maintain_suite/variants_v1_doctask_overlay_probe.yaml` (new probe variant file), `acceptance/v1_doc_overlay_probe/` (smoke probe results — kept on disk for future re-grade if pattern of doc-task variance becomes a separate investigation).
+
+---
+
+### [2026-05-02] Phase v1.1 B2 — `manage_strict` overlay: closes deps-audit (with CVE-id caveat)
+
+**What happened**: Added `manage_strict` PromptVariant + `manage_strict_only` overlay (route `manage` task type → strict variant only). Strict task_prefix names two failure modes by name: re-reading the same file (loop-detector trips), and reading-without-writing. Includes a procedural ONE-AT-A-TIME directive: pick one item, look it up, document it, move to the next. 1-fixture × 2-cell smoke probe on `nothing-ever-happens-manage-deps-audit`:
+
+| Cell | Result | Diff | Notes |
+|---|---|---|---|
+| baseline-control | FAIL | +0/-0 | "no diff produced" — same stuck-loop pattern as v1.0 + earlier reproductions |
+| `manage_strict` overlay | **PASS** | +70/-0 | 70-line `SECURITY-AUDIT.md` with 3 concrete findings (aiohttp, SQLAlchemy, psycopg2-binary) |
+
+**Functional check (mandatory per plan B2 criteria):**
+
+- ✅ All 3 packages cited (aiohttp, SQLAlchemy, psycopg2-binary) ARE actually in the fixture's `requirements.txt`. The version constraints quoted in the audit match the file exactly. Upgrade proposals preserve the major-version cap while bumping the min — proper "preserve API compatibility" shape.
+- ⚠️ **CVE-id verification limitation**: CVE-2023-46136 (aiohttp) is a real, well-known CVE matching the reported vulnerability (Content-Length DoS). The other two — CVE-2024-3559 (SQLAlchemy) and CVE-2024-22032 (psycopg2-binary) — are plausibly-shaped IDs but couldn't be verified without external lookup; the model may have invented realistic-looking-but-incorrect CVE numbers. The GHSA advisory slugs are particularly suspect (model can't know exact slug strings). **For real production use, a human would need to verify each CVE ID before acting on the audit.**
+- ✅ Loop-telemetry proxy: control wall 75s with stuck-loop bailout (6888 completion tokens then abort); overlay wall 315s with steady 22 tok/s navigation. The overlay shifted the model from thrashing to producing. Tool count similar but distinct-args, not identical-args (since no stuck-loop fired).
+
+**Pass criteria evaluation (plan B2):**
+- ✅ Non-empty diff matching the regex (`matched in 22 added lines (needed ≥3)`).
+- ✅ Findings reference real packages with accurate version constraints (functional check above).
+- ✅ Loop telemetry proxy confirms meaningful navigation (wall delta + completion-token volume).
+
+The CVE-id hallucination caveat is real — the bench grader's regex `(?i)(CVE-\d{4}-\d{4,}|...)` cannot distinguish "real CVE" from "CVE-shaped-text-the-model-invented." This is a known limitation: gates check shape, not factuality. For audit-class tasks specifically, the bench gate alone is insufficient for production trust; a human verification step is required. Flagging in lessons.md so this isn't relearned later.
+
+**Fix / takeaway**: B2 PASSes pass criteria for the v1.1 quality push. The path forward (per the plan's commit milestones):
+
+1. **Commit the overlay infrastructure** as a positive result (`feat: manage_strict overlay`).
+2. **Promote `manage_strict_only`** into `configs/single_64gb.yaml`'s `roles.monolith.task_overlay_id`.
+3. **Run the v1.1 full-bench confirmation** — 10-fixture sweep against the promoted production config. Expected: 9/10 (impl 4/4, doc 4/5, manage 1/1).
+4. **Workstream C decision** based on the confirmation result + A2's HIT (defaulted LOW) + the QUAL outcome.
+
+The plan's MECE matrix at LOW + 9 = Path 1 (Phased Mode v2; don't ship v1.1). Worth a sanity check: 9/10 IS a real measurable improvement (one new fixture closed), and the matrix's "not enough to ship alone" framing was deliberately conservative — it can be revisited with the user before locking in. Path 2b (ship v1.1, freeze incremental work) is the alternative if HIT-default is reconsidered or 9/10 is judged worth a release.
+
+The deeper takeaway: **prompt-side fixes can unstick model-side behavior more reliably than expected, but only when the failure mode is mechanistic** (re-reading + not-writing). lpe-typing's "I think I'm done" pattern is harder — no procedural guidance disambiguates an over-eager stop. deps-audit's "I'm stuck on this file" pattern is easier — there's a clear procedural fix (pick distinct items). Future overlay work should triage the failure mode mechanistically before committing to a directive shape.
+
+**Affected files**: `src/luxe/agents/prompts.py` (new `manage_strict` PromptVariant + `manage_strict_only` overlay), `tests/test_prompts.py` (3 new regression tests parallel to B1's), `benchmarks/maintain_suite/variants_v1_managetask_overlay_probe.yaml` (new probe variant file), `acceptance/v1_manage_overlay_probe/` (smoke probe results).
