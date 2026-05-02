@@ -306,44 +306,46 @@ python -m benchmarks.maintain_suite.run \
 
 ## Open work / next steps
 
-In priority order:
+Closed in Phase v1.0 / v1.1 Workstream A (commits `eb2bdf0`,
+`48e6577`, `8d1fcd3`, `f14941d`, `e96c2ce`):
+- Branch C calibration on `nothing-config` (regex now accepts
+  markdown-style UPPER_SNAKE listings).
+- Fixture surgery on `lpe-typing`, `neon-rain-modules`,
+  `isomer-quickstart`.
+- `pr_opened` offline-mode 4/5 cap documented as expected.
+- Gemma-4 dead settings entries removed.
+- Historical bake-offs re-graded — see lessons.md.
+- A3 specprefill probe — partial run showed ~5% mean wall
+  improvement; reverted (didn't clear 15% gate).
 
-1. **Decide on Branch C calibration for `nothing-config`** — confirmed
-   gate-side failure (model produced 136-line CONFIG.md, regex too
-   narrow). Per `~/.claude/plans/v1-ship-and-prompt-sweep.md` Branch C
-   gate, requires a `lessons.md` entry per fixture with (a) semantic
-   acceptability, (b) failure category, (c) targeted-vs-general
-   justification before any `fixtures.yaml` edits. (a)/(b) are already
-   in the bag; (c) needs to specify the alternate accepting pattern
-   that matches markdown-table UPPER_SNAKE listings without admitting
-   vacuous prose.
-2. **Phase 2 fixture surgery** — `lpe-rope-calc-document-typing`'s
-   base_sha already has type hints (the task is misaligned with the
-   file state); `neon-rain-document-modules`'s base_sha already has
-   `ARCHITECTURE.md` (the task says "Create" but the file exists,
-   forcing the model into a destructive rewrite that triggers the
-   gate). Both want either a new base_sha or a fixture replacement.
-3. **F2.3 specprefill_enabled probe** — flip the flag on Qwen3.6-35B-A3B-6bit
-   in `~/.omlx/model_settings.json`, restart oMLX, run a 5-fixture
-   sub-sweep. Keep on if median wall drops ≥15% AND no quality
-   regression. Decode-speed lift would make every future bake-off
-   cheaper. Master plan §F2.3.
-4. **Decide if `pr_opened` (1pt of 5) should remain a gate** when
-   running offline. With local-cache origin (no GitHub remote), every
-   run caps at 4/5 because `gh pr create` fails. Either (a) accept the
-   4-point ceiling for offline runs and adjust the 8/10 threshold, or
-   (b) make `pr_opened` no-op when origin isn't a GitHub host.
-5. **F2.1 IFS-lite** — refactor `expected_outcome` into weighted
+Remaining (priority order):
+
+1. **Workstream B — quality push on the 2 v1.0 FAILs.** Per the
+   Phase v1.1 plan in `~/.claude/plans/silly-pondering-llama.md`:
+   - **B1**: `document_strict` task overlay for
+     `lpe-rope-calc-document-typing`'s under-engagement (model adds
+     1 line and stops; overlay pushes "MUST call edit_file/write_file
+     and add substantive content").
+   - **B2**: investigate `nothing-deps-audit` stuck-loop — either a
+     task-shaped loop tolerance change in `loop.py` or a
+     `manage_strict` overlay (one lever per attempt; cap at 2
+     attempts per the plan).
+   - End-of-B confirmation: full bench against the production
+     config; v1.1 ship gate is ≥9/10. Per
+     `feedback_offer_long_running_commands.md`, hand off the bench
+     command rather than auto-launching.
+2. **Workstream C decision** — once B's full bench lands, follow the
+   MECE matrix in the plan (HIT × QUAL bins). HIT defaults to LOW
+   given the inconclusive A2 measurement (`project_prefix_cache_baseline.md`).
+3. **F2.1 IFS-lite** — refactor `expected_outcome` into weighted
    sub-instructions; report Instruction Following Score per cell.
-   Master plan §F2.1.
-6. **F2.2 logprob capture** — 15-min probe to test if oMLX honors
-   `logprobs: true`. Master plan §F2.2.
-7. **Drop Gemma-4-26B-A4B** entries from `~/.omlx/model_settings.json`
-   if still there — ship with empty `chat_template` and fail with HTTP
-   400 in the chat-driven loop.
-8. **Re-grade prior bake-offs with the fixed grader** if their
-   numbers are load-bearing for any decision. `scripts/regrade_local.py
-   --output acceptance/<phase>` walks any prior run dir.
+   Out of v1.1 scope; queue for v1.2 / v2.0.
+4. **F2.2 logprob capture** — 15-min probe to test if oMLX honors
+   `logprobs: true`. Out of v1.1 scope; queue for v1.2 / v2.0.
+5. **gh auth flake mitigation** — `assert_gh_auth()` intermittently
+   fails mid-bench (observed twice on 2026-05-02; see
+   `project_gh_auth_flake.md`). Cheap defense: retry-with-backoff
+   in `assert_gh_auth()`. Not blocking; mitigated by `--retry-errors`.
 
 ---
 
