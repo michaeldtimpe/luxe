@@ -249,6 +249,68 @@ def test_document_strict_only_overlay_fires_only_on_document_tasks():
         assert task_id == "baseline", f"{task_type} leaked to overlay"
 
 
+def test_manage_strict_variant_is_registered():
+    """Phase v1.1 B2: manage_strict variant must exist for the
+    manage_strict_only overlay to resolve. Targets the nothing-ever-
+    happens-manage-deps-audit stuck-loop pattern (model reads
+    requirements.txt repeatedly, hits the 2-repeat loop detector,
+    no diff produced). Has baseline system + a stricter task_prefix
+    naming the two failure modes (re-reading + reading-without-writing)."""
+    from luxe.agents.prompts import PROMPT_REGISTRY, get
+    assert "manage_strict" in PROMPT_REGISTRY
+    v = get("manage_strict")
+    # Baseline-system parity — overlay shouldn't change agent persona.
+    assert v.system == PROMPT_REGISTRY["baseline"].system
+    # Task prefix must call out the two failure modes by name.
+    assert "loop detector" in v.task_prefix or "loop" in v.task_prefix.lower()
+    assert "edit_file" in v.task_prefix
+    assert "write_file" in v.task_prefix
+    # Approach guidance — enumerate one-at-a-time.
+    assert "ONE AT A TIME" in v.task_prefix
+
+
+def test_manage_strict_only_overlay_is_registered():
+    """The manage-task overlay variant references manage_strict_only —
+    must exist in TASK_OVERLAYS. Maps manage → manage_strict only;
+    other task types fall through to role-level defaults (no leakage
+    into doc/implement/etc.)."""
+    from luxe.agents.prompts import TASK_OVERLAYS, get_overlay
+    assert "manage_strict_only" in TASK_OVERLAYS
+    overlay = get_overlay("manage_strict_only")
+    assert overlay is not None
+    assert overlay.by_task == {"manage": "manage_strict"}
+    # Crucially: implement, document, bugfix, review NOT in by_task —
+    # the strict directive must not leak to other task types.
+    assert "implement" not in overlay.by_task
+    assert "document" not in overlay.by_task
+
+
+def test_manage_strict_only_overlay_fires_only_on_manage_tasks():
+    """Resolve sanity check: with manage_strict_only active, manage
+    routes to manage_strict; every other task type routes to role-
+    level defaults."""
+    from luxe.agents.prompts import resolve_prompt_ids
+    # Manage → overlay fires.
+    sys_id, task_id = resolve_prompt_ids(
+        "manage",
+        system_prompt_id="baseline",
+        task_prompt_id="baseline",
+        task_overlay_id="manage_strict_only",
+    )
+    assert sys_id == "manage_strict"
+    assert task_id == "manage_strict"
+    # Implement, bugfix, document, review → fall through to role default.
+    for task_type in ("implement", "bugfix", "document", "review"):
+        sys_id, task_id = resolve_prompt_ids(
+            task_type,
+            system_prompt_id="baseline",
+            task_prompt_id="baseline",
+            task_overlay_id="manage_strict_only",
+        )
+        assert sys_id == "baseline", f"{task_type} leaked to overlay"
+        assert task_id == "baseline", f"{task_type} leaked to overlay"
+
+
 def test_resolve_prompt_ids_no_overlay_returns_role_defaults():
     """When no overlay is set, role-level system_prompt_id /
     task_prompt_id win regardless of task_type."""

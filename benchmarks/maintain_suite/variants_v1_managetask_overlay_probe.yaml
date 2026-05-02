@@ -1,0 +1,49 @@
+# Phase v1.1 B2 — manage-task strict overlay probe.
+#
+# v1.0 ship landed at 8/10 with manage 0/1 — the only manage fixture
+# (nothing-ever-happens-manage-deps-audit) hit the loop detector after
+# 20 tool calls and bailed without producing a diff. The probe tests
+# whether a manage-specific overlay (manage_strict_only — see prompts.py)
+# pushes the model to enumerate findings distinctly and write the
+# deliverable rather than re-reading the same files.
+#
+# 2 cells × 1 fixture = 2 runs. ~2-5 min wall.
+#
+# Run:
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_v1_managetask_overlay_probe.yaml \
+#       --output acceptance/v1_manage_overlay_probe \
+#       --id nothing-ever-happens-manage-deps-audit \
+#       --per-fixture-timeout 1800
+#
+# Pass criteria (Phase v1.1 plan B2):
+# 1. deps-audit produces a non-empty diff that matches the regex
+#    `(?i)(CVE-\d{4}-\d{4,}|GHSA-[\w-]+|advisory|vulnerability|>=\s?\d|<\s?\d)`.
+# 2. Functional check (mandatory): hand-read the produced
+#    SECURITY-AUDIT.md (or whatever file the model creates). Findings
+#    must reference ACTUAL dependencies in the fixture's
+#    requirements.txt — not hallucinated CVE-shaped strings against
+#    packages that aren't there. Models are good at producing regex-
+#    shaped text without doing the underlying work.
+# 3. Loop telemetry shows the model navigated meaningfully (distinct-
+#    file count > 1; ideally several distinct files read before any
+#    diff is produced) — currently this requires reading events.jsonl
+#    + the run's stdout.log; if loop telemetry isn't yet wired, fall
+#    back to inspecting the synthesizer.md and the diff content for
+#    quality.
+#
+# If pass criteria met → promote manage_strict_only into
+# configs/single_64gb.yaml's monolith role and run a 10-fixture
+# confirmation. If not → ATTEMPT 2 is the loop.py task-shaped
+# tolerance change (allow more repeated-step bailout when tool
+# arguments differ obviously). Cap total at 2 attempts per the plan;
+# diminishing returns kick in fast on a 907 KB repo.
+
+variants:
+  # Control — re-runs baseline so we have head-to-head data.
+  - {model_label: champ-baseline-control,    model_id: Qwen3.6-35B-A3B-6bit}
+
+  # The overlay test: manage_strict_only fires on manage tasks; other
+  # task types fall through. Since this YAML restricts to a single
+  # manage fixture via --id, the overlay always fires here.
+  - {model_label: champ-manage-strict,       model_id: Qwen3.6-35B-A3B-6bit, task_overlay_id: manage_strict_only}

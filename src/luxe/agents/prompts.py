@@ -156,6 +156,31 @@ _DOC_STRICT_TASK_PREFIX = (
 ) + _BASELINE_TASK_PREFIX
 
 
+# Manage-task strict directive — addresses stuck-loop bailouts on audit-style
+# manage tasks (Phase v1.1 B2). The nothing-ever-happens-manage-deps-audit
+# failure mode: model reads requirements.txt, then loops on identical file
+# reads, hits the 2-consecutive-repeat-step abort, no diff produced. The
+# overlay pushes for distinct-args enumeration and writing the deliverable
+# early instead of indefinite reading.
+_MANAGE_STRICT_TASK_PREFIX = (
+    "This is a manage / audit task. Two specific failure modes to defend "
+    "against:\n"
+    "- Re-reading the same file multiple times: the loop detector treats "
+    "identical tool calls as stuck behavior and aborts after 2 consecutive "
+    "repeat steps. Pick distinct files or distinct line ranges per read; "
+    "each tool call should explore something new.\n"
+    "- Reading without writing: this task's deliverable is a concrete "
+    "committed diff (e.g. a SECURITY-AUDIT.md), not survey prose. Don't "
+    "end the run without `edit_file` or `write_file` landing real content.\n\n"
+    "Approach: identify findings ONE AT A TIME. Pick one item (e.g. one "
+    "pinned dependency), look it up, document it as a concrete entry "
+    "(name, version constraint or CVE/advisory id, one-sentence rationale), "
+    "then move to the next. Three concrete findings is enough; you don't "
+    "need to enumerate every item. Commit the deliverable file before "
+    "stopping.\n\n"
+) + _BASELINE_TASK_PREFIX
+
+
 PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "baseline": PromptVariant(
         system=_BASELINE_SYSTEM,
@@ -180,6 +205,10 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "document_strict": PromptVariant(
         system=_BASELINE_SYSTEM,
         task_prefix=_DOC_STRICT_TASK_PREFIX,
+    ),
+    "manage_strict": PromptVariant(
+        system=_BASELINE_SYSTEM,
+        task_prefix=_MANAGE_STRICT_TASK_PREFIX,
     ),
 }
 
@@ -234,6 +263,13 @@ TASK_OVERLAYS: dict[str, TaskOverlay] = {
     # multi-component goal). Other task types fall through to role default.
     "document_strict_only": TaskOverlay(by_task={
         "document": "document_strict",
+    }),
+    # manage_strict_only — applies the manage_strict variant on manage tasks
+    # specifically. Phase v1.1 B2: addresses the nothing-ever-happens-manage-
+    # deps-audit stuck-loop (model reads requirements.txt repeatedly, hits
+    # the loop detector, no diff produced). Other task types fall through.
+    "manage_strict_only": TaskOverlay(by_task={
+        "manage": "manage_strict",
     }),
 }
 
