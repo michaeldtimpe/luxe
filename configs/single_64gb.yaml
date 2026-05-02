@@ -25,7 +25,13 @@ roles:
     num_ctx: 32768
     max_steps: 30
     max_tokens_per_turn: 8192
-    temperature: 0.2
+    temperature: 0.0    # 2026-05-01 promotion: variance probe showed
+                        # temp=0.2 produced ±2 fixture swings between
+                        # identical bench runs (4-7/10 across 3 baseline
+                        # samples); temp=0 collapses pass/fail vectors to
+                        # deterministic across two back-to-back runs.
+                        # Greedy decoding also lifts implement to 4/4
+                        # ceiling out of the box. See variants_v1_temp0_probe.yaml.
     tools:
       - read_file
       - list_dir
