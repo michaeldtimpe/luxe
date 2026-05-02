@@ -33,16 +33,32 @@ fixtures:
   - id: lpe-rope-calc-document-typing
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/lpe-rope-calc
     base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
-    goal: "Add a module docstring at the top of pe_scan.py and add type hints to every top-level function signature, preserving existing behaviour"
+    goal: "Add a module docstring at the top of pe_scan.py and add type hints to any untyped parameters in top-level function signatures (most are already typed; the remaining untyped ones are the gap), preserving existing behaviour"
     task_type: document
     expected_outcome:
       kind: regex_present
-      pattern: "def \\w+\\([^)]*: ?(?:str|int|float|bool|Path|list|dict|Optional|None)"
-      min_matches: 4          # task says "every top-level function"; pe_scan.py
-                              # has ~6 top-level fns. ≥4 catches partial work.
-      min_added_lines: 6      # docstring + several signature edits
+      pattern: "def \\w+\\([^)]*: ?(?:str|int|float|bool|Path|list|dict|Optional|None|Any|IO|BinaryIO|TextIO)"
+      min_matches: 1          # 2026-05-01 fixture surgery: the original
+                              # min_matches=4 + comment ("~6 top-level fns")
+                              # was wrong; pe_scan.py at 5c6b51f has 14
+                              # top-level defs, 13 already-typed, 1 untyped
+                              # (`f` in _read_gguf_value). ≥1 matches the
+                              # actual gap. Anti-gaming defense moves to
+                              # min_added_lines=4 below — typing one
+                              # parameter alone is 1 added line, which
+                              # would fail the substantive-edit gate; the
+                              # docstring half of the task supplies the
+                              # rest. Pattern widened to accept modern
+                              # types (Any/IO/BinaryIO) since the original
+                              # list excluded legitimate file-handle types.
+      min_added_lines: 4      # forces docstring (3-6 lines) + signature
+                              # edit; typing-only output (2 added lines)
+                              # fails this gate.
     notes: |
       Easy-win document task. Single-file repo; mono mode handles in <2 min once warm.
+      Fixture surgery 2026-05-01: thresholds aligned with actual file state
+      after Phase 0 grader fix exposed that the original min_matches=4 was
+      unmeetable on a base file that already had most signatures typed.
 
   - id: lpe-rope-calc-implement-strict-flag
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/lpe-rope-calc
@@ -103,17 +119,30 @@ fixtures:
   - id: neon-rain-document-modules
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/neon-rain
     base_sha: ef953cc85bead2f09147b99c2a1a2cb2f7d813d0
-    goal: "Create ARCHITECTURE.md at the repo root listing each src/ subdirectory (actions, ai, data, debug, input, phases, render, state, ui) and describing in 1-2 sentences what each one is responsible for. Mention the EventBus or its equivalent if present"
+    goal: "Update ARCHITECTURE.md at the repo root to add a 'Subdirectories' section listing each src/ subdirectory (actions, ai, data, debug, input, phases, render, state, ui) and describing in 1-2 sentences what each one is responsible for. Preserve the existing content; do not replace or restructure the file. Mention the EventBus or its equivalent if present"
     task_type: document
     expected_outcome:
       kind: regex_present
       pattern: "(?i)\\b(actions|phases|render|state|input)\\b"
       min_matches: 5          # forces coverage of multiple subdirs, not 1
-      min_added_lines: 18     # an architecture doc with 9 sections
+      min_added_lines: 12     # 2026-05-01 fixture surgery: was 18 when the
+                              # task was "Create whole file" (an entire
+                              # architecture doc). New task is "add a
+                              # section" — realistic size for a 9-subdir
+                              # bullet section is 11-13 lines (header,
+                              # blank, 9 entries, closing blank). 12
+                              # admits compact correct outputs while still
+                              # rejecting one-line gaming.
     notes: |
       Document task requiring directory-tree exploration. min_matches=5
       defends against a single-line file. Multi-file mid-size repo so the
       model has to navigate, not read one file end-to-end.
+      Fixture surgery 2026-05-01: original "Create ARCHITECTURE.md" goal
+      was misaligned with base_sha (ARCHITECTURE.md exists from the
+      initial commit). The previous wording forced models into a
+      destructive rewrite that triggered destructive_diff. New wording
+      adds a section to the existing file — non-destructive, content
+      requirement unchanged. Threshold realigned to new task size.
 
   # --- 4) isomer — Flask compliance tracker (~110 KB) ----------------------
   - id: isomer-document-quickstart
