@@ -547,6 +547,51 @@ def _changed_files(repo_path: Path, base_sha: str) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+_SHORTSTAT_INS_RX = re.compile(r"(\d+) insertions?\(\+\)")
+_SHORTSTAT_DEL_RX = re.compile(r"(\d+) deletions?\(-\)")
+
+
+def _diff_shortstat(repo_path: Path, base_sha: str) -> tuple[int, int]:
+    """Return (additions, deletions) from `git diff base_sha HEAD --shortstat`.
+
+    Empty diff or git failure → (0, 0). Tolerates --shortstat's omit-when-zero
+    behavior (a pure-add diff has no `deletions(-)` clause and vice versa).
+    """
+    if not base_sha:
+        return 0, 0
+    rc, out = _run(["git", "diff", base_sha, "HEAD", "--shortstat"],
+                   cwd=repo_path)
+    if rc != 0 or not out.strip():
+        return 0, 0
+    ins = _SHORTSTAT_INS_RX.search(out)
+    dels = _SHORTSTAT_DEL_RX.search(out)
+    return (int(ins.group(1)) if ins else 0,
+            int(dels.group(1)) if dels else 0)
+
+
+def _diff_added_text(repo_path: Path, base_sha: str,
+                     changed_files: list[str]) -> str:
+    """Concatenate the `+` lines of `git diff base_sha HEAD -- *changed_files`.
+
+    Used by apply_strict_gates to detect placeholder text in only newly-added
+    content (so pre-existing placeholders elsewhere don't trigger the gate).
+    Strips the leading `+` and skips `+++` file-header markers.
+    """
+    if not base_sha or not changed_files:
+        return ""
+    rc, out = _run(["git", "diff", base_sha, "HEAD", "--", *changed_files],
+                   cwd=repo_path)
+    if rc != 0 or not out:
+        return ""
+    added: list[str] = []
+    for line in out.splitlines():
+        if line.startswith("+++"):
+            continue
+        if line.startswith("+"):
+            added.append(line[1:])
+    return "\n".join(added)
+
+
 # --- main entry ------------------------------------------------------------
 
 def grade_fixture(
@@ -581,7 +626,36 @@ def grade_fixture(
     result.diff_files = len(changed)
     result.diff_produced = bool(changed)
 
+    # Capture diff size for strict-gate inputs and for the diagnostic surface
+    # (Phase 0 Bug 1: these were declared on FixtureResult but never populated,
+    # which kept downstream gate logic from ever seeing the destructive-diff
+    # signal).
+    if base_sha and result.diff_produced:
+        result.diff_additions, result.diff_deletions = _diff_shortstat(
+            repo_path, base_sha)
+
     is_write_task = fixture.task_type in _WRITE_TASK_TYPES
+
+    # Strict gates — fire on the diff itself, before outcome credit. A
+    # write task that triggers any gate (destructive_diff / role_name_leak /
+    # placeholder_diff) cannot pass; the gate detail becomes the failure
+    # reason. Phase 0 Bug 2: apply_strict_gates was defined but never
+    # invoked from grade_fixture, so destructive diffs and placeholder
+    # stubs were silently credited.
+    gate_block: tuple[str, str] | None = None
+    if is_write_task and result.diff_produced:
+        added_text = _diff_added_text(repo_path, base_sha, changed)
+        triggered = apply_strict_gates(
+            task_type=fixture.task_type,
+            file_paths=changed,
+            additions=result.diff_additions,
+            deletions=result.diff_deletions,
+            diff_added_text=added_text,
+        )
+        for name, detail in triggered:
+            result.gates_triggered.append({"name": name, "detail": detail})
+        if triggered and gate_block is None:
+            gate_block = triggered[0]
 
     # Criterion 1: PR opened
     if pr_opened:
@@ -598,7 +672,15 @@ def grade_fixture(
     eo = fixture.expected_outcome
     kind = eo.get("kind", "")
     earned_outcome = 0
-    if is_write_task and not result.diff_produced:
+    if gate_block is not None:
+        # A pre-outcome strict gate fired (destructive diff, role-name leak,
+        # placeholder text). The diff is disqualified regardless of whether
+        # the surface-level outcome would have credited; the gate detail
+        # becomes the failure reason.
+        gate_name, gate_detail = gate_block
+        result.expected_outcome_passed = False
+        result.expected_outcome_detail = f"[{gate_name}] {gate_detail}"
+    elif is_write_task and not result.diff_produced:
         # Refuse to credit: passing tests on unchanged code is a false positive.
         result.expected_outcome_passed = False
         result.expected_outcome_detail = (

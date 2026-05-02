@@ -16,6 +16,8 @@ import pytest
 from benchmarks.maintain_suite.grade import (
     Fixture,
     FixtureResult,
+    _diff_added_text,
+    _diff_shortstat,
     fixture_pass_threshold,
     grade_fixture,
     summarize,
@@ -488,3 +490,224 @@ def test_v1_release_gate_single_variant_unchanged():
     assert s["v1_release_gate"]
     # Empty per-variant dict in the output for back-compat.
     assert s["v1_release_gate_per_variant"] == {}
+
+
+# --- diff stat helpers (Phase 0 grader fix; Bug 1) --
+
+def test_diff_shortstat_basic(git_repo: Path):
+    """Known +5/-3 diff should parse to (5, 3)."""
+    base = _base_sha(git_repo)
+    # +5 lines: extend main.py with 5 new lines.
+    target = git_repo / "src" / "main.py"
+    target.write_text("def add(a, b):\n    return a + b\n"  # was 1 line; now overwriting
+                      "x = 1\ny = 2\nz = 3\nq = 4\nr = 5\n")
+    # That replaced 1 line with 7 → +7/-1. Trim to a clean +5/-3 by adjusting.
+    target.write_text("a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n")  # 5 new lines
+    # Note: original had `def add(a, b): return a + b\n` (1 line). Replacing
+    # with 5 lines → +5/-1. To get +5/-3 we need to start with 3 lines.
+    # Simpler: rewrite the test using a controlled multi-line base.
+    subprocess.run(["git", "reset", "--hard", "-q", base], cwd=git_repo, check=True)
+    target.write_text("L1\nL2\nL3\n")  # 3 lines
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "3-line base"],
+                   cwd=git_repo, check=True)
+    new_base = _base_sha(git_repo)
+    target.write_text("A\nB\nC\nD\nE\n")  # delete 3, add 5 → +5/-3
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "delta"],
+                   cwd=git_repo, check=True)
+
+    adds, dels = _diff_shortstat(git_repo, new_base)
+    assert adds == 5
+    assert dels == 3
+
+
+def test_diff_shortstat_pure_addition(git_repo: Path):
+    """`--shortstat` omits the deletions clause when there are no deletions.
+    The parser must tolerate that and return (N, 0), not crash on missing match."""
+    base = _base_sha(git_repo)
+    (git_repo / "NEW.txt").write_text("a\nb\nc\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "add file"],
+                   cwd=git_repo, check=True)
+
+    adds, dels = _diff_shortstat(git_repo, base)
+    assert adds == 3
+    assert dels == 0
+
+
+def test_diff_shortstat_empty(git_repo: Path):
+    """No diff vs base → (0, 0)."""
+    base = _base_sha(git_repo)
+    adds, dels = _diff_shortstat(git_repo, base)
+    assert adds == 0
+    assert dels == 0
+
+
+def test_diff_shortstat_no_base_sha(git_repo: Path):
+    """Empty base_sha → (0, 0); guards against accidentally diffing whole repo."""
+    adds, dels = _diff_shortstat(git_repo, "")
+    assert adds == 0
+    assert dels == 0
+
+
+def test_diff_added_text_strips_markers(git_repo: Path):
+    """`+++ b/file` headers must be skipped; the leading `+` on real added
+    lines must be stripped from the body."""
+    base = _base_sha(git_repo)
+    target = git_repo / "src" / "main.py"
+    target.write_text("def add(a, b): return a + b\nNEW_LINE_ONE\nNEW_LINE_TWO\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "delta"],
+                   cwd=git_repo, check=True)
+
+    text = _diff_added_text(git_repo, base, ["src/main.py"])
+    # The body of the added lines should appear without `+` prefix; the
+    # `+++ b/src/main.py` header should NOT.
+    assert "NEW_LINE_ONE" in text
+    assert "NEW_LINE_TWO" in text
+    assert "+++ b/src/main.py" not in text
+    # Leading `+` stripped → body shouldn't start with `+`.
+    for line in text.splitlines():
+        assert not line.startswith("+++")
+
+
+def test_diff_added_text_empty_when_no_changed_files(git_repo: Path):
+    """No changed files → empty string (not crash on empty *args to git)."""
+    base = _base_sha(git_repo)
+    text = _diff_added_text(git_repo, base, [])
+    assert text == ""
+
+
+def test_grade_fixture_records_shortstat(git_repo: Path):
+    """grade_fixture must populate result.diff_additions / diff_deletions
+    from `git diff base_sha HEAD --shortstat`. Phase 0 Bug 1 invariant.
+    """
+    base = _base_sha(git_repo)
+    target = git_repo / "src" / "main.py"
+    # Original main.py is `def add(a, b): return a + b\n` (1 line).
+    # Replace with 4 new lines → +4/-1.
+    target.write_text("X1\nX2\nX3\nX4\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "delta"], cwd=git_repo, check=True)
+
+    fix = _f("f1", "regex_present", pattern=r"X\d")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.diff_additions == 4
+    assert r.diff_deletions == 1
+
+
+def test_grade_fixture_shortstat_zero_when_no_diff(git_repo: Path):
+    """No diff → diff_additions and diff_deletions stay 0 (no spurious calls)."""
+    base = _base_sha(git_repo)
+    fix = _f("f1", "regex_present", pattern=r"anything")
+    r = grade_fixture(fix, git_repo, pr_url="", pr_opened=False,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.diff_additions == 0
+    assert r.diff_deletions == 0
+
+
+# --- strict gates wired into grade_fixture (Phase 0 Bug 2) --
+
+def test_destructive_diff_blocks_write_task_pass(git_repo: Path):
+    """Reproduce the gut-the-codebase pattern (deletions/additions ≥ 5×,
+    deletions ≥ 30) on a write task; assert outcome=False AND gates_triggered
+    contains destructive_diff. The committed diff would otherwise pass the
+    regex check on the small added lines."""
+    base = _base_sha(git_repo)
+    # Seed a large file to delete from.
+    big = git_repo / "src" / "big.py"
+    big.write_text("\n".join(f"line_{i}" for i in range(50)) + "\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed big file"],
+                   cwd=git_repo, check=True)
+    new_base = _base_sha(git_repo)
+
+    # Now: delete most of big.py, add a small new function in main.py
+    # that satisfies the regex_present pattern. -50/+5 ratio.
+    big.write_text("# all gone\n")  # 1 line; -50/+1 in big.py
+    target = git_repo / "src" / "main.py"
+    target.write_text(target.read_text() + "def new_thing(): return 42\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "destructive"],
+                   cwd=git_repo, check=True)
+
+    fix = _f("f-destruct", "regex_present", task_type="implement",
+             pattern=r"def new_thing")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0,
+                      base_sha=new_base)
+    assert r.expected_outcome_passed is False
+    gate_names = [g.get("name", g.get("gate", "")) for g in r.gates_triggered]
+    assert "destructive_diff" in gate_names
+    # Score caps at 2 (PR + citations); outcome is blocked.
+    assert r.score == 2
+
+
+def test_placeholder_diff_blocks_write_task_pass(git_repo: Path):
+    """A diff containing placeholder text (e.g. 'your X code here') must
+    block outcome credit on write tasks."""
+    base = _base_sha(git_repo)
+    target = git_repo / "src" / "main.py"
+    target.write_text(target.read_text()
+                      + "def widget():\n    # your widget code here\n    pass\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "stub"], cwd=git_repo, check=True)
+
+    fix = _f("f-placeholder", "regex_present", task_type="implement",
+             pattern=r"def widget")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed is False
+    gate_names = [g.get("name", g.get("gate", "")) for g in r.gates_triggered]
+    assert "placeholder_diff" in gate_names
+
+
+def test_clean_write_task_gates_dont_fire(git_repo: Path):
+    """A clean, non-destructive, non-placeholder diff should pass without
+    triggering any pre-outcome gate. Sanity check that we haven't broken
+    happy-path passes."""
+    base = _base_sha(git_repo)
+    target = git_repo / "src" / "main.py"
+    target.write_text(target.read_text()
+                      + "def helpful():\n    return 'work done'\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "clean"], cwd=git_repo, check=True)
+
+    fix = _f("f-clean", "regex_present", task_type="implement",
+             pattern=r"def helpful")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed is True
+    gate_names = [g.get("name", g.get("gate", "")) for g in r.gates_triggered]
+    assert "destructive_diff" not in gate_names
+    assert "placeholder_diff" not in gate_names
+    assert "role_name_leak" not in gate_names
+
+
+def test_read_only_task_gates_skip(git_repo: Path):
+    """Read-mode tasks (review, summarize) skip strict gates entirely; a
+    diff with destructive shape should not be penalized for a task type
+    that wasn't supposed to produce a diff in the first place."""
+    base = _base_sha(git_repo)
+    big = git_repo / "src" / "big.py"
+    big.write_text("\n".join(f"line_{i}" for i in range(50)) + "\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=git_repo, check=True)
+    new_base = _base_sha(git_repo)
+    big.write_text("# nope\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "destructive on review task"],
+                   cwd=git_repo, check=True)
+
+    # Review task — should NOT block on destructive_diff, since the task
+    # type indicates the agent wasn't supposed to be writing in the first
+    # place; that's an upstream issue for a separate gate.
+    fix = _f("f-review", "manual_review", task_type="review",
+             criteria="anything goes")
+    r = grade_fixture(fix, git_repo, pr_url="", pr_opened=False,
+                      citations_unresolved=0, citations_total=0,
+                      base_sha=new_base)
+    gate_names = [g.get("name", g.get("gate", "")) for g in r.gates_triggered]
+    assert "destructive_diff" not in gate_names
