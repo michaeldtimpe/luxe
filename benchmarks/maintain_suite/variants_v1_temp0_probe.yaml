@@ -1,0 +1,44 @@
+# Variance-source probe — pin temperature=0 to test if baseline
+# variance is sampling-driven or environmental.
+#
+# Context (2026-05-01): three baseline resamples on identical config
+# came in at 5, 7, 4 across runs — a 3-fixture spread that broke
+# Branch B's projection math. Need to know if dropping temperature to
+# 0 (greedy sampling) collapses that variance before committing to
+# Branch B's wall-time cost.
+#
+# Hypothesis: at temp=0 the model decodes greedily, so given identical
+# prompts + tool results the output is deterministic. Residual run-to-
+# run variance would have to come from environmental sources: bash
+# tool output (timestamps, paths), prefix-cache state, tool-result
+# ordering, etc.
+#
+# Read of the result:
+# - If temp=0 collapses pass-count variance to near-zero across 2 runs:
+#   sampling was the dominant variance source. Either pin temp=0 in
+#   production or accept that real-world deployments will see this
+#   variance. Branch B can proceed with a low-temp variant pair to
+#   make the overlay vs control comparison clean.
+# - If variance persists at temp=0 (e.g. ±2 fixtures across 2 runs):
+#   non-determinism is environmental. Investigate before committing
+#   to Branch B; a noisy ground truth makes any 1-fixture overlay
+#   delta indistinguishable from noise.
+#
+# Run (twice, back-to-back, comparing pass counts and which fixtures
+# pass each time):
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_v1_temp0_probe.yaml \
+#       --output acceptance/v1_temp0_probe_a \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_v1_temp0_probe.yaml \
+#       --output acceptance/v1_temp0_probe_b \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# 1 variant × 10 fixtures × 2 runs = 20 runs total. Expect ~1-2h wall.
+
+variants:
+  - {model_label: qwen3.6-35b-a3b-6bit, model_id: Qwen3.6-35B-A3B-6bit, temperature: 0.0}
