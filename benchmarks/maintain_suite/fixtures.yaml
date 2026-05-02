@@ -200,11 +200,23 @@ fixtures:
     task_type: document
     expected_outcome:
       kind: regex_present
-      pattern: "(?i)\\b(os\\.environ|getenv|env\\[|process\\.env)"
+      # Branch C calibration 2026-05-01: original pattern required Python
+      # idiom quotes (os.environ / getenv / env[ / process.env) which
+      # excluded prose-style docs that document env vars by NAME with
+      # file:line citations rather than quoting the Python expression.
+      # Real failure mode this fixed: probe_b's 136-line CONFIG.md (52
+      # env vars, full markdown tables, file:line citations) scored 0
+      # matches and failed. Post-calibration: the pattern is OR'd with
+      # `\b[A-Z_]{2,}[A-Z0-9_]{3,}\b` (UPPER_SNAKE_LIKE token). Composite
+      # accepts both code-quote and prose-style docs; min_added_lines=20
+      # remains the substantive-edit defense against vacuous output.
+      # Justification + (a)/(b)/(c) gate entry in lessons.md.
+      pattern: "(?i)(?:os\\.environ|getenv|env\\[|process\\.env)|\\b[A-Z_]{2,}[A-Z0-9_]{3,}\\b"
       min_matches: 3          # forces enumeration of multiple env vars
       min_added_lines: 20     # a real config doc, not a stub
     notes: |
       Document/manage hybrid on the largest Python repo. The model must
       grep for env reads across the codebase, not pattern-match on a single
       file. min_matches=3 + 20 added lines defends against listing one var
-      in a sentence and stopping.
+      in a sentence and stopping. Pattern accepts either Python idiom
+      quotes OR markdown-style UPPER_SNAKE env var names.
