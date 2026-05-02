@@ -1,0 +1,50 @@
+# Phase v1.1 B1 — document-task strict overlay probe.
+#
+# v1.0 ship landed at 8/10 with the only doc-task FAIL being
+# lpe-rope-calc-document-typing (model added 1 line and stopped, despite
+# a multi-component goal asking for both a module docstring AND type
+# hints). The probe tests whether a doc-specific overlay
+# (document_strict_only — see prompts.py) pushes the model to address
+# every component of the goal.
+#
+# 2 cells × 5 fixtures (the doc-task subset) = 10 runs. Expect 10-20 min
+# wall depending on model variance.
+#
+# Run:
+#   python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_v1_doctask_overlay_probe.yaml \
+#       --output acceptance/v1_doc_overlay_probe \
+#       --id lpe-rope-calc-document-typing \
+#       --id the-game-document-architecture \
+#       --id neon-rain-document-modules \
+#       --id isomer-document-quickstart \
+#       --id nothing-ever-happens-document-config \
+#       --per-fixture-timeout 1800
+#
+# Pass criteria (Phase v1.1 plan B1):
+# 1. lpe-typing PASS (gate-level: regex matches AND min_added_lines clears).
+# 2. No regression on the 4 other document fixtures (re-run all 5).
+# 3. No-op-edit spot check on lpe-typing — read the diff and confirm the
+#    model produced REAL work (a docstring with content, typed parameters
+#    with reasonable types) rather than gaming the "MUST call edit_file"
+#    directive with a trivial file-touch.
+#
+# If pass criteria met → promote document_strict_only into
+# configs/single_64gb.yaml's monolith role and run a 10-fixture
+# confirmation. If not → document the negative result in lessons.md
+# (Phase 1 already showed structural prompts regress doc/manage at
+# temp=0.2; this is the temp=0 verification of whether a TARGETED doc
+# overlay is different).
+
+variants:
+  # Control — re-runs baseline on the same 5 fixtures so the noise floor
+  # is captured in the same wall window. At temp=0 the per-fixture pass/
+  # fail vector is deterministic, but having the control row in the
+  # comparison table makes regressions immediately legible.
+  - {model_label: champ-baseline-control,    model_id: Qwen3.6-35B-A3B-6bit}
+
+  # The overlay test: document_strict_only fires on document tasks;
+  # other task types fall through to role default (baseline). Since
+  # this YAML restricts to doc fixtures via --id, every fixture in this
+  # probe gets the overlay.
+  - {model_label: champ-document-strict,     model_id: Qwen3.6-35B-A3B-6bit, task_overlay_id: document_strict_only}
