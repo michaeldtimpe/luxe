@@ -1,0 +1,43 @@
+# Phase v1.1 — overlay A/B with pinned work_dir (variance experiment).
+#
+# Goal: with the work_dir variance source eliminated (pinned default
+# in run.py), measure the manage_strict_only overlay's effect cleanly.
+#
+# Cell 1 (champ-no-overlay): uses prod config as-is (currently
+# overlay is COMMENTED OUT in single_64gb.yaml pending this experiment).
+# Cell 2 (champ-manage-strict): sets task_overlay_id: manage_strict_only
+# via variant override (run.py:178 line wins over prod config).
+#
+# 10 fixtures × 2 cells = 20 runs. Expected ~50-60 min wall (each run
+# ~2-5 min depending on fixture).
+#
+# Run (work_dir is now pinned by default; no flag needed):
+#   .venv/bin/python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_v1_overlay_ab_pinned.yaml \
+#       --output acceptance/v1_1_overlay_ab_pinned \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# Pass criteria for the experiment (NOT for v1.1 ship — that's
+# downstream):
+# - On the pinned substrate, does the overlay reliably close
+#   nothing-ever-happens-manage-deps-audit (cell 2 PASS, ideally
+#   on first try without retry)?
+# - Does the overlay leave the 9 other fixtures untouched (cell 2
+#   matches cell 1 on impl/document fixtures, since manage_strict_only
+#   only fires on `manage` task type)?
+#
+# If overlay reliably closes deps-audit AND no regressions: ship v1.1
+# at 9/10 (cell 2 hits the gate). Re-promote task_overlay_id:
+# manage_strict_only into configs/single_64gb.yaml as the production
+# default.
+#
+# If overlay still flips probabilistically on deps-audit: the overlay
+# is a probabilistic helper, not a reliable fix. Decision becomes
+# strategic — ship v1.1 anyway given the +0.5/run expected value, or
+# defer to v2.0 architecture work where the deps-audit failure mode
+# can be addressed at infrastructure level.
+
+variants:
+  - {model_label: champ-no-overlay,    model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: champ-manage-strict, model_id: Qwen3.6-35B-A3B-6bit, task_overlay_id: manage_strict_only}
