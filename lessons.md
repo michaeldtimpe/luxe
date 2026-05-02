@@ -211,3 +211,55 @@ The hypothesis is testable in 1-3 hours of bench wall: if the overlay composes b
 The lesson behind the lesson: aggregate metrics over a variant matrix are often nonsense for ship decisions. The same shape of bug would apply to any "≥X total" gate run over multi-cell sweeps — average wall, average tokens, etc. None of those should be summed across variants without thought.
 
 **Affected files**: `benchmarks/maintain_suite/grade.py` (`summarize()`), `benchmarks/maintain_suite/run.py` (call site + print site), `tests/test_acceptance_grader.py` (3 regression tests).
+
+---
+
+### [2026-05-01] Phase 0 — grader had two latent bugs silently inflating PASS counts
+
+**What happened**: While hand-grading `acceptance/v1_temp0_probe_b` (10-fixture, temp=0 deterministic baseline), we found that `result.json` recorded `diff_additions: 0, diff_deletions: 0` on every fixture even when the actual `git diff base..HEAD --shortstat` showed e.g. `+8/-839`. We also found `gates_triggered: []` on every fixture — including a probe_a-era run that genuinely deleted 837 lines of `Game.js` to make `npm test` return rc=0. The strict gates (`destructive_diff`, `role_name_leak`, `placeholder_diff`) that RESUME.md described as "in place" were not firing on any fixture.
+
+**Root cause**: Two independent omissions in `benchmarks/maintain_suite/grade.py`:
+
+- **Bug 1**: `FixtureResult.diff_additions` and `diff_deletions` were declared on the dataclass (defaulting to 0) but never populated anywhere. There was no call to `git diff --shortstat` in the grader at all. The fields existed as placeholders for downstream tooling that never landed.
+- **Bug 2**: `apply_strict_gates()` was correctly implemented (lines 329-354) but was **never invoked from `grade_fixture()`**. The function wired up `check_destructive_deletion` / `check_role_name_leak` / `check_placeholder_text` and returned the right shape, but the call site was missing. Only the outcome-conditional gates (`vacuous_test`, `orphan_file`) — which fire post-outcome-pass on a different code path — ever ran.
+
+Both bugs were latent across every prior bake-off in `RESUME.md`'s history table. PASSes that involved destructive diffs or placeholder stubs were silently credited.
+
+**Fix / takeaway**: Three commits.
+
+- **Commit 1** — added `_diff_shortstat(repo_path, base_sha) -> tuple[int, int]` and `_diff_added_text(repo_path, base_sha, changed_files) -> str` helpers near `_changed_files`. Both tolerate empty diff and missing base_sha.
+- **Commit 2** — wired `_diff_shortstat()` into `grade_fixture()` so `result.diff_additions` / `result.diff_deletions` reflect real shortstat output.
+- **Commit 3** — added the `apply_strict_gates()` call in `grade_fixture()` after the shortstat capture. When any gate fires on a write task, `expected_outcome_passed = False` and the gate detail prepends to `expected_outcome_detail`. The gates are skipped for read-mode tasks (review, summarize) — they shouldn't produce diffs in the first place; that's a separate upstream concern.
+
+Sidecar regrade against `acceptance/v1_temp0_probe_b` after Commit 3: exactly one fixture flipped — `neon-rain-document-modules` (4P→1F) via `destructive_diff` (118 deletions / 22 additions = 5.36×, above the 5.0× threshold). The model rewrote a pre-existing 132-line `ARCHITECTURE.md` to 36 lines of new (task-appropriate) content. The gate firing here is the correct behavior; the fixture itself is suspect because the task wording says "Create" but the file already exists at base_sha. That's a Phase 2 fixture-surgery issue, not a gate-tuning issue. Other 9 fixtures graded the same way before and after.
+
+The deeper lesson: **infrastructure that was "added" can still be unwired**. Bug 2 wasn't a code mistake — `apply_strict_gates` is well-formed. The mistake was the integration glue. RESUME.md saying "Strict gates currently in place" had a piece-by-piece checklist of WHICH gates exist; what it didn't track was whether they were CALLED. For any future "we added gate X" claim: assert in tests that the gate fires from the expected entry point on the expected inputs, not just that the gate function returns the right value when invoked directly.
+
+True real-PASS at temp=0 against the fixed grader: **5/10** (was printing 6/10). Per task type: implement 4/4, document 1/5, manage 0/1.
+
+**Affected files**: `benchmarks/maintain_suite/grade.py` (`_diff_shortstat`, `_diff_added_text`, `grade_fixture` populates diff stats and invokes `apply_strict_gates`), `tests/test_acceptance_grader.py` (10 new tests across the three commits), `scripts/regrade_local.py` (new — sidecar tool for re-grading existing acceptance runs without re-running luxe).
+
+---
+
+### [2026-05-01] Don't read `origin/<branch>` in offline-cache repos — use the local branch ref
+
+**What happened**: While diagnosing probe_b results, we read `git diff base_sha..origin/luxe/implement/<branch>` against the offline fixture cache to inspect each run's pushed diff. Several "PASSes" appeared destructive: `neon-rain-implement-reset-shortcut` showed `+8/-839` (Game.js gutted to 3 lines), `the-game-implement-shuffle-shortcut` showed only Python stubs in a JS repo with a commit message reading "(No changes were made as no findings survived validation.)", `isomer-document-quickstart` showed -148 line README rewrite. We classified 3 of 6 PASSes as false positives, called real-PASS 3/10, and built a strategic argument that the grader was 50% inflated and probe_b was largely gamed.
+
+When the sidecar regrade tool ran the grader directly against the actual local branches in the cache (via `git clone --local`), it reported entirely different diff shapes: `+11/0` for neon-rain-reset (a clean `keydown`/`game:restart` event-bus wiring), `+14/-1` for the-game-shuffle (a real App.jsx keydown handler with INPUT/TEXTAREA guards), `+4/-3` for isomer-quickstart (genuinely terse, but not destructive).
+
+**Root cause**: The fixture cache at `~/.luxe/fixture-cache/<repo>` was originally cloned from GitHub (pre-2026-05-01 offline switch). It still had remote-tracking refs pointing to GitHub: `refs/remotes/origin/luxe/implement/<branch>` carrying old commits from prior runs (some of which WERE genuinely destructive, e.g. the `2026-04-29` neon-rain run that did gut Game.js). After the 2026-05-01 offline switch, `repo_url` in `fixtures.yaml` became a local path, and luxe's `git push` during a run targeted `origin = /local/path`. That push lands in the cache's LOCAL branch namespace — `refs/heads/luxe/...` — not the remote-tracking namespace. Local and remote-tracking refs with the same branch name are now divergent: local = newest run's commit, remote-tracking = stale GitHub state.
+
+`git diff base..origin/<branch>` resolves to the remote-tracking ref. Reading those was reading the historical state, not the current run. `git clone --local <cache>` (used by the sidecar) copies the cache's LOCAL branches to the new clone's `origin/<branch>` namespace — which is why the sidecar gets the right answer while a direct cache read does not.
+
+**Fix / takeaway**: When inspecting the latest run's commit in an offline-cache fixture repo, **use the local branch name, not `origin/<branch>`**. Either:
+
+- `git -C <cache> diff <base>..<branch>` (uses the local ref); or
+- `git -C <cache> diff <base>..refs/heads/<branch>` to be explicit.
+
+Generalizing: any time a workflow's "remote" is the same physical disk as the workflow's actor (offline cache, local mirror, etc.), the local-vs-remote-tracking distinction in git collapses in semantics but persists in the ref namespace. Stale `origin/...` refs from a past life of the repo will linger and silently mislead reads. The defense is to either prune them (`git remote prune origin` or `git push --prune`) or to never rely on `origin/<branch>` resolution in such setups.
+
+The investigation cost: this misreading drove a half-day's worth of strategic analysis (a "real-PASS 3/10, grader 50% inflated, the model is gaming aggressively" thread) that turned out to be wrong. The actual probe_b real-PASS is 5/10, the grader's PASSes are mostly genuine, and the model's behavior at temp=0 is significantly better than the misreading suggested. Specifically, the strategic implication for Branch B's 8/10 ship-gate math changes — a 5/10 baseline is closer to the gate than 3/10, and the per-task ceiling at temp=0 is implement 4/4 (already saturated, which obsoletes the `implement_via_cot` overlay).
+
+The methodology rule: **before drawing strategic conclusions from grading data, regrade through the same code path the bench uses**. The sidecar regrade tool (`scripts/regrade_local.py`) is now the canonical way to do this without paying the agent-loop's wall-time cost. Manual `git diff` against a cache repo is fine for code-shape spot checks but is NOT a substitute for sidecar regrade when classifying real PASS vs false positive.
+
+**Affected files**: `scripts/regrade_local.py` (new tool that does this correctly); none of the corrected `git diff` semantics required code changes — it's a workflow change.

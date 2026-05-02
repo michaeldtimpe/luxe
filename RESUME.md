@@ -1,9 +1,14 @@
 # luxe — session resume document
 
 Snapshot for picking up cross-session. Reflects state at HEAD `9b38d93`
-(2026-05-01) — Phase 1 prompt-shaping sweep complete, Branch B
-implementation committed but **not yet run**. The next launchable
-action is the Branch B sweep against the new variant file.
++ uncommitted Phase-0 grader fixes (2026-05-01 evening). The bench
+infrastructure went offline-only (fixtures cloned from a local cache,
+no network needed) and the v1 acceptance grader had two latent bugs
+fixed (Bugs 1+2; see `lessons.md`). Branch B was queued to launch but
+deferred: at temp=0 the implement category hits 4/4 baseline, which
+*obsoletes* the `implement_via_cot` overlay. Real strategic question
+shifted from "lift implement" to "lift doc/manage" — which the
+existing overlay set doesn't address.
 
 ---
 
@@ -14,16 +19,24 @@ on `localhost:8000`). Takes a goal + repo, opens a PR. **Mono-only as
 of v1.0** — single model, single agent loop, single `luxe maintain`
 command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
-**What's in flight:** the v1.0 release path. The 10-fixture acceptance
-suite needs **≥8/10 PASSes** to ship. Current best is 7/10 (baseline,
-2026-05-01 sweep). Phase 1 prompt-shaping showed structural prompts
-(CoT, SoT, HADS) lift `implement` to a 4/4 ceiling but regress
-`document` and `manage` — no cell beat baseline overall. Branch B
-(per-task-type overlays, applies CoT only to implement+bugfix) is
-implemented and queued; expected to compose baseline's doc/manage
-performance with the implement ceiling for an 8/10 projection.
+**What's in flight:** v1.0 release path. The 10-fixture acceptance
+suite needs **≥8/10 PASSes** to ship. The post-grader-fix temp=0
+baseline is **5/10 stable** (variance was sampling-driven; pinning
+temp=0 collapsed the 4-7 spread to a deterministic vector). Per task
+type: implement 4/4, document 1/5, manage 0/1.
 
-**Resume command** is at the bottom — launches the Branch B sweep.
+**Open questions:** (a) whether the destructive_diff gate firing on
+`neon-rain-document-modules` is a true positive or a fixture-design
+defect (file existed at base despite "Create" task — Phase 2 fixture
+surgery), (b) whether `nothing-ever-happens-document-config`'s
+gate-side miss (real CONFIG.md, regex too narrow) warrants Branch C
+calibration, (c) whether the doc/manage bottleneck is reachable at
+all by prompt overlays since Phase 1 showed structural prompts
+*regress* doc/manage.
+
+**Iteration model:** all grader iteration uses the sidecar regrade
+tool (`scripts/regrade_local.py`) against existing acceptance dirs.
+Full bench re-runs reserved for end-of-phase confirmation only.
 
 ---
 
@@ -35,13 +48,20 @@ Every model claim goes through:
 2. Read the printed comparison table — `pass/fail/wall/tokens/bailouts`
    per cell. (As of `c6a83c6` the per-fixture output also shows
    `[HH:MM:SS] N/total ETA ~Xmin` headers.)
-3. **Inspect every PASS PR by hand** via `gh pr diff`. Historical false-
-   positive rate is 30-50% even with the tighter grader.
-4. Strict regrade with `scripts/regrade_phase2.py` for an automated
-   sanity check on diff shape.
+3. **Inspect every PASS PR by hand** via the actual local-branch ref
+   in the offline cache: `git -C ~/.luxe/fixture-cache/<repo> diff
+   <base_sha>..<branch_name>`. **Do NOT use `origin/<branch>` —** the
+   cache's stale GitHub-tracking refs point to old runs and silently
+   mislead. Branch name is in `~/.luxe/runs/<run_id>/pr_state.json`.
+4. Sidecar regrade with `scripts/regrade_local.py --output <dir>`
+   for fast, faithful re-grading without re-running luxe (seconds vs
+   60-120 min). Reads cache LOCAL branches via `git clone --local`,
+   which sidesteps the stale-ref trap.
 
 Real PASS count is always ≤ printed count. Every historical bake-off
-has had at least one false-positive PASS.
+has had at least one false-positive PASS — and as of Phase 0 the
+strict gates (destructive_diff, role_name_leak, placeholder_diff)
+actually fire at grading time, which they previously didn't.
 
 ---
 
@@ -109,12 +129,21 @@ symlinks land: `brew services restart omlx`.
 | Granite-4.1 (3b only) | 04-30 | granite-4.1-3b-bf16 | 1/10 real (model too small for the loop) |
 | v1 baseline (post P0 fixes) | 04-30 | qwen3.6-35B-A3B-6bit | 5/10 (then 7/10 on 05-01 re-run; sampling variance is real at N=10) |
 | **Phase 1 prompt-shaping** | **05-01** | **6 cells: baseline + baseline-rp + cot + sot + hads + combined-rp** | **baseline 7/10; structural variants uniformly 4/4 implement but regressed doc/manage; no Gate A winner** |
+| **temp=0 baseline (Phase 0 grader fixed)** | **05-01 PM** | **qwen3.6-35B-A3B-6bit @ temp=0** | **5/10 stable across 2 runs; per-task: impl 4/4, doc 1/5, manage 0/1** |
 
 Full results: `acceptance/<phase>/comparison.json` per phase dir.
 
+> **Caveat on pre-Phase-0 results**: every row above 04-30 was graded
+> against a grader that didn't fire its strict gates (Bug 2 — see
+> `lessons.md`). The "real PASS leader" column is approximately right
+> for top-of-table comparisons but the absolute pass counts almost
+> certainly include 1-2 false positives per cell that destructive_diff
+> would have caught. Re-grade with `scripts/regrade_local.py` if the
+> historical numbers are load-bearing for a decision.
+
 ---
 
-## Phase 1 outcome (the table that matters)
+## Phase 1 outcome (pre-Phase-0-grader, retain for context)
 
 `acceptance/prompt_shaping/comparison.json`:
 
@@ -127,11 +156,26 @@ Full results: `acceptance/<phase>/comparison.json` per phase dir.
 | champ-hads | **4** | 1 | 0 | 5 |
 | champ-combined-rp | **4** | 1 | 0 | 5 |
 
+> These numbers were graded **before** the Phase 0 grader fixes. Each
+> cell almost certainly has 1-2 false-positive PASSes that
+> `destructive_diff` / `placeholder_diff` would now catch. Re-grade
+> with `scripts/regrade_local.py --output acceptance/prompt_shaping`
+> to get current-grader numbers if the comparison is load-bearing.
+
 Hidden inside: every prompt-shaped variant cleared the implement
-ceiling (4/4) — including `lpe-rope-calc-implement-strict-flag`, which
-baseline misses. The composition hypothesis (Branch B) is: apply the
-implement-friendly framing only on implement+bugfix, keep baseline on
-docs/manage. Projected to **8/10** if baseline's 3+1 doc/manage holds.
+ceiling (4/4). Original Branch B hypothesis was: apply the implement-
+friendly framing only on implement+bugfix, keep baseline on
+docs/manage; projected to 8/10 if baseline's 3+1 doc/manage held.
+
+**That hypothesis is now obsolete.** The 2026-05-01 PM temp=0 baseline
+showed implement is already at 4/4 at temp=0 without any structural
+prompt — the implement gain Phase 1 attributed to CoT/SoT/HADS was
+plausibly a baseline-variance artifact (Phase 1 ran at temp=0.2; the
+sampling variance there explained baseline swinging 5→7 between
+identical runs). The implement category being saturated at temp=0
+means the `implement_via_cot` overlay has nothing to lift; promoting
+it would not improve the gate. The real bottleneck is doc (1/5) and
+manage (0/1), and Phase 1 showed structural prompts *regress* both.
 
 ---
 
@@ -146,8 +190,12 @@ captured as retry-able `ToolCall.error` strings instead of escaping
 `neon-rain-document-modules` at wall=0s/tokens=0.
 
 Post-PR strict gates (`benchmarks/maintain_suite/grade.py`):
-`destructive_diff`, `role_name_leak`, `placeholder_diff`, `vacuous_test`,
-`orphan_file` (catches the granite-3b `.ts`-next-to-`.js` exploit).
+`destructive_diff`, `role_name_leak`, `placeholder_diff` — fire
+**pre-outcome** on write tasks (Phase 0 fix; previously these were
+defined but never invoked from `grade_fixture`, so silently no-op).
+`vacuous_test`, `orphan_file` — fire post-outcome-pass on
+implement-task `tests_pass` outcomes specifically. `destructive_diff`
+threshold: deletions/additions ≥ 5.0 AND deletions ≥ 30.
 
 Grader-level controls per fixture: `expected_outcome.min_matches` and
 `expected_outcome.min_added_lines`. Diff-aware: `_check_regex_present`
@@ -166,13 +214,22 @@ Bailout categorization: `_classify_bailout` produces `stuck_after_done` /
 
 ## Bench output
 
-Per-fixture (as of `c6a83c6`):
+Per-fixture (as of token-split change):
 ```
 ━━━ run 53/60  [19:43:35]  ETA ~24min  [variant]  fixture  [task_type]  goal...
       grading: ...
   → invoking `luxe maintain` (variant)
-  PASS  [19:46:12 +2:37]  score=5/5  wall=157s  tokens=82583  ...
+  PASS  [19:46:12 +2:37]  score=5/5  wall=157s  tokens=68k/15k/83k  gen_tps~96  ...
 ```
+
+`tokens=in/out/total` — prompt vs completion vs sum, sourced from the
+oMLX `usage` block summed over chat turns. `gen_tps~` is the wall-
+bounded decode estimate (`completion_tokens / wall_s`); the tilde
+flags that it includes tool-execution and inter-turn overhead, so it
+understates raw MLX decode speed. Real prefill/decode TPS requires the
+streaming-backend refactor (stage 2 of the token-telemetry work) — see
+`scripts/`/no plan written yet. Captured per cell in `comparison.json`
+as `avg_prompt_tokens`, `avg_completion_tokens`, `gen_tps_wall`.
 
 Token-interval progress logging fires every 5000 completion tokens
 (via `LUXE_TOKEN_LOG_INTERVAL`; 0 disables). Captured in
@@ -180,58 +237,64 @@ Token-interval progress logging fires every 5000 completion tokens
 
 ---
 
-## Resume command — Branch B sweep
+## Resume command — sidecar regrade against fixed grader
+
+The previous "Branch B sweep" resume command is **deferred** (Branch B's
+hypothesis is obsolete at temp=0; see "Phase 1 outcome" caveat above).
+The next launchable action is a sidecar regrade pass to confirm the
+post-Phase-0 grader's results across both probe runs:
 
 ```bash
 cd /Users/michaeltimpe/Downloads/luxe
 
-# Confirm oMLX state
-.venv/bin/python -c "
-from luxe.backend import Backend
-b = Backend(); listed = set(b.list_models())
-m = 'Qwen3.6-35B-A3B-6bit'
-print(f'  {\"✓\" if m in listed else \"✗\"} {m}')
-"
-# If ✗: brew services restart omlx
+# oMLX is not required for sidecar regrade — pure repo state inspection.
+python scripts/regrade_local.py --output acceptance/v1_temp0_probe_a
+python scripts/regrade_local.py --output acceptance/v1_temp0_probe_b
+```
 
+Each regrade takes seconds, not minutes. Output: `result_regraded.json`
+written next to each fixture's `result.json`, plus a summary table on
+stdout. Expected: 5/10 PASS for both probes (one fixture flips vs the
+stored 6/10 — `neon-rain-document-modules` via `destructive_diff`).
+
+**Optional E2E confirmation (~60-90 min)**: a single fresh bench run
+against the fixed grader — only worth doing if you want to verify the
+sidecar's regrade matches a from-scratch run end-to-end:
+
+```bash
 python -m benchmarks.maintain_suite.run \
-    --variants benchmarks/maintain_suite/variants_task_type_overlay.yaml \
-    --output acceptance/task_type_overlay \
+    --variants benchmarks/maintain_suite/variants_v1_temp0_probe.yaml \
+    --output acceptance/v1_temp0_probe_post_grader_fix \
     --per-fixture-timeout 1800 \
     --all
 ```
 
-2 cells × 10 fixtures = 20 runs. Expect **1-3h wall** based on Phase 1
-averages.
-
-**Promotion criterion** (locked, see `~/.claude/plans/task-type-overlays.md`):
-- `champ-implement-via-cot` real-PASS ≥ 8/10
-- AND beats `champ-baseline-control` by ≥1 fixture pass
-- The bench will print `v1 release : YES (cleared by: <cell>)` when
-  the per-cell gate fires.
-
 ---
 
-## After-the-bench checklist
+## After-the-bench checklist (post-Phase-0)
 
-1. Read the comparison table — note pass count and which cell cleared.
-2. **Hand-grade every PASS PR** with `gh pr diff --repo <owner/repo>
-   <num>`. Pay particular attention to the new doc/manage passes — the
-   structural prompts being suppressed there is the entire Branch B
-   hypothesis.
-3. If `champ-implement-via-cot` ≥ 8/10 AND beats control by ≥1: **ship
-   v1.0**:
-   - Add `task_overlay_id: implement_via_cot` to `configs/single_64gb.yaml`'s
-     `roles.monolith` block.
-   - Run a 1-cell × 10-fixture confirmation against the production config.
-   - If still 8/10, bump `pyproject.toml` `version` from `1.0.0.dev0` to
-     `1.0.0`. Tag `v1.0.0`. Push.
-   - Append the v1-ship entry to `lessons.md`.
-4. If overlay ties baseline at 7/10: re-run once for sample size before
-   deciding (Phase 1 baseline already swung 5→7 between identical runs).
-5. If overlay fails to clear 8/10 even on the second run: fall through
-   to Branch C in the master plan. **`lessons.md` entry required first**
-   per the plan, before any fixture.yaml or configs/ edits.
+1. Read the printed comparison table; note pass count, which cell
+   cleared (if multi-variant), and which gates fired (`destructive_diff`,
+   `placeholder_diff`, `role_name_leak`, `vacuous_test`, `orphan_file`).
+2. **Hand-grade every PASS** by reading the actual local-branch state
+   in the cache: `git -C ~/.luxe/fixture-cache/<repo> diff <base_sha>..<branch_name>`.
+   Branch name from `~/.luxe/runs/<run_id>/pr_state.json`. **Do NOT use
+   `origin/<branch>`** — stale GitHub-tracking refs in the cache point
+   to old runs.
+3. **Pareto reporting** (per `~/.claude/plans/task-type-overlays.md`
+   Verification §4): record `implement` / `document` / `manage` pass
+   counts separately, plus bailout-category distribution. Even when the
+   8/10 ship gate fires, the per-task-type breakdown is the diagnostic
+   surface.
+4. If a multi-variant sweep cleared 8/10 in a single cell: ship per
+   the Branch A path (master plan §Phase 2 Branch A).
+5. If 7/10 or below: don't proceed to Branch B with the existing
+   `implement_via_cot` overlay — it has nothing to lift at temp=0
+   (implement is already 4/4 baseline). Decide between (a) a new
+   overlay targeting doc/manage, (b) Branch C calibration relax for
+   the gate-side miss on `nothing-config`, or (c) accept the gate as
+   unreachable on the current fixture set and shift conversation to
+   fixture surgery / model selection.
 
 ---
 
@@ -239,27 +302,42 @@ averages.
 
 In priority order:
 
-1. **Branch B sweep** — the resume command above. Single launchable
-   action; everything else is downstream.
-2. **F2.3 specprefill_enabled probe** — flip the flag on Qwen3.6-35B-A3B-6bit
+1. **Decide on Branch C calibration for `nothing-config`** — confirmed
+   gate-side failure (model produced 136-line CONFIG.md, regex too
+   narrow). Per `~/.claude/plans/v1-ship-and-prompt-sweep.md` Branch C
+   gate, requires a `lessons.md` entry per fixture with (a) semantic
+   acceptability, (b) failure category, (c) targeted-vs-general
+   justification before any `fixtures.yaml` edits. (a)/(b) are already
+   in the bag; (c) needs to specify the alternate accepting pattern
+   that matches markdown-table UPPER_SNAKE listings without admitting
+   vacuous prose.
+2. **Phase 2 fixture surgery** — `lpe-rope-calc-document-typing`'s
+   base_sha already has type hints (the task is misaligned with the
+   file state); `neon-rain-document-modules`'s base_sha already has
+   `ARCHITECTURE.md` (the task says "Create" but the file exists,
+   forcing the model into a destructive rewrite that triggers the
+   gate). Both want either a new base_sha or a fixture replacement.
+3. **F2.3 specprefill_enabled probe** — flip the flag on Qwen3.6-35B-A3B-6bit
    in `~/.omlx/model_settings.json`, restart oMLX, run a 5-fixture
-   sub-sweep against `acceptance/v1_default_post_fix` numbers. Keep on
-   if median wall drops ≥15% AND no quality regression. Decode-speed
-   lift would make every future bake-off cheaper. See master plan §F2.3.
-3. **F2.1 IFS-lite** — refactor `expected_outcome` into weighted
-   sub-instructions; report Instruction Following Score per cell. Would
-   distinguish "variant X engaged but missed sub-step" from "variant X
-   did nothing" on partial-credit fixtures. Master plan §F2.1.
-4. **F2.2 logprob capture** — 15-min probe to test if oMLX honors
-   `logprobs: true`. If yes, build the capture + analysis path. Master
-   plan §F2.2.
-5. **Drop Gemma-4-26B-A4B** entries from `~/.omlx/model_settings.json`
+   sub-sweep. Keep on if median wall drops ≥15% AND no quality
+   regression. Decode-speed lift would make every future bake-off
+   cheaper. Master plan §F2.3.
+4. **Decide if `pr_opened` (1pt of 5) should remain a gate** when
+   running offline. With local-cache origin (no GitHub remote), every
+   run caps at 4/5 because `gh pr create` fails. Either (a) accept the
+   4-point ceiling for offline runs and adjust the 8/10 threshold, or
+   (b) make `pr_opened` no-op when origin isn't a GitHub host.
+5. **F2.1 IFS-lite** — refactor `expected_outcome` into weighted
+   sub-instructions; report Instruction Following Score per cell.
+   Master plan §F2.1.
+6. **F2.2 logprob capture** — 15-min probe to test if oMLX honors
+   `logprobs: true`. Master plan §F2.2.
+7. **Drop Gemma-4-26B-A4B** entries from `~/.omlx/model_settings.json`
    if still there — ship with empty `chat_template` and fail with HTTP
    400 in the chat-driven loop.
-6. **Hand-grade Phase 1 PASS PRs** if you want to confirm the no-winner
-   verdict beyond the per-cell totals. 33 PASSes across 6 cells; the
-   ones worth checking are the new lpe-strict-flag passes (4 across
-   the structural variants — confirm real work, not regex-gaming).
+8. **Re-grade prior bake-offs with the fixed grader** if their
+   numbers are load-bearing for any decision. `scripts/regrade_local.py
+   --output acceptance/<phase>` walks any prior run dir.
 
 ---
 
@@ -273,9 +351,20 @@ In priority order:
   `~/.omlx/models/` doesn't make it appear in `/v1/models` until restart.
 - **`mlx-community` chat templates are inconsistent.** StarCoder2-3B,
   CodeGemma-2B, Gemma-4-26B-A4B all ship with empty `chat_template`.
-- **Sampling variance at N=10 is large** — Phase 1 baseline went 5→7
-  between identical runs. ±1 fixture deltas between cells are noise.
-  The promotion criterion gates on absolute floor (8/10) for this reason.
+- **Sampling variance at N=10 is large at temp=0.2** — Phase 1 baseline
+  swung 5→7 between identical runs. **At temp=0 the variance collapses
+  to deterministic vectors** (probe_a == probe_b across all 10 fixtures
+  on 2026-05-01 PM). For ship decisions, prefer temp=0 over temp=0.2 —
+  noise floor disappears. Master plan's "±1 deltas are noise" rule
+  applied at temp=0.2; at temp=0 a 1-fixture delta IS the signal.
+- **`origin/<branch>` in offline-cache repos is a stale-ref trap** —
+  `~/.luxe/fixture-cache/<repo>/refs/remotes/origin/...` was populated
+  when the cache was first cloned from GitHub, then never updated.
+  Post-2026-05-01 runs push to local branches (`refs/heads/...`) which
+  do NOT update the remote-tracking refs. Reading
+  `git diff base..origin/<branch>` reads ancient state and silently
+  misleads. Use `git diff base..<branch>` (local ref) or sidecar
+  regrade. Documented in the 2026-05-01 lessons.md entry.
 - **Dense >30B mxfp8 doesn't fit on this hardware tier under load** —
   granite-4.1-30b-mxfp8 spiked 22GB+ wired during forward pass and
   pushed the system into swap. MoE models (Qwen3.6-35B-A3B at ~3B
@@ -287,6 +376,13 @@ In priority order:
 - **Bench `wall=0s tokens=0` was a flake mode caused by unhandled tool
   exceptions** — fixed in P0.1 (`c2b8484`). If you see it again, an
   uncaught exception escaped `dispatch_tool`.
+- **`run.py` resume model treats `status: error` as `skip_done` by
+  default** — if a sweep dies before any model invocation (e.g. DNS
+  failure on git clone, the 2026-05-01 Branch B incident), re-launching
+  without `--retry-errors` silently skips every fixture and prints a
+  zeroed Summary. Either pass `--retry-errors` or `rm -rf` the output
+  dir before re-launching. No preflight network check exists; consider
+  adding one before the next overnight slot.
 
 ---
 
