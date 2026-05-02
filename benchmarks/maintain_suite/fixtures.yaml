@@ -148,18 +148,38 @@ fixtures:
   - id: isomer-document-quickstart
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/isomer
     base_sha: 33da2bc14869bc252901cb199ba73b2fa776e33f
-    goal: "Update README.md to add a 'Quickstart' section showing how to run the app locally with docker-compose and how to access the dashboard. Reference docker-compose.yml and the default port from app.py. Preserve any existing setup steps already documented; do not strip the ISOMER_SECRET / .env setup"
+    goal: "Update README.md's Quick Start section to clarify how to run the app locally with docker-compose and how to access the dashboard. Reference docker-compose.yml and the default port from app.py. Preserve all existing setup steps; do not strip the ISOMER_SECRET / .env setup"
     task_type: document
     expected_outcome:
       kind: regex_present
-      pattern: "(?i)#+\\s*Quickstart"
-      min_added_lines: 8      # closes the rename-only / strip-key-content gaming
+      # 2026-05-01 fixture surgery: pattern was `#+\s*Quickstart` which
+      # never matched the file's existing `## Quick Start` heading (space).
+      # Models that legitimately added to the existing section without
+      # renaming the heading scored 0 on regex despite producing correct
+      # content. Replaced with content-shape pattern: must reference
+      # docker-compose (the deployment shape the task asks about).
+      # min_matches=1 since one mention is enough; substantive-edit gate
+      # below carries the gaming defense.
+      pattern: "(?i)docker[\\s-]?compose"
+      min_matches: 1
+      min_added_lines: 4      # was 8 (sized for "Create whole section");
+                              # new task is "update existing section",
+                              # realistic addition is 4-8 lines. 4 admits
+                              # focused outputs while still rejecting
+                              # rename-only or one-line gaming. The
+                              # destructive_diff gate (Phase 0) catches
+                              # the original anti-gaming concern (the
+                              # rename-and-strip-secret pattern would
+                              # produce many deletions and trip the
+                              # destructive_diff threshold).
     notes: |
-      Document task on a mid-sized Flask app. Goal explicitly preserves the
-      existing ISOMER_SECRET setup — prior bake-off saw a model rename
-      "Quick Start" → "Quickstart" while stripping the secret-generation
-      step, leaving a non-functional Quickstart. min_added_lines=8 makes
-      the rename-only diff fail the gate.
+      Document task on a mid-sized Flask app. Goal explicitly preserves
+      the existing ISOMER_SECRET setup — prior bake-off saw a model
+      rename "Quick Start" → "Quickstart" while stripping the secret-
+      generation step. Phase 0's destructive_diff gate now catches that
+      pattern (mass deletions on a non-deleted file), which is why the
+      regex pattern was freed to focus on content shape rather than
+      heading-style enforcement. Fixture surgery 2026-05-01.
 
   - id: isomer-implement-healthcheck
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/isomer
