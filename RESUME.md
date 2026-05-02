@@ -127,21 +127,24 @@ symlinks land: `brew services restart omlx`.
 | Phase 2 — head-to-head | 04-28 | mono/swarm/micro × {14B, 1.5B} | mono 14B + swarm 14B tied at 2/5 real |
 | Phase 3 — phased mode | 04-29 | phased__qwen-coder-14b | 0/5 real |
 | Mono precision | 04-29 | 14B-8bit, 32B-6bit, 30B-A3B-6bit, abliterated-14B-6bit | 30B-A3B-6bit (2-3/5) but bimodal |
-| Overnight MoE | 04-29 | qwen3.6-35B-A3B {4,6}bit, gemma-4-26B-A4B {4,8}bit | qwen3.6-35B-A3B-6bit |
+| Overnight MoE | 04-29 | qwen3.6-35B-A3B {4,6}bit, gemma-4-26B-A4B {4,8}bit | qwen3.6-35B-A3B-6bit (regraded 0/20 — every printed PASS was false) |
 | 8-bit completion | 04-30 | qwen3.6-35B-A3B-8bit, qwen-coder-32B-8bit, qwen3-coder-30B-A3B-8bit | none beat 6-bit |
 | Granite-4.1 (3b only) | 04-30 | granite-4.1-3b-bf16 | 1/10 real (model too small for the loop) |
-| v1 baseline (post P0 fixes) | 04-30 | qwen3.6-35B-A3B-6bit | 5/10 (then 7/10 on 05-01 re-run; sampling variance is real at N=10) |
-| **Phase 1 prompt-shaping** | **05-01** | **6 cells: baseline + baseline-rp + cot + sot + hads + combined-rp** | **baseline 7/10; structural variants uniformly 4/4 implement but regressed doc/manage; no Gate A winner** |
+| v1 baseline (post P0 fixes) | 04-30 | qwen3.6-35B-A3B-6bit | 5/10 → regraded 3/10 (40% false-positive). 05-01 re-run was 6/10 → regraded 4/10. Sampling variance is real at temp=0.2 |
+| **Phase 1 prompt-shaping** | **05-01** | **6 cells: baseline + baseline-rp + cot + sot + hads + combined-rp** | **printed 33/60 → regraded 8/60 (76% inflation). Phase 1's "structural prompts hit 4/4 implement" finding was almost entirely a false-positive artifact of the broken grader.** |
 | **temp=0 baseline (Phase 0 grader fixed)** | **05-01 PM** | **qwen3.6-35B-A3B-6bit @ temp=0** | **5/10 stable across 2 runs; per-task: impl 4/4, doc 1/5, manage 0/1** |
+| **v1.0.0 ship confirmation** | **05-01/05-02** | **qwen3.6-35B-A3B-6bit @ temp=0 (production config) + Phase-0/surgery/Branch-C fixes** | **8/10 (impl 4/4, doc 4/5, manage 0/1). First honest pass count.** |
 
 Full results: `acceptance/<phase>/comparison.json` per phase dir.
 
 > **Caveat on pre-Phase-0 results**: every row above 04-30 was graded
 > against a grader that didn't fire its strict gates (Bug 2 — see
-> `lessons.md`). The "real PASS leader" column is approximately right
-> for top-of-table comparisons but the absolute pass counts almost
-> certainly include 1-2 false positives per cell that destructive_diff
-> would have caught. Re-grade with `scripts/regrade_local.py` if the
+> `lessons.md`). A1 re-grade pass on 2026-05-02 confirmed the
+> deflation is severe — `prompt_shaping` went 33/60 → 8/60 (76%
+> false), `overnight_moe` went 5/20 → 0/20 (every "PASS" was
+> gaming-shaped). Treat any pre-Phase-0 number as approximately 0.25-
+> 0.7× of what's printed; re-grade with `scripts/regrade_local.py` if
+> the
 > historical numbers are load-bearing for a decision.
 
 ---
@@ -360,6 +363,16 @@ In priority order:
   on 2026-05-01 PM). For ship decisions, prefer temp=0 over temp=0.2 —
   noise floor disappears. Master plan's "±1 deltas are noise" rule
   applied at temp=0.2; at temp=0 a 1-fixture delta IS the signal.
+- **Offline mode caps every fixture at 4/5** — with the local-cache
+  `origin`, `gh pr create` always fails (no GitHub remote), so
+  `pr_opened` (1pt of 5) never fires offline. Every PASS reads as
+  4/5, every FAIL reads as 1/5 (citations only) or 0/5 (no diff).
+  This is consistent across all fixtures (uniform, no false signal),
+  so the gate math (≥8 fixtures with score ≥4) still works correctly.
+  Decision recorded 2026-05-02: *don't* add auto-detect logic to
+  drop the gate offline — it'd be a new failure surface for cosmetic
+  gain. The 4/5 cap is the offline-mode signature; treat it as
+  expected rather than as a bug.
 - **`origin/<branch>` in offline-cache repos is a stale-ref trap** —
   `~/.luxe/fixture-cache/<repo>/refs/remotes/origin/...` was populated
   when the cache was first cloned from GitHub, then never updated.

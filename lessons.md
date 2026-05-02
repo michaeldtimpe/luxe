@@ -337,3 +337,57 @@ The two remaining fails are model-side limitations:
 The deeper meta-takeaway: **infrastructure quality dominates result quality**. Phase 0 fixed grader bugs that had been silently inflating PASS counts since 04-29. Once the grader was honest, the remaining levers (variance pinning, fixture surgery, gate calibration, one citation-linter fix) added up to a gap closure of 5/10 → 8/10 without changing the model or its prompts. The model is the same Qwen3.6-35B-A3B-6bit it was on 04-29. What changed was: (a) the grader stopped lying, (b) sampling stopped being random, (c) fixtures matched their base_sha, (d) gates measured the right thing. Future bench cycles should expect: every "we added a gate" claim needs a regression test that asserts the gate fires from the expected entry point on the expected inputs (Phase 0 Bug 2's lesson, applied universally).
 
 **Affected files**: `pyproject.toml` (1.0.0.dev0 → 1.0.0), `configs/single_64gb.yaml` (temperature 0.2 → 0.0), `src/luxe/citations.py` (`_IPV4_PATH_RE` guard in `extract_citations`), `tests/test_citations_diff_aware.py` (2 new tests), plus the cumulative grader/fixture work referenced above.
+
+---
+
+### [2026-05-02] Phase v1.1 A1 — historical bake-off re-grade reveals severe inflation
+
+**What happened**: Re-graded four prior bake-off output dirs against the post-Phase-0 grader using `scripts/regrade_local.py`. The deflation across the board is severe — far worse than RESUME.md's earlier "1-2 false positives per cell" caveat suggested.
+
+| Phase | Printed | Regraded | Inflation |
+|---|---|---|---|
+| `acceptance/v1_default` | 5/10 | 3/10 | 1.67× |
+| `acceptance/v1_default_post_fix` | 6/10 | 4/10 | 1.50× |
+| `acceptance/prompt_shaping` (60 fixtures) | 33/60 | **8/60** | **4.13×** |
+| `acceptance/overnight_moe` (20 fixtures) | 5/20 | **0/20** | **∞** (every printed PASS was false) |
+
+**Root cause (already known)**: Phase 0's Bugs 1+2 — `apply_strict_gates` defined but never called from `grade_fixture`, `diff_additions/deletions` declared but never populated. The strict gates (`destructive_diff`, `placeholder_diff`, `role_name_leak`) caught zero gaming-shaped diffs across every prior run. Once wired, they fire frequently — especially `destructive_diff` on the historical "rewrite-the-existing-file" pattern that the model used to game `min_added_lines` checks.
+
+**Fix / takeaway**: the historical narrative needs revision. Two specific reinterpretations:
+
+1. **Phase 1's "structural prompts hit 4/4 implement"** finding (33/60 printed → 8/60 regraded, 76% false) is no longer a load-bearing claim. The CoT/SoT/HADS variants probably did NOT lift implement to 4/4; the pre-fix grader was credit­ing destructive or placeholder-shaped diffs on those runs as wins. This retroactively justifies treating Branch B's `implement_via_cot` overlay as obsolete (the underlying observation it was built on was an artifact). It also re-explains why baseline-temp=0 hit impl 4/4 "out of the box" in this session — that's the model's actual ceiling, the temp=0.2 + structural-prompt cells weren't reaching it, they were gaming-passing through the broken grader.
+2. **Overnight MoE's qwen3.6-35B-A3B-6bit "win"** (5/20 → 0/20) is now also suspect. The bake-off chose the champion based on inflated numbers. The choice was probably still defensible (the model genuinely is the strongest on this hardware tier), but the "5/20 real" claim in RESUME.md was wrong; it was 0/20. Future model selection should re-grade as a baseline before declaring a winner.
+
+**Practical guidance**: any RESUME.md "Real PASS leader" cell predating 04-30 is probably 0.25-0.7× of the printed value. When citing historical numbers in strategic decisions, run `scripts/regrade_local.py --output acceptance/<dir>` first; the cost is minutes and the data is so much more honest that it's worth doing routinely.
+
+**Affected files**: `RESUME.md` (history table updated with regraded counts and a stronger caveat block); `acceptance/<phase>/result_regraded.json` written next to every original `result.json` across the four re-graded dirs.
+
+---
+
+### [2026-05-02] Phase v1.1 A2 — prefix-cache hit-rate not directly available at INFO logs
+
+**What happened**: Tried to measure oMLX's prefix-cache hit rate on the v1 ship confirmation run as load-bearing input for the Workstream C decision. The data isn't directly available from the configuration we currently run.
+
+**Root cause**: oMLX's INFO-level log shows boundary-cache *writes* ("storing X/Y tokens") but not *reads* (per-request cache hit/miss). No `/cache/stats` or `/metrics` endpoint at `localhost:8000`. The Chat completion log line shows aggregate wall + tokens but no prefill/decode split that would let us infer TTFT (a proxy for cache hit). Cross-run wall comparisons (probe_a vs probe_b on the same fixtures at temp=0) are mixed — some fixtures faster, some slower — which doesn't strongly support either "cache helps a lot" or "cache barely helps."
+
+**Fix / takeaway**: Recorded as `project_prefix_cache_baseline.md` memory entry with status INCONCLUSIVE. Workstream C's decision matrix had two HIT bins (LOW <65%, HIGH ≥65%); without a clean number, **default to LOW** (conservative-toward-investigation: keeps Phased Mode v2 as a viable option, lets Workstream B's QUAL outcome do the heavy lifting on the decision). When/if Path 1 becomes the leading candidate based on Workstream B, re-run A2 with one of:
+
+- DEBUG-level oMLX logs + a fresh full bench (will surface per-request cache hit/miss).
+- A controlled hot-vs-cold A/B with oMLX restarted between runs (crisper signal than cross-run comparisons).
+
+The deeper takeaway: **infrastructure-availability matters for measurement plans**. The plan assumed the cache-hit-rate data was just sitting in the log; it isn't. Future plans that depend on a measurement should verify the measurement is gettable BEFORE committing to it as a decision input.
+
+**Affected files**: `~/.claude/projects/-Users-michaeltimpe-Downloads-luxe/memory/project_prefix_cache_baseline.md` (new); MEMORY.md indexed.
+
+---
+
+### [2026-05-02] Phase v1.1 A4-A5 — drop dead Gemma-4 entries; document offline 4/5 cap
+
+**What happened**: Cleanup pair from RESUME.md's "Open work" list.
+
+- A4: Removed `Gemma-4-26B-A4B-4bit` and `Gemma-4-26B-A4B-8bit` entries from `~/.omlx/model_settings.json`. RESUME.md noted these models ship with empty `chat_template` and fail HTTP 400 in the chat-driven loop; the settings entries were dead config that would mislead future model-roster decisions. Restarted oMLX; verified via `Backend().list_models()` that Gemma-4 no longer appears (the model's symlinks at `~/.omlx/models/Gemma-4-*` remain but are inert at the API surface).
+- A5: Documented the offline-mode 4/5 cap in RESUME.md's "Critical gotchas" section. Per the v1.1 plan recommendation, picked option (b): leave grader code untouched, treat 4/5 as the offline-mode signature rather than introducing auto-detect logic for `pr_opened`. The gate math still works because the gate is per-fixture pass count, not score sum.
+
+**Fix / takeaway**: Both are house-keeping; no model or grader logic changed. The Gemma-4 cleanup is a small example of **dead config compounds over time** — one model's bad chat_template would have kept showing up in roster lookups indefinitely. Periodically pruning model_settings.json is cheap insurance.
+
+**Affected files**: `~/.omlx/model_settings.json` (Gemma-4 entries removed), `RESUME.md` (gotcha entry for offline 4/5 cap).
