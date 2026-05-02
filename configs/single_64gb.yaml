@@ -32,6 +32,15 @@ roles:
                         # deterministic across two back-to-back runs.
                         # Greedy decoding also lifts implement to 4/4
                         # ceiling out of the box. See variants_v1_temp0_probe.yaml.
+    task_overlay_id: manage_strict_only
+                        # 2026-05-02 promotion (Phase v1.1 B2): closes the
+                        # nothing-ever-happens-manage-deps-audit stuck-loop
+                        # (model was reading requirements.txt repeatedly
+                        # and bailing without producing a diff). Overlay
+                        # fires only on `manage` task type — implement,
+                        # document, bugfix, review unchanged. See
+                        # variants_v1_managetask_overlay_probe.yaml +
+                        # the Phase v1.1 B2 lessons.md entry.
     tools:
       - read_file
       - list_dir
