@@ -266,6 +266,8 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
         "stages_completed": [],
         "stages_resumed": [],
         "tokens_total": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
         "wall_s_total": 0.0,
         "events_kinds": {},
         "backend_failures": [],   # most recent backend errors surfaced from events
@@ -327,8 +329,11 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
             elif kind == "single_mode_done":
                 # Single-mode telemetry — emitted by cli.py after run_single.
                 out["wall_s_total"] = float(ev.get("wall_s", 0.0))
-                out["tokens_total"] += int(ev.get("prompt_tokens", 0))
-                out["tokens_total"] += int(ev.get("completion_tokens", 0))
+                pt = int(ev.get("prompt_tokens", 0))
+                ct = int(ev.get("completion_tokens", 0))
+                out["prompt_tokens"] += pt
+                out["completion_tokens"] += ct
+                out["tokens_total"] += pt + ct
                 out["single_mode"] = {
                     "tool_calls_total": int(ev.get("tool_calls_total", 0)),
                     "schema_rejects": int(ev.get("schema_rejects", 0)),
@@ -345,10 +350,14 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
             sd = json.loads((rd / "stages" / f"{stage}.json").read_text())
         except (json.JSONDecodeError, OSError):
             continue
+        out["prompt_tokens"] += int(sd.get("prompt_tokens", 0))
+        out["completion_tokens"] += int(sd.get("completion_tokens", 0))
         out["tokens_total"] += int(sd.get("prompt_tokens", 0))
         out["tokens_total"] += int(sd.get("completion_tokens", 0))
         if stage.startswith("worker_") and isinstance(sd.get("metrics"), dict):
             m = sd["metrics"]
+            out["prompt_tokens"] += int(m.get("prompt_tokens", 0))
+            out["completion_tokens"] += int(m.get("completion_tokens", 0))
             out["tokens_total"] += int(m.get("prompt_tokens", 0))
             out["tokens_total"] += int(m.get("completion_tokens", 0))
             # Microloop-specific aggregates (zero for swarm-mode workers).
@@ -462,6 +471,15 @@ def _run_capture(cmd: list[str], log_dir: Path,
     (log_dir / "stdout.log").write_text(proc.stdout or "")
     (log_dir / "stderr.log").write_text(proc.stderr or "")
     return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def _fmt_tok(n: int) -> str:
+    """Compact token count: 412956 → '413k', 1234567 → '1.2M', <10000 → raw."""
+    if n < 10_000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n / 1_000:.0f}k"
+    return f"{n / 1_000_000:.1f}M"
 
 
 def _stderr_excerpt(text: str, max_chars: int = 400) -> str:
@@ -587,6 +605,14 @@ class Diagnostics:
     run_id: str = ""
     wall_s: float = 0.0
     tokens_total: int = 0
+    # Split of tokens_total. prompt_tokens = sum of input tokens billed across
+    # all chat turns; completion_tokens = generated. Both come from the oMLX
+    # `usage` block via the single_mode_done event. gen_tps is wall-bounded
+    # (completion_tokens / wall_s) — it counts inter-turn overhead and tool
+    # execution against the model, so it understates raw decode speed. For
+    # accurate prefill/decode TPS see backend streaming work (stage 2).
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     stages_completed: list[str] = field(default_factory=list)
     stages_resumed: list[str] = field(default_factory=list)
     validator_status: str = ""
@@ -697,6 +723,8 @@ def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
         run_id=state.luxe_run_id,
         wall_s=float(artefacts.get("wall_s_total", 0.0)),
         tokens_total=int(artefacts.get("tokens_total", 0)),
+        prompt_tokens=int(artefacts.get("prompt_tokens", 0)),
+        completion_tokens=int(artefacts.get("completion_tokens", 0)),
         stages_completed=list(artefacts.get("stages_completed", [])),
         stages_resumed=list(artefacts.get("stages_resumed", [])),
         validator_status=str(artefacts.get("validator_status", "")),
@@ -1322,9 +1350,19 @@ def main() -> int:
             # Format elapsed as M:SS for legibility on long runs.
             mm, ss = divmod(int(run_elapsed), 60)
             elapsed_str = f"{mm}:{ss:02d}"
+            # tokens shown as in/out/total. gen_tps~ is wall-bounded
+            # (completion / wall_s) — includes tool-execution and inter-turn
+            # overhead, so it understates raw MLX decode speed. Tilde flags
+            # the approximation. Real prefill/decode TPS arrives with the
+            # streaming-backend refactor (stage 2).
+            tps_g = (d.completion_tokens / d.wall_s) if d.wall_s > 0 else 0.0
+            tok_field = (f"tokens={_fmt_tok(d.prompt_tokens)}/"
+                         f"{_fmt_tok(d.completion_tokens)}/"
+                         f"{_fmt_tok(d.tokens_total)}")
             print(f"  {_verdict(r):5s}  [{end_ts} +{elapsed_str}]  "
                   f"score={r.score}/{r.max_score}  "
-                  f"wall={d.wall_s:.0f}s  tokens={d.tokens_total}  "
+                  f"wall={d.wall_s:.0f}s  {tok_field}  "
+                  f"gen_tps~{tps_g:.0f}  "
                   f"diff={r.diff_files}f  "
                   f"validator={d.validator_status or '-'}  "
                   f"cite={d.citations_unresolved}/{d.citations_total}"
@@ -1419,7 +1457,8 @@ def main() -> int:
         if by_variant:
             print(f"\n━━━ Mode × Model comparison")
             header = (f"  {'variant':32s}  {'pass':>4}  {'fail':>4}  {'err':>3}  "
-                      f"{'avg_wall':>8}  {'avg_tok':>8}  "
+                      f"{'avg_wall':>8}  {'avg_in':>7}  {'avg_out':>7}  "
+                      f"{'gen_tps~':>8}  "
                       f"{'bailouts':<28}")
             print(header)
             print(f"  {'-' * (len(header) - 2)}")
@@ -1434,6 +1473,14 @@ def main() -> int:
                             if attempted_v else 0.0)
                 avg_tok = (sum(d.tokens_total for _, d in attempted_v) / len(attempted_v)
                            if attempted_v else 0.0)
+                avg_in = (sum(d.prompt_tokens for _, d in attempted_v) / len(attempted_v)
+                          if attempted_v else 0.0)
+                avg_out = (sum(d.completion_tokens for _, d in attempted_v) / len(attempted_v)
+                           if attempted_v else 0.0)
+                # Wall-bounded gen TPS — see per-fixture print for caveats.
+                total_out = sum(d.completion_tokens for _, d in attempted_v)
+                total_wall = sum(d.wall_s for _, d in attempted_v)
+                avg_gen_tps = (total_out / total_wall) if total_wall > 0 else 0.0
                 # Bailout breakdown per variant — counts each bailout type
                 # so the table at-a-glance shows whether failures are
                 # refusals, prose-only, stuck-loops, etc.
@@ -1448,12 +1495,19 @@ def main() -> int:
                 # Microloop-specific signals — non-zero only on micro runs.
                 total_rej = sum(d.microstep_rejects for _, d in attempted_v)
                 print(f"  {vid:32s}  {passed:>4}  {failed:>4}  {errored:>3}  "
-                      f"{avg_wall:>7.1f}s  {avg_tok:>8.0f}  "
+                      f"{avg_wall:>7.1f}s  {_fmt_tok(int(avg_in)):>7}  "
+                      f"{_fmt_tok(int(avg_out)):>7}  "
+                      f"{avg_gen_tps:>8.1f}  "
                       f"{bailout_summary:<28}")
                 cmp_rows[vid] = {
                     "passed": passed, "failed": failed, "errored": errored,
                     "avg_wall_s": round(avg_wall, 1),
                     "avg_tokens": int(avg_tok),
+                    "avg_prompt_tokens": int(avg_in),
+                    "avg_completion_tokens": int(avg_out),
+                    # Wall-bounded: completion / wall_s (includes tool exec
+                    # and inter-turn overhead). Underestimates raw decode TPS.
+                    "gen_tps_wall": round(avg_gen_tps, 2),
                     "microstep_rejects_total": total_rej,
                     "bailouts": bailout_counts,
                     "fixtures": len(pairs),
