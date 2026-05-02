@@ -263,3 +263,36 @@ The investigation cost: this misreading drove a half-day's worth of strategic an
 The methodology rule: **before drawing strategic conclusions from grading data, regrade through the same code path the bench uses**. The sidecar regrade tool (`scripts/regrade_local.py`) is now the canonical way to do this without paying the agent-loop's wall-time cost. Manual `git diff` against a cache repo is fine for code-shape spot checks but is NOT a substitute for sidecar regrade when classifying real PASS vs false positive.
 
 **Affected files**: `scripts/regrade_local.py` (new tool that does this correctly); none of the corrected `git diff` semantics required code changes — it's a workflow change.
+
+---
+
+### [2026-05-01] Branch C calibration — `nothing-ever-happens-document-config` gate-side miss
+
+**What happened**: At temp=0 the model produces a comprehensive 136-line `CONFIG.md` documenting ~50 environment variables in markdown tables (Variable / Default / Description / Read-in columns), with file:line citations. The grader rejects it: `pattern matched 0× in 141 added lines (needed ≥3) across 1 changed file(s)`. Per the new Branch C `lessons.md` gate (master plan §Branch C, tightened in commit 5551959), this entry must record (a) semantic acceptability, (b) failure category, (c) targeted-vs-general justification before any `fixtures.yaml` edits.
+
+**(a) Semantic acceptability** — the produced output is a textbook-correct CONFIG.md. From probe_b's commit (`luxe/document/add-a-config-md-at-the-2`):
+
+```
+| `PM_RISK_MAX_DAILY_DRAWDOWN_USD` | `0.0` | Maximum allowed daily drawdown in USD based on USDC balance vs. daily high-water mark. `0` disables the drawdown circuit breaker. | `bot/risk_controls.py:47` |
+| `BOT_MODE` | `paper` | Runtime mode — `paper` for simulation, `live` for real trading. | `bot/config.py:38` |
+```
+
+The doc enumerates 52 env vars across 10 sections (Safety/Mode Control, Secrets, Strategy Overrides, Risk Controls, Redeemer, Live Recovery, Runtime, Paper Trading, Docker Compose, Utility Scripts), with verified file:line citations. This is unambiguously what the task asked for ("documents every environment variable ... For each variable, list its name, default value, and a one-sentence description ... Cross-reference where in the codebase it is read"). Any reasonable grader would credit this output.
+
+**(b) Failure category** — `regex_present` grader miss. The pattern was `(?i)\b(os\.environ|getenv|env\[|process\.env)`, requiring the doc to literally quote Python source idioms like `os.getenv(...)`. The model wrote prose-style documentation that *references* the call sites (file:line citations) without quoting the Python expressions themselves. Classification: **gate-side**, not model-side. The model produced semantically-acceptable output (per (a)); the gate's pattern was looking for code-quote idioms in what is fundamentally a prose document. `diff_produced=true`, `diff_files=1`, no destructive_diff / placeholder_diff / role_name_leak triggers. The model engaged correctly; the gate misclassified the engagement.
+
+**(c) Targeted vs general** — the original regex was defending a real anti-gaming concern (per `fixtures.yaml`'s own comment: "min_matches=3 + 20 added lines defends against listing one var in a sentence and stopping"). Don't just remove it — the defense it provides is real for vacuous outputs. The replacement composes the original idiom-quote pattern with a markdown-name pattern. The added alternative is `\b[A-Z_]{2,}[A-Z0-9_]{3,}\b` (an UPPER_SNAKE_LIKE token of ≥5 chars with ≥2 leading letters). This:
+
+- **ACCEPTS** the actual probe_b CONFIG.md (50+ UPPER_SNAKE env var names → comfortably above min_matches=3).
+- **ACCEPTS** Python-idiom prose docs that DO quote `os.getenv(...)` (original pattern still fires via OR).
+- **REJECTS** vacuous one-paragraph docs ("This file documents environment variables.") — at most 1-2 incidental UPPER_SNAKE tokens, below `min_matches=3`.
+- **REJECTS** docs that mention env vars by description without naming them (a "config notes" prose blob with no UPPER_SNAKE names) — fails on count.
+- **REJECTS** docs that only list a header and 1-2 names — `min_added_lines=20` catches the thinness; the gate is composite.
+
+The substantive-edit gate (`min_added_lines: 20`) remains untouched. It does the heavy lifting against thin gaming; the regex is the content-shape signal.
+
+**Fix / takeaway**: replace `(?i)\b(os\.environ|getenv|env\[|process\.env)` with `(?i)(?:os\.environ|getenv|env\[|process\.env)|\b[A-Z_]{2,}[A-Z0-9_]{3,}\b`. Sidecar regrade against probe_b's existing CONFIG.md commit confirms the pattern matches; full regrade shows nothing-config flips 1F → 4P.
+
+The deeper takeaway is about gate-pattern composition: **a regex that lists implementation idioms is sometimes too narrow for a documentation task**. Implementation-idiom patterns are good for code-style tasks (the strict-flag fixture, where `add_argument` / `args.strict` SHOULD appear in the diff). For documentation tasks, the test should be content-shape, not implementation-shape. Future doc-task fixtures should consider: what does the *output* look like, not what *code* it references.
+
+**Affected files**: `benchmarks/maintain_suite/fixtures.yaml` (one regex pattern updated on `nothing-ever-happens-document-config`).
