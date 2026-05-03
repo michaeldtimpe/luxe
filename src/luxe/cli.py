@@ -134,11 +134,18 @@ def _should_reprompt_for_under_engagement(task_type: str, additions: int) -> boo
                    "unloads every model it touched once the run completes, "
                    "freeing oMLX RAM. Pass --keep-loaded to keep them warm "
                    "for a follow-up run.")
+@click.option("--spec-yaml", "spec_yaml_path", default=None,
+              help="Path to a YAML file containing a SpecDD spec (Lever 1, "
+                   "v1.4-prep). When provided AND LUXE_REPROMPT_ON_DOC=1, "
+                   "the reprompt gate uses per-requirement spec validation "
+                   "instead of the diff-size heuristic. Without this flag, "
+                   "the v1.3 reprompt behavior is preserved.")
 def maintain(
     repo: str, goal: str, task_type: str | None,
     config_path: str | None,
     allow_dirty: bool, skip_confirm: bool, watch_ci: bool,
     output_dir: str, save_report: bool, keep_loaded: bool,
+    spec_yaml_path: str | None,
 ):
     """Run a luxe maintain pipeline against a repository.
 
@@ -155,6 +162,17 @@ def maintain(
 
     repo_path = _resolve_repo(repo)
     detected_task = task_type or _infer_task_type(goal)
+
+    # SpecDD Lever 1 (v1.4-prep): load spec from --spec-yaml if provided.
+    # Failed loads (missing file, malformed YAML, invalid spec) abort the
+    # run BEFORE the model is loaded so the user sees the error fast.
+    # When None, the reprompt block falls back to v1.3 directive behavior.
+    loaded_spec = None
+    if spec_yaml_path:
+        import yaml as _yaml
+        from luxe.spec import spec_from_yaml_dict
+        with open(spec_yaml_path) as _f:
+            loaded_spec = spec_from_yaml_dict(_yaml.safe_load(_f) or {})
 
     confirm_callback: Callable[[], bool] | None
     if skip_confirm:
@@ -300,65 +318,116 @@ def maintain(
                 append_event(spec.run_id, "citation_lint_passed",
                              count=len(lint.citations), summary=lint.summary())
 
-        # v1.3 probe — re-prompt-on-under-engagement for doc tasks (see
-        # _should_reprompt_for_under_engagement docstring above).
+        # SpecDD Lever 1 (v1.4-prep): when a spec is provided, the reprompt
+        # gate uses per-requirement validation. Run validate() once and
+        # short-circuit the v1.3 path entirely. Still gated by
+        # LUXE_REPROMPT_ON_DOC=1 so the env-var contract is unchanged.
+        _spec_validation = None
+        if (loaded_spec is not None
+                and detected_task in _WRITE_TASKS
+                and os.environ.get("LUXE_REPROMPT_ON_DOC") == "1"):
+            from luxe.spec_validator import (
+                validate as _validate_spec,
+                format_unsatisfied_for_reprompt,
+            )
+            _spec_validation = _validate_spec(
+                loaded_spec, repo_path, prep.base_sha,
+            )
+            append_event(spec.run_id, "spec_validation",
+                         all_satisfied=_spec_validation.all_satisfied,
+                         total=len(_spec_validation.results),
+                         unsatisfied_ids=[
+                             r.requirement.id
+                             for r in _spec_validation.unsatisfied
+                         ])
+
+        # v1.3 directive reprompt path — fires when no spec OR spec is fully
+        # satisfied (in which case the gate below short-circuits to no-op
+        # before computing diff_text).
         _reprompt_diff = (
             _diff_against_base(repo_path, prep.base_sha)
             if detected_task in _WRITE_TASKS else None
         )
-        if (_reprompt_diff is not None
-                and _should_reprompt_for_under_engagement(
-                    detected_task, _reprompt_diff[0])):
-            additions, deletions, diff_text = _reprompt_diff
-            console.print(
-                f"\n[bold cyan]▶ Reprompt 2nd pass[/]  "
-                f"(diff +{additions}/-{deletions} below threshold "
-                f"{_REPROMPT_DOC_ADDITIONS_THRESHOLD})"
+        # Gate selection:
+        #   - If a spec is loaded AND has unsatisfied requirements, use the
+        #     SpecDD structured reprompt.
+        #   - Else, fall through to v1.3 diff-size heuristic.
+        _spec_reprompt_fires = (
+            _spec_validation is not None
+            and not _spec_validation.all_satisfied
+        )
+        _v1_3_reprompt_fires = (
+            _spec_validation is None
+            and _reprompt_diff is not None
+            and _should_reprompt_for_under_engagement(
+                detected_task, _reprompt_diff[0]))
+
+        if _spec_reprompt_fires or _v1_3_reprompt_fires:
+            additions, deletions, diff_text = (
+                _reprompt_diff if _reprompt_diff is not None else (0, 0, "")
             )
-            append_event(spec.run_id, "reprompt_fired",
-                         additions=additions, deletions=deletions,
-                         threshold=_REPROMPT_DOC_ADDITIONS_THRESHOLD)
-            # Branch on whether the first pass produced ANY edits. If
-                # additions==0 AND the model emitted substantial prose, this
-                # is the "prose-mode" failure shape (model enumerated the
-                # answer in its final report but never called write/edit).
-                # The standard "make the missing edits now" reprompt has been
-                # observed to fail on this — model just does another prose
-                # exploration pass. Inject the model's prior prose back to it
-                # as the *content* it should be saving, with explicit
-                # imperative framing.
-            prior_text = single_result.final_text or ""
-            if additions == 0 and len(prior_text) > 1000:
-                followup_goal = (
-                    f"PROBLEM: You completed a pass on this goal but did NOT "
-                    f"call write_file or edit_file. The working tree has 0 "
-                    f"added lines. You produced extensive prose in your "
-                    f"final report but it is stranded — not saved to disk.\n\n"
-                    f"Original goal:\n  {goal}\n\n"
-                    f"Your prior final report (which you must now persist "
-                    f"to disk):\n\n{prior_text[:6000]}\n\n"
-                    f"Action: identify the file path the goal asks for "
-                    f"(e.g., 'CONFIG.md' for an env-var documentation task; "
-                    f"the path is named in the goal). Call write_file with "
-                    f"that path and a coherent document body derived from "
-                    f"the report above. Do this on your FIRST tool call. "
-                    f"Do not explore more files first. After write_file "
-                    f"succeeds, you may continue if the content needs "
-                    f"refinement."
+            if _spec_reprompt_fires:
+                # SpecDD path — structured per-requirement reprompt. The
+                # diff state is informational; the gate is which requirements
+                # are unmet.
+                console.print(
+                    f"\n[bold cyan]▶ Reprompt 2nd pass[/]  "
+                    f"(spec: {len(_spec_validation.unsatisfied)}/"
+                    f"{len(_spec_validation.results)} requirement(s) unmet)"
                 )
-            else:
+                append_event(spec.run_id, "reprompt_fired",
+                             additions=additions, deletions=deletions,
+                             threshold=_REPROMPT_DOC_ADDITIONS_THRESHOLD,
+                             gate="spec")
                 followup_goal = (
                     f"You completed an initial pass on this goal:\n  {goal}\n\n"
-                    f"The diff so far is small ({additions} added / "
-                    f"{deletions} deleted lines):\n"
-                    f"```diff\n{diff_text}\n```\n\n"
-                    f"Re-read the goal carefully. Identify each named deliverable. "
-                    f"For any deliverable NOT yet reflected in the diff, make the "
-                    f"missing edits now via edit_file or write_file. If you "
-                    f"believe the diff is complete, make no further edits and "
-                    f"explain in your response which lines satisfy each "
-                    f"deliverable."
+                    + format_unsatisfied_for_reprompt(_spec_validation)
                 )
+            else:
+                # v1.3 directive path — preserved verbatim for fixtures
+                # without a spec. Branches on the prose-mode signature
+                # (additions==0 AND substantial prior prose).
+                console.print(
+                    f"\n[bold cyan]▶ Reprompt 2nd pass[/]  "
+                    f"(diff +{additions}/-{deletions} below threshold "
+                    f"{_REPROMPT_DOC_ADDITIONS_THRESHOLD})"
+                )
+                append_event(spec.run_id, "reprompt_fired",
+                             additions=additions, deletions=deletions,
+                             threshold=_REPROMPT_DOC_ADDITIONS_THRESHOLD,
+                             gate="v1_3_directive")
+                prior_text = single_result.final_text or ""
+                if additions == 0 and len(prior_text) > 1000:
+                    followup_goal = (
+                        f"PROBLEM: You completed a pass on this goal but did NOT "
+                        f"call write_file or edit_file. The working tree has 0 "
+                        f"added lines. You produced extensive prose in your "
+                        f"final report but it is stranded — not saved to disk.\n\n"
+                        f"Original goal:\n  {goal}\n\n"
+                        f"Your prior final report (which you must now persist "
+                        f"to disk):\n\n{prior_text[:6000]}\n\n"
+                        f"Action: identify the file path the goal asks for "
+                        f"(e.g., 'CONFIG.md' for an env-var documentation task; "
+                        f"the path is named in the goal). Call write_file with "
+                        f"that path and a coherent document body derived from "
+                        f"the report above. Do this on your FIRST tool call. "
+                        f"Do not explore more files first. After write_file "
+                        f"succeeds, you may continue if the content needs "
+                        f"refinement."
+                    )
+                else:
+                    followup_goal = (
+                        f"You completed an initial pass on this goal:\n  {goal}\n\n"
+                        f"The diff so far is small ({additions} added / "
+                        f"{deletions} deleted lines):\n"
+                        f"```diff\n{diff_text}\n```\n\n"
+                        f"Re-read the goal carefully. Identify each named deliverable. "
+                        f"For any deliverable NOT yet reflected in the diff, make the "
+                        f"missing edits now via edit_file or write_file. If you "
+                        f"believe the diff is complete, make no further edits and "
+                        f"explain in your response which lines satisfy each "
+                        f"deliverable."
+                    )
             second_result = run_single(
                 backend, cfg.role("monolith"),
                 goal=followup_goal,

@@ -579,6 +579,12 @@ def _luxe_maintain(
 
     `config` overrides the default config (used by multi-variant runs to
     pin per-candidate model overlays).
+
+    SpecDD Lever 1 (v1.4-prep): when the fixture has `requirements:`
+    authored, write the spec to a temp file inside log_dir and pass
+    `--spec-yaml <path>` to luxe maintain. luxe's reprompt block uses
+    the spec validator gate when LUXE_REPROMPT_ON_DOC=1; otherwise
+    behavior is unchanged from v1.3.2.
     """
     cmd = [
         sys.executable, "-m", "luxe.cli", "maintain",
@@ -591,6 +597,15 @@ def _luxe_maintain(
     ]
     if config:
         cmd.extend(["--config", str(config)])
+    # SpecDD spec passthrough — only when the fixture has requirements.
+    # The temp file lives in log_dir for traceability; rewritten each
+    # invocation. spec.py's spec_to_yaml_dict round-trips the YAML.
+    if fixture.requirements:
+        from luxe.spec import spec_to_yaml_dict
+        spec = fixture.to_spec()
+        spec_path = log_dir / f"{fixture.id}.spec.yaml"
+        spec_path.write_text(yaml.safe_dump(spec_to_yaml_dict(spec)))
+        cmd.extend(["--spec-yaml", str(spec_path)])
     rc, out, err = _run_capture(cmd, log_dir, timeout_s=timeout_s)
     excerpt = _stderr_excerpt(err) if rc != 0 else ""
     return rc, _extract_run_id(out + err), excerpt
