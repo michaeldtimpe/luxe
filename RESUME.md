@@ -1,16 +1,94 @@
 # luxe — session resume document
 
-Current state: **v1.1.0 shipped 2026-05-02** at 9/10 acceptance. Two
-infrastructure improvements over v1.0: pinned-work_dir bench default
-(eliminates the dominant temp=0 variance source) + `manage_strict`
-task overlay (closes the deps-audit stuck-loop). Champion unchanged:
-`Qwen3.6-35B-A3B-6bit` at temperature=0.0 in
-`configs/single_64gb.yaml`.
+Current state: **v1.2.0 shipped 2026-05-02 (commit `df646b0`, tag `v1.2.0`)**.
+Closed a deterministic `lpe-rope-calc-implement-strict-flag` regression
+caused by `cve_lookup` being added unconditionally to the tool surface —
+gated to `task_type == "manage"`. Champion unchanged:
+`Qwen3.6-35B-A3B-6bit` at temperature=0.0 in `configs/single_64gb.yaml`.
 
-The one remaining FAIL is `lpe-rope-calc-document-typing` — model
-under-engagement (adds 1 line and stops). Out of v1.1 scope; needs
-either a model upgrade, few-shot prompting, or a runtime
-re-prompt-on-incomplete-diff loop.
+**Headline bench**: 8/10. Same score as v1.1, but the picture changed —
+v1.1's "9/10" was actually 8-9/10 with one borderline doc fixture. v1.2
+closes one deterministic implement FAIL; `nothing-ever-happens-document-config`
+is variance-borderline (~33% FAIL rate at n=3 replicates). lpe-typing
+remains the deterministic ceiling.
+
+---
+
+## ⚡ Resume here — picking up 2026-05-03 morning
+
+**Where we paused:** mid-flight on the `v1.3 reprompt-on-doc` lever
+probe. Three lever attempts on lpe-typing have now all failed:
+- v1.1 abstract overlay → +2/-2, FAIL
+- v1.2 procedural overlay → +2/-1, FAIL
+- v1.3 runtime reprompt + diff context → +2/-1, FAIL
+
+The lever is the *third* negative result on lpe-typing — likely a
+genuine model-side limit at this scale. **But** the lever has a
+*secondary* effect worth investigating: on `nothing-ever-happens-document-config`
+(the variance-borderline fixture, ~33% FAIL rate), it lifted first-pass
+diff <10 lines to +141 final. Question we paused on: **does the lever
+make nothing-doc-config deterministic PASS?**
+
+### Uncommitted state to know about
+
+`src/luxe/cli.py` has 114 lines added (uncommitted). Three pieces:
+1. `_REPROMPT_DOC_ADDITIONS_THRESHOLD = 10` constant
+2. `_diff_against_base(repo_path, base_sha)` helper
+3. `_should_reprompt_for_under_engagement(task_type, additions)` gate +
+   reprompt block in `maintain` command between citation lint and PR cycle.
+   Feature-flagged off by default; enable with `LUXE_REPROMPT_ON_DOC=1`.
+   No tests yet for the gate logic — would need adding before ship.
+
+### The decisive replicate (paused)
+
+3× replicate of `nothing-ever-happens-document-config` with reprompt
+enabled. **Replicate 1: PASS** (results saved at
+`acceptance/v1_3_nothing_doc_reprompt_replicate_1/`). Replicates 2 and 3
+were stopped before running. Resume command:
+
+```
+for i in 2 3; do
+  echo "=== Replicate $i ==="
+  LUXE_REPROMPT_ON_DOC=1 .venv/bin/python -m benchmarks.maintain_suite.run \
+      --variants benchmarks/maintain_suite/variants_v1_default.yaml \
+      --output "acceptance/v1_3_nothing_doc_reprompt_replicate_$i" \
+      --per-fixture-timeout 1800 \
+      --work-dir ~/.luxe/bench-workspace \
+      --id nothing-ever-happens-document-config \
+      --force 2>&1 | tail -22
+  echo ""
+done
+```
+
+(~5 min/replicate with reprompt firing; ~10 min total.)
+
+### Decision tree from replicate results
+
+Compare replicate-1 PASS + reps 2+3 outcomes against the prior baseline
+data (no reprompt: 1 FAIL + 2 PASS in
+`acceptance/v1_2_nothing_doc_replicate_{1,2,3}/`):
+
+- **3/3 PASS with reprompt** → lever stabilizes the variance. Ship:
+  - Move env var to `RoleConfig.reprompt_on_under_engagement` flag
+  - Add unit tests for `_should_reprompt_for_under_engagement` gate
+  - Add `lessons.md` entry (regression-and-recovery + variance fix story)
+  - Bump pyproject to `1.3.0`, commit, tag
+- **2/3 PASS** → no better than baseline (which was already 2/3). Lever
+  is decorative; revert or leave behind feature flag without promotion.
+- **0-1/3 PASS** → lever made variance *worse* (unlikely given rep 1
+  passed, but possible). Revert immediately.
+
+### If reverting
+
+`git checkout src/luxe/cli.py` cleans the working tree. No other files
+touched today besides what's in `df646b0` (v1.2.0 ship).
+
+### If not pursuing the reprompt lever further
+
+Pivot to highest-leverage queued item: **MLX_USE_ANE=1 probe**
+(see `project_mlx_use_ane_probe.md`). Smaller win expected given our
+85.4% prefix-cache hit rate, but worth a probe when ready. Decode-speed
+lever, no quality risk.
 
 ---
 
@@ -21,18 +99,20 @@ on `localhost:8000`). Takes a goal + repo, opens a PR. **Mono-only**
 since v1.0 — single model, single agent loop, single `luxe maintain`
 command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
-**What's shipped:** v1.1.0 (tag, with manage_strict_only overlay
-auto-firing on `manage` tasks; pinned-work_dir bench default).
+**What's shipped:** v1.2.0 (tag `df646b0`, per-tool subphase pass:
+cve_lookup gated to `manage`, bash chain-hardening, read_file binary
+detection, latent _REPO_ROOT bug closed). v1.1.0 features (manage_strict
+overlay, pinned-work_dir default) all preserved.
 
-**What's queued for v2.0:**
-- Per-tool refinement subphases (CVE lookup tool as the seed —
-  defeats audit hallucination by making CVE references deterministic
-  via OSV.dev). See `project_tool_subphases_and_cve_lookup.md`.
-  **Now the highest-leverage v2.0 direction.**
+**What's queued for v1.3 / v2.0:**
+- Reprompt-on-doc lever — uncommitted in `cli.py` behind
+  `LUXE_REPROMPT_ON_DOC=1`. Ship/revert decision pending morning
+  replicate (see "Resume here" at top).
+- ~~lpe-typing under-engagement~~ — three negative lever attempts.
+  Recommend accepting as ceiling unless model is upgraded.
 - MCP-mediated codebase slicing — independent value prop (reduces
-  ingest size on large repos). Composes with the per-tool subphases.
-- lpe-typing under-engagement — needs a different lever than prompt
-  overlays (B1's `document_strict` was a negative result).
+  ingest size on large repos).
+- MLX_USE_ANE=1 probe — decode-speed lever, no quality risk. Cheap.
 - ~~Phased Mode v2~~ **deprioritized** — A2 re-measurement on pinned
   work_dir substrate showed 85.4% prefix-cache hit rate (HIGH per
   the plan's threshold). The cache is already warm; subtask scoping
@@ -310,8 +390,8 @@ python -m benchmarks.maintain_suite.run \
 
 ## Open work / next steps
 
-Closed in Phase v1.0 / v1.1 (commits trace from `eb2bdf0` through
-v1.1.0 tag):
+Closed in Phase v1.0 / v1.1 / v1.2 (commits trace from `eb2bdf0` through
+`v1.2.0` tag `df646b0`):
 - Branch C calibration on `nothing-config` (regex now accepts
   markdown-style UPPER_SNAKE listings).
 - Fixture surgery on `lpe-typing`, `neon-rain-modules`,
@@ -320,8 +400,8 @@ v1.1.0 tag):
 - Gemma-4 dead settings entries removed.
 - Historical bake-offs re-graded.
 - A3 specprefill probe — reverted (~5% gain, didn't clear 15% gate).
-- B1 `document_strict` overlay — negative result; infrastructure
-  registered but not promoted.
+- B1 `document_strict` overlay (abstract) — negative result;
+  infrastructure registered but not promoted.
 - B2 `manage_strict` overlay — POSITIVE result; promoted in
   production. Closes deps-audit.
 - Variance investigation — confirmed random tempdir leak as
@@ -329,23 +409,38 @@ v1.1.0 tag):
   into `run.py`; future bench runs are deterministic on the
   pinned substrate.
 - v1.1.0 ship at 9/10.
+- **Per-tool subphase pass (v1.2.0)**: `cve_lookup` (gated to manage
+  task_type after surface-bloat regression discovery), bash chain
+  hardening, read_file binary detection, latent `_REPO_ROOT` import-bind
+  bug. 12 other tools audited solid.
+- **Procedural document_strict overlay (2026-05-03)**: revised B1
+  overlay with explicit decomposition + self-review. Reprobe negative —
+  reverted. lpe-typing diff still +2/-1.
+- **Variance discovery (2026-05-03)**: nothing-doc-config has ~33%
+  FAIL rate at n=3 replicates. v1.1's "9/10" was variance-fortunate;
+  effective ceiling was always 8-9/10. Implement category remains
+  deterministic at temp=0; doc/manage are not.
 
-Remaining for v2.0 (no current priority order; revisit):
+Remaining for v2.0 (priority-ordered after the morning replicate):
 
-1. **lpe-rope-calc-document-typing under-engagement** — only
-   remaining v1.1 FAIL. Stable across every temp=0 run. Closing
-   needs a different lever: a model upgrade, few-shot examples in
-   the prompt, or a runtime re-prompt-on-incomplete-diff loop
-   that detects multi-component goals where some component is
-   missing from the diff. Out of v1.1 scope.
-2. **Per-tool refinement subphases** — see
-   `project_tool_subphases_and_cve_lookup.md`. ~15 tools in the
-   dev-facing toolkit (read_file, edit_file, bash, lint,
-   typecheck, security_scan, deps_audit, ...) each get a
-   bench-probe → tool-side hardening → optional tool-overlay
-   subphase. Seed: `cve_lookup` tool backed by OSV.dev to defeat
-   the audit hallucination caveat called out in the v1.1 ship
-   entry.
+1. **lpe-rope-calc-document-typing under-engagement** — THREE negative
+   prompt/runtime lever attempts. Genuinely model-limited at this scale.
+   Remaining viable levers: model upgrade, few-shot examples in the
+   doc_strict prefix (untested but lower expected ROI given three
+   misses), specialized re-prompt tool that does the missing edit
+   deterministically (bench-gaming, not production). **Recommendation:
+   accept as ceiling; pivot.**
+2. **Reprompt-on-doc lever ship/revert decision** — depends on the
+   morning replicate (see "Resume here" at top of this file). If 3/3
+   PASS, lever ships at v1.3; if not, revert.
+3. **Per-tool refinement subphases** — see
+   `project_tool_subphases_and_cve_lookup.md`. v1.2 closed cve_lookup +
+   bash + read_file + _REPO_ROOT. Template validated. Future tools
+   added to the surface should follow the same shape AND get task_type
+   gating to avoid the surface-bloat trap (cve_lookup precedent).
+4. **MLX_USE_ANE=1 probe** — queued; see `project_mlx_use_ane_probe.md`.
+   Decode-speed lever; no quality risk. Smaller win expected given
+   85.4% cache hit rate, but cheap to test.
 3. ~~**Phased Mode v2**~~ — **deprioritized 2026-05-02 PM**. A2
    re-measurement on the pinned-work_dir substrate showed 85.4%
    prefix-cache hit rate (HIGH; well above the 65% threshold).
@@ -426,14 +521,15 @@ Remaining for v2.0 (no current priority order; revisit):
 ## Recent commit trail (most recent first)
 
 ```
-9b38d93  scripts: register_omlx_models — require --models-file (post-v1.0 cleanup)
-b81b628  bench: Branch B task-type overlays + multi-variant v1_release_gate fix
-506b190  docs: align iogpu.wired_limit_mb in RESUME.md with actual value (36864 MB)
-c6a83c6  bench: add timestamps + run progress + rolling ETA to run.py output
-b341ea9  bench: prompt-shaping v2 — fix CoT XML collision and HADS deliberation loop
-cb1d12c  bench: prompt-shaping bake-off scaffolding (registry, RoleConfig, variant matrix)
-c2b8484  bench: capture tool exceptions + drop dead escalate refs + sharpen regex_present errors
-76d3e7a  bench: add orphan_file grader gate — close last "tests pass for the wrong reason" hole
+df646b0  v1.2.0: gate cve_lookup to manage task_type — close v1.2 implement regression
+7ccba1f  feat: tool subphases — bash chain-hardening, read_file binary detection, fs.get_repo_root() fix
+84e3ea8  feat: cve_lookup — surface OSV.dev aliases; closes second-order hallucination
+c1e2a81  feat: cve_lookup tool — defeats audit hallucination via OSV.dev
+198a4a6  docs: post-v1.1 A2 re-measurement — prefix-cache hit rate is HIGH (85.4%)
+00c3dc7  v1.1.0: pinned work_dir default + manage_strict overlay → 9/10
+ec88cd2  bench: pin work_dir default + A/B variant YAML for overlay experiment
+89cc3e6  config: promote manage_strict_only overlay into production single_64gb
+eb9960c  feat: manage_strict overlay — closes deps-audit stuck-loop
 4cfdac9  v1.0: mono-only — delete swarm/micro/phased + tighten grader + 10 fixtures
 ```
 
