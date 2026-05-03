@@ -6,7 +6,9 @@ validate → dispatch → append results → repeat until done or budget exhaust
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -15,6 +17,7 @@ from typing import Any, Callable
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import context_pressure, elide_old_tool_results
+from luxe.run_state import append_event
 from luxe.tools.base import ToolCache, ToolDef, ToolCall, ToolFn, dispatch_tool, validate_args
 
 
@@ -88,6 +91,16 @@ def _parse_text_tool_calls(
 
 _MAX_CONSECUTIVE_REPEAT_STEPS = 2
 
+# Tools exempt from duplicate-call detection. Reads are idempotent in name
+# but post-write semantics differ — re-reading after an edit returns the
+# updated content, which the model relies on to verify edits landed.
+# Deduplicating reads strands the model: it tries to verify a write,
+# gets "you already called this" instead of fresh content, panics,
+# and retries the write — which then trips the streak-abort. Only
+# write/search tools where re-running yields no new information stay
+# in the dedup path.
+_DEDUP_EXEMPT_TOOLS = {"read_file"}
+
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
 # patterns mid-run. Set to 0 to disable. Configurable via env.
@@ -110,11 +123,14 @@ def run_agent(
     cache: ToolCache | None = None,
     cacheable: set[str] | None = None,
     on_tool_event: OnToolEvent | None = None,
+    run_id: str | None = None,
+    phase: str = "main",
 ) -> AgentResult:
     """Run the agent loop: chat → tool calls → dispatch → repeat."""
 
     result = AgentResult()
     t0 = time.monotonic()
+    log_calls = bool(run_id) and os.environ.get("LUXE_LOG_TOOL_CALLS") == "1"
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -208,7 +224,8 @@ def run_agent(
                     continue
 
             key = _call_key(tc.name, tc.arguments)
-            if key in seen_calls:
+            key_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
+            if key in seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
                 step_had_repeat = True
                 content = (
                     f"You already called {tc.name} with these exact arguments "
@@ -235,6 +252,13 @@ def run_agent(
                 })
                 if on_tool_event:
                     on_tool_event(dup)
+                if log_calls:
+                    append_event(
+                        run_id, "tool_call",
+                        phase=phase, step=step, name=tc.name,
+                        key_hash=key_hash, duplicate=True, cached=False,
+                        bytes_out=0,
+                    )
                 continue
 
             executed = dispatch_tool(
@@ -254,9 +278,23 @@ def run_agent(
 
             if on_tool_event:
                 on_tool_event(executed)
+            if log_calls:
+                append_event(
+                    run_id, "tool_call",
+                    phase=phase, step=step, name=tc.name,
+                    key_hash=key_hash, duplicate=False,
+                    cached=executed.cached, bytes_out=executed.bytes_out,
+                )
 
         if step_had_repeat:
             consecutive_repeat_steps += 1
+            if log_calls:
+                append_event(
+                    run_id, "tool_step_done",
+                    phase=phase, step=step,
+                    step_had_repeat=True,
+                    consecutive_repeat_steps=consecutive_repeat_steps,
+                )
             if consecutive_repeat_steps >= _MAX_CONSECUTIVE_REPEAT_STEPS:
                 result.final_text = resp.text or ""
                 result.aborted = True
@@ -267,6 +305,13 @@ def run_agent(
                 break
         else:
             consecutive_repeat_steps = 0
+            if log_calls:
+                append_event(
+                    run_id, "tool_step_done",
+                    phase=phase, step=step,
+                    step_had_repeat=False,
+                    consecutive_repeat_steps=0,
+                )
     else:
         result.final_text = resp.text if 'resp' in dir() else ""
         result.aborted = True

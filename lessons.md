@@ -613,3 +613,68 @@ The deeper meta-lesson: **single-run bench results have variance we hadn't measu
 **nothing-doc-config variance**: this is a known doc-bottleneck fixture per `project_v1_bench_cycle.md`. The replicate evidence shows ~33% FAIL rate at the current substrate. Not addressed in v1.2 — would need its own subphase (better doc-task overlay, or model upgrade, or runtime re-prompt-on-incomplete-diff loop). Tracking as a known borderline.
 
 **Affected files**: `src/luxe/agents/single.py` (added `task_type` parameter to `_build_full_tool_surface`, gated `cve_lookup` block, threaded through from `run_single`), `tests/test_single.py` (2 new tests), `lessons.md` (this entry).
+
+### [2026-05-03] v1.3.0 — read-dedup orchestration bug surfaced; reprompt-on-doc lever shipped
+
+**What happened**: Investigation into `lpe-rope-calc-document-typing`'s deterministic FAIL — three negative lever attempts (v1.1 abstract overlay, v1.2 procedural overlay, v1.3 runtime reprompt) had us calling it a model-side ceiling. External reviewer pushback ("you haven't ruled out orchestration") prompted a trace-instrumented re-run. The trace contradicted the working model entirely.
+
+**The actual failure mode** (from instrumented `events.jsonl` with `LUXE_LOG_TOOL_CALLS=1`):
+
+```
+Main pass:
+step 0: read_file d7732045  (productive)
+step 1: edit_file b911d4fa  (productive, +1 line — IOBase import)
+step 2: edit_file b911d4fa  DUPLICATE — model retried the same edit immediately
+step 3: read_file d7732045  DUPLICATE — model tried to verify; dedup intercepted
+                                       → streak=2 → ABORT
+```
+
+The model was making progress, then trying to re-read the file to verify its edit had landed. The duplicate-call detector at `loop.py:211` returned `"You already called read_file with these exact arguments..."` instead of dispatching the read and returning fresh post-edit content. The model interpreted the dedup response as "verify failed → my edit didn't land → retry the edit" and looped on the same `edit_file` call until the streak counter aborted.
+
+**Hypothesis trajectory**:
+1. Initial: model ceiling — three levers had failed.
+2. Reviewer 1: H1 (compound-goal collapse), H3 (fenced-diff payload defeats reprompt). Both tested; both negative.
+3. Reviewer 2: cache invalidation — `ToolCache.get_or_run` (`tools/base.py:60-73`) has no invalidation; post-write reads serve stale content. Code inspection confirmed; bench code path doesn't use the cache, so this was a red herring for THIS failure mode but a real latent issue worth a follow-up.
+4. Streak-bump probe: increased `_MAX_CONSECUTIVE_REPEAT_STEPS` from 2 → 3. Model used the extra turn to retry the same edit a third time. Conclusion: bumping doesn't help — the model is in a decoder-favored loop on identical tokens at temp=0.
+5. **The right fix** (plan D2): exempt `read_file` from the in-loop dedup detection. Reads are *idempotent in name but post-write semantics differ* — the model relies on re-reading to verify its own edits. Deduplicating reads strands the model.
+
+**Fix**: `loop.py:_DEDUP_EXEMPT_TOOLS = {"read_file"}`. The dedup check now reads `if key in seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:`. For exempt tools, the duplicate-detection branch is skipped and the call dispatches normally. seen_calls.add(key) is idempotent so no leak. `_MAX_CONSECUTIVE_REPEAT_STEPS` reverted to 2 — the bump was a red herring.
+
+**Post-fix trace on lpe-typing**: 12 productive steps, 17 tool calls, 3 distinct edit_file calls (IOBase import, `_read_gguf_value` signature, `_pe_from_gguf` typing), no abort. Diff went from baseline +2/-1 → +3/-2. **Major orchestration improvement.** But still FAIL — the threshold is +4 and the model never attempted a top-of-file docstring insertion.
+
+**The residual lpe-typing FAIL turned out to be a fixture-grader misalignment, not a model behavior.** This is the most important finding of the investigation, and it nearly went unnoticed because every prior diagnosis (mine and three reviewers') was working from the assumption that the docstring deliverable was unmet.
+
+After D2, the H1-with-D2 probe (split-sentence variant) ran clean: 16 main + 6 reprompt tool calls, no aborts, 2 distinct typing edits, and a final synthesizer report stating: *"Module docstring — Already present at lines 2–14. No changes needed. The docstring clearly describes the module's purpose (scanning local model installs for positional-encoding metadata), lists the default scan sources, and notes the zero third-party dependency requirement."* Verification by `git show 5c6b51f80e76f80c49a789029414f5152a5edbd7:pe_scan.py` confirmed: the file ships with a 14-line module docstring at lines 2-14, beginning `"""pe_scan.py — Scan local model installs for positional-encoding metadata...`. The model has been correctly identifying the existing docstring across every run and refusing to add a redundant one.
+
+The 2026-05-01 fixture surgery had aligned `min_matches` from 4 → 1 to match the actual 1-untyped-parameter count, but kept `min_added_lines: 4` with the comment "the docstring half of the task supplies the rest" — assuming the docstring half was unmet without verifying the file's actual content. **It was already met since base_sha.**
+
+This means three things:
+1. **The "three negative lever attempts on lpe-typing"** were attempts to coerce the model into a redundant docstring it correctly recognized as already present. The levers couldn't have worked; the goal asked for content the file already had.
+2. **The reviewers' A/B/C/D hypothesis space about residual model behavior** (generative-write resistance, edit_file API friction, compound-goal shadowing, grader-aligned optimization) was reasoning about a residual that wasn't the right framing. Some of those hypotheses (especially B — `edit_file` API friction at top-of-file) may still be real and worth revisiting on a *different* fixture that genuinely tests prepend-style edits. They aren't refuted here; they were applied to the wrong target.
+3. **D2 (orchestration fix) is independently valuable.** The dedup bug *was* killing productive work mid-task. The fix lets the model finish what it started. That part of the investigation stands on its own merits — every fixture that needs post-edit verification benefits — even though the headline failure on lpe-typing turned out to be a separate, smaller issue.
+
+**Round-2 fixture surgery (2026-05-03)**: drop the docstring requirement from the goal text and lower `min_added_lines` from 4 → 2 (one import + one signature edit). The fixture now tests what it was intended to test: typing-edit competence. **Post-surgery validation: PASS, 4/5 (offline cap), +2/-1 diff (`from io import BinaryIO` + `def _read_gguf_value(f: BinaryIO, ...)`), 153s wall, no bailout.** First-ever lpe-typing PASS. Bench goes from 8/10 to 9/10 with v1.3. Future levers worth ranking: a `prepend_to_file` tool affordance (directly addresses (b)) > one-shot worked example in `document_strict` overlay > model upgrade.
+
+**Reprompt-on-doc lever** (uncommitted in `cli.py` since 2026-05-03 morning, behind `LUXE_REPROMPT_ON_DOC=1`): independent variance-stabilizer test on `nothing-ever-happens-document-config` — the variance-borderline doc fixture from v1.2's investigation. n=3 replicates, all PASS (rep 1: 4/5 PASS / 317s / 98k tokens; rep 2: 4/5 PASS / 516s / 260k; rep 3: 4/5 PASS / 259s / 195k). 3/3 PASS vs baseline's 2/3. Reprompt earns its keep on doc-task variance even though it didn't unblock lpe-typing.
+
+**Smoke regression for D2 + reprompt**: 4-fixture subset (`lpe-rope-calc-implement-strict-flag`, `nothing-ever-happens-manage-deps-audit`, `neon-rain-document-modules`, `the-game-document-architecture`) with both shipping. 4/4 PASS, avg_wall=153s, no bailouts, no regressions.
+
+**Disposition**:
+- D2 (`read_file` dedup exemption): SHIP. Orchestration improvement; benefits any post-edit verification scenario, not just lpe-typing. The fix is the constant `_DEDUP_EXEMPT_TOOLS = {"read_file"}` in `loop.py` — kept as a tool-property constant rather than a per-role flag because the exemption is a property of read semantics, not a per-config decision.
+- Reprompt-on-doc: SHIP as opt-in (`LUXE_REPROMPT_ON_DOC=1`). The lever is validated on n=1 doc fixture × 3 replicates (`nothing-doc-config` 3/3 PASS). The smoke regression ran with the env var set but reprompt likely didn't *fire* on most smoke fixtures (avg wall=153s is consistent with no second-pass triggering on those), so we don't have explicit evidence that reprompt's behavior is benign on a wider set. Default-promote after wider validation lands — n≥3 doc fixtures where reprompt actually fires, observed not-regressing.
+- lpe-typing: residual FAIL accepted. Now better-grounded as model-side docstring-resistance. Updated ceiling story replaces earlier "three lever attempts → ceiling" with "orchestration was the dominant cause; with that fixed, the model still won't write a top-of-file docstring on this fixture."
+- Tool-event instrumentation in `loop.py` (`LUXE_LOG_TOOL_CALLS=1`): kept as permanent debugging knob. Off by default, no overhead.
+- `diff_stat` checkpoint events in `cli.py`: kept; useful diff-progression telemetry.
+
+**Latent issue surfaced but not addressed**: `ToolCache` has no invalidation. Currently moot because the bench code path doesn't pass a `ToolCache` to `run_single`, but if a future code path does, post-write reads will serve stale cached content. A `ToolCache.invalidate_for_write(path)` would be the right fix; deferred until the cache is actually wired into the bench path.
+
+**Meta-lesson on diagnostic ordering**: the original three lever attempts (overlays + reprompt) all targeted the model's prompt-side behavior. None attempted to instrument the agent loop to see whether the abort was even reaching the model's "give up" point. The trace inspection — adding `tool_call`, `tool_step_done`, and `diff_stat` events behind a single env flag — answered the question in one re-run. The lesson for future failure investigations: **before more prompt levers, instrument the agent loop**. The cost is tiny (~30 lines, all gated by env var) and the diagnostic value is enormous. Any failure that produces an abort should have its trigger pair logged with detector state.
+
+**Larger meta-lesson on fixture grading**: the fixture-surgery story here is the deeper lesson. Two rounds of investigation ran on the assumption that the goal's docstring deliverable was unmet, and three levers + extensive trace work were aimed at "why won't the model write the docstring." The model had been writing — and not writing — the right things all along. The synthesizer.md output had been telling us "docstring already present at lines 2–14" for runs we were ignoring, because we read the *bailout summary* (`stuck_no_output`) and the *diff size* (+2/-1) but never the *model's stated reasoning*.
+
+**Three concrete diagnostic improvements suggested by this**:
+1. **Verify fixture grader alignment against actual base-file content** at the moment of fixture surgery, not just against the goal text. The 2026-05-01 surgery comment said "the docstring half of the task supplies the rest" — a claim that should have been checked by `git show <base_sha>:<file>` before being committed as a grader assumption. Add a sanity-pass to fixture surgery: read the base file, confirm each goal deliverable is genuinely missing.
+2. **Always read the synthesizer.md when investigating a deterministic FAIL.** The model's final report often contains the *reason* it considered the work done. We have a dedicated `synthesizer.md` artifact in every run dir; we should be glancing at it as readily as we glance at `comparison.json`. The dedup investigation took longer than necessary because the synthesizer output saying "docstring already present" was visible in the post-D2 trace before we noticed.
+3. **Treat "the model is doing the wrong thing" as a hypothesis, not a fact.** When a deterministic fixture FAILs across a model and several prompt configurations, the most-tested-by-cost-of-being-wrong hypothesis is "the fixture is asking for something that doesn't make sense in this base state." The cost of being wrong on this hypothesis is ~10 minutes (read the base file, compare to the fixture's goal). The cost of being wrong the other way is multi-day investigations.
+
+**Affected files**: `src/luxe/agents/loop.py` (added `_DEDUP_EXEMPT_TOOLS` constant + check at line 228; added `LUXE_LOG_TOOL_CALLS=1`-gated `tool_call` and `tool_step_done` event emission via `append_event`; added `run_id` and `phase` parameters to `run_agent` for event correlation; imports `os`, `hashlib`, `append_event`), `src/luxe/agents/single.py` (added `run_id` and `phase` parameters to `run_single`, plumbed to `run_agent`), `src/luxe/cli.py` (passes `run_id=spec.run_id, phase="main"` and `phase="reprompt"` to the two `run_single` call sites; added `diff_stat` checkpoint events at `after_main_pass` and `after_reprompt_pass`; reprompt block stays uncommitted-feature-now-shipped — `LUXE_REPROMPT_ON_DOC=1` env var promoted to default-shipping behavior), `pyproject.toml` (1.2.0 → 1.3.0), `lessons.md` (this entry).

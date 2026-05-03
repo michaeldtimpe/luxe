@@ -33,32 +33,35 @@ fixtures:
   - id: lpe-rope-calc-document-typing
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/lpe-rope-calc
     base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
-    goal: "Add a module docstring at the top of pe_scan.py and add type hints to any untyped parameters in top-level function signatures (most are already typed; the remaining untyped ones are the gap), preserving existing behaviour"
+    goal: "Add type hints to any untyped parameters in top-level function signatures (most are already typed; the remaining untyped ones are the gap), preserving existing behaviour. The module already has a docstring at the top of pe_scan.py — do not add a redundant one."
     task_type: document
     expected_outcome:
       kind: regex_present
       pattern: "def \\w+\\([^)]*: ?(?:str|int|float|bool|Path|list|dict|Optional|None|Any|IO|BinaryIO|TextIO)"
-      min_matches: 1          # 2026-05-01 fixture surgery: the original
-                              # min_matches=4 + comment ("~6 top-level fns")
-                              # was wrong; pe_scan.py at 5c6b51f has 14
-                              # top-level defs, 13 already-typed, 1 untyped
-                              # (`f` in _read_gguf_value). ≥1 matches the
-                              # actual gap. Anti-gaming defense moves to
-                              # min_added_lines=4 below — typing one
-                              # parameter alone is 1 added line, which
-                              # would fail the substantive-edit gate; the
-                              # docstring half of the task supplies the
-                              # rest. Pattern widened to accept modern
-                              # types (Any/IO/BinaryIO) since the original
-                              # list excluded legitimate file-handle types.
-      min_added_lines: 4      # forces docstring (3-6 lines) + signature
-                              # edit; typing-only output (2 added lines)
-                              # fails this gate.
+      min_matches: 1          # pe_scan.py at 5c6b51f has 14 top-level defs,
+                              # 13 already-typed, 1 untyped (`f` in
+                              # _read_gguf_value). ≥1 matches the actual gap.
+      min_added_lines: 2      # 2026-05-03 fixture surgery (round 2): the
+                              # 2026-05-01 surgery aligned min_matches to
+                              # actual file state but kept min_added_lines=4
+                              # assuming the docstring half was unmet. It
+                              # WAS already met — pe_scan.py at 5c6b51f
+                              # ships with a 14-line module docstring at
+                              # lines 2-14. The model correctly identified
+                              # the existing docstring across multiple runs
+                              # and refused to add a redundant one; the
+                              # fixture was failing because of a grader
+                              # gate asking for content the file already
+                              # has. Round-2 fix: drop the docstring
+                              # requirement from the goal and lower the
+                              # floor to 2 (one typing import + one
+                              # signature edit).
     notes: |
       Easy-win document task. Single-file repo; mono mode handles in <2 min once warm.
-      Fixture surgery 2026-05-01: thresholds aligned with actual file state
-      after Phase 0 grader fix exposed that the original min_matches=4 was
-      unmeetable on a base file that already had most signatures typed.
+      Fixture surgery 2026-05-01: thresholds aligned to actual untyped-param count.
+      Fixture surgery 2026-05-03: dropped docstring requirement (already present
+      in base file at lines 2-14); lowered min_added_lines to match typing-only
+      target. Investigation that surfaced this is in lessons.md v1.3.0 entry.
 
   - id: lpe-rope-calc-implement-strict-flag
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/lpe-rope-calc

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,59 @@ def main():
 
 
 _WRITE_TASKS = {"implement", "bugfix", "document", "manage"}
+
+
+# v1.3 probe: re-prompt-on-under-engagement lever for doc tasks. The B1+B2
+# overlay attempts (v1.1 abstract / v1.2 procedural anchor) both failed to
+# unblock lpe-typing's under-engagement at the model scale. This is a
+# runtime lever instead: after the agent loop finishes, if a doc-task diff
+# is suspiciously small, re-invoke the agent with the goal + actual diff
+# and a directive to find missing deliverables. Hardcoded threshold for
+# the probe; if the lever lands, promote to RoleConfig.
+_REPROMPT_DOC_ADDITIONS_THRESHOLD = 10
+
+
+def _diff_against_base(repo_path: str, base_sha: str) -> tuple[int, int, str]:
+    """Return (additions, deletions, diff_text) of working tree vs base_sha.
+
+    Uses --numstat for stable counts; --diff for the patch text the
+    re-prompt feeds to the model. Both run against the same revision
+    range so they're consistent.
+    """
+    additions = deletions = 0
+    stat = subprocess.run(
+        ["git", "diff", "--numstat", base_sha, "--"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if stat.returncode == 0:
+        for line in stat.stdout.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                try:
+                    additions += int(parts[0])
+                    deletions += int(parts[1])
+                except ValueError:
+                    pass
+    patch = subprocess.run(
+        ["git", "diff", base_sha, "--"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    diff_text = patch.stdout if patch.returncode == 0 else ""
+    return additions, deletions, diff_text
+
+
+def _should_reprompt_for_under_engagement(task_type: str, additions: int) -> bool:
+    """Reprompt gate: doc tasks with diff additions below threshold.
+
+    Validated v1.3.0 on `nothing-ever-happens-document-config` (3/3 PASS as
+    variance stabilizer; baseline 2/3). Set LUXE_REPROMPT_ON_DOC=1 to
+    enable. Kept opt-in until a wider doc-fixture validation (n≥3 fixtures
+    where reprompt actually fires) lands — n=1 fixture × 3 reps is enough
+    to ship the lever, not enough to default-promote it.
+    """
+    if os.environ.get("LUXE_REPROMPT_ON_DOC") != "1":
+        return False
+    return task_type == "document" and additions < _REPROMPT_DOC_ADDITIONS_THRESHOLD
 
 
 @main.command()
@@ -198,6 +252,8 @@ def maintain(
             languages=languages,
             extra_tool_defs=extra_tool_defs or None,
             extra_tool_fns=extra_tool_fns or None,
+            run_id=spec.run_id,
+            phase="main",
         )
         append_event(spec.run_id, "single_mode_done",
                      wall_s=single_result.wall_s,
@@ -208,6 +264,11 @@ def maintain(
                      aborted=single_result.aborted,
                      abort_reason=single_result.abort_reason,
                      final_text_chars=len(single_result.final_text or ""))
+        if detected_task in _WRITE_TASKS:
+            _ds = _diff_against_base(repo_path, prep.base_sha)
+            append_event(spec.run_id, "diff_stat",
+                         checkpoint="after_main_pass",
+                         additions=_ds[0], deletions=_ds[1])
 
         final_report = single_result.final_text or ""
 
@@ -230,6 +291,74 @@ def maintain(
                               f"({len(lint.citations)} citations: {lint.summary()})")
                 append_event(spec.run_id, "citation_lint_passed",
                              count=len(lint.citations), summary=lint.summary())
+
+        # v1.3 probe — re-prompt-on-under-engagement for doc tasks (see
+        # _should_reprompt_for_under_engagement docstring above).
+        _reprompt_diff = (
+            _diff_against_base(repo_path, prep.base_sha)
+            if detected_task in _WRITE_TASKS else None
+        )
+        if (_reprompt_diff is not None
+                and _should_reprompt_for_under_engagement(
+                    detected_task, _reprompt_diff[0])):
+            additions, deletions, diff_text = _reprompt_diff
+            console.print(
+                f"\n[bold cyan]▶ Reprompt 2nd pass[/]  "
+                f"(diff +{additions}/-{deletions} below threshold "
+                f"{_REPROMPT_DOC_ADDITIONS_THRESHOLD})"
+            )
+            append_event(spec.run_id, "reprompt_fired",
+                         additions=additions, deletions=deletions,
+                         threshold=_REPROMPT_DOC_ADDITIONS_THRESHOLD)
+            followup_goal = (
+                f"You completed an initial pass on this goal:\n  {goal}\n\n"
+                f"The diff so far is small ({additions} added / "
+                f"{deletions} deleted lines):\n"
+                f"```diff\n{diff_text}\n```\n\n"
+                f"Re-read the goal carefully. Identify each named deliverable. "
+                f"For any deliverable NOT yet reflected in the diff, make the "
+                f"missing edits now via edit_file or write_file. If you "
+                f"believe the diff is complete, make no further edits and "
+                f"explain in your response which lines satisfy each "
+                f"deliverable."
+            )
+            second_result = run_single(
+                backend, cfg.role("monolith"),
+                goal=followup_goal,
+                task_type=detected_task,
+                languages=languages,
+                extra_tool_defs=extra_tool_defs or None,
+                extra_tool_fns=extra_tool_fns or None,
+                run_id=spec.run_id,
+                phase="reprompt",
+            )
+            single_result.tool_calls_total += second_result.tool_calls_total
+            single_result.schema_rejects += second_result.schema_rejects
+            single_result.prompt_tokens += second_result.prompt_tokens
+            single_result.completion_tokens += second_result.completion_tokens
+            single_result.wall_s += second_result.wall_s
+            single_result.tool_calls.extend(second_result.tool_calls)
+            if second_result.aborted:
+                single_result.aborted = True
+                single_result.abort_reason = (
+                    "reprompt: " + (second_result.abort_reason or "")
+                )
+            if second_result.final_text:
+                single_result.final_text = (
+                    (single_result.final_text or "")
+                    + "\n\n--- Reprompt 2nd pass ---\n"
+                    + second_result.final_text
+                )
+                final_report = single_result.final_text
+                (run_dir(spec.run_id) / "synthesizer.md").write_text(final_report)
+            append_event(spec.run_id, "reprompt_done",
+                         second_pass_tool_calls=second_result.tool_calls_total,
+                         second_pass_completion_tokens=second_result.completion_tokens,
+                         second_pass_aborted=second_result.aborted)
+            _ds = _diff_against_base(repo_path, prep.base_sha)
+            append_event(spec.run_id, "diff_stat",
+                         checkpoint="after_reprompt_pass",
+                         additions=_ds[0], deletions=_ds[1])
 
         if detected_task in _WRITE_TASKS:
             try:
