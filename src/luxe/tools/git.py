@@ -6,17 +6,18 @@ import subprocess
 from typing import Any
 
 from luxe.tools.base import ToolDef, ToolFn
-from luxe.tools.fs import _REPO_ROOT
+from luxe.tools.fs import get_repo_root
 
 
 def _run_git(*cmd: str, max_output: int = 32768) -> tuple[str, str | None]:
-    if _REPO_ROOT is None:
+    repo_root = get_repo_root()
+    if repo_root is None:
         return "", "Repo root not set"
     try:
         proc = subprocess.run(
             ["git", *cmd],
             capture_output=True, text=True,
-            cwd=_REPO_ROOT, timeout=30,
+            cwd=repo_root, timeout=30,
         )
         if proc.returncode != 0:
             return "", proc.stderr.strip() or f"git exited with {proc.returncode}"

@@ -7,19 +7,20 @@ import subprocess
 from typing import Any
 
 from luxe.tools.base import ToolDef, ToolFn
-from luxe.tools.fs import _REPO_ROOT
+from luxe.tools.fs import get_repo_root
 
 _MAX_FINDINGS = 150
 _TIMEOUT = 60
 
 
 def _run_tool(cmd: list[str], parse_json: bool = False) -> tuple[str, str | None]:
-    if _REPO_ROOT is None:
+    repo_root = get_repo_root()
+    if repo_root is None:
         return "", "Repo root not set"
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
-            cwd=_REPO_ROOT, timeout=_TIMEOUT,
+            cwd=repo_root, timeout=_TIMEOUT,
         )
         output = proc.stdout or proc.stderr
         if parse_json:
