@@ -89,6 +89,16 @@ fixtures:
       flag-conditioned exit code. Outcome regex is broad (any of three
       argparse idioms) so a working implementation will pass regardless of
       style; min_matches=2 forces both registration and usage.
+      SpecDD Lever 1 (v1.4-prep): mechanical port of expected_outcome to R1.
+      min_added_lines=6 floor is NOT yet representable in the spec model;
+      legacy grader still enforces it.
+    requirements:
+      - id: R1
+        must: "Register a --strict CLI argument and use it to gate exit code (≥2 references in added lines: arg registration + usage site)"
+        done_when: "regex `(?:add_argument|--strict|args\\.strict)` matches in ≥2 added lines"
+        kind: regex_present
+        pattern: "(?:add_argument|--strict|args\\.strict)"
+        min_matches: 2
 
   # --- 2) the-game — small JS movie randomizer (74 KB) ---------------------
   - id: the-game-implement-shuffle-shortcut
@@ -103,6 +113,15 @@ fixtures:
     notes: |
       Small JS feature add. Tests luxe's ability to find the existing
       randomization handler and wire a keyboard input.
+      SpecDD Lever 1 (v1.4-prep): mechanical port. min_added_lines=5
+      remains a legacy-grader floor, not yet in spec model.
+    requirements:
+      - id: R1
+        must: "Bind a keyboard event listener (keydown/keyup/keypress) to wire the new shortcut"
+        done_when: "regex `addEventListener.*['\\\"](key(down|up|press))['\\\"]` matches in ≥1 added line"
+        kind: regex_present
+        pattern: "addEventListener.*['\"](key(down|up|press))['\"]"
+        min_matches: 1
 
   - id: the-game-document-architecture
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/the-game
@@ -129,6 +148,14 @@ fixtures:
     notes: |
       Mid-sized JS implement task. Existing test suite must still pass.
       Image-heavy assets/ directory is correctly skipped by BM25/AST indices.
+      SpecDD Lever 1 (v1.4-prep): mechanical port of tests_pass to R1.
+      Single requirement; demonstrates the tests_pass kind in spec form.
+    requirements:
+      - id: R1
+        must: "Existing test suite passes after the Shift+R shortcut implementation"
+        done_when: "`npm test` exits 0 in the repo root"
+        kind: tests_pass
+        command: "npm test"
 
   - id: neon-rain-document-modules
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/neon-rain
@@ -209,6 +236,15 @@ fixtures:
       Implement task on a 45-KB Flask app. Tests model's ability to find
       the Flask app instance and add a route in idiomatic style. Pattern
       matches both bare-app and blueprint registration.
+      SpecDD Lever 1 (v1.4-prep): mechanical port. min_added_lines=4
+      remains a legacy-grader floor.
+    requirements:
+      - id: R1
+        must: "Register a Flask route for /health on the existing app or blueprint"
+        done_when: "regex `(?:@app\\.route|@bp\\.route).*['\\\"]/health['\\\"]` matches in ≥1 added line"
+        kind: regex_present
+        pattern: "(?:@app\\.route|@bp\\.route).*['\"]/health['\"]"
+        min_matches: 1
 
   # --- 5) nothing-ever-happens — Polymarket trading bot (907 KB) -----------
   - id: nothing-ever-happens-manage-deps-audit
