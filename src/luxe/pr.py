@@ -133,7 +133,17 @@ def _run(cmd: list[str], cwd: str | Path, env: dict | None = None,
 # --- preflight -------------------------------------------------------------
 
 def assert_gh_auth() -> None:
-    """Raise GhAuthError if `gh` is missing or not authenticated."""
+    """Raise GhAuthError if `gh` is missing or not authenticated.
+
+    Retry-with-backoff on rc!=0 to defend against the intermittent flake
+    documented in `project_gh_auth_flake.md`: `gh auth status` is observed
+    to non-deterministically fail mid-bench while the auth state is
+    actually fine (verifiable by re-checking seconds later). 3 attempts
+    at 0.5s / 1.5s spacing — total worst-case 2s of preflight delay
+    before a true auth failure surfaces. Captures the last attempt's
+    stderr for the error message so a real auth problem still gives the
+    user the actionable hint.
+    """
     try:
         result = _run(["gh", "auth", "status"], cwd=Path.cwd())
     except FileNotFoundError as e:
@@ -141,10 +151,27 @@ def assert_gh_auth() -> None:
             "GitHub CLI (`gh`) not found. Install with `brew install gh` and "
             "authenticate with `gh auth login`."
         ) from e
-    if not result.ok:
-        raise GhAuthError(
-            "GitHub CLI is not authenticated. Run `gh auth login` and re-run."
-        )
+
+    if result.ok:
+        return
+
+    # Retry — the flake recovers within seconds when it fires.
+    for delay_s in (0.5, 1.5):
+        time.sleep(delay_s)
+        try:
+            result = _run(["gh", "auth", "status"], cwd=Path.cwd())
+        except FileNotFoundError as e:
+            raise GhAuthError(
+                "GitHub CLI (`gh`) not found mid-retry."
+            ) from e
+        if result.ok:
+            return
+
+    raise GhAuthError(
+        "GitHub CLI is not authenticated (3 attempts). "
+        "Run `gh auth login` and re-run. "
+        f"Last stderr: {result.stderr.strip()[:200] if result.stderr else '(empty)'}"
+    )
 
 
 def is_dirty(repo_path: str | Path) -> bool:
