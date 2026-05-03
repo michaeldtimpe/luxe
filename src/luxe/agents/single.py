@@ -25,11 +25,19 @@ from luxe import symbols as symbols_mod
 def _build_full_tool_surface(
     languages: frozenset[str] | None,
     tool_allowlist: list[str] | None,
+    task_type: str | None = None,
 ) -> tuple[list[ToolDef], dict[str, ToolFn], set[str]]:
     """Assemble the full read+write+analyze+shell+git tool surface.
 
     `tool_allowlist` (typically from the role config) restricts which of these
     are exposed. Pass None to expose everything — handy for tests.
+
+    `task_type` gates audit-only tools off non-audit tasks. cve_lookup is the
+    canonical case: it closes deps-audit hallucination on `manage` but, when
+    present on `implement`/`document`/`bugfix`/`review` surfaces, dilutes the
+    model's prior over edit_file/write_file enough to flip a previously-PASS
+    implement fixture into prose-mode under-engagement (lpe-rope-calc-implement-
+    strict-flag, deterministic 3/3 in v1.2 regression probe).
     """
     defs: list[ToolDef] = []
     fns: dict[str, ToolFn] = {}
@@ -67,9 +75,11 @@ def _build_full_tool_surface(
     # Closes the audit-hallucination gap from v1.1's deps-audit by giving
     # the model a deterministic, factual CVE source instead of having it
     # produce CVE-shaped strings that match the regex but may be invented.
-    defs.append(cve_lookup_mod.cve_lookup_def())
-    fns.update(cve_lookup_mod.TOOL_FNS)
-    cacheable.update(cve_lookup_mod.CACHEABLE)
+    # Gated to `manage` task_type only — see docstring above.
+    if task_type == "manage":
+        defs.append(cve_lookup_mod.cve_lookup_def())
+        fns.update(cve_lookup_mod.TOOL_FNS)
+        cacheable.update(cve_lookup_mod.CACHEABLE)
 
     if tool_allowlist is not None:
         allowed = set(tool_allowlist)
@@ -98,7 +108,9 @@ def run_single(
     allowlist of native tools. Anything in `extra_tool_defs` (e.g. MCP tools)
     is appended unconditionally — MCP tools are namespaced and can't collide.
     """
-    defs, fns, cacheable = _build_full_tool_surface(languages, role_cfg.tools or None)
+    defs, fns, cacheable = _build_full_tool_surface(
+        languages, role_cfg.tools or None, task_type=task_type
+    )
 
     if extra_tool_defs:
         defs = defs + list(extra_tool_defs)
