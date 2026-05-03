@@ -377,6 +377,13 @@ class FixtureResult:
     gates_triggered: list[dict] = field(default_factory=list)
     diff_additions: int = 0
     diff_deletions: int = 0
+    # SpecDD Lever 1 (v1.4-prep) parallel observation. Populated when a
+    # fixture has `requirements:` authored. Does NOT gate score (legacy
+    # `expected_outcome` still drives the binary PASS/FAIL); spec_validation
+    # is observability for the migration. Each entry: {id, must, satisfied,
+    # detail}. spec_all_satisfied is None when no requirements were authored.
+    spec_validation: list[dict] = field(default_factory=list)
+    spec_all_satisfied: bool | None = None
 
     @property
     def passed(self) -> bool:
@@ -398,6 +405,25 @@ class Fixture:
     base_sha: str = ""
     required_env: list[str] = field(default_factory=list)
     notes: str = ""
+    # SpecDD Lever 1 (v1.4-prep): list of raw requirement dicts as authored
+    # in fixtures.yaml. Empty list = legacy fixture (uses expected_outcome
+    # only). Validated lazily via to_spec(); not eagerly because fixtures
+    # without requirements should still load on systems where src/luxe/spec.py
+    # isn't yet importable for any reason.
+    requirements: list[dict] = field(default_factory=list)
+
+    def to_spec(self):
+        """Return a Spec if requirements are authored, else None.
+
+        Imported lazily so legacy fixture loads don't depend on luxe.spec.
+        """
+        if not self.requirements:
+            return None
+        from luxe.spec import spec_from_yaml_dict
+        return spec_from_yaml_dict({
+            "goal": self.goal,
+            "requirements": self.requirements,
+        })
 
     @classmethod
     def from_dict(cls, d: dict) -> "Fixture":
@@ -410,6 +436,7 @@ class Fixture:
             repo_path=str(d.get("repo_path", "")),
             base_sha=str(d.get("base_sha", "")),
             required_env=list(d.get("required_env", [])),
+            requirements=list(d.get("requirements", [])),
             notes=str(d.get("notes", "")),
         )
 
@@ -790,6 +817,26 @@ def grade_fixture(
                    else "no citations" if citations_total == 0 and citations_unresolved == 0
                    else f"{citations_unresolved} unresolved"),
     })
+
+    # SpecDD Lever 1 (v1.4-prep) parallel observation: when the fixture has
+    # `requirements:` authored, run the spec validator alongside the legacy
+    # grader and record per-requirement results. Does NOT change result.score
+    # — `expected_outcome` is still the binary gate. This lets us compare
+    # spec output to legacy output as fixtures migrate.
+    spec = fixture.to_spec()
+    if spec is not None and base_sha:
+        from luxe.spec_validator import validate as _validate_spec
+        validation = _validate_spec(spec, repo_path, base_sha)
+        result.spec_all_satisfied = validation.all_satisfied
+        result.spec_validation = [
+            {
+                "id": r.requirement.id,
+                "must": r.requirement.must,
+                "satisfied": r.satisfied,
+                "detail": r.detail,
+            }
+            for r in validation.results
+        ]
 
     return result
 
