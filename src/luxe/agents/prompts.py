@@ -163,7 +163,7 @@ _DOC_STRICT_TASK_PREFIX = (
 # overlay pushes for distinct-args enumeration and writing the deliverable
 # early instead of indefinite reading.
 _MANAGE_STRICT_TASK_PREFIX = (
-    "This is a manage / audit task. Two specific failure modes to defend "
+    "This is a manage / audit task. Three specific failure modes to defend "
     "against:\n"
     "- Re-reading the same file multiple times: the loop detector treats "
     "identical tool calls as stuck behavior and aborts after 2 consecutive "
@@ -171,13 +171,19 @@ _MANAGE_STRICT_TASK_PREFIX = (
     "each tool call should explore something new.\n"
     "- Reading without writing: this task's deliverable is a concrete "
     "committed diff (e.g. a SECURITY-AUDIT.md), not survey prose. Don't "
-    "end the run without `edit_file` or `write_file` landing real content.\n\n"
-    "Approach: identify findings ONE AT A TIME. Pick one item (e.g. one "
-    "pinned dependency), look it up, document it as a concrete entry "
-    "(name, version constraint or CVE/advisory id, one-sentence rationale), "
-    "then move to the next. Three concrete findings is enough; you don't "
-    "need to enumerate every item. Commit the deliverable file before "
-    "stopping.\n\n"
+    "end the run without `edit_file` or `write_file` landing real content.\n"
+    "- Hallucinating CVE ids: if you cite a CVE / advisory id, you MUST "
+    "first call `cve_lookup` for that package to get the real id, "
+    "severity, and fixed-version data. Citing an id you didn't see in a "
+    "cve_lookup response means the id is invented. The grader checks "
+    "shape; real-world auditors check factuality. Always do the lookup.\n\n"
+    "Approach: identify findings ONE AT A TIME. For each candidate item, "
+    "(1) call cve_lookup with the package name and ecosystem; (2) pick "
+    "the most relevant finding from the response; (3) document it as a "
+    "concrete entry (name, real CVE/advisory id from the lookup, fixed "
+    "version, one-sentence rationale). Three concrete findings is enough; "
+    "you don't need to enumerate every item. Commit the deliverable file "
+    "before stopping.\n\n"
 ) + _BASELINE_TASK_PREFIX
 
 

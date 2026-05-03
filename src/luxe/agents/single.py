@@ -16,7 +16,7 @@ from luxe.agents.loop import AgentResult, OnToolEvent, run_agent
 from luxe.agents.prompts import get as get_prompt, resolve_prompt_ids
 from luxe.backend import Backend
 from luxe.config import RoleConfig
-from luxe.tools import analysis, fs, git, shell
+from luxe.tools import analysis, cve_lookup as cve_lookup_mod, fs, git, shell
 from luxe.tools.base import ToolCache, ToolDef, ToolFn
 from luxe import search as search_mod
 from luxe import symbols as symbols_mod
@@ -62,6 +62,14 @@ def _build_full_tool_surface(
     defs.extend(a_defs)
     fns.update(a_fns)
     cacheable.update(analysis.CACHEABLE)
+
+    # cve_lookup — language-agnostic; queries OSV.dev for any ecosystem.
+    # Closes the audit-hallucination gap from v1.1's deps-audit by giving
+    # the model a deterministic, factual CVE source instead of having it
+    # produce CVE-shaped strings that match the regex but may be invented.
+    defs.append(cve_lookup_mod.cve_lookup_def())
+    fns.update(cve_lookup_mod.TOOL_FNS)
+    cacheable.update(cve_lookup_mod.CACHEABLE)
 
     if tool_allowlist is not None:
         allowed = set(tool_allowlist)
