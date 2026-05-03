@@ -62,6 +62,17 @@ fixtures:
       Fixture surgery 2026-05-03: dropped docstring requirement (already present
       in base file at lines 2-14); lowered min_added_lines to match typing-only
       target. Investigation that surfaced this is in lessons.md v1.3.0 entry.
+      SpecDD Lever 1 (v1.4-prep): proof-of-concept fixture for `requirements:`
+      schema. Currently runs ALONGSIDE expected_outcome (parallel observation);
+      does not gate score. When the integration matures, expected_outcome will
+      become a transitional alias for R1.
+    requirements:
+      - id: R1
+        must: "Add a type hint to any untyped parameter in a top-level function signature in pe_scan.py"
+        done_when: "regex matches in ≥1 added line: a typed-parameter signature using a recognized type"
+        kind: regex_present
+        pattern: "def \\w+\\([^)]*: ?(?:str|int|float|bool|Path|list|dict|Optional|None|Any|IO|BinaryIO|TextIO)"
+        min_matches: 1
 
   - id: lpe-rope-calc-implement-strict-flag
     repo_url: /Users/michaeltimpe/.luxe/fixture-cache/lpe-rope-calc
