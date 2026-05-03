@@ -18,7 +18,8 @@ from luxe.tools import cve_lookup
 _OSV_AIOHTTP_RESPONSE = {
     "vulns": [
         {
-            "id": "CVE-2023-46136",
+            "id": "GHSA-q3qx-c6g2-7pw2",
+            "aliases": ["CVE-2023-46136", "PYSEC-2023-225"],
             "summary": "aiohttp 3.9.0 and earlier have a DoS vulnerability in body parser",
             "details": "A long prose details block we don't want in the model's prompt — it eats tokens with no audit value.",
             "severity": [{"type": "CVSS_V3", "score": "7.5"}],
@@ -58,18 +59,34 @@ def isolate_cache(tmp_path, monkeypatch):
 # --- compression --
 
 def test_compress_response_keeps_load_bearing_fields():
-    """The compressed response must keep id, summary (truncated), severity,
-    fixed_versions, and a top advisory URL — the fields a real audit needs."""
+    """The compressed response must keep id, aliases, summary (truncated),
+    severity, fixed_versions, and a top advisory URL — the fields a real
+    audit needs to ground its findings without inventing ids."""
     out = cve_lookup._compress_response(_OSV_AIOHTTP_RESPONSE)
     assert out["count"] == 1
     assert out["truncated"] is False
     v = out["vulnerabilities"][0]
-    assert v["id"] == "CVE-2023-46136"
+    assert v["id"] == "GHSA-q3qx-c6g2-7pw2"
+    # Aliases are load-bearing — many advisories have OSV's id as a GHSA
+    # but the model + downstream readers expect the CVE id. Without
+    # aliases preserved, the model would have to recall the CVE from
+    # training data (sometimes correct, never deterministic).
+    assert v["aliases"] == ["CVE-2023-46136", "PYSEC-2023-225"]
     assert "DoS" in v["summary"]
     assert v["severity"] == "7.5"
     assert v["fixed_versions"] == ["3.9.4"]
     # Prefer ADVISORY-typed reference; not the WEB-typed or REPORT.
     assert "GHSA-q3qx-c6g2-7pw2" in v["advisory_url"]
+
+
+def test_compress_response_handles_missing_aliases():
+    """Some OSV entries have no aliases (e.g. PYSEC-only or GHSA-only).
+    The compressor must return an empty list, not crash, not omit the key.
+    Stable schema makes the model's prompt parsing predictable."""
+    raw = {"vulns": [{"id": "PYSEC-2019-123", "summary": "x",
+                      "affected": [], "references": []}]}
+    out = cve_lookup._compress_response(raw)
+    assert out["vulnerabilities"][0]["aliases"] == []
 
 
 def test_compress_response_drops_prose_details():
@@ -168,7 +185,8 @@ def test_cve_lookup_fn_uses_cache_on_repeat_call():
 
 
 def test_cve_lookup_fn_returns_compressed_json():
-    """Response is JSON the model can parse; CVE id surfaces in result."""
+    """Response is JSON the model can parse; canonical id (GHSA) surfaces
+    plus aliases (containing the CVE) and fixed_versions."""
     with patch.object(cve_lookup, "_query_osv",
                       return_value=_OSV_AIOHTTP_RESPONSE):
         result, err = cve_lookup.cve_lookup_fn(
@@ -176,8 +194,10 @@ def test_cve_lookup_fn_returns_compressed_json():
     assert err is None
     parsed = json.loads(result)
     assert parsed["count"] == 1
-    assert parsed["vulnerabilities"][0]["id"] == "CVE-2023-46136"
-    assert parsed["vulnerabilities"][0]["fixed_versions"] == ["3.9.4"]
+    v = parsed["vulnerabilities"][0]
+    assert v["id"] == "GHSA-q3qx-c6g2-7pw2"
+    assert "CVE-2023-46136" in v["aliases"]
+    assert v["fixed_versions"] == ["3.9.4"]
 
 
 def test_cve_lookup_fn_handles_http_error_cleanly():

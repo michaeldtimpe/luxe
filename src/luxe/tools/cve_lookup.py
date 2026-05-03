@@ -13,11 +13,16 @@ ecosystem (PyPI, npm, Go, Maven, RubyGems, crates.io, NuGet, ...).
 Responses are cached to ~/.luxe/cve_cache/ with 24h TTL so repeat
 lookups within a multi-fixture bench run don't pound the API.
 
-Response is compressed before returning to the model: only id, summary
-(truncated), severity score, fixed versions, and the top advisory URL
-survive. The full OSV.dev response includes long prose 'details'
-blocks and ecosystem-specific chaff that would otherwise burn prompt
-tokens with no benefit.
+Response is compressed before returning to the model: only id, aliases
+(e.g. ['CVE-XXXX-YYYY']), summary (truncated), severity score, fixed
+versions, and the top advisory URL survive. The full OSV.dev response
+includes long prose 'details' blocks and ecosystem-specific chaff that
+would otherwise burn prompt tokens with no benefit.
+
+Aliases are load-bearing: OSV.dev uses GHSA as the primary id while
+audit consumers (and bench grader regexes) expect CVE ids. Surfacing
+the aliases lets the model cite any id from the lookup response —
+GHSA, CVE, PYSEC — rather than relying on training-data recall.
 """
 
 from __future__ import annotations
@@ -89,6 +94,14 @@ def _compress_response(raw: dict[str, Any]) -> dict[str, Any]:
     for v in vulns[:_MAX_VULNS_PER_RESPONSE]:
         compressed: dict[str, Any] = {
             "id": v.get("id", ""),
+            # Aliases — usually a list like ['CVE-XXXX-YYYY', 'PYSEC-YYYY-NN'].
+            # Surfacing this is load-bearing: many advisories use GHSA as the
+            # primary id while the model + downstream readers expect the CVE
+            # id. Without aliases here, the model would have to recall the
+            # CVE from training data (sometimes correct, not deterministic).
+            # With aliases the audit can cite EVERY id from the lookup
+            # response and never invent one.
+            "aliases": list(v.get("aliases") or []),
             "summary": (v.get("summary") or "")[:_SUMMARY_MAX_CHARS],
         }
         # Severity — OSV.dev gives a list; first entry is typically the
@@ -163,12 +176,18 @@ def cve_lookup_def() -> ToolDef:
         name="cve_lookup",
         description=(
             "Look up known security vulnerabilities for a package via the "
-            "OSV.dev advisory database. Use this BEFORE citing any CVE id "
-            "in a security audit — the bench grader checks shape, not "
-            "factuality, but real-world auditors check both. Returns up "
-            "to 30 vulnerabilities, each with id, summary, severity, fixed "
-            "versions, and an advisory URL. Supports PyPI, npm, Go, Maven, "
-            "RubyGems, crates.io, NuGet, and others."
+            "OSV.dev advisory database. Use this BEFORE citing any CVE / "
+            "GHSA / advisory id in a security audit — the bench grader "
+            "checks shape, not factuality, but real-world auditors check "
+            "both. Returns up to 30 vulnerabilities, each with `id` "
+            "(canonical OSV id, often GHSA-XXXX-XXXX-XXXX), `aliases` "
+            "(list of cross-referenced ids, often containing the "
+            "CVE-XXXX-YYYY form), summary, severity, fixed versions, and "
+            "an advisory URL. Cite ids EXACTLY as they appear in the "
+            "response's `id` or `aliases` fields — don't translate "
+            "between schemes (GHSA ↔ CVE) or invent ids the response "
+            "doesn't contain. Supports PyPI, npm, Go, Maven, RubyGems, "
+            "crates.io, NuGet, and others."
         ),
         parameters={
             "type": "object",
