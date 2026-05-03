@@ -536,3 +536,26 @@ The infrastructure-quality-dominates-result-quality theme from the v1.0 ship les
 **Fix / takeaway**: bumped pyproject.toml `1.0.0` → `1.1.0`. Tag `v1.1.0`. Production config `configs/single_64gb.yaml` now has `task_overlay_id: manage_strict_only` and benefits from the pinned-work_dir default. v1.1 is the new shipped state; v1.0 stays available via tag for users who want it.
 
 **Affected files**: `pyproject.toml` (1.0.0 → 1.1.0), `configs/single_64gb.yaml` (re-promoted manage_strict_only after the variance experiment), `benchmarks/maintain_suite/run.py` (work_dir default change shipped in commit ec88cd2 already).
+
+---
+
+### [2026-05-02] Post-v1.1 — A2 prefix-cache re-measurement: HIGH (85.4%); Phased Mode v2 deprioritized
+
+**What happened**: After v1.1.0 ship, re-ran A2 (the prefix-cache hit-rate measurement) on the pinned-work_dir substrate. The original A2 (2026-05-02 morning) had been INCONCLUSIVE because oMLX's INFO log doesn't expose hit/miss data. With `server.log_level: debug` and the pinned `--work-dir` default, the per-request hit data is now visible.
+
+**Aggregate hit rate on `nothing-config` (the longest-context fixture, 16 model requests): 85.4%** (206,848 hit / 242,300 prompt tokens). Per-request range: 22% (one outlier on the turn the model first wrote a chunk of new content) to 100% (turns where the prompt was fully covered by the cache).
+
+**Root cause / interpretation**: cache reuse is working. Steady-state behavior across an agentic loop is: each turn reuses the prior turns' system prompt + earlier tool results, only the newly-grown tail of the conversation needs cold prefill. With the work_dir pinned, the prompt prefix is byte-identical across reruns of the same fixture, so cache reuse is effective from request 1.
+
+**Decision impact (Workstream C):** the plan's MECE matrix at LOW + 9 = Path 1 (Phased Mode v2). At HIGH + 9 = Path 2b (ship v1.1; freeze incremental work; Phased Mode v2 not needed). Original A2 INCONCLUSIVE defaulted to LOW for caution. The re-measurement is conclusively HIGH (85% >> 65% threshold), so we land at Path 2b. **Phased Mode v2's architectural premise — "subtask scoping reduces context bloat and warms the cache" — is invalidated by the measurement: the cache is already warm.** The complexity cost of resurrecting phased/micro modes with proper memory primitives isn't justified by a baseline already at 85%.
+
+**Fix / takeaway**: deprioritize Phased Mode v2 in v2.0 planning. The two remaining v2.0 directions are unaffected by this measurement and become the priority work:
+
+1. **Per-tool refinement subphases** (CVE lookup as seed) — see `project_tool_subphases_and_cve_lookup.md`. Defeats the audit-hallucination caveat from v1.1's deps-audit by making CVE references deterministic via OSV.dev.
+2. **MCP-mediated codebase slicing** — independent value prop (reduces ingest size on large repos). Unrelated to cache warmth.
+
+**lpe-typing under-engagement** (the only remaining v1.1 FAIL) is also unaffected — needs a different lever (model upgrade, few-shot prompting, or runtime re-prompt-on-incomplete-diff loop) regardless of cache state.
+
+The deeper takeaway: **the work_dir pin enabled this measurement to even be possible**. Without it, prefix-cache reuse appeared modest because the prefixes themselves were different across runs. The same infrastructure fix that closed the variance issue also unlocked the architectural decision data. One bug, two consequences. Worth remembering as a pattern: when an investigation hits a wall ("the data is too noisy to interpret"), the failure is often upstream of the measurement.
+
+**Affected files**: `~/.omlx/settings.json` (log_level cycled debug → info; system config, not in repo), `~/.claude/projects/.../memory/project_prefix_cache_baseline.md` (status updated from INCONCLUSIVE to HIGH 85.4%), MEMORY.md (index updated), RESUME.md (Phased Mode v2 deprioritized in v2.0 queue).

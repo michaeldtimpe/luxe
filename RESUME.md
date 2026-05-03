@@ -28,12 +28,16 @@ auto-firing on `manage` tasks; pinned-work_dir bench default).
 - Per-tool refinement subphases (CVE lookup tool as the seed —
   defeats audit hallucination by making CVE references deterministic
   via OSV.dev). See `project_tool_subphases_and_cve_lookup.md`.
-- Phased Mode v2 (subtask-scoped context refresh + MCP-mediated
-  codebase slicing) — gated on a re-measured A2 prefix-cache hit-rate
-  (the original A2 was inconclusive because work_dir randomness
-  contaminated the data; needs re-running with pinned default).
+  **Now the highest-leverage v2.0 direction.**
+- MCP-mediated codebase slicing — independent value prop (reduces
+  ingest size on large repos). Composes with the per-tool subphases.
 - lpe-typing under-engagement — needs a different lever than prompt
   overlays (B1's `document_strict` was a negative result).
+- ~~Phased Mode v2~~ **deprioritized** — A2 re-measurement on pinned
+  work_dir substrate showed 85.4% prefix-cache hit rate (HIGH per
+  the plan's threshold). The cache is already warm; subtask scoping
+  for cache warmth is a solution to a non-problem. See
+  `project_prefix_cache_baseline.md`.
 
 **Iteration model:** all grader iteration uses the sidecar regrade
 tool (`scripts/regrade_local.py`) against existing acceptance dirs.
@@ -342,14 +346,16 @@ Remaining for v2.0 (no current priority order; revisit):
    subphase. Seed: `cve_lookup` tool backed by OSV.dev to defeat
    the audit hallucination caveat called out in the v1.1 ship
    entry.
-3. **Phased Mode v2** — see
-   `project_post_v1_architecture_ideas.md`. Subtask-scoped
-   context refresh + MCP-mediated codebase slicing.
-   **Re-measure A2 first** with pinned work_dir — the original
-   inconclusive measurement was contaminated by the same
-   tempdir randomness that caused the variance issue. With
-   pinned default, the prefix-cache hit-rate question can be
-   answered cleanly.
+3. ~~**Phased Mode v2**~~ — **deprioritized 2026-05-02 PM**. A2
+   re-measurement on the pinned-work_dir substrate showed 85.4%
+   prefix-cache hit rate (HIGH; well above the 65% threshold).
+   The architectural premise ("subtask scoping warms the cache")
+   is invalidated by the measurement — the cache is already warm.
+   See `project_prefix_cache_baseline.md` for the per-request data.
+   Subtask scoping might still help for *context-window pressure*
+   reasons (less to fit in 32k context) but the cache-warmth
+   motivation is gone, and ingest reduction is better addressed by
+   MCP slicing (item 2).
 3. **F2.1 IFS-lite** — refactor `expected_outcome` into weighted
    sub-instructions; report Instruction Following Score per cell.
    Out of v1.1 scope; queue for v1.2 / v2.0.
