@@ -101,6 +101,8 @@ def run_single(
     extra_tool_fns: dict[str, ToolFn] | None = None,
     cache: ToolCache | None = None,
     on_tool_event: OnToolEvent | None = None,
+    run_id: str | None = None,
+    phase: str = "main",
 ) -> AgentResult:
     """Run the single-mode agent end-to-end on a goal.
 
@@ -140,4 +142,6 @@ def run_single(
         cache=cache,
         cacheable=cacheable,
         on_tool_event=on_tool_event,
+        run_id=run_id,
+        phase=phase,
     )
