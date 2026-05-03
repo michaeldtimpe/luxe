@@ -215,3 +215,46 @@ def _requirement_to_yaml_dict(r: Requirement) -> dict[str, Any]:
     if r.command is not None:
         out["command"] = r.command
     return out
+
+
+# --- prompt-template helpers ----------------------------------------------
+# Pure formatting functions for stitching Spec/ValidationResult into model
+# prompts. cli.py (step 5 of Lever 1) will call these; step 4 adds them
+# without integration so they can be reviewed in isolation. The wording is
+# intentionally model-readable, not log-readable — these strings go into
+# the model's context window.
+
+
+def format_spec_for_task_prompt(spec: "Spec") -> str:
+    """Render a Spec as a checklist block for the model's task prompt.
+
+    Output shape (deterministic ordering follows Spec.requirements):
+
+        Requirements (each must be satisfied for this task to be complete):
+        - R1: <must>
+          Graded by: <done_when>
+        - R2: <must>
+          Graded by: <done_when>
+        ...
+
+    Empty requirements list returns "" so the caller can unconditionally
+    concatenate without trailing whitespace artefacts. The model sees the
+    `done_when` predicate description so it knows HOW it is being graded;
+    per the SpecDD plan §Lever 1 ¶4, this is non-optional — without it,
+    false-negative loops (model thinks done, validator says no, model
+    can't tell why) are guaranteed.
+    """
+    if not spec.requirements:
+        return ""
+    lines = [
+        "Requirements (each must be satisfied for this task to be complete):"
+    ]
+    for r in spec.requirements:
+        lines.append(f"- {r.id}: {r.must}")
+        lines.append(f"  Graded by: {r.done_when}")
+    return "\n".join(lines)
+
+
+# Note: format_unsatisfied_for_reprompt lives in spec_validator.py because
+# it operates on a ValidationResult (defined there). Keeping it co-located
+# with the type avoids forward-reference clutter and circular imports.

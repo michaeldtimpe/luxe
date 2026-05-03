@@ -16,6 +16,7 @@ from luxe.spec_validator import (
     RequirementResult,
     ValidationResult,
     _added_lines_from_diff,
+    format_unsatisfied_for_reprompt,
     validate,
 )
 
@@ -327,3 +328,63 @@ class TestValidationResult:
         )
         result = validate(spec, repo, base)
         assert len(result.results) == 3  # R3 still evaluated despite R1/R2 failing
+
+
+class TestFormatUnsatisfiedForReprompt:
+    def test_all_satisfied_returns_empty(self, tmp_path):
+        repo, base = _init_repo(tmp_path)
+        (repo / "x.py").write_text("a = 1\n")
+        spec = Spec(
+            goal="x",
+            requirements=[Requirement(
+                id="R1", must="x", done_when="y",
+                kind="regex_present", pattern=r"a = 1",
+            )],
+        )
+        result = validate(spec, repo, base)
+        assert result.all_satisfied
+        assert format_unsatisfied_for_reprompt(result) == ""
+
+    def test_unsatisfied_includes_id_must_done_when_detail(self, tmp_path):
+        repo, base = _init_repo(tmp_path)
+        spec = Spec(
+            goal="x",
+            requirements=[Requirement(
+                id="R2",
+                must="Add a module docstring",
+                done_when="regex matches at file head",
+                kind="regex_present",
+                pattern=r"^never_present",
+            )],
+        )
+        result = validate(spec, repo, base)
+        out = format_unsatisfied_for_reprompt(result)
+        assert "R2: Add a module docstring" in out
+        assert "Graded by: regex matches at file head" in out
+        assert "Current state:" in out
+        assert "edit_file" in out  # imperative tail
+
+    def test_renders_only_unsatisfied_requirements(self, tmp_path):
+        repo, base = _init_repo(tmp_path)
+        (repo / "x.py").write_text("good_token\n")
+        spec = Spec(
+            goal="x",
+            requirements=[
+                Requirement(
+                    id="R1", must="good token present",
+                    done_when="x", kind="regex_present",
+                    pattern=r"good_token",
+                ),
+                Requirement(
+                    id="R2", must="missing token present",
+                    done_when="x", kind="regex_present",
+                    pattern=r"never_appears",
+                ),
+            ],
+        )
+        result = validate(spec, repo, base)
+        out = format_unsatisfied_for_reprompt(result)
+        # R1 satisfied — should NOT appear in reprompt
+        assert "R1:" not in out
+        assert "R2:" in out
+        assert "missing token present" in out
