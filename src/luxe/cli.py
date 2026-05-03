@@ -63,10 +63,18 @@ _REPROMPT_DOC_ADDITIONS_THRESHOLD = 10
 def _diff_against_base(repo_path: str, base_sha: str) -> tuple[int, int, str]:
     """Return (additions, deletions, diff_text) of working tree vs base_sha.
 
-    Uses --numstat for stable counts; --diff for the patch text the
-    re-prompt feeds to the model. Both run against the same revision
-    range so they're consistent.
+    Mark untracked files as intent-to-add (`git add -N`) before diffing.
+    Without this, `git diff <base_sha>` only shows changes to tracked
+    files — newly created files (e.g., write_file('CONFIG.md', ...))
+    are invisible until staged. Intent-to-add adds an index entry without
+    staging content, which is enough for diff to surface the new file
+    as a +N/-0 change. The PR cycle's later `git add . && git commit`
+    still works correctly.
     """
+    subprocess.run(
+        ["git", "add", "-N", "."],
+        cwd=repo_path, capture_output=True, text=True,
+    )
     additions = deletions = 0
     stat = subprocess.run(
         ["git", "diff", "--numstat", base_sha, "--"],
@@ -310,18 +318,47 @@ def maintain(
             append_event(spec.run_id, "reprompt_fired",
                          additions=additions, deletions=deletions,
                          threshold=_REPROMPT_DOC_ADDITIONS_THRESHOLD)
-            followup_goal = (
-                f"You completed an initial pass on this goal:\n  {goal}\n\n"
-                f"The diff so far is small ({additions} added / "
-                f"{deletions} deleted lines):\n"
-                f"```diff\n{diff_text}\n```\n\n"
-                f"Re-read the goal carefully. Identify each named deliverable. "
-                f"For any deliverable NOT yet reflected in the diff, make the "
-                f"missing edits now via edit_file or write_file. If you "
-                f"believe the diff is complete, make no further edits and "
-                f"explain in your response which lines satisfy each "
-                f"deliverable."
-            )
+            # Branch on whether the first pass produced ANY edits. If
+                # additions==0 AND the model emitted substantial prose, this
+                # is the "prose-mode" failure shape (model enumerated the
+                # answer in its final report but never called write/edit).
+                # The standard "make the missing edits now" reprompt has been
+                # observed to fail on this — model just does another prose
+                # exploration pass. Inject the model's prior prose back to it
+                # as the *content* it should be saving, with explicit
+                # imperative framing.
+            prior_text = single_result.final_text or ""
+            if additions == 0 and len(prior_text) > 1000:
+                followup_goal = (
+                    f"PROBLEM: You completed a pass on this goal but did NOT "
+                    f"call write_file or edit_file. The working tree has 0 "
+                    f"added lines. You produced extensive prose in your "
+                    f"final report but it is stranded — not saved to disk.\n\n"
+                    f"Original goal:\n  {goal}\n\n"
+                    f"Your prior final report (which you must now persist "
+                    f"to disk):\n\n{prior_text[:6000]}\n\n"
+                    f"Action: identify the file path the goal asks for "
+                    f"(e.g., 'CONFIG.md' for an env-var documentation task; "
+                    f"the path is named in the goal). Call write_file with "
+                    f"that path and a coherent document body derived from "
+                    f"the report above. Do this on your FIRST tool call. "
+                    f"Do not explore more files first. After write_file "
+                    f"succeeds, you may continue if the content needs "
+                    f"refinement."
+                )
+            else:
+                followup_goal = (
+                    f"You completed an initial pass on this goal:\n  {goal}\n\n"
+                    f"The diff so far is small ({additions} added / "
+                    f"{deletions} deleted lines):\n"
+                    f"```diff\n{diff_text}\n```\n\n"
+                    f"Re-read the goal carefully. Identify each named deliverable. "
+                    f"For any deliverable NOT yet reflected in the diff, make the "
+                    f"missing edits now via edit_file or write_file. If you "
+                    f"believe the diff is complete, make no further edits and "
+                    f"explain in your response which lines satisfy each "
+                    f"deliverable."
+                )
             second_result = run_single(
                 backend, cfg.role("monolith"),
                 goal=followup_goal,
