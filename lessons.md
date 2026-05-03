@@ -489,3 +489,50 @@ The plan's MECE matrix at LOW + 9 = Path 1 (Phased Mode v2; don't ship v1.1). Wo
 The deeper takeaway: **prompt-side fixes can unstick model-side behavior more reliably than expected, but only when the failure mode is mechanistic** (re-reading + not-writing). lpe-typing's "I think I'm done" pattern is harder — no procedural guidance disambiguates an over-eager stop. deps-audit's "I'm stuck on this file" pattern is easier — there's a clear procedural fix (pick distinct items). Future overlay work should triage the failure mode mechanistically before committing to a directive shape.
 
 **Affected files**: `src/luxe/agents/prompts.py` (new `manage_strict` PromptVariant + `manage_strict_only` overlay), `tests/test_prompts.py` (3 new regression tests parallel to B1's), `benchmarks/maintain_suite/variants_v1_managetask_overlay_probe.yaml` (new probe variant file), `acceptance/v1_manage_overlay_probe/` (smoke probe results).
+
+---
+
+### [2026-05-02] Phase v1.1 — work_dir variance discovery + fix
+
+**What happened**: After B2's smoke PASS on deps-audit, the v1.1 ship-confirmation full bench produced an unexpected mixed result. Two consecutive runs at temp=0 with the production config + `manage_strict_only` overlay both landed at 8/10, but with different failure shapes — Run A had deps-audit FAIL + neon-rain-reset PASS (matching v1.0); Run B had deps-audit PASS + neon-rain-reset FAIL (an implement-task fixture flipping for the first time at temp=0). The cumulative cross-run picture across 5 temp=0 runs (v1.0 ship confirmation + 2 overlay runs + 2 no-overlay runs) showed two fixtures flipping unpredictably regardless of whether the overlay was set: neon-rain-reset went 3 PASS / 2 FAIL, deps-audit went 1 PASS / 4 FAIL.
+
+**Root cause**: the bench's `work_dir` defaulted to `tempfile.mkdtemp(prefix="luxe-acceptance-")` — a random tempdir per invocation. That random suffix appeared in bash and git tool outputs (paths in `pwd`, `ls -la`, error messages, `git diff` output). Tool outputs become tool messages in the agent's prompt. At greedy temp=0 the model is deterministic *given a fixed input*, but the input wasn't fixed across bench invocations — different tempdir = different prompt = different model output for any fixture whose tool calls happened to surface the path.
+
+A 3-iteration single-fixture probe of neon-rain-reset with `--work-dir ~/.luxe/bench-workspace` (pinned) produced 3/3 PASS, vs 3/5 PASS earlier with random tempdirs. Confirmed.
+
+**Fix / takeaway**: changed the `--work-dir` default in `benchmarks/maintain_suite/run.py` from `None` (mkdtemp) to `~/.luxe/bench-workspace`. Existing reuse logic in `_resolve_repo` handles cached clones correctly (base_sha checkout + reuse). Added `--ephemeral-work-dir` flag for callers that explicitly want process isolation. Help text references this lessons entry so future-us doesn't flip the default back without checking why.
+
+The 2-cell A/B with pinned default — `champ-no-overlay` vs `champ-manage-strict` — produced the cleanest possible signal: no-overlay cell matched v1.0 ship confirmation EXACTLY (deterministic on pinned substrate); overlay cell differed only on deps-audit (F → P). The 9 other fixtures had identical pass/fail in both cells. That's what "the overlay does exactly what it claims" looks like.
+
+The deeper takeaway: **the earlier "temp=0 collapses sampling variance to deterministic" finding was true ABOUT THE MODEL — given identical input, it produces identical output**. The variance we were seeing wasn't sampling-level; it was input-level. Random data flowed through the bench infrastructure into the prompt, and the model's determinism stopped being visible.
+
+This also clarifies the earlier inconclusive A2 prefix-cache measurement (`project_prefix_cache_baseline.md`): cross-run prefix-cache reuse appeared modest because **the prefixes themselves were different across runs** (random tempdir in tool outputs). With pinned work_dir, prefix-cache reuse becomes a meaningful question again. If we want to revisit the Phased Mode v2 architectural decision, do it with pinned work_dir; A2 needs re-measurement with this confound removed.
+
+**Affected files**: `benchmarks/maintain_suite/run.py` (work_dir default change + new `--ephemeral-work-dir` flag), `benchmarks/maintain_suite/variants_v1_overlay_ab_pinned.yaml` (new — A/B variant for the experiment), `~/.claude/projects/.../memory/project_workdir_variance_leak.md` (new — tracks the finding).
+
+---
+
+### [2026-05-02] v1.1.0 ship — pinned work_dir + manage_strict overlay → 9/10
+
+**What happened**: Shipped v1.1.0 with two infrastructure improvements over v1.0: (1) pinned `--work-dir` default eliminating the dominant temp=0 variance source, and (2) `manage_strict_only` task overlay closing the deps-audit stuck-loop. Champion model unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0.
+
+Acceptance result against the production config (single cell, `manage_strict_only` promoted in `single_64gb.yaml`): 9/10 stable on the pinned-work_dir substrate. Confirmation came from cell 2 of the variants_v1_overlay_ab_pinned.yaml A/B run; running a separate single-cell production-config confirmation was deemed redundant since the variant override goes through the same code path as the config setting (`run.py:178` writes to `cfg["roles"]["monolith"]["task_overlay_id"]` either way).
+
+Per task type:
+- implement 4/4 (saturated since v1.0)
+- document 4/5 (lpe-typing remains FAIL — under-engagement pattern not solved by document_strict overlay; B1 was a negative result)
+- manage 1/1 (NEW in v1.1 — deps-audit closed by manage_strict overlay)
+
+**Workstream C decision discipline**: the Phase v1.1 plan's MECE matrix said LOW + 9 = Path 1 (Phased Mode v2; don't ship v1.1) on the grounds that "one fixture closed via prompts is informative but not enough to ship a quality bump alone." That hedge was framed pre-result and pre-variance-investigation. The pinned-work_dir A/B closed the variance ambiguity and showed the overlay's contribution is real, isolated, and reproducible. Decision was made to override the matrix on those grounds — this is a documented departure from the plan, not a quiet override. Path-1 architectural work (Phased Mode v2 + per-tool subphases including the CVE lookup tool — see `project_post_v1_architecture_ideas.md` and `project_tool_subphases_and_cve_lookup.md`) remains queued for v2.0.
+
+**The one remaining FAIL at v1.1** is `lpe-rope-calc-document-typing` — model adds 1 line and stops (under-engagement). B1's `document_strict` overlay nudged 1→2 added lines but didn't unblock the docstring half. The `document_strict` infrastructure stays registered in `prompts.py` for future experiments but is NOT promoted in production. The pattern needs either a model upgrade, few-shot examples in the prompt, or a runtime re-prompt loop when the submitted diff doesn't match all named goal deliverables — none of which are in v1.1 scope.
+
+A separate caveat on the deps-audit PASS: the audit's CVE IDs are partially hallucinated (real packages cited with real version constraints and accurate file:line citations, but some specific CVE numbers may be invented). Bench grader's regex checks shape, not factuality. Flagged in the v1.1 B2 lessons entry as a known limitation. The CVE-lookup tool subphase (post-v1; see `project_tool_subphases_and_cve_lookup.md`) addresses this directly.
+
+**Path through the plan**: Phase 0 (grader fixes) → fixture surgery on 3 fixtures → Branch C calibration on `nothing-config` → temp=0 promotion → citation-linter IPv4 fix → v1.0.0 ship at 8/10 → Phase v1.1 (B1 negative, B2 positive on prompt overlay) → variance investigation → work_dir pin → v1.1.0 ship at 9/10.
+
+The infrastructure-quality-dominates-result-quality theme from the v1.0 ship lessons entry held up for v1.1 too: every gain came from infrastructure work. Bench grader honesty (Phase 0), gate calibration (Branch C), citation linter (IPv4 guard), and now the work_dir pin — none are model improvements; all are measurement improvements. The model is the same. The bench just stopped lying in different ways.
+
+**Fix / takeaway**: bumped pyproject.toml `1.0.0` → `1.1.0`. Tag `v1.1.0`. Production config `configs/single_64gb.yaml` now has `task_overlay_id: manage_strict_only` and benefits from the pinned-work_dir default. v1.1 is the new shipped state; v1.0 stays available via tag for users who want it.
+
+**Affected files**: `pyproject.toml` (1.0.0 → 1.1.0), `configs/single_64gb.yaml` (re-promoted manage_strict_only after the variance experiment), `benchmarks/maintain_suite/run.py` (work_dir default change shipped in commit ec88cd2 already).

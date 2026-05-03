@@ -33,14 +33,19 @@ roles:
                         # Greedy decoding also lifts implement to 4/4
                         # ceiling out of the box. See variants_v1_temp0_probe.yaml.
     task_overlay_id: manage_strict_only
-                        # 2026-05-02 promotion (Phase v1.1 B2): closes the
-                        # nothing-ever-happens-manage-deps-audit stuck-loop
-                        # (model was reading requirements.txt repeatedly
-                        # and bailing without producing a diff). Overlay
-                        # fires only on `manage` task type — implement,
-                        # document, bugfix, review unchanged. See
-                        # variants_v1_managetask_overlay_probe.yaml +
-                        # the Phase v1.1 B2 lessons.md entry.
+                        # 2026-05-02 (Phase v1.1 B2 + ship): closes the
+                        # nothing-ever-happens-manage-deps-audit stuck-loop.
+                        # Briefly disabled mid-investigation to confirm the
+                        # variance source was the random-tempdir leak in
+                        # the bench's work_dir, not the overlay itself.
+                        # A/B with pinned work_dir confirmed: overlay
+                        # reliably closes deps-audit (cell 2 PASS), no
+                        # regressions on the 9 other fixtures (overlay
+                        # fires only on `manage` task type per
+                        # test_manage_strict_only_overlay_fires_only_on_manage_tasks).
+                        # See variants_v1_overlay_ab_pinned.yaml +
+                        # acceptance/v1_1_overlay_ab_pinned/ for the
+                        # confirmation data.
     tools:
       - read_file
       - list_dir

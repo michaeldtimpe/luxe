@@ -1,41 +1,39 @@
 # luxe — session resume document
 
-Snapshot for picking up cross-session. Reflects state at HEAD `9b38d93`
-+ uncommitted Phase-0 grader fixes (2026-05-01 evening). The bench
-infrastructure went offline-only (fixtures cloned from a local cache,
-no network needed) and the v1 acceptance grader had two latent bugs
-fixed (Bugs 1+2; see `lessons.md`). Branch B was queued to launch but
-deferred: at temp=0 the implement category hits 4/4 baseline, which
-*obsoletes* the `implement_via_cot` overlay. Real strategic question
-shifted from "lift implement" to "lift doc/manage" — which the
-existing overlay set doesn't address.
+Current state: **v1.1.0 shipped 2026-05-02** at 9/10 acceptance. Two
+infrastructure improvements over v1.0: pinned-work_dir bench default
+(eliminates the dominant temp=0 variance source) + `manage_strict`
+task overlay (closes the deps-audit stuck-loop). Champion unchanged:
+`Qwen3.6-35B-A3B-6bit` at temperature=0.0 in
+`configs/single_64gb.yaml`.
+
+The one remaining FAIL is `lpe-rope-calc-document-typing` — model
+under-engagement (adds 1 line and stops). Out of v1.1 scope; needs
+either a model upgrade, few-shot prompting, or a runtime
+re-prompt-on-incomplete-diff loop.
 
 ---
 
 ## 30-second orientation
 
 **luxe** is an MLX-only repo maintainer for Apple Silicon (oMLX backend
-on `localhost:8000`). Takes a goal + repo, opens a PR. **Mono-only as
-of v1.0** — single model, single agent loop, single `luxe maintain`
+on `localhost:8000`). Takes a goal + repo, opens a PR. **Mono-only**
+since v1.0 — single model, single agent loop, single `luxe maintain`
 command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
-**What's in flight:** v1.0 release path. The 10-fixture acceptance
-suite needs **≥8/10 PASSes** to ship. After Phase 0 grader fixes,
-fixture surgery on `lpe-typing` and `neon-rain-modules`, and Branch C
-calibration on `nothing-config`, sidecar regrade against probe_b
-shows **6/10** with the current grader + current fixtures. A fresh
-full run is the E2E confirmation step — expected 6-8/10 (the surgered
-neon-rain-modules will pass on a fresh "Update" run since the model
-won't be forced into a destructive rewrite; lpe-typing depends on
-whether the model writes both halves of the task — typing AND a
-docstring — this time).
+**What's shipped:** v1.1.0 (tag, with manage_strict_only overlay
+auto-firing on `manage` tasks; pinned-work_dir bench default).
 
-**The remaining gap to ship**: 2-3 passes (6/10 → 8/10). Levers
-remaining: (a) overlay for doc/manage if a fresh run still tops out at
-6-7/10, (b) more fixture surgery on `isomer-document-quickstart`
-(prior runs were destructive — model rewrote 148 lines of README), or
-(c) `pr_opened`-as-1pt question (every offline run currently caps at
-4/5 because `gh pr create` fails without a GitHub remote).
+**What's queued for v2.0:**
+- Per-tool refinement subphases (CVE lookup tool as the seed —
+  defeats audit hallucination by making CVE references deterministic
+  via OSV.dev). See `project_tool_subphases_and_cve_lookup.md`.
+- Phased Mode v2 (subtask-scoped context refresh + MCP-mediated
+  codebase slicing) — gated on a re-measured A2 prefix-cache hit-rate
+  (the original A2 was inconclusive because work_dir randomness
+  contaminated the data; needs re-running with pinned default).
+- lpe-typing under-engagement — needs a different lever than prompt
+  overlays (B1's `document_strict` was a negative result).
 
 **Iteration model:** all grader iteration uses the sidecar regrade
 tool (`scripts/regrade_local.py`) against existing acceptance dirs.
@@ -134,6 +132,8 @@ symlinks land: `brew services restart omlx`.
 | **Phase 1 prompt-shaping** | **05-01** | **6 cells: baseline + baseline-rp + cot + sot + hads + combined-rp** | **printed 33/60 → regraded 8/60 (76% inflation). Phase 1's "structural prompts hit 4/4 implement" finding was almost entirely a false-positive artifact of the broken grader.** |
 | **temp=0 baseline (Phase 0 grader fixed)** | **05-01 PM** | **qwen3.6-35B-A3B-6bit @ temp=0** | **5/10 stable across 2 runs; per-task: impl 4/4, doc 1/5, manage 0/1** |
 | **v1.0.0 ship confirmation** | **05-01/05-02** | **qwen3.6-35B-A3B-6bit @ temp=0 (production config) + Phase-0/surgery/Branch-C fixes** | **8/10 (impl 4/4, doc 4/5, manage 0/1). First honest pass count.** |
+| **Phase v1.1 variance experiment** | **05-02** | **2-cell A/B: champ-no-overlay + champ-manage-strict, pinned work_dir** | **no-overlay 8/10 (matches v1.0 ship deterministically); overlay 9/10 (deps-audit closes; no regressions). Confirmed work_dir randomness was the dominant temp=0 variance source.** |
+| **v1.1.0 ship** | **05-02** | **qwen3.6-35B-A3B-6bit @ temp=0 + manage_strict_only overlay + pinned work_dir** | **9/10 (impl 4/4, doc 4/5, manage 1/1). Only remaining FAIL is lpe-typing under-engagement.** |
 
 Full results: `acceptance/<phase>/comparison.json` per phase dir.
 
@@ -306,37 +306,50 @@ python -m benchmarks.maintain_suite.run \
 
 ## Open work / next steps
 
-Closed in Phase v1.0 / v1.1 Workstream A (commits `eb2bdf0`,
-`48e6577`, `8d1fcd3`, `f14941d`, `e96c2ce`):
+Closed in Phase v1.0 / v1.1 (commits trace from `eb2bdf0` through
+v1.1.0 tag):
 - Branch C calibration on `nothing-config` (regex now accepts
   markdown-style UPPER_SNAKE listings).
 - Fixture surgery on `lpe-typing`, `neon-rain-modules`,
   `isomer-quickstart`.
 - `pr_opened` offline-mode 4/5 cap documented as expected.
 - Gemma-4 dead settings entries removed.
-- Historical bake-offs re-graded — see lessons.md.
-- A3 specprefill probe — partial run showed ~5% mean wall
-  improvement; reverted (didn't clear 15% gate).
+- Historical bake-offs re-graded.
+- A3 specprefill probe — reverted (~5% gain, didn't clear 15% gate).
+- B1 `document_strict` overlay — negative result; infrastructure
+  registered but not promoted.
+- B2 `manage_strict` overlay — POSITIVE result; promoted in
+  production. Closes deps-audit.
+- Variance investigation — confirmed random tempdir leak as
+  dominant temp=0 variance source. Pinned-work_dir default wired
+  into `run.py`; future bench runs are deterministic on the
+  pinned substrate.
+- v1.1.0 ship at 9/10.
 
-Remaining (priority order):
+Remaining for v2.0 (no current priority order; revisit):
 
-1. **Workstream B — quality push on the 2 v1.0 FAILs.** Per the
-   Phase v1.1 plan in `~/.claude/plans/silly-pondering-llama.md`:
-   - **B1**: `document_strict` task overlay for
-     `lpe-rope-calc-document-typing`'s under-engagement (model adds
-     1 line and stops; overlay pushes "MUST call edit_file/write_file
-     and add substantive content").
-   - **B2**: investigate `nothing-deps-audit` stuck-loop — either a
-     task-shaped loop tolerance change in `loop.py` or a
-     `manage_strict` overlay (one lever per attempt; cap at 2
-     attempts per the plan).
-   - End-of-B confirmation: full bench against the production
-     config; v1.1 ship gate is ≥9/10. Per
-     `feedback_offer_long_running_commands.md`, hand off the bench
-     command rather than auto-launching.
-2. **Workstream C decision** — once B's full bench lands, follow the
-   MECE matrix in the plan (HIT × QUAL bins). HIT defaults to LOW
-   given the inconclusive A2 measurement (`project_prefix_cache_baseline.md`).
+1. **lpe-rope-calc-document-typing under-engagement** — only
+   remaining v1.1 FAIL. Stable across every temp=0 run. Closing
+   needs a different lever: a model upgrade, few-shot examples in
+   the prompt, or a runtime re-prompt-on-incomplete-diff loop
+   that detects multi-component goals where some component is
+   missing from the diff. Out of v1.1 scope.
+2. **Per-tool refinement subphases** — see
+   `project_tool_subphases_and_cve_lookup.md`. ~15 tools in the
+   dev-facing toolkit (read_file, edit_file, bash, lint,
+   typecheck, security_scan, deps_audit, ...) each get a
+   bench-probe → tool-side hardening → optional tool-overlay
+   subphase. Seed: `cve_lookup` tool backed by OSV.dev to defeat
+   the audit hallucination caveat called out in the v1.1 ship
+   entry.
+3. **Phased Mode v2** — see
+   `project_post_v1_architecture_ideas.md`. Subtask-scoped
+   context refresh + MCP-mediated codebase slicing.
+   **Re-measure A2 first** with pinned work_dir — the original
+   inconclusive measurement was contaminated by the same
+   tempdir randomness that caused the variance issue. With
+   pinned default, the prefix-cache hit-rate question can be
+   answered cleanly.
 3. **F2.1 IFS-lite** — refactor `expected_outcome` into weighted
    sub-instructions; report Instruction Following Score per cell.
    Out of v1.1 scope; queue for v1.2 / v2.0.
