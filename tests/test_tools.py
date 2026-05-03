@@ -311,3 +311,132 @@ class TestValidation:
         err = validate_args(defn, {})
         assert err is not None
         assert "required" in err.lower()
+
+
+# --- read_file binary-rejection (2026-05-02 tool subphase) --
+
+class TestReadFileBinaryRejection:
+    """Reading a binary file with errors='replace' returns multi-MB of
+    garbage that pollutes the model's context. The tool detects binary
+    content (null bytes in first 8 KB) and returns a clean error."""
+
+    def test_rejects_file_with_null_bytes(self, tmp_repo: Path):
+        (tmp_repo / "blob.bin").write_bytes(b"PNG\x00\x01\x02header" + b"\xff" * 1000)
+        result, err = fs.READ_ONLY_FNS["read_file"]({"path": "blob.bin"})
+        assert result == ""
+        assert err is not None
+        assert "binary" in err.lower()
+
+    def test_accepts_utf8_source(self, tmp_repo: Path):
+        """UTF-8 source — no null bytes — must still read fine. Defends
+        against false positives that would block legitimate code files
+        (e.g. Python with unicode identifiers or accented strings)."""
+        (tmp_repo / "src" / "unicode.py").write_text(
+            "# encoding: utf-8\n"
+            "def greet(): return 'héllo wörld'\n"
+            "α = 'greek'\n",
+            encoding="utf-8",
+        )
+        result, err = fs.READ_ONLY_FNS["read_file"]({"path": "src/unicode.py"})
+        assert err is None
+        assert "héllo" in result
+        assert "α" in result
+
+    def test_accepts_empty_file(self, tmp_repo: Path):
+        """Empty file: no null bytes, no content, reads cleanly as ''."""
+        (tmp_repo / "empty.txt").write_text("")
+        result, err = fs.READ_ONLY_FNS["read_file"]({"path": "empty.txt"})
+        assert err is None
+        assert result == ""
+
+
+# --- bash chain-rejection (2026-05-02 tool subphase) --
+
+from luxe.tools import shell  # noqa: E402
+
+
+class TestBashChainRejection:
+    """Pre-2026-05-02 the bash tool checked parts[0] against the allowlist
+    then ran the command via shell=True — so `cat foo && rm -rf /` passed
+    the check (parts[0] == 'cat') and then `rm` executed despite not being
+    in the allowlist. The hardened tool tokenizes via shlex and rejects
+    chain operators, redirects, and command substitution."""
+
+    def test_rejects_double_amp_chain(self, tmp_repo: Path):
+        result, err = shell._bash({"command": "cat foo && rm -rf /"})
+        assert result == ""
+        assert err is not None
+        assert "&&" in err  # message names the offending operator
+
+    def test_rejects_double_pipe_chain(self, tmp_repo: Path):
+        result, err = shell._bash({"command": "ls /missing || echo x"})
+        assert result == ""
+        assert err is not None
+        assert "||" in err
+
+    def test_rejects_semicolon_chain(self, tmp_repo: Path):
+        result, err = shell._bash({"command": "ls ; rm -rf /"})
+        assert result == ""
+        assert err is not None
+        assert ";" in err
+
+    def test_rejects_pipe(self, tmp_repo: Path):
+        """Pipes let the second binary bypass the allowlist. Model should
+        issue a single bash call with grep+regex, or use the dedicated
+        grep tool."""
+        result, err = shell._bash({"command": "cat foo | wc"})
+        assert result == ""
+        assert err is not None
+
+    def test_rejects_output_redirect(self, tmp_repo: Path):
+        """Redirects let an allowlisted binary write outside the repo
+        (`cat foo > /etc/passwd`). Reject; use write_file instead."""
+        result, err = shell._bash({"command": "cat foo > /tmp/leak"})
+        assert result == ""
+        assert err is not None
+        assert ">" in err
+
+    def test_rejects_backtick_command_substitution(self, tmp_repo: Path):
+        """Backticks run an inner command whose binary isn't allowlisted."""
+        result, err = shell._bash({"command": "cat `find / -name passwd`"})
+        assert result == ""
+        assert err is not None
+        assert "substitution" in err.lower()
+
+    def test_rejects_dollar_paren_substitution(self, tmp_repo: Path):
+        """$(...) is the modern form of command substitution."""
+        result, err = shell._bash({"command": "cat $(echo /etc/passwd)"})
+        assert result == ""
+        assert err is not None
+        assert "substitution" in err.lower()
+
+    def test_quoted_pipe_in_regex_is_allowed(self, tmp_repo: Path):
+        """`|` inside a quoted regex isn't a shell operator — shlex respects
+        quotes. Must NOT be rejected; the model needs alternation in regex
+        patterns. (The command may exit non-zero on no match; that's fine.)"""
+        result, err = shell._bash({"command": 'grep "foo|bar" src/main.py'})
+        if err:
+            assert "operator" not in err.lower()
+            assert "substitution" not in err.lower()
+
+    def test_unallowlisted_first_binary_still_rejected(self, tmp_repo: Path):
+        """Existing allowlist behavior preserved — `rm` alone is rejected
+        before any chain logic kicks in."""
+        result, err = shell._bash({"command": "rm -rf /"})
+        assert result == ""
+        assert err is not None
+        assert "allowlist" in err.lower()
+
+    def test_normal_allowlisted_command_still_works(self, tmp_repo: Path):
+        """Sanity: hardening didn't break the happy path."""
+        result, err = shell._bash({"command": "ls src/"})
+        assert err is None
+        assert "main.py" in result
+
+    def test_mismatched_quotes_returns_clean_error(self, tmp_repo: Path):
+        """shlex raises ValueError on mismatched quotes; we return a
+        structured error rather than letting the exception escape."""
+        result, err = shell._bash({"command": "echo 'unclosed"})
+        assert result == ""
+        assert err is not None
+        assert "parse" in err.lower() or "quote" in err.lower()

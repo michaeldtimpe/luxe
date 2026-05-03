@@ -141,6 +141,21 @@ def set_repo_root(path: str | Path) -> None:
     _REPO_ROOT = Path(path).resolve()
 
 
+def get_repo_root() -> Path | None:
+    """Return the currently-set repo root, or None if not yet configured.
+
+    Use this from sibling tool modules (shell.py, git.py, analysis.py)
+    instead of `from luxe.tools.fs import _REPO_ROOT`. The import-style
+    binds the module-level name once at import time, so subsequent calls
+    to set_repo_root() don't propagate — any tool using the imported
+    name silently fails with "Repo root not set" forever. The getter
+    closes that latent bug (caught by test_tools.py's bash chain-rejection
+    suite on 2026-05-02; all three sibling tool modules switched to it
+    in the same commit).
+    """
+    return _REPO_ROOT
+
+
 def _safe(rel: str) -> Path:
     if _REPO_ROOT is None:
         raise RuntimeError("Repo root not set — call set_repo_root() first")
@@ -157,6 +172,21 @@ def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
     size = path.stat().st_size
     if size > _MAX_FILE_SIZE:
         return "", f"File too large ({size} bytes, limit {_MAX_FILE_SIZE})"
+    # Reject obvious binary files — reading them with errors="replace" returns
+    # gigabytes of garbage that pollutes the model's context. Null bytes in
+    # the first 8 KB is a strong signal: text formats don't contain them, and
+    # PNG/JPG/zip/elf/etc. all do. Lets the model see UTF-8/UTF-16 source
+    # files without false positives (those don't have null bytes in code).
+    try:
+        head = path.read_bytes()[:8192]
+    except OSError as e:
+        return "", str(e)
+    if b"\x00" in head:
+        return "", (
+            f"File appears to be binary ({args['path']}): null bytes in "
+            f"first 8 KB. Use ls / file / a hex dumper if you need to "
+            "inspect binary content; this tool is for text source only."
+        )
     try:
         text = path.read_text(errors="replace")
     except Exception as e:
