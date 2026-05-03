@@ -1,35 +1,57 @@
 # luxe — session resume document
 
-Current state: **v1.3.0 ship-pending — fixture-surgery validation in flight 2026-05-03**.
+Current state: **v1.3.0/.1/.2 all shipped 2026-05-03; v1.4 SpecDD decision pending audit-completed write-up**.
 
-The lpe-typing investigation surfaced two distinct issues, both addressed in v1.3:
+**Today's ship sequence**:
+- **v1.3.0** (`cd27e35`, tag `v1.3.0`) — read_file dedup exemption + lpe-typing fixture surgery. Bench 8/10 → 9/10.
+- **v1.3.1** (`162d1da`, tag `v1.3.1`) — `_diff_against_base` undercount bug fix + directive reprompt for prose-mode. Bug was masking actual reprompt firing accuracy.
+- **v1.3.2** (`e22773e`, tag `v1.3.2`) — `assert_gh_auth` retry-with-backoff + queue-cleanup diligence (closed ANE, F2.2 logprobs, spec-prefill revisit as non-starters).
 
-1. **Orchestration bug (D2)**: agent loop's duplicate-call detector was killing
-   `read_file` calls the model used to verify its own edits, causing premature
-   aborts mid-task. Fix: exempt `read_file` from in-loop dedup detection.
-   Independently valuable — benefits any fixture requiring post-edit verification.
+**Two audits completed this session** (memory entries):
+- `project_compound_goal_audit.md` — 5/5 compound-goal fixtures show full sub-deliverable completion in passing runs. SpecDD's "compound-goal shadowing is the primary ceiling" premise doesn't hold on the current bench.
+- `project_loose_grader_audit.md` — 5/10 fixture graders are looser than their goal text. Models pass anyway, but the bench can't *enforce* compound-goal compliance. Pre-v1.4 decision input.
 
-2. **Fixture-grader misalignment**: `pe_scan.py` at base_sha already ships with
-   a 14-line module docstring (lines 2-14). The fixture's `min_added_lines: 4`
-   floor was set assuming the model would add a docstring, but the goal asked
-   for content the file already had. The model has been correctly identifying
-   the existing docstring across every run and refusing to add a redundant one.
-   Three "lever attempts" + extensive trace work were chasing a non-existent
-   residual. Round-2 fixture surgery: drop docstring requirement from goal,
-   lower `min_added_lines` to 2 (typing-edit-only target).
+**SpecDD plan recalibrated** (`~/.claude/plans/fluffy-brewing-lemur.md` updated with post-v1.3 reality check). The bench-moving claim no longer holds at the magnitude the plan was sized for. Architectural value (programmatic Definition of Done, `.sdd` chains) remains intact.
 
-The reprompt-on-doc lever ships as opt-in via `LUXE_REPROMPT_ON_DOC=1` (n=1
-fixture × 3 reps validated; default-promote requires wider validation). Champion
-unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0.
+**In-flight as of leaving the desk**: 3-rep directive-reprompt sanity check on `nothing-doc-config` (`acceptance/v1_4_sanity_directive_rep_{1,2,3}/`). Rep 1 already PASS (139 additions on first pass, reprompt didn't fire — bug fix working as designed). Reps 2-3 in progress.
 
-**Headline bench (predicted)**: 9/10 — D2 fix + fixture surgery should let
-lpe-typing PASS for the first time. nothing-doc-config remains the
-variance-borderline FAIL pending wider reprompt validation. Smoke regression
-on 4 non-lpe-typing fixtures: 4/4 PASS with D2 active.
+Champion unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0. Effective bench score: ~9.67/10 (9 deterministic + 0.67 from `nothing-doc-config` variance).
 
 ---
 
-## ⚡ Resume here — ship v1.3.0
+## ⚡ Resume here — v1.4 disposition decision
+
+Three v1.4 paths to choose between, all evidence gathered. The pre-Lever-1 sanity check (per the SpecDD plan) is effectively the directive-reprompt validation that's currently running. Result determines which path is best.
+
+| Path | Cost | Bench delta | Ships at v1.4 |
+|---|---|---|---|
+| **A. SpecDD Lever 1 (architectural)** | 2-3 sessions | ~+0.3 score | `Spec` data model, spec-validating synthesizer, structured reprompt replaces v1.3 directive reprompt, 5+ fixtures migrated to per-requirement schema |
+| **B. Tighten loose graders only** | ~1 session | depends; could surface latent issues if model has hidden failures | 5 fixture YAML edits to make graders match goal text; bench becomes more rigorous |
+| **C. Both: tighten graders AS PART OF SpecDD ship** | 2-3 sessions | ~+0.3 + bench rigor improvement | Path A + per-requirement schema is the grader-tightening mechanism naturally |
+| **D. Defer; accept current state** | 0 | 0 | Document loose graders as known limitation; revisit when fixture set changes |
+
+My recommendation when reviewing the bench results: **Path C is the cleanest framing.** The SpecDD per-requirement schema simultaneously gives architectural lift (programmatic Definition of Done) AND tightens the bench's grading floor. One ship covers both concerns.
+
+**Sanity-check decision criteria** (when bench finishes):
+- 3/3 PASS with reprompt firing only on FAIL-shaped first passes → directive reprompt mechanism validated; SpecDD's structured reprompt is a natural evolution → Path C is well-grounded
+- 2/3 PASS (same as baseline) → directive reprompt didn't help; SpecDD's reprompt mechanism may need different shape → run pre-Lever-1 manual probe per the plan's original design
+- <2/3 PASS → directive reprompt regressed → revert v1.3.1 directive code → revisit nothing-doc separately
+
+### Memory entries from today (read these first when resuming)
+
+- `project_v1_3_dedup_fix.md` — ship summary
+- `project_compound_goal_audit.md` — bench audit
+- `project_loose_grader_audit.md` — bench audit
+- `feedback_instrument_loop_first.md` — diagnostic principle from v1.3 investigation
+- `feedback_verify_fixture_grader.md` — diagnostic principle from v1.3 investigation
+- `project_mlx_use_ane_probe.md` — closed
+- `project_omlx_logprobs_unsupported.md` — closed
+
+Original v1.3 ship checklist below kept for reference; the work is done.
+
+---
+
+## (historical) ⚡ Ship v1.3.0 — DONE
 
 All code changes staged and tested. To ship:
 
