@@ -283,3 +283,51 @@ def _eval_manual(req: Requirement) -> RequirementResult:
             f"{req.id} manual review required: {req.done_when}"
         ),
     )
+
+
+# --- prompt-template helpers ----------------------------------------------
+
+
+def format_unsatisfied_for_reprompt(validation: ValidationResult) -> str:
+    """Render the unsatisfied requirements as a structured reprompt body.
+
+    Used by the cli.py reprompt block (step 5) to replace the v1.3
+    directive form with per-requirement specificity. The model gets:
+    which requirement is unmet, what would satisfy it, and what the
+    current evidence is.
+
+    Returns "" when all requirements are satisfied — caller should NOT
+    fire a reprompt in that case (the validator's `all_satisfied` check
+    is the gate).
+
+    Output shape:
+
+        The following requirement(s) are not yet satisfied:
+
+        - R2: <must>
+          Graded by: <done_when>
+          Current state: <validator detail>
+
+        Address each unsatisfied requirement specifically. Use edit_file
+        or write_file to make the missing changes. Do NOT modify content
+        that satisfies already-satisfied requirements.
+    """
+    unsatisfied = validation.unsatisfied
+    if not unsatisfied:
+        return ""
+    lines = [
+        "The following requirement(s) are not yet satisfied:",
+        "",
+    ]
+    for r in unsatisfied:
+        req = r.requirement
+        lines.append(f"- {req.id}: {req.must}")
+        lines.append(f"  Graded by: {req.done_when}")
+        lines.append(f"  Current state: {r.detail}")
+    lines.append("")
+    lines.append(
+        "Address each unsatisfied requirement specifically. Use edit_file "
+        "or write_file to make the missing changes. Do NOT modify content "
+        "that satisfies already-satisfied requirements."
+    )
+    return "\n".join(lines)

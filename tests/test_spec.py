@@ -10,6 +10,7 @@ import pytest
 from luxe.spec import (
     Requirement,
     Spec,
+    format_spec_for_task_prompt,
     spec_from_yaml_dict,
     spec_to_yaml_dict,
 )
@@ -272,3 +273,41 @@ class TestYamlRoundTrip:
         req_dicts = {r["id"]: r for r in out["requirements"]}
         assert req_dicts["R1"]["min_matches"] == 2
         assert "min_matches" not in req_dicts["R2"]
+
+
+class TestFormatSpecForTaskPrompt:
+    def test_empty_spec_returns_empty(self):
+        s = Spec(goal="prose only")
+        assert format_spec_for_task_prompt(s) == ""
+
+    def test_single_requirement_renders_checklist(self):
+        r = Requirement(
+            id="R1",
+            must="Add a docstring at file top",
+            done_when="regex `^\"\"\"` matches in ≥1 added line",
+            kind="regex_present",
+            pattern=r'^"""',
+        )
+        s = Spec(goal="g", requirements=[r])
+        out = format_spec_for_task_prompt(s)
+        assert "Requirements" in out
+        assert "R1: Add a docstring at file top" in out
+        assert "Graded by: regex `^\"\"\"` matches" in out
+
+    def test_preserves_requirement_order(self):
+        r1 = Requirement(id="R1", must="first", done_when="x", kind="manual")
+        r2 = Requirement(id="R2", must="second", done_when="x", kind="manual")
+        r3 = Requirement(id="R3", must="third", done_when="x", kind="manual")
+        s = Spec(goal="g", requirements=[r1, r2, r3])
+        out = format_spec_for_task_prompt(s)
+        # R1 must appear before R2 must appear before R3 in the rendered text
+        i1, i2, i3 = out.index("R1:"), out.index("R2:"), out.index("R3:")
+        assert i1 < i2 < i3
+
+    def test_no_trailing_whitespace_artefacts(self):
+        s = Spec(goal="g", requirements=[
+            Requirement(id="R1", must="x", done_when="y", kind="manual"),
+        ])
+        out = format_spec_for_task_prompt(s)
+        assert not out.endswith("\n")
+        assert not out.endswith(" ")
