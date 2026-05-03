@@ -1,11 +1,12 @@
 # luxe — session resume document
 
-Current state: **v1.3.0/.1/.2 all shipped 2026-05-03; v1.4 SpecDD decision pending audit-completed write-up**.
+Current state: **v1.3.0/.1/.2 shipped + v1.4-prep Lever 1 data model committed 2026-05-03**.
 
 **Today's ship sequence**:
 - **v1.3.0** (`cd27e35`, tag `v1.3.0`) — read_file dedup exemption + lpe-typing fixture surgery. Bench 8/10 → 9/10.
 - **v1.3.1** (`162d1da`, tag `v1.3.1`) — `_diff_against_base` undercount bug fix + directive reprompt for prose-mode. Bug was masking actual reprompt firing accuracy.
 - **v1.3.2** (`e22773e`, tag `v1.3.2`) — `assert_gh_auth` retry-with-backoff + queue-cleanup diligence (closed ANE, F2.2 logprobs, spec-prefill revisit as non-starters).
+- **v1.4-prep** (`23827c1`, NOT tagged) — SpecDD Lever 1 data model committed. `src/luxe/spec.py` + 27 unit tests. Self-contained, reversible. No integration yet.
 
 **Two audits completed this session** (memory entries):
 - `project_compound_goal_audit.md` — 5/5 compound-goal fixtures show full sub-deliverable completion in passing runs. SpecDD's "compound-goal shadowing is the primary ceiling" premise doesn't hold on the current bench.
@@ -19,9 +20,62 @@ Champion unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0. Effective bench s
 
 ---
 
-## ⚡ Resume here — v1.4 disposition decision
+## ⚡ Resume here — v1.4 Lever 1 next steps
 
-Three v1.4 paths to choose between, all evidence gathered. The pre-Lever-1 sanity check (per the SpecDD plan) is effectively the directive-reprompt validation that's currently running. Result determines which path is best.
+The pre-Lever-1 sanity check ran (3 reps of nothing-doc-config with directive
+reprompt, all PASS but reprompt didn't fire on any of them — low-variance
+day, not lever validation). Combined with the only true test of directive
+reprompt against a prose-mode FAIL (`v1_3_1_nothing_doc_rep_1`), the
+empirical rescue rate for prompt-based reprompts is **0/1**. Decision made:
+
+**v1.4 ships SpecDD Lever 1 for architectural value, NOT for prose-mode rescue.**
+
+User parameters that drove this decision:
+- "Bench score is fine for now" — not chasing bench-moving claim
+- "Small sample is fine" — accepts 0/1 weight on prompt-reprompt rescue
+
+### What's already done (committed 2026-05-03)
+
+- `src/luxe/spec.py` — `Requirement`, `Spec` dataclasses + YAML round-trip
+- `tests/test_spec.py` — 27 unit tests, all pass
+- Module docstring spells out the recalibrated rationale
+
+### What's next (in order, each independently shippable)
+
+1. **`src/luxe/spec_validator.py`** — predicate evaluator per `RequirementKind`.
+   - `regex_present` / `regex_absent` operate on diff added-lines (reuse `citations.py` parsing helpers if applicable).
+   - `tests_pass` shells out to the configured command.
+   - `ast_query` uses the existing tree-sitter symbol index.
+   - `manual` always returns "unsatisfied; needs human review."
+   - Unit tests in `tests/test_spec_validator.py`.
+
+2. **Migrate ONE fixture to per-requirement schema** as proof-of-concept:
+   - Pick `lpe-rope-calc-document-typing` (smallest, simplest, already audited).
+   - Add `requirements: [R1: type hints landed]` field; keep `expected_outcome` as transitional alias.
+   - Verify the new schema parses and the validator produces the same PASS/FAIL signal as the legacy grader.
+
+3. **Synthesizer prompt update** in `src/luxe/agents/prompts.py`:
+   - Spec checklist + per-requirement `done_when` predicate descriptions.
+   - Structured reprompt format for unsatisfied requirements (replaces v1.3 directive form).
+
+4. **`cli.py` reprompt block**:
+   - Replace the directive reprompt branch (v1.3.1) with spec validator gate.
+   - Retry budget per `RoleConfig.max_reprompt_cycles` (new field; default 5).
+   - Stability check: re-evaluate ALL requirements each cycle, abort on `requirement_oscillation`.
+
+5. **Migrate remaining fixtures** to per-requirement schema:
+   - This IS the grader-tightening from `project_loose_grader_audit.md` — natural side effect.
+   - 5 sessions estimated per the plan; can be incremental.
+
+6. **Retire v1.3 directive reprompt code** — its branch in cli.py becomes dead code once spec validator is the gate.
+
+### Read these before resuming
+
+- `~/.claude/plans/fluffy-brewing-lemur.md` — full SpecDD plan with post-v1.3 reality check at top.
+- `src/luxe/spec.py` module docstring — recalibrated rationale.
+- Memory entries: `project_compound_goal_audit.md`, `project_loose_grader_audit.md`, `project_v1_3_dedup_fix.md`.
+
+### (historical) Three v1.4 paths considered, all evidence gathered
 
 | Path | Cost | Bench delta | Ships at v1.4 |
 |---|---|---|---|
