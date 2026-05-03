@@ -1,6 +1,6 @@
 # luxe — session resume document
 
-Current state: **v1.3.0/.1/.2 shipped + v1.4-prep Lever 1 data model committed 2026-05-03**.
+Current state: **v1.4.0 shipped 2026-05-03 — first 10/10 bench (SpecDD Lever 1)**.
 
 **Today's ship sequence**:
 - **v1.3.0** (`cd27e35`, tag `v1.3.0`) — read_file dedup exemption + lpe-typing fixture surgery. Bench 8/10 → 9/10.
