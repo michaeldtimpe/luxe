@@ -63,6 +63,7 @@ roles:
       - typecheck
       - security_scan
       - deps_audit
+      - cve_lookup
 
 # Single mode does not have task-type pipelines — the monolith handles the
 # task end-to-end. Task type still influences the system prompt framing.
