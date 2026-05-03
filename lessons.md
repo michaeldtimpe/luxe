@@ -710,3 +710,96 @@ The non-prose-mode reprompt path (some edits but under threshold) preserves the 
 2. **Validate threshold-based decisions on edge cases.** The reprompt threshold check is a numerical comparison; if the input is silently zeroed, every comparison is wrong. Future thresholding logic should log the input value with a sanity-check assertion or warning when the value is implausibly low.
 
 **Affected files**: `src/luxe/cli.py` (`_diff_against_base` adds `git add -N .` prefix; reprompt block branches on `additions == 0 AND len(prior_text) > 1000` for the directive prose-mode followup), `pyproject.toml` (1.3.0 → 1.3.1), `lessons.md` (this entry).
+
+### [2026-05-03] v1.4.0 — SpecDD Lever 1: programmatic Definition of Done; first 10/10 bench
+
+**What happened**: Shipped Lever 1 of the SpecDD phase
+(`~/.claude/plans/fluffy-brewing-lemur.md`). All 10 bench fixtures now
+have a `requirements:` schema; the agent's reprompt gate uses the spec
+validator (per-requirement check) when a spec is provided. Full bench
+validation: **10/10 PASS, 40/50 score, v1 release gate cleared** — the
+first time the bench has gone clean.
+
+**Sequence of v1.4-prep commits in this ship** (all on main, between
+v1.3.2 and v1.4.0 tags):
+1. `23827c1` — `src/luxe/spec.py` data model (`Requirement`, `Spec`,
+   YAML round-trip), 27 unit tests.
+2. `0d37844` — `src/luxe/spec_validator.py` predicate evaluator
+   (regex_present, regex_absent, tests_pass, ast_query stub, manual
+   stub), 18 unit tests. Reuses `git add -N` diff trick from v1.3.1.
+3. `fcc9830` — Bench integration. `Fixture` dataclass gains
+   `requirements`/`to_spec()`; `grade_fixture` runs spec validator as
+   parallel observation (does not gate score yet); lpe-typing migrated
+   as proof-of-concept. Local smoke validated PASS+FAIL agreement.
+4. `a81007c` — Prompt-template helpers `format_spec_for_task_prompt`
+   (input side, in spec.py) and `format_unsatisfied_for_reprompt`
+   (output side, in spec_validator.py), 7 tests.
+5. `98c6b89` — `cli.py` reprompt gate replacement. New `--spec-yaml`
+   flag; spec validator gate replaces the v1.3 diff-size heuristic
+   when a spec is provided AND `LUXE_REPROMPT_ON_DOC=1`. Bench harness
+   threads the spec via temp YAML. v1.3 directive form preserved as
+   fallback for ad-hoc usage without `--spec-yaml`.
+6. `e01169d` — 4 mechanical fixture migrations (lpe-implement-strict,
+   the-game-shuffle, neon-rain-reset, isomer-healthcheck). Direct
+   port of expected_outcome to single R1.
+7. `0f611d0` — 5 loose-grader fixture migrations (the-game-arch,
+   neon-rain-modules, isomer-quickstart, nothing-manage-deps,
+   nothing-doc-config). Tightened to per-sub-deliverable requirements;
+   audit-recommended bench-rigor improvements landed at the spec layer.
+
+**Validation results** (`acceptance/v1_4_prep_full_bench/`,
+2026-05-03 18:13–18:53):
+- 10/10 PASS, 40/50 score (4/5 each = offline cap)
+- Every fixture: `expected_outcome_passed=true` AND `spec_all_satisfied=true`
+- Zero unsatisfied requirements across the entire bench
+- nothing-doc-config (the variance fixture) PASSed cleanly with 119 added-line
+  matches against R1's ≥15 threshold; reprompt did not need to fire
+- v1 release gate cleared by `mono__qwen3.6-35b-a3b-6bit`
+
+**Recalibrated framing** (per audit memos written this session):
+- The original SpecDD plan framed Lever 1 as "attacks compound-goal shadowing,
+  the bench's primary ceiling" with a 1+-point bench-score lift expected.
+- Post-v1.3 audit (`project_compound_goal_audit.md`) showed compound-goal
+  shadowing wasn't actually exhibited on the bench — every passing run
+  fully addressed all sub-deliverables. The "primary ceiling" framing
+  was empirically thin.
+- Lever 1 still ships for **architectural value**: programmatic
+  Definition of Done + per-requirement grading + future-readiness for
+  Levers 2/3.
+- The bench-score outcome (8/10 → 10/10) is real but the causes are
+  layered: lpe-typing fixture surgery (v1.3.0) closed the deterministic
+  FAIL; nothing-doc variance happened to roll positive on this run
+  (~33% historical FAIL rate is unchanged structurally).
+
+**What did NOT ship in this version (deferred)**:
+- v1.3 directive reprompt code retirement (step 7 from the v1.4 roadmap).
+  Removing it would silently disable reprompt for ad-hoc `luxe maintain`
+  usage without `--spec-yaml`. Spec path is preferred when available;
+  directive form is preserved as fallback. Future ship once we have
+  evidence of ad-hoc usage patterns.
+- min_added_lines representation in spec model. Currently a fixture-level
+  floor in legacy grader; not yet a per-requirement predicate kind. The
+  4 mechanical-port fixtures still have legacy `min_added_lines` floors
+  enforced parallel to spec validation.
+- ast_query and manual predicate kinds stubbed (return unsatisfied with
+  notice). Full integration with `src/luxe/symbols.py` deferred until
+  a fixture actually authors an ast_query requirement.
+
+**Affected files**: `src/luxe/spec.py` (new), `src/luxe/spec_validator.py`
+(new), `tests/test_spec.py` (new, 31 tests after step 4 additions),
+`tests/test_spec_validator.py` (new, 21 tests after step 4 additions),
+`src/luxe/cli.py` (`--spec-yaml` flag + spec validator gate in reprompt
+block; v1.3 directive code preserved as fallback), `benchmarks/maintain_suite/grade.py`
+(`Fixture.requirements`, `Fixture.to_spec()`, `FixtureResult.spec_validation`,
+`spec_all_satisfied`; spec validator wired into `grade_fixture` as parallel
+observation), `benchmarks/maintain_suite/run.py` (`_luxe_maintain` writes
+spec YAML and threads `--spec-yaml`), `benchmarks/maintain_suite/fixtures.yaml`
+(all 10 fixtures gained `requirements:` blocks, 5 of which were tightened
+beyond the legacy `expected_outcome` to close audit-identified gaps).
+
+**391 tests pass** (up from 384 pre-Lever-1; 27 spec + 21 spec_validator + 1 net change in other test counts).
+
+**Memory entries from this ship**: see also
+`project_compound_goal_audit.md`, `project_loose_grader_audit.md`,
+`feedback_instrument_loop_first.md`, `feedback_verify_fixture_grader.md`
+in the project memory directory.
