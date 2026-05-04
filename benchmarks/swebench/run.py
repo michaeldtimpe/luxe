@@ -32,7 +32,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from .adapter import run_instance, write_predictions  # noqa: E402
+from .adapter import (  # noqa: E402
+    SweBenchInvocationResult,
+    run_instance,
+    write_predictions,
+)
 from .fixtures import SweBenchInstance, load_instances_from_json  # noqa: E402
 from .stratify import read_subset  # noqa: E402
 
@@ -100,12 +104,65 @@ def main() -> int:
     results = []
     started = time.time()
 
+    # Count cached vs fresh up front so the startup banner is honest.
+    cached_count = 0
+    for instance in instances:
+        sp = args.output / f"{instance.instance_id}.json"
+        if sp.exists():
+            try:
+                cached_summary = json.loads(sp.read_text())
+                if "model_patch" in cached_summary:
+                    cached_count += 1
+            except (json.JSONDecodeError, OSError):
+                pass
+    if cached_count:
+        print(f"  {cached_count}/{len(instances)} already on disk, "
+              f"will run {len(instances) - cached_count} fresh", flush=True)
+
+    runtime_wall = 0.0
+    runtime_done = 0
+
     for i, instance in enumerate(instances):
+        inst_summary_path = args.output / f"{instance.instance_id}.json"
+
+        cached = None
+        if inst_summary_path.exists():
+            try:
+                cached = json.loads(inst_summary_path.read_text())
+                # Legacy summaries (pre-resume) don't carry the patch;
+                # treat them as a re-run candidate.
+                if "model_patch" not in cached:
+                    cached = None
+            except (json.JSONDecodeError, OSError):
+                cached = None
+
+        if cached is not None:
+            result = SweBenchInvocationResult(
+                instance_id=cached["instance_id"],
+                model_patch=cached.get("model_patch", ""),
+                wall_s=float(cached.get("wall_s", 0.0)),
+                rc=int(cached.get("rc", 0)),
+                error=cached.get("error", ""),
+            )
+            results.append(result)
+            present = "✓" if result.model_patch.strip() else "✗"
+            print(f"  [{i+1}/{len(instances)}] {instance.instance_id} "
+                  f"(cached)  {present}", flush=True)
+            continue
+
         t0 = time.time()
+        if runtime_done > 0:
+            avg_s = runtime_wall / runtime_done
+            remaining_fresh = (len(instances) - i) - max(
+                0, cached_count - i  # cached items still ahead
+            )
+            eta_min = (avg_s * max(0, remaining_fresh)) / 60
+            eta_str = f" / ETA {eta_min:.0f}m (avg {avg_s:.0f}s)"
+        else:
+            eta_str = ""
         elapsed_min = (t0 - started) / 60
-        eta_min = (elapsed_min / max(i, 1)) * (len(instances) - i) if i > 0 else 0.0
         print(f"  [{i+1}/{len(instances)}] {instance.instance_id} "
-              f"(elapsed {elapsed_min:.0f}m / ETA {eta_min:.0f}m)", flush=True)
+              f"(elapsed {elapsed_min:.0f}m{eta_str})", flush=True)
 
         result = run_instance(
             instance, args.work_dir,
@@ -114,16 +171,23 @@ def main() -> int:
         )
         results.append(result)
 
-        # Save per-instance summary
-        inst_summary = args.output / f"{instance.instance_id}.json"
-        inst_summary.parent.mkdir(parents=True, exist_ok=True)
-        inst_summary.write_text(json.dumps({
+        elapsed = time.time() - t0
+        runtime_wall += elapsed
+        runtime_done += 1
+
+        # Save per-instance summary, including the model_patch so a
+        # crashed/Ctrl-C run can resume by skipping completed instances.
+        # ensure_repo() does `git clean -fdx` on every iteration, so we
+        # cannot re-derive the patch from the workspace after the fact.
+        inst_summary_path.parent.mkdir(parents=True, exist_ok=True)
+        inst_summary_path.write_text(json.dumps({
             "instance_id": result.instance_id,
             "wall_s": result.wall_s,
             "rc": result.rc,
             "patch_lines": result.model_patch.count("\n"),
             "patch_present": bool(result.model_patch.strip()),
             "error": result.error,
+            "model_patch": result.model_patch,
         }, indent=2))
 
         wall = time.time() - t0
