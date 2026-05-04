@@ -901,3 +901,77 @@ thresholds, and the reprompt rescue worked.
 
 **Affected files**: `lessons.md` (this entry), `RESUME.md` (state update).
 Memory: `project_doc_config_three_modes.md`, `project_external_benchmark_program.md`.
+
+---
+
+### [2026-05-04 PM] SWE-bench n=10 A/B — counterexample heuristic regressed quality; deliberation amplifiers are dangerous on already-correct trajectories
+
+**What happened**: After the swebench prompt overlay shipped (smoke 2/3 PASS
+mechanically), one trajectory (`astropy-12907`) showed the model localizing
+the bug correctly (`_cstack` in `astropy/modeling/separable.py`) but never
+calling `edit_file` — 5 reads + 25k chars of analysis + final report with
+no edits. Diagnosed as hypothesis-stall (`(e)`): model traced the bug
+report's simple snippet, concluded its tracing was correct, and never
+constructed the failing nested-CompoundModel input that would have
+falsified the conclusion. Shipped a `swebench_bugfix_counterexample`
+PromptVariant that adds one clause: "if your trace yields the expected
+result but the report shows otherwise, construct the failing variant."
+
+A/B on a stratified n=10 (4 `<15 min fix` + 6 `15 min - 1 hour` across 10
+distinct repos) flipped the working state backwards:
+- Baseline: mechanical 10/10 (real-fix rate 4-5/10 by manual review)
+- +Heuristic: mechanical 8/10 — `matplotlib-13989` (which the baseline
+  had matched gold EXACTLY) regressed to empty patch, and
+  `astropy-13453` (baseline had a partial fix) also regressed to empty.
+
+**Root cause**: The heuristic was scoped as a global prompt modifier but
+behaves like a conditional intervention. Helps: ambiguous /
+underdetermined / multi-site fixes (rare in the n=10 set). Hurts:
+straightforward pattern-alignment fixes (common). Adding a "construct a
+counterexample" deliberation trigger to a model that was already on the
+correct trajectory shifts it from pattern-completion → overthinking →
+deviation. The 12907 trace was atypical — falsification is genuinely the
+right move there, but extrapolating from one trace to a global prompt
+clause amplified noise.
+
+**Two more findings worth banking**:
+
+1. **Trajectory fragility is the bigger story.** Two cases flipped from
+   gold-match → broken under the heuristic. The model often has the
+   correct answer early, and continued reasoning can erase it. This
+   suggests minimality / early-stopping bias may outperform more-
+   reasoning prompts as a future direction.
+
+2. **The (b) reasoning bucket is not one thing.** In the n=10 manual
+   review, (b) splits into:
+   - **(b1)** missing transformation pattern (django regex char-class —
+     fixable with examples)
+   - **(b2)** multi-location consistency (requests-2931 fixes one of
+     two sites, pytest-10051 misses adding a new method — planning gap)
+   - **(b3)** true design gap (sphinx prefers obvious `dict.fromkeys`
+     dedup over the gold's `sorted(set(...))` — model chose the
+     simpler-looking option)
+
+   Only b1 and b2 are realistically prompt-tractable.
+
+**Fix / takeaway**:
+1. Reverted the rule; baseline prompt is the working state. The
+   `swebench_bugfix_counterexample` variant stays in tree as a negative
+   control for SpecDD comparison — useful, even if not shipped.
+2. Inspector v2 ships a 5-signal gold-proximity tier (file match,
+   line-based hunk proximity, hunk coverage, hunk count, size, token
+   overlap) so that "10/10 mechanical PASS" stops misleading. n=10
+   real picture: 6 strong + 3 plausible + 1 wrong_location, vs.
+   mechanical's 10/10. Rich tiers visible via
+   `python -m benchmarks.swebench.smoke_inspect --gold-source ...`.
+3. New durable rule (memory): interventions that amplify reasoning can
+   harm trajectories that were already correct. A/B before shipping any
+   "think more" clause; do not extrapolate from single-instance probes.
+
+**Affected files**: `src/luxe/agents/prompts.py`, `tests/test_prompts.py`,
+`benchmarks/swebench/subsets/probe_n10.json`,
+`configs/single_64gb_swebench_counterexample.yaml`,
+`benchmarks/swebench/smoke_inspect.py`,
+`tests/test_swebench_smoke_inspect.py`.
+Memory: new `feedback_deliberation_amplifiers.md`; updated
+`project_swebench_smoke_2026_05_04.md`.
