@@ -53,3 +53,8 @@ results/**/*.partial
 acceptance/
 benchmarks/bench_*.json
 benchmarks/small_models_*.json
+
+# Benchmark dataset dumps (re-downloadable; large) — frozen subsets at
+# benchmarks/<bench>/subsets/v*_*.json are tracked, raw dataset dumps
+# are not.
+benchmarks/swebench/subsets/raw/
