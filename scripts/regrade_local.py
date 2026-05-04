@@ -41,6 +41,7 @@ from benchmarks.maintain_suite.grade import (  # noqa: E402
     FixtureResult,
     grade_fixture,
 )
+from luxe.citations import lint_report  # noqa: E402
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str]:
@@ -115,17 +116,32 @@ def regrade_one(result_path: Path, fixtures: dict[str, Fixture]) -> dict:
     run_id = str(state.get("luxe_run_id", ""))
     branch = _pushed_branch_for(run_id) if run_id else ""
 
-    # Carry over agent-loop outputs we don't recompute: pr_url, pr_opened,
-    # citation counts. (The grader's responsibility is the *grading* logic;
-    # the agent-loop's responsibility was the diff and PR cycle, which we're
-    # treating as ground truth from the original run.)
+    # Carry over agent-loop outputs we don't recompute: pr_url, pr_opened.
+    # The grader's responsibility is the *grading* logic; the agent-loop's
+    # responsibility was the diff and PR cycle, treated as ground truth.
     pr_url = str(raw.get("pr_url", ""))
     pr_opened = bool(raw.get("pr_opened", False))
-    cit_unres = int(raw.get("citations_unresolved", 0))
-    cit_total = int(raw.get("citations_total", 0))
 
     worktree = Path("/tmp") / f"regrade-{fixture_id}"
     _prepare_worktree(fixture, branch, worktree)
+
+    # Re-run the citation linter against the original synthesizer.md if we
+    # can find it. Falls back to stored counts if the run dir is gone or
+    # the synthesizer was never written. Re-running here is what makes
+    # sidecar regrade actually validate citation-linter changes — without
+    # this, edits to src/luxe/citations.py can't be tested without a fresh
+    # bench run.
+    cit_unres = int(raw.get("citations_unresolved", 0))
+    cit_total = int(raw.get("citations_total", 0))
+    synth_path = Path.home() / ".luxe" / "runs" / run_id / "synthesizer.md"
+    if synth_path.is_file():
+        try:
+            report_text = synth_path.read_text()
+            lint = lint_report(report_text, worktree, base_sha=fixture.base_sha)
+            cit_unres = len(lint.unresolved)
+            cit_total = len(lint.citations)
+        except (OSError, RuntimeError):
+            pass  # fall back to stored counts
 
     new_result = grade_fixture(
         fixture, worktree,
