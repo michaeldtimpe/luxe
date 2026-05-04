@@ -1,13 +1,28 @@
 # luxe — session resume document
 
-Current state: **v1.4.0 shipped 2026-05-03 — three-replicate validation: 9/10, 10/10, 10/10 → 9.67/10 effective bench**.
+Current state: **v1.4.1 in progress 2026-05-03 PM/late** — three fixes + adapter scaffolding for external benchmarks. Mode B validation in flight (bhnsu1i79).
 
-**2026-05-03 PM validation outcome** (`acceptance/v1_4_validation_rep_{1,2,3}/`):
+**Late 2026-05-03 work** (commits 1d5b006 → 399ed66):
+- `1d5b006` v1.4.1 fixes: citation-linter bare-filename fallback + Mode B write-pressure + regrade lint re-run
+- `42d2d51`, `656e83a`, `399ed66` SWE-bench scaffolding (data model, stratify, frozen n=75 subset, preds-only runner). No Docker harness yet (decision point #1).
+- `71b4c7e`, `2f58019` BFCL v3 adapter (schemas, grade, run.py). Raw-mode validated via load smoke; live execution pending bench completion.
+- `bb92b09`, `37cd1c8` lessons.md / RESUME.md / .gitignore tidy.
+
+**Failure-mode decomposition for `nothing-ever-happens-document-config`** (was: "33% prose-mode" — actually three distinct bugs):
+- **Mode A**: synthesizer prose truncates `bot/strategy/foo.py:42` to `foo.py:42`. Linter false-flags missing_file. → **fixed** by bare-filename fallback in `src/luxe/citations.py` (validated 3F→4P on diag rep 1).
+- **Mode B**: prose-mode hallucination — agent declares "comprehensive picture" early, hallucinates content from priors, never writes. → **fix landed** (`LUXE_WRITE_PRESSURE=1` opt-in, mid-loop write-pressure injection in `src/luxe/agents/loop.py`); validation in flight.
+- **Mode C**: out-of-range line-number hallucination in synthesizer prose (88 instances observed in postfix rep 5). Genuine citation lint failures; not a linter bug. Mode B fix may partially mitigate; structural fix deferred.
+
+**Original 2026-05-03 PM validation outcome** (`acceptance/v1_4_validation_rep_{1,2,3}/`):
 - Rep 1: 9/10 (`nothing-ever-happens-document-config` FAIL — variance fixture)
 - Rep 2: 10/10
 - Rep 3: 10/10
 - Per RESUME's decision tree: 2/3 at 10/10 → "variance is real; bench effectively 9.67/10; document honestly; close session at B."
-- Discovery: `scripts/regrade_local.py:90` falls into the stale-`origin/<branch>` trap on manage tasks. Pre-existing bug, not introduced this session. Bench-time `result.json` is authoritative; sidecar regrade unreliable for manage. See `project_regrade_local_origin_bug.md`.
+
+**External benchmarks plan**: `~/.claude/plans/fancy-honking-lerdorf.md` — SWE-bench Verified n=75 stratified subset + BFCL v3 Python-relevant subset, pre/post SpecDD Lever 2/3. Adapter code scaffolded; live runs pending Mode B validation completion.
+
+**Frozen subsets**:
+- `benchmarks/swebench/subsets/v1_baseline_n75.json` — 75 instances across 12 repos, per-repo cap 8, deterministic from seed 20260503.
 
 **Today's ship sequence**:
 - **v1.3.0** (`cd27e35`) — read_file dedup exemption + lpe-typing fixture surgery. Bench 8/10 → 9/10.
