@@ -16,12 +16,15 @@
 - SWE-bench Verified — `benchmarks/swebench/`: fixtures + stratify + adapter + run.py (preds-only) + harness.py + compare.py (paired McNemar) + tests
 - Frozen subset: `benchmarks/swebench/subsets/v1_baseline_n75.json` (75 instances, 12 repos, per-repo cap 8)
 
-**External benchmark first results** (`acceptance/bfcl/pre_specdd_v141/rep_1/`):
-- BFCL `simple_python` raw: 330/400 = **82.5%**
-- BFCL `irrelevance` raw: 220/240 = **91.67%**
-- Combined: 550/640 = **85.94%**
-- 43/70 simple_python failures = `no_tool_call_emitted` — prose-mode tendencies in raw mode too
-- ~16-21s/problem at temp=0 (much slower than the plan's 3-5s estimate)
+**BFCL pre-SpecDD baseline complete** (`acceptance/bfcl/pre_specdd_v141/rep_1/`, 2026-05-04):
+- `irrelevance`: 220/240 = **91.67%** (avg 20.9s)
+- `multiple`: 166/200 = **83.00%** (avg 18.5s)
+- `simple_python`: 330/400 = **82.50%** (avg 16.6s)
+- `parallel`: 132/200 = **66.00%** (avg 20.1s)
+- `parallel_multiple`: 98/200 = **49.00%** (avg 24.3s)
+- **TOTAL: 946/1240 = 76.29%** in ~3.5h wall
+- **Parallel cliff**: parallel_multiple sits 33pp below single-call avg. Multi-call planning is the model's weakness and the most likely place SpecDD agent-mode will show value. Single-call categories are too saturated for big SpecDD gains.
+- 43/70 `simple_python` failures = `no_tool_call_emitted` — same prose-mode tendency that drove the SWE-bench reproducer-script regression in the smoke run.
 
 **SWE-bench preds-only smoke** (`acceptance/swebench/smoke_2026_05_04/`):
 - 3 astropy instances; 2/3 produced non-empty patches; ~3 min wall/instance
@@ -46,24 +49,18 @@ git tag -a v1.4.1 -m "v1.4.1: linter bare-filename fix + Mode B opt-in + regrade
 
 Decision: promote `LUXE_WRITE_PRESSURE=1` from opt-in to default? 10/10 validation supports it but a bench-wide ×3 reps with the flag would be the rigorous gate before promotion. ~75 min wall.
 
-### B. SWE-bench prompt work before n=75 baseline (~half-day)
-The smoke exposed that the agent creates reproducer scripts instead of editing source. Without specialized prompting, an n=75 baseline would mostly score 0%. Two paths:
-1. Add a `--task swebench-bugfix` mode in `src/luxe/cli.py` with curated bug-fix prompt ("read suspected source; identify root cause; edit the source file; don't write reproducers; run tests to verify").
-2. Skip the SWE-bench prompt work; accept low pass rate; measure the *agent − raw* delta as a proxy for luxe's value-add.
+### B. SWE-bench smoke re-run + n=75 baseline (next)
+**Shipped (commit `60acdc7`)**: `swebench_bugfix` PromptVariant + `swebench_strict_only` TaskOverlay + `configs/single_64gb_swebench.yaml` (now the swebench runner default) + mechanical `smoke_inspect.py`. Prompt forbids new files, treats reproducers as search context, requires one tool call per response (parallel-cliff defense), prescribes a linear locate→read→edit→verify protocol, includes a continued-exploration permission clause to avoid shallow edits. Inspector applied to the historical smoke confirms 0/3 PASS — the regression we're fixing.
 
-Option 1 is more honest. ~half-day to a session.
+Next steps:
+1. Re-run the same 3-instance astropy smoke with the new config (~10 min).
+2. `python -m benchmarks.swebench.smoke_inspect --predictions acceptance/swebench/smoke_2026_05_04_v2/predictions.json` — expect 3/3 PASS before escalating.
+3. If smoke clean, run n=75 against `subsets/v1_baseline_n75.json` (~5h wall preds-only; Docker harness scoring still gated by RESUME option D).
 
-### C. Continue BFCL coverage (~3 hours)
-Three categories not yet run: `multiple` (200), `parallel` (200), `parallel_multiple` (200). Each ~50-60 min wall. Would round out the Python subset to ~1240 problems for a complete pre-SpecDD baseline.
-
-```bash
-OMLX_API_KEY=omlx-sdb25582k3mq8pf9 .venv/bin/python -m benchmarks.bfcl.run \
-    --categories multiple parallel parallel_multiple \
-    --mode raw \
-    --output acceptance/bfcl/pre_specdd_v141/rep_1/ \
-    --model Qwen3.6-35B-A3B-6bit --temperature 0.0
-.venv/bin/python -m benchmarks.bfcl.aggregate --output acceptance/bfcl/pre_specdd_v141/rep_1/
-```
+### C. BFCL — second rep + agent-mode probe on parallel categories (~5h)
+Single-call rep is saturated; not worth re-running. The actionable next signal is:
+1. Second rep across all 5 raw-mode categories for variance bounds on the 76.29% number (~3.5h).
+2. Agent-mode probe on `parallel` + `parallel_multiple` to test whether the agent loop lifts the cliff (~1.5h for 400 problems if agent-mode wall ≈ raw-mode wall).
 
 ### D. Docker confirmation for SWE-bench harness scoring
 `pip install swebench` is done; harness wrapper at `benchmarks/swebench/harness.py` is wired but defers Docker calls. Confirm Docker Desktop is up + ~10GB free + acceptable RAM headroom (model ~30GB + container layer 6-8GB on a 64GB box is tight but viable). Then:
