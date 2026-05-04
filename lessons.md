@@ -803,3 +803,53 @@ beyond the legacy `expected_outcome` to close audit-identified gaps).
 `project_compound_goal_audit.md`, `project_loose_grader_audit.md`,
 `feedback_instrument_loop_first.md`, `feedback_verify_fixture_grader.md`
 in the project memory directory.
+
+### [2026-05-03 PM] v1.4.0 — three-replicate validation: 9/10, 10/10, 10/10
+
+**What happened**: Per the RESUME.md decision tree, ran three independent
+full-bench replicates of v1.4.0 (`acceptance/v1_4_validation_rep_{1,2,3}/`)
+with `LUXE_REPROMPT_ON_DOC=1` against `variants_v1_default.yaml`, pinned
+work_dir, `--force` to wipe stored state per rep. Results:
+
+| Rep | Stored result | Failed fixture | Notes |
+|---|---|---|---|
+| 1 | 9/10 (40/50 score) | `nothing-ever-happens-document-config` (1F) | Variance fixture rolled FAIL — expected ~33% historical rate |
+| 2 | 10/10 | — | clean |
+| 3 | 10/10 | — | clean |
+
+**Headline**: 2/3 at 10/10 confirms the variance branch — bench is
+**effectively 9.67/10**, not a structural 10/10. The original v1.4.0
+ship at 10/10 (acceptance/v1_4_prep_full_bench) was real but
+variance-fortunate; the structural ceiling is at one fixture's prose-mode
+roll on `nothing-doc-config`. Implement and manage categories remain
+deterministic; doc-category variance dominates.
+
+**Sidecar regrade discovered a pre-existing tooling bug** (`scripts/regrade_local.py:90`):
+the regrader uses `git checkout origin/<branch_name>` against the local
+clone, but for fixtures where the agent's branch wasn't pushed to origin
+(notably `nothing-ever-happens-manage-deps-audit` across all 3 reps), the
+ref doesn't exist and the regrader silently falls back to `base_sha` →
+0 additions → spurious FAIL. This is exactly the stale-`origin/<branch>`
+trap warned about in `feedback_offline_cache_refs.md` and the Critical
+Gotchas in RESUME.md, except inside the regrader itself. The bench-time
+grader's numbers are authoritative; the sidecar regrade for manage tasks
+is unreliable until this is fixed. Hand-grading the actual local cache
+showed real `SECURITY-AUDIT.md` writes of 81-107 lines on branches -3/-4/-5,
+matching the bench-time `diff_additions=76-90` numbers.
+
+**Decision per the resume tree**: end at option B. v1.4.0 is shipped and
+tagged; the 9.67/10 effective bench is the honest framing.
+
+**Lessons reinforced**:
+1. **Variance is structural, not eliminated by Lever 1.** The original
+   audit (`project_compound_goal_audit.md`) was right: SpecDD's
+   compound-goal premise didn't account for prose-mode tool-affordance
+   variance. Lever 1's value is architectural (programmatic DoD); it
+   doesn't lift the doc-category variance ceiling.
+2. **Trust bench-time results over sidecar regrade for manage tasks.**
+   The sidecar is a tool for cheap iteration on grading logic, not a
+   ground-truth re-evaluation. When stored and regrade disagree on a
+   manage fixture, hand-grade the cache.
+
+**Affected files**: `lessons.md` (this entry), memory directory
+(`project_v1_4_validation.md`, `project_regrade_local_origin_bug.md`).

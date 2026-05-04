@@ -1,6 +1,13 @@
 # luxe — session resume document
 
-Current state: **v1.4.0 shipped 2026-05-03 — first 10/10 bench (SpecDD Lever 1)**.
+Current state: **v1.4.0 shipped 2026-05-03 — three-replicate validation: 9/10, 10/10, 10/10 → 9.67/10 effective bench**.
+
+**2026-05-03 PM validation outcome** (`acceptance/v1_4_validation_rep_{1,2,3}/`):
+- Rep 1: 9/10 (`nothing-ever-happens-document-config` FAIL — variance fixture)
+- Rep 2: 10/10
+- Rep 3: 10/10
+- Per RESUME's decision tree: 2/3 at 10/10 → "variance is real; bench effectively 9.67/10; document honestly; close session at B."
+- Discovery: `scripts/regrade_local.py:90` falls into the stale-`origin/<branch>` trap on manage tasks. Pre-existing bug, not introduced this session. Bench-time `result.json` is authoritative; sidecar regrade unreliable for manage. See `project_regrade_local_origin_bug.md`.
 
 **Today's ship sequence**:
 - **v1.3.0** (`cd27e35`) — read_file dedup exemption + lpe-typing fixture surgery. Bench 8/10 → 9/10.
