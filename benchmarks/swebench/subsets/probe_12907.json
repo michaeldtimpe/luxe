@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "n": 1,
+  "purpose": "Single-instance probe for astropy__astropy-12907. Used to instrument the model's stalled trajectory (localized _cstack but never edited) with LUXE_LOG_TOOL_CALLS=1.",
+  "instance_ids": [
+    "astropy__astropy-12907"
+  ]
+}
