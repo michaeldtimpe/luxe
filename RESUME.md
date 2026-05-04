@@ -2,7 +2,11 @@
 
 Current state: **v1.4.1 in progress 2026-05-03 PM/late** — three fixes + adapter scaffolding for external benchmarks. Mode B validation in flight (bhnsu1i79).
 
-**Late 2026-05-03 work** (commits 1d5b006 → 399ed66):
+**2026-05-04 early-AM update**: Mode B validation completed — **10/10 PASS** on `nothing-doc-config × 10` reps with `LUXE_WRITE_PRESSURE=1` + `LUXE_REPROMPT_ON_DOC=1`. Three rescue regimes observed: clean engagement (8/10), Mode B mid-loop write-pressure (1/10, rep 9), reprompt rescue (1/10, rep 5). Linter fix held: 0 unresolved citations across all 10 reps. Historical ~33% FAIL rate for this fixture collapsed to 0%.
+
+BFCL raw mode on `simple_python` (400 problems) launching now via bdeuxmalt — first external agent benchmark data point.
+
+**Late 2026-05-03 / early 2026-05-04 work** (commits 1d5b006 → dc4c5df):
 - `1d5b006` v1.4.1 fixes: citation-linter bare-filename fallback + Mode B write-pressure + regrade lint re-run
 - `42d2d51`, `656e83a`, `399ed66` SWE-bench scaffolding (data model, stratify, frozen n=75 subset, preds-only runner). No Docker harness yet (decision point #1).
 - `71b4c7e`, `2f58019` BFCL v3 adapter (schemas, grade, run.py). Raw-mode validated via load smoke; live execution pending bench completion.
