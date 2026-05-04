@@ -853,3 +853,51 @@ tagged; the 9.67/10 effective bench is the honest framing.
 
 **Affected files**: `lessons.md` (this entry), memory directory
 (`project_v1_4_validation.md`, `project_regrade_local_origin_bug.md`).
+
+### [2026-05-04] v1.4.1 Mode B/A fix combination — 10/10 PASS on nothing-doc-config × 10 reps
+
+**What happened**: Three fixes from the late 2026-05-03 session
+(citation-linter bare-filename fallback + Mode B mid-loop write-pressure
+injection + sidecar regrade lint re-run) validated on
+`nothing-ever-happens-document-config` × 10 replicates with
+`LUXE_WRITE_PRESSURE=1` + `LUXE_REPROMPT_ON_DOC=1`. Result: **10/10 PASS,
+score 4/5 each**, 0 unresolved citations across all reps.
+
+**Per-rep breakdown** (`acceptance/doc_config_modeB_rep_{1..10}/`):
+
+| Rep | Score | Citations | Additions | Mode B fired | Reprompt fired | Notes |
+|-----|-------|-----------|-----------|--------------|----------------|-------|
+| 1 | 4 | 0 | 173 | — | — | clean engagement |
+| 2 | 4 | 0 | 135 | — | — | clean |
+| 3 | 4 | 0 | 203 | — | — | clean |
+| 4 | 4 | 0 | 168 | — | — | clean |
+| 5 | 4 | 0 | 147 | — | ✓ | reprompt rescue (main pass: 0 add, 28k prose chars) |
+| 6 | 4 | 0 | 135 | — | — | clean |
+| 7 | 4 | 0 | 207 | — | — | clean |
+| 8 | 4 | 0 | 173 | — | — | clean |
+| 9 | 4 | 0 | 138 | ✓ (step 6) | — | Mode B rescue (gate fired at step 6: 18 tool calls + 5024 tokens + 0 writes; main pass continued and produced 138 additions) |
+| 10 | 4 | 0 | 30 | — | — | clean (smaller diff but still PASS) |
+
+**Three rescue regimes observed**:
+1. **Clean engagement** (8/10): model writes early, neither Mode B nor reprompt fires.
+2. **Mode B rescue** (1/10, rep 9): gate fires mid-main-pass when tool count + tokens + step thresholds cross with 0 writes. The synthetic user message lands at the right moment; model writes immediately after. No reprompt needed.
+3. **Reprompt rescue** (1/10, rep 5): Mode B doesn't fire because the main pass exits before step 5's *cumulative* completion tokens cross the 4000 threshold (the model goes from "still reading" at step 4 to "all-prose" at step 5; step 5 generates ~5000 prose tokens AFTER the gate evaluation at step 5 entry). The post-loop reprompt — gated on `spec_all_satisfied=false` — fires and the model writes on the second pass.
+
+**Mode A signal**: 0/10 reps had unresolved citations. Linter bare-
+filename fallback eliminated the false-flag failure mode that produced
+`acceptance/doc_config_diag_rep_1` 3F before the fix.
+
+**Headline**: With v1.4.1's three fixes combined, the historical ~33%
+FAIL rate on this fixture collapses to 0% across n=10. Mode B and
+reprompt are complementary — when one doesn't catch the trap, the other
+does.
+
+**Threshold tuning consideration**: Mode B's `_WRITE_PRESSURE_MIN_TOKENS=4000`
+*just barely* misses rep 5's pre-prose state (cumulative tokens hit ~3800
+at step 5 entry, the prose itself crosses 4000). Lowering to 3000 would
+catch rep 5 before reprompt does, saving ~370s of wall time on rescued
+runs. Not pursued — n=1 observation isn't enough signal to tune
+thresholds, and the reprompt rescue worked.
+
+**Affected files**: `lessons.md` (this entry), `RESUME.md` (state update).
+Memory: `project_doc_config_three_modes.md`, `project_external_benchmark_program.md`.
