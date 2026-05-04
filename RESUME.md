@@ -2,9 +2,35 @@
 
 Current state: **v1.4.1 in progress 2026-05-03 PM/late** — three fixes + adapter scaffolding for external benchmarks. Mode B validation in flight (bhnsu1i79).
 
-**2026-05-04 early-AM update**: Mode B validation completed — **10/10 PASS** on `nothing-doc-config × 10` reps with `LUXE_WRITE_PRESSURE=1` + `LUXE_REPROMPT_ON_DOC=1`. Three rescue regimes observed: clean engagement (8/10), Mode B mid-loop write-pressure (1/10, rep 9), reprompt rescue (1/10, rep 5). Linter fix held: 0 unresolved citations across all 10 reps. Historical ~33% FAIL rate for this fixture collapsed to 0%.
+**2026-05-04 autonomous slot summary** (run while user slept ~11:30 PM → ~5:00 AM):
 
-BFCL raw mode on `simple_python` (400 problems) launching now via bdeuxmalt — first external agent benchmark data point.
+**v1.4.1 Mode B validation — 10/10 PASS** on `nothing-doc-config × 10` reps with `LUXE_WRITE_PRESSURE=1` + `LUXE_REPROMPT_ON_DOC=1`. Three rescue regimes observed: clean engagement (8/10), Mode B mid-loop write-pressure (1/10, rep 9), reprompt rescue (1/10, rep 5). Linter fix held: 0 unresolved citations across all 10 reps. Historical ~33% FAIL rate for this fixture collapsed to 0%.
+
+**BFCL v3 pre-SpecDD raw-mode baseline** (`acceptance/bfcl/pre_specdd_v141/rep_1/`):
+- `simple_python`: 330/400 = **82.5%** PASS
+- `irrelevance`: 220/240 = **91.67%** PASS
+- Combined: 550/640 = **85.94%**
+- 43/70 simple_python failures are `no_tool_call_emitted` — prose-mode tendencies show up in BFCL too
+- ~16-21s/problem at temp=0; full Python subset (~950 problems) would be ~5-7 hours wall
+
+**SWE-bench preds-only smoke** (`acceptance/swebench/smoke_2026_05_04/`):
+- 3 astropy instances; 2/3 produced non-empty patches; ~3 min wall/instance
+- **Critical finding**: model creates reproducer scripts (`repo_root/test_sep.py`) instead of editing source files. SWE-bench-specific prompting needed before a real n=75 baseline run.
+- Pipeline validated end-to-end (clone → agent → diff → predictions.json). Docker harness step still gated on user confirmation.
+
+**Pending decisions** (need user input):
+- Docker confirmation for SWE-bench harness scoring (~10GB image pulls, ~60 min)
+- Whether to add a `--task swebench-bugfix` mode with curated prompting before n=75 baseline run
+- Promote `LUXE_WRITE_PRESSURE=1` from opt-in to default? (10/10 validation supports this; bench-wide ×3 reps would be the rigorous gate)
+- Bundle v1.4.1 fixes + scaffolding into a tagged release (v1.4.1)?
+
+**18 commits** since v1.4.0, all on main:
+- `1d5b006` v1.4.1 fixes (linter + Mode B + regrade)
+- `42d2d51`, `656e83a`, `399ed66`, `e0da66e` SWE-bench scaffolding
+- `71b4c7e`, `2f58019`, `41e47c1`, `86c3b4e` BFCL adapter + tests + aggregator
+- `c64f7ad`, `19d2202` SWE-bench paired McNemar comparator
+- `bb92b09`, `8de1e46`, `dc4c5df`, `096fdee` docs/lessons/RESUME updates
+- `37cd1c8` .gitignore for raw dataset dumps
 
 **Late 2026-05-03 / early 2026-05-04 work** (commits 1d5b006 → dc4c5df):
 - `1d5b006` v1.4.1 fixes: citation-linter bare-filename fallback + Mode B write-pressure + regrade lint re-run
