@@ -226,3 +226,80 @@ def test_extract_citations_keeps_dotted_filenames_with_digits():
     cs = extract_citations(text)
     assert len(cs) == 1
     assert cs[0].path == "v1.2.3.py"
+
+
+def test_bare_filename_resolves_to_unique_canonical_path(git_repo: Path):
+    """Synthesizer prose sometimes truncates `bot/strategy/foo.py:42` to
+    `foo.py:42` even when the deliverable's own citations use the full path.
+    When exactly one file with that basename exists in the repo, the linter
+    should resolve to it rather than flag missing_file.
+
+    Regression: nothing-ever-happens-document-config diag rep 1 (2026-05-03)
+    — model wrote canonical paths in CONFIG.md but bare names
+    (`nothing_happens.py:307`, `dashboard.py:71`) in the synthesizer's
+    Final Report. Linter dinged 2 citations and fixture scored 3/5 instead
+    of 4/5.
+    """
+    # `src/calc.py` is the only `calc.py` in the repo — bare reference resolves.
+    base = _base_sha(git_repo)
+    report = "Helper at `calc.py:2`."
+    res = lint_report(report, git_repo, base_sha=base)
+    assert not res.is_blocking
+    assert res.citations[0].status == "resolved"
+    assert res.citations[0].matched_line == 2
+
+
+def test_bare_filename_ambiguous_stays_missing(git_repo: Path):
+    """Two files with the same basename → ambiguous; the linter must NOT
+    guess. Falls through to missing_file so the model's truncation surfaces
+    rather than silently resolving to the wrong file.
+    """
+    (git_repo / "tests").mkdir()
+    (git_repo / "tests" / "calc.py").write_text("# different file\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "add second calc"], cwd=git_repo, check=True)
+    base = _base_sha(git_repo)
+    report = "See `calc.py:1`."  # ambiguous — could be src/calc.py or tests/calc.py
+    res = lint_report(report, git_repo, base_sha=base)
+    assert res.is_blocking
+    assert res.citations[0].status == "missing_file"
+
+
+def test_bare_filename_typo_stays_missing(git_repo: Path):
+    """A bare filename that doesn't match any file in the repo is a real
+    miss — must still flag missing_file, not silently resolve.
+    """
+    base = _base_sha(git_repo)
+    report = "See `nonexistent.py:1`."
+    res = lint_report(report, git_repo, base_sha=base)
+    assert res.is_blocking
+    assert res.citations[0].status == "missing_file"
+
+
+def test_bare_filename_skips_excluded_dirs(git_repo: Path):
+    """A unique match inside `node_modules/` (or another vendored/build dir)
+    should NOT count. Otherwise a citation could resolve to an irrelevant
+    vendored copy.
+    """
+    (git_repo / "node_modules" / "pkg").mkdir(parents=True)
+    (git_repo / "node_modules" / "pkg" / "index.js").write_text("// vendored\n")
+    subprocess.run(["git", "add", "-f", "node_modules/"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "vendor"], cwd=git_repo, check=True)
+    base = _base_sha(git_repo)
+    report = "See `index.js:1`."
+    res = lint_report(report, git_repo, base_sha=base)
+    assert res.is_blocking
+    assert res.citations[0].status == "missing_file"
+
+
+def test_bare_filename_does_not_apply_to_paths_with_slashes(git_repo: Path):
+    """`bot/missing.py:1` is an explicit path; it should NOT fall back to
+    bare-filename resolution if that path doesn't exist. Slashed paths are
+    intentional — a miss there is a real miss.
+    """
+    base = _base_sha(git_repo)
+    # `src/calc.py` exists, but `subdir/calc.py` does not — explicit path miss.
+    report = "See `subdir/calc.py:1`."
+    res = lint_report(report, git_repo, base_sha=base)
+    assert res.is_blocking
+    assert res.citations[0].status == "missing_file"

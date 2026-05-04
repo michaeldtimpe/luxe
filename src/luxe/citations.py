@@ -72,6 +72,14 @@ _CITATION_RE = re.compile(
 _IPV4_PATH_RE = re.compile(r"(?:^|/)\d+\.\d+\.\d+\.\d+$")
 _FUZZY_WINDOW = 20
 
+# Directories skipped during bare-filename resolution. A vendored copy under
+# `node_modules/` or a build artifact under `dist/` shouldn't make a citation
+# resolve to the wrong file.
+_BARE_FILENAME_EXCLUDE_DIRS = frozenset({
+    ".git", "__pycache__", "node_modules", ".venv", "venv", "env",
+    "dist", "build", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+})
+
 
 @dataclass
 class Citation:
@@ -216,6 +224,31 @@ def _snippet_matches(file_lines: list[str], near_line: int, snippet: str,
     return None
 
 
+def _resolve_bare_filename(repo_root: Path, basename: str) -> Path | None:
+    """Resolve a bare filename (no `/`) to its canonical repo path when the
+    repo contains exactly one file with that basename. Returns None when
+    the filename is ambiguous or absent. Skips vendored / build / cache
+    directories to avoid resolving to the wrong copy.
+
+    This forgives synthesizer-prose truncations like `dashboard.py:71` when
+    the canonical path is `bot/dashboard.py:71` and the deliverable's own
+    citations are correct. A bare filename that resolves uniquely is a
+    legitimate citation, not a hallucination — so the linter accepting it
+    is more correct, not looser.
+    """
+    matches: list[Path] = []
+    for p in repo_root.rglob(basename):
+        if not p.is_file():
+            continue
+        rel_parts = p.relative_to(repo_root).parts
+        if any(part in _BARE_FILENAME_EXCLUDE_DIRS for part in rel_parts):
+            continue
+        matches.append(p)
+        if len(matches) > 1:
+            return None  # ambiguous
+    return matches[0] if matches else None
+
+
 def _check_one(citation: Citation, finding: ValidatorFinding | None,
                repo_root: Path, changed: set[str], deleted: set[str]) -> CitationResult:
     path = citation.path
@@ -227,6 +260,11 @@ def _check_one(citation: Citation, finding: ValidatorFinding | None,
                               detail="file deleted in diff (intentional fix)")
 
     abs_path = (repo_root / path)
+    if not abs_path.is_file() and "/" not in path:
+        resolved = _resolve_bare_filename(repo_root, path)
+        if resolved is not None:
+            path = str(resolved.relative_to(repo_root))
+            abs_path = resolved
     if not abs_path.is_file():
         return CitationResult(citation, "missing_file",
                               detail=f"{path} does not exist post-edit")

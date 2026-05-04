@@ -101,6 +101,31 @@ _MAX_CONSECUTIVE_REPEAT_STEPS = 2
 # in the dedup path.
 _DEDUP_EXEMPT_TOOLS = {"read_file"}
 
+# Tools considered "write" actions for mid-loop write-pressure detection.
+# Tasks that produce a deliverable diff must hit at least one of these — a
+# loop that reads many times without ever writing is the prose-mode trap
+# observed on nothing-ever-happens-document-config (v1.4.0 rep 1: 17 tool
+# calls, 9092 completion tokens, 0 writes; model declared "comprehensive
+# picture" prematurely, hallucinated content from priors, never committed).
+_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
+
+# Mid-loop write-pressure thresholds (Mode B fix). Fires once per run when
+# all conditions hold: tool calls >= MIN_TOOLS, completion tokens >=
+# MIN_TOKENS, current step >= MIN_STEP, zero writes so far. Off by default;
+# enable per-run with LUXE_WRITE_PRESSURE=1 (or via runtime config).
+_WRITE_PRESSURE_MIN_TOOLS = 10
+_WRITE_PRESSURE_MIN_TOKENS = 4000
+_WRITE_PRESSURE_MIN_STEP = 5
+
+_WRITE_PRESSURE_MESSAGE = (
+    "Mid-loop notice: you've issued multiple reads without writing or "
+    "editing any files. This task's deliverable is a concrete diff — "
+    "re-reading existing material cannot produce one. Stop reading and "
+    "call `write_file` or `edit_file` now with the deliverable based on "
+    "what you've already learned. If specific details are missing, write "
+    "a first draft that captures the structure, then refine."
+)
+
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
 # patterns mid-run. Set to 0 to disable. Configurable via env.
@@ -144,12 +169,38 @@ def run_agent(
     seen_calls: set[str] = set()
     consecutive_repeat_steps = 0
     next_token_log_threshold = _TOKEN_LOG_INTERVAL  # 0 = disabled
+    write_pressure_enabled = os.environ.get("LUXE_WRITE_PRESSURE") == "1"
+    write_pressure_fired = False
+    writes_seen = 0
 
     for step in range(role_cfg.max_steps):
         result.steps = step + 1
 
         pressure = context_pressure(messages, role_cfg.num_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
+
+        # Mid-loop write-pressure injection (Mode B fix). Fires once per
+        # run when the agent has done substantial reading + generation
+        # without writing. Targets the prose-mode trap where the model
+        # declares "comprehensive picture" prematurely and hallucinates
+        # the deliverable into chat instead of committing it. The
+        # synthetic user message interrupts the read-loop and forces a
+        # write decision before further tool calls accumulate.
+        if (write_pressure_enabled
+                and not write_pressure_fired
+                and writes_seen == 0
+                and step >= _WRITE_PRESSURE_MIN_STEP
+                and result.tool_calls_total >= _WRITE_PRESSURE_MIN_TOOLS
+                and result.completion_tokens >= _WRITE_PRESSURE_MIN_TOKENS):
+            messages.append({"role": "user", "content": _WRITE_PRESSURE_MESSAGE})
+            write_pressure_fired = True
+            if log_calls:
+                append_event(
+                    run_id, "write_pressure_fired",
+                    phase=phase, step=step,
+                    tool_calls_total=result.tool_calls_total,
+                    completion_tokens=result.completion_tokens,
+                )
 
         messages = elide_old_tool_results(messages, role_cfg.num_ctx)
 
@@ -267,6 +318,8 @@ def run_agent(
             )
             result.tool_calls.append(executed)
             seen_calls.add(key)
+            if tc.name in _WRITE_TOOLS and not executed.error:
+                writes_seen += 1
 
             content = executed.error or executed.result
             messages.append({
