@@ -80,6 +80,11 @@ def main() -> int:
     grand_prompt = 0
     grand_completion = 0
 
+    global_runtime_wall = 0.0  # actual time spent this session (fresh runs only)
+    global_runtime_done = 0    # fresh-run problem count this session
+    global_remaining = 0       # fresh problems still to run across all categories
+
+    valid_categories: list[tuple[str, list[dict[str, Any]], dict[str, Any], Path]] = []
     for category in args.categories:
         if category not in SUPPORTED_CATEGORIES:
             print(f"  skipping unsupported category: {category}")
@@ -92,51 +97,112 @@ def main() -> int:
         gt_map = load_ground_truth(category)
         cat_dir = args.output / category
         cat_dir.mkdir(parents=True, exist_ok=True)
+        valid_categories.append((category, problems, gt_map, cat_dir))
+        for idx, pr in enumerate(problems):
+            if not (cat_dir / f"{pr.get('id', f'{category}_{idx}')}.json").exists():
+                global_remaining += 1
+
+    grand_n = sum(len(p) for _, p, _, _ in valid_categories)
+    print(f"BFCL {args.mode}: {grand_n} problems across "
+          f"{len(valid_categories)} categories — "
+          f"{global_remaining} fresh, {grand_n - global_remaining} cached",
+          flush=True)
+
+    for category, problems, gt_map, cat_dir in valid_categories:
 
         cat_pass = 0
         cat_wall = 0.0
         cat_prompt = 0
         cat_completion = 0
+        cat_skipped = 0
+        cat_runtime_wall = 0.0
+        cat_runtime_done = 0
+
+        existing = sum(1 for idx, pr in enumerate(problems)
+                       if (cat_dir / f"{pr.get('id', f'{category}_{idx}')}.json").exists())
+        if existing:
+            print(f"  {category}: {existing}/{len(problems)} already on disk, "
+                  f"will run {len(problems) - existing} fresh", flush=True)
 
         for i, problem in enumerate(problems):
             pid = problem.get("id", f"{category}_{i}")
-            if args.mode == "raw":
-                result = run_problem_raw(
-                    backend, problem,
-                    max_tokens=args.max_tokens,
-                    temperature=args.temperature,
-                )
+            out_path = cat_dir / f"{pid}.json"
+
+            cached: dict[str, Any] | None = None
+            if out_path.exists():
+                try:
+                    cached = json.loads(out_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    cached = None
+
+            if cached is not None:
+                cat_pass += int(cached.get("passed", False))
+                cat_wall += float(cached.get("wall_s", 0.0))
+                cat_prompt += int(cached.get("prompt_tokens", 0))
+                cat_completion += int(cached.get("completion_tokens", 0))
+                cat_skipped += 1
             else:
-                result = run_problem_agent(
-                    backend, role_cfg, problem,
-                )
+                t0 = time.time()
+                if args.mode == "raw":
+                    result = run_problem_raw(
+                        backend, problem,
+                        max_tokens=args.max_tokens,
+                        temperature=args.temperature,
+                    )
+                else:
+                    result = run_problem_agent(
+                        backend, role_cfg, problem,
+                    )
+                elapsed = time.time() - t0
 
-            gt = gt_map.get(pid)
-            grade_res = grade(category, result.actual_calls, gt)
+                gt = gt_map.get(pid)
+                grade_res = grade(category, result.actual_calls, gt)
 
-            (cat_dir / f"{pid}.json").write_text(json.dumps({
-                "id": pid,
-                "category": category,
-                "passed": grade_res.passed,
-                "reason": grade_res.reason,
-                "actual_calls": [
-                    {"name": n, "arguments": a} for (n, a) in result.actual_calls
-                ],
-                "wall_s": result.wall_s,
-                "prompt_tokens": result.prompt_tokens,
-                "completion_tokens": result.completion_tokens,
-                "error": result.error,
-            }, indent=2))
+                out_path.write_text(json.dumps({
+                    "id": pid,
+                    "category": category,
+                    "passed": grade_res.passed,
+                    "reason": grade_res.reason,
+                    "actual_calls": [
+                        {"name": n, "arguments": a} for (n, a) in result.actual_calls
+                    ],
+                    "wall_s": result.wall_s,
+                    "prompt_tokens": result.prompt_tokens,
+                    "completion_tokens": result.completion_tokens,
+                    "error": result.error,
+                }, indent=2))
 
-            cat_pass += int(grade_res.passed)
-            cat_wall += result.wall_s
-            cat_prompt += result.prompt_tokens
-            cat_completion += result.completion_tokens
+                cat_pass += int(grade_res.passed)
+                cat_wall += result.wall_s
+                cat_prompt += result.prompt_tokens
+                cat_completion += result.completion_tokens
+                cat_runtime_wall += elapsed
+                cat_runtime_done += 1
+                global_runtime_wall += elapsed
+                global_runtime_done += 1
 
-            if (i + 1) % 25 == 0 or (i + 1) == len(problems):
+            if (i + 1) % 10 == 0 or (i + 1) == len(problems):
                 running_rate = cat_pass / (i + 1)
+                cat_fresh_total = len(problems) - existing
+                cat_fresh_left = max(0, cat_fresh_total - cat_runtime_done)
+                global_left_fresh = max(0, global_remaining - global_runtime_done)
+                if cat_runtime_done > 0 and cat_fresh_left > 0:
+                    avg_s = cat_runtime_wall / cat_runtime_done
+                    eta_s = avg_s * cat_fresh_left
+                    eta_str = f" eta={eta_s/60:.1f}m avg={avg_s:.1f}s"
+                else:
+                    eta_str = ""
+                if global_runtime_done > 0 and global_left_fresh > 0:
+                    g_avg = global_runtime_wall / global_runtime_done
+                    g_eta_s = g_avg * global_left_fresh
+                    global_str = (f" | global {global_left_fresh} left"
+                                  f" total_eta={g_eta_s/60:.1f}m")
+                else:
+                    global_str = ""
+                skip_str = f" skipped={cat_skipped}" if cat_skipped else ""
                 print(f"  {category} {i+1}/{len(problems)} "
-                      f"pass_rate={running_rate:.2%} cum_wall={cat_wall:.0f}s",
+                      f"pass_rate={running_rate:.2%} cum_wall={cat_wall:.0f}s"
+                      f"{eta_str}{skip_str}{global_str}",
                       flush=True)
 
         n = len(problems)
