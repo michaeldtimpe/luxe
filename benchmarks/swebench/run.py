@@ -64,8 +64,11 @@ def main() -> int:
     p.add_argument("--work-dir", type=Path,
                    default=Path.home() / ".luxe" / "swebench-workspace",
                    help="Repo clones live here.")
-    p.add_argument("--config", type=Path, default=None,
-                   help="Pin a luxe config (default: configs/single_64gb.yaml).")
+    p.add_argument("--config", type=Path,
+                   default=Path("configs/single_64gb_swebench.yaml"),
+                   help="Pin a luxe config. Defaults to the SWE-bench-specific "
+                        "config (swebench_strict_only overlay). Pass "
+                        "configs/single_64gb.yaml to opt out.")
     p.add_argument("--per-instance-timeout", type=int, default=1800,
                    help="Seconds per instance before kill.")
     p.add_argument("--model-name", default="luxe-qwen3.6-35b-a3b-6bit",

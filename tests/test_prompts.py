@@ -311,6 +311,70 @@ def test_manage_strict_only_overlay_fires_only_on_manage_tasks():
         assert task_id == "baseline", f"{task_type} leaked to overlay"
 
 
+def test_swebench_strict_only_overlay_is_registered():
+    """The swebench-task overlay variant references swebench_strict_only —
+    must exist in TASK_OVERLAYS. Maps bugfix → swebench_bugfix only;
+    other task types fall through. Activated via configs/single_64gb_
+    swebench.yaml; the default config is unaffected."""
+    from luxe.agents.prompts import PROMPT_REGISTRY, TASK_OVERLAYS, get_overlay
+    assert "swebench_strict_only" in TASK_OVERLAYS
+    overlay = get_overlay("swebench_strict_only")
+    assert overlay is not None
+    assert overlay.by_task == {"bugfix": "swebench_bugfix"}
+    # Variant must be registered or resolve_prompt_ids will return an id
+    # that get_prompt() then KeyErrors on.
+    assert "swebench_bugfix" in PROMPT_REGISTRY
+    # Crucially: implement, document, manage, review NOT in by_task —
+    # the SWE-bench directive must not leak to other task types or it
+    # contaminates the maintain_suite if someone accidentally points it
+    # at this config.
+    for other in ("implement", "document", "manage", "review", "summarize"):
+        assert other not in overlay.by_task
+
+
+def test_swebench_strict_only_overlay_fires_only_on_bugfix_tasks():
+    """Resolve sanity check: with swebench_strict_only active, bugfix
+    routes to swebench_bugfix; every other task type routes to role-
+    level defaults."""
+    from luxe.agents.prompts import resolve_prompt_ids
+    sys_id, task_id = resolve_prompt_ids(
+        "bugfix",
+        system_prompt_id="baseline",
+        task_prompt_id="baseline",
+        task_overlay_id="swebench_strict_only",
+    )
+    assert sys_id == "swebench_bugfix"
+    assert task_id == "swebench_bugfix"
+    for task_type in ("implement", "document", "manage", "review", "summarize"):
+        sys_id, task_id = resolve_prompt_ids(
+            task_type,
+            system_prompt_id="baseline",
+            task_prompt_id="baseline",
+            task_overlay_id="swebench_strict_only",
+        )
+        assert sys_id == "baseline", f"{task_type} leaked to overlay"
+        assert task_id == "baseline", f"{task_type} leaked to overlay"
+
+
+def test_swebench_bugfix_variant_contains_anti_reproducer_directives():
+    """Surface-level guard against accidental edits that drop the key
+    directives. The smoke run we're defending against was specifically
+    'model creates reproducer scripts'; the prompt MUST forbid new
+    files and MUST require single-tool-per-response (parallel-cliff
+    defense). Doesn't lock exact wording, just key tokens."""
+    from luxe.agents.prompts import get
+    variant = get("swebench_bugfix")
+    prefix = variant.task_prefix
+    # Anti-new-files (anti-reproducer):
+    assert "Do NOT create any new files" in prefix
+    # Parallel-call-cliff defense:
+    assert "ONE tool per response" in prefix
+    # Test-edit guard:
+    assert "Do NOT modify or add\ntests" in prefix or "Do NOT modify or add tests" in prefix
+    # Tool-call hint biases toward search:
+    assert "grep or find_symbol" in prefix
+
+
 def test_resolve_prompt_ids_no_overlay_returns_role_defaults():
     """When no overlay is set, role-level system_prompt_id /
     task_prompt_id win regardless of task_type."""

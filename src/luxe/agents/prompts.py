@@ -189,6 +189,44 @@ _MANAGE_STRICT_TASK_PREFIX = (
 ) + _BASELINE_TASK_PREFIX
 
 
+# SWE-bench bug-fix directive — addresses the smoke-run failure mode where
+# the model creates reproducer scripts (`repo_root/test_sep.py`, `astropy/
+# timeseries/test_bug.py`) instead of editing existing source. Same prose-
+# mode/demonstrate-don't-act bias BFCL exposed (43/70 simple_python
+# failures = no_tool_call_emitted). Also enforces one-tool-per-response to
+# defend against the parallel-call cliff (49% PASS on parallel_multiple).
+_SWEBENCH_TASK_PREFIX = (
+    "This is a SWE-bench bug-fix task. Your deliverable is a patch to "
+    "EXISTING source files within the package source tree. Only edits "
+    "to package source files are graded; new files and test edits are "
+    "ignored.\n\n"
+    "Core constraints:\n"
+    "1. Modify existing package source only. Do NOT create any new "
+    "files in the repository.\n"
+    "2. Treat reproducer snippets in the bug report as search context "
+    "to locate the buggy code. Rely on static analysis — reading code "
+    "and grepping — rather than executing reproducers.\n"
+    "3. Focus edits on the core package logic. Do NOT modify or add "
+    "tests; the grader provides its own test suite.\n"
+    "4. Invoke ONE tool per response. Do not emit parallel tool calls.\n\n"
+    "If you cannot confidently locate the bug after initial search, "
+    "continue exploring (read additional files, trace call sites). Do "
+    "not guess at an edit.\n\n"
+    "Linear protocol (single pass):\n"
+    "  (1) read bug report → identify likely module/function\n"
+    "  (2) call grep or find_symbol to locate the code\n"
+    "  (3) read the function and surrounding context\n"
+    "  (4) make a minimal edit via edit_file\n"
+    "  (4.5) verify the change is consistent with call sites and "
+    "surrounding logic\n"
+    "  (5) (optional) run existing tests via bash\n"
+    "  (6) final report\n\n"
+    "Open with a brief `## Plan` section (≤150 words), then "
+    "IMMEDIATELY call grep or find_symbol. Keep subsequent reasoning "
+    "concise and technical.\n\n"
+) + _BASELINE_TASK_PREFIX
+
+
 PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "baseline": PromptVariant(
         system=_BASELINE_SYSTEM,
@@ -217,6 +255,10 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "manage_strict": PromptVariant(
         system=_BASELINE_SYSTEM,
         task_prefix=_MANAGE_STRICT_TASK_PREFIX,
+    ),
+    "swebench_bugfix": PromptVariant(
+        system=_BASELINE_SYSTEM,
+        task_prefix=_SWEBENCH_TASK_PREFIX,
     ),
 }
 
@@ -278,6 +320,17 @@ TASK_OVERLAYS: dict[str, TaskOverlay] = {
     # the loop detector, no diff produced). Other task types fall through.
     "manage_strict_only": TaskOverlay(by_task={
         "manage": "manage_strict",
+    }),
+    # swebench_strict_only — applies the swebench_bugfix variant on bugfix
+    # tasks specifically. SWE-bench smoke (2026-05-04) showed the model
+    # creating reproducer scripts instead of editing source; this overlay
+    # forbids new files, treats reproducers as search context, enforces a
+    # linear protocol, and requires one tool call per response (the latter
+    # informed by the BFCL parallel-call cliff). Activated via the
+    # configs/single_64gb_swebench.yaml derived config; the default
+    # configs/single_64gb.yaml is unaffected.
+    "swebench_strict_only": TaskOverlay(by_task={
+        "bugfix": "swebench_bugfix",
     }),
 }
 
