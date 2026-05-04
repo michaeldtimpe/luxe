@@ -1,0 +1,63 @@
+omlx_base_url: "http://127.0.0.1:8000"
+
+profile:
+  name: "Single-model 64 GB — SWE-bench (counterexample heuristic)"
+  description: >-
+    A/B variant of single_64gb_swebench.yaml. Routes bugfix to
+    swebench_bugfix_counterexample, which adds the falsification clause
+    ("if your trace yields the expected result but the report shows
+    otherwise, construct the failing variant"). Targets the hypothesis-
+    stall failure mode observed in the astropy-12907 probe trajectory.
+    Used for the n=10 stratified A/B against single_64gb_swebench.yaml.
+  memory_budget_gb: 64
+  peak_model_gb: 30.0
+
+models:
+  monolith: "Qwen3.6-35B-A3B-6bit"
+
+roles:
+  monolith:
+    model_key: monolith
+    num_ctx: 32768
+    max_steps: 30
+    max_tokens_per_turn: 8192
+    temperature: 0.0
+    task_overlay_id: swebench_strict_counterexample_only
+    tools:
+      - read_file
+      - list_dir
+      - glob
+      - grep
+      - bm25_search
+      - find_symbol
+      - write_file
+      - edit_file
+      - git_diff
+      - git_log
+      - git_show
+      - bash
+      - lint
+      - typecheck
+      - security_scan
+      - deps_audit
+      - cve_lookup
+
+task_types:
+  review:
+    description: "Code review — single-model agentic loop"
+    pipeline: [monolith]
+  implement:
+    description: "Feature implementation — single-model agentic loop"
+    pipeline: [monolith]
+  bugfix:
+    description: "Bug investigation and fix — single-model agentic loop"
+    pipeline: [monolith]
+  document:
+    description: "Documentation generation — single-model agentic loop"
+    pipeline: [monolith]
+  summarize:
+    description: "Codebase summarization — single-model agentic loop"
+    pipeline: [monolith]
+  manage:
+    description: "Repository management — single-model agentic loop"
+    pipeline: [monolith]

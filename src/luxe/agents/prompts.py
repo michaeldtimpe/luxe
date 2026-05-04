@@ -227,6 +227,37 @@ _SWEBENCH_TASK_PREFIX = (
 ) + _BASELINE_TASK_PREFIX
 
 
+# Counterexample-heuristic clause — to be A/B-tested against the base
+# swebench_bugfix prompt on the n=10 stratified probe. Targets the
+# astropy-12907 trajectory: model traces the bug report's simple snippet,
+# concludes the code is correct, never tests the failing variant. The
+# clause names the contradiction (trace OK + report shows wrong output)
+# as a falsification signal and prescribes constructing the failing
+# variant. General debugging heuristic — not 12907-specific.
+_SWEBENCH_COUNTEREXAMPLE_CLAUSE = (
+    "If your trace of a snippet from the bug report yields the expected "
+    "result but the report shows a different output, that contradiction "
+    "is the signal: the bug lives in a code path the simple input does "
+    "not exercise. Construct the more complex / nested / edge-case "
+    "variant described in the report and trace it through the same "
+    "functions before deciding the code is correct.\n\n"
+)
+
+# Surgically insert the clause before the "Linear protocol" header in
+# the base swebench prompt. The asserts catch silent drift if the base
+# prompt's structure ever changes — better to fail at import time than
+# to ship a no-op variant.
+assert "Linear protocol (single pass):\n" in _SWEBENCH_TASK_PREFIX, (
+    "swebench prompt structure changed; counterexample-clause insert "
+    "point is no longer present"
+)
+_SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX = _SWEBENCH_TASK_PREFIX.replace(
+    "Linear protocol (single pass):\n",
+    _SWEBENCH_COUNTEREXAMPLE_CLAUSE + "Linear protocol (single pass):\n",
+)
+assert _SWEBENCH_COUNTEREXAMPLE_CLAUSE in _SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX
+
+
 PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "baseline": PromptVariant(
         system=_BASELINE_SYSTEM,
@@ -259,6 +290,10 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "swebench_bugfix": PromptVariant(
         system=_BASELINE_SYSTEM,
         task_prefix=_SWEBENCH_TASK_PREFIX,
+    ),
+    "swebench_bugfix_counterexample": PromptVariant(
+        system=_BASELINE_SYSTEM,
+        task_prefix=_SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX,
     ),
 }
 
@@ -331,6 +366,14 @@ TASK_OVERLAYS: dict[str, TaskOverlay] = {
     # configs/single_64gb.yaml is unaffected.
     "swebench_strict_only": TaskOverlay(by_task={
         "bugfix": "swebench_bugfix",
+    }),
+    # swebench_strict_counterexample_only — A/B variant of the above that
+    # routes bugfix to swebench_bugfix_counterexample (adds the
+    # falsification heuristic). Activated via configs/single_64gb_swebench
+    # _counterexample.yaml; the default swebench config still uses the
+    # baseline overlay so the A/B is one config-flag apart.
+    "swebench_strict_counterexample_only": TaskOverlay(by_task={
+        "bugfix": "swebench_bugfix_counterexample",
     }),
 }
 
