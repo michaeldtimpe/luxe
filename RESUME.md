@@ -1,93 +1,142 @@
 # luxe — session resume document
 
-## Current state — 2026-05-04
+## Current state — 2026-05-04 PM
 
-**v1.4.1 fixes shipped + validated**: 18 commits since v1.4.0 (`1e545e8 → 10b352b`). Working tree clean. 461 tests passing.
+**Working tree**: clean. **485 tests passing** (was 461 at session start; +24 added across BFCL resume, SWE-bench prompt overlay tests, gold-proximity inspector tests).
 
-**`nothing-doc-config × 10` validation: 10/10 PASS** with `LUXE_WRITE_PRESSURE=1` + `LUXE_REPROMPT_ON_DOC=1`. Three rescue regimes:
-- 8/10 clean engagement (no rescue)
-- 1/10 Mode B mid-loop write-pressure (rep 9 — gate fired at step 6 with 18 tools + 5024 tokens + 0 writes; model wrote 138 lines after injection)
-- 1/10 reprompt rescue (rep 5 — Mode B's threshold barely missed at step 5 entry; main pass produced 28k prose chars + 0 writes; reprompt landed and model wrote 147 lines)
-- Linter fix held: 0 unresolved citations across all 10 reps
-- Historical ~33% FAIL rate on this fixture → 0%
-
-**External agent benchmark adapters scaffolded** (per `~/.claude/plans/fancy-honking-lerdorf.md`):
-- BFCL v3 — `benchmarks/bfcl/`: schemas + adapter + grade + run.py + aggregate.py + tests
-- SWE-bench Verified — `benchmarks/swebench/`: fixtures + stratify + adapter + run.py (preds-only) + harness.py + compare.py (paired McNemar) + tests
-- Frozen subset: `benchmarks/swebench/subsets/v1_baseline_n75.json` (75 instances, 12 repos, per-repo cap 8)
+**SWE-bench n=75 baseline launched**, expected to be running when this resume is read. Output: `acceptance/swebench/pre_specdd_v141_n75/rep_1/`. Uses the default `configs/single_64gb_swebench.yaml` (baseline anti-reproducer prompt). The runner has resume capability — same command picks up where it left off after a crash.
 
 **BFCL pre-SpecDD baseline complete** (`acceptance/bfcl/pre_specdd_v141/rep_1/`, 2026-05-04):
-- `irrelevance`: 220/240 = **91.67%** (avg 20.9s)
-- `multiple`: 166/200 = **83.00%** (avg 18.5s)
-- `simple_python`: 330/400 = **82.50%** (avg 16.6s)
-- `parallel`: 132/200 = **66.00%** (avg 20.1s)
-- `parallel_multiple`: 98/200 = **49.00%** (avg 24.3s)
+- `irrelevance`: 220/240 = **91.67%**, `multiple`: 166/200 = **83.00%**, `simple_python`: 330/400 = **82.50%**, `parallel`: 132/200 = **66.00%**, `parallel_multiple`: 98/200 = **49.00%**
 - **TOTAL: 946/1240 = 76.29%** in ~3.5h wall
-- **Parallel cliff**: parallel_multiple sits 33pp below single-call avg. Multi-call planning is the model's weakness and the most likely place SpecDD agent-mode will show value. Single-call categories are too saturated for big SpecDD gains.
-- 43/70 `simple_python` failures = `no_tool_call_emitted` — same prose-mode tendency that drove the SWE-bench reproducer-script regression in the smoke run.
+- **Parallel cliff**: parallel_multiple sits 33pp below single-call avg — multi-call planning is the model's weakness; single-call is too saturated for big SpecDD gains.
 
-**SWE-bench preds-only smoke** (`acceptance/swebench/smoke_2026_05_04/`):
-- 3 astropy instances; 2/3 produced non-empty patches; ~3 min wall/instance
-- Pipeline validated end-to-end (clone → agent → diff → predictions.json)
-- **Critical finding**: model creates reproducer scripts (`repo_root/test_sep.py`) instead of editing source files. SWE-bench-specific prompting needed before a real n=75 baseline run.
+**SWE-bench prompt + inspector work this session** (post-v1.4.1):
+- Anti-reproducer overlay shipped: `swebench_bugfix` PromptVariant + `swebench_strict_only` TaskOverlay + `configs/single_64gb_swebench.yaml`. Prompt forbids new files, treats reproducer snippets as search context, requires one tool call per response (parallel-cliff defense), prescribes linear locate→read→edit→verify protocol, includes continued-exploration permission clause.
+- **n=10 A/B** (`probe_n10.json` — 4 easy + 6 medium across 10 distinct repos): baseline 6 strong + 3 plausible + 1 wrong_location; **counterexample-heuristic variant regressed two gold-matches to empty** (matplotlib-13989, astropy-13453). Heuristic functions as conditional intervention, not global modifier — preserved in tree as negative control (`single_64gb_swebench_counterexample.yaml`) but NOT promoted.
+- **Inspector v2** with gold-proximity tier (`benchmarks/swebench/smoke_inspect.py --gold-source`): five signals (file match, line-based hunk proximity, hunk coverage, hunk count, size, token overlap) producing tiered verdict (strong / plausible / wrong_shape / wrong_location / wrong_target). Mechanical PASS/FAIL alone overstates quality (was reading 10/10 against a 4-6/10 real-fix reality on n=10).
+- **Refined failure-mode taxonomy**: (a) commitment / (b1) transformation pattern / (b2) multi-site consistency / (b3) true design gap / (c) localization / (d) already passing / (e) hypothesis-stall. Per the n=10 review, b2 is the most common non-d class; only b1 is realistically prompt-tractable.
 
 Champion unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0 on oMLX.
 
 ---
 
-## ⚡ Resume here — pending decisions
+## ⚡ Resume here — n=75 result analysis
 
-### A. Tag v1.4.1 + decide on Mode B promotion (~5 min)
-Three fixes are validated and worth tagging:
-- Citation-linter bare-filename fallback (Mode A)
-- Mode B mid-loop write-pressure (opt-in via `LUXE_WRITE_PRESSURE=1`)
-- Sidecar regrade lint re-run
+The expected workflow when you start the next session:
 
+### Step 1 — gold-proximity tier on the n=75 output
+
+```bash
+cd /Users/michaeltimpe/Downloads/luxe && \
+.venv/bin/python -m benchmarks.swebench.smoke_inspect \
+    --predictions acceptance/swebench/pre_specdd_v141_n75/rep_1/predictions.json \
+    --gold-source benchmarks/swebench/subsets/raw/verified.jsonl
+```
+
+Output format: per-instance line `<tier>  <instance_id>  file=Y/N loca=Y/N full=Y/N hunk=Y/N size=Y/N toke=Y/N  cov=X.XX  jac=X.XX`. Final summary line gives counts per tier + mechanical PASS rate + strong-or-plausible rate.
+
+### Step 2 — manual review of plausibles + wrong_locations
+
+The inspector is much more honest after v2 but still has known limitations:
+- **Same-hunk-but-different-lines partial fixes** still score "strong" when model adds 1 of N gold's added lines within a single hunk (astropy-13453 pattern at n=10).
+- **wrong_class-but-right-file** can score "plausible" with low coverage (sklearn-10297 at n=10 hit RidgeClassifierCV vs gold's RidgeCV — both in `ridge.py`).
+
+Run this script to dump per-instance gold-vs-model diffs for the plausibles + wrong_locations:
+
+```bash
+.venv/bin/python <<'EOF'
+import json
+from pathlib import Path
+preds = json.loads(Path('acceptance/swebench/pre_specdd_v141_n75/rep_1/predictions.json').read_text())
+gold_jsonl = Path('benchmarks/swebench/subsets/raw/verified.jsonl').read_text().splitlines()
+gold = {}
+for line in gold_jsonl:
+    if line.strip():
+        r = json.loads(line)
+        gold[r['instance_id']] = r['patch']
+# Filter: change to whatever subset you want to inspect
+target_iids = ['<instance_id_1>', '<instance_id_2>']  # paste from inspector output
+for r in preds:
+    if r['instance_id'] not in target_iids: continue
+    print(f"=== {r['instance_id']} ===")
+    print("GOLD:")
+    print(gold[r['instance_id']][:1500])
+    print("MODEL:")
+    print(r['model_patch'][:1500])
+    print('-' * 80)
+EOF
+```
+
+### Step 3 — classify every failure into the taxonomy
+
+Reference: `project_swebench_smoke_2026_05_04.md` has the full taxonomy with n=10 examples per class. Tally the n=75 distribution.
+
+### Step 4 — compute the durable pre-SpecDD anchor number
+
+Three numbers worth reporting in the lessons.md entry:
+1. **Mechanical PASS rate** (non-empty patches that don't trip new_file/test_path/no_substantive)
+2. **Strong-or-plausible rate** (gold-proximity tier)
+3. **Manual high-confidence rate** (after spot-check; what would actually pass FAIL_TO_PASS)
+
+The third number is the real pre-SpecDD anchor. Expected from n=10 extrapolation: **30-50%**.
+
+### Step 5 — decision branch
+
+| Outcome | Next move |
+|---|---|
+| 30-45% high-confidence | Solid anchor. Move to **SpecDD Lever 2 work** (~2-3 sessions, `~/.claude/plans/fluffy-brewing-lemur.md`). |
+| <20% high-confidence | Localization or reasoning ceiling dominates. Inspect distribution of wrong_target / wrong_location instances. Maybe **minimality-bias A/B** (Step C from prior planning) before SpecDD. |
+| >50% high-confidence | Either model is more capable than expected, or inspector is still optimistic. Spot-check 10 random "strong" claims; if real, celebrate. |
+
+### Resume command — if the n=75 run was interrupted
+
+Same command. Resume is automatic (per-instance summaries include `model_patch`):
+
+```bash
+LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 \
+.venv/bin/python -m benchmarks.swebench.run \
+    --subset benchmarks/swebench/subsets/v1_baseline_n75.json \
+    --output acceptance/swebench/pre_specdd_v141_n75/rep_1/
+```
+
+---
+
+## Background tasks (non-blocking on n=75)
+
+### A. Tag v1.4.1 (~5 min)
+Three fixes shipped + validated; ready to tag:
 ```bash
 git tag -a v1.4.1 -m "v1.4.1: linter bare-filename fix + Mode B opt-in + regrade lint re-run"
 ```
+Decision pending: promote `LUXE_WRITE_PRESSURE=1` from opt-in to default? 10/10 validation supports it; bench-wide ×3 reps with the flag would be the rigorous gate before promotion (~75 min wall).
 
-Decision: promote `LUXE_WRITE_PRESSURE=1` from opt-in to default? 10/10 validation supports it but a bench-wide ×3 reps with the flag would be the rigorous gate before promotion. ~75 min wall.
+### B. Minimality-bias A/B (proposed but not yet shipped)
+Reviewer-suggested orthogonal experiment to the counterexample heuristic. Tests whether the bottleneck is **over-editing**, not **under-reasoning**. Would add `swebench_bugfix_minimal` PromptVariant with clause: *"Make the smallest change that fixes the issue. Avoid adding new structures unless the bug fundamentally requires them. Once you have a coherent patch, stop — do not iterate."* Run on the same `probe_n10.json` set; 3-way compare (baseline / counterexample / minimal). ~70 min wall.
 
-### B. SWE-bench smoke re-run + n=75 baseline (next)
-**Shipped (commit `60acdc7`)**: `swebench_bugfix` PromptVariant + `swebench_strict_only` TaskOverlay + `configs/single_64gb_swebench.yaml` (now the swebench runner default) + mechanical `smoke_inspect.py`. Prompt forbids new files, treats reproducers as search context, requires one tool call per response (parallel-cliff defense), prescribes a linear locate→read→edit→verify protocol, includes a continued-exploration permission clause to avoid shallow edits. Inspector applied to the historical smoke confirms 0/3 PASS — the regression we're fixing.
+Hypotheses (per reviewer):
+- Preserves baseline's matplotlib + sympy gold-matches (counterexample broke them)
+- May improve sphinx/xarray-type precision
+- Won't help pytest (true structural — needs new method)
 
-Next steps:
-1. Re-run the same 3-instance astropy smoke with the new config (~10 min).
-2. `python -m benchmarks.swebench.smoke_inspect --predictions acceptance/swebench/smoke_2026_05_04_v2/predictions.json` — expect 3/3 PASS before escalating.
-3. If smoke clean, run n=75 against `subsets/v1_baseline_n75.json` (~5h wall preds-only; Docker harness scoring still gated by RESUME option D).
+### C. Docker confirmation for SWE-bench harness scoring
+`pip install swebench` is done; harness wrapper at `benchmarks/swebench/harness.py` is wired but defers Docker calls. Confirm Docker Desktop is up + ~10GB free + acceptable RAM headroom (model ~30GB + container layer 6-8GB on a 64GB box is tight but viable). Then run harness scoring on the n=75 predictions for FAIL_TO_PASS / PASS_TO_PASS — that's the definitive number.
 
-### C. BFCL — second rep + agent-mode probe on parallel categories (~5h)
-Single-call rep is saturated; not worth re-running. The actionable next signal is:
-1. Second rep across all 5 raw-mode categories for variance bounds on the 76.29% number (~3.5h).
-2. Agent-mode probe on `parallel` + `parallel_multiple` to test whether the agent loop lifts the cliff (~1.5h for 400 problems if agent-mode wall ≈ raw-mode wall).
-
-### D. Docker confirmation for SWE-bench harness scoring
-`pip install swebench` is done; harness wrapper at `benchmarks/swebench/harness.py` is wired but defers Docker calls. Confirm Docker Desktop is up + ~10GB free + acceptable RAM headroom (model ~30GB + container layer 6-8GB on a 64GB box is tight but viable). Then:
-
-```bash
-.venv/bin/python -c "
-from pathlib import Path
-from benchmarks.swebench.harness import run_harness, write_harness_summary
-res = run_harness(Path('acceptance/swebench/smoke_2026_05_04/predictions.json'),
-                  output_dir=Path('acceptance/swebench/smoke_2026_05_04/'),
-                  run_id='luxe_smoke')
-write_harness_summary(res, Path('acceptance/swebench/smoke_2026_05_04/harness_summary.json'))
-"
-```
-
-### E. Lever 2 prep — `~/.claude/plans/fluffy-brewing-lemur.md`
-~2-3 sessions per the SpecDD plan. Decoupled from benchmark work; can parallelize.
-
-### F. Smaller cleanup items
-- Retire v1.3 directive reprompt code in `cli.py` (RESUME old option C, ~15 min)
+### D. Smaller cleanup items (queued)
+- Retire v1.3 directive reprompt code in `cli.py` (~15 min)
 - `min_added_lines` as per-requirement predicate kind in `src/luxe/spec.py`
-- `ast_query` and `manual` predicate full integrations (currently stubbed in `spec_validator.py`)
+- `ast_query` and `manual` predicate full integrations (currently stubbed)
 - Tune Mode B thresholds based on broader bench data (currently 10 tools / 4000 tokens / step 5)
+- Bring `benchmarks/swebench/run.py` ETA format into BFCL standard (group + global counts) — cosmetic; the runner is functional
 
 ---
 
 ## Memory entries (read first)
+
+External benchmark program — current focus:
+- `project_swebench_smoke_2026_05_04.md` — **n=10 A/B + refined a/b1/b2/b3/c/d/e taxonomy** (most recent, primary reference for n=75 analysis)
+- `project_bfcl_pre_specdd_baseline.md` — 76.29% combined, parallel cliff diagnosed
+- `project_external_benchmark_program.md` — overall SWE-bench n=75 + BFCL v3 plan
 
 Bench-substrate / failure-mode work:
 - `project_doc_config_three_modes.md` — A/B/C decomposition of doc-config variance
@@ -96,12 +145,9 @@ Bench-substrate / failure-mode work:
 - `project_compound_goal_audit.md` — SpecDD premise empirically thin
 - `project_loose_grader_audit.md` — 5/10 graders looser than goal text (closed at v1.4 spec layer)
 
-External benchmark program:
-- `project_external_benchmark_program.md` — SWE-bench n=75 + BFCL v3 plan
-- `project_bfcl_pre_specdd_baseline.md` — 85.94% combined, 16-21s/problem
-- `project_swebench_smoke_2026_05_04.md` — pipeline validated, prompt gap exposed
-
 Diagnostic / process:
+- `feedback_deliberation_amplifiers.md` — **NEW** don't extrapolate "think more" prompt clauses from single-instance probes; A/B before shipping
+- `feedback_benchmark_progress.md` — **NEW** all bench runners need group + global elapsed/remaining/ETA
 - `feedback_instrument_loop_first.md` — `LUXE_LOG_TOOL_CALLS=1` before adding prompt mass
 - `feedback_verify_fixture_grader.md` — read base file before debugging model behavior
 - `feedback_replicate_borderline_fixtures.md` — 3× replicate before claiming regression
@@ -134,10 +180,17 @@ Latent / open:
 - v1.4 — SpecDD Lever 1: programmatic Definition of Done; per-requirement spec validator; reprompt gate uses spec
 - v1.4.1 — citation-linter bare-filename fallback (Mode A) + Mode B mid-loop write-pressure (opt-in) + sidecar regrade lint re-run
 
+**Post-v1.4.1 (this session, swebench-side; not part of luxe's release versioning)**:
+- BFCL Python subset complete: 76.29% (parallel cliff diagnosed)
+- swebench prompt overlay: anti-reproducer + linear protocol
+- n=10 A/B established: counterexample heuristic anti-correlated with already-correct trajectories; reverted
+- inspector v2 with gold-proximity tier; resume capability for n=75-class runs
+- n=75 baseline launched against `subsets/v1_baseline_n75.json`
+
 **What's queued**:
 - v1.5.0 — SpecDD Lever 2 (`.sdd` parser, spec_resolver, tool-side Forbids, resume path, prompt injection)
 - v1.6.0 — SpecDD Lever 3 (fixture-side `.sdd` contracts, methodology A/B)
-- External benchmark baseline run (BFCL multiple/parallel + SWE-bench n=75 with curated prompt)
+- Docker harness scoring on n=75 predictions for definitive FAIL_TO_PASS numbers
 
 **Iteration model**: bench changes go through `scripts/regrade_local.py` for fast iteration on grader/linter logic without re-running luxe. Full bench re-runs reserved for end-of-phase confirmation.
 
@@ -175,8 +228,15 @@ Real PASS count is always ≤ printed count. Every historical bake-off has had a
 | `benchmarks/maintain_suite/grade.py` | grading + strict gates + multi-variant `v1_release_gate` |
 | `benchmarks/maintain_suite/fixtures.yaml` | the 10 v1 fixtures (each w/ `requirements:` block) |
 | `benchmarks/swebench/` | SWE-bench Verified adapter (preds-only + Docker harness wrapper + compare) |
-| `benchmarks/bfcl/` | BFCL v3 adapter (raw + agent modes, schema converter, grader) |
-| `configs/single_64gb.yaml` | the only config — currently `Qwen3.6-35B-A3B-6bit` |
+| `benchmarks/swebench/smoke_inspect.py` | **inspector v2** — mechanical + gold-proximity tier (`--gold-source`); 5 signals, line-based hunk proximity, hunk coverage |
+| `benchmarks/swebench/run.py` | preds-only runner; **idempotent resume** (per-instance summaries carry `model_patch`); same command picks up after a crash |
+| `benchmarks/swebench/subsets/v1_baseline_n75.json` | 75 stratified instances, 12 repos — the pre-SpecDD anchor target |
+| `benchmarks/swebench/subsets/probe_n10.json` | n=10 A/B subset (4 easy + 6 medium across 10 distinct repos) |
+| `benchmarks/swebench/subsets/probe_12907.json` | single-instance probe used for the original hypothesis-stall trace |
+| `benchmarks/bfcl/` | BFCL v3 adapter (raw + agent modes, schema converter, grader); resume + ETA in `run.py` |
+| `configs/single_64gb.yaml` | maintain_suite config — `Qwen3.6-35B-A3B-6bit`, `manage_strict_only` overlay |
+| `configs/single_64gb_swebench.yaml` | **swebench config** — `swebench_strict_only` overlay (anti-reproducer prompt); the n=75 default |
+| `configs/single_64gb_swebench_counterexample.yaml` | A/B variant with falsification clause; **negative control, not promoted** |
 | `scripts/regrade_local.py` | sidecar regrade w/ citation re-run (v1.4.1) |
 | `scripts/register_omlx_models.py` | symlink HF cache → `~/.omlx/models/` |
 | `lessons.md` | running postmortem; latest entry covers v1.4.1 Mode B/A combo validation |
@@ -238,26 +298,21 @@ jq -c 'select(.kind=="write_pressure_fired")' ~/.luxe/runs/$RUN/events.jsonl
 ## Recent commit trail (most recent first)
 
 ```
+09e97a2  benchmarks/swebench/run: idempotent resume for n=75-class runs
+238ecd0  lessons.md: SWE-bench n=10 A/B postmortem
+a4af109  swebench/smoke_inspect: gold-proximity tier (line-based, with coverage)
+f8b3490  swebench prompt: counterexample-heuristic A/B variant + n=10 subset
+8aaac6d  swebench prompt: revert rule #5 + add 12907 single-instance probe subset
+19424c9  swebench prompt: add rule #5 — no analysis-only final reports (REVERTED)
+fb9f985  docs: RESUME.md — complete BFCL baseline + swebench overlay shipped
+60acdc7  swebench: anti-reproducer prompt overlay + mechanical smoke inspector
+d5003bb  benchmarks/bfcl/run: idempotent resume + group/global ETA progress
+cebc2ba  docs: RESUME.md — restructure as lean current-state document (629 → 272 lines)
 10b352b  docs: RESUME.md — autonomous slot summary (Mode B + BFCL + SWE-bench smoke)
 86c3b4e  benchmarks/bfcl/aggregate: post-hoc summary builder from per-problem JSONs
-096fdee  docs: RESUME.md — Mode B 10/10 PASS validation result
 dc4c5df  lessons.md: v1.4.1 Mode B/A combo validation — 10/10 PASS on nothing-doc-config × 10
-19d2202  benchmarks/swebench/compare: add CLI entry — `python -m benchmarks.swebench.compare`
-c64f7ad  benchmarks/swebench/compare: paired McNemar + Wilson CI for pre/post analysis
-41e47c1  tests/test_bfcl_adapter: load smoke + dispatch shape against real bfcl_eval data
-e0da66e  benchmarks/swebench/harness: Docker harness wrapper (defers Docker call)
-8de1e46  docs: RESUME.md updated for late 2026-05-03 work
-399ed66  benchmarks/swebench: adapter + preds-only runner (no Docker harness yet)
-37cd1c8  .gitignore: exclude benchmarks/<bench>/subsets/raw/ (re-downloadable HF dumps)
-656e83a  benchmarks/swebench: freeze v1_baseline_n75 subset from real Verified data
-2f58019  benchmarks/bfcl: adapter + grader + runner (raw mode validated, agent mode plumbed)
-bb92b09  docs: lessons.md + RESUME.md updates for v1.4.1 fixes + Mode B/C decomposition
-71b4c7e  benchmarks/bfcl: PRELIMINARY scaffolding (BFCL v3 adapter)
-42d2d51  benchmarks/swebench: PRELIMINARY scaffolding (SWE-bench Verified adapter)
 1d5b006  v1.4.1: citation-linter bare-filename fallback + Mode B write-pressure + regrade lint re-run
-1e545e8  docs: RESUME.md — five next-session options + cleanup of v1.3-era resume content
 707bab8  v1.4.0: SpecDD Lever 1 — programmatic Definition of Done; first 10/10 bench
-0f611d0  v1.4-prep: SpecDD Lever 1 — 5 loose-grader fixture migrations (step 6 complete)
 ```
 
 ---
