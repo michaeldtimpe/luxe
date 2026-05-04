@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "n": 10,
+  "purpose": "Stratified n=10 sample from v1_baseline_n75 for the SWE-bench prompt A/B (baseline vs counterexample-heuristic). 4 `<15 min fix` + 6 `15 min - 1 hour` across 10 distinct repos. Fresh instances: avoids the three astropy IDs already used in the prior smoke (12907 / 13033 / 13236) so the A/B isn't contaminated by carryover state in the workspace.",
+  "instance_ids": [
+    "django__django-10097",
+    "matplotlib__matplotlib-13989",
+    "sympy__sympy-12096",
+    "pallets__flask-5014",
+    "astropy__astropy-13453",
+    "scikit-learn__scikit-learn-10297",
+    "pytest-dev__pytest-10051",
+    "sphinx-doc__sphinx-10466",
+    "psf__requests-2931",
+    "pydata__xarray-2905"
+  ]
+}

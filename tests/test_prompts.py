@@ -375,6 +375,41 @@ def test_swebench_bugfix_variant_contains_anti_reproducer_directives():
     assert "grep or find_symbol" in prefix
 
 
+def test_swebench_strict_counterexample_only_overlay_is_registered():
+    """The counterexample-heuristic A/B variant: bugfix → swebench_
+    bugfix_counterexample. Used by configs/single_64gb_swebench_
+    counterexample.yaml; default swebench config remains on the base
+    variant."""
+    from luxe.agents.prompts import PROMPT_REGISTRY, TASK_OVERLAYS, get_overlay
+    assert "swebench_strict_counterexample_only" in TASK_OVERLAYS
+    overlay = get_overlay("swebench_strict_counterexample_only")
+    assert overlay is not None
+    assert overlay.by_task == {"bugfix": "swebench_bugfix_counterexample"}
+    assert "swebench_bugfix_counterexample" in PROMPT_REGISTRY
+    for other in ("implement", "document", "manage", "review", "summarize"):
+        assert other not in overlay.by_task
+
+
+def test_swebench_bugfix_counterexample_extends_base_with_falsification_clause():
+    """The +heuristic variant must contain everything the base variant
+    does (anti-reproducer, single-tool, linear protocol) plus the
+    falsification clause. Catches the silent-no-op case where the base
+    prompt's structure changes and the .replace() call no-ops."""
+    from luxe.agents.prompts import get
+    base = get("swebench_bugfix").task_prefix
+    var = get("swebench_bugfix_counterexample").task_prefix
+    # Variant strictly extends base — every base directive still present:
+    assert "Do NOT create any new files" in var
+    assert "ONE tool per response" in var
+    assert "Linear protocol (single pass):" in var
+    assert "grep or find_symbol" in var
+    # Falsification clause itself:
+    assert "yields the expected result" in var
+    assert "construct the more complex" in var.lower() or "Construct the more complex" in var
+    # Variant is strictly longer:
+    assert len(var) > len(base)
+
+
 def test_resolve_prompt_ids_no_overlay_returns_role_defaults():
     """When no overlay is set, role-level system_prompt_id /
     task_prompt_id win regardless of task_type."""
