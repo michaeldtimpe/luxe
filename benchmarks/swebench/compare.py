@@ -172,3 +172,36 @@ def render_text(cmp: PairedComparison) -> str:
     lines.append(f"  Losses ({len(cmp.losses)}, pre-only): " + ", ".join(cmp.losses[:8]) +
                  (f" + {len(cmp.losses)-8} more" if len(cmp.losses) > 8 else ""))
     return "\n".join(lines)
+
+
+def main() -> int:
+    """CLI entry: compare two harness_summary.json files."""
+    import argparse
+    import sys
+    from pathlib import Path
+
+    p = argparse.ArgumentParser(description="Paired pre/post comparison via McNemar.")
+    p.add_argument("--pre", required=True, type=Path,
+                   help="harness_summary.json from the pre-SpecDD run.")
+    p.add_argument("--post", required=True, type=Path,
+                   help="harness_summary.json from the post-SpecDD run.")
+    p.add_argument("--pre-name", default="pre")
+    p.add_argument("--post-name", default="post")
+    p.add_argument("--output", type=Path, default=None,
+                   help="If set, write the rendered report here too.")
+    args = p.parse_args()
+
+    pre = load_checkpoint_from_harness_summary(args.pre_name, args.pre)
+    post = load_checkpoint_from_harness_summary(args.post_name, args.post)
+    cmp = compare(pre, post)
+    rendered = render_text(cmp)
+    print(rendered)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
