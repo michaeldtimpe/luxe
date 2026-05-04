@@ -3,160 +3,100 @@
 Current state: **v1.4.0 shipped 2026-05-03 — first 10/10 bench (SpecDD Lever 1)**.
 
 **Today's ship sequence**:
-- **v1.3.0** (`cd27e35`, tag `v1.3.0`) — read_file dedup exemption + lpe-typing fixture surgery. Bench 8/10 → 9/10.
-- **v1.3.1** (`162d1da`, tag `v1.3.1`) — `_diff_against_base` undercount bug fix + directive reprompt for prose-mode. Bug was masking actual reprompt firing accuracy.
-- **v1.3.2** (`e22773e`, tag `v1.3.2`) — `assert_gh_auth` retry-with-backoff + queue-cleanup diligence (closed ANE, F2.2 logprobs, spec-prefill revisit as non-starters).
-- **v1.4-prep** (`23827c1`, NOT tagged) — SpecDD Lever 1 data model committed. `src/luxe/spec.py` + 27 unit tests. Self-contained, reversible. No integration yet.
+- **v1.3.0** (`cd27e35`) — read_file dedup exemption + lpe-typing fixture surgery. Bench 8/10 → 9/10.
+- **v1.3.1** (`162d1da`) — `_diff_against_base` undercount bug fix + directive reprompt for prose-mode.
+- **v1.3.2** (`e22773e`) — `assert_gh_auth` retry-with-backoff + 3 perf-probe non-starters formally closed (ANE, F2.2 logprobs, spec-prefill revisit).
+- **v1.4-prep** chain (`23827c1` → `0f611d0`) — 7 incremental commits laying down SpecDD Lever 1: data model, predicate evaluator, bench integration, prompt-template helpers, cli.py reprompt gate, fixture migrations.
+- **v1.4.0** (`707bab8`, tag `v1.4.0`) — Lever 1 ship. 10/10 PASS validated end-to-end with `LUXE_REPROMPT_ON_DOC=1`. All 10 fixtures: `expected_outcome_passed=true` AND `spec_all_satisfied=true`. v1 release gate cleared.
 
-**Two audits completed this session** (memory entries):
-- `project_compound_goal_audit.md` — 5/5 compound-goal fixtures show full sub-deliverable completion in passing runs. SpecDD's "compound-goal shadowing is the primary ceiling" premise doesn't hold on the current bench.
-- `project_loose_grader_audit.md` — 5/10 fixture graders are looser than their goal text. Models pass anyway, but the bench can't *enforce* compound-goal compliance. Pre-v1.4 decision input.
+Champion unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0.
 
-**SpecDD plan recalibrated** (`~/.claude/plans/fluffy-brewing-lemur.md` updated with post-v1.3 reality check). The bench-moving claim no longer holds at the magnitude the plan was sized for. Architectural value (programmatic Definition of Done, `.sdd` chains) remains intact.
+**Honest framing of the 10/10 result** (per `lessons.md` v1.4.0 entry):
+- 10/10 layers v1.3.0 fixture surgery + lucky variance roll on `nothing-doc-config`. Variance is structurally unchanged (~33% historical FAIL).
+- SpecDD Lever 1's premise (compound-goal shadowing is the bench's primary ceiling) was empirically thin per `project_compound_goal_audit.md`. Lever 1 ships for **architectural value** (programmatic Definition of Done; tightened per-requirement grading), not bench-score lift.
+- Tightened doc/manage specs (R2/R3 across 4 fixtures) didn't false-fail this run — model addresses every sub-deliverable in passing runs.
 
-**In-flight as of leaving the desk**: 3-rep directive-reprompt sanity check on `nothing-doc-config` (`acceptance/v1_4_sanity_directive_rep_{1,2,3}/`). Rep 1 already PASS (139 additions on first pass, reprompt didn't fire — bug fix working as designed). Reps 2-3 in progress.
-
-Champion unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0. Effective bench score: ~9.67/10 (9 deterministic + 0.67 from `nothing-doc-config` variance).
-
----
-
-## ⚡ Resume here — v1.4 Lever 1 next steps
-
-The pre-Lever-1 sanity check ran (3 reps of nothing-doc-config with directive
-reprompt, all PASS but reprompt didn't fire on any of them — low-variance
-day, not lever validation). Combined with the only true test of directive
-reprompt against a prose-mode FAIL (`v1_3_1_nothing_doc_rep_1`), the
-empirical rescue rate for prompt-based reprompts is **0/1**. Decision made:
-
-**v1.4 ships SpecDD Lever 1 for architectural value, NOT for prose-mode rescue.**
-
-User parameters that drove this decision:
-- "Bench score is fine for now" — not chasing bench-moving claim
-- "Small sample is fine" — accepts 0/1 weight on prompt-reprompt rescue
-
-### What's already done (committed 2026-05-03)
-
-- `src/luxe/spec.py` — `Requirement`, `Spec` dataclasses + YAML round-trip
-- `tests/test_spec.py` — 27 unit tests, all pass
-- Module docstring spells out the recalibrated rationale
-
-### What's next (in order, each independently shippable)
-
-1. **`src/luxe/spec_validator.py`** — predicate evaluator per `RequirementKind`.
-   - `regex_present` / `regex_absent` operate on diff added-lines (reuse `citations.py` parsing helpers if applicable).
-   - `tests_pass` shells out to the configured command.
-   - `ast_query` uses the existing tree-sitter symbol index.
-   - `manual` always returns "unsatisfied; needs human review."
-   - Unit tests in `tests/test_spec_validator.py`.
-
-2. **Migrate ONE fixture to per-requirement schema** as proof-of-concept:
-   - Pick `lpe-rope-calc-document-typing` (smallest, simplest, already audited).
-   - Add `requirements: [R1: type hints landed]` field; keep `expected_outcome` as transitional alias.
-   - Verify the new schema parses and the validator produces the same PASS/FAIL signal as the legacy grader.
-
-3. **Synthesizer prompt update** in `src/luxe/agents/prompts.py`:
-   - Spec checklist + per-requirement `done_when` predicate descriptions.
-   - Structured reprompt format for unsatisfied requirements (replaces v1.3 directive form).
-
-4. **`cli.py` reprompt block**:
-   - Replace the directive reprompt branch (v1.3.1) with spec validator gate.
-   - Retry budget per `RoleConfig.max_reprompt_cycles` (new field; default 5).
-   - Stability check: re-evaluate ALL requirements each cycle, abort on `requirement_oscillation`.
-
-5. **Migrate remaining fixtures** to per-requirement schema:
-   - This IS the grader-tightening from `project_loose_grader_audit.md` — natural side effect.
-   - 5 sessions estimated per the plan; can be incremental.
-
-6. **Retire v1.3 directive reprompt code** — its branch in cli.py becomes dead code once spec validator is the gate.
-
-### Read these before resuming
-
-- `~/.claude/plans/fluffy-brewing-lemur.md` — full SpecDD plan with post-v1.3 reality check at top.
-- `src/luxe/spec.py` module docstring — recalibrated rationale.
-- Memory entries: `project_compound_goal_audit.md`, `project_loose_grader_audit.md`, `project_v1_3_dedup_fix.md`.
-
-### (historical) Three v1.4 paths considered, all evidence gathered
-
-| Path | Cost | Bench delta | Ships at v1.4 |
-|---|---|---|---|
-| **A. SpecDD Lever 1 (architectural)** | 2-3 sessions | ~+0.3 score | `Spec` data model, spec-validating synthesizer, structured reprompt replaces v1.3 directive reprompt, 5+ fixtures migrated to per-requirement schema |
-| **B. Tighten loose graders only** | ~1 session | depends; could surface latent issues if model has hidden failures | 5 fixture YAML edits to make graders match goal text; bench becomes more rigorous |
-| **C. Both: tighten graders AS PART OF SpecDD ship** | 2-3 sessions | ~+0.3 + bench rigor improvement | Path A + per-requirement schema is the grader-tightening mechanism naturally |
-| **D. Defer; accept current state** | 0 | 0 | Document loose graders as known limitation; revisit when fixture set changes |
-
-My recommendation when reviewing the bench results: **Path C is the cleanest framing.** The SpecDD per-requirement schema simultaneously gives architectural lift (programmatic Definition of Done) AND tightens the bench's grading floor. One ship covers both concerns.
-
-**Sanity-check decision criteria** (when bench finishes):
-- 3/3 PASS with reprompt firing only on FAIL-shaped first passes → directive reprompt mechanism validated; SpecDD's structured reprompt is a natural evolution → Path C is well-grounded
-- 2/3 PASS (same as baseline) → directive reprompt didn't help; SpecDD's reprompt mechanism may need different shape → run pre-Lever-1 manual probe per the plan's original design
-- <2/3 PASS → directive reprompt regressed → revert v1.3.1 directive code → revisit nothing-doc separately
-
-### Memory entries from today (read these first when resuming)
-
-- `project_v1_3_dedup_fix.md` — ship summary
-- `project_compound_goal_audit.md` — bench audit
-- `project_loose_grader_audit.md` — bench audit
-- `feedback_instrument_loop_first.md` — diagnostic principle from v1.3 investigation
-- `feedback_verify_fixture_grader.md` — diagnostic principle from v1.3 investigation
-- `project_mlx_use_ane_probe.md` — closed
-- `project_omlx_logprobs_unsupported.md` — closed
-
-Original v1.3 ship checklist below kept for reference; the work is done.
+**Memory entries from this session** (read these first when resuming):
+- `project_v1_3_dedup_fix.md` — v1.3.0 ship + investigation
+- `project_compound_goal_audit.md` — 5/5 fixtures show full sub-deliverable completion
+- `project_loose_grader_audit.md` — 5/10 graders looser than goal text (closed at spec layer in v1.4.0)
+- `feedback_instrument_loop_first.md`, `feedback_verify_fixture_grader.md` — diagnostic principles
+- `project_mlx_use_ane_probe.md`, `project_omlx_logprobs_unsupported.md` — closed non-starters
 
 ---
 
-## (historical) ⚡ Ship v1.3.0 — DONE
+## ⚡ Resume here — five next-session options
 
-All code changes staged and tested. To ship:
+Recommended order: **A then B**. The 10/10 result is the most consequential claim from the last session; spending an hour proving it holds across replicates is the highest-leverage move before committing to deeper work.
+
+### A. Replicate v1.4.0 bench 2-3× (~50-75 min, mostly hands-off)
+
+Confirms 10/10 isn't variance-fortunate. `nothing-doc-config` has ~33% historical FAIL rate; one PASS isn't proof of a real ceiling lift. Three independent runs:
 
 ```bash
-cd /Users/michaeltimpe/Downloads/luxe
-git add benchmarks/maintain_suite/fixtures.yaml lessons.md pyproject.toml \
-        src/luxe/agents/loop.py src/luxe/agents/single.py src/luxe/cli.py
-git commit -m "v1.3.0: read_file dedup exemption + reprompt-on-doc default-on
-
-Agent loop dedup detector was stranding the model on post-edit verification
-reads — model would edit a file, try to read it back to verify, get back
-'you already called this' instead of fresh content, panic, and retry the
-edit until the streak counter aborted. Trace-instrumented re-run on lpe-typing
-caught it: step 1 productive edit, step 2 retry-edit (dup), step 3 re-read (dup),
-abort at streak=2. Fix: exempt read_file from _DEDUP_EXEMPT_TOOLS.
-
-After fix, lpe-typing engages for 12 productive steps with 3 distinct edits
-(IOBase import, signature, _pe_from_gguf typing) and lands at +3/-2.
-Residual FAIL is now genuinely model-side docstring-resistance, not
-orchestration.
-
-Reprompt-on-doc lever validated 3/3 PASS on nothing-doc-config variance
-fixture; promoted to default-on. LUXE_REPROMPT_OFF=1 is rollback knob.
-
-Smoke regression: 4/4 PASS on lpe-implement, nothing-manage-deps,
-neon-rain-modules, the-game-architecture. No regressions.
-
-LUXE_LOG_TOOL_CALLS=1 instrumentation in loop.py kept as permanent
-debugging knob (off by default, no overhead). Diff-stat checkpoints in
-cli.py kept for telemetry."
-
-git tag v1.3.0
+cd /Users/michaeltimpe/Downloads/luxe && for i in 1 2 3; do
+  echo "=== rep $i (v1.4.0 full bench validation) ==="
+  rm -rf "acceptance/v1_4_validation_rep_$i"
+  LUXE_REPROMPT_ON_DOC=1 .venv/bin/python -m benchmarks.maintain_suite.run \
+      --variants benchmarks/maintain_suite/variants_v1_default.yaml \
+      --output "acceptance/v1_4_validation_rep_$i" \
+      --per-fixture-timeout 1800 \
+      --work-dir ~/.luxe/bench-workspace \
+      --all \
+      --force 2>&1 | tail -10
+  echo ""
+done
 ```
 
-Then update memory entries (per the lessons.md entry's references to
-`project_v1_bench_cycle.md` and `project_lmstudio_loop.md`).
+Decision tree:
+- **3/3 at 10/10** → strong claim; lessons.md update; ship v1.4.0 with confidence; end session at B.
+- **2/3 at 10/10** → variance is real; one fixture FAIL across reps. Document honestly; bench is effectively 9.67/10. Close session at B.
+- **<2/3 at 10/10** → either spec gates are missing failures the legacy grader caught, or substrate has shifted. Investigate before continuing to D/E.
 
-### What changed in v1.3.0
+### B. Pause / end session
 
-| File | Lines | Purpose |
-|---|---|---|
-| `src/luxe/agents/loop.py` | +47 | `_DEDUP_EXEMPT_TOOLS = {"read_file"}` exemption; `LUXE_LOG_TOOL_CALLS=1`-gated `tool_call`/`tool_step_done` event emission; `run_id`/`phase` params on `run_agent`. |
-| `src/luxe/agents/single.py` | +4 | `run_id`/`phase` plumb-through. |
-| `src/luxe/cli.py` | +129 | Reprompt code (was uncommitted; now default-on); diff_stat checkpoints; phase-tagged run_single calls. |
-| `lessons.md` | +47 | v1.3.0 entry — full investigation story, hypothesis trajectory, disposition. |
-| `pyproject.toml` | 1.2.0 → 1.3.0 | Version bump. |
+Natural stopping point after replicates settle. v1.4.0 is shipped and tagged. Good place to step away if no other lever calls.
 
-### Trace instrumentation (now permanent)
+### C. Step 7 — retire v1.3 directive reprompt code (~15 min)
+
+Cleanup. Removes the `additions == 0 AND len(prior_text) > 1000` branch in `cli.py` reprompt block. Trade-off: ad-hoc `luxe maintain` users (no `--spec-yaml`) silently lose reprompt entirely. Consider keeping deferred until evidence of ad-hoc usage patterns.
+
+If pursuing: edit `src/luxe/cli.py` reprompt block to assert `loaded_spec is not None` when `LUXE_REPROMPT_ON_DOC=1`; raise a clear error if a user opts in to reprompt without providing a spec.
+
+### D. Variance-fixing structural work (~half-day to a session)
+
+Targets the only known residual weakness: `nothing-doc-config`'s ~33% prose-mode FAIL rate. Two candidate approaches:
+
+1. **`prepend_to_file` tool affordance** — addresses Hypothesis B from the original lpe-typing review (top-of-file `edit_file` friction). Even though lpe-typing turned out to be fixture-surgery territory, a `prepend_to_file` tool would be useful for future doc fixtures and might shift `nothing-doc-config`'s prose-loop behavior.
+
+2. **Synthetic write_file injection on prose-mode detection** — harness-side scaffolding: when the agent loop produces N reads with 0 writes, inject a synthetic tool result message indicating the model should consider `write_file`. Empirically targets the failure mode (0/1 prompt-based rescue rate observed; structural intervention may work where prompts didn't).
+
+Either is an architectural addition. Pick one based on whether tool-affordance-extension or harness-scaffolding feels right for the codebase's direction.
+
+### E. Lever 2 prep (~2-3 sessions per the SpecDD plan)
+
+Ships at v1.5.0:
+- `src/luxe/sdd.py` — `.sdd` file parser (markdown + section extraction)
+- `src/luxe/spec_resolver.py` — directory walk + chain assembly + glob compilation
+- Tool-side `Forbids` enforcement in `src/luxe/tools/fs.py`
+- `src/luxe/cli.py` resume path — load `.sdd` chain on resume
+- Worker prompt construction injects scoped `.sdd` chain
+
+The plan calls for dogfooding: author internal `.sdd` files for `src/luxe/luxe.sdd`, `src/luxe/agents/agents.sdd`, etc. before enabling target-repo `.sdd` consumption.
+
+Premise: ship Lever 2 only if Lever 1's architectural value delivered. Reassess after replicates land — if 10/10 is robust, Lever 2 is a defensible next investment; if variance dominates, structural work in D may take priority.
+
+### F. (smaller items also queued)
+
+- `min_added_lines` as a per-requirement predicate kind in `src/luxe/spec.py` (small; would close the legacy-floor gap noted in v1.4.0 lessons entry).
+- `ast_query` and `manual` predicate kind full integrations (currently stubbed in `spec_validator.py`).
+- Lever 3 (`v1.6.0`) — fixture-side `.sdd` contracts + methodology A/B with `scripts/audit_requirements.py`.
+
+### Trace instrumentation (still on)
 
 `LUXE_LOG_TOOL_CALLS=1` emits per-tool-call and per-step events to the
-run's `events.jsonl`. Use to diagnose any future agent-loop abort:
+run's `events.jsonl`. Permanent debugging knob (off by default, zero
+overhead when off). Use to diagnose any future agent-loop abort:
 
 ```bash
 LUXE_LOG_TOOL_CALLS=1 python -m benchmarks.maintain_suite.run --id <fixture> --force
@@ -167,22 +107,16 @@ jq -c 'select(.kind=="tool_call" or .kind=="tool_step_done")' ~/.luxe/runs/$RUN/
 The `key_hash` field uses the same `_call_key()` the detector compares —
 duplicate pairs are unambiguous from the trace.
 
-### After v1.3.0 ships — next queued
+### Open hazards (not addressed in v1.4.0)
 
-- **MLX_USE_ANE=1 probe** (see `project_mlx_use_ane_probe.md`) —
-  decode-speed lever, no quality risk. Smaller win expected given our
-  85.4% prefix-cache hit rate, but worth a probe when ready.
-- **lpe-typing follow-up** — premature convergence on docstring
-  deliverable is now the cleanest framing of the residual FAIL.
-  Future levers worth trying (low expected ROI, document if attempted):
-  H4 few-shot worked example in `document_strict` overlay; explicit
-  `prepend_to_file` tool affordance for top-of-file inserts (the
-  `edit_file` API requires constructing an old_string for a position
-  before any existing text, which is awkward).
 - **Latent ToolCache invalidation** — `ToolCache.get_or_run` has no
-  invalidation. Currently moot in bench code path (no cache wired in)
-  but a hazard if/when the cache gets used. Add `invalidate_for_write(path)`
-  if/when relevant.
+  invalidation. Currently moot in bench code path (no cache wired in
+  for `run_single`) but a hazard if/when the cache gets used. Add
+  `invalidate_for_write(path)` if/when relevant.
+- **`min_added_lines` not in spec model** — fixtures with mechanical
+  ports retain a legacy substantive-edit floor; spec validator can't
+  represent it as a per-requirement predicate. Address in a future
+  spec.py extension.
 
 ---
 
