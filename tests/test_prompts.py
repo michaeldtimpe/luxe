@@ -373,6 +373,10 @@ def test_swebench_bugfix_variant_contains_anti_reproducer_directives():
     assert "Do NOT modify or add\ntests" in prefix or "Do NOT modify or add tests" in prefix
     # Tool-call hint biases toward search:
     assert "grep or find_symbol" in prefix
+    # Commit directive (the 12907 smoke trajectory closed out without
+    # editing; rule #5 forbids analysis-only reports):
+    assert "Do NOT submit a final report with zero edits" in prefix
+    assert "edit_file BEFORE writing any final summary" in prefix
 
 
 def test_resolve_prompt_ids_no_overlay_returns_role_defaults():
