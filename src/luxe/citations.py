@@ -26,6 +26,9 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from luxe.sdd import SddParseError
+from luxe.spec_resolver import _glob_matches, find_all_sdd
+
 
 @dataclass
 class ValidatorFinding:
@@ -98,8 +101,32 @@ class CitationResult:
 
 
 @dataclass
+class SpecFinding:
+    """SpecDD Lever 2 lint signal: an edit relative to a `.sdd` contract.
+
+    `kind` is one of:
+      - `spec_violation` — modified path matches a `.sdd` `Forbids:` glob.
+        STRICT gate (defense in depth against rename/mv evasion of the
+        tool-side check).
+      - `spec_orphan` — modified path is outside every `Owns:` glob in
+        the chain, but at least one Owns glob exists. WARNING ONLY at
+        Lever 2; promotion to strict is deferred to Lever 3 after the
+        implicit-ownership convention is shaken out on real fixtures.
+
+    `path` is repo-root-relative. `glob` and `sdd_path` identify the
+    rule's source for reporting.
+    """
+
+    kind: str  # "spec_violation" | "spec_orphan"
+    path: str
+    glob: str | None
+    sdd_path: str | None  # repo-root-relative
+
+
+@dataclass
 class LintResult:
     citations: list[CitationResult] = field(default_factory=list)
+    spec_findings: list[SpecFinding] = field(default_factory=list)
     repo_root: Path | None = None
     base_sha: str = ""
 
@@ -109,13 +136,26 @@ class LintResult:
         return [c for c in self.citations if c.status in bad]
 
     @property
+    def spec_violations(self) -> list[SpecFinding]:
+        return [f for f in self.spec_findings if f.kind == "spec_violation"]
+
+    @property
+    def spec_orphans(self) -> list[SpecFinding]:
+        return [f for f in self.spec_findings if f.kind == "spec_orphan"]
+
+    @property
     def is_blocking(self) -> bool:
-        return len(self.unresolved) > 0
+        return len(self.unresolved) > 0 or len(self.spec_violations) > 0
 
     def summary(self) -> str:
         from collections import Counter
         c = Counter(r.status for r in self.citations)
-        return ", ".join(f"{k}={v}" for k, v in sorted(c.items()))
+        parts = [f"{k}={v}" for k, v in sorted(c.items())]
+        if self.spec_violations:
+            parts.append(f"spec_violation={len(self.spec_violations)}")
+        if self.spec_orphans:
+            parts.append(f"spec_orphan={len(self.spec_orphans)}")
+        return ", ".join(parts)
 
 
 def extract_citations(text: str) -> list[Citation]:
@@ -319,6 +359,10 @@ def lint_report(
 
     `envelope` provides the original validator findings (with snippets); the
     linter uses these to forgive line-shift after worker edits.
+
+    SpecDD Lever 2: also evaluates every modified file against the
+    repo's `.sdd` chain, producing `spec_violation` (strict) and
+    `spec_orphan` (warning) findings on the result.
     """
     root = Path(repo_root).resolve()
     citations = extract_citations(report_text)
@@ -335,4 +379,87 @@ def lint_report(
         _check_one(c, by_path_line.get((c.path, c.line)), root, changed, deleted)
         for c in citations
     ]
-    return LintResult(citations=results, repo_root=root, base_sha=base_sha)
+    spec_findings = _check_spec_compliance(root, changed - deleted)
+    return LintResult(
+        citations=results,
+        spec_findings=spec_findings,
+        repo_root=root,
+        base_sha=base_sha,
+    )
+
+
+def _check_spec_compliance(repo_root: Path, modified_paths: set[str]) -> list[SpecFinding]:
+    """Evaluate each modified path against the repo's `.sdd` chain.
+
+    Emits `spec_violation` for any path matching a `Forbids:` glob in
+    any `.sdd`, and `spec_orphan` for any path not matching any
+    `Owns:` glob WHEN at least one `Owns:` glob exists in the chain.
+    Repos without `.sdd` files emit no findings.
+
+    Malformed `.sdd` short-circuits the check — a single emitted
+    `spec_violation` finding flags the malformed file and stops; the
+    tool-side enforcement layer surfaces the same error during the
+    agent loop, so the lint surfacing is for human visibility.
+    """
+    if not modified_paths:
+        return []
+    try:
+        sdds = find_all_sdd(repo_root)
+    except SddParseError as e:
+        return [SpecFinding(
+            kind="spec_violation",
+            path=str(getattr(e, "path", "")),
+            glob=None,
+            sdd_path=str(getattr(e, "path", "")),
+            )]
+    if not sdds:
+        return []
+
+    out: list[SpecFinding] = []
+    has_any_owns = any(sf.owns for sf in sdds)
+
+    for path in sorted(modified_paths):
+        normalized = path.replace("\\", "/").lstrip("/")
+        # Forbids check — strict gate.
+        forbidden = False
+        for sf in sdds:
+            for glob in sf.forbids:
+                if _glob_matches(glob, normalized):
+                    try:
+                        sdd_rel = str(sf.path.relative_to(repo_root))
+                    except ValueError:
+                        sdd_rel = str(sf.path)
+                    out.append(SpecFinding(
+                        kind="spec_violation",
+                        path=normalized,
+                        glob=glob,
+                        sdd_path=sdd_rel,
+                    ))
+                    forbidden = True
+                    break
+            if forbidden:
+                break
+        if forbidden:
+            continue
+
+        # Orphan check — warning only. Skipped when no Owns globs exist
+        # anywhere in the chain (nothing to be an orphan from).
+        if not has_any_owns:
+            continue
+        owned = False
+        for sf in sdds:
+            for glob in sf.owns:
+                if _glob_matches(glob, normalized):
+                    owned = True
+                    break
+            if owned:
+                break
+        if not owned:
+            out.append(SpecFinding(
+                kind="spec_orphan",
+                path=normalized,
+                glob=None,
+                sdd_path=None,
+            ))
+
+    return out

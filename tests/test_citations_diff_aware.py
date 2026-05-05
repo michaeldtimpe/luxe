@@ -303,3 +303,141 @@ def test_bare_filename_does_not_apply_to_paths_with_slashes(git_repo: Path):
     res = lint_report(report, git_repo, base_sha=base)
     assert res.is_blocking
     assert res.citations[0].status == "missing_file"
+
+
+# --- SpecDD Lever 2: spec_violation / spec_orphan -------------------------
+
+
+def _add_sdd(repo: Path, rel_path: str, body: str) -> None:
+    """Drop a `.sdd` file and commit it as part of the base."""
+    p = repo / rel_path
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body, encoding="utf-8")
+
+
+def _modify(repo: Path, rel_path: str, content: str) -> None:
+    """Add or modify a file and commit it (post-base)."""
+    p = repo / rel_path
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", str(p)], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", f"add {rel_path}"], cwd=repo, check=True)
+
+
+class TestSpecComplianceFindings:
+    def test_no_sdd_means_no_findings(self, git_repo: Path):
+        base = _base_sha(git_repo)
+        _modify(git_repo, "src/new.py", "x = 1\n")
+        res = lint_report("", git_repo, base_sha=base)
+        assert res.spec_findings == []
+
+    def test_spec_violation_fires_on_forbidden_path(self, git_repo: Path):
+        # Drop an .sdd at the repo root (named after the dir).
+        _add_sdd(
+            git_repo,
+            f"{git_repo.name}.sdd",
+            "# root\n## Forbids\n- tests/**\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add sdd"], cwd=git_repo, check=True)
+        base = _base_sha(git_repo)
+
+        # Modify a forbidden file and check.
+        _modify(git_repo, "tests/test_thing.py", "x = 1\n")
+        res = lint_report("", git_repo, base_sha=base)
+        assert res.is_blocking
+        assert len(res.spec_violations) == 1
+        v = res.spec_violations[0]
+        assert v.path == "tests/test_thing.py"
+        assert v.glob == "tests/**"
+
+    def test_spec_orphan_fires_outside_owns_glob(self, git_repo: Path):
+        _add_sdd(
+            git_repo,
+            f"{git_repo.name}.sdd",
+            "# root\n## Owns\n- src/**\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add sdd"], cwd=git_repo, check=True)
+        base = _base_sha(git_repo)
+
+        _modify(git_repo, "docs/note.md", "# note\n")
+        res = lint_report("", git_repo, base_sha=base)
+        # Orphan is warning only — should not block.
+        assert not res.is_blocking
+        assert len(res.spec_orphans) == 1
+        assert res.spec_orphans[0].path == "docs/note.md"
+
+    def test_spec_orphan_skipped_when_no_owns_globs(self, git_repo: Path):
+        # Forbids-only sdd (no Owns) — should NOT fire orphan for any path.
+        _add_sdd(
+            git_repo,
+            f"{git_repo.name}.sdd",
+            "# root\n## Forbids\n- secret/**\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add sdd"], cwd=git_repo, check=True)
+        base = _base_sha(git_repo)
+
+        _modify(git_repo, "anywhere/foo.py", "x = 1\n")
+        res = lint_report("", git_repo, base_sha=base)
+        assert res.spec_orphans == []
+        assert res.spec_violations == []
+
+    def test_owned_path_yields_no_finding(self, git_repo: Path):
+        _add_sdd(
+            git_repo,
+            f"{git_repo.name}.sdd",
+            "# root\n## Owns\n- src/**\n## Forbids\n- tests/**\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add sdd"], cwd=git_repo, check=True)
+        base = _base_sha(git_repo)
+
+        _modify(git_repo, "src/new.py", "x = 1\n")
+        res = lint_report("", git_repo, base_sha=base)
+        assert res.spec_findings == []
+        assert not res.is_blocking
+
+    def test_summary_includes_spec_counts(self, git_repo: Path):
+        _add_sdd(
+            git_repo,
+            f"{git_repo.name}.sdd",
+            "# root\n## Owns\n- src/**\n## Forbids\n- tests/**\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add sdd"], cwd=git_repo, check=True)
+        base = _base_sha(git_repo)
+
+        _modify(git_repo, "tests/x.py", "x = 1\n")  # violation
+        _modify(git_repo, "docs/y.md", "x\n")  # orphan
+        res = lint_report("", git_repo, base_sha=base)
+        s = res.summary()
+        assert "spec_violation=1" in s
+        assert "spec_orphan=1" in s
+
+    def test_deleted_files_are_not_lint_targets(self, git_repo: Path):
+        # Workers may delete files as part of a fix; deletion shouldn't
+        # produce spec_violation findings even if the deleted path
+        # matches a Forbids glob.
+        # Setup: pre-existing tests/old.py committed at base, then sdd
+        # added that forbids tests/**.
+        _modify(git_repo, "tests/old.py", "x\n")
+        _add_sdd(
+            git_repo,
+            f"{git_repo.name}.sdd",
+            "# root\n## Forbids\n- tests/**\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "sdd"], cwd=git_repo, check=True)
+        base = _base_sha(git_repo)
+
+        # Worker deletes tests/old.py.
+        subprocess.run(
+            ["git", "rm", "-q", "tests/old.py"], cwd=git_repo, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "delete"], cwd=git_repo, check=True
+        )
+        res = lint_report("", git_repo, base_sha=base)
+        assert res.spec_violations == []
