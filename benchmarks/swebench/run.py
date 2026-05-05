@@ -77,6 +77,9 @@ def main() -> int:
                    help="Seconds per instance before kill.")
     p.add_argument("--model-name", default="luxe-qwen3.6-35b-a3b-6bit",
                    help="Model identifier for the predictions.json rows.")
+    p.add_argument("--no-inject-sdd", action="store_true",
+                   help="Disable SpecDD Lever 2 synthetic .sdd injection. "
+                        "Use for pre-Lever-2 baseline reproduction.")
     args = p.parse_args()
 
     if not args.dataset.is_file():
@@ -168,6 +171,7 @@ def main() -> int:
             instance, args.work_dir,
             config=args.config,
             timeout_s=args.per_instance_timeout,
+            inject_sdd=not args.no_inject_sdd,
         )
         results.append(result)
 
