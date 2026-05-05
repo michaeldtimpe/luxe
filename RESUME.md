@@ -1,6 +1,31 @@
 # luxe — session resume document
 
-## Current state — 2026-05-04 night / 2026-05-05
+## Current state — 2026-05-05 morning (Lever 2 shipped + n=10 in flight)
+
+**Working tree**: clean. **607 tests passing** (was 485 at start of yesterday's session; +122 across BFCL resume, SWE-bench overlay, gold-proximity inspector, and SpecDD Lever 2 ship).
+
+**SpecDD Lever 2 (v1.5.0) — SHIPPED end-to-end** in 7 commits. All seven planned deliverables landed:
+1. `src/luxe/sdd.py` — `.sdd` parser (six canonical sections, tolerant header normalization)
+2. `src/luxe/spec_resolver.py` — chain assembly + gitignore-style glob matching (hand-rolled because Python 3.11 lacks `Path.full_match`)
+3. `src/luxe/tools/fs.py::_check_spec_forbids` — pre-write tool-side enforcement; honesty guards run first
+4. `src/luxe/agents/single.py::_build_sdd_block` — `Repository contracts` block injection at task-prompt construction
+5. Resume reload — N/A by current architecture (luxe's only resume is `luxe pr <id>`, post-synthesizer); chain reloads on every `run_single`. Documented inline.
+6. Four dogfood `.sdd` files (`luxe.sdd`, `agents/agents.sdd`, `tools/tools.sdd`, `maintain_suite.sdd`) + root `CLAUDE.md`
+7. `src/luxe/citations.py` — `spec_violation` (strict gate) + `spec_orphan` (warning only at Lever 2)
+
+Plus `benchmarks/swebench/adapter.py` synthetic `.sdd` injection at fixture-prep (closes the n=75 anti-reproducer-prompt-leak hole) and `benchmarks/swebench/compare_runs.py` for pre/post delta reports.
+
+**Active probe**: post-Lever-2 n=10 rerun in flight (`acceptance/swebench/post_specdd_v15_n10/rep_1/`); same 10 instances as the pre-Lever-2 probe. Validation gate before launching n=75 rerun. Background task ID: `btqszm5k0`.
+
+**Two subtle issues banked to memory** (`feedback_exception_hierarchy_catch_order.md`, `feedback_fixture_prep_dirty_tree.md`):
+- `SddParseError(ValueError)` — `except ValueError` silently catches `SddParseError`; derived first or routes wrong
+- Synthetic `.sdd` in cloned tree → `luxe maintain` rc=2 in 1s with "uncommitted changes" message; pair with `--allow-dirty`
+
+**Lever 2 hypothesis (testable on next n=75 rerun)**: empty_patch ↓ (target <20/75); new_file_in_diff → 0/75. If either doesn't materialise, hypothesis is wrong and Lever 3 needs reframing.
+
+---
+
+## Earlier state — 2026-05-04 night
 
 **Working tree**: clean as of last commit; Lever 2 work in progress.
 
