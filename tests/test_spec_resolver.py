@@ -9,6 +9,8 @@ import pytest
 from luxe.sdd import SddFile, SddParseError
 from luxe.spec_resolver import (
     ResolvedChain,
+    find_all_sdd,
+    format_sdd_block,
     resolve_chain,
     _compile_glob,
     _glob_matches,
@@ -282,3 +284,82 @@ class TestEmptyChainBehavior:
         assert chain.is_forbidden("anything")[0] is False
         assert chain.is_owned("anything")[0] is False
         assert chain.all_forbids() == []
+
+
+class TestFindAllSdd:
+    def test_empty_repo(self, tmp_path):
+        assert find_all_sdd(tmp_path) == []
+
+    def test_finds_canonical_sdd_only(self, tmp_path):
+        # Two correctly-named, one mis-named.
+        _write_sdd(tmp_path / "src" / "luxe" / "luxe.sdd", "# luxe\n## Must\n- a\n")
+        _write_sdd(
+            tmp_path / "src" / "luxe" / "agents" / "agents.sdd",
+            "# agents\n## Must\n- b\n",
+        )
+        # Mis-named file: basename doesn't match parent dir.
+        _write_sdd(tmp_path / "src" / "wrong_name.sdd", "# wrong\n## Must\n- ignored\n")
+
+        found = find_all_sdd(tmp_path)
+        titles = {sf.title for sf in found}
+        assert titles == {"luxe", "agents"}
+
+    def test_returns_sorted_by_path(self, tmp_path):
+        # Authored out-of-order; result should be sorted alphabetically.
+        _write_sdd(tmp_path / "z" / "z.sdd", "# z\n")
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n")
+        _write_sdd(tmp_path / "m" / "m.sdd", "# m\n")
+        found = find_all_sdd(tmp_path)
+        assert [sf.title for sf in found] == ["a", "m", "z"]
+
+    def test_propagates_parse_errors(self, tmp_path):
+        _write_sdd(tmp_path / "broken" / "broken.sdd", "## Must\n- a\n## Must\n- b\n")
+        with pytest.raises(SddParseError, match="duplicate"):
+            find_all_sdd(tmp_path)
+
+
+class TestFormatSddBlock:
+    def test_empty_input_returns_empty_string(self, tmp_path):
+        assert format_sdd_block([], tmp_path) == ""
+
+    def test_renders_owns_and_forbids(self, tmp_path):
+        _write_sdd(
+            tmp_path / "src" / "luxe" / "luxe.sdd",
+            "# luxe\n## Owns\n- src/luxe/**\n## Forbids\n- tests/**\n",
+        )
+        sdds = find_all_sdd(tmp_path)
+        block = format_sdd_block(sdds, tmp_path)
+        assert "## Repository contracts" in block
+        assert "src/luxe/luxe.sdd" in block
+        assert "Owns: src/luxe/**" in block
+        assert "Forbids: tests/**" in block
+
+    def test_omits_must_and_done_when(self, tmp_path):
+        # Only Forbids/Owns should surface in the prompt.
+        _write_sdd(
+            tmp_path / "src" / "src.sdd",
+            "# src\n"
+            "## Must\n- this is aspirational\n"
+            "## Done when\n- this is for the validator\n"
+            "## Forbids\n- secret/**\n",
+        )
+        sdds = find_all_sdd(tmp_path)
+        block = format_sdd_block(sdds, tmp_path)
+        assert "Forbids: secret/**" in block
+        assert "this is aspirational" not in block
+        assert "this is for the validator" not in block
+
+    def test_skips_sdd_with_no_owns_or_forbids(self, tmp_path):
+        # An sdd that only has aspirational sections doesn't appear.
+        _write_sdd(
+            tmp_path / "a" / "a.sdd",
+            "# a\n## Must\n- aspirational only\n",
+        )
+        _write_sdd(
+            tmp_path / "b" / "b.sdd",
+            "# b\n## Forbids\n- bad/**\n",
+        )
+        sdds = find_all_sdd(tmp_path)
+        block = format_sdd_block(sdds, tmp_path)
+        assert "From `a/a.sdd`" not in block
+        assert "From `b/b.sdd`" in block

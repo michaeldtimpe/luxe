@@ -93,6 +93,72 @@ class ResolvedChain:
         return out
 
 
+def find_all_sdd(repo_root: Path) -> list[SddFile]:
+    """Enumerate every well-formed `<dir>/<dir>.sdd` under `repo_root`.
+
+    Used for mono-mode prompt injection where there's no per-file target
+    but we still want the model to see every active contract in the
+    repo. Walks the tree once via `Path.rglob('*.sdd')` and filters to
+    files whose basename matches their parent directory's name (the
+    canonical `.sdd` placement convention from §Lever 2 of the plan).
+
+    `.sdd` files in unconventional locations (e.g. a sidecar dropped in
+    a subdir without renaming) are silently ignored. Returns sorted by
+    relative path for deterministic prompt construction.
+    """
+    root = repo_root.resolve()
+    out: list[SddFile] = []
+    for candidate in sorted(root.rglob("*.sdd")):
+        if not candidate.is_file():
+            continue
+        if candidate.parent.name + ".sdd" != candidate.name:
+            continue
+        out.append(parse_sdd_file(candidate))
+    return out
+
+
+def format_sdd_block(sdd_files: list[SddFile], repo_root: Path) -> str:
+    """Render a list of `.sdd` files as a model-readable contract block.
+
+    Output shape (suitable for appending to a task prompt; returns ""
+    when there are no `.sdd` files so callers can unconditionally
+    concatenate):
+
+        ## Repository contracts (.sdd files)
+
+        From `<rel-path>`:
+        - Forbids: <glob1>
+        - Forbids: <glob2>
+        - Owns: <glob3>
+
+        From `<rel-path-2>`:
+        - ...
+
+    Only `Forbids` and `Owns` sections are surfaced — these are the
+    enforceable constraints the model needs to know about. `Must` /
+    `Must not` / `Done when` are aspirational and would bloat the
+    prompt; they live in the spec validator's reprompt path instead.
+    """
+    if not sdd_files:
+        return ""
+    root = repo_root.resolve()
+    lines = ["## Repository contracts (.sdd files)", ""]
+    for sf in sdd_files:
+        try:
+            rel = sf.path.relative_to(root)
+        except ValueError:
+            rel = sf.path
+        if not (sf.forbids or sf.owns):
+            continue
+        lines.append(f"From `{rel}`:")
+        for glob in sf.owns:
+            lines.append(f"- Owns: {glob}")
+        for glob in sf.forbids:
+            lines.append(f"- Forbids: {glob}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def resolve_chain(repo_root: Path, target: Path) -> ResolvedChain:
     """Walk from `target`'s containing dir up to `repo_root`, collecting `.sdd`.
 
