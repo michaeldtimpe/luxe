@@ -305,18 +305,35 @@ def maintain(
             lint = lint_report(final_report, repo_path, base_sha=prep.base_sha,
                                envelope=None)
             if lint.is_blocking:
-                console.print(f"\n[red]✗ Citation lint failed[/] — "
-                              f"{len(lint.unresolved)} unresolved: {lint.summary()}")
+                console.print(f"\n[red]✗ Lint failed[/] — "
+                              f"{len(lint.unresolved)} unresolved citation(s), "
+                              f"{len(lint.spec_violations)} spec violation(s): "
+                              f"{lint.summary()}")
                 for r in lint.unresolved[:10]:
                     console.print(f"    - `{r.citation.path}:{r.citation.line}` — "
                                   f"[red]{r.status}[/]: {r.detail}")
+                for sv in lint.spec_violations[:10]:
+                    console.print(
+                        f"    - [red]spec_violation[/] `{sv.path}` "
+                        f"forbidden by `{sv.sdd_path}` (glob `{sv.glob}`)"
+                    )
                 append_event(spec.run_id, "citation_lint_blocked",
-                             unresolved=len(lint.unresolved), summary=lint.summary())
+                             unresolved=len(lint.unresolved),
+                             spec_violations=len(lint.spec_violations),
+                             summary=lint.summary())
             else:
-                console.print(f"\n[green]✓ Citation lint passed[/] "
+                console.print(f"\n[green]✓ Lint passed[/] "
                               f"({len(lint.citations)} citations: {lint.summary()})")
                 append_event(spec.run_id, "citation_lint_passed",
                              count=len(lint.citations), summary=lint.summary())
+            # Orphans are warning-only at Lever 2 — surface them for human
+            # visibility but do not block the run.
+            if lint.spec_orphans:
+                console.print(
+                    f"[yellow]· {len(lint.spec_orphans)} spec_orphan warning(s)[/]"
+                )
+                for so in lint.spec_orphans[:5]:
+                    console.print(f"    - `{so.path}` (no Owns: glob covers this path)")
 
         # SpecDD Lever 1 (v1.4-prep): when a spec is provided, the reprompt
         # gate uses per-requirement validation. Run validate() once and
