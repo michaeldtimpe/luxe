@@ -1,10 +1,16 @@
 # luxe — session resume document
 
-## Current state — 2026-05-04 PM
+## Current state — 2026-05-04 night / 2026-05-05
 
-**Working tree**: clean. **485 tests passing** (was 461 at session start; +24 added across BFCL resume, SWE-bench prompt overlay tests, gold-proximity inspector tests).
+**Working tree**: clean as of last commit; Lever 2 work in progress.
 
-**SWE-bench n=75 baseline launched**, expected to be running when this resume is read. Output: `acceptance/swebench/pre_specdd_v141_n75/rep_1/`. Uses the default `configs/single_64gb_swebench.yaml` (baseline anti-reproducer prompt). The runner has resume capability — same command picks up where it left off after a crash.
+**SWE-bench n=75 pre-SpecDD anchor — DONE** (`acceptance/swebench/pre_specdd_v141_n75/rep_1/`):
+- 7h 34m wall (15:47 → 23:21 on 2026-05-04). 49/75 non-empty patches; mechanical 45/75 (60%).
+- **Strong (gold-match)**: 12/75 = **16%**. **Strong + plausible**: 30/75 = **40%**. **Manual high-confidence (post Step-2 review)**: **24/75 = 32%** — the durable pre-SpecDD anchor.
+- Lands in RESUME.md's previously-defined 30-45% branch → **SpecDD Lever 2 is the next move**. Decision made.
+- **Empty-patch (26/75 = 35%)** is the dominant failure mode at n=75 scale; n=10 had zero. Anti-reproducer prompt's locate→read→edit→verify protocol fails to even produce a candidate diff on a third of stratified instances.
+- 4/75 created `test_fix.py` despite anti-reproducer rule — prompt is **leaky**; needs tool-side enforcement (Lever 2's tool-side Forbids is the right shape).
+- See `project_swebench_n75_baseline.md` and lessons.md `[2026-05-04] SWE-bench n=75 pre-SpecDD anchor` for full breakdown.
 
 **BFCL pre-SpecDD baseline complete** (`acceptance/bfcl/pre_specdd_v141/rep_1/`, 2026-05-04):
 - `irrelevance`: 220/240 = **91.67%**, `multiple`: 166/200 = **83.00%**, `simple_python`: 330/400 = **82.50%**, `parallel`: 132/200 = **66.00%**, `parallel_multiple`: 98/200 = **49.00%**
@@ -21,84 +27,29 @@ Champion unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0 on oMLX.
 
 ---
 
-## ⚡ Resume here — n=75 result analysis
+## ⚡ Resume here — SpecDD Lever 2 (v1.5.0)
 
-The expected workflow when you start the next session:
+Plan: `~/.claude/plans/fluffy-brewing-lemur.md` §Lever 2. Multi-session (~2-3 sessions).
 
-### Step 1 — gold-proximity tier on the n=75 output
+### Build order (each step has its own tests; do not skip)
 
-```bash
-cd /Users/michaeltimpe/Downloads/luxe && \
-.venv/bin/python -m benchmarks.swebench.smoke_inspect \
-    --predictions acceptance/swebench/pre_specdd_v141_n75/rep_1/predictions.json \
-    --gold-source benchmarks/swebench/subsets/raw/verified.jsonl
-```
+1. **`src/luxe/sdd.py`** — markdown section parser. Sections: Must / Must not / Owns / Depends on / Forbids / Done when. Returns a structured `SddFile`. Tests in `tests/test_sdd.py`.
+2. **`src/luxe/spec_resolver.py`** — walk from path to repo root collecting `<dir>/<dir>.sdd`. Returns ancestor-first chain. Glob compilation for Owns/Forbids checks. Tests in `tests/test_spec_resolver.py`.
+3. **Tool-side `Forbids` in `src/luxe/tools/fs.py`** — `write_file`/`edit_file` refuse if target matches any ancestor `.sdd`'s `Forbids:` glob. Structured error: *"Path X forbidden by Y.sdd; this worker owns Z."* Tests for both deny and allow paths.
+4. **Worker prompt embeds resolved chain** — `src/luxe/agents/prompts.py`: when worker iteration targets file F, prompt includes the resolved chain for F instead of monolithic repo_summary. Respects 32k window.
+5. **Resume reloads spec chain** — `cli.py --resume` re-resolves `.sdd` chain on each resumed worker iteration. Closes the v1.4 gap noted in `run_state.py`. No checkpoint format change.
+6. **Dogfood internal `.sdd` files** — author `src/luxe/luxe.sdd`, `src/luxe/agents/agents.sdd`, `src/luxe/tools/tools.sdd`, `src/luxe/spec.sdd`, `benchmarks/maintain_suite/maintain_suite.sdd`. Plus root `CLAUDE.md` (~30 lines) instructing chain walk. **This step exists to surface parser bugs before bench depends on it** — order it after parser+resolver but before tool-side Forbids.
+7. **Citation linter `spec_orphan` / `spec_violation`** — `src/luxe/citations.py`: `spec_orphan` ships as warning only (Phase 3 promotes); `spec_violation` strict from day one (defense in depth against rename/mv evasion).
 
-Output format: per-instance line `<tier>  <instance_id>  file=Y/N loca=Y/N full=Y/N hunk=Y/N size=Y/N toke=Y/N  cov=X.XX  jac=X.XX`. Final summary line gives counts per tier + mechanical PASS rate + strong-or-plausible rate.
+### `spec_orphan` resolution convention (don't ship as strict yet)
 
-### Step 2 — manual review of plausibles + wrong_locations
+- Root `.sdd` `Owns:` globs **implicitly cover** new files at corresponding paths.
+- Sibling-path violations only — `src/auth/new.py` orphan-fires only if `src/api/api.sdd` exists with `Owns: src/api/**` AND no root `.sdd`.
+- Implement-task implicit grant — fixture YAML `implement_creates_new: true` injects synthetic `Owns:` for that run.
 
-The inspector is much more honest after v2 but still has known limitations:
-- **Same-hunk-but-different-lines partial fixes** still score "strong" when model adds 1 of N gold's added lines within a single hunk (astropy-13453 pattern at n=10).
-- **wrong_class-but-right-file** can score "plausible" with low coverage (sklearn-10297 at n=10 hit RidgeClassifierCV vs gold's RidgeCV — both in `ridge.py`).
+### Pre-Lever-1 sanity check status — already moot
 
-Run this script to dump per-instance gold-vs-model diffs for the plausibles + wrong_locations:
-
-```bash
-.venv/bin/python <<'EOF'
-import json
-from pathlib import Path
-preds = json.loads(Path('acceptance/swebench/pre_specdd_v141_n75/rep_1/predictions.json').read_text())
-gold_jsonl = Path('benchmarks/swebench/subsets/raw/verified.jsonl').read_text().splitlines()
-gold = {}
-for line in gold_jsonl:
-    if line.strip():
-        r = json.loads(line)
-        gold[r['instance_id']] = r['patch']
-# Filter: change to whatever subset you want to inspect
-target_iids = ['<instance_id_1>', '<instance_id_2>']  # paste from inspector output
-for r in preds:
-    if r['instance_id'] not in target_iids: continue
-    print(f"=== {r['instance_id']} ===")
-    print("GOLD:")
-    print(gold[r['instance_id']][:1500])
-    print("MODEL:")
-    print(r['model_patch'][:1500])
-    print('-' * 80)
-EOF
-```
-
-### Step 3 — classify every failure into the taxonomy
-
-Reference: `project_swebench_smoke_2026_05_04.md` has the full taxonomy with n=10 examples per class. Tally the n=75 distribution.
-
-### Step 4 — compute the durable pre-SpecDD anchor number
-
-Three numbers worth reporting in the lessons.md entry:
-1. **Mechanical PASS rate** (non-empty patches that don't trip new_file/test_path/no_substantive)
-2. **Strong-or-plausible rate** (gold-proximity tier)
-3. **Manual high-confidence rate** (after spot-check; what would actually pass FAIL_TO_PASS)
-
-The third number is the real pre-SpecDD anchor. Expected from n=10 extrapolation: **30-50%**.
-
-### Step 5 — decision branch
-
-| Outcome | Next move |
-|---|---|
-| 30-45% high-confidence | Solid anchor. Move to **SpecDD Lever 2 work** (~2-3 sessions, `~/.claude/plans/fluffy-brewing-lemur.md`). |
-| <20% high-confidence | Localization or reasoning ceiling dominates. Inspect distribution of wrong_target / wrong_location instances. Maybe **minimality-bias A/B** (Step C from prior planning) before SpecDD. |
-| >50% high-confidence | Either model is more capable than expected, or inspector is still optimistic. Spot-check 10 random "strong" claims; if real, celebrate. |
-
-### Resume command — if the n=75 run was interrupted
-
-Same command. Resume is automatic (per-instance summaries include `model_patch`):
-
-```bash
-LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 \
-.venv/bin/python -m benchmarks.swebench.run \
-    --subset benchmarks/swebench/subsets/v1_baseline_n75.json \
-    --output acceptance/swebench/pre_specdd_v141_n75/rep_1/
-```
+The plan calls for a manual reprompt-injection probe before any code. Lever 1 already shipped (v1.4.0 + v1.4.1) and the structured-reprompt format is validated in production via the spec validator's reprompt path. No probe needed.
 
 ---
 
@@ -134,7 +85,8 @@ Hypotheses (per reviewer):
 ## Memory entries (read first)
 
 External benchmark program — current focus:
-- `project_swebench_smoke_2026_05_04.md` — **n=10 A/B + refined a/b1/b2/b3/c/d/e taxonomy** (most recent, primary reference for n=75 analysis)
+- `project_swebench_n75_baseline.md` — **NEW** n=75 anchor: 32% high-confidence; empty-patch 26/75 dominant; primary reference for SpecDD Lever 2 hypothesis
+- `project_swebench_smoke_2026_05_04.md` — n=10 A/B + refined a/b1/b2/b3/c/d/e taxonomy (n=10 was 50pp optimistic; superseded by n=75)
 - `project_bfcl_pre_specdd_baseline.md` — 76.29% combined, parallel cliff diagnosed
 - `project_external_benchmark_program.md` — overall SWE-bench n=75 + BFCL v3 plan
 

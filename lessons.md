@@ -975,3 +975,111 @@ clause amplified noise.
 `tests/test_swebench_smoke_inspect.py`.
 Memory: new `feedback_deliberation_amplifiers.md`; updated
 `project_swebench_smoke_2026_05_04.md`.
+
+---
+
+### [2026-05-04] SWE-bench n=75 pre-SpecDD anchor — 32% high-confidence; empty-patch is the dominant failure class
+
+**What happened**: Stratified n=75 Verified subset run completed in 7h 34m
+wall against `configs/single_64gb_swebench.yaml` (anti-reproducer overlay,
+Qwen3.6-35B-A3B-6bit @ temp=0). Headline numbers, with three different
+honesty levels:
+
+- **Mechanical PASS**: 45/75 (60%) — non-empty, non-test-path, non-new-file
+- **Strong (gold-match)**: 12/75 (16%) — inspector v2 gold-proximity tier
+- **Strong + plausible**: 30/75 (40%) — inspector v2 best-case
+- **Manual high-confidence (Step 2 review)**: **24/75 = 32%** — the durable anchor
+
+The 32% number landed squarely in RESUME.md's pre-defined "30-45% →
+SpecDD Lever 2" decision branch. Lever 2 is now in flight at v1.5.0.
+
+**Root cause / what surprised**:
+
+1. **The n=10 A/B (`probe_n10.json`) was 50pp optimistic.** That run hit
+   9/10 strong-or-plausible. The n=75 stratified mix dropped to 40%.
+   The n=10 wasn't dishonest — it was just easy + small + cherry-picked
+   across distinct repos. Don't extrapolate small probes to a real anchor.
+
+2. **Empty-patch is the dominant failure class at scale (26/75 = 35%).**
+   The n=10 had zero empty-patches; this only emerges past ~30 instances.
+   Anti-reproducer prompt's locate→read→edit→verify protocol fails to
+   even produce a candidate diff on a third of stratified tasks. The
+   class clusters by repo: sphinx, pylint, mwaskom, late-requests
+   (5414/6028) are heavily over-represented. It's not uniformly random.
+   This is the **single biggest signal** for SpecDD: the model isn't
+   over-editing or under-reviewing — it's failing to commit at all.
+
+3. **Anti-reproducer prompt rule is leaky** — 4/75 created `test_fix.py`
+   despite the prompt forbidding it (django-10097, xarray-3305,
+   pytest-5262, sympy-13877). Prose-level rules are guidance, not
+   enforcement. **Tool-side `Forbids` (Lever 2's design) is the right
+   shape for this category** — the prompt cannot be made strictly
+   reliable; the tool layer can.
+
+4. **wrong_target (12) >> wrong_location (3)**. Cross-file localization
+   is harder than within-file localization. Multi-file gold patches
+   dominate the wrong_target class (sympy-13091 has 21 gold files;
+   django-11532 has 5). When gold spans many files, the model picks
+   one and ignores the rest. SpecDD Lever 2's `.sdd` chain that scopes
+   each iteration to a specific subtree is a partial mitigation;
+   Lever 3's per-file `.sdd` contracts would be a stronger one.
+
+5. **Inspector v2 understates "strong" by ~6 cases** (~40% of plausibles
+   were actually clean PASSes after manual review). The token-overlap
+   (jaccard) signal is too noisy when model and gold use slightly
+   different identifiers — `to_native_string` vs `builtin_str` removal
+   in requests-2317, `dict.fromkeys` vs `sorted(set(...))` in
+   sphinx-10466, etc. Line-based hunk proximity also brittle when
+   intermediate edits drift line numbers (sklearn-10908 was marked
+   wrong_location but is a clean gold-match in the same method).
+   Manual Step 2 is non-optional; mechanical inspector ≠ ground truth.
+
+6. **One distinct failure pattern worth a name: "fixed adjacent symptom".**
+   `sphinx-10449` had a real `NameError: annotation` bug in the original
+   code; the model fixed that and stopped, never reaching the actual
+   reported issue (suppress `:rtype: None` for class autodocs). This is
+   a new class — call it (f) **adjacent-bug stop**: model finds A real
+   bug nearby and considers the goal satisfied. Not (d) already-passing
+   (which is "no real bug exists"), and not (b1/b2/b3) reasoning class.
+   Worth tracking on Lever 2/3 reruns to see if it's a one-off or a
+   pattern.
+
+**Fix / takeaway**:
+
+1. **32% is the durable pre-SpecDD anchor.** Use this number, not
+   "12 strong" or "30 strong-or-plausible", when comparing post-Lever-2
+   runs. Strong-only is too tight (excludes semantically-equivalent
+   different-mechanism fixes); strong-or-plausible is too loose
+   (includes wrong-direction "plausibles"). Manual Step 2 with a
+   per-instance taxonomy verdict is the only honest number.
+
+2. **Empty-patch class is the SpecDD test.** Lever 2's tool-side `Forbids`
+   doesn't directly help here, but the per-file `.sdd` chain in worker
+   prompts plus the spec validator's reprompt-on-unmet-requirement gate
+   should help: when the model returns "I couldn't find the bug",
+   the validator should emit a structured "R1 still unsatisfied — do
+   not stop" instead of letting the loop terminate. Track empty-patch
+   delta as the headline signal on the post-Lever-2 rerun. If empty-patch
+   stays at ~25/75, Lever 2's bench-moving claim falls apart.
+
+3. **Anti-reproducer rule moves to the tool layer at Lever 2.** Already
+   queued in the build order: `src/luxe/tools/fs.py` `write_file` and
+   `edit_file` refuse if target matches an ancestor `.sdd`'s `Forbids:`
+   glob. Internal `.sdd` for the swebench fixture mode will list
+   `Forbids: test_*.py` at the root.
+
+4. **Don't extrapolate small probes to anchors.** The 9/10 n=10 result
+   was real but unrepresentative. Future bench-program planning should
+   require at least 50-instance stratified samples before claiming a
+   number is "the" anchor.
+
+5. **Add (f) adjacent-bug stop to the failure-mode taxonomy.** Update
+   `project_swebench_smoke_2026_05_04.md`'s taxonomy when Lever 2 reruns
+   produce a second instance of this pattern.
+
+**Affected files**: no source changes for the bench run itself. Memory
+entry: new `project_swebench_n75_baseline.md`. Output:
+`acceptance/swebench/pre_specdd_v141_n75/rep_1/predictions.json` (the
+durable artefact for FAIL_TO_PASS Docker harness scoring later) and
+`step2_gold_vs_model.txt` (per-instance gold-vs-model dump for the
+plausibles + wrong_locations, used for the manual review).
