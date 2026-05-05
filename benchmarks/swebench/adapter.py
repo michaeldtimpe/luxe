@@ -177,6 +177,10 @@ def invoke_luxe_maintain(
         "--task", "bugfix",
         "--yes",
         "--keep-loaded",
+        # Synthetic SpecDD .sdd file may be present in the working tree
+        # (Lever 2 fixture-prep injection). It is removed before
+        # extract_diff so it does not contaminate predictions.json.
+        "--allow-dirty",
     ]
     if config:
         cmd.extend(["--config", str(config)])
