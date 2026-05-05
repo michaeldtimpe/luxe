@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from luxe.sdd import SddParseError
+from luxe.spec_resolver import resolve_chain
 from luxe.tools.base import ToolDef, ToolFn
 
 _REPO_ROOT: Path | None = None
@@ -165,6 +167,55 @@ def _safe(rel: str) -> Path:
     return resolved
 
 
+def _check_spec_forbids(rel: str) -> str | None:
+    """Return error if `rel` matches a `.sdd` `Forbids:` glob in the chain.
+
+    SpecDD Lever 2 enforcement: pre-write tool-side guard. The model
+    cannot evade by renaming once a `Forbids:` rule exists in an
+    ancestor `.sdd` — the rule fires on every write attempt regardless
+    of how the path was constructed.
+
+    Returns None when:
+      - no repo root is set (test envs that bypass set_repo_root)
+      - no `.sdd` files exist in the chain (the common case for repos
+        that haven't adopted SpecDD)
+      - the path is allowed by the chain
+
+    Returns a structured error string with the offending `.sdd` path
+    and the matching glob when the path is forbidden.
+
+    A malformed `.sdd` upstream raises SddParseError; we convert that
+    to a tool-level error so the model sees one actionable message
+    rather than a stack trace. Repeat-fires are fine — broken `.sdd`
+    is an authoring bug, not a bench-loop concern.
+    """
+    if _REPO_ROOT is None:
+        return None
+    target = (_REPO_ROOT / rel).resolve()
+    try:
+        chain = resolve_chain(_REPO_ROOT, target)
+    except SddParseError as e:
+        # NOTE: must come before the ValueError catch — SddParseError
+        # subclasses ValueError, so the order matters.
+        return f"Cannot evaluate Forbids: malformed .sdd — {e}"
+    except ValueError:
+        # target outside repo_root; _safe() will reject this independently
+        return None
+
+    forbidden, sdd, glob = chain.is_forbidden(rel)
+    if not forbidden or sdd is None:
+        return None
+    try:
+        sdd_rel = sdd.path.relative_to(_REPO_ROOT)
+    except ValueError:
+        sdd_rel = sdd.path
+    return (
+        f"refusing to write {rel!r}: forbidden by {sdd_rel} "
+        f"(matches glob {glob!r}). This worker is scoped by .sdd "
+        f"contracts; do not write files outside the allowed paths."
+    )
+
+
 def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
     path = _safe(args["path"])
     if not path.is_file():
@@ -274,6 +325,10 @@ def _write_file(args: dict[str, Any]) -> tuple[str, str | None]:
         return "", err
     if (err := _check_placeholder_text(content)):
         return "", err
+    # SpecDD Lever 2: tool-side Forbids enforcement. Cheap directory
+    # walk; no-op when no `.sdd` exists in the chain.
+    if (err := _check_spec_forbids(rel)):
+        return "", err
 
     path = _safe(rel)
     # Mass-deletion check needs the existing content (if file exists).
@@ -296,6 +351,9 @@ def _write_file(args: dict[str, Any]) -> tuple[str, str | None]:
 def _edit_file(args: dict[str, Any]) -> tuple[str, str | None]:
     rel = args["path"]
     if (err := _check_role_path(rel)):
+        return "", err
+    # SpecDD Lever 2: tool-side Forbids — symmetric with _write_file.
+    if (err := _check_spec_forbids(rel)):
         return "", err
 
     path = _safe(rel)
