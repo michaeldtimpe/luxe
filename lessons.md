@@ -1083,3 +1083,105 @@ entry: new `project_swebench_n75_baseline.md`. Output:
 durable artefact for FAIL_TO_PASS Docker harness scoring later) and
 `step2_gold_vs_model.txt` (per-instance gold-vs-model dump for the
 plausibles + wrong_locations, used for the manual review).
+
+---
+
+### [2026-05-05] SpecDD Lever 2 architecture + two subtle gotchas
+
+**What happened**: Shipped SpecDD Lever 2 (v1.5.0) end-to-end in one
+session: parser (`src/luxe/sdd.py`) → resolver (`src/luxe/spec_resolver.py`)
+→ tool-side Forbids enforcement (`src/luxe/tools/fs.py`) → prompt-side
+chain block (`src/luxe/agents/single.py`) → citation linter
+spec_violation/spec_orphan signals (`src/luxe/citations.py`) → synthetic
+`.sdd` injection for SWE-bench fixtures (`benchmarks/swebench/adapter.py`)
+→ four dogfood `.sdd` files for the luxe codebase itself + root
+`CLAUDE.md`. Full suite: 521 → 607 passed (+86 tests).
+
+Two subtle issues surfaced during integration that are worth banking:
+
+**1. `except ValueError` silently catches `SddParseError`.**
+
+`SddParseError(ValueError)` subclasses `ValueError` so a tool can
+distinguish "out-of-repo path" (`ValueError` raised by
+`Path.relative_to`) from "malformed contract". The tool layer's
+`_check_spec_forbids` had:
+
+```python
+try:
+    chain = resolve_chain(...)
+except ValueError:
+    return None  # outside repo_root, _safe will reject
+except SddParseError as e:
+    return f"Cannot evaluate Forbids: malformed .sdd — {e}"
+```
+
+The `ValueError` clause caught the malformed-`.sdd` case first, so
+malformed contracts silently allowed all writes — exactly the
+opposite of the intended behaviour. Fixed by reordering the
+catches; the constraint is now documented with a `NOTE` comment in
+the function.
+
+The general rule: **when catching multiple exception types where one
+subclasses another, list the most-derived first.** Test each path
+explicitly — a passing "no-error" test does not exercise this
+ordering.
+
+**2. Synthetic `.sdd` in a fixture clone reads as "uncommitted".**
+
+The SWE-bench adapter drops a synthetic `<repo_basename>.sdd` at
+fixture-prep time so tool-side Forbids fires for the anti-reproducer
+rule that the prose prompt cannot reliably hold. The first smoke run
+crashed in 1 second with rc=2:
+
+> `luxe refuses to start with uncommitted changes — commit, stash, or
+> pass --allow-dirty to proceed (the PR diff will include them).`
+
+The synthetic contract is by design uncommitted (it's removed before
+`extract_diff` so it never enters predictions.json). Fix: pass
+`--allow-dirty` from `invoke_luxe_maintain`. Smoke probe
+(astropy-12907 with injection) then succeeded with the gold-shape
+patch and zero `.sdd` contamination.
+
+Generalisation: **fixture-prep injection that adds untracked files
+must be paired with `--allow-dirty` in any agent invocation that
+checks tree cleanliness.** Other future cases that might trigger
+this: temp-files for environment overrides, model-context sidecars,
+synthesizer.md overrides for resume scenarios.
+
+**Architecture note worth banking**:
+
+The plan's "Lever 2 chain at worker iteration time" was scoped against
+a worker tier that doesn't exist post-mono pivot (v1.0). The actual
+shape that emerged: **chain block injection at the single task-prompt
+construction** in `single.py` (full-repo scope, since mono mode has
+no per-file targeting). `find_all_sdd` walks once, `format_sdd_block`
+renders Forbids/Owns only (Must / Done when stay aspirational and live
+in spec_validator's reprompt path). The plan's "resume reloads chain"
+task is N/A — luxe's resume path is `luxe pr <run_id>` which runs
+the post-synthesizer PR cycle, not the agent loop. Chain reloads
+fresh on every `run_single` call by construction. Documented inline.
+
+**Fix / takeaway**:
+1. New durable rule (memory): when catching exception hierarchies in
+   the same try/except, derived classes first or it silently routes
+   wrong.
+2. New durable rule (memory): fixture-prep injections that drop
+   uncommitted files into the cloned tree need `--allow-dirty` in
+   the downstream agent invocation. Track this as part of any future
+   .sdd-class fixture-prep work.
+3. Lever 2 ships at v1.5.0 with seven concrete deliverables; the
+   hypothesis ("anti-reproducer rule moves to the tool layer →
+   empty_patch class shrinks via better engagement, new_file_in_diff
+   class disappears") is testable on the next n=75 rerun. The
+   prediction is empty_patch ↓, new_file_in_diff → 0; if either
+   doesn't materialise, the hypothesis is wrong.
+
+**Affected files**: `src/luxe/sdd.py`, `src/luxe/spec_resolver.py`,
+`src/luxe/tools/fs.py`, `src/luxe/agents/single.py`,
+`src/luxe/citations.py`, `src/luxe/cli.py`,
+`benchmarks/swebench/adapter.py`, `benchmarks/swebench/run.py`,
+`benchmarks/swebench/compare_runs.py`, `tests/test_sdd.py`,
+`tests/test_spec_resolver.py`, `tests/test_tools_spec_forbids.py`,
+`tests/test_single.py`, `tests/test_citations_diff_aware.py`,
+`tests/test_swebench_adapter.py`, plus the four dogfood `.sdd` files
+and root `CLAUDE.md`.
