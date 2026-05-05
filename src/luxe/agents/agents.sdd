@@ -1,0 +1,19 @@
+# agents
+
+The agent loop and prompt surface. Single source of truth for prompt
+strings; the registry pattern keeps variant cells coupled to runtime.
+
+## Must
+- All mono prompt strings live in `src/luxe/agents/prompts.py` `PROMPT_REGISTRY`
+- `TaskOverlay` maps `task_type` to `PromptVariant` id; routing goes through `resolve_prompt_ids`
+- `run_agent` (loop.py) owns the inner tool-call loop; `single.py` is the entry
+- Mode B write-pressure injection (v1.4.1) is opt-in via `LUXE_WRITE_PRESSURE=1`
+- SpecDD Lever 2 chain block (`_build_sdd_block`) is appended after the variant's `task_prefix`
+
+## Must not
+- Inline prompt strings in `single.py` or `cli.py` (un-couples variants from runtime)
+- Add feature flags or backwards-compatibility shims for retired modes (swarm / micro / phased)
+- Add a new prompt variant without a corresponding test in `tests/test_prompts.py`
+
+## Owns
+- src/luxe/agents/**

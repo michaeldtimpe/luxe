@@ -1,0 +1,32 @@
+# luxe
+
+Root invariants for the luxe codebase. Picked up by `find_all_sdd` and
+surfaced to the model in the task prompt when `set_repo_root` points at
+the luxe checkout itself; read by humans and Claude Code as the
+authoritative architectural contract.
+
+Sourced from `lessons.md` postmortems and the durable rules in user
+auto-memory.
+
+## Must
+- Mono-only execution mode (single capable model, full tool surface)
+- temp=0.0 in production fixture configs
+- All mono prompt edits go through `src/luxe/agents/prompts.py` registry
+- Pin `--work-dir ~/.luxe/bench-workspace` for bench runs (random tempdir leaks into prompts)
+- `oMLX` `idle_timeout_seconds: 1800` (null keeps models resident forever)
+- `--keep-loaded` for bench mode (post-run unload fires by default)
+
+## Must not
+- Read `origin/<branch>` in offline-cache repos (stale-ref trap; use local ref or sidecar regrade)
+- Use MoE Instruct-2507 model family (long-context fabrication, skips optional tool calls)
+- Use `--no-verify`, `--no-gpg-sign`, or other hook-skip flags
+- Force-push to `main` or `master`
+- Configure dense >30B mxfp8 models (don't fit on 64GB Mac under load)
+
+## Owns
+- src/luxe/**
+
+## Forbids
+- src/swarm/**
+- src/micro/**
+- src/phased/**
