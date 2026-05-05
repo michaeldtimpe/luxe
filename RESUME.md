@@ -15,7 +15,14 @@
 
 Plus `benchmarks/swebench/adapter.py` synthetic `.sdd` injection at fixture-prep (closes the n=75 anti-reproducer-prompt-leak hole) and `benchmarks/swebench/compare_runs.py` for pre/post delta reports.
 
-**Active probe**: post-Lever-2 n=10 rerun in flight (`acceptance/swebench/post_specdd_v15_n10/rep_1/`); same 10 instances as the pre-Lever-2 probe. Validation gate before launching n=75 rerun. Background task ID: `btqszm5k0`.
+**n=10 validation — DONE 2026-05-05 08:48** (`acceptance/swebench/post_specdd_v15_n10/rep_1/`, 53m wall):
+- **strong**: 2 → **4** (+2). django-10097 escaped `new_file_in_diff` → strong (Forbids worked). matplotlib-13989 escaped `empty_patch` → strong (engagement win).
+- **strong + plausible**: 6 → 7 (+1)
+- **new_file_in_diff**: 1 → **0** (-1). Hypothesis confirmed for this class.
+- **empty_patch**: 2 → 2 (composition shifted: matplotlib-13989 escaped, xarray-2905 regressed).
+- **One regression** — xarray-2905 plausible → empty_patch. Trace shows 21 tool calls (read_file × 13, grep × 4) with **zero write_file/edit_file**. Model wrote the correct fix in synthesizer.md prose but never invoked the write tool. This is the **prose-mode under-engagement (Mode B) class** that `LUXE_WRITE_PRESSURE=1` rescued for `nothing-doc-config` at v1.4.1 — NOT a Lever 2 failure.
+
+**n=75 post-Lever-2 — LAUNCHED 2026-05-05 ~08:50** in background (`acceptance/swebench/post_specdd_v15_n75/rep_1/`). Expected wall ~7.5h. Background task ID: `bx391qvsu`.
 
 **Two subtle issues banked to memory** (`feedback_exception_hierarchy_catch_order.md`, `feedback_fixture_prep_dirty_tree.md`):
 - `SddParseError(ValueError)` — `except ValueError` silently catches `SddParseError`; derived first or routes wrong
