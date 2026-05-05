@@ -16,6 +16,8 @@ from luxe.agents.loop import AgentResult, OnToolEvent, run_agent
 from luxe.agents.prompts import get as get_prompt, resolve_prompt_ids
 from luxe.backend import Backend
 from luxe.config import RoleConfig
+from luxe.sdd import SddParseError
+from luxe.spec_resolver import find_all_sdd, format_sdd_block
 from luxe.tools import analysis, cve_lookup as cve_lookup_mod, fs, git, shell
 from luxe.tools.base import ToolCache, ToolDef, ToolFn
 from luxe import search as search_mod
@@ -127,10 +129,12 @@ def run_single(
     )
     sys_variant = get_prompt(sys_id)
     task_variant = get_prompt(task_id)
+    sdd_block = _build_sdd_block()
     task_prompt = (
         f"Task type: {task_type}\n"
         f"Goal: {goal}\n\n"
         f"{task_variant.task_prefix}"
+        f"{sdd_block}"
     )
 
     return run_agent(
@@ -145,3 +149,32 @@ def run_single(
         run_id=run_id,
         phase=phase,
     )
+
+
+def _build_sdd_block() -> str:
+    """Surface every `.sdd` contract in the active repo as a prompt block.
+
+    SpecDD Lever 2: the model sees Forbids/Owns globs alongside the
+    task goal so it doesn't waste cycles attempting writes the tool
+    layer will refuse. Returns "\\n\\n<block>" when contracts exist,
+    or "" when no `.sdd` files are present (the common case for
+    fixture repos that haven't adopted SpecDD).
+
+    A malformed `.sdd` is logged-but-not-raised here — the tool-side
+    Forbids check will surface the actionable error on the first
+    write attempt, which is the friendlier failure mode (the run
+    still gets a chance to make read-only progress before the first
+    refused write).
+    """
+    repo_root = fs.get_repo_root()
+    if repo_root is None:
+        return ""
+    try:
+        sdd_files = find_all_sdd(repo_root)
+    except SddParseError:
+        # Tool layer will surface this on first write attempt.
+        return ""
+    block = format_sdd_block(sdd_files, repo_root)
+    if not block:
+        return ""
+    return "\n\n" + block

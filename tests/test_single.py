@@ -6,7 +6,12 @@ the deterministic parts: tool surface assembly with allowlist.
 
 from __future__ import annotations
 
-from luxe.agents.single import _build_full_tool_surface
+from pathlib import Path
+
+import pytest
+
+from luxe.agents.single import _build_full_tool_surface, _build_sdd_block
+from luxe.tools import fs
 
 
 def test_full_tool_surface_includes_read_write_shell_git_analysis():
@@ -77,3 +82,50 @@ def test_cve_lookup_gating_respects_allowlist_intersection():
     )
     names = {d.name for d in defs}
     assert names == {"read_file"}
+
+
+# --- SpecDD Lever 2: prompt-side .sdd injection ---------------------------
+
+
+class TestSddBlockInjection:
+    def test_no_repo_root_returns_empty(self):
+        # Defensive — _build_sdd_block must not raise when fs hasn't been
+        # configured yet (test environments, dry-run prompt construction).
+        fs._REPO_ROOT = None
+        assert _build_sdd_block() == ""
+
+    def test_no_sdd_files_returns_empty(self, tmp_path: Path):
+        fs.set_repo_root(tmp_path)
+        try:
+            assert _build_sdd_block() == ""
+        finally:
+            fs._REPO_ROOT = None
+
+    def test_renders_sdd_block_for_real_contracts(self, tmp_path: Path):
+        sdd_dir = tmp_path / "src" / "luxe"
+        sdd_dir.mkdir(parents=True)
+        (sdd_dir / "luxe.sdd").write_text(
+            "# luxe\n## Forbids\n- tests/**\n",
+            encoding="utf-8",
+        )
+        fs.set_repo_root(tmp_path)
+        try:
+            block = _build_sdd_block()
+            assert block.startswith("\n\n")  # detached from preceding text
+            assert "## Repository contracts" in block
+            assert "Forbids: tests/**" in block
+            assert "src/luxe/luxe.sdd" in block
+        finally:
+            fs._REPO_ROOT = None
+
+    def test_malformed_sdd_does_not_crash_prompt_construction(self, tmp_path: Path):
+        # Tool-side check surfaces the malformed-sdd error on first
+        # write attempt; prompt construction must not crash beforehand.
+        sdd_path = tmp_path / "broken" / "broken.sdd"
+        sdd_path.parent.mkdir()
+        sdd_path.write_text("## Must\n- a\n## Must\n- b\n", encoding="utf-8")
+        fs.set_repo_root(tmp_path)
+        try:
+            assert _build_sdd_block() == ""
+        finally:
+            fs._REPO_ROOT = None
