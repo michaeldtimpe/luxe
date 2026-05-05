@@ -165,6 +165,11 @@ def _build_sdd_block() -> str:
     write attempt, which is the friendlier failure mode (the run
     still gets a chance to make read-only progress before the first
     refused write).
+
+    Resume note (Lever 2): luxe's only resume path is `luxe pr <run_id>`
+    which resumes the post-synthesizer PR cycle (commit/test/push/CI),
+    not the agent loop. The chain therefore reloads fresh on every
+    `run_single` invocation — there is no checkpoint state to drift.
     """
     repo_root = fs.get_repo_root()
     if repo_root is None:

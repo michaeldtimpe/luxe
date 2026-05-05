@@ -1,0 +1,20 @@
+# maintain_suite
+
+The 10-fixture v1 acceptance bench. Strict gates dispatch through a
+single pipeline; new fixtures must declare their per-requirement spec.
+
+## Must
+- `vacuous_test` gate fires on `implement` + `tests_pass` only
+- `min_added_lines` is a floor, not a ceiling
+- New fixtures land with a `requirements:` block (SpecDD Lever 1 schema)
+- Bench runs use `--work-dir ~/.luxe/bench-workspace` (variance leak fix)
+- Sidecar regrade via `scripts/regrade_local.py` re-runs the citation linter against `synthesizer.md`
+- Borderline document/manage fixtures replicate 3× before claiming a regression
+
+## Must not
+- Run bench without `--keep-loaded` (post-run unload fires by default)
+- Trust `scripts/regrade_local.py` results that read `origin/<branch>` (pre-v1.4.1 bug; fixed but stay alert)
+- Add fixtures without `task_type` in the YAML (cve_lookup gating depends on it)
+
+## Owns
+- benchmarks/maintain_suite/**

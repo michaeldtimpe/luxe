@@ -1,0 +1,20 @@
+# tools
+
+Tool-side enforcement layer. Every model write passes through this
+module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
+
+## Must
+- `write_file` and `edit_file` run honesty guards (role-path, placeholder, mass-deletion) before any I/O
+- SpecDD Lever 2 `_check_spec_forbids` runs after honesty guards (cheaper guards first)
+- `SddParseError` catch precedes `ValueError` catch in fs.py — `SddParseError` subclasses `ValueError`
+- All tool errors return as `(str, str | None)` tuples; never raise to the caller
+- `get_repo_root()` is the canonical accessor — never `from luxe.tools.fs import _REPO_ROOT`
+- `cve_lookup` is gated to `task_type == "manage"` only (surface bloat regresses implement)
+- New honesty-pattern guards land with a regression test in `tests/test_tools.py`
+
+## Must not
+- Bypass `_safe()` path scoping in any new tool
+- Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)
+
+## Owns
+- src/luxe/tools/**
