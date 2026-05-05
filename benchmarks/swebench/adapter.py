@@ -86,6 +86,66 @@ def ensure_repo(instance: SweBenchInstance, work_dir: Path) -> Path:
     return repo_dir
 
 
+# SpecDD Lever 2: synthetic `.sdd` overlay for SWE-bench fixtures.
+# The n=75 baseline (2026-05-04) revealed that the anti-reproducer prompt
+# rule is leaky — 4/75 instances created `test_fix.py` / `repo_root/...`
+# despite the prompt forbidding it. Tool-side enforcement via
+# `<repo_basename>.sdd` `Forbids:` is the durable shape: it fires every
+# time the model attempts the offending write, regardless of how the
+# path was constructed.
+#
+# Patterns are derived from the literal n=75 leakage cases:
+# - test_fix.py / xarray/test_fix.py / sympy/test_det_fix.py (4 cases)
+# - repo_root/test_encoded_file.py (1 case)
+# Plus prophylactic coverage for adjacent reproducer-shaped names.
+SWEBENCH_SDD_BODY = """\
+# swebench-fixture
+
+Synthetic contract dropped at fixture-prep time. Tool-side Forbids
+enforces the anti-reproducer rule that the prose prompt cannot
+strictly hold.
+
+## Forbids
+- test_fix.py
+- **/test_fix.py
+- test_*_fix.py
+- **/test_*_fix.py
+- repro.py
+- **/repro.py
+- reproduce.py
+- **/reproduce.py
+- reproducer.py
+- **/reproducer.py
+- repo_root/**
+- src/test_*.py
+- test_encoded_*.py
+- **/test_encoded_*.py
+"""
+
+
+def write_swebench_sdd(repo: Path) -> Path:
+    """Drop a synthetic `<repo_basename>.sdd` at the cloned-repo root.
+
+    The basename matches the directory name so `find_all_sdd` picks it
+    up. Written outside any tracked path; `remove_swebench_sdd` cleans
+    it before `extract_diff` so the synthetic contract does not leak
+    into the predictions.json patch.
+    """
+    sdd = repo / f"{repo.name}.sdd"
+    sdd.write_text(SWEBENCH_SDD_BODY, encoding="utf-8")
+    return sdd
+
+
+def remove_swebench_sdd(repo: Path) -> None:
+    """Remove the synthetic `.sdd` before diff extraction.
+
+    Idempotent: missing file is a no-op.
+    """
+    sdd = repo / f"{repo.name}.sdd"
+    if sdd.is_file():
+        sdd.unlink()
+
+
 def extract_diff(repo: Path, base_commit: str) -> str:
     """`git diff <base_commit> HEAD` — the model patch."""
     rc, out, err = _run(["git", "add", "-N", "."], cwd=repo)
@@ -136,8 +196,15 @@ def run_instance(
     config: Path | None = None,
     extra_env: dict[str, str] | None = None,
     timeout_s: float | None = 1800.0,
+    inject_sdd: bool = True,
 ) -> SweBenchInvocationResult:
-    """End-to-end per-instance run: ensure repo → invoke luxe → extract diff."""
+    """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
+
+    `inject_sdd` (default True) drops a synthetic `<repo_basename>.sdd`
+    with anti-reproducer Forbids globs at the cloned-repo root before
+    the agent runs, and removes it before diff extraction. Set False to
+    reproduce the pre-Lever-2 baseline behaviour.
+    """
     inst_dir = work_dir / instance.instance_id
     log_dir = inst_dir / "log"
     t0 = time.monotonic()
@@ -149,10 +216,16 @@ def run_instance(
             wall_s=time.monotonic() - t0,
             error=f"setup_failed: {e}",
         )
-    rc, out, err = invoke_luxe_maintain(
-        instance, repo, log_dir,
-        config=config, extra_env=extra_env, timeout_s=timeout_s,
-    )
+    if inject_sdd:
+        write_swebench_sdd(repo)
+    try:
+        rc, out, err = invoke_luxe_maintain(
+            instance, repo, log_dir,
+            config=config, extra_env=extra_env, timeout_s=timeout_s,
+        )
+    finally:
+        if inject_sdd:
+            remove_swebench_sdd(repo)
     diff = extract_diff(repo, instance.base_commit)
     return SweBenchInvocationResult(
         instance_id=instance.instance_id,
