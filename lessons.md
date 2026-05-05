@@ -1185,3 +1185,95 @@ fresh on every `run_single` call by construction. Documented inline.
 `tests/test_single.py`, `tests/test_citations_diff_aware.py`,
 `tests/test_swebench_adapter.py`, plus the four dogfood `.sdd` files
 and root `CLAUDE.md`.
+
+---
+
+### [2026-05-05] SpecDD Lever 2 — post-ship SWE-bench n=75 result
+
+**What happened**: Same n=75 stratified subset, same model, same
+config + Lever 2's prompt-side `.sdd` block + tool-side Forbids +
+synthetic `<repo>.sdd` injection at fixture-prep. 7h41m wall (vs
+baseline 7h2m, +9% from added prompt tokens).
+
+| Metric | Pre-Lever-2 | Post-Lever-2 | Delta |
+|---|---|---|---|
+| strong (gold-match) | 12 | 13 | +1 |
+| strong + plausible | 30 | 32 | +2 |
+| empty_patch | 26 | 30 | **+4** |
+| new_file_in_diff | 4 | **0** | **-4** |
+| any non-empty patch | 45 | 45 | 0 |
+
+**Two simultaneous effects**:
+
+1. **`new_file_in_diff` 4 → 0 — target class CLEARED.** Of the four
+   baseline instances that created reproducer files: django-10097
+   → **strong** gold-match, xarray-3305 → plausible, pytest-5262 →
+   strong, sympy-13877 → empty_patch. Three out of four escaped to
+   a real fix once the synthetic `.sdd` Forbids fired tool-side.
+   The Lever 2 hypothesis ("anti-reproducer rule moves to the tool
+   layer → no_file_in_diff disappears") is empirically confirmed
+   at n=75 scale.
+
+2. **`empty_patch` 26 → 30 — prose-mode regression.** The prompt-side
+   `.sdd` block adds context tokens (~200-400 depending on chain
+   depth). On borderline instances, this shifts the response
+   distribution toward deliberation mode: the model writes the
+   correct fix in synthesizer.md prose but never invokes
+   `write_file`. Confirmed at n=10 via xarray-2905 trace inspection
+   (21 read tool calls, 0 write calls, correct fix in prose).
+
+   Specific n=75 regressions worth tracking:
+   - pylint-4970: **strong → wrong_location** — model picked an
+     adjacent line to the gold's edit. Localization noise, possibly
+     unrelated to Lever 2.
+   - sphinx-10435: **strong → empty_patch** — clear engagement loss.
+   - sphinx-10449: **plausible → empty_patch** — the "fixed adjacent
+     symptom" case I named yesterday. Now doesn't fix even the
+     adjacent NameError.
+   - 4 wrong_target → empty_patch — instances that previously
+     attempted an off-target fix now give up entirely.
+
+**Net direction**: target class hit (new_file_in_diff → 0), modest
+quality lift on the durable anchor (strong + plausible: 30 → 32, +2),
+but offset by prose-mode growth (empty_patch +4). Net change in
+non-empty patch presence: 0.
+
+**Root cause of the prose-mode regression**: extra tokens in the
+task prompt nudge marginal instances toward "let me think more"
+behavior. The fix already exists at v1.4.1: `LUXE_WRITE_PRESSURE=1`
+mid-loop intervention rescued `nothing-doc-config` from 33% FAIL →
+0% over 10 reps. The flag is currently opt-in; not enabled in
+`configs/single_64gb_swebench.yaml`.
+
+**Fix / takeaway**:
+
+1. **Lever 2 ships at v1.5.0 with the empirical caveat above.** The
+   target-class win is real (new_file_in_diff → 0); the modest
+   strong+plausible lift is within n=75 noise but directionally
+   positive; the empty_patch regression is a known prior-shipped
+   class with a known fix (LUXE_WRITE_PRESSURE).
+
+2. **Recommended next step** (NOT this session): enable
+   `LUXE_WRITE_PRESSURE=1` in the swebench config and rerun n=75.
+   Predicted result: empty_patch ↓ toward baseline (~26) while
+   keeping new_file_in_diff at 0. If that holds, ship v1.5.0
+   (Lever 2) + v1.5.1 (write-pressure default flip) as a paired
+   tag with a clean attribution table.
+
+3. **General durable rule**: **prompt-side context additions cost
+   tokens and may push borderline instances into prose-mode**. When
+   adding any prompt block (.sdd contracts, examples, plan
+   templates), measure both the target-class win AND the
+   prose-mode delta on the same fixture set. Bundle write-pressure
+   defaults if a regression appears.
+
+4. **Add a per-instance rerun probe** for the strong → empty
+   regressions (sphinx-10435, sympy-13091) to distinguish "Lever 2
+   broke it" from "n=75 variance" — temp=0 is mostly deterministic
+   for SWE-bench but extra tokens in the prompt change the input,
+   so identical-trajectory determinism doesn't apply across pre/post.
+
+**Affected files**: results in
+`acceptance/swebench/post_specdd_v15_n75/rep_1/predictions.json`;
+delta report via `python -m benchmarks.swebench.compare_runs`. No
+source changes from the rerun itself.

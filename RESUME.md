@@ -22,7 +22,19 @@ Plus `benchmarks/swebench/adapter.py` synthetic `.sdd` injection at fixture-prep
 - **empty_patch**: 2 → 2 (composition shifted: matplotlib-13989 escaped, xarray-2905 regressed).
 - **One regression** — xarray-2905 plausible → empty_patch. Trace shows 21 tool calls (read_file × 13, grep × 4) with **zero write_file/edit_file**. Model wrote the correct fix in synthesizer.md prose but never invoked the write tool. This is the **prose-mode under-engagement (Mode B) class** that `LUXE_WRITE_PRESSURE=1` rescued for `nothing-doc-config` at v1.4.1 — NOT a Lever 2 failure.
 
-**n=75 post-Lever-2 — LAUNCHED 2026-05-05 ~08:50** in background (`acceptance/swebench/post_specdd_v15_n75/rep_1/`). Expected wall ~7.5h. Background task ID: `bx391qvsu`.
+**n=75 post-Lever-2 — DONE 2026-05-05 ~16:30**, wall 7h41m (`acceptance/swebench/post_specdd_v15_n75/rep_1/`).
+
+| Metric | Pre-Lever-2 | Post-Lever-2 | Delta |
+|---|---|---|---|
+| strong (gold-match) | 12 | **13** | +1 |
+| strong + plausible | 30 | **32** | +2 |
+| **new_file_in_diff** | 4 | **0** | **-4** ✓ target class cleared |
+| **empty_patch** | 26 | **30** | **+4** ⚠ prose-mode regression |
+| any non-empty patch | 45 | 45 | 0 |
+
+Hypothesis confirmed on target class. Modest quality lift (+2 strong+plausible). Side-effect: prompt-side `.sdd` block tokens push borderline instances into deliberation mode (model writes correct fix in synthesizer.md prose but never invokes write_file). Same class as `LUXE_WRITE_PRESSURE=1` rescued at v1.4.1.
+
+**Recommended follow-up** (not yet shipped): enable `LUXE_WRITE_PRESSURE=1` in `configs/single_64gb_swebench.yaml`; rerun n=75 (~7.5h). Predicted: empty_patch returns to ~26 while new_file_in_diff stays at 0. Ship v1.5.0 + v1.5.1 (flag flip) as paired tag. See `lessons.md [2026-05-05] Lever 2 post-ship` and `project_v15_specdd_lever2_shipped.md`.
 
 **Two subtle issues banked to memory** (`feedback_exception_hierarchy_catch_order.md`, `feedback_fixture_prep_dirty_tree.md`):
 - `SddParseError(ValueError)` — `except ValueError` silently catches `SddParseError`; derived first or routes wrong
