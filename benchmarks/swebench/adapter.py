@@ -185,6 +185,17 @@ def invoke_luxe_maintain(
     if config:
         cmd.extend(["--config", str(config)])
     env = os.environ.copy()
+    # SWE-bench commits are throwaway scaffolding for diff extraction —
+    # luxe maintain's pr.py runs `git commit` to seal the agent's edits
+    # so extract_diff can pull a clean patch. Honoring the user's global
+    # commit.gpgsign + SSH-key signing config blocks the commit when the
+    # key requires an interactive passphrase (observed on n=75 attempt
+    # 2026-05-05 — every instance failed with `Load key ... incorrect
+    # passphrase`). Override unconditionally for bench runs; nothing is
+    # ever pushed.
+    env.setdefault("GIT_CONFIG_COUNT", "1")
+    env.setdefault("GIT_CONFIG_KEY_0", "commit.gpgsign")
+    env.setdefault("GIT_CONFIG_VALUE_0", "false")
     if extra_env:
         env.update(extra_env)
     rc, out, err = _run(cmd, env=env, timeout_s=timeout_s)
