@@ -94,16 +94,33 @@ def ensure_repo(instance: SweBenchInstance, work_dir: Path) -> Path:
 # time the model attempts the offending write, regardless of how the
 # path was constructed.
 #
-# Patterns are derived from the literal n=75 leakage cases:
+# Original patterns derived from the literal n=75 baseline leakage:
 # - test_fix.py / xarray/test_fix.py / sympy/test_det_fix.py (4 cases)
 # - repo_root/test_encoded_file.py (1 case)
-# Plus prophylactic coverage for adjacent reproducer-shaped names.
+#
+# v1.5 paired-mechanism rerun (2026-05-06,
+# acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/) revealed
+# 8 new escape paths under write_pressure actuation — the model finds
+# adjacent un-forbidden filenames when forced to write something. The
+# v1.5 pressure-run block below covers all 8 observed escapes plus
+# prophylactic adjacents. Patterns are conceptually creation forbids;
+# the broader globs (`**/*_verify.py`, `**/test_*_time.py`) WILL also
+# block edits to legitimate pre-existing tests with those names — the
+# v1.6 backlog item promotes proper creation-only semantics.
 SWEBENCH_SDD_BODY = """\
 # swebench-fixture
 
 Synthetic contract dropped at fixture-prep time. Tool-side Forbids
 enforces the anti-reproducer rule that the prose prompt cannot
 strictly hold.
+
+## Notes
+- Forbids list has two layers: the original n=75 baseline patterns
+  (test_fix / repro / reproducer) and the v1.5 pressure-run additions
+  (verify_fix / tmp_* / test_*_verify / test_*_time). The v1.5 block
+  was empirically derived from
+  acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/ — see
+  adapter.py docstring above.
 
 ## Forbids
 - test_fix.py
@@ -120,6 +137,17 @@ strictly hold.
 - src/test_*.py
 - test_encoded_*.py
 - **/test_encoded_*.py
+- verify_fix.py
+- **/verify_fix.py
+- tmp_test.py
+- tmp_install.py
+- **/tmp_*.py
+- **/test_*_verify.py
+- **/test_*_time.py
+- verify_*.py
+- **/verify_*.py
+- *_verify.py
+- **/*_verify.py
 """
 
 

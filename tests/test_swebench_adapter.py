@@ -50,19 +50,53 @@ class TestSwebenchSddBody:
     def test_does_not_block_legitimate_test_paths(self):
         """Existing test files in standard layouts must NOT trip Forbids.
         The model needs to read these to understand existing test patterns.
+
+        Boundary-case entries (test_runtime.py, test_data_verification.py)
+        prove the v1.5 broad globs anchor on `_time.py` / `_verify.py`
+        SUFFIXES, not the bare `time` / `verify` substrings.
         """
         sf = parse_sdd(SWEBENCH_SDD_BODY)
         legit_paths = [
             "tests/test_models.py",
             "tests/conftest.py",
+            "tests/test_array.py",
             "src/django/tests/test_admin.py",
             "lib/matplotlib/tests/test_axes.py",
+            "astropy/tests/test_units.py",
+            "tests/test_runtime.py",            # substring 'time' but no _time.py suffix
+            "tests/test_data_verification.py",  # substring 'verify' but no _verify.py suffix
         ]
         for path in legit_paths:
             assert not any(_glob_matches(g, path) for g in sf.forbids), (
                 f"legitimate test file {path!r} would be blocked; "
                 f"check Forbids globs are not over-broad: {sf.forbids}"
             )
+
+    @pytest.mark.parametrize("path,instance", [
+        ("verify_fix.py",                       "psf__requests-1921 / pydata__xarray-3677 / pydata__xarray-3151"),
+        ("repo/verify_fix.py",                  "pytest-dev__pytest-10051"),
+        ("xarray/tests/test_fix_verify.py",     "pydata__xarray-3151"),
+        ("tmp_test.py",                         "pylint-dev__pylint-4970 (1/2)"),
+        ("tmp_install.py",                      "pylint-dev__pylint-4970 (2/2)"),
+        ("lib/matplotlib/test_verify.py",       "matplotlib__matplotlib-14623"),
+        ("sklearn/test_refit_time.py",          "scikit-learn__scikit-learn-11310"),
+        ("sympy/test_verify.py",                "sympy__sympy-12481"),
+    ])
+    def test_blocks_observed_v15_pressure_paths(self, path, instance):
+        """v1.5 paired-mechanism rerun produced 8 new_file_in_diff cases —
+        write_pressure actuation found names un-covered by the original
+        Forbids list. Each escaped path here must match at least one
+        Forbids glob; a regression points at the exact filename and the
+        instance it came from.
+
+        Source:
+        acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/
+        """
+        sf = parse_sdd(SWEBENCH_SDD_BODY)
+        assert any(_glob_matches(g, path) for g in sf.forbids), (
+            f"{path!r} (from {instance}) escaped the v1.5 Forbids tightening; "
+            f"globs={sf.forbids}"
+        )
 
 
 class TestWriteRemoveSdd:
