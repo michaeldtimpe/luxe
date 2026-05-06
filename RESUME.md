@@ -1,31 +1,46 @@
 # luxe — session resume document
 
-## Current state — 2026-05-05 evening (v1.5.0-rc; one rerun from final tag)
+## Current state — 2026-05-06 morning (v1.5.0-rc-2; v2 rerun pending)
 
-**Working tree**: clean. **607 tests passing**.
+**Working tree**: clean. **619 tests passing** (+8 vs prior 611 from new v1.5-pressure leakage parametrized cases). 3 commits ahead of `origin/main`:
 
-**SpecDD Lever 2 — code SHIPPED, tag DEFERRED** until the paired-mechanism rerun lands a strictly-dominant result. Two reviews aligned on the plan: ship `.sdd` constraint and `LUXE_WRITE_PRESSURE` actuation as one coupled mechanism, no v1.5.1 follow-up.
+```
+e062bab swebench/adapter: extend Forbids for v1.5 paired-mechanism escape paths
+dcfa772 swebench/adapter: disable commit.gpgsign for bench runs
+6c21956 swebench: bind LUXE_WRITE_PRESSURE to inject_sdd (paired mechanism)
+```
 
-**Architectural reframe**: `.sdd` is a coupled control architecture, not a single feature.
+**SpecDD Lever 2 — code SHIPPED, tag DEFERRED** pending a clean paired-mechanism rerun. The first paired-mechanism n=75 (v1) succeeded on every floor *except* `new_file_in_diff = 0` (8 instances leaked). Forbids tightening (commit `e062bab`) covers all 8 observed escape paths. Plan calls for one more n=75 rerun (v2) to confirm the floor holds, then tag.
+
+**Architectural reframe (unchanged)**: `.sdd` is a coupled control architecture.
 - **`.sdd`** (negative constraint, three layers: prompt → tool → linter) restricts *where* the model can write.
 - **`LUXE_WRITE_PRESSURE=1`** (positive actuation, mid-loop intervention from v1.4.1) ensures the model *does* write.
-- They must ship together. Adding constraint without actuation is what produced the empty_patch +4 regression at n=75. The fix is already on the shelf at v1.4.1 — wire it into the same swebench code path that does `inject_sdd=True`.
+- They ship as a pair. v1 confirmed: empty_patch −12pp absolute, strong + plausible +2.
 
-**SWE-bench n=75 results so far** (each run = 7.5h wall):
+**SWE-bench n=75 results — paired-mechanism rerun v1 (2026-05-06 dawn)**
 
-| Metric | Pre-Lever-2 (baseline) | Post-Lever-2 (no pressure) | Post-Lever-2 + pressure (predicted) | Ship floor |
+| Metric | Pre-Lever-2 baseline | Post-Lever-2 (no pressure) | **v1 paired (actual)** | Ship floor |
 |---|---|---|---|---|
-| strong (gold-match) | 12 | 13 | 13–15 | ≥12 |
-| strong + plausible | 30 | 32 | ≥32 | ≥30 |
-| **empty_patch** | 26 | **30** | 24–27 | ≤28 |
-| **new_file_in_diff** | 4 | **0** ✓ | 0 | 0 |
-| any non-empty patch | 45 | 45 | ~47–49 | — |
+| strong (gold-match) | 12 | 13 | **16** ✅ +4 | ≥12 |
+| strong + plausible | 30 | 32 | **32** ✅ | ≥30 |
+| empty_patch | 26 | 30 | **14** ✅ −12 | ≤28 |
+| **new_file_in_diff** | 4 | 0 | **8** ❌ regression | =0 |
+| any non-empty patch | 49 | 45 | 61 | — |
 
-`new_file_in_diff: 4 → 0` at scale is the headline win — full class elimination, not noise. 3 of 4 baseline reproducer-creators escaped to real fixes (django-10097 → strong, xarray-3305 → plausible, pytest-5262 → strong). The empty_patch +4 is mode shift (model writes the fix in prose, doesn't commit via tools), not capability loss — confirmed at n=10 via xarray-2905 trace inspection (21 reads, 0 writes, correct fix in synthesizer.md).
+**Headline:** `empty_patch 26 → 14` (paired mechanism beat the prediction range of 24–27). xarray-2905 (the n=10 paired-mechanism bellwether) produced a 14-line diff after previously writing the fix in prose without committing. Of two named-regression instances tracked in the original RESUME.md plan: sphinx-10435 still empty, sympy-13091 rescued (92-line diff).
 
-**Two subtle issues banked to memory** during the Lever 2 ship (`feedback_exception_hierarchy_catch_order.md`, `feedback_fixture_prep_dirty_tree.md`):
-- `SddParseError(ValueError)` — `except ValueError` silently catches `SddParseError`; derived first or routes wrong
-- Synthetic `.sdd` in cloned tree → `luxe maintain` rc=2 in 1s; pair with `--allow-dirty`
+**The new_file_in_diff regression** is closeable. v1 escape paths cluster into 3 patterns:
+- `verify_fix.py` variants (4 instances; literal at root, `repo/verify_fix.py`, `xarray/tests/test_fix_verify.py`)
+- `tmp_*.py` (1 instance, 2 paths: `tmp_test.py`, `tmp_install.py`)
+- novel `test_*_<descriptor>.py` shapes (3 instances: `test_verify.py`, `test_refit_time.py`, `sympy/test_verify.py`, `lib/matplotlib/test_verify.py`)
+
+Commit `e062bab` adds 12 globs covering all 8 + prophylactic adjacents. 8 new parametrized tests assert each escape path is now blocked; expanded legitimate-paths guard confirms the broad globs anchor on suffix not substring.
+
+**Two prerequisite fixes discovered during v1**:
+- `dcfa772` — disable `commit.gpgsign` env override for bench runs. Without this, every instance failed with `Load key: incorrect passphrase` (luxe maintain's pr.py git commit blocks on the user's interactive SSH-signing config). Documented in `feedback_offer_long_running_commands.md` adjacent.
+- `6c21956` — bind `LUXE_WRITE_PRESSURE=1` to `inject_sdd=True` per the original plan's Step 2 ($described in next section).
+
+**See `~/.claude/plans/humble-prancing-patterson.md`** for the full v2 plan + failure-mode analysis (categorized empty_patch, wrong_target, wrong_location patterns + prioritized v1.6 backlog).
 
 ---
 
@@ -56,104 +71,85 @@ Champion unchanged: `Qwen3.6-35B-A3B-6bit` at temperature=0.0 on oMLX.
 
 ---
 
-## ⚡ Resume here — v1.5.0 release path (overnight)
+## ⚡ Resume here — v1.5.0 v2 rerun + ship decision (overnight)
 
-Total wall: ~9.5h (1h variance probe + 7.5h n=75 rerun + 30-45m harness). Sized for an overnight slot.
+Steps 1-3 of the original release path are **done** (commits `6c21956`, `dcfa772`, `e062bab` on this branch). The remaining work is the v2 n=75 rerun confirming the Forbids tightening closes `new_file_in_diff` without regressing the other floors, then the tag.
 
-### Step 1 — Variance probe (~1h, sequential first)
+Total remaining wall: ~5h n=75 + 30-45m harness scoring + tag.
 
-Confirm the 2 named regressions are reproducible at temp=0 vs n=75 noise. Probe runs at **current** post-Lever-2 settings (no `LUXE_WRITE_PRESSURE`) so we measure the Lever 2 effect in isolation; the rerun in Step 3 measures whether pressure rescues it.
+Full plan + failure-mode analysis: `~/.claude/plans/humble-prancing-patterson.md`.
 
-```bash
-# Author the 2-instance subset (one-time, ~30s)
-.venv/bin/python <<'EOF'
-import json
-from pathlib import Path
-Path("benchmarks/swebench/subsets/probe_regression2.json").write_text(json.dumps({
-    "version": 1,
-    "n": 2,
-    "purpose": "Variance probe for the two clean post-Lever-2 regressions (strong→empty class). 3× reps each.",
-    "instance_ids": ["sphinx-doc__sphinx-10435", "sympy__sympy-13091"],
-}, indent=2))
-EOF
-
-# Run 3 reps sequentially. ~3-5 min/instance × 2 instances × 3 reps ≈ 30-45m wall.
-for r in 1 2 3; do
-    LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 \
-    .venv/bin/python -m benchmarks.swebench.run \
-        --subset benchmarks/swebench/subsets/probe_regression2.json \
-        --output acceptance/swebench/probe_regression2/rep_$r/
-done
-```
-
-Verdict logic:
-- 3/3 empty_patch on both instances → systematic Lever 2 effect; WRITE_PRESSURE is the right counterforce (consistent with the n=10 xarray-2905 mechanism)
-- Mixed (1/3 or 2/3 empty) → variance, not a Lever 2 systematic; WRITE_PRESSURE rerun still wanted but the regression framing weakens
-- 0/3 empty → wasn't a real regression; n=75 was unlucky
-
-Either way, the rerun in Step 3 proceeds. The probe just calibrates the attribution claim in the v1.5.0 release commit.
-
-### Step 2 — Wire `LUXE_WRITE_PRESSURE` into the swebench harness
-
-Conceptually `.sdd` and write_pressure are the same mechanism (constrain + actuate). Bind them in code so you can't get one without the other.
-
-Edit `benchmarks/swebench/adapter.py::run_instance`: when `inject_sdd=True`, also set `LUXE_WRITE_PRESSURE=1` in the subprocess env. Add `--no-write-pressure` escape hatch on `run.py` to mirror `--no-inject-sdd` (for future ablation). Add the matching test in `tests/test_swebench_adapter.py`.
-
-```python
-# benchmarks/swebench/adapter.py — in run_instance, before invoke_luxe_maintain:
-if inject_sdd:
-    write_swebench_sdd(repo)
-    extra_env = {**(extra_env or {}), "LUXE_WRITE_PRESSURE": "1"}
-```
-
-Run the suite, commit:
+### Step 1 (was Step 4) — n=75 v2 rerun with tightened Forbids (~5h)
 
 ```bash
-.venv/bin/python -m pytest tests/test_swebench_adapter.py -v
-git commit -m "swebench: bind LUXE_WRITE_PRESSURE to inject_sdd (paired mechanism)"
-```
-
-### Step 3 — n=75 rerun with paired mechanism (~7.5h)
-
-```bash
-LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 \
-.venv/bin/python -m benchmarks.swebench.run \
+cd ~/Downloads/luxe
+LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 nohup \
+  .venv/bin/python -m benchmarks.swebench.run \
     --subset benchmarks/swebench/subsets/v1_baseline_n75.json \
-    --output acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/ \
-    > /tmp/n75_pressure.log 2>&1 &
+    --output acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/ \
+    > /tmp/n75_pressure_v2.log 2>&1 &
 ```
 
-Resume is automatic (per-instance summaries carry `model_patch`). Same idempotent runner.
+NEW output dir (`...v2_n75`) so v1's data stays as the reference. The
+adapter binds `LUXE_WRITE_PRESSURE=1` and disables `commit.gpgsign`
+automatically (commits `6c21956`, `dcfa772`); no shell env munging
+needed beyond `OMLX_API_KEY`.
 
-### Step 4 — Multi-way comparison
+**Restart oMLX before launching** (`brew services restart omlx`) to
+clear any pinned models from earlier work — round 0 deluxe probes had
+this issue and corrupted the first attempt.
+
+### Step 2 — Compare v2 vs prior runs
 
 ```bash
+# v2 vs pre-Lever-2 baseline (the long-arc claim)
 .venv/bin/python -m benchmarks.swebench.compare_runs \
     --pre  acceptance/swebench/pre_specdd_v141_n75/rep_1/predictions.json \
-    --post acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/predictions.json \
+    --post acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/predictions.json \
     --gold-source benchmarks/swebench/subsets/raw/verified.jsonl
+
+# v2 vs v1 (isolates the Forbids-tightening effect)
+.venv/bin/python -m benchmarks.swebench.compare_runs \
+    --pre  acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/predictions.json \
+    --post acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/predictions.json \
+    --gold-source benchmarks/swebench/subsets/raw/verified.jsonl
+
+# Inspector — the hard new_file_in_diff blocker
+.venv/bin/python -m benchmarks.swebench.smoke_inspect \
+    --predictions acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/predictions.json \
+    --gold-source benchmarks/swebench/subsets/raw/verified.jsonl \
+    | grep -E "^  (strong|plausible|empty_patch|new_file_in_diff|wrong_location|wrong_target)" \
+    | awk '{print $1}' | sort | uniq -c
 ```
 
-Then again with `--pre` set to the no-pressure post run to isolate the WRITE_PRESSURE effect.
+### Step 3 — Ship-floor check (HARD BLOCKER, all must hold)
 
-### Step 5 — Ship-floor check
+| Metric | Floor | v1 actual | v2 target |
+|---|---|---|---|
+| strong | ≥12 | 16 | ≥14 |
+| strong + plausible | ≥30 | 32 | ≥30 |
+| empty_patch | ≤28 | 14 | ≤16 (allow ±2) |
+| **new_file_in_diff** | **=0** | **8** | **=0** |
 
-| Metric | Floor | Reason |
-|---|---|---|
-| `new_file_in_diff` | = 0 | Target class regression unacceptable |
-| `empty_patch` | ≤ 28 | Within ±2 of baseline; tighter risks blocking on noise, looser doesn't enforce the paired-mechanism claim |
-| `strong + plausible` | ≥ 30 | No regression vs pre-Lever-2 baseline |
-| `strong` | ≥ 12 | No regression on the gold-match class |
+Acceptance gate:
 
-If any floor missed → do NOT tag; investigate per-instance traces. If all four hold → proceed to Step 6.
+1. Inspector reports zero `new_file_in_diff` entries.
+2. jq cross-check on v2 predictions.json: list any `model_patch` containing `new file mode` lines — should agree with inspector at zero.
+3. strong ≥14 AND strong+plausible ≥30 AND empty_patch ≤16.
+4. Spot-check 3 random `strong` rows by reading the patch — guards against the "broad glob accidentally blocked legit edits" failure mode where strong drops sharply because the model couldn't write what it needed.
 
-### Step 6 — Docker harness scoring (~30-45m)
+**Stop conditions:**
+- Any of (1)-(4) fails → do **NOT** tag.
+- If `new_file_in_diff > 0` on v2: do NOT add another broad glob. Inspect the new escape names; if they reveal a fundamentally novel pattern, that's the trigger to escalate to creation-only forbids (v1.6 backlog item). Adding another whack-a-mole pattern risks a v3 round of the same dance.
+- If strong drops sharply (e.g., 16 → ≤12): a broad glob blocked legitimate edits. Inspect with `_glob_matches` against the rejected paths; tighten the offending glob.
 
-Run the wrapper at `benchmarks/swebench/harness.py` against the post-pressure `predictions.json` for definitive `FAIL_TO_PASS` / `PASS_TO_PASS` numbers. Confirm Docker Desktop is up + ~10GB free + RAM headroom. Output to `acceptance/swebench/post_specdd_v15_pressure_n75/harness/`. Numbers go into the v1.5.0 release commit body.
+### Step 4 — Docker harness scoring (~30-45m)
 
-### Step 7 — Tag v1.5.0
+Run the wrapper at `benchmarks/swebench/harness.py` against `acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/predictions.json`. Confirm Docker Desktop is up + ~10GB free + RAM headroom. Output to `acceptance/swebench/post_specdd_v15_pressure_v2_n75/harness/`. Numbers go into the v1.5.0 release commit body.
 
-Single annotated tag covering the full mechanism:
+### Step 5 — Tag v1.5.0
+
+Tag message records v2 absolute floors AND delta vs v1 (so the rerun's signal is preserved alongside the original v1 numbers):
 
 ```bash
 git tag -a v1.5.0 -m "$(cat <<'EOF'
@@ -164,11 +160,17 @@ prompt + tool + linter) bound to LUXE_WRITE_PRESSURE in the
 SWE-bench harness (positive actuation). Ships together because
 constrained execution requires enforced actuation.
 
-SWE-bench n=75 vs pre-Lever-2 baseline:
-  new_file_in_diff: 4 → 0 (full class elimination)
-  strong + plausible: 30 → <N>
-  empty_patch: 26 → <N>
+n=75 paired-mechanism rerun (v2 — Forbids tightened):
+  strong:                <v2>  (v1: 16 → v2: <delta>)
+  strong + plausible:    <v2>  (v1: 32 → v2: <delta>)
+  empty_patch:           <v2>  (v1: 14 → v2: <delta>; baseline 26)
+  new_file_in_diff:      <v2>  (v1: 8 → v2: 0;  baseline 4)
+  any non-empty patch:   <v2>
   FAIL_TO_PASS (Docker harness): <pre> → <post>
+
+vs pre-Lever-2 baseline (acceptance/swebench/pre_specdd_v141_n75/rep_1/):
+  empty_patch:           -<X>pp  (paired mechanism's headline win)
+  new_file_in_diff:      0       (full class elimination, sustained)
 
 Internal dogfood: src/luxe/luxe.sdd (Forbids retired modes),
 agents/agents.sdd, tools/tools.sdd, maintain_suite.sdd, root
@@ -177,14 +179,11 @@ EOF
 )"
 ```
 
-### Step 8 — Documentation
+### Step 6 — Documentation
 
-Update `lessons.md` with a closing entry on the paired-mechanism architecture and Step 4 numbers. Update `project_v15_specdd_lever2_shipped.md` with the final delta. Move the v1.5.0 sections of RESUME.md to "Earlier state" and add a new "Resume here" pointing at Lever 3 scoping (the `trace:` field machine-checkable audit is the gating step before any A/B run; see `~/.claude/plans/fluffy-brewing-lemur.md` §Lever 3).
+Move the v1.5.0 sections of RESUME.md to "Earlier state". New "Resume here" points at v1.6 priorities — early-bail intervention is #1 (addresses 10 of 14 empty_patch in v1 paired-mechanism data; see plan file's failure analysis).
 
-### Two open sanity-check questions before kickoff
-
-1. **Are the ship-floor thresholds calibrated right?** `empty_patch ≤ 28` is ±2 of baseline. Tighter risks blocking on noise; looser doesn't enforce the paired-mechanism claim.
-2. **Variance probe at current settings only, or also include a pressure rep?** Current plan: probe at no-pressure (~1h) to isolate Lever 2 effect; the n=75 rerun at pressure (~7.5h) measures the rescue. Doubling the probe to include a pressure rep would let you eyeball the rescue mechanism on 2 instances before committing 7.5h, at 2× probe cost (~2h). Default plan is the cheaper path; flip if you want defense-in-depth.
+`lessons.md` already has the v1 paired-mechanism entry (added in this session); add a closing entry with the v2 ship numbers + the Forbids tightening lesson.
 
 ---
 
@@ -263,16 +262,18 @@ Latent / open:
 - v1.4 — SpecDD Lever 1: programmatic Definition of Done; per-requirement spec validator; reprompt gate uses spec
 - v1.4.1 — citation-linter bare-filename fallback (Mode A) + Mode B mid-loop write-pressure (opt-in) + sidecar regrade lint re-run
 
-**v1.5.0-rc (this session)**:
-- SpecDD Lever 2 code complete: `.sdd` parser, resolver + chain assembly, tool-side Forbids in `fs.py`, prompt-side `Repository contracts` block in `single.py`, citation linter `spec_violation`/`spec_orphan` gates, dogfood `.sdd` files, root `CLAUDE.md`
-- SWE-bench harness: synthetic `.sdd` injection at fixture-prep with anti-reproducer Forbids, removed before extract_diff
-- 122 new tests (485 → 607)
-- n=10 + n=75 validation runs complete; `new_file_in_diff: 4 → 0` confirmed at scale
-- **Pending**: bind `LUXE_WRITE_PRESSURE=1` to `inject_sdd=True` (paired mechanism), n=75 rerun, harness scoring, tag
+**v1.5.0-rc-2 (this session, 2026-05-06)**:
+- SpecDD Lever 2 code complete (carried from prior session)
+- **`6c21956`** — bind `LUXE_WRITE_PRESSURE=1` to `inject_sdd=True` in swebench adapter (paired-mechanism wiring)
+- **`dcfa772`** — disable `commit.gpgsign` env override in `invoke_luxe_maintain` (bench-only; required because user's SSH-signing config blocks unattended commits)
+- **`e062bab`** — extend `SWEBENCH_SDD_BODY` Forbids with 12 new globs covering all 8 v1 paired-mechanism escape paths + prophylactic adjacents
+- 619 tests passing (+12 new vs the 607 baseline that started this work: 4 paired-mechanism env tests in `6c21956`, 8 v1.5-pressure leakage parametrized cases in `e062bab`)
+- v1 paired-mechanism n=75 result analyzed; 8 escape paths discovered + closed
+- **Pending**: v2 n=75 rerun confirming `new_file_in_diff = 0` floor holds; harness scoring; tag
 
 **What's queued**:
-- **v1.5.0** (final tag, this overnight) — Lever 2 + pressure paired-mechanism rerun
-- v1.6.0 — SpecDD Lever 3 (fixture-side `.sdd` contracts, methodology A/B); blocked on `trace:` field machine-checkable audit; held until v1.5.0 ships
+- **v1.5.0** (final tag, next overnight) — v2 rerun confirming Forbids tightening landed cleanly. See `~/.claude/plans/humble-prancing-patterson.md` for the full plan + failure-mode analysis.
+- v1.6.0 — early-bail intervention #1 priority (addresses 10 of 14 v1 empty_patch). Then creation-only forbids (replaces v1.5's broad-glob workaround with proper semantics). Then retrieval-side multi-file edits. Then in-loop test-execution feedback. Lever 3 still on backlog but de-prioritized vs the empty_patch class.
 
 **Iteration model**: bench changes go through `scripts/regrade_local.py` for fast iteration on grader/linter logic without re-running luxe. Full bench re-runs reserved for end-of-phase confirmation.
 
@@ -318,8 +319,8 @@ Real PASS count is always ≤ printed count. Every historical bake-off has had a
 | `benchmarks/maintain_suite/fixtures.yaml` | the 10 v1 fixtures (each w/ `requirements:` block) |
 | `benchmarks/swebench/` | SWE-bench Verified adapter (preds-only + Docker harness wrapper + compare) |
 | `benchmarks/swebench/smoke_inspect.py` | **inspector v2** — mechanical + gold-proximity tier (`--gold-source`); 5 signals, line-based hunk proximity, hunk coverage |
-| `benchmarks/swebench/run.py` | preds-only runner; **idempotent resume** (per-instance summaries carry `model_patch`); same command picks up after a crash; **`--no-inject-sdd` flag (v1.5) for ablation** |
-| `benchmarks/swebench/adapter.py` | **synthetic `.sdd` injection (v1.5)** — `write_swebench_sdd` / `remove_swebench_sdd`; passes `--allow-dirty` |
+| `benchmarks/swebench/run.py` | preds-only runner; **idempotent resume** (per-instance summaries carry `model_patch`); same command picks up after a crash; **`--no-inject-sdd` + `--no-write-pressure` flags (v1.5) for ablation** |
+| `benchmarks/swebench/adapter.py` | **synthetic `.sdd` injection (v1.5)** — `write_swebench_sdd` / `remove_swebench_sdd`; passes `--allow-dirty`; **paired-mechanism env wiring + commit.gpgsign override (v1.5.0-rc-2)**; SWEBENCH_SDD_BODY Forbids has two empirical layers (n=75 baseline + v1 paired-mechanism rerun escapes) |
 | `benchmarks/swebench/compare_runs.py` | **(v1.5)** — pre/post predictions delta report (per-instance + class-level + summary) |
 | `benchmarks/swebench/subsets/v1_baseline_n75.json` | 75 stratified instances, 12 repos — the pre-SpecDD anchor target |
 | `benchmarks/swebench/subsets/probe_n10.json` | n=10 A/B subset (4 easy + 6 medium across 10 distinct repos) |
@@ -333,6 +334,7 @@ Real PASS count is always ≤ printed count. Every historical bake-off has had a
 | `lessons.md` | running postmortem; latest entry covers v1.4.1 Mode B/A combo validation |
 | `~/.claude/plans/fancy-honking-lerdorf.md` | external benchmark plan (SWE-bench n=75 + BFCL v3) |
 | `~/.claude/plans/fluffy-brewing-lemur.md` | SpecDD plan (Levers 1/2/3) |
+| `~/.claude/plans/humble-prancing-patterson.md` | **v1.5.0 ship plan + failure-mode analysis (this session)** — Forbids tightening + v2 rerun + v1.6 backlog ranking |
 
 ---
 

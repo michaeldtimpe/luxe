@@ -1277,3 +1277,117 @@ mid-loop intervention rescued `nothing-doc-config` from 33% FAIL →
 `acceptance/swebench/post_specdd_v15_n75/rep_1/predictions.json`;
 delta report via `python -m benchmarks.swebench.compare_runs`. No
 source changes from the rerun itself.
+
+---
+
+### [2026-05-06] SpecDD Lever 2 — paired-mechanism rerun (v1) + Forbids tightening (v1.5.0-rc-2)
+
+**What happened**: Wired `LUXE_WRITE_PRESSURE=1` into the swebench
+adapter alongside `inject_sdd=True` (commit `6c21956`), ran n=75 with
+the paired mechanism, hit unexpected failure modes, fixed them, and
+landed three concrete shippables for v1.5.0:
+
+1. **`6c21956`** — paired-mechanism env wiring. The fix that the
+   2026-05-05 lesson called for. `run_instance` default now binds
+   `LUXE_WRITE_PRESSURE=1` whenever `inject_sdd=True`. Tests in
+   `TestPairedMechanismEnv`.
+2. **`dcfa772`** — bench commit-signing override. Discovered when
+   the first paired-mechanism n=75 launch produced rc=5 +
+   patch_lines=0 on every instance. Root cause buried in stdout:
+   `pr_blocked: git commit failed: error: Enter passphrase for
+   ~/.ssh/id_ed25519`. The user's global `commit.gpgsign=true` with
+   an SSH key requiring an interactive passphrase blocks luxe
+   maintain's pr.py commit step. SWE-bench commits are throwaway
+   scaffolding — `_check_spec_forbids` extract_diff doesn't care if
+   they're signed. Fix: `invoke_luxe_maintain` injects
+   `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=commit.gpgsign`,
+   `GIT_CONFIG_VALUE_0=false` into the subprocess env via
+   `setdefault` so caller-supplied values still win.
+3. **`e062bab`** — Forbids tightening for v1 paired-mechanism escape
+   patterns. Detailed below.
+
+**v1 paired-mechanism n=75 result** (5h 25m wall;
+`acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/`):
+
+| Metric | Pre-Lever-2 | Post-Lever-2 (no pressure) | v1 paired (actual) |
+|---|---|---|---|
+| strong | 12 | 13 | 16 ✅ +4 |
+| strong + plausible | 30 | 32 | 32 ✅ |
+| empty_patch | 26 | 30 | **14** ✅ −12 |
+| new_file_in_diff | 4 | 0 | **8** ❌ regression |
+
+Three of the four ship-floor metrics passed. **empty_patch
+−12pp absolute** beat the prediction range of 24–27. xarray-2905 —
+the n=10 instance that previously wrote the fix in synthesizer.md
+prose without committing — produced a 14-line diff. Of two
+named-regression instances, sphinx-10435 still empty, sympy-13091
+rescued (92-line diff). The paired-mechanism mechanism worked.
+
+**The new_file_in_diff regression**: write-pressure pushes the model
+to write *something*, and the .sdd's literal Forbids only covered
+`test_fix.py` / `repro.py` / `reproducer.py` shapes. Under pressure,
+the model found adjacent un-forbidden filenames. The 8 escape paths
+clustered into 3 patterns:
+- `verify_fix.py` variants (4 instances; root, `repo/...`, and
+  `xarray/tests/test_fix_verify.py` shape)
+- `tmp_*.py` (1 instance, 2 paths: `tmp_test.py`, `tmp_install.py`)
+- novel `test_*_<descriptor>.py` (3 instances: `test_verify.py` ×3
+  variants, `test_refit_time.py`)
+
+**The fix (commit `e062bab`)**: extended `SWEBENCH_SDD_BODY` Forbids
+with 12 globs covering all 8 observed escapes plus prophylactic
+adjacents. Added 8 parametrized tests
+(`test_blocks_observed_v15_pressure_paths`) so a future regression
+points at the exact filename and the source instance. Expanded
+`test_does_not_block_legitimate_test_paths` with boundary-case
+entries (`test_runtime.py`, `test_data_verification.py`) confirming
+the broad globs anchor on suffix not substring.
+
+**Acknowledged risk for v1.5**: the broad globs (`**/*_verify.py`,
+`**/test_*_time.py`) WILL also block edits to legitimate
+pre-existing tests with those names. We accept this for v1.5
+because the n=75 subset has no such file. v1.6 backlog item
+promotes proper **creation-only forbids** semantics —
+`_check_spec_forbids` augmented with a stat() check so rules can
+fire only when the target file doesn't pre-exist.
+
+**The lessons that landed durably**:
+
+1. **Paired mechanisms are a category.** Constraint without
+   actuation under-delivers (post-Lever-2 no-pressure: empty_patch
+   +4). Constraint *with* actuation can over-actuate against an
+   incomplete constraint surface. The combination must be designed
+   together. New rule of thumb: if a Forbid mechanism prevents the
+   model from doing X, also instrument what the model does *instead*
+   — the next-best behavior is your next failure class.
+
+2. **Bench-side commit-signing must be local-config-immune.** Any
+   git operation in unattended runs has to override the user's
+   global signing config. Never assume the host machine's git is
+   non-interactive.
+
+3. **Whack-a-mole stops at iteration 2.** First Forbids extension
+   (the original n=75 baseline patterns) caught 4 paths. Second
+   round (this session) caught 8. If a third round is needed,
+   that's the signal to escalate to creation-only forbids — adding
+   another broad glob just delays the same loop.
+
+4. **Categorical failure-mode analysis on the v1 result yielded
+   sharper next-iteration priorities than the original v1.5 plan.**
+   10 of 14 v1 empty_patch are `agent_bailed` — agent declared
+   done in <5 tool calls, before write_pressure's `MIN_TOOLS=10`
+   threshold could fire. v1.6 priority #1 is now an **early-bail
+   intervention** keyed on "no writes after N=3 steps + claimed
+   done" — addresses the largest avoidable class. Lever 3 slips
+   to later because it doesn't move that needle.
+
+**Next**: v2 n=75 rerun confirming `new_file_in_diff = 0` floor
+holds. Plan + acceptance gate at
+`~/.claude/plans/humble-prancing-patterson.md`. Ship-floor check is
+HARD — if v2 still leaks, escalate to creation-only forbids
+(v1.6), do not add another broad glob.
+
+**Affected files**: `benchmarks/swebench/adapter.py`,
+`benchmarks/swebench/run.py`, `tests/test_swebench_adapter.py`,
+`acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/`. v2 will
+write to `acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/`.
