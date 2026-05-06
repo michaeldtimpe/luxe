@@ -2,8 +2,8 @@
 
 The end-to-end run_instance path requires git + a real luxe install +
 oMLX backend; these tests cover only the deterministic glue:
-write_swebench_sdd, remove_swebench_sdd, and the synthetic-contract
-content shape.
+write_swebench_sdd, remove_swebench_sdd, the synthetic-contract content
+shape, and the paired-mechanism env wiring (write_pressure ↔ inject_sdd).
 """
 
 from __future__ import annotations
@@ -12,9 +12,11 @@ from pathlib import Path
 
 import pytest
 
+from benchmarks.swebench import adapter as adapter_mod
 from benchmarks.swebench.adapter import (
     SWEBENCH_SDD_BODY,
     remove_swebench_sdd,
+    run_instance,
     write_swebench_sdd,
 )
 from luxe.sdd import parse_sdd
@@ -102,3 +104,66 @@ class TestWriteRemoveSdd:
         sdds = find_all_sdd(repo)
         assert len(sdds) == 1
         assert sdds[0].title == "swebench-fixture"
+
+
+class TestPairedMechanismEnv:
+    """Verify run_instance wires LUXE_WRITE_PRESSURE alongside inject_sdd.
+
+    Constraint (.sdd) and actuation (write_pressure) ship together:
+    n=75 measured `empty_patch +4` when constraint shipped without
+    actuation, so the adapter binds them by default and lets ablation
+    flip them off via the explicit kwargs.
+    """
+
+    @pytest.fixture
+    def captured_env(self, tmp_path: Path, monkeypatch):
+        """Replace ensure_repo + invoke_luxe_maintain with stubs that capture env."""
+        captured = {}
+
+        def fake_ensure_repo(instance, work_dir):
+            r = work_dir / instance.instance_id
+            r.mkdir(parents=True, exist_ok=True)
+            return r
+
+        def fake_invoke(instance, repo, log_dir, *, config=None, extra_env=None, timeout_s=None):
+            captured["extra_env"] = dict(extra_env) if extra_env else {}
+            return 0, "", ""
+
+        def fake_extract_diff(repo, base_commit):
+            return ""
+
+        monkeypatch.setattr(adapter_mod, "ensure_repo", fake_ensure_repo)
+        monkeypatch.setattr(adapter_mod, "invoke_luxe_maintain", fake_invoke)
+        monkeypatch.setattr(adapter_mod, "extract_diff", fake_extract_diff)
+        return captured
+
+    def _instance(self):
+        from benchmarks.swebench.fixtures import SweBenchInstance
+        return SweBenchInstance(
+            instance_id="paired__test_1",
+            repo="paired/test",
+            base_commit="0" * 40,
+            problem_statement="trivial",
+        )
+
+    def test_default_pairs_inject_sdd_with_write_pressure(self, tmp_path, captured_env):
+        # Default kwargs: inject_sdd=True, write_pressure=True → env carries pressure flag.
+        run_instance(self._instance(), tmp_path)
+        assert captured_env["extra_env"].get("LUXE_WRITE_PRESSURE") == "1"
+
+    def test_no_inject_sdd_skips_write_pressure(self, tmp_path, captured_env):
+        # Pre-Lever-2 baseline: no .sdd, no actuation. The pair stays paired.
+        run_instance(self._instance(), tmp_path, inject_sdd=False)
+        assert "LUXE_WRITE_PRESSURE" not in captured_env["extra_env"]
+
+    def test_explicit_write_pressure_false_skips_pressure(self, tmp_path, captured_env):
+        # Ablation: .sdd injected but pressure disabled — measure constraint in isolation.
+        run_instance(self._instance(), tmp_path, inject_sdd=True, write_pressure=False)
+        assert "LUXE_WRITE_PRESSURE" not in captured_env["extra_env"]
+
+    def test_extra_env_preserved_alongside_pressure(self, tmp_path, captured_env):
+        # Caller-supplied extra_env must merge with, not be replaced by, the pressure flag.
+        run_instance(self._instance(), tmp_path, extra_env={"FOO": "bar"})
+        env = captured_env["extra_env"]
+        assert env.get("FOO") == "bar"
+        assert env.get("LUXE_WRITE_PRESSURE") == "1"
