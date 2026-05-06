@@ -80,6 +80,10 @@ def main() -> int:
     p.add_argument("--no-inject-sdd", action="store_true",
                    help="Disable SpecDD Lever 2 synthetic .sdd injection. "
                         "Use for pre-Lever-2 baseline reproduction.")
+    p.add_argument("--no-write-pressure", action="store_true",
+                   help="Disable mid-loop write-pressure when .sdd is injected. "
+                        "Default-paired with inject_sdd; flag exists for ablation. "
+                        "Has no effect if --no-inject-sdd is also set.")
     args = p.parse_args()
 
     if not args.dataset.is_file():
@@ -172,6 +176,7 @@ def main() -> int:
             config=args.config,
             timeout_s=args.per_instance_timeout,
             inject_sdd=not args.no_inject_sdd,
+            write_pressure=not args.no_write_pressure,
         )
         results.append(result)
 

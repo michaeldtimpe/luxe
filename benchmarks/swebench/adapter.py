@@ -201,6 +201,7 @@ def run_instance(
     extra_env: dict[str, str] | None = None,
     timeout_s: float | None = 1800.0,
     inject_sdd: bool = True,
+    write_pressure: bool = True,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -208,6 +209,14 @@ def run_instance(
     with anti-reproducer Forbids globs at the cloned-repo root before
     the agent runs, and removes it before diff extraction. Set False to
     reproduce the pre-Lever-2 baseline behaviour.
+
+    `write_pressure` (default True) is the paired actuation for the .sdd
+    constraint: when True AND inject_sdd is True, sets
+    `LUXE_WRITE_PRESSURE=1` in the subprocess env so the mid-loop
+    Mode B intervention from v1.4.1 fires when the model reads-many-but-
+    writes-zero. The two ship together because constrained execution
+    requires enforced actuation; n=75 measured `empty_patch +4` when
+    constraint shipped without actuation.
     """
     inst_dir = work_dir / instance.instance_id
     log_dir = inst_dir / "log"
@@ -222,6 +231,8 @@ def run_instance(
         )
     if inject_sdd:
         write_swebench_sdd(repo)
+        if write_pressure:
+            extra_env = {**(extra_env or {}), "LUXE_WRITE_PRESSURE": "1"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
