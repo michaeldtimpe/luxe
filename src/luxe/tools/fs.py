@@ -167,22 +167,30 @@ def _safe(rel: str) -> Path:
     return resolved
 
 
-def _check_spec_forbids(rel: str) -> str | None:
-    """Return error if `rel` matches a `.sdd` `Forbids:` glob in the chain.
+def _check_spec_forbids(rel: str, *, creating: bool) -> str | None:
+    """Return error if `rel` matches a `.sdd` Forbids glob in the chain.
 
     SpecDD Lever 2 enforcement: pre-write tool-side guard. The model
     cannot evade by renaming once a `Forbids:` rule exists in an
     ancestor `.sdd` — the rule fires on every write attempt regardless
     of how the path was constructed.
 
+    `creating` (kwarg-only, required) distinguishes two policy classes:
+      - `Forbids` globs always fire (create or edit)
+      - `Forbids creating` globs fire only when `creating=True`, i.e.
+        the call site has determined the write would create a new file
+        at this path (path does not exist as a file)
+
+    Edits to existing files pass `creating=False`. The error message
+    shape differs by class so the model's planner gets a clear recovery
+    gradient — "wrong operation" (find an existing file) is a different
+    signal than "wrong location" (find a different file entirely).
+
     Returns None when:
       - no repo root is set (test envs that bypass set_repo_root)
       - no `.sdd` files exist in the chain (the common case for repos
         that haven't adopted SpecDD)
       - the path is allowed by the chain
-
-    Returns a structured error string with the offending `.sdd` path
-    and the matching glob when the path is forbidden.
 
     A malformed `.sdd` upstream raises SddParseError; we convert that
     to a tool-level error so the model sees one actionable message
@@ -202,13 +210,30 @@ def _check_spec_forbids(rel: str) -> str | None:
         # target outside repo_root; _safe() will reject this independently
         return None
 
-    forbidden, sdd, glob = chain.is_forbidden(rel)
+    forbidden, sdd, glob = chain.is_forbidden(rel, creating=creating)
     if not forbidden or sdd is None:
         return None
     try:
         sdd_rel = sdd.path.relative_to(_REPO_ROOT)
     except ValueError:
         sdd_rel = sdd.path
+    # Distinguish create-only matches: their recovery gradient is "edit
+    # an existing file", not "write somewhere else". The existing-file
+    # check (creating implies the path doesn't exist) means a glob can
+    # only have matched via `forbids_create` if `creating=True` AND the
+    # match wasn't on a `forbids` glob. Walk the source SddFile to
+    # determine which list matched — cheaper than threading the class
+    # back through `is_forbidden`.
+    is_create_only = creating and any(g == glob for g in sdd.forbids_create) and not any(
+        g == glob for g in sdd.forbids
+    )
+    if is_create_only:
+        return (
+            f"refusing to create {rel!r}: forbidden-on-create by {sdd_rel} "
+            f"(matches glob {glob!r}). Edit an existing file instead of "
+            f"creating a new one — search the repo for the relevant "
+            f"existing file and edit it."
+        )
     return (
         f"refusing to write {rel!r}: forbidden by {sdd_rel} "
         f"(matches glob {glob!r}). This worker is scoped by .sdd "
@@ -325,12 +350,23 @@ def _write_file(args: dict[str, Any]) -> tuple[str, str | None]:
         return "", err
     if (err := _check_placeholder_text(content)):
         return "", err
+
+    # `_safe` rejects path-escape attempts; convert to a tool error so
+    # the call site doesn't have to worry about PermissionError leaking
+    # past the dispatch wrapper. Done up front because the Forbids check
+    # below needs `path.is_file()` to compute the create-vs-edit signal.
+    try:
+        path = _safe(rel)
+    except (PermissionError, ValueError) as e:
+        return "", str(e)
+    creating = not path.is_file()
+
     # SpecDD Lever 2: tool-side Forbids enforcement. Cheap directory
-    # walk; no-op when no `.sdd` exists in the chain.
-    if (err := _check_spec_forbids(rel)):
+    # walk; no-op when no `.sdd` exists in the chain. `creating`
+    # routes `Forbids creating` checks (v1.6) — see _check_spec_forbids.
+    if (err := _check_spec_forbids(rel, creating=creating)):
         return "", err
 
-    path = _safe(rel)
     # Mass-deletion check needs the existing content (if file exists).
     if path.is_file():
         try:
@@ -353,7 +389,9 @@ def _edit_file(args: dict[str, Any]) -> tuple[str, str | None]:
     if (err := _check_role_path(rel)):
         return "", err
     # SpecDD Lever 2: tool-side Forbids — symmetric with _write_file.
-    if (err := _check_spec_forbids(rel)):
+    # `creating=False` always: edit_file requires the file to exist
+    # (enforced two lines down), so it's structurally never a create.
+    if (err := _check_spec_forbids(rel, creating=False)):
         return "", err
 
     path = _safe(rel)

@@ -27,33 +27,54 @@ class TestSwebenchSddBody:
     def test_parses_cleanly(self):
         sf = parse_sdd(SWEBENCH_SDD_BODY)
         assert sf.title == "swebench-fixture"
-        assert sf.forbids  # has at least one Forbids glob
+        # v1.6: scaffolding patterns live in forbids_create; only
+        # repo_root/** stays in always-fires Forbids.
+        assert sf.forbids
+        assert sf.forbids_create
 
-    def test_blocks_observed_n75_leakage_paths(self):
+    def test_repo_root_in_unconditional_forbids(self):
+        # repo_root/** is a synthetic prompt-context path; the model
+        # should never write there under any operation. Stays in Forbids
+        # (not Forbids creating) so it fires on every attempt.
+        sf = parse_sdd(SWEBENCH_SDD_BODY)
+        assert any(_glob_matches(g, "repo_root/test_encoded_file.py") for g in sf.forbids)
+        assert any(_glob_matches(g, "repo_root/anything.py") for g in sf.forbids)
+
+    def test_blocks_observed_n75_leakage_paths_at_create(self):
         """The four literal paths the model created at n=75 must all
-        match a Forbids glob. Without this guard, a broader/loose glob
-        update could silently cease to fire."""
+        match a Forbids creating glob (v1.6 — these are creation events
+        by definition, since the model invented them). Without this
+        guard, a broader/loose glob update could silently cease to fire.
+        """
         sf = parse_sdd(SWEBENCH_SDD_BODY)
         leakage_paths = [
             "test_fix.py",                     # django-10097, sympy-13877
             "xarray/test_fix.py",              # xarray-3305
             "sympy/test_det_fix.py",           # sympy-13877 alternate
-            "repo_root/test_encoded_file.py",  # pytest-5262
             "src/test_encoded_file.py",        # pytest-5262 alternate
         ]
         for path in leakage_paths:
-            assert any(_glob_matches(g, path) for g in sf.forbids), (
-                f"{path!r} not blocked by any Forbids glob; "
-                f"globs={sf.forbids}"
+            matched = any(_glob_matches(g, path) for g in sf.forbids_create) or any(
+                _glob_matches(g, path) for g in sf.forbids
             )
+            assert matched, (
+                f"{path!r} not blocked by any Forbids/Forbids-creating glob; "
+                f"forbids={sf.forbids}, forbids_create={sf.forbids_create}"
+            )
+        # repo_root/** specifically: must fire on Forbids (always), not just create-time.
+        assert any(_glob_matches(g, "repo_root/test_encoded_file.py") for g in sf.forbids)
 
-    def test_does_not_block_legitimate_test_paths(self):
-        """Existing test files in standard layouts must NOT trip Forbids.
-        The model needs to read these to understand existing test patterns.
+    def test_legitimate_test_paths_not_blocked_at_edit(self):
+        """v1.6 invariant: legitimate test edits pass.
 
-        Boundary-case entries (test_runtime.py, test_data_verification.py)
-        prove the v1.5 broad globs anchor on `_time.py` / `_verify.py`
-        SUFFIXES, not the bare `time` / `verify` substrings.
+        Under v1.5 the broad globs (`**/*_verify.py`, `**/test_*_time.py`)
+        would block edits to existing test files matching those names.
+        Under v1.6, those globs live in `Forbids creating` — they only
+        fire when the model invents a NEW file. At edit-time
+        (creating=False) they never fire.
+
+        This test asserts the invariant at the section level: legit
+        paths don't appear in `Forbids` (the always-fires section).
         """
         sf = parse_sdd(SWEBENCH_SDD_BODY)
         legit_paths = [
@@ -63,13 +84,17 @@ class TestSwebenchSddBody:
             "src/django/tests/test_admin.py",
             "lib/matplotlib/tests/test_axes.py",
             "astropy/tests/test_units.py",
-            "tests/test_runtime.py",            # substring 'time' but no _time.py suffix
-            "tests/test_data_verification.py",  # substring 'verify' but no _verify.py suffix
+            "tests/test_runtime.py",
+            "tests/test_data_verification.py",
+            # v1.6-specific: matplotlib-24870 / sympy-12481 shapes that
+            # WOULD have been blocked by v1.5 broad globs at edit-time.
+            "tests/test_bool_contour.py",
+            "tests/test_fix_check.py",
         ]
         for path in legit_paths:
             assert not any(_glob_matches(g, path) for g in sf.forbids), (
-                f"legitimate test file {path!r} would be blocked; "
-                f"check Forbids globs are not over-broad: {sf.forbids}"
+                f"legitimate test file {path!r} matches always-fires Forbids; "
+                f"would block legit edits: {sf.forbids}"
             )
 
     @pytest.mark.parametrize("path,instance", [
@@ -82,20 +107,37 @@ class TestSwebenchSddBody:
         ("sklearn/test_refit_time.py",          "scikit-learn__scikit-learn-11310"),
         ("sympy/test_verify.py",                "sympy__sympy-12481"),
     ])
-    def test_blocks_observed_v15_pressure_paths(self, path, instance):
+    def test_blocks_observed_v15_pressure_paths_at_create(self, path, instance):
         """v1.5 paired-mechanism rerun produced 8 new_file_in_diff cases —
         write_pressure actuation found names un-covered by the original
-        Forbids list. Each escaped path here must match at least one
-        Forbids glob; a regression points at the exact filename and the
-        instance it came from.
+        Forbids list. Under v1.6 these patterns live in `Forbids
+        creating`; they fire when the model invents the file at create
+        time.
 
-        Source:
-        acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/
+        Source: acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/
         """
         sf = parse_sdd(SWEBENCH_SDD_BODY)
-        assert any(_glob_matches(g, path) for g in sf.forbids), (
-            f"{path!r} (from {instance}) escaped the v1.5 Forbids tightening; "
-            f"globs={sf.forbids}"
+        assert any(_glob_matches(g, path) for g in sf.forbids_create), (
+            f"{path!r} (from {instance}) escaped the v1.5 Forbids-creating list; "
+            f"forbids_create={sf.forbids_create}"
+        )
+
+    @pytest.mark.parametrize("path,instance", [
+        ("test_bool_contour.py",          "matplotlib__matplotlib-24870 (v2 escape)"),
+        ("tests/test_bool_contour.py",    "matplotlib__matplotlib-24870 (alt path)"),
+        ("test_fix_check.py",             "sympy__sympy-12481 (v2 escape)"),
+        ("sympy/test_fix_check.py",       "sympy__sympy-12481 (alt path)"),
+    ])
+    def test_blocks_v2_test_topic_shape_at_create(self, path, instance):
+        """v1.5 v2 rerun escapes — `test_<topic>.py` and `test_fix_*.py`
+        shapes. Indistinguishable from legitimate test files by name
+        alone; only blockable as creation events. The architectural
+        reason for v1.6 (acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/).
+        """
+        sf = parse_sdd(SWEBENCH_SDD_BODY)
+        assert any(_glob_matches(g, path) for g in sf.forbids_create), (
+            f"{path!r} (from {instance}) escaped v1.6 Forbids-creating; "
+            f"forbids_create={sf.forbids_create}"
         )
 
 

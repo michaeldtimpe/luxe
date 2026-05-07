@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "n": 14,
+  "frozen_at": "2026-05-06",
+  "recipe": {
+    "purpose": "v1.6 Phase C smoke \u2014 4 v2 regressions + 5 v2-strong preservation + 5 random",
+    "parent_subset": "v1_baseline_n75.json",
+    "seed": 20260506
+  },
+  "instance_ids": [
+    "astropy__astropy-13453",
+    "astropy__astropy-13977",
+    "django__django-10097",
+    "django__django-10880",
+    "matplotlib__matplotlib-13989",
+    "matplotlib__matplotlib-24870",
+    "mwaskom__seaborn-3187",
+    "psf__requests-6028",
+    "pydata__xarray-3305",
+    "pytest-dev__pytest-10081",
+    "sphinx-doc__sphinx-10466",
+    "sympy__sympy-12481",
+    "sympy__sympy-13031",
+    "sympy__sympy-13091"
+  ]
+}

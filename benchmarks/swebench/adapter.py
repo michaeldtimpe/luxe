@@ -87,42 +87,62 @@ def ensure_repo(instance: SweBenchInstance, work_dir: Path) -> Path:
 
 
 # SpecDD Lever 2: synthetic `.sdd` overlay for SWE-bench fixtures.
-# The n=75 baseline (2026-05-04) revealed that the anti-reproducer prompt
-# rule is leaky — 4/75 instances created `test_fix.py` / `repo_root/...`
-# despite the prompt forbidding it. Tool-side enforcement via
-# `<repo_basename>.sdd` `Forbids:` is the durable shape: it fires every
-# time the model attempts the offending write, regardless of how the
-# path was constructed.
 #
-# Original patterns derived from the literal n=75 baseline leakage:
-# - test_fix.py / xarray/test_fix.py / sympy/test_det_fix.py (4 cases)
-# - repo_root/test_encoded_file.py (1 case)
+# v1.6 (2026-05-06): split into two policy classes after v1.5's
+# broad-glob approach hit an architectural ceiling.
 #
-# v1.5 paired-mechanism rerun (2026-05-06,
-# acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/) revealed
-# 8 new escape paths under write_pressure actuation — the model finds
-# adjacent un-forbidden filenames when forced to write something. The
-# v1.5 pressure-run block below covers all 8 observed escapes plus
-# prophylactic adjacents. Patterns are conceptually creation forbids;
-# the broader globs (`**/*_verify.py`, `**/test_*_time.py`) WILL also
-# block edits to legitimate pre-existing tests with those names — the
-# v1.6 backlog item promotes proper creation-only semantics.
+# `Forbids` fires on every write (create or edit). `Forbids creating`
+# fires only when the write would create a new file at that path —
+# i.e., the model cannot invent new validation scaffolding, but may
+# freely edit any pre-existing repo file even if its name happens to
+# match a creation-banned pattern.
+#
+# Why the split: v1.5 broad globs (`**/*_verify.py`, `**/test_*.py`)
+# could not safely deploy as edit-or-create bans because they would
+# block legitimate edits to existing repo files. Under create-only
+# semantics they become principled — *the model may not invent new
+# tests; it may freely edit existing ones*. The Phase A static audit
+# (full SWE-bench Verified, n=500, 2026-05-06) confirmed zero gold
+# patches create a `test_*.py` file, so `**/test_*.py` ships as a
+# stable adapter-wide create-ban.
+#
+# History:
+#   - n=75 baseline (2026-05-04): observed 4 instances create
+#     test_fix.py / xarray/test_fix.py / sympy/test_det_fix.py + 1
+#     repo_root/test_encoded_file.py.
+#   - v1.5 paired-mechanism rerun (2026-05-06,
+#     post_specdd_v15_pressure_n75/rep_1): 8 new escapes under
+#     WRITE_PRESSURE actuation (verify_fix / tmp_* / test_*_verify /
+#     test_*_time / verify_* shapes).
+#   - v2 rerun with broad-glob tightening (2026-05-06,
+#     post_specdd_v15_pressure_v2_n75): cratered 8 → 2 but two novel
+#     escapes (test_bool_contour.py, test_fix_check.py) showed that
+#     `test_<topic>.py` is indistinguishable from a legitimate test
+#     file — no safe broad glob exists. v1.6's create-only semantics
+#     resolve the paradox.
 SWEBENCH_SDD_BODY = """\
 # swebench-fixture
 
-Synthetic contract dropped at fixture-prep time. Tool-side Forbids
-enforces the anti-reproducer rule that the prose prompt cannot
+Synthetic contract dropped at fixture-prep time. Tool-side enforcement
+backs the anti-reproducer prompt rule that the prose layer cannot
 strictly hold.
 
 ## Notes
-- Forbids list has two layers: the original n=75 baseline patterns
-  (test_fix / repro / reproducer) and the v1.5 pressure-run additions
-  (verify_fix / tmp_* / test_*_verify / test_*_time). The v1.5 block
-  was empirically derived from
-  acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/ — see
-  adapter.py docstring above.
+- `Forbids` (create-or-edit): only `repo_root/**` — synthetic prompt
+  context that should never appear as a real repo path under any
+  operation.
+- `Forbids creating` (create-only): all scaffolding-name patterns. The
+  model may not *invent* new files matching these globs, but may
+  freely *edit* a real repo file by the same name if one exists. The
+  invariant: "you may not invent new validation scaffolding."
+- Patterns derive from three layers: n=75 baseline leakage,
+  v1.5-pressure-rerun escapes, and v2-rerun novel shapes. See the
+  module docstring above for the empirical history.
 
 ## Forbids
+- repo_root/**
+
+## Forbids creating
 - test_fix.py
 - **/test_fix.py
 - test_*_fix.py
@@ -133,21 +153,24 @@ strictly hold.
 - **/reproduce.py
 - reproducer.py
 - **/reproducer.py
-- repo_root/**
 - src/test_*.py
 - test_encoded_*.py
 - **/test_encoded_*.py
 - verify_fix.py
 - **/verify_fix.py
+- verify_*.py
+- **/verify_*.py
+- *_verify.py
+- **/*_verify.py
 - tmp_test.py
 - tmp_install.py
 - **/tmp_*.py
 - **/test_*_verify.py
 - **/test_*_time.py
-- verify_*.py
-- **/verify_*.py
-- *_verify.py
-- **/*_verify.py
+- test_*.py
+- **/test_*.py
+- test_fix_*.py
+- **/test_fix_*.py
 """
 
 

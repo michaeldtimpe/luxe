@@ -48,19 +48,37 @@ class ResolvedChain:
     target_rel: str
     files: list[SddFile] = field(default_factory=list)
 
-    def is_forbidden(self, rel_path: str) -> tuple[bool, SddFile | None, str | None]:
+    def is_forbidden(
+        self, rel_path: str, *, creating: bool
+    ) -> tuple[bool, SddFile | None, str | None]:
         """Check `rel_path` (repo-root-relative) against every Forbids glob.
 
         Returns `(True, sdd_file, glob)` for the first hit found in the
         chain (root → leaf order), or `(False, None, None)` if the path
         is not forbidden. Path normalization: leading `./` and `/` are
         stripped; backslashes are converted to forward slashes.
+
+        `Forbids` globs fire on every check regardless of `creating`.
+        `Forbids creating` globs fire **only** when `creating=True` —
+        i.e., the call site has determined the write would create a new
+        file at this path (the path does not exist as a file). Edits to
+        existing files pass `creating=False` and bypass the create-only
+        section.
+
+        Callers must pass `creating` explicitly so the policy boundary
+        is visible at every check site (no implicit default that could
+        silently change semantics).
         """
         normalized = _normalize_rel(rel_path)
         for sf in self.files:
             for glob in sf.forbids:
                 if _glob_matches(glob, normalized):
                     return True, sf, glob
+        if creating:
+            for sf in self.files:
+                for glob in sf.forbids_create:
+                    if _glob_matches(glob, normalized):
+                        return True, sf, glob
         return False, None, None
 
     def is_owned(self, rel_path: str) -> tuple[bool, SddFile | None, str | None]:
@@ -89,6 +107,19 @@ class ResolvedChain:
         out: list[tuple[SddFile, str]] = []
         for sf in self.files:
             for glob in sf.forbids:
+                out.append((sf, glob))
+        return out
+
+    def all_forbids_create(self) -> list[tuple[SddFile, str]]:
+        """Flat list of (source_file, glob) pairs for Forbids creating.
+
+        Symmetric to `all_forbids`, separated so callers (tests, prompt
+        renderers) can distinguish the two policy classes without
+        inspecting each `SddFile` directly.
+        """
+        out: list[tuple[SddFile, str]] = []
+        for sf in self.files:
+            for glob in sf.forbids_create:
                 out.append((sf, glob))
         return out
 
@@ -129,15 +160,17 @@ def format_sdd_block(sdd_files: list[SddFile], repo_root: Path) -> str:
         From `<rel-path>`:
         - Forbids: <glob1>
         - Forbids: <glob2>
-        - Owns: <glob3>
+        - Forbids creating: <glob3>
+        - Owns: <glob4>
 
         From `<rel-path-2>`:
         - ...
 
-    Only `Forbids` and `Owns` sections are surfaced — these are the
-    enforceable constraints the model needs to know about. `Must` /
-    `Must not` / `Done when` are aspirational and would bloat the
-    prompt; they live in the spec validator's reprompt path instead.
+    Only `Forbids`, `Forbids creating`, and `Owns` sections are
+    surfaced — these are the enforceable constraints the model needs
+    to know about. `Must` / `Must not` / `Done when` are aspirational
+    and would bloat the prompt; they live in the spec validator's
+    reprompt path instead.
     """
     if not sdd_files:
         return ""
@@ -148,13 +181,15 @@ def format_sdd_block(sdd_files: list[SddFile], repo_root: Path) -> str:
             rel = sf.path.relative_to(root)
         except ValueError:
             rel = sf.path
-        if not (sf.forbids or sf.owns):
+        if not (sf.forbids or sf.forbids_create or sf.owns):
             continue
         lines.append(f"From `{rel}`:")
         for glob in sf.owns:
             lines.append(f"- Owns: {glob}")
         for glob in sf.forbids:
             lines.append(f"- Forbids: {glob}")
+        for glob in sf.forbids_create:
+            lines.append(f"- Forbids creating: {glob}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
