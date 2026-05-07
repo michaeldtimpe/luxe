@@ -1391,3 +1391,134 @@ HARD — if v2 still leaks, escalate to creation-only forbids
 `benchmarks/swebench/run.py`, `tests/test_swebench_adapter.py`,
 `acceptance/swebench/post_specdd_v15_pressure_n75/rep_1/`. v2 will
 write to `acceptance/swebench/post_specdd_v15_pressure_v2_n75/rep_1/`.
+
+---
+
+### [2026-05-06] v1.5.0-rc-2 v2 result — broad-glob ceiling found; v1.6 creation-only forbids architecturally required
+
+**What happened**: v2 n=75 rerun (Forbids tightened by `e062bab`)
+collapsed `new_file_in_diff` 8 → 2 but did not eliminate it. Two
+escape paths remained: `test_bool_contour.py` (matplotlib-24870)
+and `test_fix_check.py` (sympy-12481). Both shapes are
+indistinguishable from legitimate test files by name alone — no
+broad glob can safely cover them as edit-or-create bans. The
+v1.5 broad-glob approach hit an architectural ceiling that more
+patterns cannot resolve.
+
+v2 ship-floor check (HARD `new_file_in_diff = 0`):
+
+| Metric | Floor | v1 actual | **v2 actual** | Verdict |
+|---|---|---|---|---|
+| strong | ≥14 | 16 | 16 | ✅ |
+| strong + plausible | ≥30 | 32 | 35 | ✅ |
+| empty_patch | ≤16 (±2) | 14 | 17 | ✅ borderline |
+| **new_file_in_diff** | **=0** | 8 | **2** | ❌ |
+
+The long-arc claim (v2 vs pre-Lever-2 baseline) sustained: empty
+26 → 17 (−35%); strong 12 → 16 (+33%); strong+plausible 30 → 35
+(+5); any-non-empty 45 → 56 (+24%). The headline win held.
+
+**Root cause**: the v1.5 contract conflated two qualitatively
+different operations. *Editing* `tests/test_existing.py` (a real
+gold-patch target) is repository participation. *Creating*
+`test_bool_contour.py` (an invented verification artifact) is
+benchmark gaming. v1.5 globs were path-aware: "these filenames
+are suspicious." That premise breaks when the suspicious filename
+is shaped exactly like a legitimate one.
+
+**Fix / takeaway — v1.6 creation-only forbids**: introduced a new
+`Forbids creating` section in `.sdd`. It fires *only* when the
+write would create a new file at the target path
+(`creating = not target_path.is_file()` computed in `_write_file`).
+`Forbids` (always-fires) and `Forbids creating` (create-only) are
+distinct policy classes. Under create-only semantics, the broad
+ban `**/test_*.py` becomes principled — *the model may not invent
+new tests; it may freely edit existing ones* — because Phase A
+audit on full SWE-bench Verified (n=500) confirmed zero gold
+patches create a `test_*.py` file.
+
+The architectural shift: v1.5 encoded *"these filenames are
+suspicious"*; v1.6 encodes *"creating verifier scaffolding is
+disallowed."* The policy stops being path-aware and becomes
+operation-aware. Repository participation and benchmark gaming
+become separate, enforceable categories.
+
+A subtle but high-leverage detail: the create-only error message
+reads *"refusing to create X: forbidden-on-create. Edit an
+existing file instead of creating a new one"* — a recovery
+gradient ("wrong operation; find an existing nearby file") rather
+than the v1.5 *"forbidden ... do not write outside the allowed
+paths"* (which read as "wrong location" and primed bailout).
+
+**Smoke validation (Phase C, n=14, 2026-05-06)**:
+- new_file_in_diff = **0** across all 14 ✅
+- **sympy-12481 reroute (the architectural test case)**: was
+  inventing `test_fix_check.py` in v2 → v1.6 produced a strong
+  gold-match by editing `sympy/combinatorics/permutations.py`
+  directly. The qualitative transition *"invent scaffold → modify
+  existing artifact"* was empirically demonstrated.
+- Both v2 strong-tier "regression" instances (xarray-3305,
+  sphinx-10466) rebounded to strong, confirming those were temp=0
+  variance, not glob collateral.
+- Mixed signal on second escape: matplotlib-24870 went empty
+  (bailout) rather than rerouting. 1/2 of the architectural test
+  cases reroute cleanly; the other shows the user-predicted
+  "constraint pressure → occasional abandonment" mode. Net
+  positive but not unanimous.
+- v2-strong preservation 4/5 (matplotlib-13989 the variance drop).
+
+**The lessons that landed durably**:
+
+1. **Operation-aware policy generalizes; path-aware policy
+   doesn't.** When a constraint conflates two distinct operations
+   on the same target, broadening the constraint either fails
+   (can't catch the corner case) or over-reaches (blocks
+   legitimate work). The right primitive is to split the
+   operations, not extend the patterns. *"creating verifier
+   scaffolding is disallowed"* is a policy; *"these filenames are
+   suspicious"* is folklore.
+
+2. **Static + dynamic state together yield clean policy boundaries
+   without planner state.** `creating = not Path.is_file()` at the
+   moment of the write is operationally observable, deterministic,
+   and stateful across turns automatically. A file created in step
+   1 can be edited in step 2 of the same trajectory because
+   `Path.is_file()` answers correctly — no synthetic planner-state
+   tracking needed.
+
+3. **Error message wording is a recovery-gradient signal.**
+   *"forbidden ... do not write outside allowed paths"* primes
+   bailout. *"forbidden-on-create ... edit an existing file
+   instead"* primes reroute. For models running under pressure
+   actuation, the difference between *wrong location* and *wrong
+   operation* in the prose may be the highest-leverage planner
+   change in the entire mechanism. Worth its own A/B in v1.7.
+
+4. **Audit before broadening.** Phase A static check on full
+   Verified (n=500) confirmed zero gold patches create a
+   `test_*.py` file before shipping `**/test_*.py` as
+   ForbidsCreate. A 5-min audit gates a global adapter policy from
+   becoming subset-specific tuning. Cheaper than discovering it
+   post-tag.
+
+5. **Smoke before full rerun.** A 14-instance targeted smoke
+   (~30-50 min wall) validates the architectural premise before a
+   ~5h full bench commits. The smoke composition matters: include
+   the regressions (validates the fix), the recent gains
+   (validates non-regression), and a small random sample
+   (validates the broad effect).
+
+**Open question (Phase B, doesn't gate ship)**: trace inspection
+on `~/.luxe/runs/<run_id>/events.jsonl` for matplotlib-24870 to
+distinguish "novel un-globbable shape but planner exhausted
+options" (architectural) vs "forbid feedback caused planner
+collapse" (mechanism-tuning). Doesn't gate v1.6 tag; informs
+v1.7 Mode B threshold tuning.
+
+**Affected files**: `src/luxe/sdd.py`, `src/luxe/spec_resolver.py`,
+`src/luxe/tools/fs.py`, `benchmarks/swebench/adapter.py`,
+`tests/test_sdd.py`, `tests/test_spec_resolver.py`,
+`tests/test_tools_spec_forbids.py`,
+`tests/test_swebench_adapter.py`,
+`benchmarks/swebench/subsets/v16_smoke_n14.json`.
+643 tests passing (+24 vs 619 v1.5.0-rc-2 baseline).
