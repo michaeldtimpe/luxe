@@ -215,28 +215,36 @@ class TestChainQueries:
         return resolve_chain(tmp_path, target)
 
     def test_is_forbidden_finds_root_match(self, chain):
-        hit, sf, glob = chain.is_forbidden("tests/foo.py")
+        hit, sf, glob = chain.is_forbidden("tests/foo.py", creating=False)
         assert hit is True
         assert sf is not None
         assert sf.title == "luxe"
         assert glob == "tests/**"
 
     def test_is_forbidden_finds_leaf_match(self, chain):
-        hit, sf, glob = chain.is_forbidden("src/luxe/spec.py")
+        hit, sf, glob = chain.is_forbidden("src/luxe/spec.py", creating=False)
         assert hit is True
         assert sf.title == "agents"
         assert glob == "src/luxe/spec.py"
 
     def test_is_forbidden_double_star_glob(self, chain):
-        hit, sf, glob = chain.is_forbidden("src/luxe/secret_token.py")
+        hit, sf, glob = chain.is_forbidden("src/luxe/secret_token.py", creating=False)
         assert hit is True
         assert glob == "**/secret_*.py"
 
     def test_is_forbidden_returns_false_when_no_match(self, chain):
-        hit, sf, glob = chain.is_forbidden("src/luxe/spec_validator.py")
+        hit, sf, glob = chain.is_forbidden("src/luxe/spec_validator.py", creating=False)
         assert hit is False
         assert sf is None
         assert glob is None
+
+    def test_forbids_section_fires_regardless_of_creating(self, chain):
+        # `Forbids` (not `Forbids creating`) globs fire on both create
+        # and edit attempts. `tests/**` is in luxe.sdd Forbids.
+        for creating in (True, False):
+            hit, _, glob = chain.is_forbidden("tests/foo.py", creating=creating)
+            assert hit is True, f"Forbids should fire at creating={creating}"
+            assert glob == "tests/**"
 
     def test_is_owned_finds_root_match(self, chain):
         hit, sf, glob = chain.is_owned("src/luxe/spec.py")
@@ -270,9 +278,9 @@ class TestChainQueries:
 
     def test_path_normalization_in_queries(self, chain):
         # Caller passes various input shapes; chain normalizes.
-        assert chain.is_forbidden("./tests/foo.py")[0] is True
-        assert chain.is_forbidden("/tests/foo.py")[0] is True
-        assert chain.is_forbidden("tests\\foo.py")[0] is True
+        assert chain.is_forbidden("./tests/foo.py", creating=False)[0] is True
+        assert chain.is_forbidden("/tests/foo.py", creating=False)[0] is True
+        assert chain.is_forbidden("tests\\foo.py", creating=False)[0] is True
 
 
 class TestEmptyChainBehavior:
@@ -281,9 +289,84 @@ class TestEmptyChainBehavior:
         target.write_text("x")
         chain = resolve_chain(tmp_path, target)
         assert chain.files == []
-        assert chain.is_forbidden("anything")[0] is False
+        assert chain.is_forbidden("anything", creating=False)[0] is False
+        assert chain.is_forbidden("anything", creating=True)[0] is False
         assert chain.is_owned("anything")[0] is False
         assert chain.all_forbids() == []
+        assert chain.all_forbids_create() == []
+
+
+class TestForbidsCreate:
+    """v1.6 — `Forbids creating` fires only when path doesn't exist."""
+
+    @pytest.fixture
+    def create_only_chain(self, tmp_path):
+        # Chain has only Forbids creating rules; no Forbids.
+        _write_sdd(
+            tmp_path / "src" / "src.sdd",
+            "# src\n"
+            "## Forbids creating\n"
+            "- **/test_*.py\n"
+            "- **/verify_*.py\n",
+        )
+        target = tmp_path / "src" / "foo.py"
+        target.write_text("x")
+        return resolve_chain(tmp_path, target)
+
+    def test_create_only_fires_only_when_creating(self, create_only_chain):
+        # creating=True → blocked
+        hit, sf, glob = create_only_chain.is_forbidden("test_new.py", creating=True)
+        assert hit is True
+        assert glob == "**/test_*.py"
+        # creating=False → allowed (caller indicated this is an edit)
+        hit, sf, glob = create_only_chain.is_forbidden("test_new.py", creating=False)
+        assert hit is False
+        assert sf is None
+        assert glob is None
+
+    def test_v2_test_topic_shape_blocked_at_create(self, create_only_chain):
+        # The shape that broad-glob v1.5 couldn't safely cover.
+        for path in ("test_bool_contour.py", "lib/matplotlib/test_bool_contour.py"):
+            hit, _, _ = create_only_chain.is_forbidden(path, creating=True)
+            assert hit is True, f"create-time ban should fire on {path!r}"
+            hit, _, _ = create_only_chain.is_forbidden(path, creating=False)
+            assert hit is False, f"edit-time should pass on {path!r}"
+
+    def test_forbids_takes_precedence_over_create_only(self, tmp_path):
+        # Both sections populated; `Forbids` fires first regardless of creating.
+        _write_sdd(
+            tmp_path / "src" / "src.sdd",
+            "# src\n"
+            "## Forbids\n- secrets/**\n"
+            "## Forbids creating\n- **/test_*.py\n",
+        )
+        target = tmp_path / "src" / "foo.py"
+        target.write_text("x")
+        chain = resolve_chain(tmp_path, target)
+
+        # Path matches Forbids — fires at both creating modes.
+        hit, _, glob = chain.is_forbidden("secrets/api.key", creating=False)
+        assert hit is True
+        assert glob == "secrets/**"
+        hit, _, glob = chain.is_forbidden("secrets/api.key", creating=True)
+        assert hit is True
+        assert glob == "secrets/**"
+
+        # Path matches only Forbids creating — fires only at create-time.
+        hit, _, glob = chain.is_forbidden("test_new.py", creating=True)
+        assert hit is True
+        assert glob == "**/test_*.py"
+        hit, _, _ = chain.is_forbidden("test_new.py", creating=False)
+        assert hit is False
+
+    def test_all_forbids_create_lists_pairs(self, create_only_chain):
+        rules = create_only_chain.all_forbids_create()
+        assert len(rules) == 2
+        globs = [g for _, g in rules]
+        assert "**/test_*.py" in globs
+        assert "**/verify_*.py" in globs
+        # all_forbids returns nothing because Forbids is empty
+        assert create_only_chain.all_forbids() == []
 
 
 class TestFindAllSdd:
@@ -363,3 +446,27 @@ class TestFormatSddBlock:
         block = format_sdd_block(sdds, tmp_path)
         assert "From `a/a.sdd`" not in block
         assert "From `b/b.sdd`" in block
+
+    def test_renders_forbids_create(self, tmp_path):
+        _write_sdd(
+            tmp_path / "src" / "src.sdd",
+            "# src\n"
+            "## Forbids\n- secrets/**\n"
+            "## Forbids creating\n- **/test_*.py\n- **/repro.py\n",
+        )
+        sdds = find_all_sdd(tmp_path)
+        block = format_sdd_block(sdds, tmp_path)
+        assert "Forbids: secrets/**" in block
+        assert "Forbids creating: **/test_*.py" in block
+        assert "Forbids creating: **/repro.py" in block
+
+    def test_surfaces_sdd_with_only_forbids_create(self, tmp_path):
+        # A file with only Forbids creating still appears in the prompt.
+        _write_sdd(
+            tmp_path / "create" / "create.sdd",
+            "# create\n## Forbids creating\n- **/scaffold_*.py\n",
+        )
+        sdds = find_all_sdd(tmp_path)
+        block = format_sdd_block(sdds, tmp_path)
+        assert "From `create/create.sdd`" in block
+        assert "Forbids creating: **/scaffold_*.py" in block

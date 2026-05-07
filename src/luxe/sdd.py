@@ -26,12 +26,21 @@ six canonical sections:
     - tests/**
     - **/test_*.py
 
+    ## Forbids creating
+    - **/verify_*.py
+
     ## Done when
     - Statement of completion criterion
 
-`Owns`, `Depends on`, and `Forbids` are path globs (relative to the repo
-root). `Must`, `Must not`, and `Done when` are prose statements (one
-bullet per statement).
+`Owns`, `Depends on`, `Forbids`, and `Forbids creating` are path globs
+(relative to the repo root). `Must`, `Must not`, and `Done when` are
+prose statements (one bullet per statement).
+
+`Forbids` fires on every write attempt (create or edit). `Forbids
+creating` fires *only* when the write would create a new file at the
+target path — i.e., the path does not currently exist as a file. This
+distinguishes the policy boundary between "you may not touch this
+class of file" and "you may not invent new files of this shape".
 
 Section names are case-insensitive and tolerate `must_not` / `must-not` /
 `must not`. Each section is optional — a `.sdd` with only `Forbids:` is
@@ -49,7 +58,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-CANONICAL_SECTIONS = ("must", "must_not", "owns", "depends_on", "forbids", "done_when")
+CANONICAL_SECTIONS = (
+    "must",
+    "must_not",
+    "owns",
+    "depends_on",
+    "forbids",
+    "forbids_create",
+    "done_when",
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +86,7 @@ class SddFile:
     owns: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)
     forbids: list[str] = field(default_factory=list)
+    forbids_create: list[str] = field(default_factory=list)
     done_when: list[str] = field(default_factory=list)
 
 
@@ -101,6 +119,7 @@ def parse_sdd(text: str, path: Path | None = None) -> SddFile:
         owns=sections.get("owns", []),
         depends_on=sections.get("depends_on", []),
         forbids=sections.get("forbids", []),
+        forbids_create=sections.get("forbids_create", []),
         done_when=sections.get("done_when", []),
     )
 
@@ -183,7 +202,9 @@ def _normalize_section_name(header: str) -> str | None:
 
     Tolerates: `Must`, `must`, `MUST`, `Must Not`, `Must not`, `must_not`,
     `must-not`, `Depends on`, `Depends_on`, `depends-on`, `Done when`,
-    `done_when`, `done-when`. Whitespace and case are normalized.
+    `done_when`, `done-when`, `Forbids creating`, `forbids_creating`,
+    `forbids-creating`, `forbids_create`. Whitespace and case are
+    normalized.
     """
     canonical = (
         header.lower()
@@ -191,6 +212,10 @@ def _normalize_section_name(header: str) -> str | None:
         .replace(" ", "_")
         .strip("_")
     )
+    # English-style alias: "Forbids creating" parses to forbids_creating;
+    # we store it as forbids_create to match the field name.
+    if canonical == "forbids_creating":
+        canonical = "forbids_create"
     if canonical in CANONICAL_SECTIONS:
         return canonical
     return None

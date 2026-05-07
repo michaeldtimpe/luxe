@@ -51,7 +51,7 @@ class TestSectionParsing:
         )
         assert sf.must == ["statement one", "statement two"]
 
-    def test_all_six_canonical_sections(self):
+    def test_all_seven_canonical_sections(self):
         sf = parse_sdd(
             "# t\n"
             "## Must\n- m1\n"
@@ -59,6 +59,7 @@ class TestSectionParsing:
             "## Owns\n- src/luxe/**\n"
             "## Depends on\n- src/luxe/agents/\n"
             "## Forbids\n- tests/**\n"
+            "## Forbids creating\n- **/verify_*.py\n"
             "## Done when\n- d1\n"
         )
         assert sf.must == ["m1"]
@@ -66,6 +67,7 @@ class TestSectionParsing:
         assert sf.owns == ["src/luxe/**"]
         assert sf.depends_on == ["src/luxe/agents/"]
         assert sf.forbids == ["tests/**"]
+        assert sf.forbids_create == ["**/verify_*.py"]
         assert sf.done_when == ["d1"]
 
     def test_canonical_section_list_matches_dataclass_fields(self):
@@ -98,6 +100,31 @@ class TestSectionParsing:
     def test_done_when_normalization_variants(self, header):
         sf = parse_sdd(f"## {header}\n- z\n")
         assert sf.done_when == ["z"]
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "Forbids creating",
+            "forbids creating",
+            "FORBIDS CREATING",
+            "forbids_creating",
+            "forbids-creating",
+            "forbids_create",  # field-name form also accepted
+        ],
+    )
+    def test_forbids_create_normalization_variants(self, header):
+        sf = parse_sdd(f"## {header}\n- **/test_*.py\n")
+        assert sf.forbids_create == ["**/test_*.py"]
+        # No spillover into forbids
+        assert sf.forbids == []
+
+    def test_forbids_and_forbids_create_independent(self):
+        sf = parse_sdd(
+            "## Forbids\n- src/swarm/**\n"
+            "## Forbids creating\n- **/test_*.py\n- **/repro.py\n"
+        )
+        assert sf.forbids == ["src/swarm/**"]
+        assert sf.forbids_create == ["**/test_*.py", "**/repro.py"]
 
     def test_unknown_section_silently_ignored(self):
         # Forward compat: tomorrow's SDD may add sections. Today's parser
