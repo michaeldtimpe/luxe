@@ -1,8 +1,10 @@
 # luxe — session resume document
 
-## Current state — 2026-05-06 evening (v1.6.0-rc-1; n=75 v3 pending)
+## Current state — 2026-05-09 (v1.6.0-rc-1; n=75 v3 RAN, ship-floor analysis pending)
 
-**Working tree**: clean as of last commit. **643 tests passing** (+24 vs 619 v1.5.0-rc-2 baseline). v1.6 code shipped; tag held until full n=75 v3 validates the ship floor.
+**Working tree**: clean. **643 tests passing** (+24 vs 619 v1.5.0-rc-2 baseline). v1.6 code shipped; tag held until ship-floor inspector confirms the v3 floor.
+
+**Phase D Step 1 — DONE 2026-05-09** (~5h wall, finished 05:23 local). 75/75 instances ran; 57/75 produced a non-empty patch. Predictions at `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/predictions.json`. **Ship-floor metrics not yet computed** — Steps 2–4 below have not run. Pick up at Step 2 (compare_runs + smoke_inspect) before any tag decision.
 
 **SpecDD Lever 2 v1.6 — code SHIPPED, tag DEFERRED** pending overnight n=75 v3 confirming `new_file_in_diff = 0` floor under creation-only semantics.
 
@@ -30,13 +32,15 @@
 
 ---
 
-## ⚡ Resume here — Phase D full n=75 v3 + ship decision (overnight)
+## ⚡ Resume here — Phase D Step 2 (ship-floor analysis) + ship decision
 
-The remaining work is the v3 n=75 rerun confirming the create-only ship floor holds, then the tag.
+Step 1 ran cleanly on 2026-05-09 — predictions are sitting at `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/predictions.json`. Run completed 75/75 in ~5h; 57/75 non-empty patches per the run summary. Tier breakdown / `new_file_in_diff` audit / wrong_target delta have **not** been computed yet — that's Step 2.
 
-Total remaining wall: ~5h n=75 + 30-45m harness scoring + tag.
+Total remaining wall: ~30-45m inspector + compare + 30-45m Docker harness + tag.
 
-### Step 1 — n=75 v3 rerun with creation-only forbids (~5h)
+### Step 1 — n=75 v3 rerun with creation-only forbids — DONE 2026-05-09
+
+Reference command (kept for re-run):
 
 ```bash
 brew services restart omlx && sleep 5 && \
@@ -48,9 +52,7 @@ LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 nohup \
     > /tmp/n75_v16.log 2>&1 &
 ```
 
-Restart oMLX before launching to clear any pinned models. Adapter
-binds `LUXE_WRITE_PRESSURE=1` and disables `commit.gpgsign`
-automatically; no shell env munging needed beyond `OMLX_API_KEY`.
+Adapter binds `LUXE_WRITE_PRESSURE=1` and disables `commit.gpgsign` automatically; no shell env munging needed beyond `OMLX_API_KEY`. Restart oMLX before any rerun to clear pinned models.
 
 ### Step 2 — Compare v3 vs prior runs
 
