@@ -1522,3 +1522,105 @@ v1.7 Mode B threshold tuning.
 `tests/test_swebench_adapter.py`,
 `benchmarks/swebench/subsets/v16_smoke_n14.json`.
 643 tests passing (+24 vs 619 v1.5.0-rc-2 baseline).
+
+---
+
+### [2026-05-10] v1.6.0 ship — n=75 v3 + Docker harness 36/75 (48.0%); creation-only forbids validated
+
+**What happened**: The overnight n=75 v3 rerun (creation-only
+forbids) hit every ship-floor gate. Inspector reported strong=16,
+strong+plausible=36, empty_patch=18, **new_file_in_diff=0**,
+wrong_target=17. jq cross-check on the predictions confirmed zero
+patches contain `new file mode` — agreeing with the inspector at
+the file-creation level. Spot-check of 3 random strong rows
+(`pytest-8399`, `django-11333`, `scikit-learn-11578`) showed
+clean surgical edits to existing files — no broad-glob collateral
+damage to legitimate work. Docker harness then resolved
+**36/75 = 48.0%** in 34m43s with zero errors. v1.6.0 tagged.
+
+**v3 vs pre-Lever-2 baseline (v1.4.1, 12 strong / 26 empty /
+4 new_file)**:
+  - empty_patch: −10.7pp (paired-mechanism win, sustained)
+  - new_file_in_diff: 0 (full class elimination, durable)
+  - strong: +33% (12 → 16, durable)
+  - any non-empty patch: +27% (45 → 57)
+
+**v3 vs v2 (creation-only delta)**: new_file 2 → 0 (the
+architectural target). xarray-3305 + sphinx-10466 both rebounded
+to strong (variance, not glob collateral, confirmed). sympy-12481
+went from inventing `test_fix_check.py` (v2) to a plausible-tier
+edit on the gold file (v3) — the architectural test case the v1.6
+shift was designed for. matplotlib-24870 went new_file → empty
+(1/2 v2-escape "constraint pressure → occasional abandonment",
+within ±1 variance budget).
+
+**The inspector is a near-perfect harness predictor**: of the
+16 strong-tier instances, 15 resolved (94%); the lone unresolved
+strong was `sphinx-doc__sphinx-10466`. Plausible tier resolved at
+50% (10/20), wrong_target at 47% (8/17), wrong_location at 75%
+(3/4), empty_patch at 0%. The 11 wrong_target / wrong_location
+resolves are *alternative-solution credit* — model fixed a
+different file or locus than gold but tests still pass. This
+matters: the static gold-proximity tier is a lower bound on
+actual SWE-bench performance, and the gap between
+strong+plausible (36) and FAIL_TO_PASS (36) at n=75 is
+coincidental — different instances each side, similar net.
+
+**`harness.py:collect_results` was wrong for swebench >= 4.x**:
+the wrapper's collector looked for a top-level
+`<run_id>.<model>.json` file. swebench 4.x writes per-instance
+reports at `logs/run_evaluation/<run_id>/<model>/<instance>/report.json`.
+Discovered when the wrapper's `harness_summary.json` came back
+with `n=0`. Fixed in this commit cycle by walking the per-instance
+layout; legacy top-level path retained as fallback. Validated
+against the v16 logs — now reports `n=57, n_resolved=36`.
+
+**Why the v3 shape held under harness scoring**: the create-only
+semantics give the planner a *recovery gradient* — when a write
+is forbidden-on-create, the error message says "Edit an existing
+file instead of creating a new one", which primes reroute, not
+bailout. Compare v1.5 broad-glob `Forbids` semantics, which fired
+the same way for both edit and create: the planner couldn't
+distinguish "wrong location" from "wrong operation". v3's
+operation-aware policy is the architecture the system was missing.
+
+**Lessons**:
+
+1. **Operation-aware policy beats path-aware folklore.** The v1.5
+   ceiling wasn't a glob-tuning problem — it was that the policy
+   conflated two qualitatively different operations on the same
+   target. v1.6's `Forbids creating` section + `creating: bool`
+   threading + distinct error wording shipped as a full
+   architectural fix in ~24h once the framing was right.
+
+2. **`creating = not Path.is_file()` is the cleanest possible
+   stateful check.** Operationally observable, deterministic,
+   handles multi-step trajectories (create then edit) without any
+   synthetic planner state. The policy boundary lives at the
+   write-time check, not in the prompt or the trace.
+
+3. **Static gold-proximity is a lower bound, not a ceiling.**
+   The harness gave 11 instances credit that the inspector
+   classified as wrong_target / wrong_location. For pre-tag
+   sanity-checking the inspector is enough; for headline numbers,
+   the harness is necessary.
+
+4. **The wrapper's collector must follow upstream layout.**
+   When swebench 4.x changed to per-instance report files, the
+   wrapper silently returned `n=0`. The harness ran fine —
+   only the aggregation step broke. Fold the per-instance walk
+   into `collect_results` going forward; keep legacy fallback for
+   older swebench installs.
+
+**Open for v1.7**: BFCL agent-mode post-SpecDD (no pre-anchor
+exists; one-shot v1.6 datapoint to inform v1.7 BFCL strategy);
+sphinx-10466 strong→unresolved investigation; early-bail
+intervention as the #1 next-gen lever (10+ of 18 v3 empty_patch
+in scope).
+
+**Affected files**: `benchmarks/swebench/harness.py` (collector
+rebuilt for swebench 4.x layout), `.gitignore` (logs/), `RESUME.md`,
+`lessons.md`. v3 predictions kept at
+`acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/`;
+harness logs at `logs/run_evaluation/luxe_v16_n75/` (gitignored,
+~hand-debug).
