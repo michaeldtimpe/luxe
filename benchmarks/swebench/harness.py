@@ -105,12 +105,45 @@ def run_harness(
 def collect_results(run_id: str, output_dir: Path) -> dict[str, HarnessResult]:
     """Walk the harness's output and build {instance_id: HarnessResult}.
 
-    The official harness writes a top-level `<run_id>.<model_name>.json`
-    plus per-instance log dirs. We only need the top-level summary for
-    pass/fail; the log dirs are kept for hand-debugging.
+    swebench >= 4.x writes per-instance reports at
+    `logs/run_evaluation/<run_id>/<model_name>/<instance_id>/report.json`
+    (each `{"<instance_id>": {"resolved": ..., ...}}`).
+
+    Older versions wrote a top-level `<run_id>.<model_name>.json` with
+    `resolved_ids`/`completed_ids` arrays. Both layouts are tolerated.
     """
-    from glob import glob
     out: dict[str, HarnessResult] = {}
+
+    # Modern (per-instance) layout — swebench >= 4.x
+    run_root = Path.cwd() / "logs" / "run_evaluation" / run_id
+    if run_root.is_dir():
+        for model_dir in run_root.iterdir():
+            if not model_dir.is_dir():
+                continue
+            for inst_dir in model_dir.iterdir():
+                report = inst_dir / "report.json"
+                if not report.is_file():
+                    out[inst_dir.name] = HarnessResult(
+                        instance_id=inst_dir.name, resolved=False,
+                        error="no_report",
+                    )
+                    continue
+                try:
+                    data = json.loads(report.read_text())
+                except (OSError, json.JSONDecodeError):
+                    out[inst_dir.name] = HarnessResult(
+                        instance_id=inst_dir.name, resolved=False,
+                        error="report_unreadable",
+                    )
+                    continue
+                inner = data.get(inst_dir.name, {})
+                out[inst_dir.name] = HarnessResult(
+                    instance_id=inst_dir.name,
+                    resolved=bool(inner.get("resolved", False)),
+                    raw=inner,
+                )
+
+    # Legacy (top-level summary) layout
     summary_files = list(Path.cwd().glob(f"{run_id}.*.json")) + list(
         output_dir.glob(f"{run_id}.*.json")
     )
@@ -119,15 +152,16 @@ def collect_results(run_id: str, output_dir: Path) -> dict[str, HarnessResult]:
             data = json.loads(Path(path).read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        # Format: {"resolved_ids": [...], "completed_ids": [...], ...}
-        # OR per-instance details under "tests". Tolerate both.
         resolved = set(data.get("resolved_ids", []))
         for iid in data.get("completed_ids", resolved):
-            out[iid] = HarnessResult(instance_id=iid, resolved=iid in resolved)
+            if iid not in out:
+                out[iid] = HarnessResult(instance_id=iid, resolved=iid in resolved)
         for iid in data.get("error_ids", []):
-            out[iid] = HarnessResult(
-                instance_id=iid, resolved=False, error="harness_error",
-            )
+            if iid not in out:
+                out[iid] = HarnessResult(
+                    instance_id=iid, resolved=False, error="harness_error",
+                )
+
     return out
 
 
@@ -138,9 +172,11 @@ def write_harness_summary(
     """Emit harness_summary.json — luxe-format aggregated view."""
     n = len(results)
     n_resolved = sum(1 for r in results.values() if r.resolved)
+    n_errors = sum(1 for r in results.values() if r.error)
     payload = {
         "n": n,
         "n_resolved": n_resolved,
+        "n_errors": n_errors,
         "resolution_rate": (n_resolved / n) if n else 0.0,
         "instances": {
             iid: {"resolved": r.resolved, "error": r.error}
