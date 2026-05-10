@@ -1,14 +1,26 @@
 # luxe — session resume document
 
-## Current state — 2026-05-09 (v1.6.0-rc-1; n=75 v3 RAN, ship-floor analysis pending)
+## Current state — 2026-05-10 (v1.6.0 SHIPPED)
 
-**Working tree**: clean. **643 tests passing** (+24 vs 619 v1.5.0-rc-2 baseline). v1.6 code shipped; tag held until ship-floor inspector confirms the v3 floor.
+**Working tree**: clean post-tag. **643 tests passing**. **v1.6.0 tagged** with the v3 ship-floor + Docker harness numbers. BFCL v3 post-SpecDD raw-mode comparison run kicked off (~3.5h wall, in-progress as of tag time).
 
-**Phase D Step 1 — DONE 2026-05-09** (~5h wall, finished 05:23 local). 75/75 instances ran; 57/75 produced a non-empty patch. Predictions at `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/predictions.json`. **Ship-floor metrics not yet computed** — Steps 2–4 below have not run. Pick up at Step 2 (compare_runs + smoke_inspect) before any tag decision.
+**Ship-floor result (Phase D Step 3, all gates green)**:
 
-**SpecDD Lever 2 v1.6 — code SHIPPED, tag DEFERRED** pending overnight n=75 v3 confirming `new_file_in_diff = 0` floor under creation-only semantics.
+| Signal | Floor | v3 actual |
+|---|---|---|
+| new_file_in_diff | =0 | **0** ✅ (jq cross-check confirms zero `new file mode`) |
+| strong | ≥14 | **16** ✅ |
+| strong + plausible | ≥30 | **36** ✅ |
+| empty_patch | ≤18 | **18** ✅ |
+| wrong_target | ≤20 (soft) | **17** ✅ (no Phase B anchoring spike) |
 
-**Architectural reframe — operation-aware policy**: v1.5 encoded *"these filenames are suspicious"* (path-aware). v1.6 encodes *"creating verifier scaffolding is disallowed"* (operation-aware). `.sdd` gains a new section `Forbids creating` that fires only when a write would create a new file at the target path. The policy boundary now matches the behavioral distinction the system was missing: **repository participation** (legitimate edits to existing files) vs **benchmark gaming** (invented validation scaffolds).
+**Docker harness (Phase D Step 4, n=75)**: **36/75 = 48.0% resolved** in 34m43s, 0 errors. Tier × resolved: strong 15/16 (94%), plausible 10/20 (50%), wrong_target 8/17 (47%), wrong_location 3/4 (75%), empty_patch 0/18 (0%). The strong inspector tier is a near-perfect predictor of harness-resolution; 11 wrong_target/wrong_location resolves are alternative-solution credit (model fixed a different file/locus than gold, tests pass anyway).
+
+**v3 vs pre-Lever-2 baseline (long-arc claim)**: strong 12→16 (+33%); empty_patch 26→18 (−10.7pp); new_file_in_diff 4→0 (full class elimination); any non-empty 45→57 (+27%). Paired-mechanism win sustained AND class eliminated.
+
+**v3 vs v2 (creation-only delta)**: new_file 2→0 (the architectural target). xarray-3305 + sphinx-10466 both empty/wrong_loc → strong (variance, not collateral, confirmed). sympy-12481 invent→plausible (gold file modified). matplotlib-24870 new_file→empty (1/2 v2-escape "constraint pressure → occasional abandonment", within budget).
+
+**Architectural shift recap — operation-aware policy**: v1.5 encoded *"these filenames are suspicious"* (path-aware). v1.6 encodes *"creating verifier scaffolding is disallowed"* (operation-aware). `.sdd` gains a new section `Forbids creating` that fires only when a write would create a new file at the target path. The policy boundary now matches the behavioral distinction the system was missing: **repository participation** (legitimate edits to existing files) vs **benchmark gaming** (invented validation scaffolds).
 
 | Section | Fires on edit? | Fires on create? |
 |---|---|---|
@@ -32,11 +44,24 @@
 
 ---
 
-## ⚡ Resume here — Phase D Step 2 (ship-floor analysis) + ship decision
+## ⚡ Resume here — v1.7 priorities (post-v1.6.0 ship)
 
-Step 1 ran cleanly on 2026-05-09 — predictions are sitting at `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/predictions.json`. Run completed 75/75 in ~5h; 57/75 non-empty patches per the run summary. Tier breakdown / `new_file_in_diff` audit / wrong_target delta have **not** been computed yet — that's Step 2.
+v1.6.0 is tagged. The v3 ship-floor + harness data is captured in the tag annotation; v3 predictions are sitting at `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/`; harness logs at `logs/run_evaluation/luxe_v16_n75/` (gitignored). The four remaining v1.6-era loose ends:
 
-Total remaining wall: ~30-45m inspector + compare + 30-45m Docker harness + tag.
+1. **Watch the BFCL v3 post-SpecDD raw-mode run land** (~3.5h from 2026-05-10 17:30 local) — `acceptance/bfcl/post_specdd_v16/rep_1/`. Raw mode bypasses the agent loop, so SpecDD doesn't fire — primarily a regression check (model unchanged from v1.4.1 baseline). If totals deviate >2pp from 76.29%, an infra regression leaked. If they don't, file the result and move on.
+2. **(Open question)** BFCL agent-mode post-SpecDD run — would actually exercise SpecDD, but no pre-SpecDD agent-mode anchor exists. Worth doing as a one-shot v1.6 datapoint to inform v1.7 BFCL strategy.
+3. **(Optional follow-up)** Re-aggregate the v3 harness summary into a tracked `harness_summary.json` once the rebuilt `harness.py:collect_results` fix is exercised on a fresh run. Current summary was written via the fixed collector against the existing `logs/run_evaluation/luxe_v16_n75/` dir.
+4. **sphinx-doc__sphinx-10466 strong→unresolved** is the lone strong tier instance the harness rejected. Worth a glance for v1.7 prep but not a v1.6 blocker.
+
+### v1.7 priorities (in order of expected impact)
+
+1. **Early-bail intervention** — addresses ≥10 of the 18 v3 paired-mechanism `empty_patch` cases (the `agent_bailed` class). Interception strategy: detect the bail signature in the loop (consecutive low-output steps + no write-tool calls) and inject a directive turn rather than letting the loop trip its stuck detector. Prerequisite: `LUXE_LOG_TOOL_CALLS=1` traces of the 18 v3 empties to confirm class composition.
+2. **b2 multi-site retrieval** — extend the spec-validator predicate kinds so SpecDD Lever 1 can demand citations from N sites within a single fixture. Closes the loose-grader gap surfaced in `project_loose_grader_audit.md`.
+3. **In-loop test execution feedback** — pipe `pytest` results from the previous step back into the model's next prompt. Likely gates the second strong-tier rebound (Phase B nearest-anchoring tightening, slated to fire here).
+4. **Mode B threshold tuning** — broader bench data is incoming from v3 + Phase B; revisit the 10 tools / 4000 tokens / step 5 thresholds against the v3 traces.
+5. **Lever 3** — held until empty_patch class is fully addressed; Lever 3 needs clean separation of constraint vs reasoning failures, and the empty_patch class confounds that boundary today.
+
+### Old Phase D Step 2/3/4 commands (kept for re-run reference)
 
 ### Step 1 — n=75 v3 rerun with creation-only forbids — DONE 2026-05-09
 
