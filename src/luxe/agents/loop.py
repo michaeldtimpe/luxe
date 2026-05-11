@@ -109,12 +109,30 @@ _DEDUP_EXEMPT_TOOLS = {"read_file"}
 # picture" prematurely, hallucinated content from priors, never committed).
 _WRITE_TOOLS = frozenset({"write_file", "edit_file"})
 
+# Post-write drift detector. Once at least one write has succeeded, any
+# run of non-write tool calls that each return zero bytes (or hit the
+# dedup short-circuit) signals "diff already produced, model is spinning
+# on verification without new information." Exit cleanly at this many
+# back-to-back idle calls so the harness still commits/pushes the work
+# without burning the full max_steps budget.
+# Observed pattern (qwen3-coder-next-80b, 2026-05-10 m5max_moe bake-off):
+# edit_file (step 1) → git_diff 972B (step 2) → lint 0B → bash 0B →
+# git_diff 0B (dup) → bash 0B (dup×2 → stuck_no_output bailout). Diff
+# was already correct from step 1; steps 3–11 produced no new signal.
+_POST_WRITE_IDLE_MAX = 3
+
 # Mid-loop write-pressure thresholds (Mode B fix). Fires once per run when
-# all conditions hold: tool calls >= MIN_TOOLS, completion tokens >=
-# MIN_TOKENS, current step >= MIN_STEP, zero writes so far. Off by default;
-# enable per-run with LUXE_WRITE_PRESSURE=1 (or via runtime config).
+# the gate hits: step >= MIN_STEP, tools >= MIN_TOOLS, zero writes, AND
+# either completion >= MIN_TOKENS (prose-heavy trap) or tools >=
+# MAX_TOOLS_BEFORE_FIRE (tool-heavy trap). The dual signal handles models
+# with different output distributions: qwen3.6-35b generates ~9k completion
+# tokens in the v1.4 prose-mode failure, while qwen3-coder-next-80b emits
+# 30 reads with only ~1.5k completion tokens — same read-loop pathology,
+# different surface telemetry. Off by default; enable per-run with
+# LUXE_WRITE_PRESSURE=1 (or via runtime config).
 _WRITE_PRESSURE_MIN_TOOLS = 10
 _WRITE_PRESSURE_MIN_TOKENS = 4000
+_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE = 15
 _WRITE_PRESSURE_MIN_STEP = 5
 
 _WRITE_PRESSURE_MESSAGE = (
@@ -172,6 +190,7 @@ def run_agent(
     write_pressure_enabled = os.environ.get("LUXE_WRITE_PRESSURE") == "1"
     write_pressure_fired = False
     writes_seen = 0
+    post_write_idle_tools = 0
 
     for step in range(role_cfg.max_steps):
         result.steps = step + 1
@@ -191,7 +210,8 @@ def run_agent(
                 and writes_seen == 0
                 and step >= _WRITE_PRESSURE_MIN_STEP
                 and result.tool_calls_total >= _WRITE_PRESSURE_MIN_TOOLS
-                and result.completion_tokens >= _WRITE_PRESSURE_MIN_TOKENS):
+                and (result.completion_tokens >= _WRITE_PRESSURE_MIN_TOKENS
+                     or result.tool_calls_total >= _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE)):
             messages.append({"role": "user", "content": _WRITE_PRESSURE_MESSAGE})
             write_pressure_fired = True
             if log_calls:
@@ -310,6 +330,8 @@ def run_agent(
                         key_hash=key_hash, duplicate=True, cached=False,
                         bytes_out=0,
                     )
+                if writes_seen > 0:
+                    post_write_idle_tools += 1
                 continue
 
             executed = dispatch_tool(
@@ -320,6 +342,12 @@ def run_agent(
             seen_calls.add(key)
             if tc.name in _WRITE_TOOLS and not executed.error:
                 writes_seen += 1
+                post_write_idle_tools = 0
+            elif writes_seen > 0:
+                if executed.bytes_out == 0 or executed.error:
+                    post_write_idle_tools += 1
+                else:
+                    post_write_idle_tools = 0
 
             content = executed.error or executed.result
             messages.append({
@@ -338,6 +366,17 @@ def run_agent(
                     key_hash=key_hash, duplicate=False,
                     cached=executed.cached, bytes_out=executed.bytes_out,
                 )
+
+        if post_write_idle_tools >= _POST_WRITE_IDLE_MAX:
+            result.final_text = resp.text or ""
+            if log_calls:
+                append_event(
+                    run_id, "post_write_idle_exit",
+                    phase=phase, step=step,
+                    idle_tools=post_write_idle_tools,
+                    writes_seen=writes_seen,
+                )
+            break
 
         if step_had_repeat:
             consecutive_repeat_steps += 1
