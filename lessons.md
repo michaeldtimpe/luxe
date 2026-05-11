@@ -1624,3 +1624,172 @@ rebuilt for swebench 4.x layout), `.gitignore` (logs/), `RESUME.md`,
 `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/`;
 harness logs at `logs/run_evaluation/luxe_v16_n75/` (gitignored,
 ~hand-debug).
+
+---
+
+### [2026-05-10] m5max_moe bake-off — three substrate bugs and a behavioural-threshold miscalibration
+
+**What happened**: First M5 Max 128GB MoE bake-off
+(qwen3.6-35B-A3B-6bit, qwen3-coder-next-80B-A3B-6bit,
+glm-4.5-air-106B-A12B-4bit, 10 fixtures each = 30 cells) scored
+17/30 (81/150). The headline number masked three independent
+substrate failures and one behavioural-threshold miscalibration,
+none of which were model-quality signals:
+
+1. **GLM 0/10 from tool-name parsing.** Every GLM dispatch call
+   emitted the tool name with stray newlines: `"read_file\n"`,
+   `"bash\n\n"`, `"glob\n\n\n"`. The dispatcher's
+   `if name not in tool_fns` lookup missed every call, returned
+   0 bytes, the model retried the same broken call, and the dup
+   detector eventually bailed the run with zero progress.
+
+2. **All variants capped at 4/5 on every passing fixture.** The
+   bench clones live under `~/.luxe/bench-workspace/<id>-clone`
+   with no GitHub remote, so `gh pr create` fails universally;
+   the `pr_opened` rubric criterion (1 pt of 5) never fires
+   offline. Known design (RESUME.md L397), not a bug, but it was
+   obscuring the substrate signal underneath.
+
+3. **`neon-rain-implement-reset-shortcut` 1/5 — but `rc=127`.**
+   The fixture's R1 predicate is `npm test`. M5 Max didn't have
+   node installed (clean dev env), so the test exited 127
+   `command not found` and was scored as a test failure. Pure
+   environment, no model involvement.
+
+4. **`qwen3-coder / nothing-ever-happens-document-config` —
+   "Prompt too long: 33827 tokens exceeds max context window of
+   32768".** oMLX's global `sampling.max_context_window` was set
+   to 32k while the Qwen3 family natively supports 128k+. Hard
+   400 from oMLX, not a model bailout. Bumped the global to 48k
+   to clear it.
+
+5. **qwen3-coder-next 7/10 stuck_no_output bailouts — post-write
+   verification drift.** Trace: edit_file at step 1, git_diff at
+   step 2 confirms diff, then 5–8 turns of lint/bash/git_diff
+   each returning 0 bytes until the dup detector eventually
+   bails. The diff was correct from step 1; the bailouts were
+   wasting tokens but not breaking outcomes.
+
+6. **`qwen3-coder / nothing-ever-happens-document-config` still
+   1/5 after substrate fixes — pure read-loop.** 30 reads, 0
+   writes, model never produces a diff. The mid-loop
+   write-pressure intervention (Mode B, `LUXE_WRITE_PRESSURE=1`)
+   was designed for exactly this pathology — but the existing
+   gate required `completion_tokens >= 4000` (calibrated on
+   qwen3.6-35B's 9092-token v1.4 failure), and qwen3-coder is
+   a tool-call-heavy / prose-light model averaging ~1855
+   completion tokens per fixture. The gate was structurally
+   unreachable for this model class.
+
+**Root cause** — single architectural theme across all five:
+**every threshold/gate calibrated on one model's telemetry
+distribution silently fails on a model with a different
+distribution.** Restated:
+
+- Whitespace tolerance: implicit assumption that "models emit
+  clean tool names." GLM violates it.
+- pr_opened criterion: implicit assumption that bench environment
+  has GitHub access. Offline bench violates it.
+- npm/node available: implicit assumption that the bench host has
+  the toolchain. Clean dev env violates it.
+- 32k context window: implicit assumption that 32k is "enough."
+  qwen3-coder under realistic retrieval load violates it.
+- 4000 completion-token threshold: implicit assumption that
+  models drifting into the read-loop trap will generate prose
+  about it. qwen3-coder emits silent tool calls instead.
+
+The **post-write idle pattern** (5) is a separate behaviour
+class: the agent's terminal-state heuristic conflates
+"verification spinning after success" with "stuck pre-success."
+Same dup-detector handles both, both flagged as `aborted`.
+
+**Fix / takeaway**:
+
+1. `tools/base.py`: `name = name.strip()` before the tool_fns
+   lookup. Defensive normalisation, costs nothing, recovers any
+   model that emits stray whitespace.
+
+2. `~/.omlx/settings.json`: `sampling.max_context_window` 32768 →
+   49152. Documented as a runtime prereq in `RESUME.md`. **This
+   is per-machine state and not version-controlled** — any new
+   bench host needs the same bump.
+
+3. `brew install node`. Documented in RESUME.md.
+
+4. `agents/loop.py`: `_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE = 15`,
+   OR'd with the existing completion-tokens gate. Tool-call ceiling
+   handles tool-call-heavy models; completion gate handles
+   prose-heavy models. Either signal — same outcome.
+
+5. `agents/loop.py`: `_POST_WRITE_IDLE_MAX = 3`. After any write
+   succeeds, 3 back-to-back 0-byte verification calls exit cleanly
+   (not aborted) so the harness commits/pushes without burning the
+   max_steps budget. Distinct from the dup-detector path: catches
+   tools that vary their args (vary their dup-key) but still
+   return nothing useful.
+
+6. `benchmarks/maintain_suite/run.py`: `LUXE_WRITE_PRESSURE=1`
+   becomes the maintain_suite default (via `env.setdefault` so
+   ablations can still override).
+
+**Result after all six fixes**: 17/30 (81/150) → **30/30
+(120/150)**. Every variant passes the v1 gate; every passing
+fixture is a true 4/5 (offline pr_opened cap). Wall-time
+improved by 17–39% across variants from the
+post-write-idle-exit and earlier write-pressure injection.
+
+**The lessons that landed durably**:
+
+1. **Telemetry asymmetry across model classes is the rule, not
+   the exception.** Tuning behavioural thresholds (write-pressure
+   gates, max-step ceilings, retrieval budgets) on the failure
+   trace of one model produces gates that are unreachable for
+   models with different output distributions. The fix is to add
+   alternative signals (OR-branches on different telemetry
+   channels), not to lower the single threshold — lowering it
+   risks false-firing on the original model class.
+
+2. **Substrate failures wear model-failure clothes.** Four of
+   six issues in this bake-off (whitespace dispatch, pr_opened
+   offline, missing npm, oMLX context) looked like model bailouts
+   in `summary.json` and `comparison.json`. The path to truth
+   was always the same: `events.jsonl` per run_id, walk the
+   tool_call sequence, watch the bytes_out column. Trace before
+   theorising.
+
+3. **Defensive normalisation at API surfaces costs nothing.**
+   `name.strip()` in the tool dispatcher is one line; it
+   recovered 7/10 fixtures on the affected model. Comparable
+   defensive moves at every "we receive a string from the model"
+   boundary cost nearly nothing relative to what they enable.
+
+4. **Post-success verification drift is its own failure class.**
+   The dup detector catches it eventually but marks it `aborted`,
+   which collapses with pre-success bailout in dashboards. A
+   distinct "clean exit, work already landed" signal makes the
+   bench analysis honest: the difference between "model failed"
+   and "model succeeded then spun on cleanup" is large.
+
+5. **The `LUXE_WRITE_PRESSURE` opt-in default was wrong.** It's
+   load-bearing for tool-call-heavy models on read-loop-prone
+   fixtures. The maintain_suite now opts in by default; the
+   swebench adapter already wires it via `LUXE_WRITE_PRESSURE=1`.
+
+**Open question for v1.7**: do these threshold-asymmetry findings
+generalise to SWE-bench? The current 4000-completion threshold
+was calibrated against `nothing-ever-happens-document-config` on
+qwen3.6-35B; the SWE-bench `empty_patch` class (14/75 in v1
+paired-mechanism, 17/75 in v2) may include similar read-loop
+trajectories on qwen3-coder-class instance distributions. Worth
+re-running with `LUXE_WRITE_PRESSURE=1` + the tuned threshold
+before the v1.7 early-bail intervention design lands.
+
+**Affected files**: `src/luxe/tools/base.py`,
+`src/luxe/agents/loop.py`, `tests/test_tools.py`,
+`tests/test_loop_write_pressure.py`,
+`benchmarks/maintain_suite/run.py`, `~/.omlx/settings.json` (not
+version-controlled), `RESUME.md` (oMLX/npm prereq doc).
+5 new regression tests (1 dispatch + 4 loop); 648 tests collected,
+643 passing — 5 pre-existing `test_bfcl_adapter.py` failures from
+missing optional `bfcl_eval` dependency persist (unrelated to this
+session).
