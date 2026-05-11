@@ -80,6 +80,11 @@ def dispatch_tool(
     cache: ToolCache | None = None,
     cacheable: set[str] | None = None,
 ) -> ToolCall:
+    # Tolerate stray whitespace in the tool name. GLM-4.5-Air-4bit emits
+    # `"read_file\n"` / `"bash\n\n"` etc.; without normalization the lookup
+    # misses, the model retries the same broken call, and the dup detector
+    # bails the whole run with zero progress.
+    name = name.strip()
     tc = ToolCall(id="", name=name, arguments=args)
     if name not in tool_fns:
         tc.error = f"Unknown tool: {name}"

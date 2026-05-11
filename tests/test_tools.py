@@ -277,6 +277,25 @@ class TestDispatchToolErrorCapture:
         assert tc.error is None
         assert tc.result == "hello"
 
+    def test_tool_name_whitespace_is_stripped(self):
+        """GLM-4.5-Air-4bit emits tool names with trailing newlines
+        (`"read_file\\n"`, `"bash\\n\\n"`). Without normalization the
+        dispatch lookup misses, the model loops on broken calls, and
+        the run bails with zero progress. The dispatcher strips
+        whitespace before the lookup so stray newlines don't break
+        otherwise-valid calls."""
+        called = {"n": 0}
+        def normal_fn(args):
+            called["n"] += 1
+            return "ok", None
+        for variant in ("read_file\n", "  read_file  ", "read_file\n\n\n", "\tread_file"):
+            tc = dispatch_tool(variant, {"path": "x"},
+                               {"read_file": normal_fn})
+            assert tc.error is None, f"variant {variant!r} failed: {tc.error}"
+            assert tc.result == "ok"
+            assert tc.name == "read_file"  # canonicalized
+        assert called["n"] == 4
+
     def test_cached_tool_exception_not_poisoned_into_cache(self):
         """An exception during the first call must not be cached as a
         successful result — the cache stays empty so retries can succeed."""
