@@ -17,9 +17,9 @@ candidates). M5 is also the active dense-search frontier for deluxe.
 This document tracks the luxe.M1 production state — M5 lane activity
 is documented inline below when a benchmark is in flight.
 
-## Current state — 2026-05-11 (v1.6.1-rc-1; substrate hardening + maintain_suite Lever 2 extension + BFCL agent anchor)
+## Current state — 2026-05-11 (v1.6.1 SHIPPED — substrate hardening + maintain_suite Lever 2 extension + BFCL agent anchor)
 
-**Working tree**: clean. **648 tests collected, 643 passing** (5 new regression tests landed; 5 pre-existing `test_bfcl_adapter.py` failures from missing optional `bfcl_eval` dep persist — unrelated, predates the session). **7 commits pushed to `origin/main`** (5cc3c87 → 1d848ae) on top of v1.6.0; BFCL agent anchor docs land on top of that.
+**Working tree**: clean. **652 tests passing** (`bfcl_eval` adapter tests now green after dep landed). **v1.6.1 tagged locally** at `0a964bf` (annotated, signed) on top of v1.6.0 (10 commits since: 7 substrate/maintain_suite + 3 doc rolls). Tag not pushed to `origin`; the local main branch is 1 commit ahead of `origin/main` from before the tag.
 
 **M5 Max MoE bake-off complete** (`acceptance/m5max_moe/`, 2026-05-10). The full run started at 17/30 (81/150, GLM 0/10) and landed at **30/30 (120/150, all 3 variants pass v1 gate) modulo a single transient `embedded null byte` ValueError at the commit step** (lpe-rope-calc-implement-strict-flag on GLM, scored 4/5 on the recheck). The final official bench shows 29/30; the variance recheck confirms the true rollup is 30/30. See `lessons.md` 2026-05-10 m5max_moe entry for the full postmortem.
 
@@ -47,7 +47,7 @@ BFCL agent adapter does NOT wire `.sdd` injection or the Lever 1 spec validator 
 
 See memory entries `project_bfcl_post_specdd_v16_raw.md` + `project_bfcl_post_specdd_v16_agent.md`; lessons.md 2026-05-11 entry has the full postmortem.
 
-**v1.6.1-rc-1 status**: the seven commits above + this BFCL doc-roll are the v1.6.1 candidate. No release tag yet — the user signed off on the version bump after the BFCL agent run landed. v1.6.1 is a patch on top of v1.6.0 capturing: (a) substrate hardening from the m5max_moe bake-off, (b) SpecDD Lever 2 extended into maintain_suite, (c) BFCL v3 agent anchor (data only, no code). No architectural shift — v1.7 is reserved for early-bail intervention and BFCL Lever 1 wiring per the priority list below.
+**v1.6.1 SHIPPED 2026-05-11** (tag `0a964bf`, local only — not pushed to origin). Patch on top of v1.6.0 capturing: (a) substrate hardening from the m5max_moe bake-off, (b) SpecDD Lever 2 extended into maintain_suite, (c) BFCL v3 agent anchor (data only, no code). No architectural shift — v1.7 is reserved for early-bail intervention and BFCL Lever 1 wiring per the priority list below.
 
 ---
 
@@ -339,7 +339,7 @@ Latent / open:
 
 **luxe** is an MLX-only repo maintainer for Apple Silicon (oMLX backend on `localhost:8000`). Takes a goal + repo, opens a PR. Mono-only since v1.0 — single model, single agent loop, single `luxe maintain` command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
-**What's shipped through v1.6.0**:
+**What's shipped through v1.6.1**:
 - v1.0 — mono-only; 10 fixtures; strict gates
 - v1.1 — pinned work_dir default + manage_strict overlay → 9/10
 - v1.2 — per-tool subphase pass: cve_lookup gated to manage; bash chain-hardening; read_file binary detection
@@ -348,13 +348,14 @@ Latent / open:
 - v1.4.1 — citation-linter bare-filename fallback (Mode A) + Mode B mid-loop write-pressure (opt-in) + sidecar regrade lint re-run
 - v1.5.0-rc-2 — SpecDD Lever 2 paired-mechanism (`.sdd` constraint + WRITE_PRESSURE actuation); 619 tests
 - v1.6.0 (tagged 2026-05-09) — creation-only Forbids: `.sdd` gains `Forbids creating` section, `creating: bool` threaded through write-time guards; recovery-gradient error wording; SWE-bench n=75 v3 36/75 = 48.0% harness-resolved; 643 tests
+- v1.6.1 (tagged 2026-05-11, local only at `0a964bf`) — substrate hardening (6 fix vectors from m5max_moe bake-off); SpecDD Lever 2 extended into maintain_suite (`Fixture.forbids_create` + synth `.sdd` injection); BFCL v3 anchors (raw 76.45%, agent 83.71%); 652 tests
 
-**v1.6.1-rc-1 (in flight; this session continued from 2026-05-10/11)**:
+**v1.6.1 SHIPPED 2026-05-11** (tag `0a964bf`, local only):
 - m5max_moe substrate hardening (6 fix vectors): tool-name strip in dispatcher + loop boundary; `_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE = 15` OR-branch on completion-tokens gate; `_POST_WRITE_IDLE_MAX = 3` clean-exit signal; `LUXE_WRITE_PRESSURE=1` as maintain_suite default
 - SpecDD Lever 2 extended into maintain_suite: `Fixture.forbids_create: list[str]` + `_inject_forbids_create_sdd` writes synthetic `<repo>.sdd` + `.git/info/exclude` append; 3 fixtures opted in with cross-product JS test-name coverage
 - BFCL v3 anchors filed: raw 76.45% (regression check, no infra drift) + agent 83.71% (+7.26pp vs raw; parallel cliff +17pp; irrelevance −6.25pp)
-- 648 tests collected, 643 passing (5 new regression tests for tool-name strip + WRITE_PRESSURE branches + synth .sdd injection)
-- **Pending**: v1.6.1 tag (subject to user sign-off); BFCL agent run does NOT exercise Lever 1 yet — adapter wiring is a v1.7 lever
+- 652 tests passing
+- BFCL agent run did NOT exercise Lever 1 — adapter wiring is v1.7 priority #2
 
 **What's queued for v1.7.0**:
 - Early-bail intervention #1 priority (addresses ≥10 of 18 v3 paired-mechanism empty_patch). Then BFCL Lever 1 wiring + abstain gradient (baseline-to-beat: 83.71% / 64.5% / 85.83%). Then b2 multi-site retrieval. Then in-loop test execution feedback. Then Mode B threshold tuning. Lever 3 on backlog.
