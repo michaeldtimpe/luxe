@@ -24,9 +24,22 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
+from typing import Any, Sequence
 
 from luxe.spec import Requirement, Spec
+
+
+@lru_cache(maxsize=256)
+def _compiled_pattern(pattern: str) -> re.Pattern[str]:
+    """Cache compiled regex patterns. Spec/Requirement are frozen so the
+    pattern string is stable across the run; for the BFCL Lever 1 wiring
+    `validate()` runs every loop step on every problem (~1240 problems × ~7
+    steps) and re-compiling per call dominates wall time. See the latency
+    contract in `~/.claude/plans/bubbly-plotting-gosling.md` Phase C.2.
+    """
+    return re.compile(pattern)
 
 
 @dataclass(frozen=True)
@@ -59,19 +72,39 @@ class ValidationResult:
         return [r for r in self.results if not r.satisfied]
 
 
-def validate(spec: Spec, repo_path: str | Path, base_sha: str) -> ValidationResult:
+def validate(
+    spec: Spec,
+    repo_path: str | Path,
+    base_sha: str,
+    *,
+    tool_calls: Sequence[tuple[str, dict[str, Any]]] | None = None,
+) -> ValidationResult:
     """Evaluate every requirement in `spec` against the working tree.
 
     `repo_path` is the working-tree root (where the agent has been editing).
     `base_sha` is the fixture's reference state — diff predicates compare
-    against this.
+    against this. `tool_calls` is the agent loop's current tool-call list
+    (BFCL Lever 1: v1.7 agent-trajectory predicates) — pass `None` for
+    diff-only validation (the v1.4–v1.6 call shape).
 
     No early-exit: every requirement is evaluated even if an earlier one
     failed, so the caller (synthesizer or reprompt block) can show the
     full set of unsatisfied items in a single pass.
+
+    Latency contract: regex predicates use a cached compile; agent-trajectory
+    predicates do no IO. Diff parsing runs subprocess and is skipped when
+    no diff-predicate requirements are present (e.g., BFCL-only specs).
     """
-    repo = Path(repo_path)
-    added_lines = _added_lines_from_diff(repo, base_sha)
+    repo = Path(repo_path) if repo_path else None
+    tool_calls = tool_calls or ()
+
+    needs_diff = any(
+        r.kind in ("regex_present", "regex_absent")
+        for r in spec.requirements
+    )
+    added_lines = (
+        _added_lines_from_diff(repo, base_sha) if needs_diff and repo else []
+    )
 
     results: list[RequirementResult] = []
     for req in spec.requirements:
@@ -85,6 +118,10 @@ def validate(spec: Spec, repo_path: str | Path, base_sha: str) -> ValidationResu
             results.append(_eval_ast_query(req))
         elif req.kind == "manual":
             results.append(_eval_manual(req))
+        elif req.kind == "expects_zero_calls":
+            results.append(_eval_expects_zero_calls(req, tool_calls))
+        elif req.kind == "min_tool_calls":
+            results.append(_eval_min_tool_calls(req, tool_calls))
         else:
             # spec.py's __post_init__ should prevent this, but defensive
             # coverage in case the validator's kind list drifts from spec.py
@@ -150,7 +187,7 @@ def _eval_regex_present(
     1 match, needed ≥3".
     """
     assert req.pattern is not None  # spec.py validates this
-    rx = re.compile(req.pattern)
+    rx = _compiled_pattern(req.pattern)
     matches = [fname for fname, body in added_lines if rx.search(body)]
 
     if len(matches) >= req.min_matches:
@@ -191,7 +228,7 @@ def _eval_regex_absent(
     exactly what should be removed.
     """
     assert req.pattern is not None
-    rx = re.compile(req.pattern)
+    rx = _compiled_pattern(req.pattern)
     for fname, body in added_lines:
         if rx.search(body):
             return RequirementResult(
@@ -264,6 +301,66 @@ def _eval_ast_query(req: Requirement) -> RequirementResult:
         detail=(
             f"{req.id} ast_query not yet implemented at v1.4-prep; "
             "requirement reports unsatisfied to surface this clearly."
+        ),
+    )
+
+
+def _eval_expects_zero_calls(
+    req: Requirement,
+    tool_calls: Sequence[tuple[str, dict[str, Any]]],
+) -> RequirementResult:
+    """The agent must emit zero tool calls. Used for BFCL irrelevance
+    problems where the correct response is to decline rather than call
+    available tools. The detail message names the first violating call
+    so the reprompt can be specific.
+    """
+    if not tool_calls:
+        return RequirementResult(
+            requirement=req,
+            satisfied=True,
+            detail=f"{req.id} no tool calls emitted (abstain held)",
+        )
+    first_name = tool_calls[0][0]
+    return RequirementResult(
+        requirement=req,
+        satisfied=False,
+        detail=(
+            f"{req.id} expected zero tool calls, "
+            f"got {len(tool_calls)} (first: {first_name}). "
+            f"These tools are not relevant to the user's request."
+        ),
+    )
+
+
+def _eval_min_tool_calls(
+    req: Requirement,
+    tool_calls: Sequence[tuple[str, dict[str, Any]]],
+) -> RequirementResult:
+    """The agent must emit at least min_matches tool calls. Used for BFCL
+    parallel / parallel_multiple problems where the user's request
+    structurally implies N tool calls; the predicate fires when the agent
+    appears about to terminate with fewer.
+
+    Note: this leaks the *count* of expected calls from BFCL ground_truth
+    structure (not the values). RESUME.md v1.7 priority #2 endorses this
+    as the Lever 1 wiring shape. Future raw-vs-agent comparisons must
+    label v1.7+ agent runs as "loop + Lever 1 hints" to avoid attributing
+    improvements to loop scaffolding alone.
+    """
+    got = len(tool_calls)
+    if got >= req.min_matches:
+        return RequirementResult(
+            requirement=req,
+            satisfied=True,
+            detail=f"{req.id} agent emitted {got} tool calls (needed ≥{req.min_matches})",
+        )
+    return RequirementResult(
+        requirement=req,
+        satisfied=False,
+        detail=(
+            f"{req.id} agent emitted {got} tool calls, "
+            f"user's request appears to require ≥{req.min_matches}. "
+            "Continue with the remaining tool calls."
         ),
     )
 

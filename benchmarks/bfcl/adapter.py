@@ -29,9 +29,81 @@ from typing import Any
 
 from luxe.backend import Backend, ChatResponse
 from luxe.config import RoleConfig
+from luxe.spec import Requirement, Spec
 from luxe.tools.base import ToolDef
 
 from .schemas import bfcl_func_spec_to_tool_def, make_stub_executor
+
+
+# Category-aware system prompt overrides (v1.7 priority #2). The default
+# prompt primes tool-eagerness which corrupts BFCL irrelevance, where the
+# correct outcome is to decline. The irrelevance variant explicitly names
+# the abstain branch without naming the benchmark — the model sees task-
+# shape language, not "this is a benchmark for irrelevance".
+_SYSTEM_PROMPTS: dict[str, str] = {
+    "irrelevance": (
+        "You are an assistant with tools. If the user's request cannot "
+        "be answered using the available tools, decline and briefly "
+        "explain why. Do not invent tool calls or invoke unrelated tools."
+    ),
+    "default": "You are an assistant that calls tools to answer questions.",
+}
+
+
+def _system_prompt_for(category: str) -> str:
+    return _SYSTEM_PROMPTS.get(category, _SYSTEM_PROMPTS["default"])
+
+
+def _spec_from_problem(
+    problem: dict[str, Any],
+    category: str,
+    ground_truth: list[Any] | None = None,
+) -> Spec | None:
+    """Derive a SpecDD Lever 1 Spec from a BFCL problem's structure.
+
+    Three category groups, three shapes:
+      - irrelevance: spec demands zero tool calls (expects_zero_calls)
+      - parallel / parallel_multiple with GT length >= 2: spec demands at
+        least len(GT) tool calls (min_tool_calls)
+      - everything else: no spec (single-call problems already grade
+        cleanly under the existing loop without Lever 1)
+
+    Fairness note: this leaks the *number* of expected calls (via GT
+    length), not the values. RESUME.md v1.7 priority #2 explicitly
+    endorses this design ("derive a per-problem Spec from the
+    expected-calls structure"). Future raw-vs-agent comparisons must
+    label v1.7+ agent runs as "loop + Lever 1 hints" rather than "loop
+    alone" to avoid attributing improvements to loop scaffolding alone.
+    """
+    if category == "irrelevance":
+        return Spec(
+            goal="The user's request cannot be served by these tools.",
+            requirements=[
+                Requirement(
+                    id="R1",
+                    must="Do not call any tool.",
+                    done_when="Zero tool calls emitted.",
+                    kind="expects_zero_calls",
+                )
+            ],
+        )
+    if category in ("parallel", "parallel_multiple"):
+        gt = ground_truth or []
+        n = len(gt) if isinstance(gt, list) else 1
+        if n >= 2:
+            return Spec(
+                goal=f"User's request implies {n} tool calls.",
+                requirements=[
+                    Requirement(
+                        id="R1",
+                        must=f"Make at least {n} tool calls covering the user's request.",
+                        done_when=f"len(tool_calls) >= {n}.",
+                        kind="min_tool_calls",
+                        min_matches=n,
+                    )
+                ],
+            )
+    return None
 
 
 # Categories we run. Subset chosen for Python-relevance and Mode-B parity.
@@ -177,10 +249,18 @@ def run_problem_agent(
     role_cfg: RoleConfig,
     problem: dict[str, Any],
     *,
-    system_prompt: str = "You are an assistant that calls tools to answer questions.",
+    category: str = "default",
+    system_prompt: str | None = None,
+    ground_truth: list[Any] | None = None,
 ) -> BfclInvocationResult:
     """Agent mode: full run_agent() loop with the BFCL spec as the only
     ToolDef and stub executor. Captures all tool calls from the loop.
+
+    `category` selects both the category-aware system prompt (abstain
+    gradient for irrelevance) and the SpecDD Lever 1 Spec derivation
+    (zero-call expectation for irrelevance, min-call count for parallel*).
+    Pass an explicit `system_prompt` to override the category default for
+    A/B testing.
     """
     from luxe.agents.loop import run_agent
 
@@ -189,6 +269,10 @@ def run_problem_agent(
     user_text = "\n\n".join(m["content"] for m in messages_seed if m.get("role") == "user")
     tool_defs = _problem_tools(problem)
     tool_fns = {td.name: make_stub_executor({"name": td.name}) for td in tool_defs}
+
+    if system_prompt is None:
+        system_prompt = _system_prompt_for(category)
+    spec = _spec_from_problem(problem, category, ground_truth)
 
     t0 = time.monotonic()
     try:
@@ -199,6 +283,7 @@ def run_problem_agent(
             task_prompt=user_text,
             tool_defs=tool_defs,
             tool_fns=tool_fns,
+            spec=spec,
         )
     except Exception as e:  # noqa: BLE001
         return BfclInvocationResult(

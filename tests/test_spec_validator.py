@@ -388,3 +388,92 @@ class TestFormatUnsatisfiedForReprompt:
         assert "R1:" not in out
         assert "R2:" in out
         assert "missing token present" in out
+
+
+
+class TestExpectsZeroCalls:
+    def test_zero_calls_passes(self):
+        spec = Spec(goal="x", requirements=[Requirement(
+            id="R1", must="abstain", done_when="zero",
+            kind="expects_zero_calls",
+        )])
+        r = validate(spec, "", "", tool_calls=[])
+        assert r.all_satisfied
+        assert "abstain held" in r.results[0].detail
+
+    def test_one_call_fails(self):
+        spec = Spec(goal="x", requirements=[Requirement(
+            id="R1", must="abstain", done_when="zero",
+            kind="expects_zero_calls",
+        )])
+        r = validate(spec, "", "", tool_calls=[("get_weather", {"city": "Tokyo"})])
+        assert not r.all_satisfied
+        assert "get_weather" in r.results[0].detail
+        assert "not relevant" in r.results[0].detail.lower()
+
+
+class TestMinToolCalls:
+    def test_meets_threshold_passes(self):
+        spec = Spec(goal="x", requirements=[Requirement(
+            id="R1", must="2 calls", done_when="len >= 2",
+            kind="min_tool_calls", min_matches=2,
+        )])
+        r = validate(spec, "", "", tool_calls=[("a", {}), ("b", {})])
+        assert r.all_satisfied
+        assert "≥2" in r.results[0].detail
+
+    def test_below_threshold_fails(self):
+        spec = Spec(goal="x", requirements=[Requirement(
+            id="R1", must="3 calls", done_when="len >= 3",
+            kind="min_tool_calls", min_matches=3,
+        )])
+        r = validate(spec, "", "", tool_calls=[("a", {})])
+        assert not r.all_satisfied
+        assert "1 tool calls" in r.results[0].detail
+        assert "Continue" in r.results[0].detail
+
+
+class TestValidatorLatency:
+    def test_agent_trajectory_predicates_skip_diff(self):
+        """Specs with only agent-trajectory predicates (no regex_*) must
+        skip the diff subprocess — validate() works when repo_path is
+        empty string and the spec has no diff-predicate requirements."""
+        spec = Spec(goal="x", requirements=[
+            Requirement(id="R1", must="zero", done_when="zero",
+                        kind="expects_zero_calls"),
+            Requirement(id="R2", must="2 calls", done_when="2",
+                        kind="min_tool_calls", min_matches=2),
+        ])
+        r = validate(spec, "", "", tool_calls=[("a", {}), ("b", {})])
+        assert r.results[0].satisfied is False  # 2 calls != 0
+        assert r.results[1].satisfied is True   # 2 >= 2
+
+    def test_validator_latency_under_1ms_p95(self):
+        """Latency contract: validate() with the BFCL parallel_multiple
+        Spec shape must complete in <1ms p95 over 100 runs. Guards against
+        future drift introducing hidden IO into the hot path. See plan
+        §C.2 latency contract."""
+        import time
+        spec = Spec(goal="x", requirements=[Requirement(
+            id="R1", must="3", done_when="3", kind="min_tool_calls", min_matches=3,
+        )])
+        tool_calls = [("a", {"k": 1}), ("b", {"k": 2})]
+        latencies = []
+        for _ in range(100):
+            t0 = time.perf_counter()
+            validate(spec, "", "", tool_calls=tool_calls)
+            latencies.append(time.perf_counter() - t0)
+        p95 = sorted(latencies)[94]
+        assert p95 < 1e-3, f"p95 latency {p95*1000:.3f}ms exceeds 1ms budget"
+
+    def test_regex_compile_is_cached(self):
+        """Repeated calls with the same regex_present pattern must not
+        re-compile. lru_cache on _compiled_pattern keys by pattern string;
+        cache_info exposes hit/miss counts for assertion."""
+        from luxe.spec_validator import _compiled_pattern
+        _compiled_pattern.cache_clear()
+        for _ in range(50):
+            _compiled_pattern(r"a\s*=\s*1")
+        info = _compiled_pattern.cache_info()
+        assert info.hits >= 49
+        assert info.misses == 1

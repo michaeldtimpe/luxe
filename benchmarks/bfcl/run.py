@@ -150,8 +150,15 @@ def main() -> int:
                         temperature=args.temperature,
                     )
                 else:
+                    # Lookup ground truth ahead of the run so Lever 1 can
+                    # derive min_tool_calls. Note: passing GT structure
+                    # leaks call cardinality (not values) per the v1.7
+                    # priority #2 design; see adapter._spec_from_problem.
+                    pre_gt = gt_map.get(pid)
                     result = run_problem_agent(
                         backend, role_cfg, problem,
+                        category=category,
+                        ground_truth=pre_gt,
                     )
                 elapsed = time.time() - t0
 

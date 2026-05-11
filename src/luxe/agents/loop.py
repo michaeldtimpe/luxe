@@ -18,6 +18,8 @@ from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import context_pressure, elide_old_tool_results
 from luxe.run_state import append_event
+from luxe.spec import Spec
+from luxe.spec_validator import validate as spec_validate
 from luxe.tools.base import ToolCache, ToolDef, ToolCall, ToolFn, dispatch_tool, validate_args
 
 
@@ -191,8 +193,19 @@ def run_agent(
     on_tool_event: OnToolEvent | None = None,
     run_id: str | None = None,
     phase: str = "main",
+    spec: Spec | None = None,
 ) -> AgentResult:
-    """Run the agent loop: chat → tool calls → dispatch → repeat."""
+    """Run the agent loop: chat → tool calls → dispatch → repeat.
+
+    `spec` (v1.7) enables SpecDD Lever 1 mid-loop reprompt gating. Two
+    agent-trajectory predicates are supported via spec_validator:
+      - expects_zero_calls: reprompts after the first tool call; suppresses
+        write_pressure + early_bail (both are tool-eagerness amplifiers
+        that would corrupt the abstain signal).
+      - min_tool_calls: reprompts at loop-break if the model produced
+        fewer than min_matches calls; resumes the loop with the reprompt.
+    Each requirement fires at most once per run.
+    """
 
     result = AgentResult()
     t0 = time.monotonic()
@@ -216,6 +229,25 @@ def run_agent(
     early_bail_fired = False
     writes_seen = 0
     post_write_idle_tools = 0
+
+    # SpecDD Lever 1 mid-loop state (v1.7). actual_tool_calls accumulates
+    # (name, args) for every dispatched call so the spec validator sees the
+    # same shape the BFCL adapter does. spec_violations_reprompted tracks
+    # which requirement ids have already triggered a reprompt so each fires
+    # at most once.
+    spec_has_zero_calls = (
+        spec is not None
+        and any(r.kind == "expects_zero_calls" for r in spec.requirements)
+    )
+    if spec_has_zero_calls:
+        # Suppression: the two tool-eagerness amplifiers (write_pressure +
+        # early_bail) would push the model toward action exactly when the
+        # correct outcome is to decline. Disable both unconditionally when
+        # the spec contains a zero-call expectation.
+        write_pressure_enabled = False
+        early_bail_enabled = False
+    actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
+    spec_violations_reprompted: set[str] = set()
 
     for step in range(role_cfg.max_steps):
         result.steps = step + 1
@@ -271,6 +303,29 @@ def run_agent(
                     reads=result.tool_calls_total - writes_seen,
                 )
 
+        # SpecDD Lever 1 mid-loop reprompt gate (v1.7). Fires expects_zero_calls
+        # reprompts here — the predicate's violation is immediate (any tool
+        # call is a violation), so the reprompt lands at the start of the
+        # next step after the offending call. min_tool_calls reprompts fire
+        # at loop-break, not here, because their natural fire-point is when
+        # the model is about to terminate without enough calls.
+        if spec is not None and actual_tool_calls:
+            vr = spec_validate(spec, "", "", tool_calls=actual_tool_calls)
+            for rr in vr.unsatisfied:
+                if rr.requirement.id in spec_violations_reprompted:
+                    continue
+                if rr.requirement.kind != "expects_zero_calls":
+                    continue
+                messages.append({"role": "user", "content": rr.detail})
+                spec_violations_reprompted.add(rr.requirement.id)
+                if log_calls:
+                    append_event(
+                        run_id, "spec_reprompt_fired",
+                        phase=phase, step=step,
+                        requirement_id=rr.requirement.id,
+                        kind=rr.requirement.kind,
+                    )
+
         messages = elide_old_tool_results(messages, role_cfg.num_ctx)
 
         try:
@@ -312,6 +367,35 @@ def run_agent(
             tool_calls = _parse_text_tool_calls(resp.text, known_names)
 
         if not tool_calls:
+            # SpecDD Lever 1 min_tool_calls gate: before declaring the run
+            # finished, check whether the spec expects more tool calls than
+            # the model has emitted. If so, inject a reprompt and continue
+            # the loop instead of breaking. Each requirement fires at most
+            # once per run, so a stuck model can't ping-pong forever.
+            if spec is not None and tool_defs:
+                vr = spec_validate(spec, "", "", tool_calls=actual_tool_calls)
+                continue_for_spec = False
+                for rr in vr.unsatisfied:
+                    if rr.requirement.id in spec_violations_reprompted:
+                        continue
+                    if rr.requirement.kind != "min_tool_calls":
+                        continue
+                    messages.append({"role": "user", "content": rr.detail})
+                    spec_violations_reprompted.add(rr.requirement.id)
+                    continue_for_spec = True
+                    if log_calls:
+                        append_event(
+                            run_id, "spec_reprompt_fired",
+                            phase=phase, step=step,
+                            requirement_id=rr.requirement.id,
+                            kind=rr.requirement.kind,
+                        )
+                if continue_for_spec:
+                    # Replay the assistant's final text so the conversation
+                    # history records the would-be exit before the reprompt.
+                    if resp.text:
+                        messages.append({"role": "assistant", "content": resp.text})
+                    continue
             result.final_text = resp.text
             break
 
@@ -396,6 +480,12 @@ def run_agent(
                 cache=cache, cacheable=cacheable,
             )
             result.tool_calls.append(executed)
+            # SpecDD Lever 1: track every successfully-dispatched call (name,
+            # args) for the spec validator. Skip error and schema-reject
+            # cases — those don't represent a "real" call as far as the
+            # agent-trajectory predicates are concerned.
+            if not executed.error:
+                actual_tool_calls.append((tc.name, tc.arguments))
             seen_calls.add(key)
             if tc.name in _WRITE_TOOLS and not executed.error:
                 writes_seen += 1
