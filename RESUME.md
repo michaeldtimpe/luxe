@@ -1,6 +1,47 @@
 # luxe — session resume document
 
-## Host lane assignment (2026-05-11)
+## Champion: `Qwen3.6-35B-A3B-6bit` (single, platform-stable, daily driver on M1 + M5)
+
+luxe pins **one MoE model** in `configs/single_64gb.yaml`, and all
+ongoing development is centered on making that model better. The
+M5 Max m5max_moe bake-off (2026-05-10) confirmed it: 10/10 perfect,
+fastest wall, highest TPS, no bailouts — beat the two larger MoE
+candidates (Qwen3-Coder-Next-80B, GLM-4.5-Air-106B) on the same gate.
+The champion is the same on M1 Max (64 GB) and M5 Max (128 GB); no
+platform split. **The bake-off is closed.** If a re-bench is ever
+needed, see `~/Downloads/luxe/CLAUDE.md` §"Single-champion policy"
+for the structure to follow.
+
+**Closed 2026-05-12: the M5 daily-driver shootout vs deluxe.**
+luxe ran the same 10 maintain_suite fixtures on the M5 host against
+deluxe's strongest dense candidate (`Qwen2.5-72B-Instruct-4bit-AWQ`).
+Result: luxe **10/10 verified vs deluxe 4/10**, 6.4× faster wall
+(41s vs 263s per fixture), 7.3× faster TPS (71.4 vs 9.8), ~11 GB
+less RAM. luxe is now the daily driver on **both** platforms. The
+shootout reference run is at `acceptance/m5_shootout/` for future
+archaeology. The deluxe dense candidate set is exhausted; no further
+shootouts are queued.
+
+## Host lane assignment (closed 2026-05-12)
+
+**luxe is the daily driver on both M1 Max and M5 Max** (Apple Silicon,
+64 GB / 128 GB respectively) for maintain_suite, SWE-bench, and
+day-to-day agentic work. The deluxe dense-fork's M1 lane was paused
+2026-05-11 (R1 BFCL champion Qwen2.5-32B-4bit and coder-tuned retry
+both rejected; dense 32B-class structurally exceeds M1 Max effective
+hardware capacity for maintain_suite gates) and the deluxe M5 lane
+was closed 2026-05-12 after the shootout. See `~/Downloads/deluxe/RESUME.md`
+for the full closure record + Tier 1/2/3 open paths; `lessons.md`
+2026-05-11 dense.M1 entry for the M1 cross-repo postmortem;
+`~/Downloads/deluxe/lessons.md` 2026-05-12 entry for the M5
+behavioral-ceiling diagnosis.
+
+**M5 (Apple M5 Max)** was the MoE bake-off / substrate-validation
+lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
+MoE candidates) and is now the production lane alongside M1.
+This document tracks the luxe production state across both hosts.
+
+## Current state — 2026-05-11 (post-m5max_moe substrate hardening; v1 maintain_suite at 30/30 modulo variance)
 
 **luxe is the production lane on M1** (Apple M1 Max, 64 GB) for both
 maintain_suite and SWE-bench work. The deluxe dense-fork's M1 lane
