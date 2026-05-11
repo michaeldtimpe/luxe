@@ -604,6 +604,58 @@ def test_run_fixture_silent_failure_marks_state_error(tmp_path, monkeypatch):
     assert (out / "f1" / "diagnostics.json").is_file()
 
 
+def test_inject_forbids_create_sdd_writes_contract_and_excludes_from_git(tmp_path):
+    """SpecDD Lever 2 fixture-side injection: write a synthetic
+    `<repo_basename>.sdd` at the cloned-repo root + register it in
+    `.git/info/exclude` so the PR cycle's `git add -A` skips it.
+
+    Mirrors the swebench adapter pattern but uses .git/info/exclude
+    instead of stripping the file post-run, because maintain_suite
+    commits and pushes via luxe maintain (no post-extract phase to
+    clean up in)."""
+    repo = tmp_path / "neon-rain-clone"
+    repo.mkdir()
+    (repo / ".git" / "info").mkdir(parents=True)
+
+    br._inject_forbids_create_sdd(repo, ["tests/**", "**/*.test.js"])
+
+    sdd = repo / "neon-rain-clone.sdd"
+    assert sdd.is_file()
+    body = sdd.read_text()
+    assert "Forbids creating" in body
+    assert "- tests/**" in body
+    assert "- **/*.test.js" in body
+
+    exclude = (repo / ".git" / "info" / "exclude").read_text()
+    assert "neon-rain-clone.sdd" in exclude
+
+
+def test_inject_forbids_create_sdd_is_idempotent(tmp_path):
+    """Second call must not duplicate the exclude entry (fixture reuse
+    across variants would otherwise grow .git/info/exclude unbounded)."""
+    repo = tmp_path / "x-clone"
+    repo.mkdir()
+    (repo / ".git" / "info").mkdir(parents=True)
+
+    br._inject_forbids_create_sdd(repo, ["tests/**"])
+    br._inject_forbids_create_sdd(repo, ["tests/**"])
+
+    exclude_lines = (repo / ".git" / "info" / "exclude").read_text().splitlines()
+    assert exclude_lines.count("x-clone.sdd") == 1
+
+
+def test_inject_forbids_create_sdd_noop_when_patterns_empty(tmp_path):
+    """No patterns = no synthetic contract. Most fixtures opt out."""
+    repo = tmp_path / "x-clone"
+    repo.mkdir()
+    (repo / ".git" / "info").mkdir(parents=True)
+
+    br._inject_forbids_create_sdd(repo, [])
+
+    assert not (repo / "x-clone.sdd").exists()
+    assert not (repo / ".git" / "info" / "exclude").exists()
+
+
 def test_run_fixture_surfaces_stderr_excerpt(tmp_path, monkeypatch):
     """When luxe.cli fails to start, the stderr should be captured into
     state.last_error so the user sees what broke without grepping logs."""

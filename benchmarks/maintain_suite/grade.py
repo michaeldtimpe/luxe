@@ -411,6 +411,16 @@ class Fixture:
     # without requirements should still load on systems where src/luxe/spec.py
     # isn't yet importable for any reason.
     requirements: list[dict] = field(default_factory=list)
+    # SpecDD Lever 2 (v1.6-style maintain_suite extension, 2026-05-10):
+    # optional list of glob patterns the model may not *create* (it may
+    # still freely edit any existing file of the same name). Empty list =
+    # no synthesized contract injected. Surfaced by the m5max_moe bake-off
+    # post-loop-boundary-fix on neon-rain-implement-reset-shortcut, where
+    # GLM produced a vacuous orphan test file when given full agentic
+    # loop runway. Mirrors the swebench adapter's Forbids creating
+    # pattern; see benchmarks/maintain_suite/run.py:_resolve_repo for
+    # the on-disk injection mechanism.
+    forbids_create: list[str] = field(default_factory=list)
 
     def to_spec(self):
         """Return a Spec if requirements are authored, else None.
@@ -437,6 +447,7 @@ class Fixture:
             base_sha=str(d.get("base_sha", "")),
             required_env=list(d.get("required_env", [])),
             requirements=list(d.get("requirements", [])),
+            forbids_create=list(d.get("forbids_create", [])),
             notes=str(d.get("notes", "")),
         )
 
