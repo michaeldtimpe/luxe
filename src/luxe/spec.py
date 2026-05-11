@@ -33,11 +33,16 @@ from typing import Any, Literal
 
 
 RequirementKind = Literal[
-    "regex_present",   # pattern matches in N+ added lines of the diff
-    "regex_absent",    # pattern must NOT appear in any added line
-    "ast_query",       # tree-sitter symbol-index query (Lever 1 scaffolding)
-    "tests_pass",      # shell command exits 0 (e.g., `npm test`, `pytest`)
-    "manual",          # human-graded; predicate description is the rubric
+    "regex_present",        # pattern matches in N+ added lines of the diff
+    "regex_absent",         # pattern must NOT appear in any added line
+    "ast_query",            # tree-sitter symbol-index query (Lever 1 scaffolding)
+    "tests_pass",           # shell command exits 0 (e.g., `npm test`, `pytest`)
+    "manual",               # human-graded; predicate description is the rubric
+    # Agent-trajectory predicates (v1.7+, BFCL adapter); evaluated against the
+    # agent loop's tool_calls list rather than the diff. See the latency
+    # contract in src/luxe/spec_validator.py.
+    "expects_zero_calls",   # agent must emit zero tool calls (BFCL irrelevance)
+    "min_tool_calls",       # agent must emit >= min_matches tool calls (BFCL parallel*)
 ]
 
 
@@ -82,6 +87,14 @@ class Requirement:
             raise ValueError(
                 f"Requirement {self.id} min_matches must be >= 1 "
                 f"(got {self.min_matches})."
+            )
+        if self.kind == "min_tool_calls" and self.min_matches < 1:
+            # Belt-and-suspenders: a min_tool_calls predicate that fires on
+            # any value triggers no abstain pressure; surface as a fixture
+            # author error rather than silently passing.
+            raise ValueError(
+                f"Requirement {self.id} kind=min_tool_calls requires "
+                f"min_matches >= 1 (got {self.min_matches})."
             )
 
 
@@ -169,7 +182,10 @@ def _requirement_from_yaml_dict(d: dict[str, Any]) -> Requirement:
             f"requirement {d.get('id', '<unnamed>')} missing keys: {sorted(missing)}"
         )
     kind = d["kind"]
-    valid_kinds = {"regex_present", "regex_absent", "ast_query", "tests_pass", "manual"}
+    valid_kinds = {
+        "regex_present", "regex_absent", "ast_query", "tests_pass", "manual",
+        "expects_zero_calls", "min_tool_calls",
+    }
     if kind not in valid_kinds:
         raise ValueError(
             f"requirement {d['id']} kind={kind!r} not in {sorted(valid_kinds)}"
@@ -210,7 +226,7 @@ def _requirement_to_yaml_dict(r: Requirement) -> dict[str, Any]:
     }
     if r.pattern is not None:
         out["pattern"] = r.pattern
-    if r.kind == "regex_present":
+    if r.kind in ("regex_present", "min_tool_calls"):
         out["min_matches"] = r.min_matches
     if r.command is not None:
         out["command"] = r.command

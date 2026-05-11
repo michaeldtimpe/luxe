@@ -146,3 +146,130 @@ def test_run_problem_raw_captures_backend_errors():
     result = run_problem_raw(_FailingBackend(), problem)
     assert result.actual_calls == []
     assert "oMLX is down" in result.error
+
+
+# --- v1.7 Lever 1 wiring tests --------------------------------------------
+
+from benchmarks.bfcl.adapter import _spec_from_problem, _system_prompt_for
+
+
+def test_system_prompt_irrelevance_has_abstain_clause():
+    p = _system_prompt_for("irrelevance")
+    # Must explicitly authorize decline and forbid invented calls.
+    lowered = p.lower()
+    assert "decline" in lowered
+    assert "do not invent" in lowered
+
+
+def test_system_prompt_default_unchanged_for_other_categories():
+    """parallel, simple_python, etc. fall back to the default — abstain
+    language MUST NOT leak into categories where tool calls are correct."""
+    for cat in ("simple_python", "multiple", "parallel", "parallel_multiple"):
+        p = _system_prompt_for(cat)
+        assert "decline" not in p.lower(), (
+            f"abstain clause leaked into {cat}; would suppress correct tool use"
+        )
+
+
+def test_spec_from_problem_irrelevance_zero_calls():
+    spec = _spec_from_problem({"id": "irrelevance_0"}, "irrelevance")
+    assert spec is not None
+    assert len(spec.requirements) == 1
+    assert spec.requirements[0].kind == "expects_zero_calls"
+
+
+def test_spec_from_problem_parallel_min_tool_calls():
+    gt = [
+        {"toolkit.f1": {"a": [1]}},
+        {"toolkit.f2": {"b": [2]}},
+        {"toolkit.f3": {"c": [3]}},
+    ]
+    spec = _spec_from_problem({"id": "parallel_multiple_0"},
+                              "parallel_multiple", ground_truth=gt)
+    assert spec is not None
+    req = spec.requirements[0]
+    assert req.kind == "min_tool_calls"
+    assert req.min_matches == 3
+
+
+def test_spec_from_problem_single_call_returns_none():
+    """simple_python / multiple problems are single-call — no Lever 1 spec.
+    A None spec means run_agent runs as v1.6 did (no mid-loop reprompt)."""
+    spec = _spec_from_problem({"id": "simple_0"}, "simple_python",
+                              ground_truth=[{"f": {"a": [1]}}])
+    assert spec is None
+
+
+def test_spec_from_problem_parallel_with_one_call_returns_none():
+    """If GT length is 1, parallel categories don't need Lever 1 — falls
+    back to the v1.6 agent loop behavior."""
+    spec = _spec_from_problem({"id": "parallel_0"}, "parallel",
+                              ground_truth=[{"f": {"a": [1]}}])
+    assert spec is None
+
+
+def test_spec_from_problem_missing_ground_truth_returns_none():
+    """parallel category without a GT (e.g., not in the GT map) safely
+    returns None rather than raising."""
+    spec = _spec_from_problem({"id": "parallel_0"}, "parallel",
+                              ground_truth=None)
+    assert spec is None
+
+
+def test_run_problem_agent_passes_spec_for_irrelevance():
+    """End-to-end: irrelevance category produces an expects_zero_calls
+    Spec and the run_agent loop receives it."""
+    from benchmarks.bfcl.adapter import run_problem_agent
+    from luxe.config import RoleConfig
+    role = RoleConfig(model_key="test", num_ctx=4096, max_steps=2,
+                      max_tokens_per_turn=512, temperature=0.0)
+
+    # Backend returns no tool calls — model abstains correctly.
+    fake_resp = ChatResponse(
+        text="I cannot answer this with the available tools.",
+        tool_calls=[],
+        finish_reason="stop",
+        timing=GenerationTiming(prompt_tokens=50, completion_tokens=15),
+    )
+    problem = {
+        "id": "irrelevance_0",
+        "question": [[{"role": "user", "content": "What's the weather in Tokyo?"}]],
+        "function": [{"name": "calculate_bmi",
+                      "description": "BMI",
+                      "parameters": {"type": "object",
+                                     "properties": {"w": {"type": "number"}},
+                                     "required": ["w"]}}],
+    }
+    backend = _MockBackend(fake_resp)
+    result = run_problem_agent(backend, role, problem, category="irrelevance")
+    assert result.actual_calls == []
+    # Backend received the irrelevance-flavored system prompt, not the default.
+    sys_msg = next(m for m in backend.last_messages
+                   if m.get("role") == "system")
+    assert "decline" in sys_msg["content"].lower()
+
+
+def test_run_problem_agent_default_prompt_for_simple_category():
+    """simple_python falls back to the default tool-eagerness prompt —
+    abstain language must NOT appear."""
+    from benchmarks.bfcl.adapter import run_problem_agent
+    from luxe.config import RoleConfig
+    role = RoleConfig(model_key="test", num_ctx=4096, max_steps=2,
+                      max_tokens_per_turn=512, temperature=0.0)
+    fake_resp = ChatResponse(
+        text="done", tool_calls=[], finish_reason="stop",
+        timing=GenerationTiming(prompt_tokens=50, completion_tokens=10),
+    )
+    problem = {
+        "id": "simple_0",
+        "question": [[{"role": "user", "content": "Compute 1+1"}]],
+        "function": [{"name": "add",
+                      "parameters": {"type": "object",
+                                     "properties": {"a": {"type": "number"}},
+                                     "required": ["a"]}}],
+    }
+    backend = _MockBackend(fake_resp)
+    run_problem_agent(backend, role, problem, category="simple_python")
+    sys_msg = next(m for m in backend.last_messages
+                   if m.get("role") == "system")
+    assert "decline" not in sys_msg["content"].lower()

@@ -102,6 +102,59 @@ class TestRequirementConstruction:
                 min_matches=0,
             )
 
+    def test_expects_zero_calls_requirement(self):
+        r = Requirement(
+            id="R1",
+            must="Do not call any tool.",
+            done_when="Zero tool calls emitted.",
+            kind="expects_zero_calls",
+        )
+        assert r.kind == "expects_zero_calls"
+        assert r.pattern is None
+        assert r.command is None
+
+    def test_min_tool_calls_requirement(self):
+        r = Requirement(
+            id="R1",
+            must="Make at least 3 tool calls.",
+            done_when="len(tool_calls) >= 3",
+            kind="min_tool_calls",
+            min_matches=3,
+        )
+        assert r.kind == "min_tool_calls"
+        assert r.min_matches == 3
+
+    def test_min_tool_calls_round_trip(self):
+        from luxe.spec import spec_from_yaml_dict, spec_to_yaml_dict
+        s = Spec(goal="parallel-multi", requirements=[Requirement(
+            id="R1",
+            must="Make at least 2 tool calls.",
+            done_when="len(tool_calls) >= 2",
+            kind="min_tool_calls",
+            min_matches=2,
+        )])
+        as_yaml = spec_to_yaml_dict(s)
+        assert as_yaml["requirements"][0]["min_matches"] == 2
+        assert as_yaml["requirements"][0]["kind"] == "min_tool_calls"
+        roundtripped = spec_from_yaml_dict(as_yaml)
+        assert roundtripped.requirements[0].min_matches == 2
+        assert roundtripped.requirements[0].kind == "min_tool_calls"
+
+    def test_expects_zero_calls_round_trip(self):
+        from luxe.spec import spec_from_yaml_dict, spec_to_yaml_dict
+        s = Spec(goal="irrelevance", requirements=[Requirement(
+            id="R1",
+            must="Do not call any tool.",
+            done_when="Zero tool calls emitted.",
+            kind="expects_zero_calls",
+        )])
+        as_yaml = spec_to_yaml_dict(s)
+        assert as_yaml["requirements"][0]["kind"] == "expects_zero_calls"
+        # No min_matches written for kinds that don't use it.
+        assert "min_matches" not in as_yaml["requirements"][0]
+        roundtripped = spec_from_yaml_dict(as_yaml)
+        assert roundtripped.requirements[0].kind == "expects_zero_calls"
+
 
 class TestSpecConstruction:
     def test_empty_requirements_allowed(self):
