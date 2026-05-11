@@ -1910,3 +1910,33 @@ passing on all 3 variants in every post-fix replicate.**
 .sdd injection (writes contract, idempotent, no-op when empty) + 1
 for the loop-boundary normalization. 7 commits on `origin/main`
 (5cc3c87 → 1d848ae).
+
+---
+
+### [2026-05-11] BFCL v3 post-SpecDD anchors land — agent +7.26pp, parallel cliff partially closes, irrelevance regresses
+
+**What happened**: Two BFCL v3 anchors landed back-to-back on top of the v1.6.1 substrate. **Raw mode** (regression check, ~6.1h): 948/1240 = 76.45%, +0.16pp vs pre-SpecDD 76.29% — well inside ±2pp tolerance, no infra drift between v1.4.1 and v1.6.1. **Agent mode** (one-shot v1.6 datapoint, 8.47h): 1038/1240 = **83.71%**, +7.26pp vs raw v1.6. Per-category vs raw: simple_python +6.00pp; multiple +7.00pp; parallel **+17.00pp**; parallel_multiple **+16.50pp**; irrelevance **−6.25pp**.
+
+Pre-flight smoke (parallel_multiple n=50) suggested 86% on the cliff. The full n=200 actually scored 64.5% — the probe was 21.5pp optimistic. Trajectory inside the probe was already noisy (70% on n=20, climbing to 86% by n=50), but at the time looked like a stable upward trend.
+
+**Root cause** (the three findings):
+
+1. **Agent loop largely closes the parallel cliff.** parallel_multiple was 49% in raw, 64.5% in agent — and the per-step loop trace shows the model emits one batch of calls, receives the (stub) results, then refines. In raw mode the model has to emit all parallel calls atomically and fails on structural correctness. Multi-turn provides a refinement gradient that raw mode cannot.
+
+2. **Loop framing primes tool-eagerness on ambiguous prompts.** −6.25pp on `irrelevance` (the "don't call any tool" category) is a real regression, not noise. The BFCL adapter's agent-mode system_prompt is "You are an assistant that calls tools to answer questions" — which biases the model toward emitting a call even when none is required. This is a known agent-harness pattern, but the BFCL split (single-call/parallel/irrelevance side-by-side) makes the cost legible in a way SWE-bench can't.
+
+3. **Probes on the prefix of a non-randomized dataset aren't representative.** BFCL subset files are ordered, not shuffled. Taking the first 50 of `parallel_multiple` gave us a sample biased toward easier instances. The probe usefully validated *infrastructure* (agent-mode wiring works, oMLX stayed up, wall-time per problem) but should not have been read as a pass-rate estimate. The 86% → 64.5% drop is methodological, not regression.
+
+**Fix / takeaway**:
+
+1. **v1.7 BFCL lever has shape now.** Wire `benchmarks/bfcl/adapter.py:run_problem_agent` to (a) derive a per-problem `Spec` from the expected-calls structure and pass it as the Lever 1 reprompt gate, and (b) add an explicit "no-call is a valid outcome" gradient — either as a Lever 1 predicate (`expects_zero_calls: true`) or as system_prompt language. Baseline to beat: agent 83.71% total, parallel_multiple 64.5%, irrelevance 85.83%. Lever 1 is doing real work in BFCL iff parallel_multiple climbs further AND irrelevance recovers toward 92%.
+
+2. **Probe protocol update**: for BFCL specifically, future probes should either sample randomly across the category (a `--seed N --sample 50`-style flag in `benchmarks/bfcl/run.py`, not yet built) or be framed *only* as infrastructure-validation runs, with no pass-rate read. The pattern generalizes: any probe on a non-randomized prefix risks the same misread.
+
+3. **Don't extrapolate agent-mode results into SpecDD claims.** BFCL agent mode at v1.6.1 has zero `.sdd` injection and zero `Spec` validation wired — the +7.26pp is *loop vs single-shot*, full stop. Any future "SpecDD lifts BFCL" claim must measure against the agent-mode baseline filed here (83.71%), not against the raw 76.45%.
+
+**Cross-reference to the m5max_moe lessons entry above**: the BFCL agent run benefitted from the just-landed substrate hardening (tool-name strip at both dispatch + loop boundary, WRITE_PRESSURE tool-ceiling OR-branch, post-write idle exit). At ~25s/problem the wall came in at 8.47h — well below the conservative 18–24h ETA. The lift on the parallel cliff (+16–17pp) is therefore loop-driven, not threshold-tuning-driven; but the *wall-time tractability* of running this anchor at all on the same hardware in one shot is the m5max work paying out.
+
+**Open for v1.8**: BFCL Lever 1 wiring (item 2 in revised v1.7 priorities); the irrelevance abstain-gradient question; whether the parallel-cliff residual (64.5%) is structural model limit or fixable with planning prompts.
+
+**Affected files**: `README.md` (BFCL section gets the three-anchor table + caveat; Status line bumped to v1.6.1-rc-1), `RESUME.md` (v1.7 priorities reordered with BFCL Lever 1 inserted as #2; v1.6-era loose ends #1+#2 marked DONE; current-state header bumped to v1.6.1-rc-1), `pyproject.toml` (1.4.0 → 1.6.1 — the stale on-disk version finally tracks the tagged state plus this in-flight patch). Memory entries: `project_bfcl_post_specdd_v16_raw.md`, `project_bfcl_post_specdd_v16_agent.md`. Predictions (gitignored): `acceptance/bfcl/post_specdd_v16/rep_1/`, `acceptance/bfcl/post_specdd_v16_agent/rep_1/`.
