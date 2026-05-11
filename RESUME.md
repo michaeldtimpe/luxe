@@ -1,8 +1,8 @@
 # luxe — session resume document
 
-## Current state — 2026-05-11 (post-m5max_moe substrate hardening; v1 maintain_suite at 30/30 modulo variance)
+## Current state — 2026-05-11 (v1.6.1-rc-1; substrate hardening + maintain_suite Lever 2 extension + BFCL agent anchor)
 
-**Working tree**: clean. **648 tests collected, 643 passing** (5 new regression tests landed; 5 pre-existing `test_bfcl_adapter.py` failures from missing optional `bfcl_eval` dep persist — unrelated, predates the session). **7 commits pushed to `origin/main`** (5cc3c87 → 1d848ae).
+**Working tree**: clean. **648 tests collected, 643 passing** (5 new regression tests landed; 5 pre-existing `test_bfcl_adapter.py` failures from missing optional `bfcl_eval` dep persist — unrelated, predates the session). **7 commits pushed to `origin/main`** (5cc3c87 → 1d848ae) on top of v1.6.0; BFCL agent anchor docs land on top of that.
 
 **M5 Max MoE bake-off complete** (`acceptance/m5max_moe/`, 2026-05-10). The full run started at 17/30 (81/150, GLM 0/10) and landed at **30/30 (120/150, all 3 variants pass v1 gate) modulo a single transient `embedded null byte` ValueError at the commit step** (lpe-rope-calc-implement-strict-flag on GLM, scored 4/5 on the recheck). The final official bench shows 29/30; the variance recheck confirms the true rollup is 30/30. See `lessons.md` 2026-05-10 m5max_moe entry for the full postmortem.
 
@@ -21,7 +21,16 @@
 
 **The variance class is open for v1.7.** GLM at temp=0 still shows ~10% per-fixture variance across replicates (orphan scaffold creation, transient `embedded null byte` from the commit step). Existing scoring gates (vacuous_test, orphan_file) catch these; `Forbids creating` cuts the rate further via the recovery-gradient error wording. Lever 3 positive constraints ("you must edit X") are the long-term answer per the v1.7 backlog below — not gating any v1 bench.
 
-**No release tag**: the m5max_moe work is substrate hardening on top of the already-tagged v1.6.0. No new version bump is implied.
+**BFCL v3 anchors filed (2026-05-11)** — both runs completed clean on top of the v1.6 substrate:
+
+- **Raw mode** (regression check, ~6.1h): 948/1240 = **76.45%** (+0.16pp vs pre-SpecDD 76.29%) — no infra drift across v1.4.1 → v1.6.1.
+- **Agent mode** (one-shot v1.6 datapoint, 8.47h): 1038/1240 = **83.71%** (+7.26pp vs raw). Parallel cliff +17pp (parallel) and +16.5pp (parallel_multiple) is the dominant lift; **irrelevance regressed −6.25pp** (loop primes tool-eagerness). Wall ETA originally estimated at 18–24h; the substrate's per-call efficiency lands it at ~25s/problem instead.
+
+BFCL agent adapter does NOT wire `.sdd` injection or the Lever 1 spec validator (`benchmarks/bfcl/adapter.py:run_problem_agent`) — the +7.26pp is loop-vs-single-shot, not SpecDD-driven. That wiring is now v1.7 priority #2 below. Side lesson: the parallel_multiple probe (n=50, 86%) was 21.5pp optimistic vs the full n=200 (64.5%) — BFCL subset files are ordered, not shuffled; future probes must sample randomly or be framed strictly as infrastructure validation.
+
+See memory entries `project_bfcl_post_specdd_v16_raw.md` + `project_bfcl_post_specdd_v16_agent.md`; lessons.md 2026-05-11 entry has the full postmortem.
+
+**v1.6.1-rc-1 status**: the seven commits above + this BFCL doc-roll are the v1.6.1 candidate. No release tag yet — the user signed off on the version bump after the BFCL agent run landed. v1.6.1 is a patch on top of v1.6.0 capturing: (a) substrate hardening from the m5max_moe bake-off, (b) SpecDD Lever 2 extended into maintain_suite, (c) BFCL v3 agent anchor (data only, no code). No architectural shift — v1.7 is reserved for early-bail intervention and BFCL Lever 1 wiring per the priority list below.
 
 ---
 
@@ -32,15 +41,16 @@ The four remaining v1.6-era loose ends below still apply. The m5max_moe substrat
 ### v1.7 priorities (in order of expected impact)
 
 1. **Early-bail intervention** — addresses ≥10 of the 18 v3 paired-mechanism `empty_patch` cases (the `agent_bailed` class). Interception strategy: detect the bail signature in the loop (consecutive low-output steps + no write-tool calls) and inject a directive turn rather than letting the loop trip its stuck detector. Prerequisite: `LUXE_LOG_TOOL_CALLS=1` traces of the 18 v3 empties to confirm class composition. With m5max_moe's `_POST_WRITE_IDLE_MAX` and tuned WRITE_PRESSURE thresholds now in place, the bail-class composition may already shift before any v1.7 work lands — worth re-checking traces before designing.
-2. **b2 multi-site retrieval** — extend the spec-validator predicate kinds so SpecDD Lever 1 can demand citations from N sites within a single fixture. Closes the loose-grader gap surfaced in `project_loose_grader_audit.md`.
-3. **In-loop test execution feedback** — pipe `pytest` results from the previous step back into the model's next prompt. Likely gates the second strong-tier rebound (Phase B nearest-anchoring tightening, slated to fire here).
-4. **Mode B threshold tuning** — broader bench data is incoming from v3 + Phase B; revisit the 10 tools / 4000 tokens / step 5 thresholds against the v3 traces. The m5max_moe tune (tool-ceiling OR-branch) already addressed the most acute miscalibration on tool-call-heavy models; more granular per-model defaults are next.
-5. **Lever 3** — held until empty_patch class is fully addressed; Lever 3 needs clean separation of constraint vs reasoning failures, and the empty_patch class confounds that boundary today.
+2. **BFCL Lever 1 wiring + abstain gradient** — two-part. (a) Extend `benchmarks/bfcl/adapter.py:run_problem_agent` to derive a per-problem `Spec` from the expected-calls structure and pass it as a reprompt gate. (b) Address the −6.25pp irrelevance regression with an explicit "no-call is a valid outcome" gradient — either as a Lever 1 predicate (`expects_zero_calls: true`) or as system_prompt language. **Baseline to beat**: agent 83.71% total, parallel_multiple 64.5%, irrelevance 85.83%. Lever 1 is doing real work in BFCL iff parallel_multiple climbs further AND irrelevance recovers toward 92%.
+3. **b2 multi-site retrieval** — extend the spec-validator predicate kinds so SpecDD Lever 1 can demand citations from N sites within a single fixture. Closes the loose-grader gap surfaced in `project_loose_grader_audit.md`.
+4. **In-loop test execution feedback** — pipe `pytest` results from the previous step back into the model's next prompt. Likely gates the second strong-tier rebound (Phase B nearest-anchoring tightening, slated to fire here).
+5. **Mode B threshold tuning** — broader bench data is incoming from v3 + Phase B; revisit the 10 tools / 4000 tokens / step 5 thresholds against the v3 traces. The m5max_moe tune (tool-ceiling OR-branch) already addressed the most acute miscalibration on tool-call-heavy models; more granular per-model defaults are next.
+6. **Lever 3** — held until empty_patch class is fully addressed; Lever 3 needs clean separation of constraint vs reasoning failures, and the empty_patch class confounds that boundary today.
 
 ### v1.6-era loose ends (status as of 2026-05-11)
 
-1. **BFCL v3 post-SpecDD raw-mode** — was kicked off 2026-05-10 17:30 local. Check `acceptance/bfcl/post_specdd_v16/rep_1/`. If totals deviate >2pp from 76.29%, an infra regression leaked. If they don't, file the result and move on.
-2. **(Open question)** BFCL agent-mode post-SpecDD run — would actually exercise SpecDD, but no pre-SpecDD agent-mode anchor exists. Worth doing as a one-shot v1.6 datapoint to inform v1.7 BFCL strategy.
+1. ~~BFCL v3 post-SpecDD raw-mode~~ **DONE 2026-05-11**: 948/1240 = **76.45%** (+0.16pp vs pre-SpecDD 76.29% — well inside ±2pp tolerance; no infra drift). Folded into v1.6.1 docs.
+2. ~~BFCL agent-mode post-SpecDD run~~ **DONE 2026-05-11**: 1038/1240 = **83.71%** (+7.26pp vs raw v1.6). Parallel cliff +17pp; irrelevance regressed −6.25pp (loop primes tool-eagerness). Folded into v1.6.1 docs; baseline-to-beat captured in v1.7 priority #2.
 3. **(Optional follow-up)** Re-aggregate the v3 harness summary into a tracked `harness_summary.json` once the rebuilt `harness.py:collect_results` fix is exercised on a fresh run. Current summary was written via the fixed collector against the existing `logs/run_evaluation/luxe_v16_n75/` dir.
 4. **sphinx-doc__sphinx-10466 strong→unresolved** is the lone strong tier instance the harness rejected. Worth a glance for v1.7 prep but not a v1.6 blocker.
 
@@ -312,28 +322,25 @@ Latent / open:
 
 **luxe** is an MLX-only repo maintainer for Apple Silicon (oMLX backend on `localhost:8000`). Takes a goal + repo, opens a PR. Mono-only since v1.0 — single model, single agent loop, single `luxe maintain` command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
-**What's shipped through v1.5.0-rc-2**:
+**What's shipped through v1.6.0**:
 - v1.0 — mono-only; 10 fixtures; strict gates
 - v1.1 — pinned work_dir default + manage_strict overlay → 9/10
 - v1.2 — per-tool subphase pass: cve_lookup gated to manage; bash chain-hardening; read_file binary detection
 - v1.3 — read_file dedup exemption + lpe-typing fixture surgery + reprompt-on-doc + `_diff_against_base` fix
 - v1.4 — SpecDD Lever 1: programmatic Definition of Done; per-requirement spec validator; reprompt gate uses spec
 - v1.4.1 — citation-linter bare-filename fallback (Mode A) + Mode B mid-loop write-pressure (opt-in) + sidecar regrade lint re-run
-- v1.5.0-rc-2 — SpecDD Lever 2 paired-mechanism (`.sdd` constraint + WRITE_PRESSURE actuation); 619 tests; v2 n=75 result hit ship floor on 3/4 metrics
+- v1.5.0-rc-2 — SpecDD Lever 2 paired-mechanism (`.sdd` constraint + WRITE_PRESSURE actuation); 619 tests
+- v1.6.0 (tagged 2026-05-09) — creation-only Forbids: `.sdd` gains `Forbids creating` section, `creating: bool` threaded through write-time guards; recovery-gradient error wording; SWE-bench n=75 v3 36/75 = 48.0% harness-resolved; 643 tests
 
-**v1.6.0-rc-1 (this session, 2026-05-06 evening)**:
-- New `.sdd` section `Forbids creating` — operation-aware policy (create-only vs always-fires)
-- `creating: bool` threaded through `_check_spec_forbids` + `is_forbidden`; computed at write-time from `Path.is_file()`
-- Distinct error message for create-only matches (recovery-gradient wording)
-- SWEBENCH_SDD_BODY split: `repo_root/**` in Forbids; all scaffolding patterns in Forbids creating; v2 escapes (`test_*.py`, `test_fix_*.py`) added to the broad create-ban
-- Phase A audit (n=500): broad `**/test_*.py` create-ban is safe — zero Verified gold patches create a `test_*.py`
-- Phase C smoke (n=14): new_file=0 ✅; sympy-12481 reroute (invent → strong gold-match) validated architectural premise
-- 643 tests passing (+24 vs v1.5-rc-2 baseline)
-- **Pending**: v3 n=75 rerun confirming ship floor; harness scoring; tag
+**v1.6.1-rc-1 (in flight; this session continued from 2026-05-10/11)**:
+- m5max_moe substrate hardening (6 fix vectors): tool-name strip in dispatcher + loop boundary; `_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE = 15` OR-branch on completion-tokens gate; `_POST_WRITE_IDLE_MAX = 3` clean-exit signal; `LUXE_WRITE_PRESSURE=1` as maintain_suite default
+- SpecDD Lever 2 extended into maintain_suite: `Fixture.forbids_create: list[str]` + `_inject_forbids_create_sdd` writes synthetic `<repo>.sdd` + `.git/info/exclude` append; 3 fixtures opted in with cross-product JS test-name coverage
+- BFCL v3 anchors filed: raw 76.45% (regression check, no infra drift) + agent 83.71% (+7.26pp vs raw; parallel cliff +17pp; irrelevance −6.25pp)
+- 648 tests collected, 643 passing (5 new regression tests for tool-name strip + WRITE_PRESSURE branches + synth .sdd injection)
+- **Pending**: v1.6.1 tag (subject to user sign-off); BFCL agent run does NOT exercise Lever 1 yet — adapter wiring is a v1.7 lever
 
-**What's queued**:
-- **v1.6.0** (final tag, next overnight) — v3 rerun confirming creation-only floor. See `~/.claude/plans/cozy-wiggling-conway.md`.
-- v1.7.0 — early-bail intervention #1 priority (addresses 10 of 14 v1 paired-mechanism empty_patch). Then b2 multi-site retrieval. Then in-loop test execution feedback. Then Phase B Mode B threshold tuning. Lever 3 on backlog but de-prioritized.
+**What's queued for v1.7.0**:
+- Early-bail intervention #1 priority (addresses ≥10 of 18 v3 paired-mechanism empty_patch). Then BFCL Lever 1 wiring + abstain gradient (baseline-to-beat: 83.71% / 64.5% / 85.83%). Then b2 multi-site retrieval. Then in-loop test execution feedback. Then Mode B threshold tuning. Lever 3 on backlog.
 
 **Iteration model**: bench changes go through `scripts/regrade_local.py` for fast iteration on grader/linter logic without re-running luxe. Full bench re-runs reserved for end-of-phase confirmation.
 

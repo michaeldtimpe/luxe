@@ -3,10 +3,13 @@
 MLX-only repo maintainer for Apple Silicon. Takes any of your repos and adds
 features, fixes bugs, updates docs, or audits maintenance — and opens a PR.
 
-> **Status:** v1.6.0-rc-1 (SpecDD Lever 2, creation-only forbids). 643 tests
-> passing. Code shipped; tag held until the SWE-bench n=75 v3 rerun confirms
-> the ship floor (`new_file_in_diff = 0`, strong ≥14, strong+plausible ≥30,
-> empty_patch ≤18). See `RESUME.md` for the active task and the launch command.
+> **Status:** v1.6.1-rc-1. v1.6.0 shipped (creation-only Forbids,
+> SWE-bench n=75 v3 36/75 = 48.0% harness-resolved). v1.6.1 in flight:
+> m5max_moe substrate hardening (6 fix vectors) + SpecDD Lever 2 extended
+> into maintain_suite (`forbids_create` per fixture, synth `.sdd` injection,
+> 30/30 modulo variance) + BFCL v3 agent-mode anchor (1038/1240 = 83.71%,
+> +7.26pp vs raw). 648 tests collected, 643 passing. See `RESUME.md` for
+> active state and the v1.7 priority list.
 
 ## What luxe does
 
@@ -256,12 +259,23 @@ automatically; no shell env munging needed beyond `OMLX_API_KEY`.
 
 ### `bfcl` — Berkeley Function-Call Leaderboard v3
 
-Tool-call evaluation across the Python subset (n=1240). Pre-SpecDD raw-mode
-baseline is 76.29% (single-call 82-92%, parallel cliff at 49-66%) — see
-`project_bfcl_pre_specdd_baseline`.
+Tool-call evaluation across the Python subset (n=1240). Two anchors filed:
+
+| Run | Total | Parallel cliff (parallel / parallel_multiple) | Irrelevance | Wall |
+|---|---|---|---|---|
+| Pre-SpecDD raw (v1.4.1, 2026-05-04) | 76.29% | 66.00% / 49.00% | 91.67% | ~6.7h |
+| Post-SpecDD raw (v1.6, 2026-05-10) | 76.45% | 65.50% / 48.00% | 92.08% | ~6.1h |
+| Post-SpecDD **agent** (v1.6, 2026-05-11) | **83.71%** | **82.50% / 64.50%** | 85.83% | ~8.5h |
+
+Raw-mode delta v1.4.1→v1.6 is +0.16pp — no infra drift across SpecDD ship.
+Agent-mode adds +7.26pp over raw, with the parallel cliff lifting +16–17pp.
+**Caveat**: agent-mode irrelevance regresses −6.25pp (loop primes
+tool-eagerness); BFCL agent adapter does NOT wire `.sdd` or the Lever 1
+spec validator yet, so the lift is loop-vs-single-shot, not SpecDD-driven.
 
 ```bash
-.venv/bin/python -m benchmarks.bfcl.run --subset python --output <dir>
+.venv/bin/python -m benchmarks.bfcl.run --mode raw   --output <dir>   # ~6h
+.venv/bin/python -m benchmarks.bfcl.run --mode agent --output <dir>   # ~8.5h
 ```
 
 ## Layout

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "luxe"
-version = "1.4.0"
-description = "luxe — MLX-only repo maintainer (single-model + specialist swarm modes)"
+version = "1.6.1"
+description = "luxe — MLX-only repo maintainer (mono-only; SpecDD Lever 2)"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27",
