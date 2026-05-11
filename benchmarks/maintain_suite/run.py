@@ -623,6 +623,14 @@ def _luxe_maintain(
     env.setdefault("GIT_CONFIG_COUNT", "1")
     env.setdefault("GIT_CONFIG_KEY_0", "commit.gpgsign")
     env.setdefault("GIT_CONFIG_VALUE_0", "false")
+    # Enable the mid-loop write-pressure injection by default for the
+    # maintain_suite. The Mode B fix targets the read-loop failure mode
+    # that surfaced on nothing-ever-happens-document-config (qwen3-coder
+    # emitting 30 reads with 0 writes); turning it on cleared the last
+    # bailing fixture and pushed the m5max_moe bake-off to 30/30. Honour
+    # an explicit override from the caller (setdefault, not assignment)
+    # so ablations can still run with LUXE_WRITE_PRESSURE=0.
+    env.setdefault("LUXE_WRITE_PRESSURE", "1")
     rc, out, err = _run_capture(cmd, log_dir, env=env, timeout_s=timeout_s)
     excerpt = _stderr_excerpt(err) if rc != 0 else ""
     return rc, _extract_run_id(out + err), excerpt

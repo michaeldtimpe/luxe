@@ -384,8 +384,17 @@ Real PASS count is always ≤ printed count. Every historical bake-off has had a
 `~/.omlx/settings.json`:
 ```json
 "max_model_memory": "36GB",
-"idle_timeout": { "idle_timeout_seconds": 1800 }
+"idle_timeout": { "idle_timeout_seconds": 1800 },
+"sampling": { "max_context_window": 49152 }
 ```
+
+`max_context_window` was bumped from 32768 (default) to 49152 on 2026-05-10
+during the m5max_moe bake-off — qwen3-coder-next-80B under realistic
+retrieval load on `nothing-ever-happens-document-config` hits 33k+ per
+turn and oMLX returns a hard 400 below the new ceiling. Qwen3 family
+natively supports 128k+, so 48k is well within model architecture.
+**This is per-machine state and not version-controlled** — any new bench
+host needs the same bump.
 
 System-level Metal wired ceiling — kept aligned with `max_model_memory`:
 ```bash
@@ -396,6 +405,15 @@ echo "iogpu.wired_limit_mb=36864" | sudo tee -a /etc/sysctl.conf
 API key for HTTP requests: `export OMLX_API_KEY=omlx-sdb25582k3mq8pf9` (in user's shell init; the bench harness reads it).
 
 **Restart oMLX** any time `settings.json`, `model_settings.json`, or new symlinks land: `brew services restart omlx`.
+
+## maintain_suite bench-host prereqs
+
+The 10-fixture suite includes fixtures that shell out to `npm test` as
+their tests_pass predicate (`neon-rain-implement-reset-shortcut`).
+Without `node` + `npm` on the bench host, those fixtures rc=127 and are
+misscored as model failures. `brew install node` is the one-shot fix on
+macOS. Documented here because the toolchain prereq isn't obvious from
+the fixture YAML alone.
 
 ---
 
