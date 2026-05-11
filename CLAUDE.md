@@ -38,6 +38,11 @@ Default to the established patterns:
 - New prompt variants land with tests in `tests/test_prompts.py`
 - New fixtures land with a `requirements:` block (SpecDD Lever 1 schema)
 - New `.sdd` files follow `<dir>/<dir>.sdd` placement
+- New maintain_suite fixtures that need write-time create-only restrictions
+  use `forbids_create: [glob, ...]` in fixtures.yaml; the bench harness's
+  `_inject_forbids_create_sdd` (run.py) writes a synthetic `<repo>.sdd`
+  at the cloned-repo root and adds it to `.git/info/exclude` so the
+  contract doesn't pollute fixture diffs
 
 When in doubt, look at how the most recent shipped feature did it and
 match the shape.
