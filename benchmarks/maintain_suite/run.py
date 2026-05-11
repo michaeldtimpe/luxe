@@ -389,12 +389,18 @@ def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
     if fixture.repo_url:
         target = work_dir / f"{fixture.id}-clone"
         if target.exists():
-            # Reuse existing clone; checkout base_sha
+            # Reuse existing clone; reset to base_sha and scrub working tree.
+            # `git checkout` alone leaves modified/untracked files from the
+            # prior variant on the same fixture, which makes `luxe maintain`
+            # refuse to start (uncommitted-changes guard). 2026-05-09: surfaced
+            # by the M5 Max multi-variant bake-off — variants 2-4 all rc=2'd.
             if fixture.base_sha:
-                r = subprocess.run(["git", "checkout", "-q", fixture.base_sha],
-                                   cwd=target, capture_output=True, text=True, check=False)
-                if r.returncode != 0:
-                    return None, f"git checkout {fixture.base_sha} failed: {r.stderr.strip()}"
+                for cmd in (["git", "reset", "--hard", "-q", fixture.base_sha],
+                            ["git", "clean", "-fdxq"]):
+                    r = subprocess.run(cmd, cwd=target,
+                                       capture_output=True, text=True, check=False)
+                    if r.returncode != 0:
+                        return None, f"{' '.join(cmd)} failed: {r.stderr.strip()}"
             return target, ""
         r = subprocess.run(["git", "clone", "--quiet", fixture.repo_url, str(target)],
                            capture_output=True, text=True, check=False)
@@ -606,7 +612,18 @@ def _luxe_maintain(
         spec_path = log_dir / f"{fixture.id}.spec.yaml"
         spec_path.write_text(yaml.safe_dump(spec_to_yaml_dict(spec)))
         cmd.extend(["--spec-yaml", str(spec_path)])
-    rc, out, err = _run_capture(cmd, log_dir, timeout_s=timeout_s)
+    # Override commit.gpgsign per-invocation — same pattern as the SWE-bench
+    # adapter (benchmarks/swebench/adapter.py:247-249). Without this, a global
+    # commit.gpgsign=true + missing signing key (e.g. M5 inheriting M1's
+    # signingkey path) blocks `git commit` after the agent writes files, and
+    # the fixture is misreported as "no diff produced". Surfaced 2026-05-09 by
+    # the M5 Max bake-off: 41/80 fixtures had successful file writes invisibly
+    # killed at the commit step.
+    env = os.environ.copy()
+    env.setdefault("GIT_CONFIG_COUNT", "1")
+    env.setdefault("GIT_CONFIG_KEY_0", "commit.gpgsign")
+    env.setdefault("GIT_CONFIG_VALUE_0", "false")
+    rc, out, err = _run_capture(cmd, log_dir, env=env, timeout_s=timeout_s)
     excerpt = _stderr_excerpt(err) if rc != 0 else ""
     return rc, _extract_run_id(out + err), excerpt
 

@@ -31,7 +31,7 @@ fixtures:
 
   # --- 1) lpe-rope-calc — single-file Python utility (20 KB) ---------------
   - id: lpe-rope-calc-document-typing
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/lpe-rope-calc
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/lpe-rope-calc
     base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
     goal: "Add type hints to any untyped parameters in top-level function signatures (most are already typed; the remaining untyped ones are the gap), preserving existing behaviour. The module already has a docstring at the top of pe_scan.py — do not add a redundant one."
     task_type: document
@@ -75,7 +75,7 @@ fixtures:
         min_matches: 1
 
   - id: lpe-rope-calc-implement-strict-flag
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/lpe-rope-calc
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/lpe-rope-calc
     base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
     goal: "Add a `--strict` CLI flag to pe_scan.py: when set, the script exits with non-zero status if any scanned GGUF file has missing or unreadable header metadata. Keep the default behaviour (exit 0 on any error) when --strict is not passed"
     task_type: implement
@@ -102,7 +102,7 @@ fixtures:
 
   # --- 2) the-game — small JS movie randomizer (74 KB) ---------------------
   - id: the-game-implement-shuffle-shortcut
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/the-game
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/the-game
     base_sha: 514d22d95dbbc55b8ad73d158d311f507f8a7b51
     goal: "Add a keyboard shortcut: pressing the 'r' key should re-randomize the current movie pick. Bind the listener once on page load; do not interfere with text inputs"
     task_type: implement
@@ -124,7 +124,7 @@ fixtures:
         min_matches: 1
 
   - id: the-game-document-architecture
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/the-game
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/the-game
     base_sha: 514d22d95dbbc55b8ad73d158d311f507f8a7b51
     goal: "Update README.md to add a 'How it works' section that describes the movie randomization algorithm in src/App.jsx (where the list is sourced and how the next pick is chosen). Reference at least one file path and the function or hook responsible"
     task_type: document
@@ -161,7 +161,7 @@ fixtures:
 
   # --- 3) neon-rain — Vite browser game (440 KB src) -----------------------
   - id: neon-rain-implement-reset-shortcut
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/neon-rain
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/neon-rain
     base_sha: ef953cc85bead2f09147b99c2a1a2cb2f7d813d0
     goal: "Add a 'reset run' keyboard shortcut: pressing Shift+R restarts the current game without reloading the page. Use the existing input system in src/input/"
     task_type: implement
@@ -181,7 +181,7 @@ fixtures:
         command: "npm test"
 
   - id: neon-rain-document-modules
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/neon-rain
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/neon-rain
     base_sha: ef953cc85bead2f09147b99c2a1a2cb2f7d813d0
     goal: "Update ARCHITECTURE.md at the repo root to add a 'Subdirectories' section listing each src/ subdirectory (actions, ai, data, debug, input, phases, render, state, ui) and describing in 1-2 sentences what each one is responsible for. Preserve the existing content; do not replace or restructure the file. Mention the EventBus or its equivalent if present"
     task_type: document
@@ -235,7 +235,7 @@ fixtures:
 
   # --- 4) isomer — Flask compliance tracker (~110 KB) ----------------------
   - id: isomer-document-quickstart
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/isomer
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/isomer
     base_sha: 33da2bc14869bc252901cb199ba73b2fa776e33f
     goal: "Update README.md's Quick Start section to clarify how to run the app locally with docker-compose and how to access the dashboard. Reference docker-compose.yml and the default port from app.py. Preserve all existing setup steps; do not strip the ISOMER_SECRET / .env setup"
     task_type: document
@@ -296,7 +296,7 @@ fixtures:
         min_matches: 1
 
   - id: isomer-implement-healthcheck
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/isomer
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/isomer
     base_sha: 33da2bc14869bc252901cb199ba73b2fa776e33f
     goal: "Add a /health HTTP endpoint to app.py that returns JSON {\"status\": \"ok\"} with HTTP 200. Wire it into the existing Flask app instance so it answers GET /health"
     task_type: implement
@@ -321,7 +321,7 @@ fixtures:
 
   # --- 5) nothing-ever-happens — Polymarket trading bot (907 KB) -----------
   - id: nothing-ever-happens-manage-deps-audit
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/nothing-ever-happens
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/nothing-ever-happens
     base_sha: 59b8874a8e87164f0ebec25b43ae2cc1a0086f7a
     goal: "Audit requirements.txt: identify any pinned dependencies with known security advisories, document them in a SECURITY-AUDIT.md file with at least three concrete findings (CVE id, version range, or upstream advisory link), and propose pinned-version upgrades that preserve API compatibility. Do not modify requirements.txt itself"
     task_type: manage
@@ -349,7 +349,7 @@ fixtures:
         min_matches: 3
 
   - id: nothing-ever-happens-document-config
-    repo_url: /Users/michaeltimpe/.luxe/fixture-cache/nothing-ever-happens
+    repo_url: /Users/mtimpe/.luxe/fixture-cache/nothing-ever-happens
     base_sha: 59b8874a8e87164f0ebec25b43ae2cc1a0086f7a
     goal: "Add a CONFIG.md at the repo root that documents every environment variable the bot reads at startup. For each variable, list its name, default value (if any), and a one-sentence description of what it controls. Cross-reference where in the codebase it is read"
     task_type: document
