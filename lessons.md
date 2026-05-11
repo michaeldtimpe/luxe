@@ -1940,3 +1940,140 @@ Pre-flight smoke (parallel_multiple n=50) suggested 86% on the cliff. The full n
 **Open for v1.8**: BFCL Lever 1 wiring (item 2 in revised v1.7 priorities); the irrelevance abstain-gradient question; whether the parallel-cliff residual (64.5%) is structural model limit or fixable with planning prompts.
 
 **Affected files**: `README.md` (BFCL section gets the three-anchor table + caveat; Status line bumped to v1.6.1-rc-1), `RESUME.md` (v1.7 priorities reordered with BFCL Lever 1 inserted as #2; v1.6-era loose ends #1+#2 marked DONE; current-state header bumped to v1.6.1-rc-1), `pyproject.toml` (1.4.0 → 1.6.1 — the stale on-disk version finally tracks the tagged state plus this in-flight patch). Memory entries: `project_bfcl_post_specdd_v16_raw.md`, `project_bfcl_post_specdd_v16_agent.md`. Predictions (gitignored): `acceptance/bfcl/post_specdd_v16/rep_1/`, `acceptance/bfcl/post_specdd_v16_agent/rep_1/`.
+
+
+### [2026-05-11] deluxe.M1 dense champion search rejected — 32B-class structurally above M1 Max capacity for maintain_suite gates
+
+Cross-repo lesson, drawn from `~/Downloads/deluxe`. Belongs in luxe's
+lessons.md because the outcome locks luxe (MoE,
+`Qwen3.6-35B-A3B-6bit`) as the production lane on this host and the
+failure mode informs how to think about any future small-model lanes
+on the same hardware.
+
+**What happened**: Over three Round 3 attempts on Apple M1 Max
+(64 GB), deluxe (the dense-only luxe fork) was unable to qualify a
+champion that cleared the maintain_suite implement gate (100% on the
+4 implement fixtures):
+
+  | Run | Candidate | Substrate | Result | Implement |
+  |---|---|---|---|---|
+  | 2026-05-09 PM | Qwen2.5-32B-Instruct-4bit | pre-port | 5/10 = 25/50 | 2/4 ❌ |
+  | 2026-05-11 AM | Qwen2.5-32B-Instruct-4bit | post-port (luxe v1.6.1 ported) | 5/10 = 25/50 (same fixtures) | 2/4 ❌ |
+  | 2026-05-11 PM | Qwen2.5-Coder-32B-Instruct-4bit | post-port | ≤4/10 (cancelled at 9/10) | 1/4 ❌ — worse than Instruct |
+
+The Coder retry was the highest-information, lowest-cost
+discriminator we could design: Round 1 had eliminated it for
+irrelevance (62.08% — below the 80% BFCL gate), but coder-tuning was
+expected to bias toward writes, exactly what the implement gate
+needs. The hypothesis was that the failure mode was *implementation
+activation* (a policy gap) rather than *capability* (a reasoning
+gap). Falsified: Coder produced **more** no-diff failures (4 vs 2),
+ran ~2.6× slower wall (avg ~600s vs 231s per fixture), and held the
+same destructive_diff failure class. Coder-tuning is the right
+direction for "wants to write" priors, just not enough to clear the
+gate on this hardware.
+
+**Root cause**: three cross-cutting failure shapes on dense 32B-class
+on M1, all of which fall *below* the substrate-hardening interventions
+luxe added in v1.4.1 + v1.6.1:
+
+  1. **Cheap pre-write exits**: ~2k completion tokens, 0 diff. Model
+     declares done at 6-7 tool calls before reaching
+     `_WRITE_PRESSURE_MIN_TOOLS=10`, so the read-loop intervention
+     never fires. The substrate's `_POST_WRITE_IDLE_MAX = 3` clean
+     exit only arms after at least one successful write, which never
+     happens. Trace: `acceptance/maintain/round3_trace/`, both fixtures
+     show the same shape — read×3, edit_file errors, dedup-caught
+     duplicate, model gives up. This is the v1.7 `agent_bailed` class
+     (pre-write declared-done bailouts), arriving on deluxe before
+     v1.7 ships on luxe.
+
+  2. **Destructive write_file misuse**: model uses `write_file` to
+     overwrite whole files for small edits — typical ratio
+     "deleted 540, added 14". The model knows the change (the
+     synthesizer report contains the correct code), but lacks
+     edit-locality discipline. Indicates a policy gap that SpecDD
+     Lever 2 (tool-side Forbids, .sdd Repository contracts in the
+     task prompt) is structurally positioned to address — the
+     `Forbids creating` semantics from v1.6 would naturally extend to
+     `Forbids whole-file-replace` if expressed as an operation-aware
+     policy at the same layer.
+
+  3. **Insufficient added lines on document fixtures**: 1-4 added
+     lines against grader gates of 2-8. Coder-tuning made this
+     *worse*, not better, despite the "writes more readily"
+     expectation. Reads less like an activation failure and more like
+     a planning/scope failure — the model produces "enough to satisfy
+     the verbal spec" without recognizing the substantive-edit
+     threshold the grader enforces.
+
+The substrate hardening luxe shipped for the m5max_moe MoE bake-off
+(see the 2026-05-10 entry above) was correctly ported to deluxe
+(`0034f2c` + `d5e2594`) and verified to work: it eliminated the
+`stuck_no_output` bailout class (1 → 0), cut avg_wall by 36% on the
+Instruct re-bench (360s → 231s), and converted what were wasted-token
+bailouts into clean post-write exits. **None of that movement showed
+up in pass/fail outcomes** — same 5/10 pre and post. That is itself
+the headline diagnostic: when substrate fixes change wall and bailout
+class but not gate outcomes, the remaining failure surface is
+*model-policy*, not orchestration.
+
+**Fix / takeaway**:
+
+1. **Hardware-attributed lane assignments are durable infrastructure
+   facts, not bench artifacts.** M1 Max + 64 GB + maintain_suite v1
+   gates = MoE-or-smaller. Document this at the project-state level
+   (RESUME.md `Host lane assignment` section) so future sessions
+   don't relitigate it. luxe is the M1 production lane; deluxe.M1 is
+   paused; deluxe.M5 remains the active dense-search frontier.
+
+2. **Substrate hardening pays out even when bench outcomes don't
+   move.** The deluxe port took a few hours, returned zero passes,
+   *and* was the right call: it surfaced the actual failure surface
+   cleanly (no longer confounded with bailout-class noise), it
+   carries forward to any future deluxe.M1 retry, and the 36% wall
+   reduction makes subsequent benches tractable. Don't conflate "the
+   benchmark didn't improve" with "the engineering work was
+   useless" — the substrate is the prerequisite for diagnostic clarity.
+
+3. **Coder-vs-Instruct is the right discriminator for "activation
+   gap vs capability gap" on dense models** — but it has a price
+   ceiling: if both candidates fail the same gate, the gap is below
+   tuning resolution and you've found a hardware/architecture
+   ceiling, not a policy ceiling. Don't keep tuning thresholds
+   downward at that point; threshold-tune only after a candidate
+   shows *direction-of-travel* improvement.
+
+4. **For luxe specifically**: the deluxe.M1 failure shapes confirm
+   the v1.7 early-bail intervention priority — the `agent_bailed`
+   class (pre-write declared-done at ≤MIN_TOOLS) is the dominant
+   blocker on dense models the same way it's the dominant blocker
+   on the 18 empty_patch SWE-bench cases. When v1.7 lands on luxe,
+   port it to deluxe immediately as Tier 1 work, with deluxe.M1
+   as a re-evaluation candidate. Same architectural intervention,
+   measured on two different benchmarks.
+
+5. **Don't run benches just to gather data when the verdict is
+   already locked.** The Coder Round 3 had 9/10 results before the
+   user called it — the 10th fixture (a known read-loop trap) was
+   estimated at 30+ additional minutes wall and best-case 4/10
+   total, still below Instruct's 5/10. Cancel cleanly, document the
+   partial result, free the hardware for the next experiment.
+
+**Cross-reference**: the m5max_moe lessons entry (2026-05-10) for
+the substrate fixes that were ported. The 2026-05-04 v1.4.1 lessons
+entry for Mode B's original calibration to MoE prose-mode failures
+(the calibration the deluxe ports inherited verbatim). v1.7 priority
+#1 in `RESUME.md` for the early-bail intervention design.
+
+**Affected files** (cross-repo): `~/Downloads/deluxe/RESUME.md` (full
+closure section), `~/Downloads/deluxe/CLAUDE.md` (M1 paused flag),
+`~/Downloads/deluxe/benchmarks/maintain_suite/variants_round3_coder.yaml`
+(new, preserved for re-run reproducibility),
+`~/Downloads/deluxe/configs/single_64gb.yaml` (Round 3 base config,
+landed alongside the substrate ports),
+`~/Downloads/deluxe/src/deluxe/{tools/base,agents/loop}.py` +
+`~/Downloads/deluxe/benchmarks/maintain_suite/run.py` (substrate ports
+from luxe v1.6.1), `~/Downloads/deluxe/tests/{test_tools,test_loop_write_pressure}.py`
+(regression tests ported). luxe-side: this lessons.md entry and the
+`Host lane assignment` section added to RESUME.md.

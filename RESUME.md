@@ -1,5 +1,22 @@
 # luxe — session resume document
 
+## Host lane assignment (2026-05-11)
+
+**luxe is the production lane on M1** (Apple M1 Max, 64 GB) for both
+maintain_suite and SWE-bench work. The deluxe dense-fork's M1 lane
+was paused 2026-05-11 after Round 3 rejected both the R1 survivor
+(Qwen2.5-32B-Instruct-4bit) and the coder-tuned retry: dense
+32B-class structurally exceeds M1 Max effective hardware capacity
+for maintain_suite gates. See `~/Downloads/deluxe/RESUME.md` for the
+closure evidence and Tier 1/2/3 open paths; `lessons.md` 2026-05-11
+dense.M1 entry for the cross-repo postmortem.
+
+**M5 (Apple M5 Max)** is the MoE bake-off / substrate-validation lane
+for luxe (last closed: m5max_moe 2026-05-10, 30/30 across three MoE
+candidates). M5 is also the active dense-search frontier for deluxe.
+This document tracks the luxe.M1 production state — M5 lane activity
+is documented inline below when a benchmark is in flight.
+
 ## Current state — 2026-05-11 (v1.6.1-rc-1; substrate hardening + maintain_suite Lever 2 extension + BFCL agent anchor)
 
 **Working tree**: clean. **648 tests collected, 643 passing** (5 new regression tests landed; 5 pre-existing `test_bfcl_adapter.py` failures from missing optional `bfcl_eval` dep persist — unrelated, predates the session). **7 commits pushed to `origin/main`** (5cc3c87 → 1d848ae) on top of v1.6.0; BFCL agent anchor docs land on top of that.
