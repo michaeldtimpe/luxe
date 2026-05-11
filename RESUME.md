@@ -1,6 +1,52 @@
 # luxe — session resume document
 
-## Current state — 2026-05-10 (v1.6.0 SHIPPED)
+## Current state — 2026-05-11 (post-m5max_moe substrate hardening; v1 maintain_suite at 30/30 modulo variance)
+
+**Working tree**: clean. **648 tests collected, 643 passing** (5 new regression tests landed; 5 pre-existing `test_bfcl_adapter.py` failures from missing optional `bfcl_eval` dep persist — unrelated, predates the session). **7 commits pushed to `origin/main`** (5cc3c87 → 1d848ae).
+
+**M5 Max MoE bake-off complete** (`acceptance/m5max_moe/`, 2026-05-10). The full run started at 17/30 (81/150, GLM 0/10) and landed at **30/30 (120/150, all 3 variants pass v1 gate) modulo a single transient `embedded null byte` ValueError at the commit step** (lpe-rope-calc-implement-strict-flag on GLM, scored 4/5 on the recheck). The final official bench shows 29/30; the variance recheck confirms the true rollup is 30/30. See `lessons.md` 2026-05-10 m5max_moe entry for the full postmortem.
+
+**Six fix vectors landed durably:**
+
+1. **`tools/base.py` `dispatch_tool` strips whitespace** in the tool name. GLM-4.5-Air-4bit emits `"read_file\n"` / `"bash\n\n"` etc.; without the strip, every dispatch missed and the model bailed (0/10 baseline → 7/10 from this fix alone).
+2. **`agents/loop.py` normalizes `tc.name` at the loop boundary** too. The dispatcher fix wasn't enough — `_WRITE_TOOLS`, `_DEDUP_EXEMPT_TOOLS`, schema validation, and dedup keying all read the raw name. With whitespace, `writes_seen` never incremented for GLM, so WRITE_PRESSURE fired *after* diffs landed and `_POST_WRITE_IDLE_MAX` never armed.
+3. **`agents/loop.py` `_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE = 15`** OR-branch on the existing completion-tokens gate. The 4000-token threshold was calibrated on qwen3.6-35B's prose-heavy failure; qwen3-coder-next averages 1855 completion tokens per fixture — the gate was unreachable. 10 of 11 firings in the verifying re-bench hit the tool-ceiling branch.
+4. **`agents/loop.py` `_POST_WRITE_IDLE_MAX = 3`** — once any write succeeds, 3 consecutive 0-byte non-write calls trigger a clean exit (not `aborted`). Catches the post-success verification drift the dup-detector eventually catches but marks as bailout. Fired in 13/30 runs.
+5. **`benchmarks/maintain_suite/run.py`** sets `LUXE_WRITE_PRESSURE=1` via `env.setdefault` so the read-loop interrupt is the bench default (ablations can still override).
+6. **SpecDD Lever 2 extended to maintain_suite** — `Fixture.forbids_create: list[str]` + `_inject_forbids_create_sdd` writes `<repo>.sdd` at the cloned-repo root + appends to `.git/info/exclude` so the synthetic contract doesn't pollute fixture diffs. Three opted-in fixtures (lpe-rope-calc-implement-strict-flag, the-game-implement-shuffle-shortcut, neon-rain-implement-reset-shortcut) get cross-product coverage of test-name shapes (prefix/suffix × separator × root/subpath). Verified end-to-end: `.sdd` lands, exclude registers, fixture diffs stay clean.
+
+**Per-machine env state** (not version-controlled, documented inline in RESUME.md §oMLX configuration and §maintain_suite bench-host prereqs):
+- `~/.omlx/settings.json` `sampling.max_context_window`: 32k → 48k (qwen3-coder-next was hitting 33k+ per turn on `nothing-ever-happens-document-config`).
+- `brew install node` (npm 11.12) — fixture `neon-rain-implement-reset-shortcut` shells out to `npm test`.
+
+**The variance class is open for v1.7.** GLM at temp=0 still shows ~10% per-fixture variance across replicates (orphan scaffold creation, transient `embedded null byte` from the commit step). Existing scoring gates (vacuous_test, orphan_file) catch these; `Forbids creating` cuts the rate further via the recovery-gradient error wording. Lever 3 positive constraints ("you must edit X") are the long-term answer per the v1.7 backlog below — not gating any v1 bench.
+
+**No release tag**: the m5max_moe work is substrate hardening on top of the already-tagged v1.6.0. No new version bump is implied.
+
+---
+
+## ⚡ Resume here — v1.7 priorities (unchanged)
+
+The four remaining v1.6-era loose ends below still apply. The m5max_moe substrate work landed durably and clears the path for v1.7 work; the "open question" from the m5max_moe lessons.md entry — *do the threshold-asymmetry findings generalise to SWE-bench?* — is now the natural first probe before the early-bail intervention design lands.
+
+### v1.7 priorities (in order of expected impact)
+
+1. **Early-bail intervention** — addresses ≥10 of the 18 v3 paired-mechanism `empty_patch` cases (the `agent_bailed` class). Interception strategy: detect the bail signature in the loop (consecutive low-output steps + no write-tool calls) and inject a directive turn rather than letting the loop trip its stuck detector. Prerequisite: `LUXE_LOG_TOOL_CALLS=1` traces of the 18 v3 empties to confirm class composition. With m5max_moe's `_POST_WRITE_IDLE_MAX` and tuned WRITE_PRESSURE thresholds now in place, the bail-class composition may already shift before any v1.7 work lands — worth re-checking traces before designing.
+2. **b2 multi-site retrieval** — extend the spec-validator predicate kinds so SpecDD Lever 1 can demand citations from N sites within a single fixture. Closes the loose-grader gap surfaced in `project_loose_grader_audit.md`.
+3. **In-loop test execution feedback** — pipe `pytest` results from the previous step back into the model's next prompt. Likely gates the second strong-tier rebound (Phase B nearest-anchoring tightening, slated to fire here).
+4. **Mode B threshold tuning** — broader bench data is incoming from v3 + Phase B; revisit the 10 tools / 4000 tokens / step 5 thresholds against the v3 traces. The m5max_moe tune (tool-ceiling OR-branch) already addressed the most acute miscalibration on tool-call-heavy models; more granular per-model defaults are next.
+5. **Lever 3** — held until empty_patch class is fully addressed; Lever 3 needs clean separation of constraint vs reasoning failures, and the empty_patch class confounds that boundary today.
+
+### v1.6-era loose ends (status as of 2026-05-11)
+
+1. **BFCL v3 post-SpecDD raw-mode** — was kicked off 2026-05-10 17:30 local. Check `acceptance/bfcl/post_specdd_v16/rep_1/`. If totals deviate >2pp from 76.29%, an infra regression leaked. If they don't, file the result and move on.
+2. **(Open question)** BFCL agent-mode post-SpecDD run — would actually exercise SpecDD, but no pre-SpecDD agent-mode anchor exists. Worth doing as a one-shot v1.6 datapoint to inform v1.7 BFCL strategy.
+3. **(Optional follow-up)** Re-aggregate the v3 harness summary into a tracked `harness_summary.json` once the rebuilt `harness.py:collect_results` fix is exercised on a fresh run. Current summary was written via the fixed collector against the existing `logs/run_evaluation/luxe_v16_n75/` dir.
+4. **sphinx-doc__sphinx-10466 strong→unresolved** is the lone strong tier instance the harness rejected. Worth a glance for v1.7 prep but not a v1.6 blocker.
+
+---
+
+## Earlier state — 2026-05-10 (v1.6.0 SHIPPED)
 
 **Working tree**: clean post-tag. **643 tests passing**. **v1.6.0 tagged** with the v3 ship-floor + Docker harness numbers. BFCL v3 post-SpecDD raw-mode comparison run kicked off (~3.5h wall, in-progress as of tag time).
 
@@ -42,26 +88,7 @@
 
 **See `~/.claude/plans/cozy-wiggling-conway.md`** for the full v1.6 plan, the audit gates, the ship-floor table, and the Phase B nearest-existing-test anchoring watch.
 
----
-
-## ⚡ Resume here — v1.7 priorities (post-v1.6.0 ship)
-
-v1.6.0 is tagged. The v3 ship-floor + harness data is captured in the tag annotation; v3 predictions are sitting at `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/`; harness logs at `logs/run_evaluation/luxe_v16_n75/` (gitignored). The four remaining v1.6-era loose ends:
-
-1. **Watch the BFCL v3 post-SpecDD raw-mode run land** (~3.5h from 2026-05-10 17:30 local) — `acceptance/bfcl/post_specdd_v16/rep_1/`. Raw mode bypasses the agent loop, so SpecDD doesn't fire — primarily a regression check (model unchanged from v1.4.1 baseline). If totals deviate >2pp from 76.29%, an infra regression leaked. If they don't, file the result and move on.
-2. **(Open question)** BFCL agent-mode post-SpecDD run — would actually exercise SpecDD, but no pre-SpecDD agent-mode anchor exists. Worth doing as a one-shot v1.6 datapoint to inform v1.7 BFCL strategy.
-3. **(Optional follow-up)** Re-aggregate the v3 harness summary into a tracked `harness_summary.json` once the rebuilt `harness.py:collect_results` fix is exercised on a fresh run. Current summary was written via the fixed collector against the existing `logs/run_evaluation/luxe_v16_n75/` dir.
-4. **sphinx-doc__sphinx-10466 strong→unresolved** is the lone strong tier instance the harness rejected. Worth a glance for v1.7 prep but not a v1.6 blocker.
-
-### v1.7 priorities (in order of expected impact)
-
-1. **Early-bail intervention** — addresses ≥10 of the 18 v3 paired-mechanism `empty_patch` cases (the `agent_bailed` class). Interception strategy: detect the bail signature in the loop (consecutive low-output steps + no write-tool calls) and inject a directive turn rather than letting the loop trip its stuck detector. Prerequisite: `LUXE_LOG_TOOL_CALLS=1` traces of the 18 v3 empties to confirm class composition.
-2. **b2 multi-site retrieval** — extend the spec-validator predicate kinds so SpecDD Lever 1 can demand citations from N sites within a single fixture. Closes the loose-grader gap surfaced in `project_loose_grader_audit.md`.
-3. **In-loop test execution feedback** — pipe `pytest` results from the previous step back into the model's next prompt. Likely gates the second strong-tier rebound (Phase B nearest-anchoring tightening, slated to fire here).
-4. **Mode B threshold tuning** — broader bench data is incoming from v3 + Phase B; revisit the 10 tools / 4000 tokens / step 5 thresholds against the v3 traces.
-5. **Lever 3** — held until empty_patch class is fully addressed; Lever 3 needs clean separation of constraint vs reasoning failures, and the empty_patch class confounds that boundary today.
-
-### Old Phase D Step 2/3/4 commands (kept for re-run reference)
+### v1.6 ship-cycle Phase D reference commands (kept for re-run)
 
 ### Step 1 — n=75 v3 rerun with creation-only forbids — DONE 2026-05-09
 
@@ -178,12 +205,6 @@ conflating two distinct operations on the same target.
 EOF
 )"
 ```
-
-### Step 6 — Documentation
-
-Move the v1.6.0 sections of RESUME.md to "Earlier state". New "Resume here" points at v1.7 priorities — early-bail intervention is #1 (addresses 10 of 14 v1 paired-mechanism empty_patch via `agent_bailed` class), then b2 multi-site retrieval, then in-loop test execution feedback. Lever 3 still on backlog but de-prioritized vs the empty_patch class.
-
-`lessons.md` already has the v1.6 architectural-shift entry (added in this session). Add a closing entry with the v3 ship numbers + the creation-only validation result.
 
 ---
 
@@ -336,14 +357,14 @@ Real PASS count is always ≤ printed count. Every historical bake-off has had a
 | Path | Purpose |
 |---|---|
 | `src/luxe/agents/single.py` | mono runner — agentic loop end-to-end; `_build_sdd_block` injects Repository contracts (v1.5) |
-| `src/luxe/agents/loop.py` | shared loop; Mode B write-pressure injection (v1.4.1) |
+| `src/luxe/agents/loop.py` | shared loop; Mode B write-pressure injection (v1.4.1); tool-call ceiling OR-branch + `_POST_WRITE_IDLE_MAX` clean exit + `tc.name` loop-boundary normalization (2026-05-10) |
 | `src/luxe/agents/prompts.py` | prompt registry + TaskOverlay; doc/manage strict variants |
 | `src/luxe/citations.py` | diff-aware citation linter; bare-filename fallback (v1.4.1); `spec_violation`/`spec_orphan` (v1.5) |
 | `src/luxe/sdd.py` | **`.sdd` parser** — seven canonical sections incl. **`forbids_create` (v1.6)**, tolerant header normalization (`Forbids creating` → `forbids_create`) |
 | `src/luxe/spec_resolver.py` | chain assembly + glob matching — `find_all_sdd`, `resolve_chain`, `format_sdd_block`; **`is_forbidden(rel, *, creating)` kwarg-only required (v1.6)**; **`all_forbids_create` helper (v1.6)** |
 | `src/luxe/spec.py` | SpecDD Lever 1 data model (`Requirement`, `Spec`, YAML round-trip) |
 | `src/luxe/spec_validator.py` | SpecDD Lever 1 predicate evaluator + reprompt-text helper |
-| `src/luxe/tools/base.py` | `dispatch_tool` (tool exceptions captured as retry-able errors) |
+| `src/luxe/tools/base.py` | `dispatch_tool` (tool exceptions captured as retry-able errors); `name.strip()` at dispatch boundary tolerates whitespace from GLM-style emit shapes (2026-05-10) |
 | `src/luxe/tools/fs.py` | write-time honesty guards; `_check_spec_forbids` pre-write enforcement; **`creating: bool` threaded (v1.6) — `_write_file` computes via `Path.is_file()`; `_edit_file` always `False`; create-only error wording for recovery gradient** |
 | `src/luxe/luxe.sdd` | root invariants (v1.5 dogfood) — Forbids retired `src/swarm/**` etc. |
 | `src/luxe/agents/agents.sdd` | (v1.5 dogfood) — prompt registry as single source of truth |
@@ -353,8 +374,8 @@ Real PASS count is always ≤ printed count. Every historical bake-off has had a
 | `src/luxe/backend.py` | `chat()` accepts `repeat_penalty`; `unload_model()`, `loaded_models()` |
 | `src/luxe/cli.py` | `luxe maintain` (mono only); `--spec-yaml` for SpecDD reprompt gate |
 | `src/luxe/config.py` | `RoleConfig` w/ system/task prompt + overlay ids + repeat_penalty |
-| `benchmarks/maintain_suite/run.py` | bench harness; `Variant` carries prompt + overlay overrides |
-| `benchmarks/maintain_suite/grade.py` | grading + strict gates + multi-variant `v1_release_gate` |
+| `benchmarks/maintain_suite/run.py` | bench harness; `Variant` carries prompt + overlay overrides; `_inject_forbids_create_sdd` writes `<repo>.sdd` + appends to `.git/info/exclude` for per-fixture SpecDD Lever 2 (2026-05-10); `LUXE_WRITE_PRESSURE=1` env default |
+| `benchmarks/maintain_suite/grade.py` | grading + strict gates + multi-variant `v1_release_gate`; `Fixture.forbids_create: list[str]` field (2026-05-10) |
 | `benchmarks/maintain_suite/fixtures.yaml` | the 10 v1 fixtures (each w/ `requirements:` block) |
 | `benchmarks/swebench/` | SWE-bench Verified adapter (preds-only + Docker harness wrapper + compare) |
 | `benchmarks/swebench/smoke_inspect.py` | inspector v2 — mechanical + gold-proximity tier (`--gold-source`); 5 signals, line-based hunk proximity, hunk coverage |
@@ -450,13 +471,22 @@ jq -c 'select(.kind=="write_pressure_fired")' ~/.luxe/runs/$RUN/events.jsonl
 
 ## Recent commit trail (most recent first)
 
-Run `git log --oneline -20` for fresh state. Highlights from this session:
+Run `git log --oneline -20` for fresh state. Highlights from recent sessions:
 
 ```
-<v1.6 commits will appear here after the work below lands>
-e062bab  swebench/adapter: extend Forbids for v1.5 paired-mechanism escape paths
-dcfa772  swebench/adapter: disable commit.gpgsign for bench runs
-6c21956  swebench: bind LUXE_WRITE_PRESSURE to inject_sdd (paired mechanism)
+1d848ae  maintain_suite: broaden JS forbids_create — catch hyphen-prefix variants (2026-05-10)
+b00ffe1  maintain_suite: per-fixture Forbids creating + synth .sdd injection (2026-05-10)
+f962ee6  agents/loop: normalize tool name at the loop boundary too (2026-05-10)
+4590e68  maintain_suite: default LUXE_WRITE_PRESSURE=1 + m5max_moe runbook docs (2026-05-10)
+6cf6b2a  agents/loop: WRITE_PRESSURE tool-ceiling branch + post-write idle exit (2026-05-10)
+fceff7e  tools/base: tolerate whitespace in tool names from dispatch_tool (2026-05-10)
+5cc3c87  maintain_suite: M5 Max bench-env prep + multi-variant repo hygiene (2026-05-10)
+2240f22  docs: v1.6.0 SHIPPED — n=75 v3 + Docker harness 36/75 (48.0%)
+4e9df21  swebench/harness: per-instance report aggregator for swebench >= 4.x
+e49d7da  docs: RESUME.md — Phase D Step 1 done (n=75 v3 ran clean)
+3174a79  docs: rewrite README for v1.6.0-rc-1 (mono-only, SpecDD Lever 2)
+92ceb4c  docs: v1.6.0-rc-1 state + creation-only architectural shift entry
+49c8acb  v1.6.0-rc-1: SpecDD Lever 2 — creation-only forbids (operation-aware policy)
 04c8aac  docs: v1.5.0-rc-2 state + paired-mechanism v1 result + Forbids tightening
 1d5b006  v1.4.1: citation-linter bare-filename fallback + Mode B write-pressure + regrade lint re-run
 707bab8  v1.4.0: SpecDD Lever 1 — programmatic Definition of Done; first 10/10 bench
