@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "n": 18,
+  "frozen_at": "2026-05-11",
+  "recipe": {
+    "purpose": "v1.7 Phase B.4 smoke — the 18 v3 empty_patch instances from acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/. Targets early-bail intervention (LUXE_EARLY_BAIL=1) plus the 32k→48k context window bump landed 2026-05-10. Expected decomposition per scripts/audit_v3_empties.py: 10 no_abort, 4 context_exhausted, 3 stuck_loop, 1 max_steps_reached. Conversion floor: >=10 of 18 to any non-empty tier.",
+    "parent_subset": "v1_baseline_n75.json",
+    "source_run": "acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/"
+  },
+  "instance_ids": [
+    "astropy__astropy-13453",
+    "astropy__astropy-13977",
+    "astropy__astropy-14096",
+    "astropy__astropy-8707",
+    "django__django-11734",
+    "matplotlib__matplotlib-13989",
+    "matplotlib__matplotlib-20488",
+    "matplotlib__matplotlib-20826",
+    "matplotlib__matplotlib-24870",
+    "mwaskom__seaborn-3069",
+    "mwaskom__seaborn-3187",
+    "psf__requests-6028",
+    "pydata__xarray-2905",
+    "pydata__xarray-6938",
+    "pylint-dev__pylint-4604",
+    "sphinx-doc__sphinx-10323",
+    "sphinx-doc__sphinx-10435",
+    "sphinx-doc__sphinx-10614"
+  ]
+}
