@@ -79,6 +79,20 @@ fixtures:
     base_sha: 5c6b51f80e76f80c49a789029414f5152a5edbd7
     goal: "Add a `--strict` CLI flag to pe_scan.py: when set, the script exits with non-zero status if any scanned GGUF file has missing or unreadable header metadata. Keep the default behaviour (exit 0 on any error) when --strict is not passed"
     task_type: implement
+    # GLM-4.5-Air-4bit observed creating debug_test.py + simple_check.py
+    # under full agentic loop runway (m5max_moe_post_code_fixes baseline,
+    # 2026-05-10) — orphan_file gate fired, score 1/5. The loop-boundary
+    # name-normalization fix exposed this variance class; the gate caught
+    # it but the recovery gradient lives at the .sdd layer.
+    forbids_create:
+      - "**/test_*.py"
+      - "**/*_test.py"
+      - debug_*.py
+      - "**/debug_*.py"
+      - simple_check.py
+      - "**/simple_check.py"
+      - scratch_*.py
+      - "**/scratch_*.py"
     expected_outcome:
       kind: regex_present
       pattern: "(?:add_argument|--strict|args\\.strict)"
@@ -106,6 +120,16 @@ fixtures:
     base_sha: 514d22d95dbbc55b8ad73d158d311f507f8a7b51
     goal: "Add a keyboard shortcut: pressing the 'r' key should re-randomize the current movie pick. Bind the listener once on page load; do not interfere with text inputs"
     task_type: implement
+    # GLM-4.5-Air-4bit observed creating test-keyboard-shortcut.js under
+    # full agentic loop runway (m5max_moe_post_code_fixes baseline,
+    # 2026-05-10) — orphan_file gate fired, score 1/5. Forbidding new
+    # test files in any conventional location closes the drift.
+    forbids_create:
+      - "tests/**"
+      - "test/**"
+      - "**/*.test.js"
+      - "**/*.spec.js"
+      - "**/__tests__/**"
     expected_outcome:
       kind: regex_present
       pattern: "addEventListener.*['\"](key(down|up|press))['\"]"
@@ -165,6 +189,19 @@ fixtures:
     base_sha: ef953cc85bead2f09147b99c2a1a2cb2f7d813d0
     goal: "Add a 'reset run' keyboard shortcut: pressing Shift+R restarts the current game without reloading the page. Use the existing input system in src/input/"
     task_type: implement
+    # Only `implement` + `tests_pass` fixture in the suite — the existing
+    # test suite IS the validator; the model should never create new tests.
+    # GLM-4.5-Air-4bit drifted into `tests/keyboard-shortcut.test.js` (a
+    # vacuous test that passed against base_sha) in 1/3 replicates of the
+    # m5max_moe bake-off post-loop-boundary-fix. vacuous_test gate caught
+    # it (score 1/5); operation-aware Forbids creating gives the model a
+    # recovery gradient (edit existing test files instead of inventing).
+    forbids_create:
+      - "tests/**"
+      - "test/**"
+      - "**/*.test.js"
+      - "**/*.spec.js"
+      - "**/__tests__/**"
     expected_outcome:
       kind: tests_pass
       command: "npm test"

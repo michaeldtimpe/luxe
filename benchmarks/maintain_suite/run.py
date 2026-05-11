@@ -372,6 +372,45 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
     return out
 
 
+# --- SpecDD Lever 2 synthetic .sdd injection ------------------------------
+
+def _inject_forbids_create_sdd(repo: Path, patterns: list[str]) -> None:
+    """Drop a synthetic `<repo_basename>.sdd` at the cloned-repo root.
+
+    Mirrors `benchmarks/swebench/adapter.write_swebench_sdd`. The basename
+    matches the directory name so `find_all_sdd` picks it up via the
+    standard `<dir>/<dir>.sdd` chain. Append the path to
+    `.git/info/exclude` (per-repo, not tracked) so `git add -A` skips it
+    during the PR cycle's commit step — keeps the contract out of the
+    fixture's diff while still enforcing the operation-aware policy at
+    write-time.
+
+    Surfaced by the m5max_moe bake-off post-loop-boundary-fix
+    (2026-05-10): GLM-4.5-Air-4bit, given full agentic loop runway,
+    produced a vacuous orphan `tests/keyboard-shortcut.test.js` on
+    neon-rain-implement-reset-shortcut that passed against the base SHA
+    and triggered the vacuous_test gate at score time. The model's
+    implementation diff was correct; the gating failure was scaffold
+    creation. `Forbids creating` at the tool layer redirects the model
+    away from creating new test scaffolding and toward editing existing
+    repo files — the same architectural shift v1.6 shipped for the
+    SWE-bench adapter.
+    """
+    if not patterns:
+        return
+    sdd_path = repo / f"{repo.name}.sdd"
+    body = "# maintain-suite-fixture\n\n## Forbids creating\n"
+    body += "\n".join(f"- {p}" for p in patterns) + "\n"
+    sdd_path.write_text(body, encoding="utf-8")
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_text() if exclude.is_file() else ""
+    entry = f"{repo.name}.sdd"
+    if entry not in existing.splitlines():
+        with exclude.open("a") as fh:
+            fh.write(f"\n# luxe synth .sdd (forbids_create injection)\n{entry}\n")
+
+
 # --- repo resolution ------------------------------------------------------
 
 def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
@@ -385,6 +424,7 @@ def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
                                capture_output=True, text=True, check=False)
             if r.returncode != 0:
                 return None, f"git checkout {fixture.base_sha} failed: {r.stderr.strip()}"
+        _inject_forbids_create_sdd(p, fixture.forbids_create)
         return p, ""
     if fixture.repo_url:
         target = work_dir / f"{fixture.id}-clone"
@@ -401,6 +441,7 @@ def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
                                        capture_output=True, text=True, check=False)
                     if r.returncode != 0:
                         return None, f"{' '.join(cmd)} failed: {r.stderr.strip()}"
+            _inject_forbids_create_sdd(target, fixture.forbids_create)
             return target, ""
         r = subprocess.run(["git", "clone", "--quiet", fixture.repo_url, str(target)],
                            capture_output=True, text=True, check=False)
@@ -411,6 +452,7 @@ def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
                                 capture_output=True, text=True, check=False)
             if r2.returncode != 0:
                 return None, f"git checkout {fixture.base_sha} failed: {r2.stderr.strip()}"
+        _inject_forbids_create_sdd(target, fixture.forbids_create)
         return target, ""
     return None, "fixture has neither repo_path nor repo_url"
 
