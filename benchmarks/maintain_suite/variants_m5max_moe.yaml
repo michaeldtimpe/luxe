@@ -1,0 +1,33 @@
+# M5 Max MoE bake-off — 50–70 GB candidates against the current luxe champion.
+#
+# Hardware: M5 Max 128 GB unified.
+# Goal: scale up the bake-off now that the 36 GB M1 ceiling no longer applies.
+# Champion (Qwen3.6-35B-A3B-6bit, ~30 GB) is the floor; we want to see if any
+# of the larger MoEs beats it on real-PASS rate, irrelevance, and wall.
+#
+# Memory peak per cell (weights + ~5–8 GB KV cache):
+#   Qwen3.6-35B-A3B-6bit:                  ~29 GB +  8 GB =  ~37 GB  (champion floor)
+#   Qwen3-Coder-Next 80B-A3B-6bit:         ~65 GB +  8 GB =  ~73 GB
+#   GLM-4.5-Air 106B-A12B-4bit:            ~58 GB +  9 GB =  ~67 GB
+#   Llama-4-Scout 109B-A17B-4bit:          ~60 GB + 10 GB =  ~70 GB
+#
+# Start oMLX with --max-model-memory 96 --max-process-memory 110 to give the
+# 70 GB peaks headroom without paging.
+#
+# Run (after register_omlx_models.py + oMLX restart):
+#   .venv/bin/python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_m5max_moe.yaml \
+#       --output acceptance/m5max_moe \
+#       --per-fixture-timeout 1800 \
+#       --all
+#
+# 4 cells × 10 fixtures = 40 runs, expect ~10–14 hours wall.
+
+variants:
+  - {mode: mono, model_label: qwen3.6-35b-a3b-6bit,           model_id: Qwen3.6-35B-A3B-6bit}
+  - {mode: mono, model_label: qwen3-coder-next-80b-a3b-6bit,  model_id: Qwen3-Coder-Next-6bit}
+  - {mode: mono, model_label: glm-4.5-air-106b-a12b-4bit,     model_id: GLM-4.5-Air-4bit}
+  # 2026-05-10: dropped Llama-4-Scout cell. Substrate fail on oMLX 0.3.8 —
+  # transformers/models/llama4/configuration_llama4.py rejects the
+  # attn_temperature_tuning config field. Re-introduce when oMLX bumps the
+  # transformers dep past the validator (see lessons.md for v0.3.8 details).
