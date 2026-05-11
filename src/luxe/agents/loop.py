@@ -144,6 +144,29 @@ _WRITE_PRESSURE_MESSAGE = (
     "a first draft that captures the structure, then refine."
 )
 
+# Early-bail intervention (v1.7 priority #1). Fires once per run when the
+# agent has read enough to plan but hasn't written. Targets SWE-bench's
+# "no_abort, zero writes" empty_patch class: 10 of 18 v3 paired-mechanism
+# empties showed model clean-exiting with 8000+ completion tokens but no
+# edits (long-trace bailers: psf-requests-6028, pydata-xarray-2905/6938,
+# django-11734, mpl-13989, sphinx-10435, sphinx-10614 partial). Distinct
+# from WRITE_PRESSURE (which fires later, on prose-mode trap with 10+ tool
+# calls). Trace audit 2026-05-11: step >= 4 with reads >= 4 catches 7 of
+# 10 no_abort cases + intercepts 3 stuck_loop and 1 max_steps cases BEFORE
+# their terminal detectors fire. Off by default; enable with
+# LUXE_EARLY_BAIL=1.
+_EARLY_BAIL_MIN_STEP = 4
+_EARLY_BAIL_MIN_READS = 4
+
+_EARLY_BAIL_MESSAGE = (
+    "Mid-loop notice: you have explored the repository but haven't proposed "
+    "any edits yet. Choose the single file most likely to need modification "
+    "and produce a concrete diff now using `write_file` or `edit_file`. If "
+    "after this exploration you believe the existing code is correct as-is, "
+    "say so explicitly with the file path you investigated and the reason — "
+    "do not continue reading."
+)
+
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
 # patterns mid-run. Set to 0 to disable. Configurable via env.
@@ -189,6 +212,8 @@ def run_agent(
     next_token_log_threshold = _TOKEN_LOG_INTERVAL  # 0 = disabled
     write_pressure_enabled = os.environ.get("LUXE_WRITE_PRESSURE") == "1"
     write_pressure_fired = False
+    early_bail_enabled = os.environ.get("LUXE_EARLY_BAIL") == "1"
+    early_bail_fired = False
     writes_seen = 0
     post_write_idle_tools = 0
 
@@ -220,6 +245,30 @@ def run_agent(
                     phase=phase, step=step,
                     tool_calls_total=result.tool_calls_total,
                     completion_tokens=result.completion_tokens,
+                )
+
+        # Early-bail intervention (v1.7 priority #1). Same checkpoint as
+        # write_pressure but fires earlier — at step 4 with 4+ non-write
+        # tool calls and zero writes. Trace-derived thresholds; see the
+        # block comment on _EARLY_BAIL_MIN_STEP above for the empirical
+        # basis. The message gives the model a binary recovery gradient:
+        # edit OR explicitly decline-with-justification. Mutually
+        # compatible with WRITE_PRESSURE — both can fire in the same run
+        # since they target different trajectory shapes.
+        if (early_bail_enabled
+                and not early_bail_fired
+                and writes_seen == 0
+                and step >= _EARLY_BAIL_MIN_STEP
+                and (result.tool_calls_total - writes_seen) >= _EARLY_BAIL_MIN_READS):
+            messages.append({"role": "user", "content": _EARLY_BAIL_MESSAGE})
+            early_bail_fired = True
+            if log_calls:
+                append_event(
+                    run_id, "early_bail_fired",
+                    phase=phase, step=step,
+                    tool_calls_total=result.tool_calls_total,
+                    completion_tokens=result.completion_tokens,
+                    reads=result.tool_calls_total - writes_seen,
                 )
 
         messages = elide_old_tool_results(messages, role_cfg.num_ctx)

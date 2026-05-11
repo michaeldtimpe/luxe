@@ -18,6 +18,9 @@ from typing import Any
 import pytest
 
 from luxe.agents.loop import (
+    _EARLY_BAIL_MESSAGE,
+    _EARLY_BAIL_MIN_READS,
+    _EARLY_BAIL_MIN_STEP,
     _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE,
     _WRITE_PRESSURE_MESSAGE,
     _WRITE_PRESSURE_MIN_STEP,
@@ -445,6 +448,180 @@ def test_whitespace_in_tool_name_does_not_break_bookkeeping(monkeypatch):
                 "WP fired after a whitespace-named write_file — name normalization "
                 "at the loop boundary regressed."
             )
+
+
+def _read_resp_with_path(path: str, completion_tokens: int = 200) -> ChatResponse:
+    """A read_file response with a varying path so duplicate-call detection
+    doesn't short-circuit. The default `_read_resp` always reads `x.py`, which
+    trips the dedup → consecutive-repeat-steps bailout before early_bail can
+    fire at step 4."""
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(id="c", name="read_file", arguments={"path": path})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
+    )
+
+
+def test_early_bail_disabled_by_default(monkeypatch):
+    """Without LUXE_EARLY_BAIL=1 set, no synthetic early-bail message lands
+    even when step >= MIN_STEP and reads >= MIN_READS with zero writes."""
+    monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
+    scripted = [_read_resp_with_path(f"f{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    for snapshot in backend.calls:
+        for msg in snapshot:
+            assert _EARLY_BAIL_MESSAGE not in str(msg.get("content", ""))
+
+
+def test_early_bail_fires_on_consecutive_low_output(monkeypatch):
+    """With LUXE_EARLY_BAIL=1 and step >= MIN_STEP, reads >= MIN_READS, zero
+    writes, the synthetic message lands exactly once. Targets the no_abort
+    long-trace bailer class (10/18 of v3 empties — model reads then quits)."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)  # isolate early_bail
+    scripted = [_read_resp_with_path(f"f{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    bail_msgs = [
+        m for m in final
+        if m.get("role") == "user" and _EARLY_BAIL_MESSAGE in str(m.get("content", ""))
+    ]
+    assert len(bail_msgs) == 1, f"expected exactly 1 early-bail injection, got {len(bail_msgs)}"
+
+
+def test_early_bail_does_not_fire_after_first_write(monkeypatch):
+    """Once a write has succeeded, the read-loop trap is no longer the
+    failure mode — post_write_idle handles drift from there. Early-bail
+    must stay dormant."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+
+    # Write at step 0, then 8 reads with varied paths.
+    write_resp = ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(id="w", name="write_file",
+                                     arguments={"path": "out.md", "content": "x"})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=200),
+    )
+    scripted = ([write_resp]
+                + [_read_resp_with_path(f"f{i}.py") for i in range(8)]
+                + [_terminal_resp()])
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    tool_fns = {
+        "write_file": lambda args: ("ok", None),
+        "read_file": lambda args: ("contents", None),
+    }
+    tool_defs = [_write_tool(), _read_tool()]
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=tool_defs, tool_fns=tool_fns,
+    )
+
+    for snapshot in backend.calls:
+        for msg in snapshot:
+            assert _EARLY_BAIL_MESSAGE not in str(msg.get("content", ""))
+
+
+def test_early_bail_fires_only_once(monkeypatch):
+    """Across many reads past the threshold the early_bail injection still
+    happens only once (fire-once flag, same shape as write_pressure)."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    scripted = [_read_resp_with_path(f"f{i}.py") for i in range(20)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    bail_msgs = [
+        m for m in final
+        if m.get("role") == "user" and _EARLY_BAIL_MESSAGE in str(m.get("content", ""))
+    ]
+    assert len(bail_msgs) == 1
+
+
+def test_early_bail_fires_before_stuck_detector(monkeypatch):
+    """The point of early_bail is to intercept the trajectory BEFORE the
+    consecutive-repeat-steps bailout (or post_write_idle, or max_steps)
+    closes the loop. If the model keeps repeating reads, early_bail
+    should fire at step MIN_STEP — well before the stuck detector at
+    step 17-22 observed in the v3 audit."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # Repeated unique reads (so dedup doesn't fire) past MIN_STEP.
+    scripted = [_read_resp_with_path(f"f{i}.py") for i in range(10)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    result = run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    # The injection must land in a snapshot BEFORE the loop terminates by
+    # any other mechanism. Inspect the index at which it first appears.
+    first_inject_idx = None
+    for idx, snapshot in enumerate(backend.calls):
+        if any(
+            m.get("role") == "user" and _EARLY_BAIL_MESSAGE in str(m.get("content", ""))
+            for m in snapshot
+        ):
+            first_inject_idx = idx
+            break
+    assert first_inject_idx is not None, "early_bail never fired"
+    # The injection lands at the start of the step AFTER thresholds cross.
+    # With MIN_STEP=4, MIN_READS=4: step 4 backend call sees the message.
+    # That is the 5th chat (0-indexed 4).
+    assert first_inject_idx == _EARLY_BAIL_MIN_STEP, (
+        f"expected injection at chat index {_EARLY_BAIL_MIN_STEP}, "
+        f"saw at {first_inject_idx}"
+    )
+    assert result.aborted is False, (
+        "early_bail must not mark the run aborted — stuck-detector did not "
+        "fire because intervention landed first"
+    )
+
+
+def test_early_bail_threshold_constants_are_sensible():
+    """Sanity-check early_bail constants. Step 4 is below the typical
+    median trajectory (~7) so the intervention lands with context budget
+    remaining; reads 4 captures the trajectory shape where exploration
+    has been substantive but no edit has materialized."""
+    assert _EARLY_BAIL_MIN_STEP >= 2  # too low → fires on legitimate exploration
+    assert _EARLY_BAIL_MIN_STEP <= 6  # too high → fires after the model has already quit
+    assert _EARLY_BAIL_MIN_READS >= 2
+    assert _EARLY_BAIL_MIN_READS <= 8
+    # Step gate and reads gate should be aligned (one read per step is the
+    # most common shape).
+    assert _EARLY_BAIL_MIN_STEP == _EARLY_BAIL_MIN_READS
 
 
 def test_write_pressure_threshold_constants_are_sensible():
