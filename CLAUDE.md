@@ -3,6 +3,35 @@
 Auto-loaded at session start. Points at the durable contracts and the
 short list of project-specific gotchas.
 
+## Single-champion policy
+
+**luxe pins exactly one MoE model: `Qwen3.6-35B-A3B-6bit`** (configured
+in `configs/single_64gb.yaml`). The M5 Max m5max_moe bake-off (2026-05-10)
+confirmed it across all eligible MoE candidates: 10/10 perfect, fastest
+wall (40.0s avg), highest TPS (72.7), no bailouts. Larger MoE
+candidates (Qwen3-Coder-Next-80B, GLM-4.5-Air-106B) also passed but
+offered no win on speed/efficiency.
+
+All ongoing development is centered on this single champion. Practical
+implications:
+
+- **Do not introduce model-fan-out**: no per-task model selection, no
+  router, no A/B against another model unless the user explicitly asks
+  for a re-bench. The bake-off is settled.
+- **Tuning and substrate fixes target this model's failure modes**.
+  When proposing changes (prompts, gates, tool surface), evaluate them
+  against `Qwen3.6-35B-A3B-6bit` first; other-model evidence is
+  secondary unless the user specifies a wider sweep.
+- **The champion is platform-stable**: it ran on M1 Max (64 GB) and is
+  the M5 Max winner. There is no platform-specific MoE champion split
+  to maintain.
+- **Don't keep alternate model configs warm**: configs in
+  `configs/_archive/` are reference-only. Don't promote them.
+
+If a re-bench is ever needed, follow `~/Downloads/luxe/RESUME.md` §
+"M5 Max MoE bake-off" structure and produce results under
+`acceptance/m5max_moe_<rebench-id>/`.
+
 ## Architecture: SpecDD Lever 2 `.sdd` chain
 
 Every directory of consequence has a `<dir>/<dir>.sdd` contract listing
