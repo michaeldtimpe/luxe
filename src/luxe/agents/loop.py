@@ -281,6 +281,14 @@ def run_agent(
         step_had_repeat = False
         for tc in tool_calls:
             result.tool_calls_total += 1
+            # Normalize the tool name at the loop boundary, not just inside
+            # dispatch_tool. Several downstream checks (`_WRITE_TOOLS`,
+            # `_DEDUP_EXEMPT_TOOLS`, `tool_def_map`, `_call_key`) all compare
+            # against the raw name; if GLM emits "edit_file\n", every one of
+            # them misses and bookkeeping silently drifts (writes_seen never
+            # increments → WP fires after diffs already landed,
+            # post_write_idle_exit never arms).
+            tc.name = tc.name.strip()
 
             if tc.name in tool_def_map:
                 err = validate_args(tool_def_map[tc.name], tc.arguments)

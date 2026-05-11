@@ -398,6 +398,55 @@ def test_write_pressure_fires_on_tool_call_ceiling_even_with_low_completion(monk
     )
 
 
+def test_whitespace_in_tool_name_does_not_break_bookkeeping(monkeypatch):
+    """Models that emit tool names with stray whitespace (GLM-4.5-Air-4bit
+    emits `"edit_file\\n"`) used to silently break `writes_seen` accounting
+    because the loop checked the raw `tc.name` against `_WRITE_TOOLS`. The
+    dispatcher's `name.strip()` saved the call from failing but the
+    downstream bookkeeping still ran on the un-stripped name, so
+    write_pressure fired after diffs were already landed and the
+    post-write idle detector never armed. Normalizing once at the loop
+    boundary fixes both.
+
+    Observed in the m5max_moe bake-off post-mortem (2026-05-10):
+    GLM's neon-rain-implement-reset-shortcut had 4 successful edit_file
+    calls but writes_seen stayed 0, then WP fired at step 15 and emitted
+    duplicate edits that triggered the stuck-loop bailout."""
+    monkeypatch.setenv("LUXE_WRITE_PRESSURE", "1")
+
+    write_resp = ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(id="w", name="write_file\n",  # ← whitespace
+                                     arguments={"path": "out.md", "content": "x"})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=500),
+    )
+    # Write (whitespace-named) at step 1, then 20 reads above the tool-call
+    # ceiling. If writes_seen incremented correctly, WP must NOT fire.
+    scripted = [write_resp] + [_read_resp(completion_tokens=100) for _ in range(20)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    tool_fns = {
+        "write_file": lambda args: ("ok", None),
+        "read_file": lambda args: ("file content here", None),
+    }
+    tool_defs = [_write_tool(), _read_tool()]
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=tool_defs, tool_fns=tool_fns,
+    )
+
+    for snapshot in backend.calls:
+        for msg in snapshot:
+            assert _WRITE_PRESSURE_MESSAGE not in str(msg.get("content", "")), (
+                "WP fired after a whitespace-named write_file — name normalization "
+                "at the loop boundary regressed."
+            )
+
+
 def test_write_pressure_threshold_constants_are_sensible():
     """Sanity-check the constants — guards against accidental edits that
     would make the gate fire too early or never. Values reflect the v1.4.0
