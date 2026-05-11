@@ -120,16 +120,35 @@ fixtures:
     base_sha: 514d22d95dbbc55b8ad73d158d311f507f8a7b51
     goal: "Add a keyboard shortcut: pressing the 'r' key should re-randomize the current movie pick. Bind the listener once on page load; do not interfere with text inputs"
     task_type: implement
-    # GLM-4.5-Air-4bit observed creating test-keyboard-shortcut.js under
-    # full agentic loop runway (m5max_moe_post_code_fixes baseline,
-    # 2026-05-10) — orphan_file gate fired, score 1/5. Forbidding new
-    # test files in any conventional location closes the drift.
+    # GLM-4.5-Air-4bit observed creating `test-keyboard-shortcut.js` at
+    # repo root (hyphen-prefix, no dotted suffix) under full agentic-loop
+    # runway in two replicates (2026-05-10). orphan_file gate fired,
+    # score 1/5. The Forbids creating set covers JS test-shape filenames
+    # across prefix/suffix/separator variants and root + subpath:
     forbids_create:
       - "tests/**"
       - "test/**"
-      - "**/*.test.js"
-      - "**/*.spec.js"
       - "**/__tests__/**"
+      - "**/__test__/**"
+      # Test prefixes (root and subpath)
+      - "test-*.js"
+      - "test_*.js"
+      - "test.*.js"
+      - "**/test-*.js"
+      - "**/test_*.js"
+      - "**/test.*.js"
+      # Test suffixes (root and subpath)
+      - "*-test.js"
+      - "*_test.js"
+      - "*.test.js"
+      - "**/*-test.js"
+      - "**/*_test.js"
+      - "**/*.test.js"
+      # Spec variants (less common; included for completeness)
+      - "*.spec.js"
+      - "**/*.spec.js"
+      - "*-spec.js"
+      - "**/*-spec.js"
     expected_outcome:
       kind: regex_present
       pattern: "addEventListener.*['\"](key(down|up|press))['\"]"
@@ -193,15 +212,31 @@ fixtures:
     # test suite IS the validator; the model should never create new tests.
     # GLM-4.5-Air-4bit drifted into `tests/keyboard-shortcut.test.js` (a
     # vacuous test that passed against base_sha) in 1/3 replicates of the
-    # m5max_moe bake-off post-loop-boundary-fix. vacuous_test gate caught
-    # it (score 1/5); operation-aware Forbids creating gives the model a
-    # recovery gradient (edit existing test files instead of inventing).
+    # m5max_moe bake-off post-loop-boundary-fix. Patterns mirror the
+    # the-game-implement-shuffle-shortcut set after that fixture surfaced
+    # a hyphen-prefix root-level variant (test-keyboard-shortcut.js) the
+    # narrower patterns missed.
     forbids_create:
       - "tests/**"
       - "test/**"
-      - "**/*.test.js"
-      - "**/*.spec.js"
       - "**/__tests__/**"
+      - "**/__test__/**"
+      - "test-*.js"
+      - "test_*.js"
+      - "test.*.js"
+      - "**/test-*.js"
+      - "**/test_*.js"
+      - "**/test.*.js"
+      - "*-test.js"
+      - "*_test.js"
+      - "*.test.js"
+      - "**/*-test.js"
+      - "**/*_test.js"
+      - "**/*.test.js"
+      - "*.spec.js"
+      - "**/*.spec.js"
+      - "*-spec.js"
+      - "**/*-spec.js"
     expected_outcome:
       kind: tests_pass
       command: "npm test"
