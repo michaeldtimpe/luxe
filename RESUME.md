@@ -41,7 +41,29 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-12 (v1.7 cycle complete, ship HELD pending redesign)
+## Current state — 2026-05-12 (v1.8 substrate landed; diligence + re-bench in flight)
+
+**Working tree**: clean post-commits. **712 tests passing** (+25 vs v1.7). **5 commits ahead of origin/main pre-push**, all pushed.
+
+**v1.8 substrate code complete** (commit a57c3d4 on top of v1.7 partial):
+- **Track 5** (observability — landed FIRST per locked sequence): `src/luxe/agents/outcomes.py` first-class episode classifier. EpisodeOutcome = (outcome, interventions_fired, failure_chain). Backfilled against v17 runs — v17 baseline established in `acceptance/v17_taxonomy/{swebench_n75,bfcl_n1240,aggregate}.json`. 19 tests.
+- **Track 2** (capability gate): pre-dispatch spec gate in `loop.py`. When spec has `expects_zero_calls`, intercept BEFORE `dispatch_tool`, drop call, do NOT add to `actual_tool_calls`, inject decline reprompt. Target: collapse 23/240 FORBIDDEN_TOOL_EMISSION cases identified by Track 5 backfill.
+- **Track 3** (adapter normalization): `_EARLY_BAIL_MESSAGE_NO_ABSTAIN` variant + `LUXE_EARLY_BAIL_MODE` env. SWE-bench adapter sets `no_abstain`; maintain_suite keeps default. Resolution precedence: kwarg > env mode > default.
+- **Track 1** (prose-burst): composite invariant (step ≤4 AND tool_calls==0 AND writes==0 AND completion_delta ≥1500). Fire-once + clean-exit on 2nd burst. `LUXE_PROSE_BURST=1` opt-in. `action_density` logged unconditionally for v1.9 data collection.
+- **Track 4** (defense-in-depth): BFCL irrelevance system prompt tightened to "do not invent tool calls under any circumstance."
+- Latent fix: `kind=` kwarg collision in `append_event(run_id, "spec_reprompt_fired", ...)` renamed to `requirement_kind`.
+
+**v1.7 taxonomy baseline** (from `acceptance/v17_taxonomy/`):
+- SWE-bench n=75: 19 strong + 19 plausible + 3 wrong_location + 18 wrong_target + 10 empty_timeout + 4 empty_context + 2 stuck. Failure_chain primaries: BAILOUT_AFTER_READS=6 (Track 1 won't fix — needs different signal); CONTEXT_EXHAUSTED=4 (substrate); EARLY_PROSE_COLLAPSE=3 (Track 1 target but composite invariant requires `tool_calls==0` — empirical class has 2-4 tool calls so won't be caught by current gate; data goes to action_density logger for v1.9).
+- BFCL n=1240: 538 single_correct + 341 multi_complete + 217 correct_abstain + 59 multi_ordering_failure + 23 forbidden_emission + 62 unclassified. Track 2's pre-dispatch gate targets the 23 FORBIDDEN_TOOL_EMISSION → expected ~0 in v1.8.
+
+**Diligence — in flight** (b39y7xug0, ~3.5h total): 3-rep on BFCL `multiple` category with oMLX restart between reps (`scripts/diligence_multiple_3rep.py`). Tests whether the v17 -4.49pp regression on `multiple` was substrate-noise (cache leakage hypothesis) or real interaction. Gate: avg ≥92% proceed to re-bench; stable at 88-89% halt for substrate investigation. **Rep 1 at 30/200, pass rate 76.67% (currently LOWER than both v1.6 and v1.7 datapoints — wait for full rep before drawing conclusions).**
+
+**v1.8 re-bench (pending diligence outcome)**:
+- B.5: SWE-bench n=75 with LUXE_EARLY_BAIL=1 + LUXE_PROSE_BURST=1 + LUXE_EARLY_BAIL_MODE=no_abstain (auto via adapter). Ship floor: empty_patch ≤13. Expected mechanism: Track 3 removes ~3 abstain regressions; Track 1 likely 0 direct impact on existing failures (composite invariant too strict).
+- C.8: BFCL n=1240 agent with Track 2 + Track 4. Ship floor: irrelevance ≥92% (HARD). Expected mechanism: Track 2 collapses 23 FORBIDDEN_TOOL_EMISSION; irrelevance 217/240 = 90.42% → ~239/240 = 99.6%.
+
+## Earlier state — 2026-05-12 (v1.7 cycle complete, ship HELD pending redesign)
 
 **Working tree**: clean. **687 tests passing**. **v1.6.1 last tag** (pushed to origin 2026-05-11). **4 commits past v1.6.1 on main + pushed** (early-bail substrate + Lever 1 wiring + BFCL adapter), but **no v1.7 tag**.
 
