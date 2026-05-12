@@ -2077,3 +2077,37 @@ landed alongside the substrate ports),
 from luxe v1.6.1), `~/Downloads/deluxe/tests/{test_tools,test_loop_write_pressure}.py`
 (regression tests ported). luxe-side: this lessons.md entry and the
 `Host lane assignment` section added to RESUME.md.
+
+---
+
+### [2026-05-12] v1.7 cycle held — both interventions work, both ship floors missed; redesign needed
+
+**What happened**: The v1.7 cycle landed two parallel interventions — `LUXE_EARLY_BAIL=1` for SWE-bench's empty_patch class (Phase B) and SpecDD Lever 1 mid-loop reprompt + abstain-tolerant system prompt for BFCL agent mode (Phase C). Both delivered substantive wins on the spirit of the plan, but both missed the literal absolute ship floors. The user held the v1.7 tag pending architectural redesign rather than tag v1.7.0 partial or iterate v1.7.1 on message wording alone.
+
+| Phase | Win | Floor missed | Mechanism |
+|---|---|---|---|
+| B (early-bail) | strong tier 16 → 19 (+3 gold-match) | empty_patch 16 vs target ≤8 | LUXE_EARLY_BAIL fires at step 4 with reads ≥4 |
+| C (Lever 1) | parallel_multiple 64.5% → 83.0% (+18.5pp); total 83.71% → 88.39% (+4.68pp) | irrelevance 90.42% vs target ≥92% | min_tool_calls loop-break reprompt + expects_zero_calls mid-loop gate |
+
+**Root cause — two distinct architectural soft edges, neither solvable by message wording alone**:
+
+1. **SWE-bench short-trace bailer class is unreachable at step ≥4.** The B.1 trace audit of the 18 v3 empty_patch cases identified 3 instances (astropy-13977, mwaskom-3187, sphinx-10614) that clean-exited at step ≤3 with 8000+ completion tokens — model bursts prose, never gets to step 4. The early_bail rule's MIN_STEP=4 cannot reach them regardless of message. B.5 confirmed: early_bail fired in 15/18 of the empty class, with the 3 short-trace cases as the 3 non-firers.
+
+2. **SWE-bench early_bail's abstain branch causes 3 wrong→empty regressions.** The message says "If after this exploration you believe the existing code is correct as-is, say so explicitly with the file path and the reason — do not continue reading." On SWE-bench (bug definitionally exists), this is a false-positive escape valve. B.5 saw 3 cases (xarray-3095, sphinx-10449, sphinx-10673) that produced SOMETHING under v3 (wrong_target/wrong_location) regress to empty_patch under v17 — taking the abstain branch instead.
+
+3. **BFCL expects_zero_calls predicate fires too late.** The grader checks `len(actual_tool_calls) == 0` at end-of-run. The Lever 1 mid-loop reprompt fires AFTER the first violating tool call has been dispatched and added to `actual_tool_calls` — by then the bench has already counted the run as failed. Of the 23/240 irrelevance failures in C.8, all are first-call-before-reprompt cases. The irrelevance +4.59pp gain is mostly from the system prompt (which fires PRE-decode and biases the model toward "decline"), with the predicate as decoration. To enforce zero-call properly, the predicate must run pre-dispatch and refuse to call the tool entirely.
+
+**Fix / takeaway — redesign queue for v1.7-redesign or v2**:
+
+For SWE-bench:
+- Strip the abstain branch from `_EARLY_BAIL_MESSAGE` in SWE-bench context. SWE-bench is bug-definitional — model should not have an escape. (Small fix, ~5 LOC. Projected delta: recover 3 regression empties → empty_patch 16 - 3 = 13.)
+- Add a per-step prose-burst detector for the short-trace class: if completion_tokens in a single step >2000 with zero tool calls, the model is bursting prose; inject a "you are reasoning out loud instead of acting — emit a tool call now" message. This is a fundamentally new signal class — requires plumbing per-step token deltas (currently `result.completion_tokens` is cumulative only). (Medium fix, ~20 LOC. Projected delta: catch ~2-3 of the 3 short-trace cases → empty_patch 13 - 2 = 11. Still misses ≤8 floor.)
+- To hit ≤8 floor would need a deeper change: either a different model class (qwen3-coder-next-80B has better write priors per the m5max_moe bake-off) or a more aggressive default tool-eagerness in the system prompt for SWE-bench-shaped tasks.
+
+For BFCL:
+- Add a pre-dispatch validator hook in `src/luxe/agents/loop.py`. When `spec` has any `expects_zero_calls` requirement and the model emits a tool call, refuse to dispatch — instead append a "decline" reprompt and continue the loop without recording the call in `actual_tool_calls`. This requires re-architecting where the spec gate runs (currently post-step, must move to mid-step between resp parsing and dispatch). (Medium fix, ~30 LOC + tests. Projected delta: irrelevance 90.42% → ~95-98% — past the 92% floor.)
+- Tighten the irrelevance system prompt as a secondary lever — currently "decline and briefly explain why. Do not invent tool calls or invoke unrelated tools." Stronger: "Available tools cannot answer this request. Do not call them under any circumstance. Reply only in prose, explaining why the request is out of scope." (Small fix, ~5 LOC. Marginal delta on top of the pre-dispatch fix.)
+
+**Architecturally aligned framing**: the v1.7 cycle proved Lever 1's wire shape is sound (parallel_multiple +18.5pp is the most reusable win) and early-bail's intervention point is correct (15/18 fire rate). What v1.7 surfaced is that **both interventions need their enforcement boundary moved earlier in the loop** — early_bail needs a pre-step-4 trigger; expects_zero_calls needs a pre-dispatch trigger. The v1.7-redesign should land both moves in one pass rather than incrementally.
+
+**Affected files** (for redesign): `src/luxe/agents/loop.py` (per-step token tracking + pre-dispatch validator hook), `src/luxe/spec_validator.py` (new evaluator entry point for pre-dispatch mode), `benchmarks/bfcl/adapter.py` (no change — the Spec wire is already in place), benchmarks/swebench/adapter.py (separate message overlay for SWE-bench so abstain branch can be stripped without affecting maintain_suite).
