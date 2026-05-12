@@ -41,24 +41,35 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-11 (post-m5max_moe substrate hardening; v1 maintain_suite at 30/30 modulo variance)
+## Current state — 2026-05-12 (v1.7 cycle complete, ship HELD pending redesign)
 
-**luxe is the production lane on M1** (Apple M1 Max, 64 GB) for both
-maintain_suite and SWE-bench work. The deluxe dense-fork's M1 lane
-was paused 2026-05-11 after Round 3 rejected both the R1 survivor
-(Qwen2.5-32B-Instruct-4bit) and the coder-tuned retry: dense
-32B-class structurally exceeds M1 Max effective hardware capacity
-for maintain_suite gates. See `~/Downloads/deluxe/RESUME.md` for the
-closure evidence and Tier 1/2/3 open paths; `lessons.md` 2026-05-11
-dense.M1 entry for the cross-repo postmortem.
+**Working tree**: clean. **687 tests passing**. **v1.6.1 last tag** (pushed to origin 2026-05-11). **4 commits past v1.6.1 on main + pushed** (early-bail substrate + Lever 1 wiring + BFCL adapter), but **no v1.7 tag**.
 
-**M5 (Apple M5 Max)** is the MoE bake-off / substrate-validation lane
-for luxe (last closed: m5max_moe 2026-05-10, 30/30 across three MoE
-candidates). M5 is also the active dense-search frontier for deluxe.
-This document tracks the luxe.M1 production state — M5 lane activity
-is documented inline below when a benchmark is in flight.
+**v1.7 bench cycle complete 2026-05-12** — both interventions delivered substantive wins on the spirit of the plan; both missed the literal ship floors. User held the v1.7 tag pending redesign rather than ship partial or iterate v1.7.1 on message wording alone.
 
-## Current state — 2026-05-11 (v1.6.1 SHIPPED — substrate hardening + maintain_suite Lever 2 extension + BFCL agent anchor)
+| Phase | Run | Headline | Ship floor |
+|---|---|---|---|
+| B.4 SWE-bench n=18 smoke | acceptance/swebench/v17_early_bail_smoke_n18/rep_1/ | 6/18 converted (3 strong, 1 plausible, 2 wrong_target); 15/18 intervention fire rate | conversion <10 vs ≥10 floor |
+| B.5 SWE-bench n=75 full | acceptance/swebench/post_specdd_v17_early_bail_n75/rep_1/ | strong 16→**19** (+3); empty_patch 18→**16** (-2); 3.77h wall | empty_patch **16 vs ≤8 floor** ❌ |
+| C.7 BFCL irrelevance smoke | acceptance/bfcl/v17_smoke_irrelevance/rep_1/ | 217/240 = 90.42% (+4.59pp vs v1.6 agent) | marginal vs +5pp gate |
+| C.8 BFCL n=1240 full | acceptance/bfcl/post_specdd_v17_lever1/rep_1/ | **total 88.39%** (+4.68pp); **parallel_multiple 64.5→83.0% (+18.5pp)**; irrelevance 90.42% | irrelevance **90.42% vs ≥92% floor** ❌ |
+
+**The biggest v1.7 win**: parallel_multiple +18.5pp via Lever 1's `min_tool_calls` predicate — this is the single largest cycle movement. The `min_tool_calls` loop-break reprompt is empirically the most reusable Lever 1 wire shape: structural cardinality cues from GT length, mid-loop nudge, no leakage of values.
+
+**Why the floors were missed (architectural, not message wording)**:
+- **SWE-bench short-trace bailer class** (3 of 18 v3 empties) clean-exit at step ≤3 with 8000+ completion tokens. `LUXE_EARLY_BAIL`'s MIN_STEP=4 rule cannot reach them. Fix requires a per-step prose-burst detector (currently `completion_tokens` is cumulative-only).
+- **SWE-bench early_bail abstain branch** caused 3 cases that produced SOMETHING under v3 (wrong_target/wrong_location) to regress to empty_patch under v17 — model took the "explicitly state the existing code is correct" escape valve.
+- **BFCL expects_zero_calls fires too late** — predicate evaluates AFTER the violating call is added to `actual_tool_calls`, which the grader has already counted as failed. Fix requires pre-dispatch validation (refuse to call the tool entirely, not just reprompt afterward).
+
+**v1.7-redesign queue** (see `lessons.md` 2026-05-12 entry for full design):
+1. Per-step token-delta plumbing in `loop.py` (currently only cumulative). Powers a prose-burst detector for the short-trace bailer class.
+2. Pre-dispatch spec gate in `loop.py` — when `spec` has any `expects_zero_calls` requirement, intercept tool dispatch and refuse rather than dispatch-then-reprompt.
+3. SWE-bench-specific message overlay so abstain branch can be stripped from `_EARLY_BAIL_MESSAGE` for SWE-bench without affecting maintain_suite (which legitimately may want abstain).
+4. Tighten irrelevance system prompt with "do not call them under any circumstance" language.
+
+**Pending diligence**: simple_python (-1.79pp) and multiple (-4.49pp) showed minor BFCL regressions in C.8 vs the v1.6 agent baseline. These categories don't get a Lever 1 spec (single-call GT), so the regression is unrelated to Lever 1. Could be temperature variance or substrate-tier drift. Worth a separate pass before the redesign.
+
+## Earlier state — 2026-05-11 (v1.6.1 SHIPPED — substrate hardening + maintain_suite Lever 2 extension + BFCL agent anchor)
 
 **Working tree**: clean. **652 tests passing** (`bfcl_eval` adapter tests now green after dep landed). **v1.6.1 tagged locally** at `0a964bf` (annotated, signed) on top of v1.6.0 (10 commits since: 7 substrate/maintain_suite + 3 doc rolls). Tag not pushed to `origin`; the local main branch is 1 commit ahead of `origin/main` from before the tag.
 
