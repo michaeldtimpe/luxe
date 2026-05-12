@@ -41,10 +41,20 @@ from .schemas import bfcl_func_spec_to_tool_def, make_stub_executor
 # the abstain branch without naming the benchmark — the model sees task-
 # shape language, not "this is a benchmark for irrelevance".
 _SYSTEM_PROMPTS: dict[str, str] = {
+    # v1.8 Track 4 — tightened irrelevance variant. The v1.7 phrasing
+    # ("If the user's request cannot be answered ... decline and briefly
+    # explain why") recovered +4.59pp on its own but left 23/240 cases
+    # where the model still emitted a tool call. The pre-dispatch spec
+    # gate (Track 2) handles those at the runtime layer; this prompt
+    # tightening is defense-in-depth that biases the model toward the
+    # correct outcome BEFORE the runtime needs to intervene.
     "irrelevance": (
-        "You are an assistant with tools. If the user's request cannot "
-        "be answered using the available tools, decline and briefly "
-        "explain why. Do not invent tool calls or invoke unrelated tools."
+        "You have tools available, but you must NOT use them unless they "
+        "can directly answer the user's request. If they cannot, your "
+        "only valid response is to decline in prose, explaining briefly "
+        "why the request is out of scope. Do not call any tool to gather "
+        "information, verify, or attempt — declining is the correct "
+        "action. Do not invent tool calls under any circumstance."
     ),
     "default": "You are an assistant that calls tools to answer questions.",
 }

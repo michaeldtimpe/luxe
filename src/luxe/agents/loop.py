@@ -160,6 +160,33 @@ _WRITE_PRESSURE_MESSAGE = (
 _EARLY_BAIL_MIN_STEP = 4
 _EARLY_BAIL_MIN_READS = 4
 
+# v1.8 Track 1 — per-step prose-burst detector. Targets the short-trace
+# bailer class identified in the B.1 audit (3/18 v3 empties unreachable by
+# early_bail's step≥4 rule because the model exited at step ≤3 with 8000+
+# completion tokens — prose burst without action). The composite invariant
+# is fired-once at the same checkpoint as early_bail/write_pressure:
+#   step <= _PROSE_BURST_MAX_STEP (4)
+#   AND tool_calls_total == 0
+#   AND writes_seen == 0
+#   AND completion_tokens_delta_last_step >= _PROSE_BURST_MIN_DELTA (1500)
+# 1500 is materially below the observed pathological range (3000-4000/step
+# in the v17 B.5 short-trace cases) so legitimate planning traces have
+# margin. Anti-oscillation: if the model's RESPONSE to the intervention is
+# ALSO a prose burst with zero tool calls, exit cleanly (not aborted) —
+# the trajectory is non-steerable. Off by default; enable with
+# LUXE_PROSE_BURST=1.
+_PROSE_BURST_MAX_STEP = 4
+_PROSE_BURST_MIN_DELTA = 1500
+
+_PROSE_BURST_MESSAGE = (
+    "Mid-loop notice: your previous response generated significant text "
+    "without invoking any tool. The deliverable for this task is a "
+    "concrete action, not a written explanation. Your next response must "
+    "either (a) emit a tool call to gather information you need, or "
+    "(b) emit a write/edit tool call to commit your solution. Reasoning "
+    "in text without calling a tool is not progress."
+)
+
 _EARLY_BAIL_MESSAGE = (
     "Mid-loop notice: you have explored the repository but haven't proposed "
     "any edits yet. Choose the single file most likely to need modification "
@@ -168,6 +195,27 @@ _EARLY_BAIL_MESSAGE = (
     "say so explicitly with the file path you investigated and the reason — "
     "do not continue reading."
 )
+
+# v1.8 Track 3 — no-abstain variant for tasks where the bug is known to
+# exist (SWE-bench: every instance has a definitional bug + gold patch).
+# Removes the "explicitly state correct" escape valve that caused 3
+# wrong_target/wrong_location → empty_patch regressions in v17 B.5.
+# Activated via env var LUXE_EARLY_BAIL_MODE=no_abstain or by passing
+# `early_bail_message=` to run_agent. SWE-bench adapter sets the env var
+# before invoking the luxe maintain subprocess; maintain_suite gets the
+# default message (abstain is sometimes legitimate there).
+_EARLY_BAIL_MESSAGE_NO_ABSTAIN = (
+    "Mid-loop notice: you have explored the repository but haven't proposed "
+    "any edits yet. The fix exists in this repository. Choose the single "
+    "file most likely to need modification and produce a concrete diff now "
+    "using `write_file` or `edit_file`. Do not continue reading; commit to "
+    "an edit based on what you've already learned."
+)
+
+_EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
+    "default": _EARLY_BAIL_MESSAGE,
+    "no_abstain": _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
+}
 
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
@@ -194,17 +242,25 @@ def run_agent(
     run_id: str | None = None,
     phase: str = "main",
     spec: Spec | None = None,
+    early_bail_message: str | None = None,
 ) -> AgentResult:
     """Run the agent loop: chat → tool calls → dispatch → repeat.
 
-    `spec` (v1.7) enables SpecDD Lever 1 mid-loop reprompt gating. Two
+    `spec` (v1.7) enables SpecDD Lever 1 reprompt gating. Two
     agent-trajectory predicates are supported via spec_validator:
-      - expects_zero_calls: reprompts after the first tool call; suppresses
-        write_pressure + early_bail (both are tool-eagerness amplifiers
-        that would corrupt the abstain signal).
+      - expects_zero_calls: PRE-DISPATCH gate (v1.8 Track 2) — drops the
+        tool call before dispatch_tool runs; injects a decline reprompt.
+        Suppresses write_pressure + early_bail (tool-eagerness amplifiers).
       - min_tool_calls: reprompts at loop-break if the model produced
-        fewer than min_matches calls; resumes the loop with the reprompt.
-    Each requirement fires at most once per run.
+        fewer than min_matches calls; resumes the loop. Fires at most
+        once per requirement.
+
+    `early_bail_message` (v1.8 Track 3) overrides the default
+    `_EARLY_BAIL_MESSAGE` for this run. SWE-bench adapter passes a
+    variant without the abstain branch ("explicitly state the existing
+    code is correct"), which was the source of 3 wrong→empty regressions
+    in v1.7's B.5. maintain_suite uses the default (abstain is sometimes
+    a legitimate outcome there). Pass None to use the default.
     """
 
     result = AgentResult()
@@ -227,6 +283,9 @@ def run_agent(
     write_pressure_fired = False
     early_bail_enabled = os.environ.get("LUXE_EARLY_BAIL") == "1"
     early_bail_fired = False
+    prose_burst_enabled = os.environ.get("LUXE_PROSE_BURST") == "1"
+    prose_burst_fired = False
+    prev_completion_tokens = 0
     writes_seen = 0
     post_write_idle_tools = 0
 
@@ -240,12 +299,13 @@ def run_agent(
         and any(r.kind == "expects_zero_calls" for r in spec.requirements)
     )
     if spec_has_zero_calls:
-        # Suppression: the two tool-eagerness amplifiers (write_pressure +
-        # early_bail) would push the model toward action exactly when the
-        # correct outcome is to decline. Disable both unconditionally when
+        # Suppression: the three tool-eagerness amplifiers (write_pressure,
+        # early_bail, prose_burst) would push the model toward action
+        # exactly when the correct outcome is to decline. Disable all when
         # the spec contains a zero-call expectation.
         write_pressure_enabled = False
         early_bail_enabled = False
+        prose_burst_enabled = False
     actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
     spec_violations_reprompted: set[str] = set()
 
@@ -292,7 +352,13 @@ def run_agent(
                 and writes_seen == 0
                 and step >= _EARLY_BAIL_MIN_STEP
                 and (result.tool_calls_total - writes_seen) >= _EARLY_BAIL_MIN_READS):
-            messages.append({"role": "user", "content": _EARLY_BAIL_MESSAGE})
+            # Resolution precedence: explicit kwarg > env mode > default.
+            if early_bail_message is not None:
+                msg = early_bail_message
+            else:
+                mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
+                msg = _EARLY_BAIL_MESSAGE_MODES.get(mode, _EARLY_BAIL_MESSAGE)
+            messages.append({"role": "user", "content": msg})
             early_bail_fired = True
             if log_calls:
                 append_event(
@@ -302,6 +368,66 @@ def run_agent(
                     completion_tokens=result.completion_tokens,
                     reads=result.tool_calls_total - writes_seen,
                 )
+
+        # v1.8 Track 1 — prose-burst detector. Composite invariant fires at
+        # most once per run; on second consecutive burst (intervention
+        # produced no response change), exit cleanly. Per-step token delta
+        # is the previous step's response size — we evaluate at the start
+        # of step N to catch a step N-1 burst, with enough budget remaining
+        # for the intervention to land.
+        completion_delta_last_step = result.completion_tokens - prev_completion_tokens
+        action_density = (
+            (result.tool_calls_total / max(1, result.completion_tokens))
+            if result.completion_tokens > 0 else 0.0
+        )
+        prose_burst_now = (
+            step <= _PROSE_BURST_MAX_STEP
+            and result.tool_calls_total == 0
+            and writes_seen == 0
+            and completion_delta_last_step >= _PROSE_BURST_MIN_DELTA
+        )
+        if prose_burst_enabled and prose_burst_now and not prose_burst_fired:
+            messages.append({"role": "user", "content": _PROSE_BURST_MESSAGE})
+            prose_burst_fired = True
+            if log_calls:
+                append_event(
+                    run_id, "prose_burst_fired",
+                    phase=phase, step=step,
+                    completion_delta=completion_delta_last_step,
+                    completion_tokens=result.completion_tokens,
+                    action_density=action_density,
+                )
+        elif prose_burst_enabled and prose_burst_fired and prose_burst_now:
+            # Anti-oscillation: intervention fired last step; this step is
+            # ALSO a prose burst with no action. Trajectory is non-steerable.
+            # Clean exit (not aborted) to preserve trace + evaluation
+            # semantics; the model has demonstrated unresponsiveness to the
+            # control layer. `resp` is the prior iteration's response (the
+            # second burst), still bound in local scope here.
+            result.final_text = resp.text or ""
+            if log_calls:
+                append_event(
+                    run_id, "prose_burst_clean_exit",
+                    phase=phase, step=step,
+                    completion_delta=completion_delta_last_step,
+                    completion_tokens=result.completion_tokens,
+                )
+            break
+
+        # Observability: emit action_density per step regardless of gating.
+        # Becomes the dataset for v1.9 adaptive threshold tuning. Cheap.
+        if log_calls and step > 0:
+            append_event(
+                run_id, "action_density_sample",
+                phase=phase, step=step,
+                completion_delta=completion_delta_last_step,
+                action_density=action_density,
+                writes_seen=writes_seen,
+                tool_calls_total=result.tool_calls_total,
+            )
+        # Capture cumulative tokens BEFORE this step's backend.chat so the
+        # next iteration's delta correctly measures THIS step's response.
+        prev_completion_tokens = result.completion_tokens
 
         # SpecDD Lever 1 mid-loop reprompt gate (v1.7). Fires expects_zero_calls
         # reprompts here — the predicate's violation is immediate (any tool
@@ -323,7 +449,7 @@ def run_agent(
                         run_id, "spec_reprompt_fired",
                         phase=phase, step=step,
                         requirement_id=rr.requirement.id,
-                        kind=rr.requirement.kind,
+                        requirement_kind=rr.requirement.kind,
                     )
 
         messages = elide_old_tool_results(messages, role_cfg.num_ctx)
@@ -388,7 +514,7 @@ def run_agent(
                             run_id, "spec_reprompt_fired",
                             phase=phase, step=step,
                             requirement_id=rr.requirement.id,
-                            kind=rr.requirement.kind,
+                            requirement_kind=rr.requirement.kind,
                         )
                 if continue_for_spec:
                     # Replay the assistant's final text so the conversation
@@ -398,6 +524,40 @@ def run_agent(
                     continue
             result.final_text = resp.text
             break
+
+        # SpecDD Lever 1 PRE-DISPATCH spec gate (v1.8 Track 2). When the
+        # spec contains any `expects_zero_calls` requirement and the model
+        # has emitted a tool call, we intercept BEFORE dispatch_tool runs:
+        # do NOT add anything to actual_tool_calls (the grader checks
+        # len(actual_tool_calls) == 0), do NOT execute the call, replay
+        # the assistant text without the tool_calls field, then inject a
+        # decline reprompt and continue the loop. This is capability
+        # gating, not post-hoc policy auditing — the bench grades on
+        # executed behavior, so the runtime must enforce before dispatch.
+        # See plan §C.2 latency contract and lessons.md 2026-05-12 entry.
+        if spec_has_zero_calls and tool_calls:
+            # Strip tool_calls from the assistant message so the model's
+            # next turn doesn't see a dangling "I tried to call X" without
+            # a corresponding tool result.
+            assistant_text = resp.text or ""
+            messages.append({"role": "assistant", "content": assistant_text})
+            messages.append({"role": "user", "content": (
+                "Tool calls are not permitted for this request. The "
+                "available tools cannot answer the user's question. "
+                "Reply only in prose, briefly explaining why the request "
+                "is out of scope."
+            )})
+            if log_calls:
+                append_event(
+                    run_id, "spec_predispatch_blocked",
+                    phase=phase, step=step,
+                    blocked_tool_names=[tc.name for tc in tool_calls],
+                    blocked_count=len(tool_calls),
+                )
+            # Skip the dispatch loop entirely. Tool calls are dropped on
+            # the floor — they never enter actual_tool_calls, so the BFCL
+            # grader sees zero calls. Continue to next step.
+            continue
 
         assistant_msg: dict[str, Any] = {"role": "assistant", "content": resp.text or ""}
         if resp.tool_calls:
