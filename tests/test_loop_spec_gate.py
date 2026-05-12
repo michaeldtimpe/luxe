@@ -92,27 +92,33 @@ def _zero_calls_spec() -> Spec:
     )])
 
 
-def test_expects_zero_calls_reprompts_after_first_tool_call():
-    """Model calls a tool when no calls were expected → reprompt next step."""
+def test_expects_zero_calls_pre_dispatch_blocks_call(monkeypatch):
+    """v1.8 Track 2: when spec forbids tool calls and the model emits one,
+    the pre-dispatch gate intercepts BEFORE dispatch — the call is dropped
+    on the floor (not in actual_tool_calls), and a decline reprompt is
+    injected for the model's next turn."""
     scripted = [
         _tool_call_resp("get_weather"),  # violation
         _terminal_resp("I'll decline."),
     ]
     backend = _ScriptedBackend(scripted)
-    run_agent(
+    result = run_agent(
         backend=backend, role_cfg=_role(),
         system_prompt="sys", task_prompt="task",
         tool_defs=[_tool_def("get_weather")], tool_fns=_identity_fn("get_weather"),
         spec=_zero_calls_spec(),
     )
-    # The second chat (index 1) should see the reprompt as the latest user msg.
+    # The blocked call must NOT appear in tool_calls_total or result.tool_calls.
+    assert result.tool_calls_total == 0, (
+        f"pre-dispatch gate should have dropped the call; "
+        f"got tool_calls_total={result.tool_calls_total}"
+    )
+    # The second chat (index 1) should see the pre-dispatch reprompt.
     second_chat = backend.calls[1]
     user_msgs = [m for m in second_chat if m.get("role") == "user"]
-    # First user msg is the task; second should be the reprompt.
     assert len(user_msgs) >= 2
     reprompt = user_msgs[-1]["content"]
-    assert "not relevant" in reprompt.lower()
-    assert "get_weather" in reprompt
+    assert "not permitted" in reprompt.lower() or "out of scope" in reprompt.lower()
 
 
 def test_expects_zero_calls_no_reprompt_when_compliant():
@@ -181,28 +187,36 @@ def test_expects_zero_calls_suppresses_write_pressure(monkeypatch):
             )
 
 
-def test_expects_zero_calls_reprompt_fires_only_once():
-    """If the model keeps calling tools after the reprompt, the reprompt
-    itself fires only once (fire-once flag per requirement id)."""
+def test_expects_zero_calls_pre_dispatch_blocks_every_offending_emission():
+    """v1.8 Track 2: unlike the v1.7 post-dispatch fire-once semantics,
+    pre-dispatch gating is a capability constraint — every offending
+    emission gets blocked. actual_tool_calls must stay empty even after
+    multiple violations. The model gets the reprompt repeatedly, which
+    is correct: each "I'm trying again" deserves a fresh constraint
+    response."""
     scripted = [
-        _tool_call_resp("get_weather"),     # violation 1
-        _tool_call_resp("get_weather", {"q": "diff"}),  # violation 2
-        _tool_call_resp("get_weather", {"q": "more"}),  # violation 3
+        _tool_call_resp("get_weather"),     # blocked 1
+        _tool_call_resp("get_weather", {"q": "diff"}),  # blocked 2
+        _tool_call_resp("get_weather", {"q": "more"}),  # blocked 3
         _terminal_resp(),
     ]
     backend = _ScriptedBackend(scripted)
-    run_agent(
+    result = run_agent(
         backend=backend, role_cfg=_role(),
         system_prompt="sys", task_prompt="task",
         tool_defs=[_tool_def("get_weather")], tool_fns=_identity_fn("get_weather"),
         spec=_zero_calls_spec(),
     )
+    # Zero calls dispatched — pre-dispatch held the line.
+    assert result.tool_calls_total == 0
+    # Final chat shows multiple decline reprompts in conversation history.
     final_chat = backend.calls[-1]
-    # Count user msgs that contain "not relevant" — the reprompt fingerprint.
-    reprompts = [m for m in final_chat
-                 if m.get("role") == "user"
-                 and "not relevant" in str(m.get("content", "")).lower()]
-    assert len(reprompts) == 1, f"expected 1 reprompt, got {len(reprompts)}"
+    declines = [m for m in final_chat
+                if m.get("role") == "user"
+                and "not permitted" in str(m.get("content", "")).lower()]
+    assert len(declines) >= 1, (
+        "expected at least one pre-dispatch decline reprompt in history"
+    )
 
 
 # --- min_tool_calls (parallel cliff gradient) ------------------------------

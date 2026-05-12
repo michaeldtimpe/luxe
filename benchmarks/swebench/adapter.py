@@ -295,6 +295,15 @@ def run_instance(
         write_swebench_sdd(repo)
         if write_pressure:
             extra_env = {**(extra_env or {}), "LUXE_WRITE_PRESSURE": "1"}
+    # v1.8 Track 3: switch the early_bail message to the no-abstain variant
+    # for SWE-bench. The default message offers an "explicitly state the
+    # existing code is correct" branch which caused 3 wrong_target/
+    # wrong_location → empty_patch regressions in v17 B.5. SWE-bench
+    # instances all have a definitional bug + gold patch, so the abstain
+    # branch is semantically incompatible with the task's reward structure.
+    # maintain_suite still uses the default (where abstain is sometimes a
+    # legitimate outcome).
+    extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_MODE": "no_abstain"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
