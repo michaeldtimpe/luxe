@@ -3,13 +3,16 @@
 MLX-only repo maintainer for Apple Silicon. Takes any of your repos and adds
 features, fixes bugs, updates docs, or audits maintenance — and opens a PR.
 
-> **Status:** v1.6.1-rc-1. v1.6.0 shipped (creation-only Forbids,
-> SWE-bench n=75 v3 36/75 = 48.0% harness-resolved). v1.6.1 in flight:
-> m5max_moe substrate hardening (6 fix vectors) + SpecDD Lever 2 extended
-> into maintain_suite (`forbids_create` per fixture, synth `.sdd` injection,
-> 30/30 modulo variance) + BFCL v3 agent-mode anchor (1038/1240 = 83.71%,
-> +7.26pp vs raw). 648 tests collected, 643 passing. See `RESUME.md` for
-> active state and the v1.7 priority list.
+> **Status:** v1.8.0 shipped (2026-05-13). The cycle migrates control
+> logic from prompts into the runtime: Track 2's pre-dispatch spec gate
+> converts `expects_zero_calls` from policy-scored to capability-gated.
+> BFCL n=1240 agent: irrelevance 100% (240/240, +9.58pp), total
+> 90.24% (+1.85pp). SWE-bench n=75 wash with v1.7 (empty_patch ≤13 floor
+> missed at 17; deferred to v1.9 — needs action_density gating). Track 5
+> taxonomy (`src/luxe/agents/outcomes.py`) is the observability primitive
+> for future mechanism-level comparisons. 712 tests. v1.6.1 (substrate
+> hardening + SpecDD Lever 2 in maintain_suite + BFCL anchors) was the
+> previous shipped tag. See `RESUME.md` for active state.
 
 ## What luxe does
 
