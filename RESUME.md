@@ -41,27 +41,42 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-12 (v1.8 substrate landed; diligence + re-bench in flight)
+## Current state — 2026-05-13 (v1.8.0 SHIPPED — pre-dispatch gate + taxonomy primitives)
 
-**Working tree**: clean post-commits. **712 tests passing** (+25 vs v1.7). **5 commits ahead of origin/main pre-push**, all pushed.
+**Working tree**: clean. **712 tests passing**. **v1.8.0 tagged + pushed** (`e21b6b2`, signed). Released atop v1.6.1 with the v1.7 cycle data preserved as the architectural-investigation baseline.
 
-**v1.8 substrate code complete** (commit a57c3d4 on top of v1.7 partial):
-- **Track 5** (observability — landed FIRST per locked sequence): `src/luxe/agents/outcomes.py` first-class episode classifier. EpisodeOutcome = (outcome, interventions_fired, failure_chain). Backfilled against v17 runs — v17 baseline established in `acceptance/v17_taxonomy/{swebench_n75,bfcl_n1240,aggregate}.json`. 19 tests.
-- **Track 2** (capability gate): pre-dispatch spec gate in `loop.py`. When spec has `expects_zero_calls`, intercept BEFORE `dispatch_tool`, drop call, do NOT add to `actual_tool_calls`, inject decline reprompt. Target: collapse 23/240 FORBIDDEN_TOOL_EMISSION cases identified by Track 5 backfill.
-- **Track 3** (adapter normalization): `_EARLY_BAIL_MESSAGE_NO_ABSTAIN` variant + `LUXE_EARLY_BAIL_MODE` env. SWE-bench adapter sets `no_abstain`; maintain_suite keeps default. Resolution precedence: kwarg > env mode > default.
-- **Track 1** (prose-burst): composite invariant (step ≤4 AND tool_calls==0 AND writes==0 AND completion_delta ≥1500). Fire-once + clean-exit on 2nd burst. `LUXE_PROSE_BURST=1` opt-in. `action_density` logged unconditionally for v1.9 data collection.
-- **Track 4** (defense-in-depth): BFCL irrelevance system prompt tightened to "do not invent tool calls under any circumstance."
-- Latent fix: `kind=` kwarg collision in `append_event(run_id, "spec_reprompt_fired", ...)` renamed to `requirement_kind`.
+**v1.8 cycle summary** — one architectural win, one trade-off, three substrate primitives.
 
-**v1.7 taxonomy baseline** (from `acceptance/v17_taxonomy/`):
-- SWE-bench n=75: 19 strong + 19 plausible + 3 wrong_location + 18 wrong_target + 10 empty_timeout + 4 empty_context + 2 stuck. Failure_chain primaries: BAILOUT_AFTER_READS=6 (Track 1 won't fix — needs different signal); CONTEXT_EXHAUSTED=4 (substrate); EARLY_PROSE_COLLAPSE=3 (Track 1 target but composite invariant requires `tool_calls==0` — empirical class has 2-4 tool calls so won't be caught by current gate; data goes to action_density logger for v1.9).
-- BFCL n=1240: 538 single_correct + 341 multi_complete + 217 correct_abstain + 59 multi_ordering_failure + 23 forbidden_emission + 62 unclassified. Track 2's pre-dispatch gate targets the 23 FORBIDDEN_TOOL_EMISSION → expected ~0 in v1.8.
+| Phase | Result | Ship floor |
+|---|---|---|
+| C.8 BFCL n=1240 (Track 2 + 4) | irrelevance 240/240 = **100%**, total **90.24%** (+1.85pp vs v1.7) | ALL ✓ (+8pp over irrelevance) |
+| B.5 SWE-bench n=75 (Track 1 + 3 + early_bail) | strong 18, empty 17 | empty_patch ≤13 missed at 17 |
 
-**Diligence — in flight** (b39y7xug0, ~3.5h total): 3-rep on BFCL `multiple` category with oMLX restart between reps (`scripts/diligence_multiple_3rep.py`). Tests whether the v17 -4.49pp regression on `multiple` was substrate-noise (cache leakage hypothesis) or real interaction. Gate: avg ≥92% proceed to re-bench; stable at 88-89% halt for substrate investigation. **Rep 1 at 30/200, pass rate 76.67% (currently LOWER than both v1.6 and v1.7 datapoints — wait for full rep before drawing conclusions).**
+**Track 2 (pre-dispatch spec gate) is the v1.8 architectural win.** When `spec` has any `expects_zero_calls` Requirement, the runtime intercepts tool dispatch BEFORE `dispatch_tool` runs — drops the call, does NOT add to `actual_tool_calls`, injects a decline reprompt, continues the loop. Capability gating, not policy auditing. Collapsed 23 FORBIDDEN_TOOL_EMISSION cases to zero with no regressions elsewhere. The substrate-legitimacy property is now reliably enforced at the dispatch boundary.
 
-**v1.8 re-bench (pending diligence outcome)**:
-- B.5: SWE-bench n=75 with LUXE_EARLY_BAIL=1 + LUXE_PROSE_BURST=1 + LUXE_EARLY_BAIL_MODE=no_abstain (auto via adapter). Ship floor: empty_patch ≤13. Expected mechanism: Track 3 removes ~3 abstain regressions; Track 1 likely 0 direct impact on existing failures (composite invariant too strict).
-- C.8: BFCL n=1240 agent with Track 2 + Track 4. Ship floor: irrelevance ≥92% (HARD). Expected mechanism: Track 2 collapses 23 FORBIDDEN_TOOL_EMISSION; irrelevance 217/240 = 90.42% → ~239/240 = 99.6%.
+**Track 5 (taxonomy) is the v1.8 observability primitive.** `src/luxe/agents/outcomes.py` classifies every episode as `(outcome, interventions_fired, failure_chain)`. Backfilled v17 + v18 in `acceptance/v{17,18}_taxonomy/` — future cycles compare by mechanism-level distribution shifts, not aggregate score deltas.
+
+**Track 3 (no-abstain message overlay) is a wash on SWE-bench.** `LUXE_EARLY_BAIL_MODE=no_abstain` env (or `early_bail_message=` kwarg on `run_agent`) selects an abstain-free variant. SWE-bench adapter sets the env; maintain_suite keeps default. Traded v17's 3 wrong→empty regressions for 2 new strong→empty bails (sphinx-10435, sympy-13031). Confidence collapse — v1.9 message lever.
+
+**Track 1 (prose-burst detector) is plumbing + observability.** `LUXE_PROSE_BURST=1` composite invariant fires once if step ≤4 with no tool calls + completion_delta ≥1500. Did NOT fire on any of the v17 empty class (empirical short-trace bailers have 2-4 tool calls, not zero). `action_density` logged unconditionally per step — substrate for v1.9 adaptive-threshold tuning.
+
+**Track 4 (irrelevance prompt tightening) is masked by Track 2.** Effect not isolable in this cycle; A/B is v1.9 work.
+
+**Diligence finding (counterintuitive but important)**: 3-rep on BFCL `multiple` at temp=0 with oMLX restart between reps landed at 177/200 EXACTLY in all 3 reps. The substrate is fully deterministic — the supposed v1.7 "−4.49pp regression on multiple" turned out to be a phantom (I had cited "v1.6 ~92.99% baseline" which was fabricated; real v1.6 was also 88.50%). No prefix-cache contamination, no hidden interaction. Future cycles must verify baseline citations against `summary.json` rather than prior-session memory.
+
+**Open architectural debt (deferred to v1.9+)**:
+1. SWE-bench Phase B short-trace bailer class — unreachable by step≥4 rule; needs action_density gating (currently only logged). Track 1's `LUXE_PROSE_BURST` ships the plumbing; gating awaits distribution data.
+2. Confidence-collapse failure mode under no-abstain message — exposed by Track 3. v1.9 message lever: a "soft-anchor" variant that gives selection heuristic without abstain escape.
+3. Hard/soft constraint primitives. v1.8 ships only the hard flavor (`expects_zero_calls`). Soft discouragement + ranked priors are v2.x.
+4. Cross-model substrate evaluation via Track 5 taxonomy — first cross-model run is v1.9 territory.
+
+**File trail**:
+- `src/luxe/agents/outcomes.py` (NEW) — Track 5 taxonomy
+- `src/luxe/agents/loop.py` — pre-dispatch gate, prose-burst, message overlay
+- `benchmarks/swebench/adapter.py` — sets `LUXE_EARLY_BAIL_MODE=no_abstain`
+- `benchmarks/bfcl/adapter.py` — tightened irrelevance system prompt
+- `scripts/{diligence_multiple_3rep,backfill_v17_taxonomy,backfill_v18_taxonomy,inspect_v17_smoke,audit_v3_empties}.py`
+- `acceptance/{v17,v18}_taxonomy/`, `acceptance/{swebench,bfcl}/post_specdd_v18_*/`
 
 ## Earlier state — 2026-05-12 (v1.7 cycle complete, ship HELD pending redesign)
 
@@ -415,7 +430,7 @@ Latent / open:
 
 **luxe** is an MLX-only repo maintainer for Apple Silicon (oMLX backend on `localhost:8000`). Takes a goal + repo, opens a PR. Mono-only since v1.0 — single model, single agent loop, single `luxe maintain` command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
-**What's shipped through v1.6.1**:
+**What's shipped through v1.8.0**:
 - v1.0 — mono-only; 10 fixtures; strict gates
 - v1.1 — pinned work_dir default + manage_strict overlay → 9/10
 - v1.2 — per-tool subphase pass: cve_lookup gated to manage; bash chain-hardening; read_file binary detection
@@ -424,7 +439,8 @@ Latent / open:
 - v1.4.1 — citation-linter bare-filename fallback (Mode A) + Mode B mid-loop write-pressure (opt-in) + sidecar regrade lint re-run
 - v1.5.0-rc-2 — SpecDD Lever 2 paired-mechanism (`.sdd` constraint + WRITE_PRESSURE actuation); 619 tests
 - v1.6.0 (tagged 2026-05-09) — creation-only Forbids: `.sdd` gains `Forbids creating` section, `creating: bool` threaded through write-time guards; recovery-gradient error wording; SWE-bench n=75 v3 36/75 = 48.0% harness-resolved; 643 tests
-- v1.6.1 (tagged 2026-05-11, local only at `0a964bf`) — substrate hardening (6 fix vectors from m5max_moe bake-off); SpecDD Lever 2 extended into maintain_suite (`Fixture.forbids_create` + synth `.sdd` injection); BFCL v3 anchors (raw 76.45%, agent 83.71%); 652 tests
+- v1.6.1 (tagged 2026-05-11 `0a964bf`, pushed to origin) — substrate hardening (6 fix vectors from m5max_moe bake-off); SpecDD Lever 2 extended into maintain_suite (`Fixture.forbids_create` + synth `.sdd` injection); BFCL v3 anchors (raw 76.45%, agent 83.71%); 652 tests
+- v1.8.0 (tagged 2026-05-13 `e21b6b2`, pushed to origin) — Track 2 pre-dispatch spec gate (capability gating); Track 5 episode-outcome taxonomy (`src/luxe/agents/outcomes.py`); Track 3 SWE-bench message overlay (`LUXE_EARLY_BAIL_MODE=no_abstain`); Track 1 prose-burst detector + action_density observability (`LUXE_PROSE_BURST=1`); Track 4 irrelevance prompt tightening. BFCL n=1240 = 90.24% (irrelevance **100%**, +9.58pp); SWE-bench n=75 wash with v17 (empty floor missed, deferred to v1.9). 712 tests. (v1.7 cycle data preserved; no v1.7 tag.)
 
 **v1.6.1 SHIPPED 2026-05-11** (tag `0a964bf`, local only):
 - m5max_moe substrate hardening (6 fix vectors): tool-name strip in dispatcher + loop boundary; `_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE = 15` OR-branch on completion-tokens gate; `_POST_WRITE_IDLE_MAX = 3` clean-exit signal; `LUXE_WRITE_PRESSURE=1` as maintain_suite default
