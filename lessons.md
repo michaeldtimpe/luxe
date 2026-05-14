@@ -2220,4 +2220,48 @@ The trace evidence is unambiguous — these are two different failure modes, bot
 
 4. **Optional: an A/B at n=75 with `--no-convergence-gate`** to isolate the convergence-gate effect from the soft-anchor wording iteration. Both shipped together; we don't have an isolated measurement of either lever.
 
-**Affected files**: `src/luxe/agents/convergence.py` (new); `src/luxe/agents/loop.py` (+convergence-score wiring; conditional fire logic; tool_history bounded list; post-intervention write telemetry); `src/luxe/agents/outcomes.py` (unchanged from v1.9; CONFIDENCE_COLLAPSE class already shipped); `benchmarks/swebench/adapter.py` (convergence_gate kwarg default-on); `benchmarks/swebench/run.py` (--no-convergence-gate CLI flag); `scripts/{compare_v110,save_run_id_manifest}.py` (new); `tests/{test_convergence,test_loop_write_pressure,test_swebench_adapter}.py` (+37 tests; 765 total, was 728). v1.10.0 tag at TBD (push status TBD by user when reviewing in the morning).
+**Affected files**: `src/luxe/agents/convergence.py` (new); `src/luxe/agents/loop.py` (+convergence-score wiring; conditional fire logic; tool_history bounded list; post-intervention write telemetry); `src/luxe/agents/outcomes.py` (unchanged from v1.9; CONFIDENCE_COLLAPSE class already shipped); `benchmarks/swebench/adapter.py` (convergence_gate kwarg default-on); `benchmarks/swebench/run.py` (--no-convergence-gate CLI flag); `scripts/{compare_v110,save_run_id_manifest}.py` (new); `tests/{test_convergence,test_loop_write_pressure,test_swebench_adapter}.py` (+37 tests; 765 total, was 728). v1.10.0 tag pushed to origin 2026-05-14 (`39ba2ee`, signed annotated).
+
+---
+
+### [2026-05-14] v1.10 post-ship audit — recovery accounting drift, silent Docker regression class, venv pollution masking pytest
+
+**What happened**: A manual review of the v1.10.0 ship documentation ~12 hours after the tag exposed four things the previous-session summary got wrong or didn't surface:
+
+1. **Recovery count undercounted.** The session summary said "5 v1.9 empties recovered." Cross-comparing the v1.9 full-stack and v1.10 taxonomy artifacts row-by-row showed **7 v1.9-full-stack empties recovered**, **2 new regressions into empty_patch**, **net −5**. The "5" was the net delta, not the gross. The summary also cited `pydata__xarray-2905` as a recovery example, which is wrong — xarray-2905 was empty under v1.9 *gate-only* (a separate A/B arm), not under v1.9 full-stack (the ship baseline) where it was already strong.
+
+2. **A Docker-resolved instance was silently surrendered.** `matplotlib-14623` was resolved on v1.9's Docker harness (alternative-solution credit despite the inspector tagging it `wrong_target`). v1.10 regressed it to empty_patch, which the inspector taxonomy did flag — but the Docker-grader impact was not surfaced in the ship doc. Practical model-utility narrative was understating a real loss.
+
+3. **A SECOND silent Docker regression existed, invisible to the inspector.** Running the v1.10 Docker harness for the first time on 2026-05-14 revealed `sphinx-doc__sphinx-10673` had `wrong_target` tier in both v1.9 AND v1.10 but lost Docker's alternative-solution credit because the v1.10 patch shrank 3345 → 1659 chars. The inspector taxonomy keys on tier transitions; same-tier regressions in patch quality/extent don't appear in the diff. This is a NEW failure-class category we didn't have a name for: **`same_tier_docker_demotion`**.
+
+4. **The venv had been quietly contaminated for weeks.** `~/.venvs/MyEnv/lib/python3.14/site-packages/` contained four `__editable__.*.pth` files from swebench fixture clones (pytest-5840, sympy-12481, xarray-2905, requests-2931). The harness was running `pip install -e .` inside the fixture's cloned source tree during instance setup; pip installed the editable into the outer MyEnv (it had no notion the cwd was a sandbox). On the next instance, the fixture's repo was reset, leaving the `.pth` pointing at a now-broken source tree — so `import pytest` from MyEnv resolved into the stale clone and exploded. Worse: pytest had no other install in MyEnv. The leaked editable was masquerading as the installed pytest the whole time. Every "N tests passing" claim in this venv before today was running against a fixture-clone pytest.
+
+**Root cause** (by item):
+
+1. **Recovery framing**: net deltas are easier to compute than gross counts; the previous-session summarizer reached for the net (19 → 14 = −5) and labeled it "recovered" without doing the row-by-row cross-tabulation. The cross-arm conflation (mixing full-stack + gate-only example instances under one label) is a separate bug — the gate-only arm is an A/B ablation, not the ship baseline. Both errors are downstream of a missing discipline: always anchor recovery/regression claims to a single, named baseline arm.
+
+2. **matplotlib-14623 Docker silence**: the v1.10 ship doc was written before the v1.10 Docker harness was run. Without the harness output, the only signal was inspector tier, which surfaces "this is now empty" but cannot surface "this used to pass tests via alternative-solution credit." If the harness had been part of the ship gate (not a follow-up), this would not have been a documentation gap.
+
+3. **sphinx-10673 silent demotion**: inspector tier is computed from patch shape (does the diff touch the gold file? does it match the gold range?). Patch-shrinkage that preserves wrong-locus characteristics doesn't change tier, but it can flip an alternative-solution Docker pass to a Docker fail. The inspector taxonomy is structurally blind to this class. We need a `patch_len_delta` column added to the cross-cycle comparison script.
+
+4. **Venv pollution**: harness fixture-setup ran `pip install -e .` against the parent venv. This is a substrate-isolation hole: the bench's per-instance "fresh repo" guarantee doesn't extend to the Python environment. The bench treats the venv as a stable dependency; the fixtures treat it as a mutable target. Result: silent shadow installs that survive past the fixture's lifetime and are never noticed until something downstream tries to use the shadowed package.
+
+**Fix / takeaway** (by item):
+
+1. **Recovery framing discipline**: when reporting cycle-to-cycle deltas, always emit gross + regressions + net in the same paragraph, and always name the baseline arm explicitly (`vs v1.9 full-stack` or `vs v1.9 gate-only`, never just `vs v1.9`). RESUME.md edited to use this template. `scripts/analyze_v110_harness.py` shipped as the cross-cycle template — it computes gross/regression/net and names the arm.
+
+2. **Docker harness must precede ship-doc write-up.** Going forward, the ship doc should be written *after* the Docker harness summary lands, not before. If the harness takes 30-45 min, that's the same window as polishing the doc. Build it into the cycle ritual.
+
+3. **`patch_len_delta` and `same_tier_docker_demotion` class.** Add `patch_len` to every taxonomy row (already present), and add a `prior_cycle_docker_resolved` field that lets the comparison script flag any instance where (a) inspector tier didn't change, (b) prior cycle was Docker-resolved, (c) current cycle is Docker-failed. This is the new failure class. sphinx-10673 is the founding instance; v1.10.1 mining candidate.
+
+4. **Substrate-isolation invariant**: `~/.venvs/MyEnv/lib/python3.14/site-packages/__editable__*.pth` MUST NOT contain any entry pointing into `swebench-workspace`. Memory entry `feedback_swebench_pip_editable_pollution.md` shipped. Bench-launch ritual should grep for this before starting and fail fast. Future fixture-prep code that needs `pip install -e` must use a per-instance venv or `pip install --target=<tempdir>`, never against MyEnv.
+
+**The Docker harness result itself** (post-cleanup, 34m41s wall, n=61 patched):
+- Resolved: 36/61 patched = 59.0% (vs v1.9 34/56 = 60.7% — −1.7pp on a larger denominator)
+- Overall: 36/75 total = 48.0% (vs v1.9 34/75 = 45.3% — **+2.7pp**)
+- Net: **+2 resolves** → v1.10 ships as Docker-WIN, narrowly.
+- Strong-tier resolution rate is **89.5%** (17/19); wrong_target is 35.3%, wrong_location is 40.0% — the v1.10 conversion-rate gain (+17.9pp) converts mostly to MORE patches, but the wrong-locus tiers resolve at only 35-40% so the harness number barely moves. v1.10.1's mechanism-habituation gate and exploratory-support variant are still the right next levers; the audit added a NEW lever to the design space: a target-locus disambiguation pre-patch step.
+
+**Side cleanup the audit forced**: `tree_sitter_languages` (luxe dependency) is unmaintained and lacks Python 3.14 wheels. The successor `tree_sitter_language_pack` (v1.8.0) installs cleanly and exposes a compatible API. `src/luxe/symbols.py:159` import swap is queued as a v1.10.1 substrate item. Until then, 15/765 tests fail on Python 3.14 (all symbol-index cases); 750/765 pass — the first **honest** test-count measurement on this venv now that the leaked pytest is gone.
+
+**Affected files**: `RESUME.md` (recovery accounting corrected; Docker harness section added with table + thesis checks + verdict; test-count line marked honest); `lessons.md` (this entry); `~/.claude/projects/-Users-michaeltimpe-Downloads-luxe/memory/feedback_swebench_pip_editable_pollution.md` (NEW); `~/.claude/projects/-Users-michaeltimpe-Downloads-luxe/memory/MEMORY.md` (index entry); `scripts/analyze_v110_harness.py` (NEW — re-runnable analyzer that emits both denominators, per-tier table omitting empty_patch, two thesis checks, verdict); `acceptance/swebench/post_specdd_v110_n75/rep_1/harness/harness_summary.json` (NEW); `~/.venvs/MyEnv/lib/python3.14/site-packages/` (4 `.pth` + 3 finder modules + 4 dist-info dirs removed — only asitop editable retained). v1.10.0 tag unchanged; no re-tag.
