@@ -404,7 +404,13 @@ def run_agent(
 
     result = AgentResult()
     t0 = time.monotonic()
-    log_calls = bool(run_id) and os.environ.get("LUXE_LOG_TOOL_CALLS") == "1"
+    # v1.10.1 — log_calls default-on when run_id is set. Earlier policy
+    # was opt-in via LUXE_LOG_TOOL_CALLS=1, which silently degraded the
+    # v1.10 production taxonomy (intervention fires + tool_calls invisible)
+    # for any run that didn't have the env exported. Default-on closes
+    # the footgun the v1.10 audit caught. Opt out via LUXE_SUPPRESS_TOOL_LOG=1
+    # (ablation parity for legacy callers).
+    log_calls = bool(run_id) and os.environ.get("LUXE_SUPPRESS_TOOL_LOG") != "1"
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},

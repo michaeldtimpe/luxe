@@ -1,0 +1,14 @@
+{
+  "version": "v1.10.1",
+  "n": 2,
+  "frozen_at": "2026-05-14",
+  "recipe": "Single-instance regression probe for the v1.10.1 levers. sympy-13031 exercises W2 (habituation clean-exit predicate); matplotlib-14623 exercises W3 (exploratory-support variant for score < LOW band). Both regressed under v1.10 with diagnosed v1.10.1 fixes; this probe validates the wiring end-to-end against the real model before the full v19_smoke_n14.json smoke.",
+  "composition": {
+    "sympy__sympy-13031": "v1.10 regressed strong -> empty; all 3 interventions fired with zero writes. Expected v1.10.1 outcome: habituation_exit event at step >= 20, clean termination (not aborted), failure_chain contains HABITUATION_EXIT.",
+    "matplotlib__matplotlib-14623": "v1.10 regressed wrong_target -> empty; convergence_score=0.0 for 12 consecutive steps, EARLY_BAIL suppressed silently. Expected v1.10.1 outcome: early_bail_fired event with msg_variant='exploratory', non-empty patch (any tier != empty_patch)."
+  },
+  "instance_ids": [
+    "sympy__sympy-13031",
+    "matplotlib__matplotlib-14623"
+  ]
+}
