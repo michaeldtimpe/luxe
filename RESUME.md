@@ -43,7 +43,9 @@ This document tracks the luxe production state across both hosts.
 
 ## Current state — 2026-05-14 (v1.10.0 SHIPPED — mechanism-isolation cycle; floor narrowly missed, conversion +17.9pp)
 
-**Working tree**: clean post-tag. **765 tests passing**. **v1.10.0 tagged locally** (annotated, signed; push status set below). Released atop v1.9.0 with the v1.10 cycle data preserved at `acceptance/swebench/post_specdd_v110_n75/rep_1/` (with `run_id_manifest.json`) and `acceptance/v110_taxonomy/`.
+**Working tree**: clean post-tag. **765 tests collected; 750 pass on MyEnv (Python 3.14)** — 15 fail uniformly on `import tree_sitter_languages` (package unmaintained, no Python 3.14 wheels; successor `tree_sitter_language_pack` is installable but requires a one-line swap in `src/luxe/symbols.py:159` — queued as v1.10.1 substrate work, no logic regression). **v1.10.0 tagged locally** (annotated, signed; push status set below). Released atop v1.9.0 with the v1.10 cycle data preserved at `acceptance/swebench/post_specdd_v110_n75/rep_1/` (with `run_id_manifest.json`) and `acceptance/v110_taxonomy/`.
+
+> **2026-05-14 audit correction**: The test-count line previously read "765 tests passing" unqualified. Manual review on 2026-05-14 caught that four `__editable__.*.pth` files from swebench-workspace fixture clones (pytest-5840, sympy-12481, xarray-2905, requests-2931) had leaked into `~/.venvs/MyEnv/site-packages` and were shadowing real `pytest` (and providing fake `sympy`/`xarray`/`requests`). All earlier "tests passing" claims in this venv were running against the leaked pytest from the fixture-clone source tree, not a real install. Cleaned up (4 .pth + 3 finder modules + 4 dist-info dirs removed); preflight invariant added (see `feedback_swebench_pip_editable_pollution.md`); real pytest 9.0.3 reinstalled.
 
 **v1.10 ship character — second substrate release in a row, but with substantive empty_patch movement**. The literal `empty_patch ≤13` floor missed by **1** (14 empties); the `intervention_conversion_rate` mechanism-level signal jumped from 63.0% to **80.9% (+17.9pp)**. Best `empty_patch` count of any luxe cycle (ties v1.5 v1's 14). Two specific regressions diagnosed and have clean v1.10.1 paths.
 
@@ -57,17 +59,44 @@ This document tracks the luxe production state across both hosts.
 | intervention_conversion_rate | ≥50% | **80.9%** ✓ | 63.0% | **+17.9pp** |
 | CONFIDENCE_COLLAPSE | =0 | 4 ✗ | 0* | +4 |
 | ABSTAIN_AFTER_INTERVENTION | ≤5 | 4 ✓ | 0* | +4 |
+| Docker harness (patched) | — | **36 / 61 (59.0%)** | 34 / 56 (60.7%) | −1.7pp on larger denom |
+| Docker harness (overall) | — | **36 / 75 (48.0%)** | 34 / 75 (45.3%) | **+2.7pp** |
 
 \* The v1.9 full-stack baseline shows 0 for `CONFIDENCE_COLLAPSE` and `ABSTAIN_AFTER_INTERVENTION` only because of a workspace-overwrite bug: ARM 2 (gate-only, LUXE_EARLY_BAIL OFF) overwrote `~/.luxe/swebench-workspace/<instance>/log/stdout.log` before the v1.9 taxonomy backfill ran, so the saved v1.9 taxonomy reflects ARM 2's events on ARM 1's predictions. The TRUE v1.9 full-stack CONFIDENCE_COLLAPSE count is unknown but almost certainly > 0. v1.10's `run_id_manifest.json` (saved immediately after the n=75 run via `scripts/save_run_id_manifest.py`) closes this bug; v1.10's 4 is the first honest measurement.
+
+**Docker harness result** (run 2026-05-14, 34m41s wall, `acceptance/swebench/post_specdd_v110_n75/rep_1/harness/harness_summary.json`):
+
+- **Net delta: +2 resolves vs v1.9** (36 vs 34). v1.10 ships as **Docker-WIN** by a narrow margin. Patched-rate dropped 1.7pp because v1.10 produces 5 more patches (61 vs 56) — the larger denominator absorbs the gain; the overall rate (which is the apples-to-apples comparison, both arms have n=75) moves +2.7pp.
+- **4 new resolves**: `astropy-14096` (v1.9-empty recovery → Docker ✓), `django-10973`, `psf__requests-1724`, `pydata__xarray-3095` (v1.9-empty recovery → Docker ✓).
+- **2 surrendered resolves**: `matplotlib-14623` (v1.10 regression to empty, the named diagnosis) and **`sphinx-doc__sphinx-10673`** (silent regression — inspector tier stayed `wrong_target` both cycles, but the v1.10 patch shrank 3345 → 1659 chars and lost Docker's alternative-solution credit; not caught by inspector grader; v1.10.1 mining candidate).
+
+Per-tier Docker resolution (intersected with `has_patch=True` only — `empty_patch` is structurally un-runnable and omitted to avoid diluting the denominator):
+
+| Tier | n_with_patch | n_resolved | rate |
+|---|---|---|---|
+| strong | 19 | 17 | 89.5% |
+| plausible | 19 | 11 | 57.9% |
+| wrong_target | 17 | 6 | 35.3% |
+| wrong_location | 5 | 2 | 40.0% |
+| new_file_in_diff | 1 | 0 | 0.0% |
+
+Thesis checks (predicted ahead of the run, confirmed after):
+- A. Regression-loss thesis (`matplotlib-14623` ∈ v1.10 empties → no Docker entry, surrender confirmed): **TRUE**. It was Docker-resolved on v1.9 and is absent from the v1.10 harness output.
+- B. Recovery-gain thesis (≥3–4 of the 7 v1.9-empty → v1.10 non-empty recoveries should resolve to net positive): **2 of 7 resolved on Docker** (astropy-14096 and xarray-3095). Below the predicted band but enough — combined with the unrelated new resolves on django-10973 and requests-1724 — to deliver +2 net.
+
+Reading: v1.10 *is* a Docker win, but a thinner one than the inspector-tier picture suggests. The `+17.9pp` mechanism-conversion gain converts mostly to *more patches* rather than *more resolved patches* — the strong tier resolves at 89.5%, but wrong_target/wrong_location at 35–40% means producing more wrong-locus patches barely budges the harness number. The v1.10.1 brief's mechanism-habituation gate and exploratory-support variant are still the right next levers; an additional finding is that the `wrong_target → empty` regression class (sphinx-10673) needs a separate audit because the inspector taxonomy doesn't surface patch-shrinkage on same-tier instances.
 
 **Regression instances** (2 single-instance regressions vs v1.9 full-stack):
 - `sympy__sympy-13031` strong → empty: ALL THREE interventions fired (soft_anchor early_bail at step 4, post_bail_rescue density gate at step 9, write_pressure at step 15). 30 tool calls, 0 writes. **Intervention habituation** — same v1.9-substrate pattern, not a v1.10 lever bug. Persisted v1.10.1 work item.
 - `matplotlib__matplotlib-14623` wrong → empty: convergence_score stayed at **0.0 for 12 consecutive steps**, suppressing early_bail every step. Pure diffuse-recon trajectory (no rereads, no greps, no preview-before-write) → no commitment nudge. **The reviewer's preemptive concern came true**: we shipped the suppression without the exploratory-support variant. Clean v1.10.1 lever (add diffuse-recon fallback message).
+  - *Docker-grader impact*: `matplotlib-14623` was Docker-**resolved** on v1.9 (alternative-solution credit despite inspector wrong_target tier — see `acceptance/swebench/post_specdd_v19_n75/rep_1/harness/harness_summary.json`). The v1.10 regression to empty_patch surrenders this Docker-resolved instance. Net Docker-grader movement is **pending W3** — recoveries (7) must outweigh this surrendered resolve to call v1.10 a Docker win.
 
 **v1.10 mechanism wins** (the proof the cycle worked):
 - intervention_conversion_rate **80.9%** (47 fired, 38 converted) vs v1.9 full-stack 63.0% (27 fired, 17 converted) — **+17.9pp**. The convergence-score gating roughly doubled the intervention precision (more fires AND a higher conversion ratio).
-- 5 v1.9 empties recovered under v1.10 — including `matplotlib-20676` (the v17 plausible→empty regression that v1.9 full-stack also missed, now ✓ 33 chars), `psf__requests-5414` (v1.9 plausible→empty regression, now ✓ 23), `pydata__xarray-2905` (v1.9 gate-only strong→empty, now ✓ 14).
+- **7 v1.9 full-stack empties recovered in v1.10** (gross): `astropy-14096` (→ wrong_location), `matplotlib-20676` (→ wrong_location), `matplotlib-20826` (→ wrong_target), `psf__requests-5414` (→ plausible), `pydata__xarray-3095` (→ wrong_target), `pylint-dev__pylint-4604` (→ new_file_in_diff), `sphinx-doc__sphinx-10323` (→ wrong_location). **2 new regressions into empty_patch**: `sympy-13031` (was strong) and `matplotlib-14623` (was wrong_target). **Net empty_patch delta: −5** (19 → 14). *Cross-arm note*: vs the v1.9 **gate-only** arm (separate baseline; not the ship arm), 5 of v1.9-gate-only's 17 empties recovered in v1.10 — including `pydata__xarray-2905` (gate-only-empty → v1.10 strong) and `matplotlib-13989` (gate-only-empty → v1.10 strong); those instances were already non-empty under v1.9 full-stack so they do not count toward the gross-7 above.
 - `sphinx-doc__sphinx-10435` ✓ 17 chars consistent across all v1.9/v1.10 runs that fired early_bail.
+
+> **2026-05-14 audit correction**: This bullet previously read "5 v1.9 empties recovered" and cited `pydata__xarray-2905` as an example. The "5" was the **net** delta (7 gross recoveries − 2 new regressions), not the recovery count itself. The cited `xarray-2905` example was a v1.9 **gate-only** recovery, not a full-stack recovery (under v1.9 full-stack it was already strong). Corrected: gross 7, regressions 2, net −5, arms labeled.
 
 **Track 1 of v1.10 (conditional intervention stacking) is the validated architectural pattern.** Per-step convergence_score in [0.0, 1.0] composed from four sub-signals (`repeated_same_path_access`, `edit_preview_behavior`, `localized_grep_density`, `file_entropy_last_K_events`). Suppresses early_bail when score < LOW_THRESHOLD (0.10) and swaps soft_anchor → commit_imperative when score ≥ HIGH_THRESHOLD (0.40). Action-density gate suppressed at score ≥ HIGH. All thresholds documented in `src/luxe/agents/convergence.py` + the in-file block comment in `loop.py`.
 
