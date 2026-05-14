@@ -270,3 +270,24 @@ class TestPairedMechanismEnv:
         env = captured_env["extra_env"]
         assert "LUXE_ACTION_DENSITY_GATE" not in env
         assert env.get("LUXE_EARLY_BAIL") == "1"
+
+    def test_v110_default_wires_convergence_gate(self, tmp_path, captured_env):
+        """v1.10 default: LUXE_CONVERGENCE_GATE=1 alongside the v1.9 stack.
+        Restores Pareto-correctness via score-based conditional firing."""
+        run_instance(self._instance(), tmp_path)
+        env = captured_env["extra_env"]
+        assert env.get("LUXE_CONVERGENCE_GATE") == "1"
+        # Plus the v1.9 stack stays:
+        assert env.get("LUXE_EARLY_BAIL") == "1"
+        assert env.get("LUXE_ACTION_DENSITY_GATE") == "1"
+
+    def test_v110_convergence_gate_disable_for_ablation(self, tmp_path, captured_env):
+        """`--no-convergence-gate` (or convergence_gate=False kwarg)
+        reverts to v1.9 semantics: binary same_file_read_twice
+        suppression on action_density_gate, unconditional early_bail."""
+        run_instance(self._instance(), tmp_path, convergence_gate=False)
+        env = captured_env["extra_env"]
+        assert "LUXE_CONVERGENCE_GATE" not in env
+        # Other v1.9 wiring stays
+        assert env.get("LUXE_EARLY_BAIL") == "1"
+        assert env.get("LUXE_ACTION_DENSITY_GATE") == "1"

@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from luxe.agents.convergence import compute_convergence_score, extract_path
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import context_pressure, elide_old_tool_results
@@ -256,6 +257,14 @@ _EARLY_BAIL_MESSAGE_NO_ABSTAIN = (
 # trajectory had a viable target before no_abstain pushed the planner
 # into stall.
 #
+# v1.10 wording iteration: dropped "rather than continuing broad
+# exploration" trailer. v1.9 ARM 1 evidence showed Qwen3.6-35B-A3B-6bit
+# interpreted the comparative ("rather than … exploration") as "wrap up
+# now" — sphinx-10435 rep_2 terminated at step 6 with 832 tokens and 0
+# writes after early_bail at step 4. Positive imperative ending
+# preserves the commitment lever without the implicit "stop reading"
+# signal.
+#
 # Design intent:
 #   - Selection heuristic ("highest-probability … even if uncertain")
 #     gives the planner permission to commit under uncertainty — the
@@ -267,19 +276,60 @@ _EARLY_BAIL_MESSAGE_NO_ABSTAIN = (
 #   - Multi-hunk friendly — "location" (not "single file / single
 #     hunk") preserves focus without overconstraining legitimate
 #     multi-hunk fixes.
+#   - Positive imperative ending — closing with the action verb, not
+#     a contrast against exploration.
 _EARLY_BAIL_MESSAGE_SOFT_ANCHOR = (
     "Mid-loop notice: you have explored the repository but haven't proposed "
     "any edits yet. Based on what you've already read, choose the "
     "highest-probability bug location — even if uncertain — and emit a "
     "concrete patch now using `write_file` or `edit_file`. Commit to your "
-    "best candidate rather than continuing broad exploration."
+    "best candidate."
+)
+
+# v1.10 — commit-imperative variant fired by the conditional-stacking
+# gate when convergence_score >= HIGH (model has identified a target
+# and rereads/grep-localizes/preview-before-write are all signaling
+# it's ready to commit). Tighter than soft-anchor; positive imperative,
+# narrow concrete next-step framing, zero mention of exploration.
+# The v1.9 lesson: avoid "rather than X" comparative phrases — they
+# read as "wrap up now" on Qwen3.6-35B-A3B-6bit.
+_EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE = (
+    "Mid-loop notice: your read pattern indicates you have identified "
+    "the likely target. Commit to the most promising file and attempt "
+    "the smallest viable corrective edit using `write_file` or "
+    "`edit_file` now."
 )
 
 _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
     "default": _EARLY_BAIL_MESSAGE,
     "no_abstain": _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
     "soft_anchor": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
+    "commit_imperative": _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE,
 }
+
+# v1.10 — convergence-score thresholds for conditional intervention
+# stacking. Picked to span the natural score range for the
+# Qwen3.6-35B-A3B-6bit champion on SWE-bench:
+#
+#   - All-distinct paths, no greps, no edits → score = 0.00  → SUPPRESS
+#   - 5 reads w/ 1 reread, low entropy           → score ≈ 0.18  → MID
+#   - 4 reads of same file, no other signals     → score = 0.44  → HIGH
+#   - Strong: reread + localized grep + preview  → score ≈ 0.75  → HIGH
+#
+# Below LOW: diffuse-recon; commitment-style interventions hurt
+#            exploratory recovery paths (v1.9 ARM 1 lost matplotlib-25775,
+#            requests-5414 to this pattern). Suppress.
+# LOW ≤ score < HIGH: standard band; soft-anchor wording fires.
+# Score ≥ HIGH: model has identified a target via repeated reads /
+#            localized greps / preview-before-write. Fire tighter
+#            commit_imperative variant; suppress the action-density
+#            gate (model is converging on its own; rescue would interrupt).
+#
+# These are starting thresholds — v1.10 Item 2 includes a re-mining
+# pass against v19 traces to refine them; see
+# acceptance/v110_mining/THRESHOLD_DECISION.md.
+_CONVERGENCE_LOW_THRESHOLD = 0.10
+_CONVERGENCE_HIGH_THRESHOLD = 0.40
 
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
@@ -354,6 +404,17 @@ def run_agent(
     # after early_bail stalls). See _ACTION_DENSITY_GATE_* constants above.
     action_density_gate_enabled = os.environ.get("LUXE_ACTION_DENSITY_GATE") == "1"
     action_density_gate_fired = False
+    # v1.10 — conditional intervention stacking via convergence score.
+    # When enabled:
+    #   - early_bail SUPPRESSED if score < _CONVERGENCE_LOW_THRESHOLD
+    #     (diffuse-recon; commitment pressure hurts exploratory recovery)
+    #   - early_bail MESSAGE swaps to commit_imperative when score >= HIGH
+    #     and the configured mode is "soft_anchor" (the dynamic variant)
+    #   - action_density_gate SUPPRESSED if score >= _CONVERGENCE_HIGH
+    #     (model has converged on its own; rescue would interrupt)
+    # Off by default; adapter wires it on for SWE-bench. Falls back to
+    # v1.9 semantics (no convergence-based gating) when disabled.
+    convergence_gate_enabled = os.environ.get("LUXE_CONVERGENCE_GATE") == "1"
     # v1.9 — convergence proxy. Track read_file call signatures so the gate
     # can suppress itself when the model has revisited the same file (strong
     # trajectories rerun reads ~3× more often than empties per the v18
@@ -365,6 +426,17 @@ def run_agent(
     # intervention shifted behavior (tool call vs another prose-only turn).
     last_intervention_step: int | None = None
     last_intervention_kind: str | None = None
+    # v1.10 — convergence-score telemetry. tool_history is a bounded list of
+    # (name, path) entries for the convergence score (see
+    # luxe.agents.convergence). post-intervention behavior signals capture
+    # whether the model engaged after a fire (lag-to-write + sustained-write
+    # signals). All observability — no gating on these yet (Item 2 wires
+    # gating; Item 1 establishes the substrate).
+    TOOL_HISTORY_MAX = 20
+    tool_history: list[dict[str, Any]] = []
+    first_write_step_after_intervention: int | None = None
+    post_intervention_consecutive_writes = 0
+    post_intervention_write_burst_max = 0
     prev_completion_tokens = 0
     prev_tool_calls_total_at_sample = 0  # v1.9 — for next_action_was_tool_call
     writes_seen = 0
@@ -384,11 +456,14 @@ def run_agent(
         # early_bail, prose_burst, action_density_gate) would push the
         # model toward action exactly when the correct outcome is to
         # decline. Disable all when the spec contains a zero-call
-        # expectation.
+        # expectation. v1.10 convergence_gate has no effect when the
+        # gated interventions are themselves disabled, but we mirror the
+        # off-switch for clarity.
         write_pressure_enabled = False
         early_bail_enabled = False
         prose_burst_enabled = False
         action_density_gate_enabled = False
+        convergence_gate_enabled = False
     actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
     spec_violations_reprompted: set[str] = set()
 
@@ -397,6 +472,15 @@ def run_agent(
 
         pressure = context_pressure(messages, role_cfg.num_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
+
+        # v1.10 — compute convergence score ONCE per step at the top of the
+        # iteration. Used by both early_bail and action_density_gate
+        # predicates AND emitted on the action_density_sample observability
+        # event. Pure function over the bounded tool_history; cheap to
+        # evaluate every step. The score is the v1.10 replacement for the
+        # v1.9 binary `same_file_read_twice_step` skip — see
+        # luxe.agents.convergence module docstring for the design rationale.
+        convergence_score = compute_convergence_score(tool_history)
 
         # Mid-loop write-pressure injection (Mode B fix). Fires once per
         # run when the agent has done substantial reading + generation
@@ -437,25 +521,60 @@ def run_agent(
                 and writes_seen == 0
                 and step >= _EARLY_BAIL_MIN_STEP
                 and (result.tool_calls_total - writes_seen) >= _EARLY_BAIL_MIN_READS):
-            # Resolution precedence: explicit kwarg > env mode > default.
-            if early_bail_message is not None:
-                msg = early_bail_message
+            # v1.10 — conditional stacking via convergence score. When the
+            # gate is enabled AND the model is in diffuse-recon (score
+            # below LOW_THRESHOLD), suppress the fire. The v1.9 evidence:
+            # commitment-style interventions at step 4 break exploratory
+            # recovery paths (ARM 1 lost matplotlib-25775, requests-5414).
+            # When score is HIGH, swap the soft_anchor message for the
+            # tighter commit_imperative wording (the model has converged
+            # on a target via repeated reads / localized greps; a stronger
+            # imperative is appropriate). Other modes (default, no_abstain,
+            # explicit kwarg) remain static — only soft_anchor is dynamic.
+            suppress_for_convergence = (
+                convergence_gate_enabled
+                and convergence_score < _CONVERGENCE_LOW_THRESHOLD
+            )
+            if suppress_for_convergence:
+                if log_calls:
+                    append_event(
+                        run_id, "early_bail_suppressed_diffuse",
+                        phase=phase, step=step,
+                        convergence_score=convergence_score,
+                        threshold=_CONVERGENCE_LOW_THRESHOLD,
+                        tool_calls_total=result.tool_calls_total,
+                    )
             else:
-                mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
-                msg = _EARLY_BAIL_MESSAGE_MODES.get(mode, _EARLY_BAIL_MESSAGE)
-            messages.append({"role": "user", "content": msg})
-            early_bail_fired = True
-            early_bail_step = step
-            last_intervention_step = step
-            last_intervention_kind = "early_bail"
-            if log_calls:
-                append_event(
-                    run_id, "early_bail_fired",
-                    phase=phase, step=step,
-                    tool_calls_total=result.tool_calls_total,
-                    completion_tokens=result.completion_tokens,
-                    reads=result.tool_calls_total - writes_seen,
-                )
+                # Resolution precedence: explicit kwarg > env mode > default.
+                if early_bail_message is not None:
+                    msg = early_bail_message
+                    msg_variant = "kwarg"
+                else:
+                    mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
+                    if (convergence_gate_enabled
+                            and mode == "soft_anchor"
+                            and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
+                        msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
+                        msg_variant = "commit_imperative"
+                    else:
+                        msg = _EARLY_BAIL_MESSAGE_MODES.get(
+                            mode, _EARLY_BAIL_MESSAGE)
+                        msg_variant = mode
+                messages.append({"role": "user", "content": msg})
+                early_bail_fired = True
+                early_bail_step = step
+                last_intervention_step = step
+                last_intervention_kind = "early_bail"
+                if log_calls:
+                    append_event(
+                        run_id, "early_bail_fired",
+                        phase=phase, step=step,
+                        tool_calls_total=result.tool_calls_total,
+                        completion_tokens=result.completion_tokens,
+                        reads=result.tool_calls_total - writes_seen,
+                        convergence_score=convergence_score,
+                        msg_variant=msg_variant,
+                    )
 
         # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,
         # action_density_gate, and the action_density_sample observability
@@ -478,14 +597,29 @@ def run_agent(
         # the same target. Thresholds derived from
         # scripts/mine_action_density.py over v17 + v18 SWE-bench n=75;
         # see acceptance/v19_mining/THRESHOLD_DECISION.md.
+        # v1.10 — convergence-score suppression replaces the v1.9 binary
+        # same_file_read_twice skip. When the gate is enabled AND the
+        # model has converged (score >= HIGH), suppress the gate — the
+        # rescue would interrupt a trajectory that's converging on its
+        # own. Keep the v1.9 same_file_read_twice_step as a fallback skip
+        # condition when the convergence gate is OFF (preserves v1.9
+        # ablation semantics).
+        v110_suppress = (
+            convergence_gate_enabled
+            and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD
+        )
+        v19_suppress = (
+            not convergence_gate_enabled
+            and same_file_read_twice_step is not None
+            and same_file_read_twice_step <= step
+        )
         if (action_density_gate_enabled
                 and not action_density_gate_fired
                 and writes_seen == 0
                 and step >= _ACTION_DENSITY_GATE_MIN_STEP
                 and result.completion_tokens >= _ACTION_DENSITY_GATE_MIN_TOKENS
                 and result.tool_calls_total <= _ACTION_DENSITY_GATE_MAX_TOOLS
-                and not (same_file_read_twice_step is not None
-                         and same_file_read_twice_step <= step)):
+                and not (v110_suppress or v19_suppress)):
             fire_mode: str | None
             if early_bail_step is None:
                 fire_mode = "standalone"
@@ -511,7 +645,23 @@ def run_agent(
                         completion_tokens=result.completion_tokens,
                         action_density=action_density,
                         same_file_read_twice_step=same_file_read_twice_step,
+                        convergence_score=convergence_score,
                     )
+        elif (action_density_gate_enabled and not action_density_gate_fired
+              and v110_suppress and log_calls):
+            # Observability — record the v1.10 suppression once when it
+            # would otherwise have fired, so post-hoc analysis can tell
+            # convergence-suppression from threshold-miss.
+            if (writes_seen == 0
+                    and step >= _ACTION_DENSITY_GATE_MIN_STEP
+                    and result.completion_tokens >= _ACTION_DENSITY_GATE_MIN_TOKENS
+                    and result.tool_calls_total <= _ACTION_DENSITY_GATE_MAX_TOOLS):
+                append_event(
+                    run_id, "action_density_gate_suppressed_converged",
+                    phase=phase, step=step,
+                    convergence_score=convergence_score,
+                    threshold=_CONVERGENCE_HIGH_THRESHOLD,
+                )
 
         # v1.8 Track 1 — prose-burst detector. Composite invariant fires at
         # most once per run; on second consecutive burst (intervention
@@ -567,7 +717,20 @@ def run_agent(
                     "since_intervention_step": step - last_intervention_step,
                     "since_intervention_kind": last_intervention_kind,
                     "next_action_was_tool_call": step_had_call,
+                    # v1.10 — post-intervention behavior signals. None
+                    # until the first post-intervention write fires; once
+                    # it does, time_to_first_write_after_intervention is
+                    # fixed for the rest of the run. write_burst_persistence
+                    # is the running max consecutive post-intervention
+                    # writes — captures "stuck on cleanup" vs "real
+                    # engagement" once the model commits.
+                    "time_to_first_write_after_intervention":
+                        first_write_step_after_intervention,
+                    "write_burst_persistence": post_intervention_write_burst_max,
                 }
+            # v1.10 — convergence_score is already computed at top of
+            # step (used by early_bail + action_density_gate predicates);
+            # just emit it on the sample event for observability.
             append_event(
                 run_id, "action_density_sample",
                 phase=phase, step=step,
@@ -575,6 +738,7 @@ def run_agent(
                 action_density=action_density,
                 writes_seen=writes_seen,
                 tool_calls_total=result.tool_calls_total,
+                convergence_score=convergence_score,
                 **habituation,
             )
         prev_tool_calls_total_at_sample = result.tool_calls_total
@@ -811,14 +975,40 @@ def run_agent(
             if not executed.error:
                 actual_tool_calls.append((tc.name, tc.arguments))
             seen_calls.add(key)
+            # v1.10 — append to tool_history for the convergence score.
+            # Bounded to the last TOOL_HISTORY_MAX entries; only
+            # successfully-dispatched calls (errors don't represent observed
+            # behavior). Path extraction is permissive — see
+            # luxe.agents.convergence.extract_path.
+            if not executed.error:
+                tool_history.append({
+                    "step": step,
+                    "name": tc.name,
+                    "path": extract_path(tc.name, tc.arguments),
+                })
+                if len(tool_history) > TOOL_HISTORY_MAX:
+                    tool_history = tool_history[-TOOL_HISTORY_MAX:]
             if tc.name in _WRITE_TOOLS and not executed.error:
                 writes_seen += 1
                 post_write_idle_tools = 0
+                # v1.10 — post-intervention write telemetry. Capture
+                # time-to-first-write and sustained-write-burst signals
+                # for any trajectory where an intervention fired earlier.
+                if last_intervention_step is not None:
+                    if first_write_step_after_intervention is None:
+                        first_write_step_after_intervention = step - last_intervention_step
+                    post_intervention_consecutive_writes += 1
+                    if post_intervention_consecutive_writes > post_intervention_write_burst_max:
+                        post_intervention_write_burst_max = post_intervention_consecutive_writes
             elif writes_seen > 0:
                 if executed.bytes_out == 0 or executed.error:
                     post_write_idle_tools += 1
                 else:
                     post_write_idle_tools = 0
+                # v1.10 — non-write after intervention breaks the burst
+                # (only matters once at least one write has occurred).
+                if last_intervention_step is not None:
+                    post_intervention_consecutive_writes = 0
 
             content = executed.error or executed.result
             messages.append({
@@ -836,6 +1026,10 @@ def run_agent(
                     phase=phase, step=step, name=tc.name,
                     key_hash=key_hash, duplicate=False,
                     cached=executed.cached, bytes_out=executed.bytes_out,
+                    # v1.10 — emit path arg so future convergence-score
+                    # mining can run against the trace. Cheap; falls
+                    # back to None for tools without a path-like arg.
+                    path=extract_path(tc.name, tc.arguments),
                 )
 
         if post_write_idle_tools >= _POST_WRITE_IDLE_MAX:

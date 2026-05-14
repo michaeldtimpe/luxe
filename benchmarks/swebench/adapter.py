@@ -266,6 +266,7 @@ def run_instance(
     write_pressure: bool = True,
     early_bail: bool = True,
     action_density_gate: bool = True,
+    convergence_gate: bool = True,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -294,6 +295,16 @@ def run_instance(
     fires at step ≥6 with low tool count + high token output, in
     standalone or post_bail_rescue mode. Thresholds derived from
     scripts/mine_action_density.py.
+
+    `convergence_gate` (default True, v1.10) sets
+    `LUXE_CONVERGENCE_GATE=1` so the conditional-stacking convergence
+    score gates early_bail (suppress on diffuse-recon) and
+    action_density_gate (suppress on high convergence), and swaps the
+    soft_anchor message for commit_imperative when the model has
+    converged on a target. Pure stacking of text-level interventions
+    is non-Pareto per v1.9 Phase D evidence; the v1.10 score restores
+    Pareto-correctness by making fires context-aware. See
+    luxe.agents.convergence for the score primitives.
     """
     inst_dir = work_dir / instance.instance_id
     log_dir = inst_dir / "log"
@@ -323,6 +334,8 @@ def run_instance(
         extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL": "1"}
     if action_density_gate:
         extra_env = {**(extra_env or {}), "LUXE_ACTION_DENSITY_GATE": "1"}
+    if convergence_gate:
+        extra_env = {**(extra_env or {}), "LUXE_CONVERGENCE_GATE": "1"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,

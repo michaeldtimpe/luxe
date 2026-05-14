@@ -90,6 +90,10 @@ def main() -> int:
     p.add_argument("--no-action-density-gate", action="store_true",
                    help="Disable LUXE_ACTION_DENSITY_GATE=1 wiring (v1.9 default-on). "
                         "Use for ablation against the staged-escalation gate.")
+    p.add_argument("--no-convergence-gate", action="store_true",
+                   help="Disable LUXE_CONVERGENCE_GATE=1 wiring (v1.10 default-on). "
+                        "Use for ablation against conditional intervention stacking; "
+                        "reverts to v1.9 binary same_file_read_twice suppression.")
     args = p.parse_args()
 
     if not args.dataset.is_file():
@@ -185,6 +189,7 @@ def main() -> int:
             write_pressure=not args.no_write_pressure,
             early_bail=not args.no_early_bail,
             action_density_gate=not args.no_action_density_gate,
+            convergence_gate=not args.no_convergence_gate,
         )
         results.append(result)
 
