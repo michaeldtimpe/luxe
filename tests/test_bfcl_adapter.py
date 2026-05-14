@@ -11,6 +11,13 @@ from typing import Any
 
 import pytest
 
+pytest.importorskip(
+    "bfcl_eval",
+    reason="bfcl_eval pins tree_sitter==0.21.3 which is incompatible with luxe's "
+    "tree-sitter-language-pack dependency. Install bfcl_eval in a separate venv "
+    "to exercise these tests.",
+)
+
 from benchmarks.bfcl.adapter import (
     SUPPORTED_CATEGORIES,
     _problem_messages,

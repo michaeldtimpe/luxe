@@ -104,6 +104,36 @@ def test_swebench_bailout_after_reads(tmp_path):
     assert ep.failure_chain[0] == FailureClass.BAILOUT_AFTER_READS
 
 
+def test_swebench_habituation_exit_classified(tmp_path):
+    """v1.10.1 — HABITUATION_EXIT fires when ≥3 distinct interventions fired
+    with zero post-intervention writes; emitted as a habituation_exit event
+    by the loop. Founding case: sympy-13031 (v1.10 audit)."""
+    events_path = tmp_path / "events.jsonl"
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": i, "name": "read_file"}
+        for i in range(8)
+    ] + [
+        {"kind": "early_bail_fired", "step": 4, "completion_tokens": 2000},
+        {"kind": "action_density_gate_fired", "step": 9, "completion_tokens": 3000},
+        {"kind": "write_pressure_fired", "step": 15, "completion_tokens": 4500},
+        {"kind": "habituation_exit", "step": 20,
+         "interventions_fired": ["action_density_gate", "early_bail", "write_pressure"]},
+        {"kind": "single_mode_done", "aborted": False, "tool_calls_total": 20},
+    ]
+    _write_events(events_path, events)
+    ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
+    assert FailureClass.HABITUATION_EXIT in ep.failure_chain
+    # Ordering invariant: HABITUATION_EXIT sits after ABSTAIN_AFTER_INTERVENTION
+    # (which appears because EARLY_BAIL fired with zero writes) but before
+    # CONFIDENCE_COLLAPSE + EMPTY_PATCH_TIMEOUT terminal classes.
+    chain = ep.failure_chain
+    hab_idx = chain.index(FailureClass.HABITUATION_EXIT)
+    timeout_idx = chain.index(FailureClass.EMPTY_PATCH_TIMEOUT)
+    assert hab_idx < timeout_idx
+    if FailureClass.ABSTAIN_AFTER_INTERVENTION in chain:
+        assert chain.index(FailureClass.ABSTAIN_AFTER_INTERVENTION) < hab_idx
+
+
 def test_swebench_bailout_with_failed_intervention(tmp_path):
     """EARLY_BAIL fired but model still didn't write → ABSTAIN_AFTER_INTERVENTION
     appears in chain."""

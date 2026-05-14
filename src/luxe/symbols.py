@@ -156,7 +156,7 @@ def _walk_for_symbols(node: Any, src: bytes, kind_map: dict[str, str],
 
 
 def _parse_file(path: Path, lang: str) -> list[Symbol]:
-    from tree_sitter_languages import get_parser
+    from tree_sitter_language_pack import get_parser
     try:
         parser = get_parser(lang)
     except Exception:

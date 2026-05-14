@@ -120,7 +120,82 @@ def main() -> None:
         tier = v110_tax[iid]["tier"]
         print(f"    - {iid} (tier={tier})")
 
-    # ---- D. verdict
+    # ---- C.5 locus × Docker resolution cross-tab (v1.10.1 substrate for v1.11)
+    # Bridges trajectory reconnaissance (did the model touch the gold target
+    # file? before or after intervention?) to Docker resolution probability.
+    # Expectation: instances where the gold file was touched BEFORE the
+    # first write resolve at a much higher rate than instances where it
+    # was touched AFTER intervention or NEVER.
+    print("\n--- locus × Docker resolution cross-tab (v1.11 substrate) ---")
+    has_locus = any("correct_touch_relative_to_intervention" in r for r in v110_tax.values())
+    if not has_locus:
+        print("  (locus fields missing from v110_tax — run scripts/compare_v110.py first)")
+    else:
+        from collections import defaultdict
+        buckets: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"n": 0, "resolved": 0})
+        for iid, r in v110_tax.items():
+            if not r.get("has_patch"):
+                continue
+            rel = r.get("correct_touch_relative_to_intervention", "none")
+            bf = r.get("correct_touch_before_first_write", False)
+            # Three buckets: "before write & before intervention" (best),
+            # "after intervention" (locus-failure signature), "never touched"
+            if rel == "none":
+                bucket = "never_touched_gold"
+            elif rel == "after":
+                bucket = "touched_after_intervention"
+            elif bf:
+                bucket = "touched_before_write"
+            else:
+                bucket = "touched_before_intervention_but_after_write"
+            buckets[bucket]["n"] += 1
+            if v110_h.get(iid, {}).get("resolved"):
+                buckets[bucket]["resolved"] += 1
+        print(f"  {'bucket':<45} {'n':>5} {'resolved':>10} {'rate':>8}")
+        for bucket, stats in sorted(buckets.items(),
+                                    key=lambda kv: -kv[1]["resolved"] / max(1, kv[1]["n"])):
+            n = stats["n"]
+            r = stats["resolved"]
+            rate = f"{100*r/n:.1f}%" if n else "n/a"
+            print(f"  {bucket:<45} {n:>5} {r:>10} {rate:>8}")
+
+    # ---- D. silent same-tier Docker demotion class (v1.10.1)
+    # Surfaces sphinx-10673 archetype: inspector tier unchanged across
+    # cycles, prior cycle Docker-resolved, current cycle Docker-failed.
+    # The inspector taxonomy is structurally blind to this — patch
+    # shrinkage that preserves wrong-locus characteristics doesn't move
+    # the tier but can flip an alternative-solution Docker pass to fail.
+    print("\n--- silent_demotion: same_tier_docker_demotion class ---")
+    silent_demotions: list[dict] = []
+    for iid, v110_row in v110_tax.items():
+        v19_row = v19_tax.get(iid)
+        if v19_row is None:
+            continue
+        if v110_row.get("tier") != v19_row.get("tier"):
+            continue
+        v19_resolved_iid = v19_h.get(iid, {}).get("resolved", False)
+        v110_resolved_iid = v110_h.get(iid, {}).get("resolved", False)
+        if not (v19_resolved_iid and not v110_resolved_iid):
+            continue
+        delta = (v110_row.get("patch_len") or 0) - (v19_row.get("patch_len") or 0)
+        silent_demotions.append({
+            "instance_id": iid,
+            "tier": v110_row.get("tier"),
+            "v19_patch_len": v19_row.get("patch_len"),
+            "v110_patch_len": v110_row.get("patch_len"),
+            "patch_len_delta": delta,
+        })
+    if silent_demotions:
+        print(f"  {len(silent_demotions)} instance(s) with same-tier Docker demotion:")
+        for s in sorted(silent_demotions, key=lambda x: x["patch_len_delta"]):
+            print(f"    - {s['instance_id']}  tier={s['tier']}  "
+                  f"patch_len {s['v19_patch_len']} -> {s['v110_patch_len']} "
+                  f"(Δ={s['patch_len_delta']:+d})")
+    else:
+        print("  (none — no instances had same_tier Docker demotion)")
+
+    # ---- E. verdict
     print("\n--- verdict ---")
     # Account for matplotlib-14623 surrender (was resolved in v19, now unresolved in v110)
     # plus any other v19-resolved instances that regressed in v110
