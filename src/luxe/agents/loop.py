@@ -300,11 +300,27 @@ _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE = (
     "`edit_file` now."
 )
 
+# v1.10.1 — exploratory-support variant fired when convergence_score < LOW
+# (diffuse-recon trajectory; the v1.10 audit's matplotlib-14623 archetype).
+# v1.10 SUPPRESSED early_bail entirely in this band — empirically the
+# silent failure mode: matplotlib-14623 sat at score=0.0 for 12 consecutive
+# steps with zero writes and zero commit nudges. The exploratory variant
+# replaces the silence with a low-pressure commit prime that doesn't force
+# a write. Positive imperative ending; no comparative framing; no abstain
+# escape valve. Permits the model to keep exploring while making the
+# eventual commit explicit and bounded.
+_EARLY_BAIL_MESSAGE_EXPLORATORY = (
+    "Mid-loop notice: you have started exploring. As you continue, "
+    "consider which file is most likely to need modification — you may "
+    "begin attempting a small corrective edit when you have a candidate."
+)
+
 _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
     "default": _EARLY_BAIL_MESSAGE,
     "no_abstain": _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
     "soft_anchor": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
     "commit_imperative": _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE,
+    "exploratory": _EARLY_BAIL_MESSAGE_EXPLORATORY,
 }
 
 # v1.10 — convergence-score thresholds for conditional intervention
@@ -330,6 +346,15 @@ _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
 # acceptance/v110_mining/THRESHOLD_DECISION.md.
 _CONVERGENCE_LOW_THRESHOLD = 0.10
 _CONVERGENCE_HIGH_THRESHOLD = 0.40
+
+# v1.10.1 — habituation clean-exit predicate threshold. Calibrated against
+# sympy-13031 trace evidence (the founding instance): all three distinct
+# interventions fired by step 15, zero writes through step 30+. The
+# trajectory is intervention-resistant — burning the remaining max_steps
+# yields no further information. Exit at step ≥20 to give the model 5+
+# steps after the typical third-intervention step before terminating.
+_HABITUATION_EXIT_MIN_STEP = 20
+_HABITUATION_EXIT_MIN_KINDS = 3
 
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
@@ -426,6 +451,13 @@ def run_agent(
     # intervention shifted behavior (tool call vs another prose-only turn).
     last_intervention_step: int | None = None
     last_intervention_kind: str | None = None
+    # v1.10.1 — habituation clean-exit predicate state. Set tracks DISTINCT
+    # intervention kinds fired this run (not count of fires). When ≥3
+    # distinct kinds have fired AND first_write_step_after_intervention is
+    # still None AND step ≥ _HABITUATION_EXIT_MIN_STEP, exit cleanly instead
+    # of burning the remaining max_steps budget. Reads from existing
+    # post-intervention telemetry; no new instrumentation required.
+    intervention_kinds_fired: set[str] = set()
     # v1.10 — convergence-score telemetry. tool_history is a bounded list of
     # (name, path) entries for the convergence score (see
     # luxe.agents.convergence). post-intervention behavior signals capture
@@ -500,6 +532,7 @@ def run_agent(
             write_pressure_fired = True
             last_intervention_step = step
             last_intervention_kind = "write_pressure"
+            intervention_kinds_fired.add("write_pressure")
             if log_calls:
                 append_event(
                     run_id, "write_pressure_fired",
@@ -521,60 +554,55 @@ def run_agent(
                 and writes_seen == 0
                 and step >= _EARLY_BAIL_MIN_STEP
                 and (result.tool_calls_total - writes_seen) >= _EARLY_BAIL_MIN_READS):
-            # v1.10 — conditional stacking via convergence score. When the
-            # gate is enabled AND the model is in diffuse-recon (score
-            # below LOW_THRESHOLD), suppress the fire. The v1.9 evidence:
-            # commitment-style interventions at step 4 break exploratory
-            # recovery paths (ARM 1 lost matplotlib-25775, requests-5414).
-            # When score is HIGH, swap the soft_anchor message for the
-            # tighter commit_imperative wording (the model has converged
-            # on a target via repeated reads / localized greps; a stronger
-            # imperative is appropriate). Other modes (default, no_abstain,
-            # explicit kwarg) remain static — only soft_anchor is dynamic.
-            suppress_for_convergence = (
-                convergence_gate_enabled
-                and convergence_score < _CONVERGENCE_LOW_THRESHOLD
-            )
-            if suppress_for_convergence:
-                if log_calls:
-                    append_event(
-                        run_id, "early_bail_suppressed_diffuse",
-                        phase=phase, step=step,
-                        convergence_score=convergence_score,
-                        threshold=_CONVERGENCE_LOW_THRESHOLD,
-                        tool_calls_total=result.tool_calls_total,
-                    )
+            # v1.10 / v1.10.1 — conditional stacking via convergence score.
+            # Three bands on the score, each with a defined message:
+            #   score < LOW:   exploratory-support variant (v1.10.1; replaces
+            #                  v1.10's total suppression. matplotlib-14623's
+            #                  12-step score=0.0 trajectory got zero commit
+            #                  nudges under v1.10 — silent failure mode. The
+            #                  exploratory message primes commitment without
+            #                  forcing a write.)
+            #   LOW ≤ score < HIGH:  soft_anchor (the v1.10 default band)
+            #   score ≥ HIGH:  commit_imperative (model has converged on a
+            #                  target via repeated reads / localized greps)
+            # Other modes (default, no_abstain, explicit kwarg) bypass the
+            # convergence-band logic — only soft_anchor is dynamic.
+            # Resolution precedence: explicit kwarg > env mode > default.
+            if early_bail_message is not None:
+                msg = early_bail_message
+                msg_variant = "kwarg"
             else:
-                # Resolution precedence: explicit kwarg > env mode > default.
-                if early_bail_message is not None:
-                    msg = early_bail_message
-                    msg_variant = "kwarg"
+                mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
+                if (convergence_gate_enabled
+                        and mode == "soft_anchor"
+                        and convergence_score < _CONVERGENCE_LOW_THRESHOLD):
+                    msg = _EARLY_BAIL_MESSAGE_EXPLORATORY
+                    msg_variant = "exploratory"
+                elif (convergence_gate_enabled
+                        and mode == "soft_anchor"
+                        and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
+                    msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
+                    msg_variant = "commit_imperative"
                 else:
-                    mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
-                    if (convergence_gate_enabled
-                            and mode == "soft_anchor"
-                            and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
-                        msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
-                        msg_variant = "commit_imperative"
-                    else:
-                        msg = _EARLY_BAIL_MESSAGE_MODES.get(
-                            mode, _EARLY_BAIL_MESSAGE)
-                        msg_variant = mode
-                messages.append({"role": "user", "content": msg})
-                early_bail_fired = True
-                early_bail_step = step
-                last_intervention_step = step
-                last_intervention_kind = "early_bail"
-                if log_calls:
-                    append_event(
-                        run_id, "early_bail_fired",
-                        phase=phase, step=step,
-                        tool_calls_total=result.tool_calls_total,
-                        completion_tokens=result.completion_tokens,
-                        reads=result.tool_calls_total - writes_seen,
-                        convergence_score=convergence_score,
-                        msg_variant=msg_variant,
-                    )
+                    msg = _EARLY_BAIL_MESSAGE_MODES.get(
+                        mode, _EARLY_BAIL_MESSAGE)
+                    msg_variant = mode
+            messages.append({"role": "user", "content": msg})
+            early_bail_fired = True
+            early_bail_step = step
+            last_intervention_step = step
+            last_intervention_kind = "early_bail"
+            intervention_kinds_fired.add("early_bail")
+            if log_calls:
+                append_event(
+                    run_id, "early_bail_fired",
+                    phase=phase, step=step,
+                    tool_calls_total=result.tool_calls_total,
+                    completion_tokens=result.completion_tokens,
+                    reads=result.tool_calls_total - writes_seen,
+                    convergence_score=convergence_score,
+                    msg_variant=msg_variant,
+                )
 
         # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,
         # action_density_gate, and the action_density_sample observability
@@ -635,6 +663,7 @@ def run_agent(
                 action_density_gate_fired = True
                 last_intervention_step = step
                 last_intervention_kind = "action_density_gate"
+                intervention_kinds_fired.add("action_density_gate")
                 if log_calls:
                     append_event(
                         run_id, "action_density_gate_fired",
@@ -677,6 +706,7 @@ def run_agent(
             prose_burst_fired = True
             last_intervention_step = step
             last_intervention_kind = "prose_burst"
+            intervention_kinds_fired.add("prose_burst")
             if log_calls:
                 append_event(
                     run_id, "prose_burst_fired",
@@ -698,6 +728,32 @@ def run_agent(
                     run_id, "prose_burst_clean_exit",
                     phase=phase, step=step,
                     completion_delta=completion_delta_last_step,
+                    completion_tokens=result.completion_tokens,
+                )
+            break
+
+        # v1.10.1 — habituation clean-exit. When ≥3 distinct interventions
+        # have fired this run AND the model has produced ZERO post-intervention
+        # writes AND step ≥ _HABITUATION_EXIT_MIN_STEP, the trajectory is
+        # intervention-resistant. Burning the remaining max_steps budget
+        # yields no further information. Exit cleanly to preserve trace +
+        # evaluation semantics (mirrors prose_burst_clean_exit and
+        # post_write_idle_exit shapes). Founding instance: sympy-13031 fired
+        # all three distinct interventions by step 15, zero writes through
+        # max_steps. `resp` is from the prior iteration's backend.chat call.
+        if (len(intervention_kinds_fired) >= _HABITUATION_EXIT_MIN_KINDS
+                and first_write_step_after_intervention is None
+                and step >= _HABITUATION_EXIT_MIN_STEP):
+            result.final_text = resp.text or "" if 'resp' in dir() else ""
+            if log_calls:
+                append_event(
+                    run_id, "habituation_exit",
+                    phase=phase, step=step,
+                    interventions_fired=sorted(intervention_kinds_fired),
+                    since_last_intervention=(
+                        step - last_intervention_step
+                        if last_intervention_step is not None else None),
+                    tool_calls_total=result.tool_calls_total,
                     completion_tokens=result.completion_tokens,
                 )
             break

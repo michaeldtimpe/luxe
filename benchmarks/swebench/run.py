@@ -54,7 +54,62 @@ def _filter_to_subset(
     return out
 
 
+def _preflight_check_venv_pollution() -> int:
+    """v1.10.1 — fail fast if swebench fixture clones have leaked editable
+    installs into the parent venv's site-packages. The 2026-05-14 audit
+    found 4 such leaks (pytest, sympy, xarray, requests) that shadowed
+    the real packages and silently invalidated "tests passing" claims.
+
+    Returns 0 if clean, 2 if pollution detected (refuses to start bench).
+    Set LUXE_SKIP_PREFLIGHT=1 to override (e.g., for a known-fresh venv).
+    """
+    import os
+    if os.environ.get("LUXE_SKIP_PREFLIGHT") == "1":
+        return 0
+    # Walk every __editable__*.pth in every site-packages dir on sys.path.
+    leaked: list[tuple[Path, str]] = []
+    seen: set[Path] = set()
+    for entry in sys.path:
+        if not entry:
+            continue
+        ep = Path(entry)
+        if not ep.is_dir() or ep in seen:
+            continue
+        seen.add(ep)
+        for pth in ep.glob("__editable__*.pth"):
+            try:
+                content = pth.read_text()
+            except OSError:
+                continue
+            if "swebench-workspace" in content:
+                leaked.append((pth, content.strip()))
+    if leaked:
+        print("FATAL: swebench fixture editable leak detected in venv site-packages.",
+              file=sys.stderr)
+        print("       The bench would run against fixture-clone source trees,",
+              file=sys.stderr)
+        print("       silently corrupting both the test suite and the bench run.",
+              file=sys.stderr)
+        print("       Found:", file=sys.stderr)
+        for pth, content in leaked:
+            print(f"         {pth}  ->  {content[:120]}", file=sys.stderr)
+        print("       Remove the leaked .pth files (plus any companion finder",
+              file=sys.stderr)
+        print("       modules / dist-info dirs) before running.", file=sys.stderr)
+        print("       See ~/.claude/projects/-Users-michaeltimpe-Downloads-luxe/"
+              "memory/feedback_swebench_pip_editable_pollution.md", file=sys.stderr)
+        print("       Override with LUXE_SKIP_PREFLIGHT=1 only if you know the",
+              file=sys.stderr)
+        print("       leak is harmless for this run.", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main() -> int:
+    rc = _preflight_check_venv_pollution()
+    if rc != 0:
+        return rc
+
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", type=Path,
                    default=Path("benchmarks/swebench/subsets/raw/verified.jsonl"),

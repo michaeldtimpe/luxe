@@ -45,6 +45,7 @@ from luxe.agents.outcomes import (
     Intervention,
     classify_swebench_run,
 )
+from luxe.agents.convergence import extract_path  # v1.10.1 — first_correct_file_touch
 
 WORKSPACE = Path.home() / ".luxe" / "swebench-workspace"
 RUNS = Path.home() / ".luxe" / "runs"
@@ -89,6 +90,7 @@ def classify_arm(preds_path: Path) -> dict:
     preds = json.loads(preds_path.read_text())
     preds_by_id = {p["instance_id"]: p for p in preds}
     manifest = _load_manifest(preds_path)
+    gold_map = _load_gold_map(GOLD)  # v1.10.1 — for first_correct_file_touch
     out = {}
     for v in verdicts:
         inst = v.instance_id
@@ -97,6 +99,14 @@ def classify_arm(preds_path: Path) -> dict:
         run_id = manifest.get(inst) or run_id_for(inst)
         events_path = (RUNS / run_id / "events.jsonl") if run_id else Path("/nonexistent")
         ep = classify_swebench_run(events_path, has_patch=has_patch, tier=v.tier)
+        # v1.10.1 — locus metric. Walks events.jsonl once to compute the
+        # four locus fields. Degrades gracefully on missing events (older
+        # traces, manifest gaps): correct_touch_relative_to_intervention
+        # falls back to "none" and the metric is treated as "not measured"
+        # by aggregators.
+        gold_files = gold_map.get(inst, [])
+        events = _load_events(events_path)
+        locus = compute_first_correct_file_touch(events, gold_files)
         out[inst] = {
             "tier": v.tier,
             "has_patch": has_patch,
@@ -105,6 +115,8 @@ def classify_arm(preds_path: Path) -> dict:
             "interventions": [i.value for i in ep.interventions_fired],
             "failure_chain": ([c.value for c in ep.failure_chain]
                               if ep.failure_chain else None),
+            "gold_target_files": gold_files,
+            **locus,
         }
     return out
 
@@ -213,6 +225,160 @@ def regression_set(target: dict, baseline: dict) -> dict:
     return out
 
 
+# --- v1.10.1 first_correct_file_touch metric -------------------------------
+#
+# Substrate for the v1.11 locus-disambiguation lever. Bridges trajectory
+# classification (when the model "explores" vs "commits") to Docker
+# resolution probability (whether the patch actually fixes the bug). The
+# hypothesis: instances where the model never touched the gold target file,
+# or touched it only AFTER intervention, account for most of the
+# wrong_target / wrong_location / unresolved-plausible volume.
+
+
+def parse_gold_target_files(gold_patch: str) -> list[str]:
+    """Extract the list of files modified by a unified diff. Returns a
+    sorted unique list of file paths (without the a/ b/ prefix). Empty
+    input returns [].
+
+    The diff is the SWE-bench Verified `patch` field — gold solution.
+    We use the `diff --git a/X b/X` header lines rather than unidiff to
+    keep the helper dependency-free and tolerant of slightly-malformed
+    diffs (which appear in some upstream BFCL/SWE-bench fixtures).
+    """
+    if not gold_patch:
+        return []
+    files: set[str] = set()
+    for line in gold_patch.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        # `diff --git a/<path> b/<path>` — take the post-image path
+        # (the b/ side), which matches what the model would write.
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        b_path = parts[3]
+        if b_path.startswith("b/"):
+            b_path = b_path[2:]
+        files.add(b_path)
+    return sorted(files)
+
+
+def compute_first_correct_file_touch(
+    events: list[dict],
+    gold_target_files: list[str],
+) -> dict:
+    """Walk `events` (parsed events.jsonl rows) in step order. Return:
+      - first_correct_file_touch_step: int | None — first step where a
+        tool_call's `path` is in `gold_target_files`.
+      - correct_touch_before_first_write: bool — was the correct file
+        touched before any write_file/edit_file call?
+      - correct_touch_relative_to_intervention: "before" | "after" | "none"
+        — relative to the FIRST intervention fire of any kind.
+
+    Events without a `path` field are skipped (v1.10's path-logged
+    tool_call schema; older trace formats degrade gracefully to "none").
+    """
+    if not gold_target_files:
+        return {
+            "first_correct_file_touch_step": None,
+            "correct_touch_before_first_write": False,
+            "correct_touch_relative_to_intervention": "none",
+        }
+    gold_set = set(gold_target_files)
+    write_tools = {"write_file", "edit_file"}
+    intervention_kinds = {
+        "early_bail_fired",
+        "write_pressure_fired",
+        "action_density_gate_fired",
+        "prose_burst_fired",
+    }
+    first_correct_step: int | None = None
+    first_write_step: int | None = None
+    first_intervention_step: int | None = None
+    for evt in events:
+        kind = evt.get("kind")
+        step = evt.get("step")
+        if kind == "tool_call" and evt.get("phase") == "main":
+            path = evt.get("path")
+            name = evt.get("name") or ""
+            if path is not None and path in gold_set and first_correct_step is None:
+                first_correct_step = step
+            if name in write_tools and first_write_step is None:
+                first_write_step = step
+        elif kind in intervention_kinds and first_intervention_step is None:
+            first_intervention_step = step
+    # Compose summary
+    if first_correct_step is None:
+        relative = "none"
+        before_write = False
+    else:
+        before_write = (first_write_step is None
+                        or first_correct_step < first_write_step)
+        if first_intervention_step is None:
+            relative = "before"  # no intervention fired at all
+        elif first_correct_step <= first_intervention_step:
+            relative = "before"
+        else:
+            relative = "after"
+    return {
+        "first_correct_file_touch_step": first_correct_step,
+        "correct_touch_before_first_write": before_write,
+        "correct_touch_relative_to_intervention": relative,
+    }
+
+
+def _load_events(events_path: Path) -> list[dict]:
+    if not events_path.is_file():
+        return []
+    out = []
+    for line in events_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def _load_gold_map(gold_path: Path) -> dict[str, list[str]]:
+    """Build {instance_id: [gold_target_files]} from verified.jsonl. Cached
+    in module scope (per-process) is fine — the file is small (75 rows)."""
+    out: dict[str, list[str]] = {}
+    if not gold_path.is_file():
+        return out
+    for line in gold_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        iid = row.get("instance_id")
+        if iid:
+            out[iid] = parse_gold_target_files(row.get("patch", ""))
+    return out
+
+
+def annotate_patch_len_deltas(target: dict, baseline: dict) -> None:
+    """v1.10.1 — mutate target rows in place, adding `prior_patch_len` and
+    `patch_len_delta` (target - prior). Surfaces the silent
+    `same_tier_docker_demotion` class identified by the v1.10 audit
+    (sphinx-10673: tier=wrong_target both cycles, patch shrank
+    3345 → 1659, lost alternative-solution Docker credit).
+
+    Rows whose instance_id is absent from baseline get None deltas
+    (cross-arm-coverage gap; common when comparing different subsets).
+    """
+    for inst, row in target.items():
+        prior = baseline.get(inst)
+        row["prior_patch_len"] = prior.get("patch_len") if prior else None
+        if prior is not None and row.get("patch_len") is not None:
+            row["patch_len_delta"] = row["patch_len"] - row["prior_patch_len"]
+        else:
+            row["patch_len_delta"] = None
+
+
 def ship_floors(metric: dict,
                 strong_to_empty_vs_v19: list[str],
                 *,
@@ -301,6 +467,11 @@ def main() -> int:
             return 1
         print(f"Classifying baseline ({args.baseline}) …", file=sys.stderr)
         baseline = classify_arm(args.baseline)
+
+    # v1.10.1 — annotate target with prior_patch_len + patch_len_delta
+    # so downstream consumers (analyze_v110_harness.py) can detect
+    # silent same-tier Docker demotions like sphinx-10673.
+    annotate_patch_len_deltas(target, baseline)
 
     metric = primary_metric(target)
     secondary = derived_secondary(target)

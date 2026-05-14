@@ -84,6 +84,7 @@ class FailureClass(str, Enum):
     EARLY_PROSE_COLLAPSE = "EARLY_PROSE_COLLAPSE"        # step ≤4, big prose, no action
     BAILOUT_AFTER_READS = "BAILOUT_AFTER_READS"          # step >4, many reads, no writes
     ABSTAIN_AFTER_INTERVENTION = "ABSTAIN_AFTER_INTERVENTION"  # took escape after EARLY_BAIL
+    HABITUATION_EXIT = "HABITUATION_EXIT"                # v1.10.1: ≥3 distinct interventions fired, no post-intervention write, clean-exit at step ≥20
     CONFIDENCE_COLLAPSE = "CONFIDENCE_COLLAPSE"          # v1.9: empty + writes=0 + EARLY_BAIL fired
     EMPTY_PATCH_TIMEOUT = "EMPTY_PATCH_TIMEOUT"          # exhausted max_steps
     CONTEXT_EXHAUSTED = "CONTEXT_EXHAUSTED"              # backend 400 on prompt size
@@ -128,6 +129,7 @@ class _TraceSummary:
     interventions: list[Intervention] = field(default_factory=list)
     pr_blocked: bool = False
     post_write_idle_exit: bool = False
+    habituation_exit: bool = False
 
 
 def _parse_events(events_path: Path) -> _TraceSummary:
@@ -182,6 +184,8 @@ def _parse_events(events_path: Path) -> _TraceSummary:
                 summary.interventions.append(Intervention.SPEC_GATE_EXPECTS_ZERO)
         elif kind == "post_write_idle_exit":
             summary.post_write_idle_exit = True
+        elif kind == "habituation_exit":
+            summary.habituation_exit = True
         elif kind == "pr_blocked":
             summary.pr_blocked = True
         elif kind in ("single_mode_done", "agent_done"):
@@ -272,6 +276,8 @@ def _classify_swebench(
         # If EARLY_BAIL fired and we still didn't write, intervention failed
         if Intervention.EARLY_BAIL in summary.interventions:
             chain.append(FailureClass.ABSTAIN_AFTER_INTERVENTION)
+        if summary.habituation_exit:
+            chain.append(FailureClass.HABITUATION_EXIT)
         if confidence_collapse:
             chain.append(FailureClass.CONFIDENCE_COLLAPSE)
         chain.append(FailureClass.EMPTY_PATCH_TIMEOUT)

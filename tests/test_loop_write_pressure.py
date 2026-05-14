@@ -1248,18 +1248,21 @@ def test_convergence_gate_off_preserves_v19_behavior(monkeypatch):
     )
 
 
-def test_convergence_gate_suppresses_early_bail_on_diffuse(monkeypatch):
-    """With LUXE_CONVERGENCE_GATE=1 and a diffuse-recon trajectory
-    (all distinct paths → score < LOW_THRESHOLD), early_bail must NOT
-    fire even though step/reads thresholds are met. Closes the
-    v1.9 wrong→empty regression class (commitment pressure on
-    exploratory recovery paths)."""
+def test_convergence_gate_fires_exploratory_on_diffuse(monkeypatch):
+    """v1.10.1 — With LUXE_CONVERGENCE_GATE=1 and a diffuse-recon trajectory
+    (all distinct paths → score < LOW_THRESHOLD), early_bail fires the
+    EXPLORATORY variant — not soft_anchor, not commit_imperative, not
+    silence. Replaces v1.10's total suppression which created the
+    matplotlib-14623 silent failure mode (12 consecutive steps at
+    score=0.0 with zero commit nudges).
+    """
+    from luxe.agents.loop import _EARLY_BAIL_MESSAGE_EXPLORATORY
     monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
     monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
     # All distinct paths → reread_ratio=0, no greps, no edits, high
-    # entropy → very low score.
+    # entropy → very low score (matplotlib-14623 archetype).
     scripted = [_read_resp_with_path(f"unique_{i}.py") for i in range(8)] + [_terminal_resp()]
     backend = _ScriptedBackend(scripted)
     role = _make_role()
@@ -1270,13 +1273,23 @@ def test_convergence_gate_suppresses_early_bail_on_diffuse(monkeypatch):
         tool_defs=[_read_tool()], tool_fns=_read_fn(),
     )
 
-    for snapshot in backend.calls:
-        for msg in snapshot:
-            content = str(msg.get("content", ""))
-            assert _EARLY_BAIL_MESSAGE_SOFT_ANCHOR not in content, (
-                "early_bail must be suppressed on diffuse-recon under v1.10 gate"
-            )
-            assert _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE not in content
+    final = backend.calls[-1]
+    exploratory_msgs = [m for m in final
+                        if m.get("role") == "user"
+                        and _EARLY_BAIL_MESSAGE_EXPLORATORY in str(m.get("content", ""))]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    commit_msgs = [m for m in final
+                   if m.get("role") == "user"
+                   and _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE in str(m.get("content", ""))]
+    assert len(exploratory_msgs) == 1, (
+        f"expected exploratory variant on diffuse-recon trajectory, got "
+        f"exploratory={len(exploratory_msgs)} soft_anchor={len(soft_msgs)} "
+        f"commit_imperative={len(commit_msgs)}"
+    )
+    assert len(soft_msgs) == 0, "soft_anchor must NOT fire when exploratory did"
+    assert len(commit_msgs) == 0, "commit_imperative must NOT fire when exploratory did"
 
 
 def test_convergence_gate_fires_commit_imperative_on_high_convergence(monkeypatch):
@@ -1413,3 +1426,108 @@ def test_convergence_gate_zero_calls_spec_disables_convergence_gate(monkeypatch)
     finally:
         _os.environ.pop("LUXE_CONVERGENCE_GATE", None)
         _os.environ.pop("LUXE_EARLY_BAIL", None)
+
+
+# --- v1.10.1 habituation clean-exit ---------------------------------------
+
+
+def _read_resp_unique(step: int, completion_tokens: int = 500) -> ChatResponse:
+    """A read_file response whose path varies by step so duplicate-call
+    detection doesn't short-circuit. Used to construct long sequences that
+    drive all three intervention thresholds.
+    """
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(id=f"c{step}", name="read_file",
+                                     arguments={"path": f"f{step}.py"})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
+    )
+
+
+def test_habituation_exit_fires_after_three_distinct_interventions(monkeypatch):
+    """With all three interventions enabled and a sequence that fires them
+    all by ~step 10 with zero writes, the habituation predicate exits the
+    loop cleanly at step >= _HABITUATION_EXIT_MIN_STEP (20). Founding case:
+    sympy-13031 trace (v1.10 audit).
+    """
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.setenv("LUXE_WRITE_PRESSURE", "1")
+    # Provide more reads than _HABITUATION_EXIT_MIN_STEP to ensure the
+    # predicate (not max_steps) is what terminates.
+    scripted = [_read_resp_unique(i, completion_tokens=500) for i in range(40)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role(max_steps=40)
+
+    result = run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    # Predicate fires at the TOP of step 20 (result.steps = step + 1).
+    assert result.steps == 21, f"expected result.steps=21, got {result.steps}"
+    # Loop exited cleanly — not aborted (post_write_idle / habituation are
+    # clean exits; max_steps is aborted).
+    assert not result.aborted, f"unexpected abort: {result.abort_reason!r}"
+    # backend.chat invoked for steps 0..19 only (not step 20).
+    assert len(backend.calls) == 20, f"expected 20 chat calls, got {len(backend.calls)}"
+
+
+def test_habituation_exit_suppressed_when_fewer_than_three_kinds(monkeypatch):
+    """If only two distinct interventions fire (e.g. WRITE_PRESSURE disabled),
+    the habituation predicate must NOT exit early — run goes to max_steps.
+    """
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)  # only 2 of 3
+    scripted = [_read_resp_unique(i, completion_tokens=500) for i in range(40)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role(max_steps=25)
+
+    result = run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    # With only EARLY_BAIL + ACTION_DENSITY_GATE firing (< 3 distinct kinds),
+    # the predicate stays inactive and the loop runs to max_steps.
+    assert result.steps == 25, f"expected max_steps=25 exit, got {result.steps}"
+
+
+def test_habituation_exit_suppressed_when_post_intervention_write(monkeypatch):
+    """All three interventions fire, but a write succeeds before step 20.
+    The habituation predicate gates on `first_write_step_after_intervention
+    is None`; once the write lands the predicate stops firing for the rest
+    of the run.
+    """
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.setenv("LUXE_WRITE_PRESSURE", "1")
+    # All three fire by ~step 10. Insert a write at step 12 so
+    # first_write_step_after_intervention becomes set. Then more reads.
+    scripted = (
+        [_read_resp_unique(i, completion_tokens=500) for i in range(12)]
+        + [_write_resp()]
+        + [_read_resp_unique(i, completion_tokens=500) for i in range(12, 30)]
+        + [_terminal_resp()]
+    )
+    backend = _ScriptedBackend(scripted)
+    role = _make_role(max_steps=25)
+
+    result = run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool(), _write_tool()],
+        tool_fns={**_read_fn(), "write_file": lambda args: ("ok", None)},
+    )
+
+    # Post-write-idle exit MAY fire (3 zero-byte calls after write trigger
+    # the existing post_write_idle predicate). Either way, the run must NOT
+    # terminate at step 21 via habituation — that would mean the write
+    # didn't reset the predicate as designed.
+    assert result.steps != 21 or not result.aborted, (
+        "habituation predicate fired despite post-intervention write")
+

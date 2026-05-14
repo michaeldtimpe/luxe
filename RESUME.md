@@ -401,9 +401,11 @@ Acceptance gate:
 - (4) fires (wrong_target +5 or more) → hold tag. Phase B postmortem before deciding ship vs v1.7-tune.
 - empty_patch climbs above 22 → the new error message + create-only semantics aren't providing the recovery gradient; v1.6 needs a re-read.
 
-### Step 4 — Docker harness scoring (~30-45m)
+### Step 4 — Docker harness scoring (~30-45m) — **MANDATORY before ship-doc write-up** (v1.10.1 ritual update)
 
-Run the wrapper at `benchmarks/swebench/harness.py` against `acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/predictions.json`. Confirm Docker Desktop is up + ~10GB free + RAM headroom. Output to `acceptance/swebench/post_specdd_v16_creation_only_n75/harness/`. Numbers go into the v1.6.0 release commit body.
+**v1.10.1 audit ritual fix**: Docker harness numbers MUST land BEFORE the ship-doc + tag is written, not as a follow-up. The v1.10 audit caught that writing the ship doc against inspector-tier only missed (a) the `matplotlib-14623` Docker-resolved surrender, (b) the `sphinx-10673` silent same-tier Docker demotion — both invisible without harness output. If the harness takes 30–45m, that's the same window as polishing the doc; build it into the cycle.
+
+Run the wrapper at `benchmarks/swebench/harness.py` against the cycle's `predictions.json`. Confirm Docker Desktop is up + ~10GB free + RAM headroom. Output to the cycle's `harness/` subdir. Numbers go into the release commit body **and** the RESUME ship-character table (both `patched %` and `overall %` kept visually separate per the v1.10.1 reporting discipline).
 
 ### Step 5 — Tag v1.6.0
 
