@@ -41,7 +41,51 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-13 (v1.8.0 SHIPPED — pre-dispatch gate + taxonomy primitives)
+## Current state — 2026-05-13 (v1.9.0 SHIPPED — substrate release; floor missed, mechanism win)
+
+**Working tree**: clean post-tag. **728 tests passing**. **v1.9.0 tagged locally** (annotated, signed; not yet pushed to origin pending user OK). Released atop v1.8.0 with the v1.9 cycle data preserved at `acceptance/swebench/post_specdd_v19_n75{,_gate_only}/rep_1/` and `acceptance/v19_taxonomy/`.
+
+**v1.9 ship character**: this is a **substrate release**, not a metric win. The literal `empty_patch ≤13` floor was missed in both arms of the A/B; the v1.9 thesis claim (eliminate the CONFIDENCE_COLLAPSE class) was empirically validated. The durable substrate plumbing (adapter env wiring, ablation flags, taxonomy classes, density-gate predicate, mining script) is the value-add — v1.10 will turn it into a metric win via mechanism-isolation work.
+
+**Phase D n=75 A/B** (run 2026-05-13, ~7h45m total wall):
+
+| Metric | Target | Full-stack (default) | Gate-only ablation | v1.8 baseline |
+|---|---|---|---|---|
+| empty_patch | ≤13 | **19** ✗ | **17** ✗ | 17 |
+| strong | ≥18 | **20** ✓ (best-ever) | 16 ✗ | 18 |
+| strong + plausible | ≥35 | **38** ✓ | **39** ✓ | 35 |
+| CONFIDENCE_COLLAPSE class | =0 | **0** ✓ | **0** ✓ | 2 |
+| wrong→empty regressions | =0 | 2 ✗ | 3 ✗ | n/a |
+
+**Mechanism win**: both arms eliminated the v18 CONFIDENCE_COLLAPSE class. sphinx-10435 + sympy-13031 (the two named v18 strong→empty regressions) produced patches under full-stack. matplotlib-20676 (the v17 plausible→empty regression) produced 56 chars under gate-only. The v1.9 thesis — give the planner permission to commit under uncertainty without an abstain valve — is empirically real at n=75.
+
+**Floor miss diagnosis** (architectural, not wording-alone): pure intervention stacking is **non-Pareto**. Full-stack PROTECTS strongs (0 strong→empty) but BREAKS some plausibles (matplotlib-25775, requests-5414). Gate-only PROTECTS plausibles (0 plausible→empty) but BREAKS slow-strongs (matplotlib-13989, xarray-2905 — both v18 strong cases needing step-4 early_bail to commit). The soft-anchor wording "rather than continuing broad exploration" empirically reads as "wrap up now" for some trajectories — sphinx-10435 rep_2 smoke terminated at step 6 with 832 tokens, no writes, after early_bail at step 4. Both findings inform the v1.10 plan.
+
+**Why full-stack ships as the default** (not gate-only):
+- Strong count 20 is the best of any luxe cycle; substrate is gentler with high-confidence trajectories than under any prior config.
+- 0 strong→empty regressions vs v18.
+- `--no-early-bail` / `--no-action-density-gate` CLI ablation flags remain for v1.10 A/B work.
+- The floor miss is a wording/composition problem, not a code-path problem; reverting to gate-only would lose the strong-count gain without moving the floor.
+
+**File trail** (v1.9 cycle):
+- `src/luxe/agents/loop.py` — `_EARLY_BAIL_MESSAGE_SOFT_ANCHOR` variant + `_ACTION_DENSITY_GATE_*` constants + staged-escalation predicate (standalone + post_bail_rescue modes; convergence-proxy skip) + habituation telemetry on `action_density_sample`
+- `src/luxe/agents/outcomes.py` — `Intervention.ACTION_DENSITY_GATE` + `FailureClass.CONFIDENCE_COLLAPSE` (decoupled definition: empty + writes=0 + EARLY_BAIL fired)
+- `benchmarks/swebench/adapter.py` — wires `LUXE_EARLY_BAIL` + `LUXE_ACTION_DENSITY_GATE` + `LUXE_EARLY_BAIL_MODE=soft_anchor` by default; `early_bail` / `action_density_gate` kwargs for ablation
+- `benchmarks/swebench/run.py` — `--no-early-bail` / `--no-action-density-gate` CLI flags
+- `scripts/mine_action_density.py` (NEW) — distribution miner with convergence telemetry (unique_files_touched, reread_ratio, same_file_read_twice)
+- `scripts/compare_v19_ab.py` (NEW) — full-stack vs gate-only ship-floor comparator
+- `acceptance/v19_mining/{action_density_distribution.json,action_density_report.md,THRESHOLD_DECISION.md}` — locked-in thresholds: step≥6, tok≥1500, tools≤10, bail+2
+- `acceptance/v19_taxonomy/{full_stack,gate_only}_swebench_n75.json` — backfill for v17/v18 comparison
+- `benchmarks/swebench/subsets/v19_smoke_n14.json` — phase-C smoke (kept as v1.10 message-iteration smoke set)
+- `tests/test_loop_write_pressure.py` (+8 tests), `tests/test_outcomes.py` (+3), `tests/test_swebench_adapter.py` (+3) — 728 total
+
+**v1.10 design brief — "mechanism-isolation cycle"** (full version below in §v1.10 backlog):
+1. **Conditional intervention stacking** — convergence as a smooth SCORE (not binary), combining repeated_same_path_access, edit_preview_behavior, localized_grep_density, file_entropy_last_K. Intervention intensity scales with the score.
+2. **Soft-anchor wording iteration** — drop "rather than continuing broad exploration"; positive imperative ("Commit to the most promising file and attempt the smallest viable corrective edit"). Smoke on `v19_smoke_n14` before any n=75 commit.
+3. **Density-gate threshold re-derivation under v19 traces** — split into `pre_intervention_density_gate` (baseline) and `post_intervention_density_gate` (rescue-path) with separately calibrated decay windows. New telemetry: `time_to_first_write_after_intervention`, `write_burst_persistence`.
+4. **Mechanism-level primary metric** — (CONFIDENCE_COLLAPSE=0 AND ABSTAIN_AFTER_INTERVENTION≤N AND intervention_conversion_rate≥X%), with `empty_patch` demoted to derived secondary. Conversion rate denominator is intervention-fired-trajectories-only for stability across trigger-policy changes.
+
+## Earlier state — 2026-05-13 (v1.8.0 SHIPPED — pre-dispatch gate + taxonomy primitives)
 
 **Working tree**: clean. **712 tests passing**. **v1.8.0 tagged + pushed** (`e21b6b2`, signed). Released atop v1.6.1 with the v1.7 cycle data preserved as the architectural-investigation baseline.
 
@@ -430,7 +474,7 @@ Latent / open:
 
 **luxe** is an MLX-only repo maintainer for Apple Silicon (oMLX backend on `localhost:8000`). Takes a goal + repo, opens a PR. Mono-only since v1.0 — single model, single agent loop, single `luxe maintain` command. Champion: `Qwen3.6-35B-A3B-6bit` in `configs/single_64gb.yaml`.
 
-**What's shipped through v1.8.0**:
+**What's shipped through v1.9.0**:
 - v1.0 — mono-only; 10 fixtures; strict gates
 - v1.1 — pinned work_dir default + manage_strict overlay → 9/10
 - v1.2 — per-tool subphase pass: cve_lookup gated to manage; bash chain-hardening; read_file binary detection
@@ -441,6 +485,7 @@ Latent / open:
 - v1.6.0 (tagged 2026-05-09) — creation-only Forbids: `.sdd` gains `Forbids creating` section, `creating: bool` threaded through write-time guards; recovery-gradient error wording; SWE-bench n=75 v3 36/75 = 48.0% harness-resolved; 643 tests
 - v1.6.1 (tagged 2026-05-11 `0a964bf`, pushed to origin) — substrate hardening (6 fix vectors from m5max_moe bake-off); SpecDD Lever 2 extended into maintain_suite (`Fixture.forbids_create` + synth `.sdd` injection); BFCL v3 anchors (raw 76.45%, agent 83.71%); 652 tests
 - v1.8.0 (tagged 2026-05-13 `e21b6b2`, pushed to origin) — Track 2 pre-dispatch spec gate (capability gating); Track 5 episode-outcome taxonomy (`src/luxe/agents/outcomes.py`); Track 3 SWE-bench message overlay (`LUXE_EARLY_BAIL_MODE=no_abstain`); Track 1 prose-burst detector + action_density observability (`LUXE_PROSE_BURST=1`); Track 4 irrelevance prompt tightening. BFCL n=1240 = 90.24% (irrelevance **100%**, +9.58pp); SWE-bench n=75 wash with v17 (empty floor missed, deferred to v1.9). 712 tests. (v1.7 cycle data preserved; no v1.7 tag.)
+- v1.9.0 (tagged 2026-05-13, local only — SUBSTRATE RELEASE) — `LUXE_ACTION_DENSITY_GATE` staged-escalation predicate (standalone + post_bail_rescue modes; convergence-proxy skip; thresholds from `scripts/mine_action_density.py`); `_EARLY_BAIL_MESSAGE_SOFT_ANCHOR` variant (selection heuristic without abstain valve); `Intervention.ACTION_DENSITY_GATE` + `FailureClass.CONFIDENCE_COLLAPSE` taxonomy classes (decoupled definition); adapter wires the full intervention stack by default + `--no-early-bail` / `--no-action-density-gate` CLI ablation flags; habituation telemetry on `action_density_sample`. **CONFIDENCE_COLLAPSE class eliminated (0 in both A/B arms; v18 had 2)**; **empty_patch floor MISSED** (full-stack 19, gate-only 17 vs ≤13 target); strong count best-ever at 20. 728 tests. v1.10 = mechanism-isolation cycle (conditional intervention stacking + soft-anchor wording iteration + density-gate re-derivation + mechanism-level primary metric).
 
 **v1.6.1 SHIPPED 2026-05-11** (tag `0a964bf`, local only):
 - m5max_moe substrate hardening (6 fix vectors): tool-name strip in dispatcher + loop boundary; `_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE = 15` OR-branch on completion-tokens gate; `_POST_WRITE_IDLE_MAX = 3` clean-exit signal; `LUXE_WRITE_PRESSURE=1` as maintain_suite default
@@ -449,8 +494,13 @@ Latent / open:
 - 652 tests passing
 - BFCL agent run did NOT exercise Lever 1 — adapter wiring is v1.7 priority #2
 
-**What's queued for v1.7.0**:
-- Early-bail intervention #1 priority (addresses ≥10 of 18 v3 paired-mechanism empty_patch). Then BFCL Lever 1 wiring + abstain gradient (baseline-to-beat: 83.71% / 64.5% / 85.83%). Then b2 multi-site retrieval. Then in-loop test execution feedback. Then Mode B threshold tuning. Lever 3 on backlog.
+**What's queued for v1.10.0 — "mechanism-isolation cycle"**:
+1. **Conditional intervention stacking — convergence as a smooth score**. v1.9 evidence: soft-anchor converts "hesitant but near-solution" trajectories while harming exploratory recovery paths. Convergence signals (`same_file_read_twice`, `grep_then_open_same_path`) imply the model has formed a candidate execution locus. Don't gate on a binary primitive — compose a smooth score from `repeated_same_path_access` (already mined as `reread_ratio`), `edit_preview_behavior` (diff/grep/preview before write), `localized_grep_density` (fraction of grep matches in same file/dir as recent reads), `file_entropy_last_K_events` (Shannon entropy of touched paths). Intervention intensity scales with the score — low (diffuse-recon → no soft-anchor; consider exploratory-support variant), mid (standard soft-anchor), high (tighter commitment phrasing). Binary primitives are brittle against benchmark-specific trace structure.
+2. **Soft-anchor wording iteration**. Drop "rather than continuing broad exploration" (frames current behavior as failure; induces premature closure). Adopt positive imperative + narrow concrete next-step framing + zero mention of exploration. Candidate to A/B: *"Commit to the most promising file and attempt the smallest viable corrective edit."* Validation gate: smoke on `benchmarks/swebench/subsets/v19_smoke_n14.json` BEFORE any n=75 commit. Message variants are cheap to overfit emotionally and expensive to validate statistically.
+3. **Density-gate threshold re-derivation under v19 traces**. v1.9 changed trajectory shape enough that v18-inherited thresholds are no longer trustworthy. Post-intervention trajectories are NOT IID relative to pre-intervention — the intervention itself alters action cadence. Split the gate into two calibrated paths: `pre_intervention_density_gate` (baseline, current `standalone` mode) and `post_intervention_density_gate` (rescue, current `post_bail_rescue` mode) with separately calibrated decay windows and minimum action counts. Re-derive from v19 traces, not v18. New observability-only telemetry: `time_to_first_write_after_intervention` (wall+step delta) and `write_burst_persistence` (writes sustained for >N consecutive actions). Both may be more predictive than raw action density.
+4. **Mechanism-level primary metric**. v1.9 demonstrated `empty_patch` moves slowly even when named mechanisms are resolved — multiple latent failure modes contribute to one aggregate. v1.10 primary: `(CONFIDENCE_COLLAPSE = 0 AND ABSTAIN_AFTER_INTERVENTION ≤ N AND intervention_conversion_rate ≥ X%)`. Each component is a hypothesized causal pathway; the metric is scientifically actionable. **Denominator stability** (critical): `intervention_conversion_rate` MUST be computed among intervention-fired trajectories only, not all trajectories — otherwise future trigger-policy changes (the convergence-score work above) distort apparent gains by changing the denominator. `empty_patch` demoted to derived secondary.
+
+See `~/.claude/plans/serene-napping-cupcake.md` §Phase E.7 for the full v1.10 design brief, including the rationale traceable to specific v1.9 trace evidence (e.g., sphinx-10435 rep_2 step-6 termination).
 
 **Iteration model**: bench changes go through `scripts/regrade_local.py` for fast iteration on grader/linter logic without re-running luxe. Full bench re-runs reserved for end-of-phase confirmation.
 
