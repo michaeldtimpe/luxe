@@ -41,7 +41,41 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-14 (v1.10.0 SHIPPED — mechanism-isolation cycle; floor narrowly missed, conversion +17.9pp)
+## In flight — 2026-05-14 evening (v1.10.1 substrate complete; smoke validation underway)
+
+**Working tree**: clean. **763 tests pass + 1 module-skip on bfcl_adapter** (= 19 tests gated on bfcl_eval which is permanently incompatible with the v1.10.1 tree_sitter_language_pack pin; documented in `tests/test_bfcl_adapter.py` importorskip). **No new tag yet** — v1.10.1 ships when the full smoke + n=75 + Docker gates clear.
+
+**v1.10.1 substrate — code complete (commits `6d1709e`, `d3bf3d9` on origin/main).** Six workstreams shipped:
+
+| # | Workstream | Status |
+|---|---|---|
+| W1 | `tree_sitter_languages` → `tree_sitter_language_pack==0.13.0` + tree-sitter 0.25.x swap | ✅ 15 fail → 0 fail; `pyproject.toml` re-pinned |
+| W2 | Habituation clean-exit predicate (≥3 distinct interventions + no post-intervention write + step ≥ 20 → clean break) | ✅ predicate + `FailureClass.HABITUATION_EXIT` + 3 unit tests |
+| W3 | Exploratory-support variant for `convergence_score < LOW` band | ✅ replaces v1.10 silent suppression; three-band dispatcher + 3 unit tests |
+| W4 | `patch_len_delta` + `same_tier_docker_demotion` detection | ✅ sphinx-10673 surfaces with Δ=−1686 on real data |
+| W5 | `first_correct_file_touch` metric (v1.11 substrate) | ✅ 4 new taxonomy fields + locus × Docker cross-tab in analyzer |
+| W6 | Cycle ritual updates + bench-launch `__editable__*.pth` preflight grep | ✅ Docker harness mandatory pre-ship-doc; preflight fails fast on swebench-workspace leaks |
+| + | `log_calls` default-on (silent footgun caught by probe) | ✅ intervention events now logged unless `LUXE_SUPPRESS_TOOL_LOG=1` |
+
+**2-instance probe validated both v1.10.1 levers end-to-end** (`acceptance/swebench/v1101_probe_n2/rep_1/`, ~10m wall):
+
+- **sympy-13031** (W2 regression test) — All 3 commitment interventions fired (`ACTION_DENSITY_GATE`, `EARLY_BAIL`, `WRITE_PRESSURE`). `habituation_exit` event emitted at step=20 (exact predicate boundary). Zero post-intervention writes. Trajectory exited cleanly → **~10-15 min wall saved per habituated instance** at scale. Outcome: empty_patch (the predicate doesn't rescue lost trajectories, it exits them cheaply).
+- **matplotlib-14623** (W3 regression test) — `early_bail` fired with `msg_variant='exploratory'`, `convergence_score=0.0` (well below LOW threshold 0.10). **Produced 24-line patch** on `lib/matplotlib/ticker.py` (LogLocator swapped-vmin/vmax fix) — was empty under v1.10. The previously-silent failure class is now measurably moved.
+
+**Active background task**: n=14 smoke against `benchmarks/swebench/subsets/v19_smoke_n14.json`, output to `acceptance/swebench/v1101_smoke_n14/rep_1/`. Expected wall ~1.5h based on probe pace. On completion, `scripts/analyze_v1101_smoke.py` reports verdict; PASS proceeds to n=75 + Docker harness.
+
+**Ship-gate progress**:
+
+| Gate | Target | Status |
+|---|---|---|
+| W1 unit tests | 765/765 collected, 0 failing | ✅ done |
+| 2-instance probe | W2 + W3 events fire correctly under real model | ✅ done |
+| n=14 smoke | Zero new regressions vs v1.10; habituation + exploratory both fire | 🟡 running |
+| n=75 (~4h) | `empty_patch ≤ 13`, conversion_rate ≥ 75%, 0 new regressions | ⏳ pending smoke |
+| Docker harness (~35m) | net resolves ≥ v1.10's 36 | ⏳ pending n=75 |
+| W4 + W5 real-data check | `silent_demotion` + locus cross-tab in output | ⏳ pending n=75 |
+
+## Earlier state — 2026-05-14 (v1.10.0 SHIPPED — mechanism-isolation cycle; floor narrowly missed, conversion +17.9pp)
 
 **Working tree**: clean post-tag. **765 tests collected; 750 pass on MyEnv (Python 3.14)** — 15 fail uniformly on `import tree_sitter_languages` (package unmaintained, no Python 3.14 wheels; successor `tree_sitter_language_pack` is installable but requires a one-line swap in `src/luxe/symbols.py:159` — queued as v1.10.1 substrate work, no logic regression). **v1.10.0 tagged locally** (annotated, signed; push status set below). Released atop v1.9.0 with the v1.10 cycle data preserved at `acceptance/swebench/post_specdd_v110_n75/rep_1/` (with `run_id_manifest.json`) and `acceptance/v110_taxonomy/`.
 
