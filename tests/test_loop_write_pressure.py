@@ -891,6 +891,10 @@ def test_early_bail_soft_anchor_mode_via_env(monkeypatch):
     # soft-anchor must NOT contain the no_abstain declarative "fix exists"
     # framing — that wording was the v18 confidence-collapse trigger.
     assert "fix exists" not in soft_msgs[0]["content"]
+    # v1.10 — must NOT contain the "rather than … exploration" comparative
+    # trailer; that wording was the v19 "wrap up now" misread trigger.
+    assert "rather than" not in soft_msgs[0]["content"]
+    assert "broad exploration" not in soft_msgs[0]["content"]
 
 
 def test_early_bail_unknown_mode_falls_back_to_default(monkeypatch):
@@ -1194,3 +1198,218 @@ def test_action_density_gate_threshold_constants_are_sensible():
     # MIN_STEP should exceed _EARLY_BAIL_MIN_STEP + 1 so the post-bail
     # rescue path has at least one turn of grace before evaluable.
     assert _ACTION_DENSITY_GATE_MIN_STEP > _EARLY_BAIL_MIN_STEP
+
+
+# v1.10 — conditional intervention stacking via convergence score.
+# LUXE_CONVERGENCE_GATE=1 gates BOTH early_bail (suppress on LOW score)
+# AND action_density_gate (suppress on HIGH score). Tests cover the
+# three score bands: diffuse / standard / converged.
+
+
+from luxe.agents.loop import (
+    _CONVERGENCE_HIGH_THRESHOLD,
+    _CONVERGENCE_LOW_THRESHOLD,
+    _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE,
+)
+
+
+def test_convergence_thresholds_are_ordered():
+    """LOW < HIGH must hold so the band structure is non-degenerate."""
+    assert 0.0 < _CONVERGENCE_LOW_THRESHOLD < _CONVERGENCE_HIGH_THRESHOLD < 1.0
+
+
+def test_convergence_gate_off_preserves_v19_behavior(monkeypatch):
+    """Without LUXE_CONVERGENCE_GATE=1, the loop behaves as v1.9 — even
+    on a diffuse-recon trajectory (all unique paths) early_bail still
+    fires with the configured mode's wording, no convergence-based
+    suppression. Backward-compat guard."""
+    monkeypatch.delenv("LUXE_CONVERGENCE_GATE", raising=False)
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # 8 distinct read paths → low convergence score, but gate disabled
+    # so early_bail still fires.
+    scripted = [_read_resp_with_path(f"f{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    assert len(soft_msgs) == 1, (
+        "convergence_gate off → soft_anchor must fire as in v1.9"
+    )
+
+
+def test_convergence_gate_suppresses_early_bail_on_diffuse(monkeypatch):
+    """With LUXE_CONVERGENCE_GATE=1 and a diffuse-recon trajectory
+    (all distinct paths → score < LOW_THRESHOLD), early_bail must NOT
+    fire even though step/reads thresholds are met. Closes the
+    v1.9 wrong→empty regression class (commitment pressure on
+    exploratory recovery paths)."""
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # All distinct paths → reread_ratio=0, no greps, no edits, high
+    # entropy → very low score.
+    scripted = [_read_resp_with_path(f"unique_{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    for snapshot in backend.calls:
+        for msg in snapshot:
+            content = str(msg.get("content", ""))
+            assert _EARLY_BAIL_MESSAGE_SOFT_ANCHOR not in content, (
+                "early_bail must be suppressed on diffuse-recon under v1.10 gate"
+            )
+            assert _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE not in content
+
+
+def test_convergence_gate_fires_commit_imperative_on_high_convergence(monkeypatch):
+    """With LUXE_CONVERGENCE_GATE=1 AND soft_anchor mode AND a high-
+    convergence trajectory (repeated reads of same paths → score ≥ HIGH),
+    early_bail swaps the soft_anchor message for the tighter
+    commit_imperative variant. Validates the v1.10 dynamic message
+    selection for converged trajectories."""
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # All reads to the SAME file → max reread_ratio, low entropy →
+    # high convergence score. But the dedup short-circuit kicks in
+    # after the first repeat (read_file is exempt from dedup, so the
+    # repeat goes through). 8 calls all to "target.py".
+    scripted = [_read_resp_with_path("target.py") for _ in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    commit_msgs = [m for m in final
+                   if m.get("role") == "user"
+                   and _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE in str(m.get("content", ""))]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    assert len(commit_msgs) == 1, (
+        f"expected commit_imperative on high-convergence trajectory, "
+        f"got commit_imperative={len(commit_msgs)} soft_anchor={len(soft_msgs)}"
+    )
+    assert len(soft_msgs) == 0, "soft_anchor must NOT fire when commit_imperative did"
+
+
+def test_convergence_gate_does_not_swap_message_for_static_modes(monkeypatch):
+    """Dynamic message selection (soft_anchor → commit_imperative on
+    high convergence) is opt-in via mode=soft_anchor. Explicit
+    no_abstain or default modes stay STATIC regardless of score —
+    callers asking for those modes get exactly that wording."""
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "no_abstain")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # High-convergence trajectory — would swap to commit_imperative
+    # if mode were soft_anchor. With no_abstain, must stay no_abstain.
+    scripted = [_read_resp_with_path("target.py") for _ in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    no_abstain_msgs = [m for m in final
+                       if m.get("role") == "user"
+                       and _EARLY_BAIL_MESSAGE_NO_ABSTAIN in str(m.get("content", ""))]
+    commit_msgs = [m for m in final
+                   if m.get("role") == "user"
+                   and _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE in str(m.get("content", ""))]
+    assert len(no_abstain_msgs) == 1
+    assert len(commit_msgs) == 0
+
+
+def test_convergence_gate_suppresses_action_density_on_high_convergence(monkeypatch):
+    """v1.10 convergence-score suppression of the action_density_gate
+    replaces v1.9's binary same_file_read_twice skip. With
+    LUXE_CONVERGENCE_GATE=1 AND a converged trajectory (repeated reads
+    of same paths → score ≥ HIGH), the action_density_gate must NOT
+    fire even when other predicates are met."""
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # All reads to same file → high convergence → suppress gate.
+    # 8 reads at 300 tokens each → 2400 tokens (above gate threshold).
+    scripted = [_read_resp_tok("target.py", 300) for _ in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    for snapshot in backend.calls:
+        for msg in snapshot:
+            assert _ACTION_DENSITY_GATE_MESSAGE not in str(msg.get("content", "")), (
+                "action_density_gate must be suppressed on high-convergence "
+                "trajectory under v1.10 convergence_gate"
+            )
+
+
+def test_convergence_gate_zero_calls_spec_disables_convergence_gate(monkeypatch):
+    """When the spec has expects_zero_calls, the v1.10 convergence_gate
+    is disabled alongside the other interventions. (Convergence_gate
+    is harmless if early_bail/action_density_gate are themselves off,
+    but the off-switch is mirrored for clarity / explicit intent.)"""
+    import os as _os
+    from luxe.spec import Requirement, Spec
+    _os.environ["LUXE_CONVERGENCE_GATE"] = "1"
+    _os.environ["LUXE_EARLY_BAIL"] = "1"
+    try:
+        spec = Spec(goal="abstain", requirements=[Requirement(
+            id="R1", must="zero", done_when="zero",
+            kind="expects_zero_calls",
+        )])
+        scripted = [_read_resp_with_path("f.py") for _ in range(8)] + [_terminal_resp()]
+        backend = _ScriptedBackend(scripted)
+        role = _make_role()
+
+        run_agent(
+            backend=backend, role_cfg=role,
+            system_prompt="sys", task_prompt="do work",
+            tool_defs=[_read_tool()], tool_fns=_read_fn(),
+            spec=spec,
+        )
+        # zero_calls suppression nukes the interventions — nothing fires.
+        for snapshot in backend.calls:
+            for msg in snapshot:
+                content = str(msg.get("content", ""))
+                assert _EARLY_BAIL_MESSAGE not in content
+                assert _EARLY_BAIL_MESSAGE_SOFT_ANCHOR not in content
+                assert _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE not in content
+    finally:
+        _os.environ.pop("LUXE_CONVERGENCE_GATE", None)
+        _os.environ.pop("LUXE_EARLY_BAIL", None)
