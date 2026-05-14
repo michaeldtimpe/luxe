@@ -84,6 +84,12 @@ def main() -> int:
                    help="Disable mid-loop write-pressure when .sdd is injected. "
                         "Default-paired with inject_sdd; flag exists for ablation. "
                         "Has no effect if --no-inject-sdd is also set.")
+    p.add_argument("--no-early-bail", action="store_true",
+                   help="Disable LUXE_EARLY_BAIL=1 wiring (v1.9 default-on). "
+                        "Use for ablation against the soft-anchor message variant.")
+    p.add_argument("--no-action-density-gate", action="store_true",
+                   help="Disable LUXE_ACTION_DENSITY_GATE=1 wiring (v1.9 default-on). "
+                        "Use for ablation against the staged-escalation gate.")
     args = p.parse_args()
 
     if not args.dataset.is_file():
@@ -177,6 +183,8 @@ def main() -> int:
             timeout_s=args.per_instance_timeout,
             inject_sdd=not args.no_inject_sdd,
             write_pressure=not args.no_write_pressure,
+            early_bail=not args.no_early_bail,
+            action_density_gate=not args.no_action_density_gate,
         )
         results.append(result)
 

@@ -67,6 +67,7 @@ class Intervention(str, Enum):
     WRITE_PRESSURE = "WRITE_PRESSURE"
     EARLY_BAIL = "EARLY_BAIL"
     PROSE_BURST = "PROSE_BURST"
+    ACTION_DENSITY_GATE = "ACTION_DENSITY_GATE"  # v1.9 staged-escalation
     SPEC_GATE_EXPECTS_ZERO = "SPEC_GATE_EXPECTS_ZERO"
     SPEC_GATE_MIN_TOOL_CALLS = "SPEC_GATE_MIN_TOOL_CALLS"
 
@@ -83,6 +84,7 @@ class FailureClass(str, Enum):
     EARLY_PROSE_COLLAPSE = "EARLY_PROSE_COLLAPSE"        # step ≤4, big prose, no action
     BAILOUT_AFTER_READS = "BAILOUT_AFTER_READS"          # step >4, many reads, no writes
     ABSTAIN_AFTER_INTERVENTION = "ABSTAIN_AFTER_INTERVENTION"  # took escape after EARLY_BAIL
+    CONFIDENCE_COLLAPSE = "CONFIDENCE_COLLAPSE"          # v1.9: empty + writes=0 + EARLY_BAIL fired
     EMPTY_PATCH_TIMEOUT = "EMPTY_PATCH_TIMEOUT"          # exhausted max_steps
     CONTEXT_EXHAUSTED = "CONTEXT_EXHAUSTED"              # backend 400 on prompt size
     BACKEND_ERROR = "BACKEND_ERROR"                      # other backend failure
@@ -138,6 +140,7 @@ def _parse_events(events_path: Path) -> _TraceSummary:
         "write_pressure_fired": Intervention.WRITE_PRESSURE,
         "early_bail_fired": Intervention.EARLY_BAIL,
         "prose_burst_fired": Intervention.PROSE_BURST,
+        "action_density_gate_fired": Intervention.ACTION_DENSITY_GATE,
     }
     last_completion_tokens = 0
     for line in events_path.read_text().splitlines():
@@ -242,10 +245,22 @@ def _classify_swebench(
                               interventions_fired=summary.interventions,
                               failure_chain=chain)
 
+    # v1.9 — CONFIDENCE_COLLAPSE is the decoupled named-pathology tag for
+    # "empty + writes=0 + EARLY_BAIL fired". Decoupled from density-gate
+    # presence so the class definition stays stable across run configs.
+    # Distinct from ABSTAIN_AFTER_INTERVENTION (the causal-link narrative);
+    # both can appear in the same chain.
+    confidence_collapse = (
+        Intervention.EARLY_BAIL in summary.interventions
+        and summary.write_tool_calls == 0
+    )
+
     # Empty patch with no specific failure — derive primary from trace shape.
     # Early prose collapse: <=4 steps with zero writes.
     if summary.total_steps <= 4 and summary.write_tool_calls == 0 and summary.total_tool_calls <= 3:
         chain.append(FailureClass.EARLY_PROSE_COLLAPSE)
+        if confidence_collapse:
+            chain.append(FailureClass.CONFIDENCE_COLLAPSE)
         chain.append(FailureClass.EMPTY_PATCH_TIMEOUT)
         return EpisodeOutcome(outcome=Outcome.EMPTY_PATCH_TIMEOUT,
                               interventions_fired=summary.interventions,
@@ -257,6 +272,8 @@ def _classify_swebench(
         # If EARLY_BAIL fired and we still didn't write, intervention failed
         if Intervention.EARLY_BAIL in summary.interventions:
             chain.append(FailureClass.ABSTAIN_AFTER_INTERVENTION)
+        if confidence_collapse:
+            chain.append(FailureClass.CONFIDENCE_COLLAPSE)
         chain.append(FailureClass.EMPTY_PATCH_TIMEOUT)
         return EpisodeOutcome(outcome=Outcome.EMPTY_PATCH_TIMEOUT,
                               interventions_fired=summary.interventions,
@@ -269,6 +286,8 @@ def _classify_swebench(
                               interventions_fired=summary.interventions,
                               failure_chain=chain)
 
+    if confidence_collapse:
+        chain.append(FailureClass.CONFIDENCE_COLLAPSE)
     chain.append(FailureClass.EMPTY_PATCH_TIMEOUT)
     return EpisodeOutcome(outcome=Outcome.EMPTY_PATCH_TIMEOUT,
                           interventions_fired=summary.interventions,

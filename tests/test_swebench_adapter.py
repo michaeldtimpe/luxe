@@ -243,3 +243,30 @@ class TestPairedMechanismEnv:
         env = captured_env["extra_env"]
         assert env.get("FOO") == "bar"
         assert env.get("LUXE_WRITE_PRESSURE") == "1"
+
+    def test_v19_default_wires_full_intervention_stack(self, tmp_path, captured_env):
+        """v1.9 default wiring: LUXE_EARLY_BAIL + LUXE_ACTION_DENSITY_GATE +
+        LUXE_EARLY_BAIL_MODE=soft_anchor + LUXE_WRITE_PRESSURE all set. The
+        v18 cycle relied on external env preconditions for LUXE_EARLY_BAIL=1;
+        v19 wires the full intervention stack adapter-side so the SWE-bench
+        configuration is reproducible without shell setup."""
+        run_instance(self._instance(), tmp_path)
+        env = captured_env["extra_env"]
+        assert env.get("LUXE_EARLY_BAIL") == "1"
+        assert env.get("LUXE_EARLY_BAIL_MODE") == "soft_anchor"
+        assert env.get("LUXE_ACTION_DENSITY_GATE") == "1"
+        assert env.get("LUXE_WRITE_PRESSURE") == "1"
+
+    def test_v19_early_bail_disable_for_ablation(self, tmp_path, captured_env):
+        run_instance(self._instance(), tmp_path, early_bail=False)
+        env = captured_env["extra_env"]
+        assert "LUXE_EARLY_BAIL" not in env
+        # mode + gate stay set — ablation isolates one lever at a time
+        assert env.get("LUXE_EARLY_BAIL_MODE") == "soft_anchor"
+        assert env.get("LUXE_ACTION_DENSITY_GATE") == "1"
+
+    def test_v19_action_density_gate_disable_for_ablation(self, tmp_path, captured_env):
+        run_instance(self._instance(), tmp_path, action_density_gate=False)
+        env = captured_env["extra_env"]
+        assert "LUXE_ACTION_DENSITY_GATE" not in env
+        assert env.get("LUXE_EARLY_BAIL") == "1"

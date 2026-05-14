@@ -264,6 +264,8 @@ def run_instance(
     timeout_s: float | None = 1800.0,
     inject_sdd: bool = True,
     write_pressure: bool = True,
+    early_bail: bool = True,
+    action_density_gate: bool = True,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -279,6 +281,19 @@ def run_instance(
     writes-zero. The two ship together because constrained execution
     requires enforced actuation; n=75 measured `empty_patch +4` when
     constraint shipped without actuation.
+
+    `early_bail` (default True, v1.9) sets `LUXE_EARLY_BAIL=1` so the
+    early-bail intervention fires at step ≥4 with reads ≥4 and zero
+    writes. Paired with the soft-anchor message variant below.
+    Previously (v1.7 / v1.8) this env was set on the command line; the
+    adapter now wires it explicitly so the SWE-bench intervention stack
+    is reproducible without external env preconditions.
+
+    `action_density_gate` (default True, v1.9) sets
+    `LUXE_ACTION_DENSITY_GATE=1` so the staged-escalation density gate
+    fires at step ≥6 with low tool count + high token output, in
+    standalone or post_bail_rescue mode. Thresholds derived from
+    scripts/mine_action_density.py.
     """
     inst_dir = work_dir / instance.instance_id
     log_dir = inst_dir / "log"
@@ -295,15 +310,19 @@ def run_instance(
         write_swebench_sdd(repo)
         if write_pressure:
             extra_env = {**(extra_env or {}), "LUXE_WRITE_PRESSURE": "1"}
-    # v1.8 Track 3: switch the early_bail message to the no-abstain variant
-    # for SWE-bench. The default message offers an "explicitly state the
-    # existing code is correct" branch which caused 3 wrong_target/
-    # wrong_location → empty_patch regressions in v17 B.5. SWE-bench
-    # instances all have a definitional bug + gold patch, so the abstain
-    # branch is semantically incompatible with the task's reward structure.
-    # maintain_suite still uses the default (where abstain is sometimes a
-    # legitimate outcome).
-    extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_MODE": "no_abstain"}
+    # v1.9: switch the early_bail message to the soft-anchor variant for
+    # SWE-bench. v1.8's no_abstain text closed the v17 wrong→empty class
+    # but introduced confidence-collapse: 2 strong→empty regressions
+    # (sphinx-10435, sympy-13031). soft-anchor preserves no-abstain's
+    # commitment pressure but adds a selection heuristic ("choose the
+    # highest-probability bug location — even if uncertain") so the
+    # planner can act under uncertainty rather than stall. maintain_suite
+    # still uses the default (where abstain is sometimes legitimate).
+    extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_MODE": "soft_anchor"}
+    if early_bail:
+        extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL": "1"}
+    if action_density_gate:
+        extra_env = {**(extra_env or {}), "LUXE_ACTION_DENSITY_GATE": "1"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
