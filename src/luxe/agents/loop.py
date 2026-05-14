@@ -178,6 +178,43 @@ _EARLY_BAIL_MIN_READS = 4
 _PROSE_BURST_MAX_STEP = 4
 _PROSE_BURST_MIN_DELTA = 1500
 
+# v1.9 — LUXE_ACTION_DENSITY_GATE. Staged-escalation predicate that catches
+# the post-bail short-stall class (model accepted early_bail at step 4 but
+# produced no edit) AND the standalone "diffuse-reconnaissance" class
+# (many tools, many tokens, no commit) that PROSE_BURST's zero-tool-call
+# rule cannot reach. Thresholds derived from
+# scripts/mine_action_density.py over v17 + v18 SWE-bench n=75 traces;
+# see acceptance/v19_mining/THRESHOLD_DECISION.md.
+#
+# Two fire modes:
+#   - standalone: early_bail never fired; gate stands on its own.
+#   - post_bail_rescue: early_bail fired at least MIN_TURNS_AFTER_BAIL
+#     turns ago AND no writes have happened since. Targets confidence-
+#     collapse trajectories where the bail nudge wasn't enough.
+#
+# Convergence proxy (same_file_read_twice) acts as a skip — strong
+# trajectories converge by re-reading the same file (3× the empty-class
+# rate per the v18 distribution), so the gate suppresses itself when
+# convergence is observed. Even without the proxy the chosen thresholds
+# already show 0 careful-strong risk on the historical distribution;
+# the proxy is a safety belt against future drift.
+#
+# Off by default. Enable with LUXE_ACTION_DENSITY_GATE=1.
+_ACTION_DENSITY_GATE_MIN_STEP = 6
+_ACTION_DENSITY_GATE_MIN_TOKENS = 1500
+_ACTION_DENSITY_GATE_MAX_TOOLS = 10
+_ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL = 2
+
+_ACTION_DENSITY_GATE_MESSAGE = (
+    "Mid-loop notice: you have generated significant reasoning but have "
+    "produced very few tool calls and no edits. This pattern — high "
+    "token output, low action — usually means analysis without "
+    "commitment. Choose the highest-probability bug location based on "
+    "what you've already established, and emit a concrete patch now "
+    "using `write_file` or `edit_file`. Commit to your best candidate "
+    "rather than continuing to deliberate."
+)
+
 _PROSE_BURST_MESSAGE = (
     "Mid-loop notice: your previous response generated significant text "
     "without invoking any tool. The deliverable for this task is a "
@@ -212,9 +249,36 @@ _EARLY_BAIL_MESSAGE_NO_ABSTAIN = (
     "an edit based on what you've already learned."
 )
 
+# v1.9 — soft-anchor variant. The v18 no_abstain text swapped v17's 3
+# wrong→empty regressions for 2 strong→empty confidence-collapse bails
+# (sphinx-10435, sympy-13031). Per acceptance/v18_taxonomy: both v18
+# regressions had v17=STRONG_GOLD_MATCH under the default message — the
+# trajectory had a viable target before no_abstain pushed the planner
+# into stall.
+#
+# Design intent:
+#   - Selection heuristic ("highest-probability … even if uncertain")
+#     gives the planner permission to commit under uncertainty — the
+#     decision-commitment lever no_abstain lacked.
+#   - No abstain valve — keeps the v17 wrong→empty class closed.
+#   - No declarative "fix exists" framing — no_abstain's existence
+#     claim may have triggered the confidence collapse; soft-anchor
+#     reframes as "commit to your best read".
+#   - Multi-hunk friendly — "location" (not "single file / single
+#     hunk") preserves focus without overconstraining legitimate
+#     multi-hunk fixes.
+_EARLY_BAIL_MESSAGE_SOFT_ANCHOR = (
+    "Mid-loop notice: you have explored the repository but haven't proposed "
+    "any edits yet. Based on what you've already read, choose the "
+    "highest-probability bug location — even if uncertain — and emit a "
+    "concrete patch now using `write_file` or `edit_file`. Commit to your "
+    "best candidate rather than continuing broad exploration."
+)
+
 _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
     "default": _EARLY_BAIL_MESSAGE,
     "no_abstain": _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
+    "soft_anchor": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
 }
 
 # Emit a progress line each time cumulative completion tokens crosses a
@@ -283,9 +347,26 @@ def run_agent(
     write_pressure_fired = False
     early_bail_enabled = os.environ.get("LUXE_EARLY_BAIL") == "1"
     early_bail_fired = False
+    early_bail_step: int | None = None  # v1.9: needed by post-bail rescue gate
     prose_burst_enabled = os.environ.get("LUXE_PROSE_BURST") == "1"
     prose_burst_fired = False
+    # v1.9 — LUXE_ACTION_DENSITY_GATE (staged escalation second-stage rescue
+    # after early_bail stalls). See _ACTION_DENSITY_GATE_* constants above.
+    action_density_gate_enabled = os.environ.get("LUXE_ACTION_DENSITY_GATE") == "1"
+    action_density_gate_fired = False
+    # v1.9 — convergence proxy. Track read_file call signatures so the gate
+    # can suppress itself when the model has revisited the same file (strong
+    # trajectories rerun reads ~3× more often than empties per the v18
+    # distribution; that's a "found my target" signal).
+    read_keys_seen: set[str] = set()
+    same_file_read_twice_step: int | None = None
+    # v1.9 — habituation telemetry. Records the most-recent intervention fire
+    # so the next step's action_density_sample can report whether the
+    # intervention shifted behavior (tool call vs another prose-only turn).
+    last_intervention_step: int | None = None
+    last_intervention_kind: str | None = None
     prev_completion_tokens = 0
+    prev_tool_calls_total_at_sample = 0  # v1.9 — for next_action_was_tool_call
     writes_seen = 0
     post_write_idle_tools = 0
 
@@ -299,13 +380,15 @@ def run_agent(
         and any(r.kind == "expects_zero_calls" for r in spec.requirements)
     )
     if spec_has_zero_calls:
-        # Suppression: the three tool-eagerness amplifiers (write_pressure,
-        # early_bail, prose_burst) would push the model toward action
-        # exactly when the correct outcome is to decline. Disable all when
-        # the spec contains a zero-call expectation.
+        # Suppression: the four tool-eagerness amplifiers (write_pressure,
+        # early_bail, prose_burst, action_density_gate) would push the
+        # model toward action exactly when the correct outcome is to
+        # decline. Disable all when the spec contains a zero-call
+        # expectation.
         write_pressure_enabled = False
         early_bail_enabled = False
         prose_burst_enabled = False
+        action_density_gate_enabled = False
     actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
     spec_violations_reprompted: set[str] = set()
 
@@ -331,6 +414,8 @@ def run_agent(
                      or result.tool_calls_total >= _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE)):
             messages.append({"role": "user", "content": _WRITE_PRESSURE_MESSAGE})
             write_pressure_fired = True
+            last_intervention_step = step
+            last_intervention_kind = "write_pressure"
             if log_calls:
                 append_event(
                     run_id, "write_pressure_fired",
@@ -360,6 +445,9 @@ def run_agent(
                 msg = _EARLY_BAIL_MESSAGE_MODES.get(mode, _EARLY_BAIL_MESSAGE)
             messages.append({"role": "user", "content": msg})
             early_bail_fired = True
+            early_bail_step = step
+            last_intervention_step = step
+            last_intervention_kind = "early_bail"
             if log_calls:
                 append_event(
                     run_id, "early_bail_fired",
@@ -369,17 +457,65 @@ def run_agent(
                     reads=result.tool_calls_total - writes_seen,
                 )
 
-        # v1.8 Track 1 — prose-burst detector. Composite invariant fires at
-        # most once per run; on second consecutive burst (intervention
-        # produced no response change), exit cleanly. Per-step token delta
-        # is the previous step's response size — we evaluate at the start
-        # of step N to catch a step N-1 burst, with enough budget remaining
-        # for the intervention to land.
+        # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,
+        # action_density_gate, and the action_density_sample observability
+        # event. completion_delta_last_step is the SIZE of the previous
+        # step's response — we evaluate at the start of step N to catch a
+        # step N-1 burst, leaving budget for the intervention to land.
         completion_delta_last_step = result.completion_tokens - prev_completion_tokens
         action_density = (
             (result.tool_calls_total / max(1, result.completion_tokens))
             if result.completion_tokens > 0 else 0.0
         )
+
+        # v1.9 — LUXE_ACTION_DENSITY_GATE. Staged-escalation predicate that
+        # fires once per run in one of two modes:
+        #   - standalone:        early_bail never fired; gate stands alone
+        #   - post_bail_rescue:  early_bail fired ≥MIN_TURNS_AFTER_BAIL
+        #                        turns ago AND no writes since
+        # Convergence proxy (same_file_read_twice on/before this step)
+        # suppresses the gate — strong trajectories converge by re-reading
+        # the same target. Thresholds derived from
+        # scripts/mine_action_density.py over v17 + v18 SWE-bench n=75;
+        # see acceptance/v19_mining/THRESHOLD_DECISION.md.
+        if (action_density_gate_enabled
+                and not action_density_gate_fired
+                and writes_seen == 0
+                and step >= _ACTION_DENSITY_GATE_MIN_STEP
+                and result.completion_tokens >= _ACTION_DENSITY_GATE_MIN_TOKENS
+                and result.tool_calls_total <= _ACTION_DENSITY_GATE_MAX_TOOLS
+                and not (same_file_read_twice_step is not None
+                         and same_file_read_twice_step <= step)):
+            fire_mode: str | None
+            if early_bail_step is None:
+                fire_mode = "standalone"
+                turns_since_bail = None
+            elif step - early_bail_step >= _ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL:
+                fire_mode = "post_bail_rescue"
+                turns_since_bail = step - early_bail_step
+            else:
+                fire_mode = None  # bail grace period — hold gate
+                turns_since_bail = None
+            if fire_mode is not None:
+                messages.append({"role": "user", "content": _ACTION_DENSITY_GATE_MESSAGE})
+                action_density_gate_fired = True
+                last_intervention_step = step
+                last_intervention_kind = "action_density_gate"
+                if log_calls:
+                    append_event(
+                        run_id, "action_density_gate_fired",
+                        phase=phase, step=step,
+                        fire_mode=fire_mode,
+                        turns_since_bail=turns_since_bail,
+                        tool_calls_total=result.tool_calls_total,
+                        completion_tokens=result.completion_tokens,
+                        action_density=action_density,
+                        same_file_read_twice_step=same_file_read_twice_step,
+                    )
+
+        # v1.8 Track 1 — prose-burst detector. Composite invariant fires at
+        # most once per run; on second consecutive burst (intervention
+        # produced no response change), exit cleanly.
         prose_burst_now = (
             step <= _PROSE_BURST_MAX_STEP
             and result.tool_calls_total == 0
@@ -389,6 +525,8 @@ def run_agent(
         if prose_burst_enabled and prose_burst_now and not prose_burst_fired:
             messages.append({"role": "user", "content": _PROSE_BURST_MESSAGE})
             prose_burst_fired = True
+            last_intervention_step = step
+            last_intervention_kind = "prose_burst"
             if log_calls:
                 append_event(
                     run_id, "prose_burst_fired",
@@ -415,8 +553,21 @@ def run_agent(
             break
 
         # Observability: emit action_density per step regardless of gating.
-        # Becomes the dataset for v1.9 adaptive threshold tuning. Cheap.
+        # Becomes the dataset for adaptive threshold tuning. Cheap.
         if log_calls and step > 0:
+            # v1.9 habituation telemetry: when an intervention has fired,
+            # report (a) how many steps since it fired, (b) which one, and
+            # (c) whether the immediately-following step produced any tool
+            # call. Lets us post-hoc measure whether text-level interventions
+            # remain causally active or accumulate as ignorable background.
+            habituation: dict[str, Any] = {}
+            if last_intervention_step is not None and step > last_intervention_step:
+                step_had_call = result.tool_calls_total > prev_tool_calls_total_at_sample
+                habituation = {
+                    "since_intervention_step": step - last_intervention_step,
+                    "since_intervention_kind": last_intervention_kind,
+                    "next_action_was_tool_call": step_had_call,
+                }
             append_event(
                 run_id, "action_density_sample",
                 phase=phase, step=step,
@@ -424,7 +575,9 @@ def run_agent(
                 action_density=action_density,
                 writes_seen=writes_seen,
                 tool_calls_total=result.tool_calls_total,
+                **habituation,
             )
+        prev_tool_calls_total_at_sample = result.tool_calls_total
         # Capture cumulative tokens BEFORE this step's backend.chat so the
         # next iteration's delta correctly measures THIS step's response.
         prev_completion_tokens = result.completion_tokens
@@ -597,6 +750,17 @@ def run_agent(
 
             key = _call_key(tc.name, tc.arguments)
             key_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
+            # v1.9 — convergence proxy. The first time a read_file call key
+            # repeats (same path + args), record the step. Strong trajectories
+            # re-read targets ~3× more often than empties; this is a
+            # "found my target" signal that suppresses the action-density
+            # gate. Tracked for read_file only — repeating a search/edit has
+            # different semantics (revising, not converging on a candidate).
+            if tc.name == "read_file":
+                if key in read_keys_seen and same_file_read_twice_step is None:
+                    same_file_read_twice_step = step
+                else:
+                    read_keys_seen.add(key)
             if key in seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
                 step_had_repeat = True
                 content = (

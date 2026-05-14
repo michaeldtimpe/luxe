@@ -18,8 +18,14 @@ from typing import Any
 import pytest
 
 from luxe.agents.loop import (
+    _ACTION_DENSITY_GATE_MAX_TOOLS,
+    _ACTION_DENSITY_GATE_MESSAGE,
+    _ACTION_DENSITY_GATE_MIN_STEP,
+    _ACTION_DENSITY_GATE_MIN_TOKENS,
+    _ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL,
     _EARLY_BAIL_MESSAGE,
     _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
+    _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
     _EARLY_BAIL_MIN_READS,
     _EARLY_BAIL_MIN_STEP,
     _PROSE_BURST_MAX_STEP,
@@ -857,6 +863,58 @@ def test_early_bail_no_abstain_mode_via_env(monkeypatch):
     assert "correct as-is" not in no_abstain_msgs[0]["content"]
 
 
+def test_early_bail_soft_anchor_mode_via_env(monkeypatch):
+    """v1.9 — LUXE_EARLY_BAIL_MODE=soft_anchor selects the selection-
+    heuristic variant. Recovers v17's strong-tier on instances where
+    v18's no_abstain text caused confidence-collapse bails."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    scripted = [_read_resp_with_path(f"f{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    assert len(soft_msgs) == 1
+    # soft-anchor must NOT contain "correct as-is" (no abstain valve)
+    assert "correct as-is" not in soft_msgs[0]["content"]
+    # soft-anchor must contain the selection-heuristic signature.
+    assert "highest-probability" in soft_msgs[0]["content"]
+    # soft-anchor must NOT contain the no_abstain declarative "fix exists"
+    # framing — that wording was the v18 confidence-collapse trigger.
+    assert "fix exists" not in soft_msgs[0]["content"]
+
+
+def test_early_bail_unknown_mode_falls_back_to_default(monkeypatch):
+    """Unknown LUXE_EARLY_BAIL_MODE values use the default variant
+    (dict.get(mode, default) semantics in loop.py)."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "nonexistent_mode")
+    scripted = [_read_resp_with_path(f"f{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    default_msgs = [m for m in final
+                    if m.get("role") == "user"
+                    and _EARLY_BAIL_MESSAGE in str(m.get("content", ""))]
+    assert len(default_msgs) == 1
+
+
 def test_early_bail_kwarg_overrides_env(monkeypatch):
     """early_bail_message=... kwarg takes precedence over env mode."""
     monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
@@ -878,3 +936,261 @@ def test_early_bail_kwarg_overrides_env(monkeypatch):
              if m.get("role") == "user"
              and custom in str(m.get("content", ""))]
     assert len(found) == 1, "kwarg should override env mode"
+
+
+# v1.9 — LUXE_ACTION_DENSITY_GATE tests. The gate fires once per run when
+# the trajectory shows high token output + low tool activity at step >= 6
+# with zero writes, in one of two modes: standalone (no early_bail) or
+# post_bail_rescue (early_bail fired ≥2 turns ago, no writes since).
+# Convergence proxy (same read_file key seen twice) suppresses the gate.
+
+
+def _read_resp_tok(path: str, completion_tokens: int) -> ChatResponse:
+    """A read_file response with a controlled completion_tokens count."""
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(id="c", name="read_file", arguments={"path": path})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
+    )
+
+
+def test_action_density_gate_disabled_by_default(monkeypatch):
+    """Without LUXE_ACTION_DENSITY_GATE=1, gate must not fire even when
+    step/tokens/tool thresholds are met."""
+    monkeypatch.delenv("LUXE_ACTION_DENSITY_GATE", raising=False)
+    monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
+    # 8 distinct reads at 300 tokens each → 2400 tokens by step 8.
+    scripted = [_read_resp_tok(f"f{i}.py", 300) for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    for snapshot in backend.calls:
+        for msg in snapshot:
+            assert _ACTION_DENSITY_GATE_MESSAGE not in str(msg.get("content", ""))
+
+
+def test_action_density_gate_fires_standalone(monkeypatch):
+    """LUXE_ACTION_DENSITY_GATE=1 without LUXE_EARLY_BAIL → gate fires in
+    standalone mode when step/tokens/tool predicates align."""
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # Distinct paths each step → no convergence proxy hit. 8 reads at 300
+    # tokens each → 2400 tokens cumulative by step 8 (gate fires at step 6
+    # when token threshold 1500 is met and tool count 6 is ≤ 10).
+    scripted = [_read_resp_tok(f"f{i}.py", 300) for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    gate_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _ACTION_DENSITY_GATE_MESSAGE in str(m.get("content", ""))]
+    assert len(gate_msgs) == 1, "expected exactly 1 standalone gate fire"
+
+
+def test_action_density_gate_fires_post_bail_rescue(monkeypatch):
+    """LUXE_EARLY_BAIL=1 + LUXE_ACTION_DENSITY_GATE=1 — early_bail fires
+    at step 4, then density gate fires at step 6 (2 turns later) as
+    post_bail_rescue when the model continues without writing."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    monkeypatch.delenv("LUXE_EARLY_BAIL_MODE", raising=False)
+    scripted = [_read_resp_tok(f"f{i}.py", 300) for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    bail_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE in str(m.get("content", ""))]
+    gate_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _ACTION_DENSITY_GATE_MESSAGE in str(m.get("content", ""))]
+    assert len(bail_msgs) == 1, "early_bail must fire first"
+    assert len(gate_msgs) == 1, "post-bail rescue gate must fire after"
+    # Sanity: the gate message must come AFTER the bail message in the
+    # conversation (escalation order).
+    bail_idx = next(i for i, m in enumerate(final)
+                    if m.get("role") == "user"
+                    and _EARLY_BAIL_MESSAGE in str(m.get("content", "")))
+    gate_idx = next(i for i, m in enumerate(final)
+                    if m.get("role") == "user"
+                    and _ACTION_DENSITY_GATE_MESSAGE in str(m.get("content", "")))
+    assert gate_idx > bail_idx, "post-bail rescue must come AFTER early_bail"
+
+
+def test_action_density_gate_holds_during_bail_grace_period(monkeypatch):
+    """Within the first MIN_TURNS_AFTER_BAIL turns after early_bail, the
+    gate must NOT fire even if other predicates are met. Verifies the
+    staged-escalation semantics: don't double-fire immediately on top of
+    a fresh intervention."""
+    import luxe.agents.loop as _loop
+    # Lower the gate MIN_STEP and MIN_TOKENS so the gate becomes EVALUABLE
+    # at step 5 (one turn after early_bail at step 4). The grace-period
+    # check (turns_since_bail < 2) is what should keep it from firing.
+    monkeypatch.setattr(_loop, "_ACTION_DENSITY_GATE_MIN_STEP", 4)
+    monkeypatch.setattr(_loop, "_ACTION_DENSITY_GATE_MIN_TOKENS", 200)
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # 8 reads, distinct paths, 300 tokens each → token threshold easily met.
+    scripted = [_read_resp_tok(f"f{i}.py", 300) for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    # At step 5 (chat index 5) the gate would otherwise be evaluable. With
+    # MIN_TURNS_AFTER_BAIL=2 and early_bail_step=4, step 5 yields
+    # turns_since_bail=1 < 2 → no fire. backend.calls[5] is the snapshot
+    # at the start of step 5's backend.chat (after gate evaluation).
+    step5_snapshot = backend.calls[5]
+    step5_gate_msgs = [m for m in step5_snapshot
+                       if m.get("role") == "user"
+                       and _ACTION_DENSITY_GATE_MESSAGE in str(m.get("content", ""))]
+    assert len(step5_gate_msgs) == 0, (
+        "gate must not fire at step 5 — only 1 turn after early_bail at step 4"
+    )
+    # And the gate MUST fire by step 6 (turns_since_bail=2 → escalation
+    # permits).
+    final = backend.calls[-1]
+    final_gate_msgs = [m for m in final
+                       if m.get("role") == "user"
+                       and _ACTION_DENSITY_GATE_MESSAGE in str(m.get("content", ""))]
+    assert len(final_gate_msgs) == 1, (
+        "gate must fire exactly once after the grace period elapses"
+    )
+
+
+def test_action_density_gate_suppressed_by_zero_calls_spec():
+    """When the spec has an expects_zero_calls requirement, the gate must
+    NOT fire — pushing toward action when the correct outcome is abstain
+    would be the opposite of the spec contract. Mirrors the same
+    suppression rule as write_pressure / early_bail / prose_burst."""
+    from luxe.spec import Requirement, Spec
+    import os as _os
+    # Use os-level env since this is integration with the loop.
+    _os.environ["LUXE_ACTION_DENSITY_GATE"] = "1"
+    try:
+        spec = Spec(goal="abstain", requirements=[Requirement(
+            id="R1", must="zero", done_when="zero",
+            kind="expects_zero_calls",
+        )])
+        # Even with the spec, scripted reads would otherwise trigger the gate;
+        # the suppression must kick in.
+        scripted = ([_read_resp_tok(f"f{i}.py", 300) for i in range(8)]
+                    + [_terminal_resp()])
+        backend = _ScriptedBackend(scripted)
+        role = _make_role()
+
+        run_agent(
+            backend=backend, role_cfg=role,
+            system_prompt="sys", task_prompt="do work",
+            tool_defs=[_read_tool()], tool_fns=_read_fn(),
+            spec=spec,
+        )
+
+        for snapshot in backend.calls:
+            for msg in snapshot:
+                assert _ACTION_DENSITY_GATE_MESSAGE not in str(msg.get("content", ""))
+    finally:
+        _os.environ.pop("LUXE_ACTION_DENSITY_GATE", None)
+
+
+def test_action_density_gate_skipped_when_convergence_proxy_satisfied(monkeypatch):
+    """If the model re-reads the same file before the gate would fire, the
+    convergence proxy (same_file_read_twice) suppresses the gate. Strong
+    trajectories converge on a target by re-reading it; the proxy lets
+    them through."""
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # Steps 0..3: distinct paths (4 unique reads). Step 4: re-read f0.py
+    # → same_file_read_twice_step=4. Then 4 more reads to push step past 6.
+    scripted = (
+        [_read_resp_tok(f"f{i}.py", 300) for i in range(4)]  # steps 0-3
+        + [_read_resp_tok("f0.py", 300)]                       # step 4 — re-read
+        + [_read_resp_tok(f"f{i}.py", 300) for i in range(5, 10)]  # steps 5-9
+        + [_terminal_resp()]
+    )
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    for snapshot in backend.calls:
+        for msg in snapshot:
+            assert _ACTION_DENSITY_GATE_MESSAGE not in str(msg.get("content", "")), (
+                "gate fired despite same_file_read_twice convergence proxy"
+            )
+
+
+def test_action_density_gate_single_shot(monkeypatch):
+    """Even when the predicate continues to hold for many subsequent
+    steps, the gate fires exactly once per run. Mirrors the single-shot
+    flag pattern in write_pressure / early_bail / prose_burst."""
+    monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
+    monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # 9 distinct reads — gate fires at step 6, but the predicate continues
+    # to hold at steps 7, 8 (no writes, low tools, high tokens).
+    scripted = [_read_resp_tok(f"f{i}.py", 300) for i in range(9)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    gate_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _ACTION_DENSITY_GATE_MESSAGE in str(m.get("content", ""))]
+    assert len(gate_msgs) == 1, f"single-shot violated: got {len(gate_msgs)} fires"
+
+
+def test_action_density_gate_threshold_constants_are_sensible():
+    """Guards against accidental edits that would make the gate fire too
+    early or never. Values mirror the v1.9 mining-derived constants in
+    acceptance/v19_mining/THRESHOLD_DECISION.md."""
+    assert _ACTION_DENSITY_GATE_MIN_STEP >= 4
+    assert _ACTION_DENSITY_GATE_MIN_STEP <= 10
+    assert _ACTION_DENSITY_GATE_MIN_TOKENS >= 500
+    assert _ACTION_DENSITY_GATE_MIN_TOKENS <= 5000
+    assert _ACTION_DENSITY_GATE_MAX_TOOLS >= 4
+    assert _ACTION_DENSITY_GATE_MAX_TOOLS <= 20
+    assert _ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL >= 1
+    # MIN_STEP should exceed _EARLY_BAIL_MIN_STEP + 1 so the post-bail
+    # rescue path has at least one turn of grace before evaluable.
+    assert _ACTION_DENSITY_GATE_MIN_STEP > _EARLY_BAIL_MIN_STEP

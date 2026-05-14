@@ -121,6 +121,70 @@ def test_swebench_bailout_with_failed_intervention(tmp_path):
     assert FailureClass.ABSTAIN_AFTER_INTERVENTION in ep.failure_chain
 
 
+def test_swebench_confidence_collapse_classified(tmp_path):
+    """v1.9 — CONFIDENCE_COLLAPSE fires when an empty trajectory had
+    EARLY_BAIL fired and zero writes. Captures the v18 strong→empty
+    pathology (sphinx-10435, sympy-13031): model had a viable target
+    pre-bail; abstain branch (or no_abstain message overload) caused
+    decision-commitment failure."""
+    events_path = tmp_path / "events.jsonl"
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": i, "name": "read_file"}
+        for i in range(8)
+    ] + [
+        {"kind": "early_bail_fired", "step": 4, "completion_tokens": 2000},
+        {"kind": "single_mode_done", "aborted": False, "tool_calls_total": 8},
+    ]
+    _write_events(events_path, events)
+    ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
+    assert ep.outcome == Outcome.EMPTY_PATCH_TIMEOUT
+    assert Intervention.EARLY_BAIL in ep.interventions_fired
+    assert FailureClass.CONFIDENCE_COLLAPSE in ep.failure_chain
+
+
+def test_swebench_confidence_collapse_independent_of_density_gate(tmp_path):
+    """CONFIDENCE_COLLAPSE definition is DECOUPLED from
+    ACTION_DENSITY_GATE — it fires on the (empty + writes=0 + EARLY_BAIL)
+    condition whether or not the density gate also fired. Keeps the
+    class definition stable across run configurations."""
+    events_path = tmp_path / "events.jsonl"
+    # Same shape as above but ALSO emits action_density_gate_fired —
+    # CONFIDENCE_COLLAPSE must still appear in failure_chain.
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": i, "name": "read_file"}
+        for i in range(8)
+    ] + [
+        {"kind": "early_bail_fired", "step": 4, "completion_tokens": 2000},
+        {"kind": "action_density_gate_fired", "step": 6,
+         "fire_mode": "post_bail_rescue", "tool_calls_total": 6},
+        {"kind": "single_mode_done", "aborted": False, "tool_calls_total": 8},
+    ]
+    _write_events(events_path, events)
+    ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
+    assert ep.outcome == Outcome.EMPTY_PATCH_TIMEOUT
+    assert Intervention.EARLY_BAIL in ep.interventions_fired
+    assert Intervention.ACTION_DENSITY_GATE in ep.interventions_fired
+    assert FailureClass.CONFIDENCE_COLLAPSE in ep.failure_chain
+
+
+def test_swebench_confidence_collapse_not_fired_without_early_bail(tmp_path):
+    """No EARLY_BAIL → no CONFIDENCE_COLLAPSE, even if writes=0 and
+    empty. Distinguishes the v17 short-trace bailers (which had no
+    intervention) from the v18 confidence-collapse class."""
+    events_path = tmp_path / "events.jsonl"
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": i, "name": "read_file"}
+        for i in range(6)
+    ] + [
+        {"kind": "single_mode_done", "aborted": False, "tool_calls_total": 6},
+    ]
+    _write_events(events_path, events)
+    ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
+    assert ep.outcome == Outcome.EMPTY_PATCH_TIMEOUT
+    assert Intervention.EARLY_BAIL not in ep.interventions_fired
+    assert FailureClass.CONFIDENCE_COLLAPSE not in (ep.failure_chain or [])
+
+
 def test_swebench_stuck_loop(tmp_path):
     events_path = tmp_path / "events.jsonl"
     _write_events(events_path, [

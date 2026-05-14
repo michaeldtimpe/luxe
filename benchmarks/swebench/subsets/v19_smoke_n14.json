@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "n": 14,
+  "frozen_at": "2026-05-13",
+  "recipe": "v19 smoke — 2 confidence-collapse + 1 plausible→empty regression + 2 v17→v18 conversions + 5 strong preservation + 1 slow-strong adversarial + 3 random (seed 20260513)",
+  "composition": {
+    "confidence_collapse_must_recover": [
+      "sphinx-doc__sphinx-10435",
+      "sympy__sympy-13031"
+    ],
+    "regression_must_recover": [
+      "matplotlib__matplotlib-20676"
+    ],
+    "v17_to_v18_conversion_must_preserve_non_empty": [
+      "matplotlib__matplotlib-20826",
+      "sphinx-doc__sphinx-10673"
+    ],
+    "strong_preservation_must_stay_strong": [
+      "astropy__astropy-12907",
+      "django__django-10914",
+      "django__django-10973",
+      "scikit-learn__scikit-learn-10844",
+      "pytest-dev__pytest-10081"
+    ],
+    "slow_strong_adversarial": [
+      "matplotlib__matplotlib-13989"
+    ],
+    "random_seed_20260513": [
+      "mwaskom__seaborn-3069",
+      "sympy__sympy-12419",
+      "pylint-dev__pylint-4604"
+    ]
+  },
+  "instance_ids": [
+    "sphinx-doc__sphinx-10435",
+    "sympy__sympy-13031",
+    "matplotlib__matplotlib-20676",
+    "matplotlib__matplotlib-20826",
+    "sphinx-doc__sphinx-10673",
+    "astropy__astropy-12907",
+    "django__django-10914",
+    "django__django-10973",
+    "scikit-learn__scikit-learn-10844",
+    "pytest-dev__pytest-10081",
+    "matplotlib__matplotlib-13989",
+    "mwaskom__seaborn-3069",
+    "sympy__sympy-12419",
+    "pylint-dev__pylint-4604"
+  ]
+}
