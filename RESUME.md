@@ -62,7 +62,13 @@ This document tracks the luxe production state across both hosts.
 - **sympy-13031** (W2 regression test) — All 3 commitment interventions fired (`ACTION_DENSITY_GATE`, `EARLY_BAIL`, `WRITE_PRESSURE`). `habituation_exit` event emitted at step=20 (exact predicate boundary). Zero post-intervention writes. Trajectory exited cleanly → **~10-15 min wall saved per habituated instance** at scale. Outcome: empty_patch (the predicate doesn't rescue lost trajectories, it exits them cheaply).
 - **matplotlib-14623** (W3 regression test) — `early_bail` fired with `msg_variant='exploratory'`, `convergence_score=0.0` (well below LOW threshold 0.10). **Produced 24-line patch** on `lib/matplotlib/ticker.py` (LogLocator swapped-vmin/vmax fix) — was empty under v1.10. The previously-silent failure class is now measurably moved.
 
-**Active background task**: n=14 smoke against `benchmarks/swebench/subsets/v19_smoke_n14.json`, output to `acceptance/swebench/v1101_smoke_n14/rep_1/`. Expected wall ~1.5h based on probe pace. On completion, `scripts/analyze_v1101_smoke.py` reports verdict; PASS proceeds to n=75 + Docker harness.
+**n=14 smoke PASSED all three ship-gate criteria** (`acceptance/swebench/v1101_smoke_n14/rep_1/`, 66m wall):
+
+- ✓ **0 new regressions vs v1.10** (composition identical: 12/14 patched in both cycles; the 2 empties — sympy-13031 + seaborn-3069 — were empty in v1.10 too).
+- ✓ **habituation_exit fires ≥ 1**: sympy-13031 exited cleanly at step=20.
+- ✓ **exploratory variant fires ≥ 1**: **7 instances** fired exploratory at `score=0.0` (the diffuse-recon archetype, matplotlib-14623 shape). Distribution across 14: 7 exploratory + 5 soft_anchor + 1 commit_imperative + 1 no fire. Same-outcome under new wiring means the lever didn't BREAK any trajectories that were already converging; the previously-silent band now has a measurable, low-pressure message that doesn't regress passing cases.
+
+**Active background task**: n=75 against `benchmarks/swebench/subsets/v1_baseline_n75.json` (exact 75-instance match with v1.10's cohort, apples-to-apples), output to `acceptance/swebench/post_specdd_v1101_n75/rep_1/`. Expected wall ~5-6h based on smoke pace (~5 min/instance). On completion: save run_id_manifest → Docker harness (~35m) → analysis → ship-gate evaluation.
 
 **Ship-gate progress**:
 
@@ -70,8 +76,8 @@ This document tracks the luxe production state across both hosts.
 |---|---|---|
 | W1 unit tests | 765/765 collected, 0 failing | ✅ done |
 | 2-instance probe | W2 + W3 events fire correctly under real model | ✅ done |
-| n=14 smoke | Zero new regressions vs v1.10; habituation + exploratory both fire | 🟡 running |
-| n=75 (~4h) | `empty_patch ≤ 13`, conversion_rate ≥ 75%, 0 new regressions | ⏳ pending smoke |
+| n=14 smoke | Zero new regressions vs v1.10; habituation + exploratory both fire | ✅ done |
+| n=75 (~5-6h) | `empty_patch ≤ 13`, conversion_rate ≥ 75%, 0 new regressions | 🟡 running |
 | Docker harness (~35m) | net resolves ≥ v1.10's 36 | ⏳ pending n=75 |
 | W4 + W5 real-data check | `silent_demotion` + locus cross-tab in output | ⏳ pending n=75 |
 
