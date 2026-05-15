@@ -41,9 +41,9 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-15 (v1.10.1 HOLD on inspector composite; Docker WIN by +2 resolves — v1.10.2 design brief queued)
+## Current state — 2026-05-15 (v1.10.1 SHIPPED — Docker-WIN +2 resolves; inspector composite acknowledged miss; v1.10.2 design brief queued)
 
-**Working tree**: clean post-pipeline. **763 tests pass + 19 module-skip on bfcl_adapter**. **No v1.10.1 tag** — the cycle ships as Docker-WIN but misses the inspector-tier composite floor; user owns the ship-or-hold call.
+**Working tree**: clean post-tag. **763 tests pass + 19 module-skip on bfcl_adapter**. **v1.10.1 tagged + pushed to origin** (annotated, signed). Released atop v1.10.0 as a **Docker-grader release** — the practical model-utility metric (Docker resolves) moved +2 vs v1.10 (48.0% → 50.7%) while the strict inspector-tier composite missed CONFIDENCE_COLLAPSE = 0 and empty_patch ≤ 13. User shipped on the Docker-WIN reading rather than holding for v1.10.2 wording iteration; the W3 collateral cases (2 confirmed) are addressed in v1.10.2.
 
 **n=75 Phase D result** (5h53m wall, `acceptance/swebench/post_specdd_v1101_n75/rep_1/`):
 
@@ -82,12 +82,12 @@ This document tracks the luxe production state across both hosts.
 
 **The W2 lever (habituation exit) is a clean win**: sympy-13031 fired the predicate at step=20 with zero post-intervention writes, terminating cleanly instead of burning max_steps. No collateral observed; predicate is conservative enough (3 distinct kinds AND step ≥20 AND no post-intervention write) that no v1.10-passing trajectory was caught by it.
 
-**Ship-or-hold decision deferred to user**: per the v1.10.1 plan's strict ship gate, the composite hold is "iterate before shipping partial." Per practical model utility, the cycle is a Docker-WIN over v1.10. **Recommendation: HOLD v1.10.1 tag; iterate W3 wording in v1.10.2 to make the exploratory variant conditional on additional signals (e.g., suppress when prior tool calls suggest convergence on a target locus — even if score < LOW).**
+**Ship decision (2026-05-15)**: shipped as Docker-WIN. The +2 Docker resolves represent practical model utility improvement; the inspector composite floor was already missed on v1.10 (CONFIDENCE_COLLAPSE 4 was non-zero); holding the cycle for further iteration would have delayed the v1.10.2 work that targets the residual W3 collateral. The architectural ship pattern matches v1.9 + v1.10 — incremental Docker-grader gains across substrate cycles.
 
-**v1.10.2 design brief** (small surface; targets the W3 collateral specifically):
+**v1.10.2 design brief** (small surface; targets the W3 collateral specifically — next cycle starts here):
 1. **Make exploratory variant conditional on file-touch novelty**: fire exploratory only when the trajectory has touched ≥ N distinct file paths in the last K steps (i.e., truly diffuse, not focused-but-low-score). For pylint-6528-class trajectories that had a candidate file but low score, don't fire exploratory — fall back to soft_anchor.
 2. **Audit the CONFIDENCE_COLLAPSE class definition**: separate "soft_anchor collapse" from "exploratory collapse" so the metric distinguishes message-induced failure modes. Update `outcomes.py` enum + classifier.
-3. **Tag v1.10.1 if user opts to ship Docker-WIN despite composite hold**, OR ship v1.10.2 as the next version after the W3 wording refinement lands.
+3. **Diligence the W5 gold-file extraction**: the never_touched_gold + touched_before_intervention_but_after_write buckets were empty in the v1.10.1 patched cohort, which doesn't match expectations. Investigate `parse_gold_target_files()` in `scripts/compare_v110.py` — likely a path-prefix or unicode issue. Must fix before v1.11 lever design depends on the cross-tab signal.
 
 **File trail (v1.10.1 cycle)**:
 - `acceptance/swebench/post_specdd_v1101_n75/rep_1/` — full bench artifacts incl. predictions, harness summary, manifest, taxonomy

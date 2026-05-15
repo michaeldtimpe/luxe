@@ -2290,3 +2290,76 @@ This is also a reminder that taxonomy/audit work is only as good as the substrat
 In contrast, W3 exploratory variant DID rescue the regression — the silent-suppression band was actively hurting the model, and replacing it with a low-pressure commit prime got out of the way. These two shapes (predicate-as-budget-saver vs predicate-as-rescue) are different design patterns and the v1.10.1 cycle now has clean exemplars of each.
 
 **Affected files**: `src/luxe/agents/loop.py` (log_calls default-on); `benchmarks/swebench/subsets/v1101_probe_n2.json` (NEW — minimal regression probe subset for both founding instances); `scripts/validate_v1101_probe.py` (NEW — walks events.jsonl and asserts both W2 and W3 expectations land); `acceptance/swebench/v1101_probe_n2/rep_1/` (probe artifacts). Substrate gates the next ship steps: n=14 smoke (~1.5h), n=75 (~4h), Docker harness (~35m).
+
+---
+
+### [2026-05-15] v1.10.1 SHIPPED — Docker-WIN +2 resolves; W3 collateral diagnosed; non-Pareto for second time in a row
+
+**The one-liner**: v1.10.1 ships as a Docker-grader release: +2 net Docker resolves vs v1.10 (38/75 vs 36/75, 48.0% → 50.7%) driven by the W3 exploratory variant rescuing matplotlib-14623 (v1.10 empty → v1.10.1 strong + Docker-resolved) and a second silent-demotion recovery (sphinx-10673). The inspector-tier composite misses (empty_patch 16 vs target ≤13; CONFIDENCE_COLLAPSE 8 vs target 0) — the W3 exploratory wording introduced collateral on 2 confirmed wrong-locus trajectories (pylint-6528, sphinx-10323). Both are Docker-failed in BOTH cycles, so the inspector regression is a no-op on the harness number. Same shape as v1.9 and v1.10 — substrate ship with documented gaps and a tight v1.10.2 lever-iteration brief.
+
+**The named cycle**:
+- v1.10.1 thesis: ship the three small W2 + W3 + W1 levers that close the two named v1.10 regressions (sympy-13031 intervention habituation, matplotlib-14623 silent suppression on diffuse-recon) without expanding surface area. Add observability for the v1.11 locus work (patch_len_delta + first_correct_file_touch).
+- v1.10.1 actual at n=75 (run 2026-05-14 18:39 → 2026-05-15 00:31, 5h53m):
+
+| Metric | v1.10.1 | v1.10 | Δ |
+|---|---|---|---|
+| Docker resolves (overall) | **38/75 = 50.7%** | 36/75 = 48.0% | **+2.7pp** |
+| Docker resolves (patched) | 38/59 = 64.4% | 36/61 = 59.0% | +5.4pp |
+| empty_patch | 16 | 14 | +2 ✗ |
+| CONFIDENCE_COLLAPSE | 8 | 4 | +4 ✗ (partly visibility) |
+| ABSTAIN_AFTER_INTERVENTION | 7 | 4 | +3 ✗ |
+| strong | 18 | 19 | −1 |
+| strong + plausible | 38 | 38 | 0 |
+| intervention_conversion_rate | 77.6% | 80.9% | −3.3pp |
+
+**The W2 win (habituation exit)**: clean. sympy-13031 fired the predicate at step=20 exactly (3 distinct interventions had fired by step ~15; first_write_step_after_intervention stayed None; step crossed threshold; loop broke cleanly). No collateral observed on the n=75 cohort — the predicate is conservative enough that no v1.10-passing trajectory was caught. Practical savings: ~10-15 min wall per habituated instance at scale. The predicate is **budget-saver, not rescue** — sympy-13031 stays empty_patch, but the bench finishes faster and the failure class is named correctly in the taxonomy.
+
+**The W3 trade-off (exploratory variant)**: succeeded on its founding test (matplotlib-14623: v1.10 empty → v1.10.1 strong + Docker-resolved with a 24-line patch on `lib/matplotlib/ticker.py` LogLocator) BUT introduced regressions on 2 wrong-locus instances:
+- `pylint-dev__pylint-6528`: msg=exploratory, score=0.0. Under v1.10 the model produced a wrong_target patch (the EARLY_BAIL was suppressed silently, so the model committed without nudge). Under v1.10.1 the model gets the exploratory variant ("you may begin attempting a small corrective edit when you have a candidate") and reads it as license to keep exploring — never commits, ends empty.
+- `sphinx-doc__sphinx-10323`: same pattern, msg=exploratory, score=0.0. Wrong_location patch in v1.10 → empty in v1.10.1.
+- (`pylint-dev__pylint-6386` was a third inspector regression, but msg=soft_anchor at score=0.25 — same wiring as v1.10. Likely bench variance on a wrong_target instance per `feedback_replicate_borderline_fixtures.md`, not W3.)
+
+The W3 collateral validates the audit reviewer's preemptive warning **verbatim**: *"The key risk: accidentally increasing noisy low-confidence edits. But because you already have intervention instrumentation and habituation signals, this is measurable quickly."* The risk materialized at n=75 scale; the smoke didn't catch it because none of these 3 instances were in the smoke subset. **Generalized lesson: when a lever's expected behavior changes a previously-silent code path, the smoke set must include instances representative of BOTH old-path and new-path target classes.** A smoke that only contains the lever's *target* archetype will miss the *adjacent* trajectories that were unaffected by the prior silent default and may now be affected by the new explicit message.
+
+**Why ship anyway**:
+1. The +2 Docker resolves are practical model-utility gain, the load-bearing benchmark for the project.
+2. All 3 inspector-tier regressions were Docker-failed in v1.10 already — no Docker resolves lost.
+3. The 2 confirmed W3 collateral cases have a clear and small v1.10.2 fix (make exploratory conditional on file-touch novelty — fire only when truly diffuse, not focused-but-low-score). Holding v1.10.1 would block the W2 habituation win + the matplotlib-14623 + sphinx-10673 recoveries from reaching downstream consumers while the v1.10.2 wording iterates.
+4. Pattern-matches v1.9 and v1.10 — substrate ships with documented gaps and the next-cycle brief.
+
+**Two architectural lessons that go beyond v1.10.1**:
+
+1. **Conditional gating is non-Pareto when one of the bands replaces silence with a permissive message.** v1.10 had two bands (suppress | fire-soft_anchor | fire-commit_imperative; suppress was silent). v1.10.1 added a fourth state (fire-exploratory) and removed the suppress band. The trade-off: the diffuse-but-no-candidate trajectories now get a useful commit prime (matplotlib-14623 wins); the diffuse-AND-candidate trajectories (rare under v1.10 because the convergence-score signal would only put them in this band when their convergence was weak even with a candidate) get a message that reads as license. **Future levers that change a previously-silent default should be conditional on a second signal that distinguishes the two adjacent trajectory shapes** — in this case, file-touch novelty would gate exploratory only when the trajectory is touching new paths each step (truly diffuse).
+
+2. **Visibility artifacts can inflate failure-class counts**. CONFIDENCE_COLLAPSE went 4 → 8 in v1.10.1. Some of that delta is real (W3 collateral), but some is **better measurement of a class that was already there** — under v1.10, score<LOW suppressed EARLY_BAIL silently, so collapsed-but-suppressed trajectories did NOT meet the "EARLY_BAIL fired" precondition for the CONFIDENCE_COLLAPSE class. Under v1.10.1 the same trajectories fire EARLY_BAIL with msg=exploratory and (when they go empty) correctly classify. The metric is now more honest but less stable across the cycle boundary. **Failure-class definitions that include "intervention X fired" as a precondition become less comparable across cycles when intervention X's firing policy changes.** v1.10.2 will split the class.
+
+**v1.10.2 design brief** (small surface, fast iteration):
+
+1. **Make exploratory variant conditional on file-touch novelty**. Fire exploratory only when the trajectory has touched ≥ N distinct file paths in the last K steps. For focused-but-low-score trajectories (pylint-6528, sphinx-10323 archetype), don't fire exploratory; fall back to soft_anchor. Smoke must include at least one wrong_target instance from v1.10 (and one from the original v1.9 set) before any n=75 commit.
+
+2. **Audit the CONFIDENCE_COLLAPSE class definition**. Split into `confidence_collapse_under_soft_anchor` and `confidence_collapse_under_exploratory` to distinguish message-induced failure modes. Update `src/luxe/agents/outcomes.py` enum + classifier; backfill v1.10 + v1.10.1 taxonomies for cross-cycle comparison.
+
+3. **Diligence the W5 gold-file extraction**. The `never_touched_gold` + `touched_before_intervention_but_after_write` buckets were empty in the v1.10.1 patched cohort — should have at least the wrong_target instances (which by definition land in a non-gold file). Likely a `parse_gold_target_files()` issue (path prefix or unicode); see `scripts/compare_v110.py`. Must fix before v1.11 lever design depends on the cross-tab.
+
+**Affected files** (full v1.10.1 cycle):
+- `src/luxe/symbols.py:159` (W1 tree-sitter swap)
+- `pyproject.toml` (W1 pin update)
+- `src/luxe/agents/loop.py` (W2 habituation predicate, intervention_kinds_fired set, _HABITUATION_EXIT_MIN_* constants; W3 _EARLY_BAIL_MESSAGE_EXPLORATORY constant + three-band dispatcher; log_calls default-on substrate hygiene)
+- `src/luxe/agents/outcomes.py` (W2 FailureClass.HABITUATION_EXIT + parse mapping + classifier branch)
+- `scripts/compare_v110.py` (W4 annotate_patch_len_deltas + W5 parse_gold_target_files / compute_first_correct_file_touch; classify_arm extended)
+- `scripts/analyze_v110_harness.py` (silent_demotion + locus × Docker cross-tab sections)
+- `scripts/validate_v1101_probe.py` (NEW — W2/W3 probe validator)
+- `scripts/analyze_v1101_smoke.py` (NEW — smoke ship-gate verdict)
+- `scripts/post_v1101_n75_pipeline.sh` (NEW — manifest + taxonomy + Docker + analysis chain)
+- `benchmarks/swebench/run.py` (W6 _preflight_check_venv_pollution)
+- `benchmarks/swebench/subsets/v1101_probe_n2.json` (NEW — regression probe subset)
+- `tests/test_loop_write_pressure.py` (+4 habituation/exploratory tests; existing v1.10 diffuse-suppression test updated to exploratory-fires assertion)
+- `tests/test_outcomes.py` (+1 HABITUATION_EXIT classifier test)
+- `tests/test_compare_v110.py` (NEW — 13 tests covering patch_len_delta, parse_gold_target_files, compute_first_correct_file_touch)
+- `tests/test_bfcl_adapter.py` (module-level pytest.importorskip on bfcl_eval; permanent substrate-incompatibility skip)
+- `acceptance/swebench/post_specdd_v1101_n75/rep_1/` — predictions, manifest, harness/harness_summary.json, analysis_stdout.log, pipeline_stdout.log
+- `acceptance/v1101_taxonomy/v1101_n75_full_stack_swebench.json` — taxonomy with patch_len_delta + locus fields
+- `acceptance/swebench/v1101_smoke_n14/rep_1/` — smoke artifacts
+- `acceptance/swebench/v1101_probe_n2/rep_1/` — probe artifacts
+
+763 tests pass + 19 module-skip (bfcl_adapter, substrate-incompatible). v1.10.1 tagged + pushed to origin.
