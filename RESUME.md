@@ -41,7 +41,66 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## In flight — 2026-05-14 evening (v1.10.1 substrate complete; smoke validation underway)
+## Current state — 2026-05-15 (v1.10.1 HOLD on inspector composite; Docker WIN by +2 resolves — v1.10.2 design brief queued)
+
+**Working tree**: clean post-pipeline. **763 tests pass + 19 module-skip on bfcl_adapter**. **No v1.10.1 tag** — the cycle ships as Docker-WIN but misses the inspector-tier composite floor; user owns the ship-or-hold call.
+
+**n=75 Phase D result** (5h53m wall, `acceptance/swebench/post_specdd_v1101_n75/rep_1/`):
+
+| Metric | Target | **v1.10.1** | v1.10 baseline | Δ |
+|---|---|---|---|---|
+| empty_patch | ≤13 | **16** ✗ (miss by 3) | 14 | +2 |
+| strong | ≥18 | **18** ✓ | 19 | −1 |
+| strong + plausible | ≥35 | **38** ✓ | 38 | 0 |
+| intervention_conversion_rate | ≥75% | **77.6%** ✓ | 80.9% | −3.3pp |
+| CONFIDENCE_COLLAPSE | =0 | **8** ✗ (+4) | 4 | +4 |
+| ABSTAIN_AFTER_INTERVENTION | ≤5 | **7** ✗ (+2) | 4 | +3 |
+| **Docker harness (overall)** | ≥36 | **38 / 75 = 50.7%** ✓ | 36 / 75 = 48.0% | **+2 resolves (+2.7pp)** |
+| Docker harness (patched) | — | 38 / 59 = 64.4% | 36 / 61 = 59.0% | +5.4pp on smaller denom |
+
+**Cross-cycle Docker delta**:
+- **Kept resolves**: 34 (Docker-resolved in both cycles)
+- **Surrendered**: 2 — `astropy-14096` (v1.10 wrong_location/Docker-resolved → v1.10.1 still patched but Docker-failed), `psf__requests-1921` (strong-tier silent demotion; patch shrank 495 → 489 chars, lost alt-solution credit)
+- **New resolves**: 4 — `matplotlib-14623` (the W3 founding test, v1.10 empty → v1.10.1 strong + Docker-resolved), `matplotlib-20826`, `psf__requests-5414`, `sphinx-doc__sphinx-10673` (silent demotion of v1.10 RECOVERED in v1.10.1!)
+
+**Per-tier Docker rates (v1.10.1)**: strong 15/18 = 83.3%, plausible 13/20 = 65.0%, wrong_target 8/17 = 47.1%, wrong_location 2/4 = 50.0%. **wrong-locus Docker rate climbed substantially** (v1.10: 35.3%/40.0% → v1.10.1: 47.1%/50.0%) — wrong-locus patches are converting on Docker at a higher rate now, which is what netted the +2 despite the patched-count drop (61 → 59).
+
+**Inspector-tier composite missed** because of two related dynamics:
+
+1. **3 v1.10 → v1.10.1 regressions vs 1 recovery** (net +2 empties):
+   - Recovered: `matplotlib-14623` (v1.10 empty → v1.10.1 strong + Docker-resolved) — the W3 founding test, full success
+   - Regressed: `pylint-dev__pylint-6528` (v1.10 wrong_target → v1.10.1 empty) — **confirmed W3 collateral**: exploratory variant fired at score=0.0, model interpreted the permissive "you may begin" framing as license to keep exploring instead of committing the wrong-locus candidate it had
+   - Regressed: `sphinx-doc__sphinx-10323` (v1.10 wrong_location → v1.10.1 empty) — **confirmed W3 collateral**: same exploratory variant + score=0.0 pattern
+   - Regressed: `pylint-dev__pylint-6386` (v1.10 wrong_target → v1.10.1 empty) — **NOT W3 collateral**: msg_variant=soft_anchor at score=0.25 (mid-band, same wiring as v1.10). Likely bench variance on a wrong_target instance (per `feedback_replicate_borderline_fixtures.md`, wrong_target has measurable temp=0 variance from substrate-state effects).
+
+2. **CONFIDENCE_COLLAPSE 4 → 8 is partly a visibility artifact**: the class is defined as "empty + writes=0 + EARLY_BAIL fired." Under v1.10, score < LOW _suppressed_ EARLY_BAIL silently, so collapsed-but-suppressed trajectories did NOT appear in the count. Under v1.10.1, the same trajectories fire EARLY_BAIL with the exploratory variant; if they then go empty, they correctly classify as CONFIDENCE_COLLAPSE. So part of the +4 delta is **better measurement of a class that was already there**, not a strict regression. The taxonomy class definition needs an audit refinement (e.g., split into `confidence_collapse_under_soft_anchor` vs `confidence_collapse_under_exploratory`).
+
+**The W3 architectural trade-off** (matches the audit reviewer's preemptive warning verbatim):
+- W3 succeeds on matplotlib-14623 archetype (no commit → commit) — the original target class.
+- W3 introduces a new failure mode for trajectories that were producing wrong-locus patches under v1.10's silent suppression: the permissive "you may begin attempting a small corrective edit when you have a candidate" reads as "keep exploring until you have a candidate" on wrong-locus paths, dissolving the implicit commit pressure that v1.10's silence preserved by default.
+- Net Docker outcome: the recovery (+1 Docker resolve on matplotlib-14623, +1 on sphinx-10673 alt-solution) outweighs the regressions (the 3 inspector-tier regressions were ALL Docker-failed in v1.10 anyway — no Docker resolves lost from those).
+
+**The W2 lever (habituation exit) is a clean win**: sympy-13031 fired the predicate at step=20 with zero post-intervention writes, terminating cleanly instead of burning max_steps. No collateral observed; predicate is conservative enough (3 distinct kinds AND step ≥20 AND no post-intervention write) that no v1.10-passing trajectory was caught by it.
+
+**Ship-or-hold decision deferred to user**: per the v1.10.1 plan's strict ship gate, the composite hold is "iterate before shipping partial." Per practical model utility, the cycle is a Docker-WIN over v1.10. **Recommendation: HOLD v1.10.1 tag; iterate W3 wording in v1.10.2 to make the exploratory variant conditional on additional signals (e.g., suppress when prior tool calls suggest convergence on a target locus — even if score < LOW).**
+
+**v1.10.2 design brief** (small surface; targets the W3 collateral specifically):
+1. **Make exploratory variant conditional on file-touch novelty**: fire exploratory only when the trajectory has touched ≥ N distinct file paths in the last K steps (i.e., truly diffuse, not focused-but-low-score). For pylint-6528-class trajectories that had a candidate file but low score, don't fire exploratory — fall back to soft_anchor.
+2. **Audit the CONFIDENCE_COLLAPSE class definition**: separate "soft_anchor collapse" from "exploratory collapse" so the metric distinguishes message-induced failure modes. Update `outcomes.py` enum + classifier.
+3. **Tag v1.10.1 if user opts to ship Docker-WIN despite composite hold**, OR ship v1.10.2 as the next version after the W3 wording refinement lands.
+
+**File trail (v1.10.1 cycle)**:
+- `acceptance/swebench/post_specdd_v1101_n75/rep_1/` — full bench artifacts incl. predictions, harness summary, manifest, taxonomy
+- `acceptance/v1101_taxonomy/v1101_n75_full_stack_swebench.json` — v1.10.1 taxonomy with `patch_len_delta`, `prior_patch_len`, and W5 locus fields (gold_target_files, first_correct_file_touch_step, correct_touch_before_first_write, correct_touch_relative_to_intervention)
+- `scripts/validate_v1101_probe.py`, `scripts/analyze_v1101_smoke.py`, `scripts/post_v1101_n75_pipeline.sh` — re-runnable pipeline scripts
+- `benchmarks/swebench/subsets/v1101_probe_n2.json` — minimal regression-test subset (sympy-13031 + matplotlib-14623)
+
+**Notable: substrate hygiene fixes from this cycle** (already shipped on `main`, separate from v1.10.1 lever changes):
+- `src/luxe/agents/loop.py` log_calls default-on (footgun closed)
+- `benchmarks/swebench/run.py` preflight `__editable__*.pth` grep (substrate isolation enforced)
+- `pyproject.toml` swap to `tree_sitter_language_pack` (Python 3.14 wheel gap closed)
+
+## Earlier state — 2026-05-14 evening (v1.10.1 substrate complete; smoke validation underway)
 
 **Working tree**: clean. **763 tests pass + 1 module-skip on bfcl_adapter** (= 19 tests gated on bfcl_eval which is permanently incompatible with the v1.10.1 tree_sitter_language_pack pin; documented in `tests/test_bfcl_adapter.py` importorskip). **No new tag yet** — v1.10.1 ships when the full smoke + n=75 + Docker gates clear.
 
