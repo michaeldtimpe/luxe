@@ -361,23 +361,14 @@ _CONVERGENCE_HIGH_THRESHOLD = 0.40
 _HABITUATION_EXIT_MIN_STEP = 20
 _HABITUATION_EXIT_MIN_KINDS = 3
 
-# v1.10.2 — post-exploratory escalation. The v1.10.1 W3 collateral
-# (pylint-6528, sphinx-10323) was caused by the model interpreting the
-# permissive exploratory message as license to stop. Diagnostic on the
-# v1.10.1 traces showed diversity-at-fire-time (step=4) cannot
-# discriminate true exploration (matplotlib-14623: 2 distinct paths,
-# went on to read 10 total + commit) from focused circling
-# (pylint-6528: 2 distinct paths, stopped after exploratory). The
-# discriminator emerges LATER in the trajectory — successful exploration
-# continues writing; the failure mode stops writing.
-#
-# Mechanism: if exploratory variant fired AND step ≥ early_bail_step +
-# _POST_EXPLORATORY_ESCALATION_TURNS AND writes_seen == 0, fire a
-# soft_anchor message as a commitment escalation. Lets matplotlib-14623-
-# class trajectories breathe and find their target (no early pressure
-# under exploratory); catches pylint-6528-class trajectories that
-# stopped responding (escalation forces a decision).
-_POST_EXPLORATORY_ESCALATION_TURNS = 4
+# v1.10.2 — post-exploratory escalation was implemented and tested but
+# REMOVED before ship. The n=4 probe revealed it regressed
+# matplotlib-14623 (cascading through 3 interventions into
+# habituation_exit) while rescuing pylint-6528. Single-mechanism
+# escalation can't satisfy both at this convergence-score band.
+# v1.10.3 needs trajectory-shape signals (e.g. post-bail tool_call
+# rate, fraction of grep vs read in the rescue window) not a single
+# step-based predicate. See lessons.md 2026-05-15 entry.
 
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
@@ -487,11 +478,6 @@ def run_agent(
     # of burning the remaining max_steps budget. Reads from existing
     # post-intervention telemetry; no new instrumentation required.
     intervention_kinds_fired: set[str] = set()
-    # v1.10.2 — track whether early_bail fired the exploratory variant
-    # so the post-exploratory escalation predicate can dispatch a
-    # soft_anchor follow-up if the model stops responding.
-    exploratory_variant_fired: bool = False
-    post_exploratory_escalation_fired: bool = False
     # v1.10 — convergence-score telemetry. tool_history is a bounded list of
     # (name, path) entries for the convergence score (see
     # luxe.agents.convergence). post-intervention behavior signals capture
@@ -622,7 +608,6 @@ def run_agent(
                     if recent_diversity >= _DIVERSITY_MIN_FOR_EXPLORATORY:
                         msg = _EARLY_BAIL_MESSAGE_EXPLORATORY
                         msg_variant = "exploratory"
-                        exploratory_variant_fired = True
                     else:
                         msg = _EARLY_BAIL_MESSAGE_SOFT_ANCHOR
                         msg_variant = "soft_anchor_low_diversity_fallback"
@@ -744,39 +729,18 @@ def run_agent(
                     threshold=_CONVERGENCE_HIGH_THRESHOLD,
                 )
 
-        # v1.10.2 — post-exploratory escalation. The W3 collateral
-        # (pylint-6528, sphinx-10323) was caused by the model
-        # interpreting the permissive exploratory message as license to
-        # stop without committing. If the model still hasn't written by
-        # step ≥ early_bail_step + _POST_EXPLORATORY_ESCALATION_TURNS,
-        # fire a soft_anchor follow-up. matplotlib-14623-class trajectories
-        # (true exploration) escape this because they DO produce a write
-        # within the window — model is steadily generating tool_calls
-        # and converges on the gold file. pylint-6528-class trajectories
-        # stop responding post-exploratory; this rescues them.
-        if (exploratory_variant_fired
-                and not post_exploratory_escalation_fired
-                and early_bail_step is not None
-                and step >= early_bail_step + _POST_EXPLORATORY_ESCALATION_TURNS
-                and writes_seen == 0):
-            messages.append({"role": "user",
-                             "content": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR})
-            post_exploratory_escalation_fired = True
-            last_intervention_step = step
-            last_intervention_kind = "post_exploratory_escalation"
-            # Don't add to intervention_kinds_fired — this is a follow-up
-            # to early_bail, not a distinct intervention kind. Counting
-            # it would distort the habituation predicate (which gates on
-            # ≥3 DISTINCT kinds).
-            if log_calls:
-                append_event(
-                    run_id, "post_exploratory_escalation_fired",
-                    phase=phase, step=step,
-                    early_bail_step=early_bail_step,
-                    turns_since_bail=step - early_bail_step,
-                    tool_calls_total=result.tool_calls_total,
-                    completion_tokens=result.completion_tokens,
-                )
+        # v1.10.2 — post-exploratory escalation REMOVED before ship.
+        # The probe revealed matplotlib-14623 (W3 founding recovery)
+        # and pylint-6528 (W3 collateral) have CONTRADICTORY needs at
+        # the same convergence-score band: pylint-6528 NEEDED escalation
+        # pressure to commit (step 8 escalation → step 8 edit_file);
+        # matplotlib-14623 was on a successful late-commit trajectory
+        # (step 14 write in v1.10.1) that the escalation cascade
+        # interrupted, regressing it to habituation_exit at step 20
+        # with 0 writes. Single-mechanism escalation can't satisfy both;
+        # v1.10.3 needs a discriminator at fire-time. v1.10.2 ships as
+        # observability-only (no model-behavior change beyond the
+        # diversity gate's minimal-trajectory fallback).
 
         # v1.8 Track 1 — prose-burst detector. Composite invariant fires at
         # most once per run; on second consecutive burst (intervention
