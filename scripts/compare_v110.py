@@ -161,6 +161,8 @@ def primary_metric(arm: dict) -> dict:
     denominator AND numerator together so the rate stays comparable.
     """
     cc_count = 0
+    cc_soft_anchor_count = 0
+    cc_exploratory_count = 0
     abstain_count = 0
     intervention_fired = []  # list of (instance_id, has_patch)
     commitment_set = {
@@ -168,10 +170,23 @@ def primary_metric(arm: dict) -> dict:
         Intervention.WRITE_PRESSURE.value,
         Intervention.ACTION_DENSITY_GATE.value,
     }
+    # v1.10.2 — count both new variants AND the legacy generic class.
+    # The aggregate (cc_count) is the back-compat ship-floor predicate;
+    # the per-variant counts let v1.10.2+ longitudinal comparisons
+    # separate model behavior from intervention policy.
+    cc_classes = {
+        FailureClass.CONFIDENCE_COLLAPSE.value,
+        FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR.value,
+        FailureClass.CONFIDENCE_COLLAPSE_EXPLORATORY.value,
+    }
     for inst, d in arm.items():
         chain = d.get("failure_chain") or []
-        if FailureClass.CONFIDENCE_COLLAPSE.value in chain:
+        if any(c in chain for c in cc_classes):
             cc_count += 1
+        if FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR.value in chain:
+            cc_soft_anchor_count += 1
+        if FailureClass.CONFIDENCE_COLLAPSE_EXPLORATORY.value in chain:
+            cc_exploratory_count += 1
         if FailureClass.ABSTAIN_AFTER_INTERVENTION.value in chain:
             abstain_count += 1
         if set(d.get("interventions") or []) & commitment_set:
@@ -183,6 +198,8 @@ def primary_metric(arm: dict) -> dict:
 
     return {
         "confidence_collapse": cc_count,
+        "confidence_collapse_soft_anchor": cc_soft_anchor_count,
+        "confidence_collapse_exploratory": cc_exploratory_count,
         "abstain_after_intervention": abstain_count,
         "intervention_fired_count": n_fired,
         "intervention_converted_count": n_converted,
@@ -263,27 +280,59 @@ def parse_gold_target_files(gold_patch: str) -> list[str]:
     return sorted(files)
 
 
-def compute_first_correct_file_touch(
+def compute_locus_metrics(
     events: list[dict],
     gold_target_files: list[str],
 ) -> dict:
-    """Walk `events` (parsed events.jsonl rows) in step order. Return:
-      - first_correct_file_touch_step: int | None — first step where a
-        tool_call's `path` is in `gold_target_files`.
-      - correct_touch_before_first_write: bool — was the correct file
-        touched before any write_file/edit_file call?
-      - correct_touch_relative_to_intervention: "before" | "after" | "none"
-        — relative to the FIRST intervention fire of any kind.
+    """v1.10.2 — locus metrics for v1.11 substrate.
 
-    Events without a `path` field are skipped (v1.10's path-logged
-    tool_call schema; older trace formats degrade gracefully to "none").
+    Walks `events` (parsed events.jsonl rows) in step order. Returns
+    BOTH reconnaissance (did we read the right file) AND commit-accuracy
+    (did we write to the right file) signals — v1.10.1 cohort analysis
+    showed the reconnaissance metric is uninformative for the locus-
+    failure question because almost all trajectories read a gold file
+    at some point. The wrong_target failure is in the COMMIT, not the
+    read.
+
+    Returns dict with keys:
+      RECONNAISSANCE (v1.10.1; kept for back-compat, not load-bearing
+      for v1.11):
+        - first_correct_file_touch_step: int | None
+        - correct_touch_before_first_write: bool
+        - correct_touch_relative_to_intervention: "before"|"after"|"none"
+      COMMIT-ACCURACY (v1.10.2; the v1.11 substrate):
+        - first_write_locus_correct: bool | None — was the FIRST write
+          (across all tool_calls) to a path in gold_target_files?
+          None when the trajectory produced no writes (empty_patch).
+        - write_locus_match_count: int — number of write_file/edit_file
+          calls whose `path` is in gold_target_files.
+        - write_locus_miss_count: int — number of write_file/edit_file
+          calls whose `path` is NOT in gold_target_files (or `path`
+          field is missing from the event).
+        - gold_files_written: list[str] — DISTINCT gold paths written
+          to. Length distinguishes "wrote to all gold files" from
+          "wrote to some but not all" — the v1.10.2 sanity check
+          revealed many wrong_target instances actually write to AT
+          LEAST ONE gold file but miss others (multi-file bugs).
+        - gold_files_missed: list[str] — DISTINCT gold paths never
+          written to. Complement of gold_files_written.
+
+    Events without a `path` field are skipped for the gold-match check
+    (v1.10's path-logged tool_call schema); older trace formats degrade
+    gracefully — locus metrics for those traces report no writes.
     """
+    empty = {
+        "first_correct_file_touch_step": None,
+        "correct_touch_before_first_write": False,
+        "correct_touch_relative_to_intervention": "none",
+        "first_write_locus_correct": None,
+        "write_locus_match_count": 0,
+        "write_locus_miss_count": 0,
+        "gold_files_written": [],
+        "gold_files_missed": [],
+    }
     if not gold_target_files:
-        return {
-            "first_correct_file_touch_step": None,
-            "correct_touch_before_first_write": False,
-            "correct_touch_relative_to_intervention": "none",
-        }
+        return empty
     gold_set = set(gold_target_files)
     write_tools = {"write_file", "edit_file"}
     intervention_kinds = {
@@ -295,6 +344,10 @@ def compute_first_correct_file_touch(
     first_correct_step: int | None = None
     first_write_step: int | None = None
     first_intervention_step: int | None = None
+    first_write_locus_correct: bool | None = None
+    write_match = 0
+    write_miss = 0
+    gold_files_written_set: set[str] = set()
     for evt in events:
         kind = evt.get("kind")
         step = evt.get("step")
@@ -303,11 +356,21 @@ def compute_first_correct_file_touch(
             name = evt.get("name") or ""
             if path is not None and path in gold_set and first_correct_step is None:
                 first_correct_step = step
-            if name in write_tools and first_write_step is None:
-                first_write_step = step
+            if name in write_tools:
+                if first_write_step is None:
+                    first_write_step = step
+                if path is not None and path in gold_set:
+                    write_match += 1
+                    gold_files_written_set.add(path)
+                    if first_write_locus_correct is None:
+                        first_write_locus_correct = True
+                else:
+                    write_miss += 1
+                    if first_write_locus_correct is None:
+                        first_write_locus_correct = False
         elif kind in intervention_kinds and first_intervention_step is None:
             first_intervention_step = step
-    # Compose summary
+    # Compose reconnaissance summary
     if first_correct_step is None:
         relative = "none"
         before_write = False
@@ -315,16 +378,29 @@ def compute_first_correct_file_touch(
         before_write = (first_write_step is None
                         or first_correct_step < first_write_step)
         if first_intervention_step is None:
-            relative = "before"  # no intervention fired at all
+            relative = "before"
         elif first_correct_step <= first_intervention_step:
             relative = "before"
         else:
             relative = "after"
+    gold_files_written = sorted(gold_files_written_set)
+    gold_files_missed = sorted(gold_set - gold_files_written_set)
     return {
         "first_correct_file_touch_step": first_correct_step,
         "correct_touch_before_first_write": before_write,
         "correct_touch_relative_to_intervention": relative,
+        "first_write_locus_correct": first_write_locus_correct,
+        "write_locus_match_count": write_match,
+        "write_locus_miss_count": write_miss,
+        "gold_files_written": gold_files_written,
+        "gold_files_missed": gold_files_missed,
     }
+
+
+# Backward-compat alias — older callers (and the v1.10.1 taxonomy
+# generator) used compute_first_correct_file_touch. Keep the name
+# working; new callers should use compute_locus_metrics directly.
+compute_first_correct_file_touch = compute_locus_metrics
 
 
 def _load_events(events_path: Path) -> list[dict]:
@@ -400,7 +476,9 @@ def render_table(label: str, metric: dict, secondary: dict, regressions: dict) -
     lines = [
         f"=== {label} ===",
         f"  PRIMARY (mechanism-level):",
-        f"    CONFIDENCE_COLLAPSE                 {metric['confidence_collapse']}",
+        f"    CONFIDENCE_COLLAPSE (all)           {metric['confidence_collapse']}",
+        f"      soft_anchor variant               {metric.get('confidence_collapse_soft_anchor', 0)}",
+        f"      exploratory variant               {metric.get('confidence_collapse_exploratory', 0)}",
         f"    ABSTAIN_AFTER_INTERVENTION          {metric['abstain_after_intervention']}",
         f"    intervention_fired                  {metric['intervention_fired_count']}",
         f"    intervention_converted              {metric['intervention_converted_count']}",

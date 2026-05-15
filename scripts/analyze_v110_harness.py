@@ -120,16 +120,62 @@ def main() -> None:
         tier = v110_tax[iid]["tier"]
         print(f"    - {iid} (tier={tier})")
 
-    # ---- C.5 locus × Docker resolution cross-tab (v1.10.1 substrate for v1.11)
-    # Bridges trajectory reconnaissance (did the model touch the gold target
-    # file? before or after intervention?) to Docker resolution probability.
-    # Expectation: instances where the gold file was touched BEFORE the
-    # first write resolve at a much higher rate than instances where it
-    # was touched AFTER intervention or NEVER.
-    print("\n--- locus × Docker resolution cross-tab (v1.11 substrate) ---")
-    has_locus = any("correct_touch_relative_to_intervention" in r for r in v110_tax.values())
-    if not has_locus:
-        print("  (locus fields missing from v110_tax — run scripts/compare_v110.py first)")
+    # ---- C.5 write-locus × Docker resolution cross-tab (v1.10.2; v1.11 substrate)
+    # Commit-accuracy signal — bridges "did the model write to the
+    # correct file?" to Docker resolution probability. v1.10.1's
+    # reconnaissance metric (touched-but-may-not-have-written) was
+    # uninformative because almost every trajectory reads a gold file
+    # at some point; the wrong_target failure is in the COMMIT, not
+    # the read. v1.11's locus-disambiguation lever sizes against this
+    # bucket: prevent ~half the wrote_to_non_gold_only instances from
+    # writing to the wrong locus → convert them to wrote_to_gold.
+    print("\n--- write-locus × Docker resolution cross-tab (v1.11 substrate) ---")
+    has_write_locus = any("write_locus_match_count" in r for r in v110_tax.values())
+    if not has_write_locus:
+        print("  (write-locus fields missing from v110_tax — run scripts/compare_v110.py first)")
+    else:
+        from collections import defaultdict
+        buckets: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"n": 0, "resolved": 0})
+        for iid, r in v110_tax.items():
+            match = r.get("write_locus_match_count", 0) or 0
+            miss = r.get("write_locus_miss_count", 0) or 0
+            written = r.get("gold_files_written") or []
+            missed = r.get("gold_files_missed") or []
+            n_gold = len(written) + len(missed)
+            if match + miss == 0:
+                bucket = "never_wrote"
+            elif match > 0 and len(missed) == 0:
+                # Hit ALL gold files (single-file or multi-file bugs both)
+                bucket = "wrote_to_all_gold"
+            elif match > 0:
+                # Partial coverage — hit at least one but missed others.
+                # v1.10.2 diagnostic finding: dominant wrong_target shape.
+                bucket = "wrote_to_some_gold_partial"
+            else:
+                bucket = "wrote_to_non_gold_only"
+            buckets[bucket]["n"] += 1
+            if v110_h.get(iid, {}).get("resolved"):
+                buckets[bucket]["resolved"] += 1
+        print(f"  {'bucket':<32} {'n':>5} {'resolved':>10} {'rate':>8}")
+        # Order by resolve rate (best to worst); never_wrote sorts last.
+        order = ["wrote_to_all_gold", "wrote_to_some_gold_partial",
+                 "wrote_to_non_gold_only", "never_wrote"]
+        for bucket in order:
+            stats = buckets.get(bucket, {"n": 0, "resolved": 0})
+            n = stats["n"]
+            r = stats["resolved"]
+            rate = f"{100*r/n:.1f}%" if n else "n/a"
+            print(f"  {bucket:<32} {n:>5} {r:>10} {rate:>8}")
+
+    # ---- C.6 reconnaissance × Docker (informational, not load-bearing)
+    # v1.10.1's metric — kept for back-compat reporting. Almost every
+    # trajectory ends up in touched_before_write because reading gold
+    # files during exploration is near-universal.
+    print("\n--- reconnaissance × Docker resolution (informational; not load-bearing) ---")
+    has_recon = any("correct_touch_relative_to_intervention" in r for r in v110_tax.values())
+    if not has_recon:
+        print("  (reconnaissance fields missing from v110_tax)")
     else:
         from collections import defaultdict
         buckets: dict[str, dict[str, int]] = defaultdict(
@@ -139,8 +185,6 @@ def main() -> None:
                 continue
             rel = r.get("correct_touch_relative_to_intervention", "none")
             bf = r.get("correct_touch_before_first_write", False)
-            # Three buckets: "before write & before intervention" (best),
-            # "after intervention" (locus-failure signature), "never touched"
             if rel == "none":
                 bucket = "never_touched_gold"
             elif rel == "after":

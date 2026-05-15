@@ -169,7 +169,9 @@ def test_swebench_confidence_collapse_classified(tmp_path):
     ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
     assert ep.outcome == Outcome.EMPTY_PATCH_TIMEOUT
     assert Intervention.EARLY_BAIL in ep.interventions_fired
-    assert FailureClass.CONFIDENCE_COLLAPSE in ep.failure_chain
+    # v1.10.2 — early_bail with no msg_variant (legacy / default) maps to
+    # CONFIDENCE_COLLAPSE_SOFT_ANCHOR.
+    assert FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR in ep.failure_chain
 
 
 def test_swebench_confidence_collapse_independent_of_density_gate(tmp_path):
@@ -194,7 +196,64 @@ def test_swebench_confidence_collapse_independent_of_density_gate(tmp_path):
     assert ep.outcome == Outcome.EMPTY_PATCH_TIMEOUT
     assert Intervention.EARLY_BAIL in ep.interventions_fired
     assert Intervention.ACTION_DENSITY_GATE in ep.interventions_fired
-    assert FailureClass.CONFIDENCE_COLLAPSE in ep.failure_chain
+    # v1.10.2 — early_bail with no msg_variant (legacy / default) maps to
+    # CONFIDENCE_COLLAPSE_SOFT_ANCHOR.
+    assert FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR in ep.failure_chain
+
+
+def test_swebench_confidence_collapse_exploratory_variant_classified(tmp_path):
+    """v1.10.2 — early_bail with msg_variant=exploratory maps to
+    CONFIDENCE_COLLAPSE_EXPLORATORY. Distinguishes message-induced
+    failure modes in longitudinal comparisons."""
+    events_path = tmp_path / "events.jsonl"
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": i, "name": "read_file"}
+        for i in range(8)
+    ] + [
+        {"kind": "early_bail_fired", "step": 4, "completion_tokens": 2000,
+         "msg_variant": "exploratory"},
+        {"kind": "single_mode_done", "aborted": False, "tool_calls_total": 8},
+    ]
+    _write_events(events_path, events)
+    ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
+    assert FailureClass.CONFIDENCE_COLLAPSE_EXPLORATORY in ep.failure_chain
+    assert FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR not in ep.failure_chain
+
+
+def test_swebench_confidence_collapse_soft_anchor_variant_explicit(tmp_path):
+    """v1.10.2 — early_bail with msg_variant=soft_anchor (explicitly
+    tagged, not legacy) maps to CONFIDENCE_COLLAPSE_SOFT_ANCHOR."""
+    events_path = tmp_path / "events.jsonl"
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": i, "name": "read_file"}
+        for i in range(8)
+    ] + [
+        {"kind": "early_bail_fired", "step": 4, "completion_tokens": 2000,
+         "msg_variant": "soft_anchor"},
+        {"kind": "single_mode_done", "aborted": False, "tool_calls_total": 8},
+    ]
+    _write_events(events_path, events)
+    ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
+    assert FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR in ep.failure_chain
+    assert FailureClass.CONFIDENCE_COLLAPSE_EXPLORATORY not in ep.failure_chain
+
+
+def test_swebench_confidence_collapse_low_diversity_fallback_variant(tmp_path):
+    """v1.10.2 — soft_anchor_low_diversity_fallback variant (LOW band,
+    diversity below threshold) maps to CONFIDENCE_COLLAPSE_SOFT_ANCHOR
+    (still soft_anchor-class commit pressure)."""
+    events_path = tmp_path / "events.jsonl"
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": i, "name": "read_file"}
+        for i in range(8)
+    ] + [
+        {"kind": "early_bail_fired", "step": 4, "completion_tokens": 2000,
+         "msg_variant": "soft_anchor_low_diversity_fallback"},
+        {"kind": "single_mode_done", "aborted": False, "tool_calls_total": 8},
+    ]
+    _write_events(events_path, events)
+    ep = classify_swebench_run(events_path, has_patch=False, tier="empty_patch")
+    assert FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR in ep.failure_chain
 
 
 def test_swebench_confidence_collapse_not_fired_without_early_bail(tmp_path):

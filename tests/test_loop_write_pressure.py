@@ -1250,11 +1250,15 @@ def test_convergence_gate_off_preserves_v19_behavior(monkeypatch):
 
 def test_convergence_gate_fires_exploratory_on_diffuse(monkeypatch):
     """v1.10.1 — With LUXE_CONVERGENCE_GATE=1 and a diffuse-recon trajectory
-    (all distinct paths → score < LOW_THRESHOLD), early_bail fires the
-    EXPLORATORY variant — not soft_anchor, not commit_imperative, not
-    silence. Replaces v1.10's total suppression which created the
-    matplotlib-14623 silent failure mode (12 consecutive steps at
-    score=0.0 with zero commit nudges).
+    (distinct paths → score < LOW_THRESHOLD), early_bail fires the
+    EXPLORATORY variant. Replaces v1.10's total suppression which created
+    the matplotlib-14623 silent failure mode.
+
+    v1.10.2 — exploratory still fires here (4 distinct paths at step=4
+    exceeds the diversity threshold of 2). The post_exploratory_escalation
+    predicate may ALSO fire later in the run if no writes occur — that's
+    correct behavior for this read-only scripted trajectory and validated
+    by the separate post-exploratory test.
     """
     from luxe.agents.loop import _EARLY_BAIL_MESSAGE_EXPLORATORY
     monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
@@ -1277,19 +1281,15 @@ def test_convergence_gate_fires_exploratory_on_diffuse(monkeypatch):
     exploratory_msgs = [m for m in final
                         if m.get("role") == "user"
                         and _EARLY_BAIL_MESSAGE_EXPLORATORY in str(m.get("content", ""))]
-    soft_msgs = [m for m in final
-                 if m.get("role") == "user"
-                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
     commit_msgs = [m for m in final
                    if m.get("role") == "user"
                    and _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE in str(m.get("content", ""))]
     assert len(exploratory_msgs) == 1, (
         f"expected exploratory variant on diffuse-recon trajectory, got "
-        f"exploratory={len(exploratory_msgs)} soft_anchor={len(soft_msgs)} "
+        f"exploratory={len(exploratory_msgs)} "
         f"commit_imperative={len(commit_msgs)}"
     )
-    assert len(soft_msgs) == 0, "soft_anchor must NOT fire when exploratory did"
-    assert len(commit_msgs) == 0, "commit_imperative must NOT fire when exploratory did"
+    assert len(commit_msgs) == 0, "commit_imperative must NOT fire on diffuse-recon"
 
 
 def test_convergence_gate_fires_commit_imperative_on_high_convergence(monkeypatch):
@@ -1530,4 +1530,136 @@ def test_habituation_exit_suppressed_when_post_intervention_write(monkeypatch):
     # didn't reset the predicate as designed.
     assert result.steps != 21 or not result.aborted, (
         "habituation predicate fired despite post-intervention write")
+
+
+# --- v1.10.2: post-exploratory escalation ---------------------------------
+
+
+def test_post_exploratory_escalation_fires_when_no_write_after_exploratory(monkeypatch):
+    """v1.10.2 — pylint-6528 / sphinx-10323 archetype: exploratory variant
+    fires at step=4, model continues exploring but never commits.
+    _POST_EXPLORATORY_ESCALATION_TURNS (4) later, no writes have happened
+    → escalation fires a soft_anchor message to force commitment.
+    """
+    from luxe.agents.loop import (
+        _EARLY_BAIL_MESSAGE_EXPLORATORY,
+        _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
+    )
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    monkeypatch.delenv("LUXE_ACTION_DENSITY_GATE", raising=False)  # isolate
+    # 10 distinct reads, no writes. Exploratory fires at step 4.
+    # Escalation should fire by step 8 (4 turns after).
+    scripted = [_read_resp_with_path(f"unique_{i}.py") for i in range(10)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role(max_steps=12)
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    exploratory_msgs = [m for m in final
+                        if m.get("role") == "user"
+                        and _EARLY_BAIL_MESSAGE_EXPLORATORY in str(m.get("content", ""))]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    # Exploratory fires once at step 4. Escalation fires once at step 8+
+    # (using SOFT_ANCHOR text). Total user messages should be 2.
+    assert len(exploratory_msgs) == 1, f"expected 1 exploratory fire, got {len(exploratory_msgs)}"
+    assert len(soft_msgs) == 1, f"expected 1 post-exploratory escalation (soft_anchor), got {len(soft_msgs)}"
+
+
+def test_post_exploratory_escalation_suppressed_when_write_occurs(monkeypatch):
+    """v1.10.2 — matplotlib-14623 archetype: exploratory fires, model
+    continues exploring, and EVENTUALLY commits a write before escalation
+    window expires. Escalation must NOT fire when writes_seen > 0.
+    """
+    from luxe.agents.loop import (
+        _EARLY_BAIL_MESSAGE_EXPLORATORY,
+        _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
+    )
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    monkeypatch.delenv("LUXE_ACTION_DENSITY_GATE", raising=False)
+    # Exploratory fires at step 4. Then 2 reads + a write at step 7
+    # (BEFORE escalation window at step 8). Then more reads.
+    scripted = (
+        [_read_resp_with_path(f"unique_{i}.py") for i in range(7)]
+        + [_write_resp()]
+        + [_read_resp_with_path(f"more_{i}.py") for i in range(3)]
+        + [_terminal_resp()]
+    )
+    backend = _ScriptedBackend(scripted)
+    role = _make_role(max_steps=15)
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool(), _write_tool()],
+        tool_fns={**_read_fn(), "write_file": lambda args: ("ok", None)},
+    )
+
+    final = backend.calls[-1]
+    exploratory_msgs = [m for m in final
+                        if m.get("role") == "user"
+                        and _EARLY_BAIL_MESSAGE_EXPLORATORY in str(m.get("content", ""))]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    assert len(exploratory_msgs) == 1, f"exploratory should fire once"
+    assert len(soft_msgs) == 0, (
+        f"escalation should NOT fire after write succeeded; got {len(soft_msgs)} soft_anchor messages"
+    )
+
+
+def test_post_exploratory_escalation_suppressed_when_exploratory_did_not_fire(monkeypatch):
+    """v1.10.2 — sphinx-10323 archetype: minimal trajectory (1 distinct
+    path) → diversity gate falls back to soft_anchor at step=4, NOT
+    exploratory. Escalation predicate gates on exploratory_variant_fired,
+    so it must NOT fire even though writes_seen=0 by step 8."""
+    from luxe.agents.loop import (
+        _EARLY_BAIL_MESSAGE_EXPLORATORY,
+        _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
+    )
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    monkeypatch.delenv("LUXE_ACTION_DENSITY_GATE", raising=False)
+    # All reads to SAME path → diversity = 1 at step 4 → soft_anchor
+    # fallback (NOT exploratory). Then more reads. Escalation should NOT
+    # fire (it gates on exploratory_variant_fired).
+    scripted = [_read_resp_with_path("only_path.py") for _ in range(10)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role(max_steps=12)
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    exploratory_msgs = [m for m in final
+                        if m.get("role") == "user"
+                        and _EARLY_BAIL_MESSAGE_EXPLORATORY in str(m.get("content", ""))]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    # Either the dedup short-circuit kicked in OR soft_anchor fired
+    # at step 4 by diversity fallback. Either way: NO exploratory fire,
+    # and at most ONE soft_anchor message (the fallback at step 4 —
+    # not an escalation, because escalation gates on exploratory).
+    assert len(exploratory_msgs) == 0, "exploratory must NOT fire when diversity < threshold"
+    assert len(soft_msgs) <= 1, (
+        f"escalation must NOT add a second soft_anchor; got {len(soft_msgs)}"
+    )
 

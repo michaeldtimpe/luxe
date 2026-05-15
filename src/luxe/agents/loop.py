@@ -14,7 +14,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from luxe.agents.convergence import compute_convergence_score, extract_path
+from luxe.agents.convergence import (
+    _DIVERSITY_MIN_FOR_EXPLORATORY,
+    compute_convergence_score,
+    extract_path,
+    recent_path_diversity,
+)
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import context_pressure, elide_old_tool_results
@@ -356,6 +361,24 @@ _CONVERGENCE_HIGH_THRESHOLD = 0.40
 _HABITUATION_EXIT_MIN_STEP = 20
 _HABITUATION_EXIT_MIN_KINDS = 3
 
+# v1.10.2 — post-exploratory escalation. The v1.10.1 W3 collateral
+# (pylint-6528, sphinx-10323) was caused by the model interpreting the
+# permissive exploratory message as license to stop. Diagnostic on the
+# v1.10.1 traces showed diversity-at-fire-time (step=4) cannot
+# discriminate true exploration (matplotlib-14623: 2 distinct paths,
+# went on to read 10 total + commit) from focused circling
+# (pylint-6528: 2 distinct paths, stopped after exploratory). The
+# discriminator emerges LATER in the trajectory — successful exploration
+# continues writing; the failure mode stops writing.
+#
+# Mechanism: if exploratory variant fired AND step ≥ early_bail_step +
+# _POST_EXPLORATORY_ESCALATION_TURNS AND writes_seen == 0, fire a
+# soft_anchor message as a commitment escalation. Lets matplotlib-14623-
+# class trajectories breathe and find their target (no early pressure
+# under exploratory); catches pylint-6528-class trajectories that
+# stopped responding (escalation forces a decision).
+_POST_EXPLORATORY_ESCALATION_TURNS = 4
+
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
 # patterns mid-run. Set to 0 to disable. Configurable via env.
@@ -464,6 +487,11 @@ def run_agent(
     # of burning the remaining max_steps budget. Reads from existing
     # post-intervention telemetry; no new instrumentation required.
     intervention_kinds_fired: set[str] = set()
+    # v1.10.2 — track whether early_bail fired the exploratory variant
+    # so the post-exploratory escalation predicate can dispatch a
+    # soft_anchor follow-up if the model stops responding.
+    exploratory_variant_fired: bool = False
+    post_exploratory_escalation_fired: bool = False
     # v1.10 — convergence-score telemetry. tool_history is a bounded list of
     # (name, path) entries for the convergence score (see
     # luxe.agents.convergence). post-intervention behavior signals capture
@@ -574,6 +602,14 @@ def run_agent(
             # Other modes (default, no_abstain, explicit kwarg) bypass the
             # convergence-band logic — only soft_anchor is dynamic.
             # Resolution precedence: explicit kwarg > env mode > default.
+            # v1.10.2 — LOW band gates on recent_path_diversity to split
+            # the two trajectory shapes that v1.10.1 conflated:
+            #   high diversity → true exploration → exploratory variant
+            #   low diversity → focused-but-uncommitted → soft_anchor fallback
+            # The "soft_anchor_low_diversity_fallback" variant name lets
+            # post-hoc analysis distinguish "soft_anchor by default in MID
+            # band" from "soft_anchor by fallback in LOW band."
+            recent_diversity = 0  # populated only when we need it
             if early_bail_message is not None:
                 msg = early_bail_message
                 msg_variant = "kwarg"
@@ -582,8 +618,14 @@ def run_agent(
                 if (convergence_gate_enabled
                         and mode == "soft_anchor"
                         and convergence_score < _CONVERGENCE_LOW_THRESHOLD):
-                    msg = _EARLY_BAIL_MESSAGE_EXPLORATORY
-                    msg_variant = "exploratory"
+                    recent_diversity = recent_path_diversity(tool_history)
+                    if recent_diversity >= _DIVERSITY_MIN_FOR_EXPLORATORY:
+                        msg = _EARLY_BAIL_MESSAGE_EXPLORATORY
+                        msg_variant = "exploratory"
+                        exploratory_variant_fired = True
+                    else:
+                        msg = _EARLY_BAIL_MESSAGE_SOFT_ANCHOR
+                        msg_variant = "soft_anchor_low_diversity_fallback"
                 elif (convergence_gate_enabled
                         and mode == "soft_anchor"
                         and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
@@ -608,6 +650,10 @@ def run_agent(
                     reads=result.tool_calls_total - writes_seen,
                     convergence_score=convergence_score,
                     msg_variant=msg_variant,
+                    # v1.10.2 — recent_path_diversity at fire time. Lets
+                    # post-hoc mining tune the LOW-band fallback threshold
+                    # against actual trajectory topology distributions.
+                    recent_path_diversity=recent_diversity,
                 )
 
         # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,
@@ -696,6 +742,40 @@ def run_agent(
                     phase=phase, step=step,
                     convergence_score=convergence_score,
                     threshold=_CONVERGENCE_HIGH_THRESHOLD,
+                )
+
+        # v1.10.2 — post-exploratory escalation. The W3 collateral
+        # (pylint-6528, sphinx-10323) was caused by the model
+        # interpreting the permissive exploratory message as license to
+        # stop without committing. If the model still hasn't written by
+        # step ≥ early_bail_step + _POST_EXPLORATORY_ESCALATION_TURNS,
+        # fire a soft_anchor follow-up. matplotlib-14623-class trajectories
+        # (true exploration) escape this because they DO produce a write
+        # within the window — model is steadily generating tool_calls
+        # and converges on the gold file. pylint-6528-class trajectories
+        # stop responding post-exploratory; this rescues them.
+        if (exploratory_variant_fired
+                and not post_exploratory_escalation_fired
+                and early_bail_step is not None
+                and step >= early_bail_step + _POST_EXPLORATORY_ESCALATION_TURNS
+                and writes_seen == 0):
+            messages.append({"role": "user",
+                             "content": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR})
+            post_exploratory_escalation_fired = True
+            last_intervention_step = step
+            last_intervention_kind = "post_exploratory_escalation"
+            # Don't add to intervention_kinds_fired — this is a follow-up
+            # to early_bail, not a distinct intervention kind. Counting
+            # it would distort the habituation predicate (which gates on
+            # ≥3 DISTINCT kinds).
+            if log_calls:
+                append_event(
+                    run_id, "post_exploratory_escalation_fired",
+                    phase=phase, step=step,
+                    early_bail_step=early_bail_step,
+                    turns_since_bail=step - early_bail_step,
+                    tool_calls_total=result.tool_calls_total,
+                    completion_tokens=result.completion_tokens,
                 )
 
         # v1.8 Track 1 — prose-burst detector. Composite invariant fires at
