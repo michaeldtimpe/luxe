@@ -11,11 +11,14 @@ from __future__ import annotations
 import pytest
 
 from luxe.agents.convergence import (
+    _DIVERSITY_MIN_FOR_EXPLORATORY,
+    _DIVERSITY_WINDOW_K,
     compute_convergence_score,
     edit_preview_behavior,
     extract_path,
     file_entropy_last_K,
     localized_grep_density,
+    recent_path_diversity,
     repeated_same_path_access,
 )
 
@@ -241,3 +244,94 @@ def test_extract_path_non_dict_args():
     # rather than raise, so the loop callsite is robust.
     assert extract_path("read_file", None) is None  # type: ignore[arg-type]
     assert extract_path("read_file", "not a dict") is None  # type: ignore[arg-type]
+
+
+# --- v1.10.2: recent_path_diversity (topology signal for LOW-band split) ---
+
+
+def test_recent_path_diversity_distinct_paths():
+    """8 distinct paths in the window → diversity=8."""
+    history = [{"step": i, "name": "read_file", "path": f"f{i}.py"} for i in range(8)]
+    assert recent_path_diversity(history) == 8
+
+
+def test_recent_path_diversity_same_path_repeated():
+    """8 calls to same path → diversity=1 (true convergence on a target)."""
+    history = [{"step": i, "name": "read_file", "path": "target.py"} for i in range(8)]
+    assert recent_path_diversity(history) == 1
+
+
+def test_recent_path_diversity_windowed_to_K():
+    """20 events, K=8: only the last 8 distinct paths count.
+    First 12 entries are ignored even though they have distinct paths."""
+    history = (
+        [{"step": i, "name": "read_file", "path": f"early_{i}.py"} for i in range(12)]
+        + [{"step": 12 + i, "name": "read_file", "path": "candidate.py"} for i in range(8)]
+    )
+    # Window covers the last 8 → all same path → diversity=1
+    assert recent_path_diversity(history) == 1
+    # Full history (k=0 means no window cap) → 13 distinct
+    assert recent_path_diversity(history, k=0) == 13
+
+
+def test_recent_path_diversity_ignores_none_paths():
+    """Entries without a path (e.g. tools that don't accept paths) are
+    skipped rather than counted as a phantom None."""
+    history = [
+        {"step": 0, "name": "ls", "path": None},
+        {"step": 1, "name": "read_file", "path": "a.py"},
+        {"step": 2, "name": "ls", "path": None},
+        {"step": 3, "name": "read_file", "path": "b.py"},
+    ]
+    assert recent_path_diversity(history) == 2
+
+
+def test_recent_path_diversity_empty_history():
+    """Empty history → diversity=0."""
+    assert recent_path_diversity([]) == 0
+
+
+def test_recent_path_diversity_threshold_constants_are_sensible():
+    """The thresholds shipped in v1.10.2 should be in plausible ranges.
+    K must cover the early_bail window (step 4-11); min for exploratory
+    must be < K (otherwise the gate never fires)."""
+    assert _DIVERSITY_WINDOW_K >= 4   # covers typical early_bail window
+    assert _DIVERSITY_WINDOW_K <= 20  # not absurdly wide
+    assert 1 < _DIVERSITY_MIN_FOR_EXPLORATORY < _DIVERSITY_WINDOW_K
+
+
+def test_recent_path_diversity_focused_low_diversity():
+    """pylint-6528 archetype: model touched only 2 distinct paths
+    (focused on a candidate but uncommitted). v1.10.2 diagnostic finding:
+    at fire-time both true-exploration AND focused-circling produce
+    diversity ≤ 3, so the threshold alone CANNOT discriminate. Set to 2
+    so only the most-minimal trajectories (≤1 path) fall back. The
+    post_exploratory_escalation predicate in loop.py handles the
+    focused-circling case."""
+    history = [{"step": i, "name": "read_file",
+                "path": ("target.py" if i % 2 == 0 else "helper.py")}
+               for i in range(8)]
+    diversity = recent_path_diversity(history)
+    assert diversity == 2
+    # diversity=2 matches threshold (not strictly below) — pass-through
+    # to exploratory; escalation handles the actual failure mode.
+    assert diversity >= _DIVERSITY_MIN_FOR_EXPLORATORY
+
+
+def test_recent_path_diversity_minimal_trajectory_falls_back():
+    """sphinx-10323 archetype: only 1 path-bearing tool call. Below the
+    exploratory threshold → falls back to soft_anchor."""
+    history = [{"step": 0, "name": "read_file", "path": "."}]
+    diversity = recent_path_diversity(history)
+    assert diversity == 1
+    assert diversity < _DIVERSITY_MIN_FOR_EXPLORATORY
+
+
+def test_recent_path_diversity_diffuse_high_diversity():
+    """matplotlib-14623 archetype: 8 distinct paths in the last 8 calls
+    (true exploration). At or above the exploratory threshold → fire
+    the exploratory variant."""
+    history = [{"step": i, "name": "read_file", "path": f"f{i}.py"} for i in range(8)]
+    diversity = recent_path_diversity(history)
+    assert diversity == 8
+    assert diversity >= _DIVERSITY_MIN_FOR_EXPLORATORY

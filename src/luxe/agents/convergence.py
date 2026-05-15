@@ -141,6 +141,60 @@ def file_entropy_last_K(history: Sequence[dict[str, Any]],
     return 1.0 - _normalized_entropy(paths)
 
 
+# v1.10.2 — recent_path_diversity is a TOPOLOGY signal, not a confidence
+# scalar. It's used by loop.py's dispatcher to distinguish two trajectory
+# shapes that v1.10's `score < LOW` band conflated:
+#
+#   high diversity + low score  →  true exploration (model still searching
+#                                  hypothesis space; matplotlib-14623
+#                                  archetype). Fire exploratory variant.
+#   low diversity + low score   →  focused-but-uncommitted (model circling
+#                                  a candidate but unwilling to act;
+#                                  pylint-6528 / sphinx-10323 archetype).
+#                                  Fall back to soft_anchor (force commit).
+#
+# v1.10.1 collateral: both shapes were getting the permissive exploratory
+# message, but the second shape interpreted "you may begin attempting"
+# as license to keep exploring rather than commit the candidate it had.
+#
+# Future-work concerns (reviewer note; queued for v1.10.3+ if raw count
+# becomes noisy at scale):
+#   - repo-size sensitivity: large repos induce broader incidental reads
+#   - helper-file fanout: utility files inflate diversity without
+#     representing real exploration
+#   - tool verbosity: some tools enumerate files implicitly
+# Candidates if/when needed: entropy-weighted diversity, per-directory
+# semantic diversity, distinct-module count. For v1.10.2 the raw count
+# is the minimal lever.
+#
+# Calibration finding (v1.10.2 diagnostic on real v1.10.1 traces):
+# At early_bail fire-time (step=4), diversity ≤ 3 across all three W3
+# cases (matplotlib-14623 = 2, pylint-6528 = 2, sphinx-10323 = 1).
+# Diversity-at-fire-time CANNOT discriminate true exploration from
+# focused circling — the discriminator emerges later (matplotlib-14623
+# went on to read 10 total paths, pylint-6528 stopped at 4). Threshold
+# set to 2: suppresses only the most-minimal trajectories (≤ 1 distinct
+# path), passes everything else through to exploratory. The
+# post_exploratory_escalation predicate in loop.py handles the
+# focused-circling failure mode.
+_DIVERSITY_WINDOW_K = 8
+_DIVERSITY_MIN_FOR_EXPLORATORY = 2
+
+
+def recent_path_diversity(history: Sequence[dict[str, Any]],
+                          k: int = _DIVERSITY_WINDOW_K) -> int:
+    """Count of DISTINCT paths in the last `k` tool_call history entries.
+    Entries without a `path` field are skipped. Returns 0 when no
+    path-bearing entries exist in the window.
+
+    Pure function over tool_history; cheap to evaluate per step alongside
+    compute_convergence_score.
+    """
+    window = list(history)[-k:] if k > 0 else list(history)
+    paths = [h.get("path") for h in window if h.get("path")]
+    return len(set(paths))
+
+
 # Weights chosen so each signal contributes at most 0.25 to the score;
 # convergence is the conjunction of multiple signals (not any one alone).
 _DEFAULT_WEIGHTS = {

@@ -85,7 +85,14 @@ class FailureClass(str, Enum):
     BAILOUT_AFTER_READS = "BAILOUT_AFTER_READS"          # step >4, many reads, no writes
     ABSTAIN_AFTER_INTERVENTION = "ABSTAIN_AFTER_INTERVENTION"  # took escape after EARLY_BAIL
     HABITUATION_EXIT = "HABITUATION_EXIT"                # v1.10.1: ≥3 distinct interventions fired, no post-intervention write, clean-exit at step ≥20
-    CONFIDENCE_COLLAPSE = "CONFIDENCE_COLLAPSE"          # v1.9: empty + writes=0 + EARLY_BAIL fired
+    # v1.9: empty + writes=0 + EARLY_BAIL fired. v1.10.2 splits this
+    # into two variants keyed on the EARLY_BAIL msg_variant so longitudinal
+    # comparisons can separate model behavior from intervention policy.
+    # Legacy CONFIDENCE_COLLAPSE retained for taxonomies generated before
+    # the split (v1.8, v1.9, v1.10, v1.10.1 pre-backfill).
+    CONFIDENCE_COLLAPSE = "CONFIDENCE_COLLAPSE"
+    CONFIDENCE_COLLAPSE_SOFT_ANCHOR = "CONFIDENCE_COLLAPSE_SOFT_ANCHOR"  # v1.10.2
+    CONFIDENCE_COLLAPSE_EXPLORATORY = "CONFIDENCE_COLLAPSE_EXPLORATORY"  # v1.10.2
     EMPTY_PATCH_TIMEOUT = "EMPTY_PATCH_TIMEOUT"          # exhausted max_steps
     CONTEXT_EXHAUSTED = "CONTEXT_EXHAUSTED"              # backend 400 on prompt size
     BACKEND_ERROR = "BACKEND_ERROR"                      # other backend failure
@@ -130,6 +137,10 @@ class _TraceSummary:
     pr_blocked: bool = False
     post_write_idle_exit: bool = False
     habituation_exit: bool = False
+    # v1.10.2 — captured from early_bail_fired event so the classifier
+    # can split CONFIDENCE_COLLAPSE by msg_variant. None for pre-v1.10
+    # traces (no msg_variant field) and runs where early_bail never fired.
+    early_bail_msg_variant: str | None = None
 
 
 def _parse_events(events_path: Path) -> _TraceSummary:
@@ -163,6 +174,13 @@ def _parse_events(events_path: Path) -> _TraceSummary:
                 summary.duplicate_calls += 1
         elif kind in intervention_map:
             summary.interventions.append(intervention_map[kind])
+            # v1.10.2 — capture msg_variant on early_bail_fired so the
+            # classifier can split CONFIDENCE_COLLAPSE. Later early_bail
+            # fires would overwrite (only one fires per run), but
+            # `not None` check below means first-fire wins which is
+            # fine for the single-fire intervention.
+            if kind == "early_bail_fired" and summary.early_bail_msg_variant is None:
+                summary.early_bail_msg_variant = evt.get("msg_variant")
             # Capture completion_tokens at intervention time as crude
             # per-step proxy (used by EARLY_PROSE_COLLAPSE classifier).
             ct = evt.get("completion_tokens", 0)
@@ -254,17 +272,35 @@ def _classify_swebench(
     # presence so the class definition stays stable across run configs.
     # Distinct from ABSTAIN_AFTER_INTERVENTION (the causal-link narrative);
     # both can appear in the same chain.
+    # v1.10.2 — dispatch to a variant-specific class based on the
+    # msg_variant of the EARLY_BAIL fire. Older taxonomies without
+    # msg_variant fall back to CONFIDENCE_COLLAPSE_SOFT_ANCHOR
+    # (soft_anchor was the default for v1.9 and v1.10).
     confidence_collapse = (
         Intervention.EARLY_BAIL in summary.interventions
         and summary.write_tool_calls == 0
     )
+    if confidence_collapse:
+        variant = summary.early_bail_msg_variant
+        if variant == "exploratory":
+            confidence_collapse_class = FailureClass.CONFIDENCE_COLLAPSE_EXPLORATORY
+        elif variant in (None, "default", "no_abstain", "soft_anchor",
+                         "commit_imperative", "kwarg",
+                         "soft_anchor_low_diversity_fallback"):
+            confidence_collapse_class = FailureClass.CONFIDENCE_COLLAPSE_SOFT_ANCHOR
+        else:
+            # Unknown variant — keep the legacy generic class to avoid
+            # silently dropping the signal.
+            confidence_collapse_class = FailureClass.CONFIDENCE_COLLAPSE
+    else:
+        confidence_collapse_class = None
 
     # Empty patch with no specific failure — derive primary from trace shape.
     # Early prose collapse: <=4 steps with zero writes.
     if summary.total_steps <= 4 and summary.write_tool_calls == 0 and summary.total_tool_calls <= 3:
         chain.append(FailureClass.EARLY_PROSE_COLLAPSE)
-        if confidence_collapse:
-            chain.append(FailureClass.CONFIDENCE_COLLAPSE)
+        if confidence_collapse_class:
+            chain.append(confidence_collapse_class)
         chain.append(FailureClass.EMPTY_PATCH_TIMEOUT)
         return EpisodeOutcome(outcome=Outcome.EMPTY_PATCH_TIMEOUT,
                               interventions_fired=summary.interventions,
@@ -278,8 +314,8 @@ def _classify_swebench(
             chain.append(FailureClass.ABSTAIN_AFTER_INTERVENTION)
         if summary.habituation_exit:
             chain.append(FailureClass.HABITUATION_EXIT)
-        if confidence_collapse:
-            chain.append(FailureClass.CONFIDENCE_COLLAPSE)
+        if confidence_collapse_class:
+            chain.append(confidence_collapse_class)
         chain.append(FailureClass.EMPTY_PATCH_TIMEOUT)
         return EpisodeOutcome(outcome=Outcome.EMPTY_PATCH_TIMEOUT,
                               interventions_fired=summary.interventions,
@@ -292,8 +328,8 @@ def _classify_swebench(
                               interventions_fired=summary.interventions,
                               failure_chain=chain)
 
-    if confidence_collapse:
-        chain.append(FailureClass.CONFIDENCE_COLLAPSE)
+    if confidence_collapse_class:
+        chain.append(confidence_collapse_class)
     chain.append(FailureClass.EMPTY_PATCH_TIMEOUT)
     return EpisodeOutcome(outcome=Outcome.EMPTY_PATCH_TIMEOUT,
                           interventions_fired=summary.interventions,

@@ -1,0 +1,18 @@
+{
+  "version": "v1.10.2",
+  "n": 4,
+  "frozen_at": "2026-05-15",
+  "recipe": "Extended regression probe for v1.10.2 — validates both the Item 1 post-exploratory-escalation mechanism AND that v1.10.1's founding wins are preserved. Sympy-13031 (W2 habituation) and matplotlib-14623 (W3 founding exploratory recovery) must not regress; pylint-6528 and sphinx-10323 (W3 collateral) must produce non-empty patches under the new escalation logic.",
+  "composition": {
+    "sympy__sympy-13031": "W2 founding test. Expected v1.10.2 outcome: habituation_exit event at step >= 20 (unchanged from v1.10.1).",
+    "matplotlib__matplotlib-14623": "W3 founding test (v1.10.1 recovery). Expected v1.10.2 outcome: exploratory variant fires at score=0.0; if model continues exploring, no escalation; otherwise escalation fires at step ~8 and soft_anchor pressure produces a commit. Patch must be non-empty (any tier != empty_patch). Strong tier (the v1.10.1 outcome) is a stretch — wrong_target or plausible is acceptable.",
+    "pylint-dev__pylint-6528": "W3 collateral (v1.10.1 empty regression). Expected v1.10.2 outcome: exploratory fires (diversity=2 >= threshold=2), then escalation fires at step ~8 (model stops responding under exploratory). Non-empty patch required; locus correctness not.",
+    "sphinx-doc__sphinx-10323": "W3 collateral (v1.10.1 empty regression). Expected v1.10.2 outcome: diversity gate falls back to soft_anchor at step 4 (diversity=1 < threshold=2); no escalation needed. Non-empty patch required."
+  },
+  "instance_ids": [
+    "sympy__sympy-13031",
+    "matplotlib__matplotlib-14623",
+    "pylint-dev__pylint-6528",
+    "sphinx-doc__sphinx-10323"
+  ]
+}

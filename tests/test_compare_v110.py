@@ -17,6 +17,7 @@ if str(_REPO) not in sys.path:
 from scripts.compare_v110 import (
     annotate_patch_len_deltas,
     compute_first_correct_file_touch,
+    compute_locus_metrics,
     parse_gold_target_files,
 )
 
@@ -195,3 +196,97 @@ def test_first_correct_file_touch_before_intervention_when_none_fired():
     result = compute_first_correct_file_touch(events, ["src/target.py"])
     assert result["first_correct_file_touch_step"] == 0
     assert result["correct_touch_relative_to_intervention"] == "before"
+
+
+# --- v1.10.2: write-locus metric (the v1.11 substrate) ----------------------
+
+
+def test_first_write_locus_correct_writes_gold_file():
+    """Trajectory: 2 reads then a write_file to a gold path. First-write
+    locus should be True; match_count=1, miss_count=0."""
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": 0,
+         "name": "read_file", "path": "wrong.py"},
+        {"kind": "tool_call", "phase": "main", "step": 1,
+         "name": "read_file", "path": "src/target.py"},
+        {"kind": "tool_call", "phase": "main", "step": 2,
+         "name": "edit_file", "path": "src/target.py"},
+    ]
+    result = compute_locus_metrics(events, ["src/target.py"])
+    assert result["first_write_locus_correct"] is True
+    assert result["write_locus_match_count"] == 1
+    assert result["write_locus_miss_count"] == 0
+
+
+def test_first_write_locus_correct_writes_non_gold_only():
+    """Wrong_target archetype: model reads the gold file but writes only
+    to a non-gold location. first_write_locus_correct=False; match=0/miss>0."""
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": 0,
+         "name": "read_file", "path": "src/target.py"},
+        {"kind": "tool_call", "phase": "main", "step": 1,
+         "name": "edit_file", "path": "src/wrong.py"},
+        {"kind": "tool_call", "phase": "main", "step": 2,
+         "name": "write_file", "path": "src/also_wrong.py"},
+    ]
+    result = compute_locus_metrics(events, ["src/target.py"])
+    assert result["first_write_locus_correct"] is False
+    assert result["write_locus_match_count"] == 0
+    assert result["write_locus_miss_count"] == 2
+
+
+def test_first_write_locus_correct_never_wrote():
+    """No writes — empty_patch class. first_write_locus_correct=None;
+    match=0/miss=0."""
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": 0,
+         "name": "read_file", "path": "src/target.py"},
+        {"kind": "tool_call", "phase": "main", "step": 1,
+         "name": "read_file", "path": "src/wrong.py"},
+    ]
+    result = compute_locus_metrics(events, ["src/target.py"])
+    assert result["first_write_locus_correct"] is None
+    assert result["write_locus_match_count"] == 0
+    assert result["write_locus_miss_count"] == 0
+
+
+def test_first_write_locus_correct_mixed_gold_and_non_gold():
+    """Mixed: first write to gold, then a write to a non-gold file.
+    first_write_locus_correct reflects the FIRST write only (True here);
+    counts increment both buckets."""
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": 0,
+         "name": "edit_file", "path": "src/target.py"},
+        {"kind": "tool_call", "phase": "main", "step": 1,
+         "name": "edit_file", "path": "src/wrong.py"},
+    ]
+    result = compute_locus_metrics(events, ["src/target.py"])
+    assert result["first_write_locus_correct"] is True
+    assert result["write_locus_match_count"] == 1
+    assert result["write_locus_miss_count"] == 1
+
+
+def test_first_write_locus_correct_first_write_wrong_second_right():
+    """First write is wrong, second is right. first_write_locus_correct
+    is False (fixes the locus of the FIRST write); both counts increment."""
+    events = [
+        {"kind": "tool_call", "phase": "main", "step": 0,
+         "name": "edit_file", "path": "src/wrong.py"},
+        {"kind": "tool_call", "phase": "main", "step": 1,
+         "name": "edit_file", "path": "src/target.py"},
+    ]
+    result = compute_locus_metrics(events, ["src/target.py"])
+    assert result["first_write_locus_correct"] is False
+    assert result["write_locus_match_count"] == 1
+    assert result["write_locus_miss_count"] == 1
+
+
+def test_compute_locus_metrics_backward_compat_alias():
+    """The old name compute_first_correct_file_touch should still work
+    and return the same dict — callers that haven't migrated yet
+    continue to function."""
+    events = [{"kind": "tool_call", "phase": "main", "step": 0,
+               "name": "read_file", "path": "src/target.py"}]
+    result_old = compute_first_correct_file_touch(events, ["src/target.py"])
+    result_new = compute_locus_metrics(events, ["src/target.py"])
+    assert result_old == result_new
