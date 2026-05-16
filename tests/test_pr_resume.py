@@ -165,3 +165,30 @@ def test_resume_preserves_failure_record(git_repo: Path, monkeypatch):
     assert push is not None
     assert push.status == "failed"
     assert "auth failed" in push.detail
+
+
+def test_do_test_timeout_records_clean_failure(git_repo: Path, monkeypatch):
+    """A hung test command must time out at cfg.test_timeout_s instead of
+    blocking the whole bench. Observed 2026-05-16: sklearn workspace
+    after a killed prior run polluted state; pr_step.test hung 25min."""
+    spec = _spec(git_repo)
+    state = PRState()
+    state.test_command = "pytest -q"
+    cfg = PRConfig(test_commands=[], test_timeout_s=3)
+
+    def hanging_run(cmd, cwd, env=None, timeout=None):
+        assert timeout == 3, "cfg.test_timeout_s must be passed to _run"
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(pr_mod, "_run", hanging_run)
+
+    pr_mod._do_test(spec, state, cfg)
+
+    test_step = state.step_or_none("test")
+    assert test_step is not None
+    assert test_step.done
+    assert test_step.status == "done"
+    assert "rc=124" in test_step.detail
+    assert "timeout after 3s" in test_step.detail
+    assert state.test_passed is False
+    assert "timed out after 3s" in (state.test_output_tail or "")

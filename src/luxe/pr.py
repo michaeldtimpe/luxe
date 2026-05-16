@@ -76,6 +76,7 @@ class PRConfig:
     branch_prefix: str = "luxe"
     draft_on_test_failure: bool = True
     test_output_tail_lines: int = 200
+    test_timeout_s: int = 600
 
 
 def default_pr_config_path() -> Path:
@@ -96,6 +97,7 @@ def load_pr_config(path: str | Path | None = None) -> PRConfig:
         branch_prefix=str(raw.get("branch_prefix", "luxe")),
         draft_on_test_failure=bool(raw.get("draft_on_test_failure", True)),
         test_output_tail_lines=int(raw.get("test_output_tail_lines", 200)),
+        test_timeout_s=int(raw.get("test_timeout_s", 600)),
     )
 
 
@@ -383,7 +385,24 @@ def _do_test(spec: RunSpec, state: PRState, cfg: PRConfig) -> None:
         state.test_passed = None
         return
     # Honour user shell quoting for the test command (it's a string from yaml).
-    res = _run(["bash", "-lc", cmd_str], cwd=repo)
+    # cfg.test_timeout_s caps wall time so a deadlocked test invocation
+    # (observed 2026-05-16 on sklearn workspace after a killed prior run
+    # polluted state) can't hang the whole bench. Timeout → rc=124,
+    # test_passed=False, tail records the timeout instead of test output.
+    try:
+        res = _run(["bash", "-lc", cmd_str], cwd=repo,
+                   timeout=cfg.test_timeout_s)
+    except subprocess.TimeoutExpired:
+        state.test_passed = False
+        state.test_output_tail = (
+            f"test step timed out after {cfg.test_timeout_s}s "
+            f"(cfg.test_timeout_s); command was: {cmd_str}"
+        )
+        step.done = True
+        step.status = "done"
+        step.detail = f"rc=124 timeout after {cfg.test_timeout_s}s"
+        step.completed_at = time.time()
+        return
     state.test_passed = res.ok
     state.test_output_tail = res.combined_tail(cfg.test_output_tail_lines)
     step.done = True

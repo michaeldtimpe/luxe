@@ -34,3 +34,8 @@ draft_on_test_failure: true
 
 # Cap on the test output snippet pasted into the PR body.
 test_output_tail_lines: 200
+
+# Wall-time cap on the test command. Defends against deadlocked test
+# invocations (workspace pollution, subprocess wait-forever bugs).
+# Timeout → rc=124, test_passed=False, tail records the timeout.
+test_timeout_s: 600
