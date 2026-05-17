@@ -1,0 +1,37 @@
+# Mode C citation-grounding 3-rep measurement (2026-05-17).
+#
+# Bug 2 Step 1 of the bug-hunt cycle landed the tightened citation-grounding
+# directive in src/luxe/agents/prompts.py (_BASELINE_SYSTEM + _HADS_SYSTEM).
+# This variants file runs 3 identical reps on the nothing-doc-config fixture
+# to measure the directive's effect on `out_of_range` citation counts vs the
+# historical baseline (88 out_of_range in postfix rep 5 per
+# project_doc_config_three_modes.md).
+#
+# Each cell is byte-identical (same model, same default config, no overlay
+# override since document tasks fall through manage_strict_only). Three reps
+# give a variance read on out_of_range counts at temp=0 — doc-task variance
+# is the documented soft spot per feedback_replicate_borderline_fixtures.md.
+#
+# Run:
+#   LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 \
+#     .venv/bin/python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_mode_c_3rep.yaml \
+#       --id nothing-ever-happens-document-config \
+#       --output acceptance/mode_c_step1_3rep/ \
+#       --per-fixture-timeout 1800
+#
+# 3 cells × 1 fixture = 3 runs. Expect ~5-15 min wall.
+#
+# Win gates (per the approved plan):
+#   - out_of_range count ≤ 30% of historical 88-instance baseline (i.e. ≤27)
+#   - total_citations_emitted not down >20% (anti-citation-avoidance)
+#   - line_qualified_citation_ratio not down >15% (anti-citation-avoidance)
+#
+# Inspect events.jsonl per run for `citation_lint_passed` /
+# `citation_lint_blocked` events — `summary` field carries the
+# `out_of_range=N` breakdown.
+
+variants:
+  - {model_label: mode-c-step1-rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: mode-c-step1-rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: mode-c-step1-rep3, model_id: Qwen3.6-35B-A3B-6bit}
