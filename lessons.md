@@ -2421,3 +2421,48 @@ For v1.10.3, the suggested approach: **stop intervening when the convergence-sco
 - `tests/test_loop_write_pressure.py` — updated existing exploratory test; removed (after revert) the 4 escalation tests
 
 781 tests pass + 1 module-skip on bfcl_adapter. v1.10.2 tagged + pushed to origin.
+
+### [2026-05-16] gh-auth flake recurrence + downstream luxe `_do_test` subprocess deadlock
+
+**What happened**: During v1.10.2 n=75 rep_2 (the variance-baseline rep), a brief mid-bench internet outage caused `scikit-learn-11310` and `scikit-learn-11578` to bail at exactly 122s with `rc=2` — the documented `assert_gh_auth()` flake from `project_gh_auth_flake.md`. After the user confirmed connectivity restored, I attempted to re-run the two instances on a 2-instance subset. The first retry (sklearn-11310) wrote a commit successfully, then entered `pr_step: test` and **hung for 25 minutes with no further events** before I killed it. A second retry attempt hit a stale luxe lock (PID survived the kill); a third attempt bailed at 1s with `rc=3` because the stale lock from PID 38948 was still present in `~/.luxe/locks/`. After force-killing all luxe + bench processes and removing the stale lock files, the workspace was usable again, but the variance baseline lost 2 instances (imputed as deterministic from their rep_1 + rep_3 agreement).
+
+**Root cause** — two distinct issues in one cascade:
+
+1. **gh-auth flake itself**: `gh auth status` calls the macOS keyring; when the network drops, the keyring login times out and `gh` exits non-zero with "Timeout trying to log in to github.com account ... (keyring)". `assert_gh_auth()` retries 3× at 0.5s/1.5s spacing (added 2026-05-02) but the network was down for longer than the retry window, so the bench bailed. This is the documented flake; mitigation is sound; the cost was 2 datapoints.
+2. **`_do_test` had `timeout=None`** (the actual surprise): `src/luxe/pr.py:386` invoked `_run(["bash", "-lc", cmd_str], cwd=repo)` with no timeout. After my kill-and-retry of the gh-auth bailout, the workspace had accumulated state from the killed prior run. The model wrote a 25-line patch on retry, then luxe ran the configured `pytest -q` test command — which deadlocked. `subprocess.run` waited forever. No event was emitted because `_do_test` doesn't emit progress mid-subprocess.
+
+**Fix / takeaway**: Shipped commit `3c3b79b` — `PRConfig.test_timeout_s` (default 600s) flows through `_do_test`; `subprocess.TimeoutExpired` is caught, recorded as `rc=124`, `test_passed=False`, and a clean tail message; bench moves on. Added regression test `test_do_test_timeout_records_clean_failure` in `test_pr_resume.py`. 801 tests pass after the change.
+
+**Generalized lesson**: **Any luxe step or bench harness that shells out to a user-controlled shell command** (test runner, build, linter, anything from yaml config) **must pass a wall-time cap to `subprocess.run`**. `timeout=None` is a latent footgun. The pattern from `3c3b79b` (`cfg.<step>_timeout_s` + `try/except TimeoutExpired → record-and-continue`) is the template; replicate it for any future step. Saved as memory entry `feedback_test_step_needs_wall_cap.md`.
+
+**Side-note (venv drift)**: The very first rep_2 launch this morning crashed in 3s with `ModuleNotFoundError: tree_sitter_language_pack`. The venv had drifted to the pre-v1.10.1 packages (`tree_sitter_languages 1.10.2` instead of `tree_sitter_language_pack 0.13.0`). Yesterday's `pyproject.toml` pin was correct (v1.10.1 W1 commit `6d1709e`), and yesterday's 781-test suite passed, so something between yesterday and this morning reset the venv state. A `.venv/bin/pip install -e .` re-pinned cleanly. Not deep-dived; if it recurs, suspect another Python project sharing the venv directory or a system pip cache invalidation. Documenting here so future-me knows the surface.
+
+**Affected files**: `src/luxe/pr.py` (added try/except + `test_timeout_s` field), `configs/pr.yaml` (documented the new field), `tests/test_pr_resume.py` (new test). No bench-layer changes were needed; the inner cap handles the case.
+
+### [2026-05-16] v1.10.2 3-rep variance baseline — single-rep ship-floor at empty_patch=13 is unsupportable
+
+**What happened**: The v1.10.2 ship report (2026-05-15) headlined `empty_patch = 13 — the ≤13 floor target first set at v1.7 is HIT for the first time`. I ran 2 additional reps of the same n=75 subset on the same v1.10.2 substrate (no code changes between reps; only the `_do_test` timeout cap from `3c3b79b` shipped mid-cycle, didn't fire in rep_3). Results:
+
+| metric | rep_1 | rep_2† | rep_3 | mean | range |
+|---|---|---|---|---|---|
+| strong | 18 | 17 | 18 | 17.7 | [17, 18] |
+| strong+plausible | 38 | 35 | 37 | 36.7 | [35, 38] |
+| **empty_patch** | **13** | **15** | **15** | **14.3** | **[13, 15]** |
+
+† rep_2 on n=73 (sklearn-11310 + sklearn-11578 dropped to gh-auth + `_do_test` cascade above); both deterministic across rep_1 + rep_3 so the normalized rep_2 estimate is {strong=18, plausible=19, s+p=37, empty=15} — wash with rep_3.
+
+rep_1 was best-of-3 on `empty_patch`. rep_2 and rep_3 both hit 15. The "floor finally hit" framing was variance-fortunate. 67 of 75 instances are stable across all 3 reps (8.2% real flip rate, all 6 flips on the wrong_target / wrong_location / empty_patch borderline).
+
+**Root cause**: The ship-floor target ≤13 was set within the measurement noise band of the borderline tiers. Single-rep gating at that strictness will reject substrate-equivalent cycles that happen to hit 14 or 15 first. This is the SWE-bench-scale resurfacing of the v1.4-era "borderline doc/manage" variance pattern documented in `feedback_replicate_borderline_fixtures.md`. **The strong-tier and plausible-tier classifications are essentially deterministic at temp=0**; variance lives entirely in the wrong-locus / empty boundary instances.
+
+**Confirmed sub-findings**:
+
+1. **`pylint-6528` is real W3 collateral, not noise**: empty in 2 of 3 reps (rep_2 + rep_3); wrong_target only in ship rep_1. This is the determinism signal the v1.10.2 design brief flagged as a follow-up question. The v1.10.3 W3-revert decision (silent suppression in score<LOW band) is now strongly supported by data, not just one-cycle observation.
+2. **`matplotlib-25775` is a new 3-way unstable instance** (plausible/empty/wrong_target). The v1.10.2 ship report counted its rep_1 plausible as a "new Docker resolve"; rep_2 and rep_3 disagree. That ship-report credit was variance-fortunate.
+3. **6 variance-class instances catalogued** (exclude from single-cycle pass/fail signals): astropy-14096 (known bouncer, 4+ reps), matplotlib-20826 (borderline locus), matplotlib-25775 (3-way new), pylint-6386 (1-of-3 outlier), pylint-6528 (W3 collateral confirmed), sympy-13091 (1-of-3 outlier).
+
+**Fix / takeaway**: **Ship floors set within ±1 of the measured cycle baseline require multi-rep validation** — saved as memory entry `feedback_ship_floor_needs_multirep_when_at_strictness.md`. The empty_patch ≤13 gate should be either restated as median-of-3 ≤14, or loosened to ≤15 single-shot. The `strong + plausible` headline gate (range [35, 38], much narrower) is more variance-robust and should be the primary ship signal in future cycles. Operationally: any new ship floor should pass a cheap 3-rep mini-baseline before being elevated to a hard gate; running this baseline cost ~9h of bench wall time and saves future cycles from chasing phantom regressions on the borderline tiers.
+
+The variance baseline also incidentally validates the substrate-determinism claim: sklearn-11310 and sklearn-11578 were identical in rep_1 and rep_3 (plausible/plausible, strong/strong) — re-confirming that the gh-auth bailout in rep_2 was environment, not substrate.
+
+**Affected files**: `scripts/variance_v1102_3rep.py` (new, committed in `882eaf0`); `benchmarks/swebench/subsets/v1102_rep2_gh_auth_rerun.json` (new, same commit); rep_2 and rep_3 artifacts live in `acceptance/swebench/post_specdd_v1102_n75/rep_{2,3}/` (gitignored per project convention) and `acceptance/v1102_taxonomy/v1102_n75_rep_{2,3}_*.json` (gitignored). Reproduce the report via `python -m scripts.variance_v1102_3rep --rep <rep_1_tax> --rep <rep_2_tax> --rep <rep_3_tax>`.

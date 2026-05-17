@@ -41,7 +41,73 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-15 (v1.10.2 SHIPPED — empty_patch floor HIT at 13; Docker-WIN +1 resolve; conversion_rate 84.2%)
+## Current state — 2026-05-16 (v1.10.2 n=75 3-rep variance baseline — empty_patch range [13, 15] mean 14.3; rep_1 ship was best-of-3; pylint-6528 W3 collateral confirmed; v1.10.3 brief unchanged but firmer)
+
+**Working tree**: clean. **801 tests pass + 1 module-skip on bfcl_adapter** (was 781; +20 from a pre-bench `pip install -e .` re-pin that picked up modules; net code change for the day is the `_do_test` timeout cap in commit `3c3b79b`). **No new tag** — the variance baseline is a measurement on the v1.10.2 substrate, not a ship.
+
+**Today's headline**: the v1.10.2 ship-cycle's "empty_patch = 13 — floor finally hit" was best-of-3. rep_2 and rep_3 both hit 15. Substrate is healthy and deterministic-on-the-strong/plausible-tiers; the wrong_target/wrong_location/empty_patch borderline carries ~±2 instances of noise. The v1.10.3 brief was already pointing at a W3 revert; the rep_2 + rep_3 evidence on `pylint-6528` (empty in 2 of 3) firms that decision considerably.
+
+**3-rep tally** (`acceptance/swebench/post_specdd_v1102_n75/rep_{1,2,3}/`):
+
+| metric | rep_1 | rep_2† | rep_3 | mean | range |
+|---|---|---|---|---|---|
+| strong | 18 | 17 | 18 | 17.7 | [17, 18] |
+| plausible | 20 | 18 | 19 | 19.0 | [18, 20] |
+| **strong+plausible** | **38** | **35** | **37** | **36.7** | **[35, 38]** |
+| **empty_patch** | **13** | **15** | **15** | **14.3** | **[13, 15]** |
+| wrong_target | 19 | 17 | 19 | 18.3 | [17, 19] |
+| wrong_location | 5 | 6 | 4 | 5.0 | [4, 6] |
+
+† rep_2 ran with n=73 — `scikit-learn-11310` + `scikit-learn-11578` bailed at rc=2/122s during a brief mid-bench internet outage (the documented gh-auth flake from `project_gh_auth_flake.md`). Both deterministic across rep_1 + rep_3 (plausible/plausible, strong/strong), so the normalized rep_2 estimate is {strong=18, plausible=19, s+p=37, empty=15} — wash with rep_3. See `lessons.md` 2026-05-16a for the deadlock cascade on the retry attempt.
+
+**Variance-class catalog (6 instances; exclude from single-cycle pass/fail signals)**:
+
+| instance | rep_1 | rep_2 | rep_3 | class |
+|---|---|---|---|---|
+| astropy-14096 | empty | wrong_loc | empty | bouncer (known, 4+ reps) |
+| matplotlib-20826 | wrong_loc | wrong_loc | wrong_target | borderline locus |
+| matplotlib-25775 | plausible | empty | wrong_target | **3-way unstable (new)** |
+| pylint-6386 | wrong_target | wrong_target | empty | 1-of-3 outlier |
+| **pylint-6528** | **wrong_target** | **empty** | **empty** | **W3 collateral (confirmed)** |
+| sympy-13091 | wrong_target | empty | wrong_target | 1-of-3 outlier |
+
+Real flip rate: 6/73 = 8.2%. 67 of 75 stable across reps. **Strong-tier and plausible-tier classifications are essentially deterministic at temp=0**; variance lives entirely in the wrong-locus / empty boundary.
+
+**Two incidents closed during the cycle**:
+
+1. **gh-auth flake recurred** during rep_2 — cost 2 sklearn datapoints. Mitigation (`assert_gh_auth()` 3× retry) is sound; the network was down longer than the retry window. Updated `project_gh_auth_flake.md` with the 2026-05-16 occurrence (still open as a luxe-level concern, not promoted to closed).
+2. **`_do_test` had `timeout=None`** — sklearn-11310 retry hung 25 min in pytest after workspace state pollution from a killed prior run. Fixed in commit `3c3b79b`: `PRConfig.test_timeout_s` (default 600s), `subprocess.TimeoutExpired` caught and recorded as `rc=124` cleanly. rep_3 ran with the fix and didn't need to fire it (no deadlock recurred). New regression test `test_do_test_timeout_records_clean_failure`. New memory entry `feedback_test_step_needs_wall_cap.md` generalizes the pattern: any luxe step or bench harness shelling out to a user-controlled command MUST set a wall cap.
+
+**Implications for v1.10.3 / v1.11 ship gates** (delta vs prior brief):
+
+- **Adopt median-of-3 for `empty_patch` gates**, or loosen the floor to ≤15 single-shot. The ≤13 single-rep gate is unsupportable given the measured range. Saved as `feedback_ship_floor_needs_multirep_when_at_strictness.md`. `strong + plausible` (range [35, 38]) is more variance-robust and should be the primary ship signal.
+- **v1.10.3 W3 revert is firmly supported** — pylint-6528 evidence is now 2/3 reps empty, not a single observation. The non-Pareto trade-off is real; silent suppression in score<LOW band remains the best move. The v1.10.2 design brief item #1 (trajectory-shape signals for late-commit vs stopped-responding) is *still* the right next architectural direction, but the immediate v1.10.3 surface stays small: revert.
+- **v1.11 lever sizing partially revised** — the v1.10.2 ship report's `wrote_to_some_gold_partial: 16 instances at 31.2% Docker rate` cross-tab is from rep_1's single observation. Worth re-deriving from the 3-rep union (or running v1.11's lever on a single rep with the variance-class instances excluded from the credit/discredit accounting). matplotlib-25775's variance class also means the v1.10.2 "+1 Docker resolve" needs the same caveat — that win may not survive replication.
+
+**v1.10.3 design brief** (unchanged from the v1.10.2 ship-cycle brief, with the W3 revert firmed up):
+
+1. **Revert v1.10.1 W3 exploratory variant** back to v1.10 silent-suppression in score<LOW band. Keep `recent_path_diversity` helper + logging as observability for future cycles, but stop using the signal as a gate trigger.
+2. **v1.11 locus-disambiguation lever** — pre-commit "did you miss any files?" prompt scoped to `wrote_to_some_gold_partial` bucket. Re-derive the bucket size from a 3-rep union before sizing the expected Docker delta.
+3. **Trajectory-shape signals** (post-bail tool_call rate, grep vs read ratio in rescue window) remain queued for after v1.10.3 ships; they're the long-term answer to the non-Pareto problem but unbudgeted for this cycle.
+
+**Reproduce the variance report**:
+
+```bash
+python -m scripts.variance_v1102_3rep \
+    --rep acceptance/v1102_taxonomy/v1102_n75_full_stack_swebench.json \
+    --rep acceptance/v1102_taxonomy/v1102_n75_rep_2_full_stack_swebench.json \
+    --rep acceptance/v1102_taxonomy/v1102_n75_rep_3_full_stack_swebench.json
+```
+
+(All taxonomy artifacts are gitignored per project convention; reproducible from `predictions.json` in the corresponding rep dirs via the established `compare_v110.classify_arm` pipeline.)
+
+**Commits today on `main`**:
+
+- `3c3b79b` — `pr: cap _do_test wall time to defend against subprocess deadlock` (the `_do_test` timeout fix)
+- `882eaf0` — `scripts: v1.10.2 3-rep variance analyzer + gh-auth rerun subset`
+- (this current commit) — `docs:` lessons + RESUME state update
+
+## Earlier state — 2026-05-15 (v1.10.2 SHIPPED — empty_patch floor HIT at 13; Docker-WIN +1 resolve; conversion_rate 84.2%)
 
 **Working tree**: clean post-tag. **781 tests pass + 1 module-skip on bfcl_adapter**. **v1.10.2 tagged + pushed to origin** (annotated, signed). Released atop v1.10.1.
 
