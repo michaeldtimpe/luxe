@@ -156,6 +156,54 @@ def test_variant_systems_are_non_empty():
         assert v.task_prefix.strip(), f"variant {vid!r} has empty task_prefix"
 
 
+# --- Mode C citation-grounding directive REVERTED 2026-05-17 --
+#
+# The directive "Prefer exact line citations grounded in observed tool output.
+# If you need to cite a line you haven't read, perform another `read_file` /
+# `grep` call before citing. Only omit line numbers as a last resort — never
+# invent them." was shipped to both _BASELINE_SYSTEM and _HADS_SYSTEM, then
+# reverted same-day after a 3-rep A/B on nothing-doc-config showed catastrophic
+# non-Pareto regression: rep_1 emitted 0 citations (model read "last resort"
+# as "OK to skip"), rep_2 + rep_3 aborted with "Stuck in loop" (model looped
+# on read_file/grep trying to ground every citation).
+#
+# These tests are regression guards: the phrases must STAY OUT of the prompts
+# unless a follow-up plan introduces a different wording that has been
+# explicitly re-validated against the loop-abort + citation-avoidance failure
+# modes catalogued in project_doc_config_three_modes.md and
+# feedback_citation_grounding_caused_loop_and_avoidance.md.
+
+_REVERTED_DIRECTIVE_PHRASES = (
+    "grounded in observed tool output",
+    "haven't read",
+    "Only omit line numbers as a last resort",
+)
+
+
+def test_baseline_system_does_not_carry_reverted_directive():
+    """Regression guard: the 2026-05-17 directive caused loop-aborts and
+    citation-avoidance on the A/B. It MUST NOT silently re-land without
+    a fresh validation cycle that addresses the failure modes."""
+    sys = get("baseline").system
+    for phrase in _REVERTED_DIRECTIVE_PHRASES:
+        assert phrase not in sys, (
+            f"baseline system carries reverted directive phrase {phrase!r}; "
+            f"see feedback_citation_grounding_caused_loop_and_avoidance.md "
+            f"before re-adding"
+        )
+
+
+def test_hads_system_does_not_carry_reverted_directive():
+    """Same regression guard for HADS — the directive landed in both
+    _BASELINE_SYSTEM and _HADS_SYSTEM <contract> blocks; both were
+    reverted."""
+    sys = get("hads_persona").system
+    for phrase in _REVERTED_DIRECTIVE_PHRASES:
+        assert phrase not in sys, (
+            f"hads_persona system carries reverted directive phrase {phrase!r}"
+        )
+
+
 # --- task-type overlays (Branch B) --
 
 def test_get_overlay_returns_none_for_empty_string():
