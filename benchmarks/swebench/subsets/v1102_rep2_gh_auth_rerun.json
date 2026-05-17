@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "n": 2,
+  "frozen_at": "2026-05-16",
+  "recipe": {
+    "source": "v1_baseline_n75",
+    "reason": "Re-run the two instances that bailed rc=2 at 122s in rep_2 due to gh auth flake during a brief internet outage on 2026-05-16. Per project_gh_auth_flake.md."
+  },
+  "instance_ids": [
+    "scikit-learn__scikit-learn-11310",
+    "scikit-learn__scikit-learn-11578"
+  ]
+}
