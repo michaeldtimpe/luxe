@@ -19,6 +19,7 @@ Empty-diff handling is task-type-aware:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -134,45 +135,166 @@ def _run(cmd: list[str], cwd: str | Path, env: dict | None = None,
 
 # --- preflight -------------------------------------------------------------
 
-def assert_gh_auth() -> None:
-    """Raise GhAuthError if `gh` is missing or not authenticated.
+_gh_auth_logger = logging.getLogger("luxe.pr.gh_auth")
 
-    Retry-with-backoff on rc!=0 to defend against the intermittent flake
-    documented in `project_gh_auth_flake.md`: `gh auth status` is observed
-    to non-deterministically fail mid-bench while the auth state is
-    actually fine (verifiable by re-checking seconds later). 3 attempts
-    at 0.5s / 1.5s spacing — total worst-case 2s of preflight delay
-    before a true auth failure surfaces. Captures the last attempt's
-    stderr for the error message so a real auth problem still gives the
-    user the actionable hint.
+# Per-suite TTL cache for the gh-auth probe. preflight() is called per
+# fixture by bench harnesses (see pr.py:preflight / cli.py:193); without a
+# cache, a transient network outage would multiply 22s of retry-budget by
+# the number of remaining fixtures. The 90s window is long enough to skip
+# most repeat probes in a bench cadence (typical maintain_suite fixtures
+# are seconds apart), short enough that a re-auth event is observed soon.
+_GH_AUTH_TTL_S: float = 90.0
+_GH_AUTH_LAST_OK_AT: float | None = None
+
+# Retry budget: 5 attempts at these inter-attempt delays. Total worst-case
+# wall ≈ sum + 5×timeout = 22s + at most 50s if every probe hits its own
+# timeout cap. Multi-minute outages MUST hard-fail (operator intervention
+# warranted); the chosen ceiling is intentional per project_gh_auth_flake.md.
+_GH_AUTH_RETRY_DELAYS_S: tuple[float, ...] = (0.0, 0.5, 1.5, 5.0, 15.0)
+_GH_AUTH_PROBE_TIMEOUT_S: float = 10.0
+
+# Probe command: gh api user --jq .login. A real HTTP call exercising the
+# same network+auth path PR creation uses (replaces `gh auth status`, which
+# only validated local CLI state and flapped on keychain issues).
+_GH_AUTH_PROBE_CMD: list[str] = ["gh", "api", "user", "--jq", ".login"]
+
+
+def _classify_gh_failure(rc: int, stderr: str) -> str:
+    """Heuristic stderr → failure_kind classifier.
+
+    Returns one of: network | auth | rate_limit | unknown. The
+    `binary_missing` kind is handled separately (FileNotFoundError raises
+    before classification). Lets future bench analytics answer "should we
+    auto-retry?" / "did GitHub degrade?" without grep archaeology on raw
+    stderr.
     """
-    try:
-        result = _run(["gh", "auth", "status"], cwd=Path.cwd())
-    except FileNotFoundError as e:
-        raise GhAuthError(
-            "GitHub CLI (`gh`) not found. Install with `brew install gh` and "
-            "authenticate with `gh auth login`."
-        ) from e
+    s = (stderr or "").lower()
+    network_markers = (
+        "could not resolve", "connection refused", "connection timed out",
+        "network is unreachable", "no route to host", "timeout", "timed out",
+        "dial tcp", "i/o timeout", "tls", "ssl", "dns",
+    )
+    if any(marker in s for marker in network_markers):
+        return "network"
+    auth_markers = (
+        "401", "not authenticated", "bad credentials", "no oauth token",
+        "authentication required", "token has been revoked", "must authenticate",
+    )
+    if any(marker in s for marker in auth_markers):
+        return "auth"
+    if "rate limit" in s or ("403" in s and "rate" in s):
+        return "rate_limit"
+    return "unknown"
 
-    if result.ok:
+
+def _reset_gh_auth_cache() -> None:
+    """Test seam — clear the TTL cache. Production code must not call this."""
+    global _GH_AUTH_LAST_OK_AT
+    _GH_AUTH_LAST_OK_AT = None
+
+
+def assert_gh_auth() -> None:
+    """Raise GhAuthError if `gh` is missing or cannot reach GitHub as the
+    authenticated user.
+
+    Probe: `gh api user --jq .login` — a real HTTP call exercising the same
+    network + auth path PR creation uses, not the local-state `gh auth
+    status` that the original implementation called. The probe swap is
+    documented in project_gh_auth_flake.md.
+
+    Retry budget: 5 attempts at delays [0, 0.5, 1.5, 5, 15]s with a 10s
+    per-attempt subprocess timeout. Catches transient drops up to ~20s;
+    multi-minute outages hard-fail.
+
+    TTL cache: a successful probe within the last _GH_AUTH_TTL_S seconds
+    short-circuits subsequent calls so per-fixture preflight doesn't
+    multiply the retry budget across a transient outage.
+
+    Telemetry: each attempt emits an `assert_gh_auth_attempt` log record
+    via the `luxe.pr.gh_auth` logger with fields (attempt, delay_s, rc,
+    stderr_excerpt, failure_kind, cache_hit). Bench harnesses that want
+    structured visibility can configure the logger; callers that don't
+    care see nothing.
+    """
+    global _GH_AUTH_LAST_OK_AT
+
+    now = time.monotonic()
+    if _GH_AUTH_LAST_OK_AT is not None and now - _GH_AUTH_LAST_OK_AT < _GH_AUTH_TTL_S:
+        _gh_auth_logger.info(
+            "assert_gh_auth_attempt",
+            extra={"attempt": 0, "delay_s": 0.0, "rc": 0,
+                   "stderr_excerpt": "", "failure_kind": "ok",
+                   "cache_hit": True},
+        )
         return
 
-    # Retry — the flake recovers within seconds when it fires.
-    for delay_s in (0.5, 1.5):
-        time.sleep(delay_s)
+    last_result: CmdResult | None = None
+    last_kind: str = "unknown"
+
+    for attempt, delay_s in enumerate(_GH_AUTH_RETRY_DELAYS_S, start=1):
+        if delay_s > 0:
+            time.sleep(delay_s)
         try:
-            result = _run(["gh", "auth", "status"], cwd=Path.cwd())
+            result = _run(_GH_AUTH_PROBE_CMD, cwd=Path.cwd(),
+                          timeout=_GH_AUTH_PROBE_TIMEOUT_S)
         except FileNotFoundError as e:
+            # Binary missing — no retry can fix this. Surface immediately
+            # so the user gets the actionable hint instead of burning 22s.
+            _gh_auth_logger.info(
+                "assert_gh_auth_attempt",
+                extra={"attempt": attempt, "delay_s": delay_s, "rc": -1,
+                       "stderr_excerpt": "FileNotFoundError",
+                       "failure_kind": "binary_missing",
+                       "cache_hit": False},
+            )
             raise GhAuthError(
-                "GitHub CLI (`gh`) not found mid-retry."
+                "GitHub CLI (`gh`) not found. Install with `brew install gh` and "
+                "authenticate with `gh auth login`."
             ) from e
+        except subprocess.TimeoutExpired:
+            _gh_auth_logger.info(
+                "assert_gh_auth_attempt",
+                extra={"attempt": attempt, "delay_s": delay_s, "rc": -1,
+                       "stderr_excerpt": f"timeout after {_GH_AUTH_PROBE_TIMEOUT_S}s",
+                       "failure_kind": "network",
+                       "cache_hit": False},
+            )
+            last_kind = "network"
+            continue
+
+        last_result = result
         if result.ok:
+            _GH_AUTH_LAST_OK_AT = time.monotonic()
+            _gh_auth_logger.info(
+                "assert_gh_auth_attempt",
+                extra={"attempt": attempt, "delay_s": delay_s, "rc": 0,
+                       "stderr_excerpt": "", "failure_kind": "ok",
+                       "cache_hit": False},
+            )
             return
 
+        last_kind = _classify_gh_failure(result.rc, result.stderr)
+        _gh_auth_logger.info(
+            "assert_gh_auth_attempt",
+            extra={"attempt": attempt, "delay_s": delay_s, "rc": result.rc,
+                   "stderr_excerpt": (result.stderr or "").strip().replace("\n", " ")[:200],
+                   "failure_kind": last_kind,
+                   "cache_hit": False},
+        )
+
+    # Retry budget exhausted. Invalidate the cache (don't trust stale-ok
+    # across a window where probes are demonstrably failing).
+    _GH_AUTH_LAST_OK_AT = None
+    last_stderr = (last_result.stderr.strip()
+                   if last_result and last_result.stderr
+                   else "(empty)")
     raise GhAuthError(
-        "GitHub CLI is not authenticated (3 attempts). "
-        "Run `gh auth login` and re-run. "
-        f"Last stderr: {result.stderr.strip()[:200] if result.stderr else '(empty)'}"
+        f"GitHub CLI could not authenticate via `gh api user` "
+        f"({len(_GH_AUTH_RETRY_DELAYS_S)} attempts, "
+        f"classified as {last_kind!r}). "
+        f"If this is a local auth problem, run `gh auth login` and re-run. "
+        f"If GitHub itself is degraded, wait and retry. "
+        f"Last stderr: {last_stderr[:200]}"
     )
 
 
