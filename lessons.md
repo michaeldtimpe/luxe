@@ -30,6 +30,61 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-05-17] Citation-grounding directive: same-day revert from prompt regression
+
+**What happened**: Mode C (line-number hallucination in final-report prose, `project_doc_config_three_modes.md`) had been deferred since v1.4. The Step 1 plan was a prompt-level fix: add a citation-grounding directive to `_BASELINE_SYSTEM` and `_HADS_SYSTEM` saying "Prefer exact line citations grounded in observed tool output. If you need to cite a line you haven't read, perform another `read_file` or `grep` call to confirm before citing. Only omit line numbers as a last resort — never invent them." The wording was tightened per code review to defend against citation-avoidance. Shipped, then a 3-rep nothing-doc-config A/B was run. Result: rep 1 emitted 0 citations (lint passed vacuously, 384s wall, no abort), rep 2 emitted 0 citations + ABORTED "Stuck in loop" at 143s, rep 3 produced no final report + ABORTED "Stuck in loop" at 459s. Historical v1.4.1 baseline on the same fixture was 10/10 PASS with no aborts. Same-day revert; lesson saved as `feedback_citation_grounding_caused_loop_and_avoidance.md`.
+
+**Root cause**: The directive packed two competing imperatives into one bullet:
+1. "perform another `read_file` or `grep` call to confirm before citing" — encouraged extra tool calls
+2. "Only omit line numbers as a last resort" — authorized omission as a fallback
+
+At temp=0 the model picked one exit deterministically per rep — neither converging on the intended "ground via observed tool output" middle path. Rep 1 took the omit exit (vacuous lint pass). Reps 2+3 took the call-again exit and looped on read_file/grep until the 2-consecutive-repeat-step abort fired.
+
+The anti-citation-avoidance gate in the win criteria (`total_citations_emitted` not down >20%) was the right defense but only AFTER the bench. The smaller insight is: any tool-loop-class system needs to anticipate the loop-detector as a downstream consequence of any prompt clause that tells the model "call X tool again."
+
+**Fix / takeaway**:
+- Same-day revert. `src/luxe/agents/prompts.py` restored. Regression guards landed in `tests/test_prompts.py` (`test_baseline_system_does_not_carry_reverted_directive`, `test_hads_system_does_not_carry_reverted_directive`) so the failing wording cannot silently re-land without re-validation.
+- General principle: prompt clauses with two imperatives that don't share an exit ARE NON-PARETO. If a directive includes "do X" AND "or alternately Y," design and validate the divergence behavior explicitly. Better: split into a single positive imperative without an "or" branch.
+- Future Mode C attempts should land in one or the other (per the feedback file): Option A — softer prompt that forbids invention WITHOUT inviting extra tool calls. Option B — structural re-lint against post-reprompt output (Step 2 of the original plan).
+
+**Affected files**: `src/luxe/agents/prompts.py` (reverted), `tests/test_prompts.py` (regression guards landed), `benchmarks/maintain_suite/variants_mode_c_3rep.yaml` (the A/B vehicle, kept for future re-tries).
+
+---
+
+### [2026-05-17] v1.10.3: small-surface revert sized correctly; smoke validates mechanism not floor
+
+**What happened**: v1.10.3 reverted the W3 exploratory-support variant introduced in v1.10.1 (commit `6d1709e`) and the diversity-gating overlay added in v1.10.2 (commit `ab39b9f`). Both gave way to v1.10's silent-suppression behavior in the score<LOW band. The v1.10.2 3-rep variance baseline (`project_v1102_variance_baseline.md`) had shown pylint-6528 empty in 2/3 reps under W3 — confirmed non-Pareto at the band level. Code revert + targeted n=4 smoke (`v1102_probe_n4.json`) at acceptance/swebench/v1103_smoke/rep_1/. Wall 17m41s. Results: sympy-13031 clean habituation_exit (unchanged); matplotlib-14623 empty + loop-abort (accepted regression — the W3 founding case, now back to v1.10 silent-failure shape per design); pylint-6528 empty (n=1 within the v1.10.2 2/3-empty variance — needs 3-rep to compare); sphinx-10323 patch_len=708 (recovered to non-empty).
+
+**Root cause / mechanism evidence**: All four runs showed the v1.10.3 design behaviors firing as intended. matplotlib-14623 emitted 11× `early_bail_suppressed_diffuse` events (score=0, recent_path_diversity=2) — no message landed in chat history, exactly as v1.10's behavior. pylint-6528 showed 3× suppression then `early_bail_fired` with `soft_anchor` variant once score crossed LOW. The suppression event carries `recent_path_diversity` as designed (kept as observability for v1.11 mining, not as a gate trigger). `outcomes.py` back-compat for `msg_variant="exploratory"` / `"soft_anchor_low_diversity_fallback"` preserved so stale event logs still classify cleanly.
+
+**Fix / takeaway**:
+- n=1 (or n=4) smoke validates SUBSTRATE STABILITY and mechanism behavior, not ship-floor evidence. A defensible n=75 ship-floor for v1.10.3 would need 3-rep replication on the variance-class instances per `feedback_ship_floor_needs_multirep_when_at_strictness.md`.
+- The "small-surface revert" framing was correct sizing: code change was ~165 lines in loop.py + 107 lines of test changes. Trade is documented (matplotlib-14623 may regress to v1.10 silent-failure shape) and accepted as the price of protecting pylint-6528 + sphinx-10323 + the broader band-level non-Pareto class.
+- Trajectory-shape signals (post-bail tool_call rate, grep vs read ratio in rescue window) remain queued. They're the structural answer to the non-Pareto at this band — v1.10.3 didn't budget them. Pick up in v1.11 or v2.x.
+
+**Affected files**: `src/luxe/agents/loop.py` (W3 dispatch removed, v1.10 suppress branch restored, observability emission added to the suppression event), `tests/test_loop_write_pressure.py` (`test_convergence_gate_fires_exploratory_on_diffuse` → `test_convergence_gate_suppresses_early_bail_on_diffuse`; new `test_exploratory_mode_string_no_longer_dispatched` + `test_suppression_event_carries_recent_path_diversity`), `src/luxe/agents/convergence.py` (helper + threshold constants left in place; `_DIVERSITY_MIN_FOR_EXPLORATORY` no longer imported by loop.py but kept for `test_convergence.py` historical assertions).
+
+---
+
+### [2026-05-17] gh-auth hardening: probe semantics matter more than retry budget
+
+**What happened**: `assert_gh_auth()` (`src/luxe/pr.py:137`) was the source of the long-standing flake documented in `project_gh_auth_flake.md` — bench errors with `rc=2 / no run_id captured`, fixtures bail at +0:00, no model invocation. The May-16 v1.10.2 rep_2 incident lost 2 sklearn datapoints during a real network outage. Pre-2026-05-17 mitigation was 3 retries at [0.5, 1.5]s spacing. Three things shipped in commit `03df904`:
+
+1. **Probe swap**: `gh auth status` → `gh api user --jq .login`. The original probe only validated local CLI state (it could flap on keychain issues unrelated to actual PR creation, and didn't validate the network path the bench actually needed).
+2. **Widened retry**: 5 attempts at [0, 0.5, 1.5, 5, 15]s with a 10s per-attempt subprocess timeout. The timeout was a co-equal change with the probe swap — `gh api user` is a real HTTP call that can hang longer than the local `gh auth status` did; without a per-attempt timeout, a single stuck subprocess could collapse the entire retry budget.
+3. **Failure-kind classifier** + 90s per-suite TTL cache. The classifier maps stderr → `network | auth | rate_limit | binary_missing | unknown`, drives future "should we auto-retry?" / "did GitHub degrade?" analytics. The TTL cache defends against per-fixture amplification — preflight() is called per fixture, so without a cache a 20s outage would multiply by N remaining fixtures.
+
+**Root cause**: The pre-2026-05-17 design validated the wrong thing (CLI state vs functional boundary). The retry was sized for sub-second flakes (May-2 occurrences) but had no defense against the per-fixture amplification class that the May-16 outage exposed. Tying probe semantics to actual functional path (gh api user) AND adding the TTL cache made the failure mode operationally separable from "GitHub unreachable" — the latter now correctly hard-fails after one suite-wide attempt cycle.
+
+**Fix / takeaway**:
+- For any health probe in a bench preflight: probe the **functional path the bench actually needs**, not a local-state shadow of it. CLI-status probes are weaker functional signals than API probes that exercise the same path the bench will exercise.
+- For any per-fixture preflight: TTL-cache a successful probe with a window calibrated to the suite cadence. Defense against amplification is non-optional for production bench harnesses.
+- For any retry budget: pair it with a per-attempt timeout. A single hung subprocess can otherwise eat the entire budget on a degraded network.
+
+**Affected files**: `src/luxe/pr.py:137-296` (probe swap, retry tuple, TTL cache, classifier, structured logging via `luxe.pr.gh_auth`), `tests/test_pr_flow.py:143-321` (11 new tests, 3 updated to mock the new probe command). project_gh_auth_flake.md updated to "hardened 2026-05-17, awaiting 3 clean cycles to close."
+
+---
+
 ### [2026-04-28] Kimi K2 does not fit in 32 GB — MoE memory model misunderstanding
 
 **What happened**: We planned to build a Kimi model family config alongside Qwen and DeepSeek for benchmarking. Research revealed that the smallest Kimi K2 variant requires 538 GB at 4-bit quantization. Despite having only ~32B active parameters per token, the full 1T parameter set (384 experts) must reside in memory.

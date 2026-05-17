@@ -41,7 +41,33 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-16 (v1.10.2 n=75 3-rep variance baseline — empty_patch range [13, 15] mean 14.3; rep_1 ship was best-of-3; pylint-6528 W3 collateral confirmed; v1.10.3 brief unchanged but firmer)
+## Current state — 2026-05-17 (v1.10.3 code-complete + bug-hunt landings — gh-auth hardened, Mode C Step 1 reverted with guards, W3 reverted to silent-suppression, n=4 smoke clean on mechanism evidence)
+
+**Working tree**: clean. **816 tests pass + 1 module-skip on bfcl_adapter** (was 801; +15 net = 11 gh-auth tests + 2 Mode C regression guards + 2 v1.10.3 substrate tests, minus 0 deletions). **No new tag yet** — awaiting user sign-off on tag + push.
+
+**Today's commits** (atop v1.10.2):
+
+- `03df904` — `pr: harden gh-auth preflight` — API probe (gh api user --jq .login), 5-attempt retry [0, 0.5, 1.5, 5, 15]s with 10s per-attempt timeout, failure-kind classifier (network|auth|rate_limit|binary_missing|unknown), 90s per-suite TTL cache, structured logging via `luxe.pr.gh_auth`. project_gh_auth_flake.md hardened; awaiting 3 clean cycles to close.
+- `833d2ca` — `prompts: regression guards for reverted Mode C citation-grounding directive` — Mode C Step 1 shipped + reverted same day after 3-rep nothing-doc-config A/B showed 0 citations on 1/3 reps + "Stuck in loop" abort on 2/3. Two-imperative wording ("call another tool" AND "omit as last resort") gave the model divergent exits. Lesson saved as feedback_citation_grounding_caused_loop_and_avoidance.md.
+- `3c72d92` — `v1.10.3: revert W3 exploratory variant to v1.10 silent-suppression` — restored v1.10 silent-suppression in score<LOW band; kept recent_path_diversity helper + emission on the suppression event as observability (not a gate trigger). `_EARLY_BAIL_MESSAGE_EXPLORATORY` constant deleted; "exploratory" mode key removed. outcomes.py classifications preserved for stale-log back-compat.
+
+**v1.10.3 smoke** (`benchmarks/swebench/subsets/v1102_probe_n4.json`, 4 fixtures, wall 17m41s, `acceptance/swebench/v1103_smoke/rep_1/`):
+
+| Fixture | Result | Mechanism evidence | Verdict |
+|---|---|---|---|
+| sympy-13031 (W2) | empty, clean exit step 20 | early_bail(soft_anchor, score=0.25) + action_density + write_pressure → habituation_exit | ✅ unchanged from v1.10.1 |
+| **matplotlib-14623** (W3 founding) | empty, **loop-abort step 14** | 11× suppressed_diffuse (score=0, div=2) — NO message lands in chat | ⚠️ **accepted regression** — exact v1.10 silent-failure shape that W3 traded for pylint protection. Per design. |
+| pylint-6528 (W3 collateral) | empty, clean exit step 12 | 3× suppressed_diffuse (steps 4-6) → score rose; soft_anchor fired step 7 | n=1 within v1.10.2's 2/3-empty variance; needs 3-rep to compare cleanly |
+| **sphinx-10323** (W3 collateral 2) | **patch_len=708**, clean | 12× suppressed_diffuse + write_pressure + post_write_idle_exit | ✅ **recovered** to non-empty |
+
+Mechanism verification PASS on all 4: suppression event carries `recent_path_diversity` as designed; `early_bail_fired` no longer carries `msg_variant=exploratory` anywhere; outcomes.py back-compat with stale logs preserved; no test regressions; no `rc=2 / no run_id` events (gh-auth hardening held).
+
+**v1.10.3 ship gates** (per `feedback_ship_floor_needs_multirep_when_at_strictness.md`):
+- n=4 smoke is a SUBSTRATE-STABILITY signal, not a ship-floor signal. Single-rep gates within ±1 of cycle baseline are noise.
+- A defensible n=75 ship-floor would require 3-rep replication on the variance-class instances (pylint-6528 included). Optional next step if user wants ship-grade evidence.
+- The code revert itself is correct: mechanism behaviors fire as designed, tests pass, no crashes. Defensible to tag based on mechanism evidence + previous v1.10.2 baseline as the population-level prior.
+
+## Earlier state — 2026-05-16 (v1.10.2 n=75 3-rep variance baseline — empty_patch range [13, 15] mean 14.3; rep_1 ship was best-of-3; pylint-6528 W3 collateral confirmed; v1.10.3 brief unchanged but firmer)
 
 **Working tree**: clean. **801 tests pass + 1 module-skip on bfcl_adapter** (was 781; +20 from a pre-bench `pip install -e .` re-pin that picked up modules; net code change for the day is the `_do_test` timeout cap in commit `3c3b79b`). **No new tag** — the variance baseline is a measurement on the v1.10.2 substrate, not a ship.
 
