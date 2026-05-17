@@ -1248,19 +1248,19 @@ def test_convergence_gate_off_preserves_v19_behavior(monkeypatch):
     )
 
 
-def test_convergence_gate_fires_exploratory_on_diffuse(monkeypatch):
-    """v1.10.1 — With LUXE_CONVERGENCE_GATE=1 and a diffuse-recon trajectory
-    (distinct paths → score < LOW_THRESHOLD), early_bail fires the
-    EXPLORATORY variant. Replaces v1.10's total suppression which created
-    the matplotlib-14623 silent failure mode.
+def test_convergence_gate_suppresses_early_bail_on_diffuse(monkeypatch):
+    """v1.10.3 — With LUXE_CONVERGENCE_GATE=1 and a diffuse-recon
+    trajectory (distinct paths → score < LOW_THRESHOLD), early_bail
+    is SILENTLY SUPPRESSED. No early_bail message lands in the chat
+    history; no soft_anchor / commit_imperative / exploratory variant
+    is emitted.
 
-    v1.10.2 — exploratory still fires here (4 distinct paths at step=4
-    exceeds the diversity threshold of 2). The post_exploratory_escalation
-    predicate may ALSO fire later in the run if no writes occur — that's
-    correct behavior for this read-only scripted trajectory and validated
-    by the separate post-exploratory test.
+    History: v1.10 had this suppression behavior. v1.10.1 replaced it
+    with an exploratory variant; v1.10.2 diversity-gated the LOW band.
+    v1.10.3 reverted both after the n=75 3-rep variance baseline showed
+    non-Pareto regression at the band level (pylint-6528 empty 2/3 reps
+    under the exploratory variant).
     """
-    from luxe.agents.loop import _EARLY_BAIL_MESSAGE_EXPLORATORY
     monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
@@ -1278,18 +1278,85 @@ def test_convergence_gate_fires_exploratory_on_diffuse(monkeypatch):
     )
 
     final = backend.calls[-1]
-    exploratory_msgs = [m for m in final
-                        if m.get("role") == "user"
-                        and _EARLY_BAIL_MESSAGE_EXPLORATORY in str(m.get("content", ""))]
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
     commit_msgs = [m for m in final
                    if m.get("role") == "user"
                    and _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE in str(m.get("content", ""))]
-    assert len(exploratory_msgs) == 1, (
-        f"expected exploratory variant on diffuse-recon trajectory, got "
-        f"exploratory={len(exploratory_msgs)} "
-        f"commit_imperative={len(commit_msgs)}"
+    default_msgs = [m for m in final
+                    if m.get("role") == "user"
+                    and _EARLY_BAIL_MESSAGE in str(m.get("content", ""))]
+    assert len(soft_msgs) == 0, (
+        f"soft_anchor variant must be suppressed in LOW band, got {len(soft_msgs)}"
     )
-    assert len(commit_msgs) == 0, "commit_imperative must NOT fire on diffuse-recon"
+    assert len(commit_msgs) == 0, (
+        f"commit_imperative variant must NOT fire in LOW band, got {len(commit_msgs)}"
+    )
+    assert len(default_msgs) == 0, (
+        f"default early_bail must NOT fire in LOW band under soft_anchor mode, "
+        f"got {len(default_msgs)}"
+    )
+
+
+def test_exploratory_mode_string_no_longer_dispatched(monkeypatch):
+    """v1.10.3 — the 'exploratory' value is no longer registered as a
+    LUXE_EARLY_BAIL_MODE. Setting it via env should fall through to the
+    default message rather than firing a now-deleted variant.
+    Regression guard: prevents a stale env config from silently mapping
+    to a missing constant or to the old W3 wording sneaking back."""
+    from luxe.agents.loop import _EARLY_BAIL_MESSAGE_MODES
+    assert "exploratory" not in _EARLY_BAIL_MESSAGE_MODES
+    # Verify the module no longer exports the old constant.
+    import luxe.agents.loop as loop_mod
+    assert not hasattr(loop_mod, "_EARLY_BAIL_MESSAGE_EXPLORATORY")
+
+
+def test_suppression_event_carries_recent_path_diversity(monkeypatch):
+    """v1.10.3 observability — the early_bail_suppressed_diffuse event
+    must include recent_path_diversity so v1.11 lever sizing has the
+    topology distribution data even though diversity is no longer a
+    gate trigger. The helper is kept (recent_path_diversity in
+    convergence.py) explicitly for this purpose."""
+    import luxe.agents.loop as loop_mod
+    captured: list[tuple[str, dict]] = []
+
+    def _capture(run_id, kind, **fields):
+        captured.append((kind, fields))
+
+    monkeypatch.setattr(loop_mod, "append_event", _capture)
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # Diffuse-recon trajectory — 8 distinct paths, no rereads, no greps.
+    scripted = [_read_resp_with_path(f"u{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-run",
+    )
+
+    suppress_events = [(k, f) for k, f in captured
+                       if k == "early_bail_suppressed_diffuse"]
+    assert suppress_events, "no early_bail_suppressed_diffuse events emitted"
+    for _, fields in suppress_events:
+        assert "recent_path_diversity" in fields, (
+            "suppression event missing recent_path_diversity observability field"
+        )
+        # 8 distinct paths in the trajectory; diversity is windowed but
+        # should be >= 2 once we've seen multiple distinct reads.
+        assert fields["recent_path_diversity"] >= 0, (
+            f"diversity must be a non-negative count, got "
+            f"{fields['recent_path_diversity']!r}"
+        )
+        assert fields["convergence_score"] < 0.10, (
+            "suppression should only fire below LOW threshold"
+        )
 
 
 def test_convergence_gate_fires_commit_imperative_on_high_convergence(monkeypatch):

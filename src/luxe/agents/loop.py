@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from luxe.agents.convergence import (
-    _DIVERSITY_MIN_FOR_EXPLORATORY,
     compute_convergence_score,
     extract_path,
     recent_path_diversity,
@@ -305,27 +304,22 @@ _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE = (
     "`edit_file` now."
 )
 
-# v1.10.1 — exploratory-support variant fired when convergence_score < LOW
-# (diffuse-recon trajectory; the v1.10 audit's matplotlib-14623 archetype).
-# v1.10 SUPPRESSED early_bail entirely in this band — empirically the
-# silent failure mode: matplotlib-14623 sat at score=0.0 for 12 consecutive
-# steps with zero writes and zero commit nudges. The exploratory variant
-# replaces the silence with a low-pressure commit prime that doesn't force
-# a write. Positive imperative ending; no comparative framing; no abstain
-# escape valve. Permits the model to keep exploring while making the
-# eventual commit explicit and bounded.
-_EARLY_BAIL_MESSAGE_EXPLORATORY = (
-    "Mid-loop notice: you have started exploring. As you continue, "
-    "consider which file is most likely to need modification — you may "
-    "begin attempting a small corrective edit when you have a candidate."
-)
+# v1.10.1 introduced an exploratory-support variant for the score<LOW band
+# (replacing v1.10's silent suppression). v1.10.2 added diversity gating
+# inside it. v1.10.3 reverted both back to silent suppression after the
+# 3-rep variance baseline showed non-Pareto regression at the band level
+# (pylint-6528 empty in 2/3 reps under the exploratory variant; see
+# project_v1102_variance_baseline.md). Constant + dict entry removed
+# with the dispatcher revert. Old event logs still carry
+# msg_variant="exploratory" / "soft_anchor_low_diversity_fallback";
+# outcomes.py preserves their CONFIDENCE_COLLAPSE classification for
+# back-compat analysis.
 
 _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
     "default": _EARLY_BAIL_MESSAGE,
     "no_abstain": _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
     "soft_anchor": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
     "commit_imperative": _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE,
-    "exploratory": _EARLY_BAIL_MESSAGE_EXPLORATORY,
 }
 
 # v1.10 — convergence-score thresholds for conditional intervention
@@ -574,72 +568,85 @@ def run_agent(
                 and writes_seen == 0
                 and step >= _EARLY_BAIL_MIN_STEP
                 and (result.tool_calls_total - writes_seen) >= _EARLY_BAIL_MIN_READS):
-            # v1.10 / v1.10.1 — conditional stacking via convergence score.
-            # Three bands on the score, each with a defined message:
-            #   score < LOW:   exploratory-support variant (v1.10.1; replaces
-            #                  v1.10's total suppression. matplotlib-14623's
-            #                  12-step score=0.0 trajectory got zero commit
-            #                  nudges under v1.10 — silent failure mode. The
-            #                  exploratory message primes commitment without
-            #                  forcing a write.)
-            #   LOW ≤ score < HIGH:  soft_anchor (the v1.10 default band)
-            #   score ≥ HIGH:  commit_imperative (model has converged on a
-            #                  target via repeated reads / localized greps)
-            # Other modes (default, no_abstain, explicit kwarg) bypass the
-            # convergence-band logic — only soft_anchor is dynamic.
+            # v1.10.3 — REVERT to v1.10 silent-suppression in score<LOW band.
+            # History:
+            #   v1.10:   suppress entirely below LOW threshold (diffuse-recon;
+            #            commitment pressure hurts exploratory recovery).
+            #   v1.10.1: replaced suppression with exploratory variant.
+            #            matplotlib-14623 was rescued; pylint-6528 regressed.
+            #   v1.10.2: added recent_path_diversity gating to split the
+            #            LOW band (high-diversity → exploratory, low-diversity
+            #            → soft_anchor fallback). 3-rep variance baseline
+            #            (project_v1102_variance_baseline.md) showed
+            #            pylint-6528 empty in 2 of 3 reps — non-Pareto
+            #            confirmed at the band level (W3 collateral).
+            #   v1.10.3: revert to v1.10 silent-suppression. Keep
+            #            recent_path_diversity computation + emission as
+            #            observability for future cycles (v1.11 lever
+            #            sizing depends on diversity-distribution data),
+            #            but stop using it as a gate trigger.
             # Resolution precedence: explicit kwarg > env mode > default.
-            # v1.10.2 — LOW band gates on recent_path_diversity to split
-            # the two trajectory shapes that v1.10.1 conflated:
-            #   high diversity → true exploration → exploratory variant
-            #   low diversity → focused-but-uncommitted → soft_anchor fallback
-            # The "soft_anchor_low_diversity_fallback" variant name lets
-            # post-hoc analysis distinguish "soft_anchor by default in MID
-            # band" from "soft_anchor by fallback in LOW band."
-            recent_diversity = 0  # populated only when we need it
-            if early_bail_message is not None:
-                msg = early_bail_message
-                msg_variant = "kwarg"
+            # Only soft_anchor mode is dynamic; static modes (default,
+            # no_abstain, explicit kwarg) bypass the band logic.
+            suppress_for_convergence = (
+                convergence_gate_enabled
+                and convergence_score < _CONVERGENCE_LOW_THRESHOLD
+                and early_bail_message is None
+                and os.environ.get("LUXE_EARLY_BAIL_MODE", "default") == "soft_anchor"
+            )
+            if suppress_for_convergence:
+                # Match v1.10 semantics: do NOT set early_bail_fired here.
+                # Suppression events emit every step the predicate is
+                # satisfied below the LOW band — bloats the log slightly
+                # but lets post-hoc analysis see how long the diffuse-
+                # recon band persisted. The outer `not early_bail_fired`
+                # guard ensures the firing branch can still pick up later
+                # if convergence rises above LOW.
+                #
+                # v1.10.3 observability — compute recent_path_diversity
+                # and emit it on every suppression event so v1.11 mining
+                # has the topology signal without it being a gate trigger.
+                recent_diversity = recent_path_diversity(tool_history)
+                if log_calls:
+                    append_event(
+                        run_id, "early_bail_suppressed_diffuse",
+                        phase=phase, step=step,
+                        convergence_score=convergence_score,
+                        threshold=_CONVERGENCE_LOW_THRESHOLD,
+                        tool_calls_total=result.tool_calls_total,
+                        recent_path_diversity=recent_diversity,
+                    )
             else:
-                mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
-                if (convergence_gate_enabled
-                        and mode == "soft_anchor"
-                        and convergence_score < _CONVERGENCE_LOW_THRESHOLD):
-                    recent_diversity = recent_path_diversity(tool_history)
-                    if recent_diversity >= _DIVERSITY_MIN_FOR_EXPLORATORY:
-                        msg = _EARLY_BAIL_MESSAGE_EXPLORATORY
-                        msg_variant = "exploratory"
-                    else:
-                        msg = _EARLY_BAIL_MESSAGE_SOFT_ANCHOR
-                        msg_variant = "soft_anchor_low_diversity_fallback"
-                elif (convergence_gate_enabled
-                        and mode == "soft_anchor"
-                        and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
-                    msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
-                    msg_variant = "commit_imperative"
+                if early_bail_message is not None:
+                    msg = early_bail_message
+                    msg_variant = "kwarg"
                 else:
-                    msg = _EARLY_BAIL_MESSAGE_MODES.get(
-                        mode, _EARLY_BAIL_MESSAGE)
-                    msg_variant = mode
-            messages.append({"role": "user", "content": msg})
-            early_bail_fired = True
-            early_bail_step = step
-            last_intervention_step = step
-            last_intervention_kind = "early_bail"
-            intervention_kinds_fired.add("early_bail")
-            if log_calls:
-                append_event(
-                    run_id, "early_bail_fired",
-                    phase=phase, step=step,
-                    tool_calls_total=result.tool_calls_total,
-                    completion_tokens=result.completion_tokens,
-                    reads=result.tool_calls_total - writes_seen,
-                    convergence_score=convergence_score,
-                    msg_variant=msg_variant,
-                    # v1.10.2 — recent_path_diversity at fire time. Lets
-                    # post-hoc mining tune the LOW-band fallback threshold
-                    # against actual trajectory topology distributions.
-                    recent_path_diversity=recent_diversity,
-                )
+                    mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
+                    if (convergence_gate_enabled
+                            and mode == "soft_anchor"
+                            and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
+                        msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
+                        msg_variant = "commit_imperative"
+                    else:
+                        msg = _EARLY_BAIL_MESSAGE_MODES.get(
+                            mode, _EARLY_BAIL_MESSAGE)
+                        msg_variant = mode
+                messages.append({"role": "user", "content": msg})
+                early_bail_fired = True
+                early_bail_step = step
+                last_intervention_step = step
+                last_intervention_kind = "early_bail"
+                intervention_kinds_fired.add("early_bail")
+                if log_calls:
+                    append_event(
+                        run_id, "early_bail_fired",
+                        phase=phase, step=step,
+                        tool_calls_total=result.tool_calls_total,
+                        completion_tokens=result.completion_tokens,
+                        reads=result.tool_calls_total - writes_seen,
+                        convergence_score=convergence_score,
+                        msg_variant=msg_variant,
+                    )
 
         # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,
         # action_density_gate, and the action_density_sample observability
