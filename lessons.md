@@ -51,6 +51,31 @@ The anti-citation-avoidance gate in the win criteria (`total_citations_emitted` 
 
 ---
 
+### [2026-05-17] v1.10.3 n=75 SHIP HELD — mechanism correct, composite worse, psf__requests cluster surrendered 3 unexpectedly
+
+**What happened**: After the small-surface revert of W3 (commit `3c72d92`) the n=4 smoke and 3-rep probe both looked clean on mechanism evidence. The n=75 + Docker harness (5h + 35min) revealed the composite picture is worse at single-rep than the v1.10.2 ship-cycle:
+- Inspector tier: strong+plausible 37 (in v1.10.2's [35, 38] range — substrate stable) but **empty_patch 18, +3 above v1.10.2's 3-rep range [13, 15]**.
+- Docker harness: **33/75 = 44.0%, −6 resolves vs v1.10.2 rep_1's 39/75 = 52.0%**.
+- Mechanism: ✅ 0 exploratory variant fires (W3 fully removed), all 6 CONFIDENCE_COLLAPSE are soft_anchor, suppression events carry `recent_path_diversity` as designed, gh-auth hardening held (sklearn-11310 + sklearn-11578 both completed cleanly).
+- Cross-cycle Docker surrenders breakdown: 1 design-accepted (matplotlib-14623), 3 known-variance, **3 NEW** Docker regressions on the psf__requests cluster (requests-1724, requests-1766, requests-5414).
+
+**Root cause / hypothesis**: The 3-instance psf__requests surrender pattern is the most concerning signal. None of those instances are in `project_v1102_variance_baseline.md`. Two possibilities: (a) random variance coincidence on a single rep; (b) hidden cost of silent-suppression on a fixture class where v1.10.1's exploratory variant was quietly helping but the v1.10.2 measurement didn't catch it (because v1.10.2's 3-rep on those instances was consistently resolved — they only fell off under v1.10.3's silent suppression).
+
+The empty_patch +3 outside the v1.10.2 range is more decisive. Even discounting the design-accepted matplotlib-14623, the remaining empties exceed the noise band per `feedback_ship_floor_needs_multirep_when_at_strictness.md`.
+
+**Fix / takeaway**:
+- **Ship held — no tag.** The W3 revert commit stays on main (it's a substrate change that may still be correct under 3-rep replication), but v1.10.3 doesn't tag as a release.
+- The gh-auth hardening + Mode C regression guards are independent of the W3 decision and stay landed regardless.
+- Next steps (in priority order):
+  1. **3-rep replication on the full n=75** to distinguish variance from systematic. ~10h additional wall.
+  2. **psf__requests cluster investigation**: pull events.jsonl for the 3 surrendered instances; check whether they fall in the score<LOW band (suppression) or above (soft_anchor fired). If they're suppressed and v1.10.1's exploratory was the working rescue, the v1.10.3 design needs a band-specific refinement (e.g., write_pressure escalation at this band for the requests fixture-class).
+  3. If 3-rep confirms regression, revert `3c72d92` and keep the cycle's other landings (gh-auth, Mode C guards) as stand-alone substrate work.
+- **General principle**: at this point in the cycle's strictness, single-rep n=75 with ±3 on a primary metric is HOLD-grade evidence on its own — even if mechanism evidence is clean. The ship floor's noise band must be calibrated to the multi-rep variance distribution, not to single-rep gates. `feedback_ship_floor_needs_multirep_when_at_strictness.md` was written for exactly this case.
+
+**Affected files**: no code change from this analysis (analysis-only). Updated: `RESUME.md` current-state header, `lessons.md` this entry, memory: `project_v1102_variance_baseline.md` (would be extended with v1.10.3 cross-cycle deltas if v1.10.3 ultimately ships; deferred for now).
+
+---
+
 ### [2026-05-17] v1.10.3: small-surface revert sized correctly; smoke validates mechanism not floor
 
 **What happened**: v1.10.3 reverted the W3 exploratory-support variant introduced in v1.10.1 (commit `6d1709e`) and the diversity-gating overlay added in v1.10.2 (commit `ab39b9f`). Both gave way to v1.10's silent-suppression behavior in the score<LOW band. The v1.10.2 3-rep variance baseline (`project_v1102_variance_baseline.md`) had shown pylint-6528 empty in 2/3 reps under W3 — confirmed non-Pareto at the band level. Code revert + targeted n=4 smoke (`v1102_probe_n4.json`) at acceptance/swebench/v1103_smoke/rep_1/. Wall 17m41s. Results: sympy-13031 clean habituation_exit (unchanged); matplotlib-14623 empty + loop-abort (accepted regression — the W3 founding case, now back to v1.10 silent-failure shape per design); pylint-6528 empty (n=1 within the v1.10.2 2/3-empty variance — needs 3-rep to compare); sphinx-10323 patch_len=708 (recovered to non-empty).
