@@ -41,9 +41,57 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-17 (v1.10.3 code-complete + bug-hunt landings — gh-auth hardened, Mode C Step 1 reverted with guards, W3 reverted to silent-suppression, n=4 smoke clean on mechanism evidence)
+## Current state — 2026-05-17 (v1.10.3 SHIP HELD — mechanism shift correct but composite worse at n=1; gh-auth + Mode C bug-hunt landed; need 3-rep before tag decision)
 
-**Working tree**: clean. **816 tests pass + 1 module-skip on bfcl_adapter** (was 801; +15 net = 11 gh-auth tests + 2 Mode C regression guards + 2 v1.10.3 substrate tests, minus 0 deletions). **No new tag yet** — awaiting user sign-off on tag + push.
+**Working tree**: clean post-bench. **816 tests pass + 1 module-skip on bfcl_adapter**. **NO TAG, NO PUSH.** Five commits sit on `main` past `origin/main` (v1.10.2 docs + 4 v1.10.3-cycle commits).
+
+**Headline — v1.10.3 single-rep n=75 + Docker harness misses ship floor on aggregate, mechanism works as designed**:
+
+| Metric | v1.10.3 rep_1 | v1.10.2 rep_1 | v1.10.2 3-rep range | Verdict |
+|---|---|---|---|---|
+| strong | 19 | 18 | [17, 18] | ✓ +1 |
+| plausible | 18 | 20 | [18, 20] | ≈ in range |
+| **strong + plausible** | **37** | 38 | **[35, 38]** | ✓ in range |
+| **empty_patch** | **18** | 13 | **[13, 15]** | ✗ **+3 outside range** |
+| wrong_target | 16 | 19 | [17, 19] | ✓ −3 |
+| wrong_location | 4 | 5 | [4, 6] | ✓ −1 |
+| **Docker harness** | **33 / 75 = 44.0%** | 39 / 75 = 52.0% | (single rep) | ✗ **−6 resolves (−8.0pp)** |
+| CONFIDENCE_COLLAPSE | 6 (all soft_anchor) | 5 (3 SA + 2 expl.) | — | mechanism shift visible — 0 exploratory variant as designed |
+| ABSTAIN_AFTER_INTERVENTION | 6 | 4 | — | ✗ +2 |
+| intervention_conversion_rate | 73.3% | 84.2% | — | ✗ −10.9pp |
+
+**Cross-cycle Docker delta** (`acceptance/swebench/post_specdd_v1103_n75/rep_1/harness/`):
+- Kept: 32. Surrendered: 7. New: 1 (psf__requests-1921).
+- Surrendered breakdown:
+  - matplotlib-14623 — **design-accepted** (W3 founding case, expected silent-failure shape under v1.10.3)
+  - matplotlib-20826, matplotlib-25775, sphinx-10449 — **3 known variance-class instances** per `project_v1102_variance_baseline.md` (could move either way on another rep)
+  - **psf__requests-1724, psf__requests-1766, psf__requests-5414 — 3 NEW Docker regressions** not in the v1.10.2 variance catalog. The psf__requests cluster surrendering 3 instances simultaneously is the most concerning signal — needs investigation before re-ship.
+- 1 errored: scikit-learn-12682 (no_report, harness-side; not a model issue).
+
+**Mechanism evidence — working as designed**:
+- 0 instances classified with `msg_variant=exploratory` (W3 variant fully removed)
+- All 6 CONFIDENCE_COLLAPSE are `soft_anchor` variant — the v1.10.3 dispatch is correct
+- `early_bail_suppressed_diffuse` events emitted with `recent_path_diversity` field populated (observability preserved per design)
+- gh-auth hardening held — sklearn-11310 + sklearn-11578 (the v1.10.2 gh-auth flake casualties) BOTH completed cleanly this cycle
+- No test regressions, no crashes
+
+**Ship decision: HOLD (do NOT tag).** Reasoning:
+- The single-rep aggregate misses the v1.10.2 ship floor (empty_patch +3 above range; Docker −6 vs rep_1).
+- 3 new Docker regressions on the psf__requests cluster don't fit the v1.10.2 variance catalog — could be (a) coincidence variance, (b) hidden cost of silent-suppression on a fixture class v1.10.1's exploratory variant was quietly helping.
+- Per `feedback_ship_floor_needs_multirep_when_at_strictness.md`: single-rep gates within ±1 of cycle baseline are noise; ±3 is above noise but n=1 can't separate signal from variance.
+- 3-rep replication is the next action. Two reps × ~5h each = ~10h additional wall.
+
+**v1.10.3 commits (on main, not pushed, not tagged)**:
+- `ff5f5df` — `docs: v1.10.3 code-complete` (← this file; will be updated)
+- `3c72d92` — `v1.10.3: revert W3 exploratory variant to v1.10 silent-suppression`
+- `833d2ca` — `prompts: regression guards for reverted Mode C citation-grounding directive`
+- `03df904` — `pr: harden gh-auth preflight — API probe, 5-attempt retry, classifier, TTL cache`
+
+**The gh-auth + Mode C-guard commits are independent of the W3 decision** — they ship regardless. If 3-rep confirms v1.10.3 W3 regression, the option is:
+1. Revert `3c72d92` (W3 silent-suppression) and keep gh-auth + Mode C guards on main; v1.10.3 cycle terminates without a tag.
+2. Investigate the psf__requests cluster + iterate prompt-band design before re-running 3-rep.
+
+## Earlier state — 2026-05-17 morning (v1.10.3 code-complete, n=4 smoke clean on mechanism evidence — superseded by n=75 above)
 
 **Today's commits** (atop v1.10.2):
 
