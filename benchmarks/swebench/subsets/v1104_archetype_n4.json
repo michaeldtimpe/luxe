@@ -1,0 +1,18 @@
+{
+  "version": "v1.10.4",
+  "n": 4,
+  "frozen_at": "2026-05-18",
+  "recipe": "Conditional-band-response preflight gate. Four archetype instances established by the v1.10.3 3-rep deep-dive analysis. Any change to the convergence/intervention surface (suppression predicate, message variant selection, score-band thresholds) MUST run this fixture before any n=14 smoke or n=75 cycle. Pass criteria are per-instance, not aggregate — this is archetype-driven evaluation, not bulk-score.",
+  "composition": {
+    "sphinx-doc__sphinx-10435": "CONFIDENCE_COLLAPSE recovery archetype. Was strong in v1.9 / v1.10 / v1.10.1 / v1.10.2 (3/3 reps each cycle, 17-18 line patch ~837 bytes). REGRESSED to empty_patch in v1.10.3 (3/3 reps, 0 bytes). Trajectory: silent suppression at step 4 → soft_anchor bail at step 5 → terminate at step 6-7 with 0 writes. v1.10.4 target: strong patch (≥1 of 1 rep on preflight, ≥2 of 3 in n=75). This is the load-bearing case for the v1.10.4 cycle.",
+    "matplotlib__matplotlib-14623": "W3 founding case. wrong_target in v1.10.2 (3/3, ~58-99 byte patches touching wrong locus). empty_patch in v1.10.3 (3/3) — accepted as the design-target failure shape (the whole reason for W3 silent suppression was to NOT solve this via repeated exploratory firing that wasted runway). v1.10.4 target: no STRICTLY worse outcome than v1.10.3 baseline. Acceptable: empty_patch (matches v1.10.3) or wrong_target (matches v1.10.2). Unacceptable: any change that re-introduces the v1.10.1 wasted-runway shape.",
+    "psf__requests-5414": "Cluster regression archetype. Docker-pass in v1.10.2 with try/except wrap around IDNA encoding that handles both `*` and `.` host prefixes (hash 5508b8d0ba, 1045b). Docker-fail in v1.10.3 (3/3 reps produce byte-identical wildcard-only patch hash 0bac5337dc, 1049b, missing `.` case). Mechanism: silent suppression at score=0.0 lets the model converge faster (11 steps, max_score 0.417) on a less complete case analysis. v1.10.4 target: Docker-pass via either v1.10.2-shape try/except OR an equivalent broader case analysis.",
+    "psf__requests-1921": "Deterministic v1.10.3 GAIN archetype (the preservation case). Docker-fail in v1.10.2 (3/3). Docker-pass in v1.10.3 (3/3 reps produce byte-identical passing patch hash 8528e03e9d, 495b). Mechanism: 3 silent suppressions at steps 4-6 give the model breathing room; soft_anchor variant fires at step 7 and produces a passing patch. v1.10.4 target: Docker-pass preserved. If v1.10.4 alters the score<LOW band behavior, must verify 1921's trajectory still gets the soft_anchor at step 7 with enough preceding suppressions for the model to land on the working fix."
+  },
+  "instance_ids": [
+    "sphinx-doc__sphinx-10435",
+    "matplotlib__matplotlib-14623",
+    "psf__requests-5414",
+    "psf__requests-1921"
+  ]
+}
