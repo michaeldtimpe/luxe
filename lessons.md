@@ -2546,3 +2546,84 @@ rep_1 was best-of-3 on `empty_patch`. rep_2 and rep_3 both hit 15. The "floor fi
 The variance baseline also incidentally validates the substrate-determinism claim: sklearn-11310 and sklearn-11578 were identical in rep_1 and rep_3 (plausible/plausible, strong/strong) — re-confirming that the gh-auth bailout in rep_2 was environment, not substrate.
 
 **Affected files**: `scripts/variance_v1102_3rep.py` (new, committed in `882eaf0`); `benchmarks/swebench/subsets/v1102_rep2_gh_auth_rerun.json` (new, same commit); rep_2 and rep_3 artifacts live in `acceptance/swebench/post_specdd_v1102_n75/rep_{2,3}/` (gitignored per project convention) and `acceptance/v1102_taxonomy/v1102_n75_rep_{2,3}_*.json` (gitignored). Reproduce the report via `python -m scripts.variance_v1102_3rep --rep <rep_1_tax> --rep <rep_2_tax> --rep <rep_3_tax>`.
+
+### [2026-05-18] v1.10.3 ship HOLD via cohort-shift methodology — aggregate metrics hid a deterministic strong→empty regression on a previously rescued case
+
+**What happened**: v1.10.3 (W3 silent-suppression revert) completed 3-rep n=75. Single-rep rep_1 looked alarming (Docker −6 vs v1.10.2). Median normalized across the 3 reps to clean (Docker −2 apples-to-apples, empty_patch median 15 = v1.10.2 baseline). My first surface report recommended TAG. The user pushed back: "Does this represent a deep dive of the findings?"
+
+The deep dive ran a per-instance cohort-shift 3×3 matrix (`scripts/audit_v1103_suppression.py` later codified the methodology). It surfaced **two deterministic regressions** that the median view hid:
+
+1. **sphinx-doc__sphinx-10435**: strong (3/3 reps in v1.10.2) → empty_patch (3/3 reps in v1.10.3). Load-bearing — this is the v1.9 CONFIDENCE_COLLAPSE rescue case, maintained as strong through v1.10/v1.10.1/v1.10.2.
+2. **matplotlib__matplotlib-14623**: wrong_target (3/3) → empty (3/3). The W3 "design-accepted" founding case that, on inspection, was a tier degradation (NOT Docker-equivalent — v1.10.2 rep_1 had this Docker-resolved with a 54-line patch in ticker.py).
+
+The aggregate medians were equal because v1.10.3 also produced **deterministic gains** (sphinx-10323 empty→wrong_location, pylint-4661 wrong_target→plausible) that mathematically offset the losses. Empty_patch count was identical (15 both cycles) but on DIFFERENT instances.
+
+**Mechanism trace for the load-bearing case** — sphinx-10435 under v1.10.2 vs v1.10.3:
+
+| step | v1.10.2 (strong) | v1.10.3 (empty) |
+|---|---|---|
+| 4 | early_bail_fired with exploratory variant | early_bail_suppressed_diffuse (silent) |
+| 5 | (continues exploring) | early_bail_fired with soft_anchor → wrap-up wording terminates |
+| 6-11 | reads + writes 17-18 line patch | empty patch |
+
+**Root cause**: The W3 silent-suppression policy in score<LOW band removed the only explicit signal for sphinx-10435's trajectory. With the suppression silent, the next intervention (soft_anchor at score=0.25) fires at step 5 and its "Commit to your best candidate" wording is interpreted as wrap-up by Qwen3.6-35B-A3B-6bit on this trajectory shape — exactly the failure mode `feedback_soft_anchor_wording_reads_as_wrap_up.md` warned about.
+
+**Methodology lesson**: **Per-instance cohort-shift 3×3 matrix is mandatory for any 3-rep validation. Aggregate medians can hide deterministic regressions that mathematically offset deterministic gains.** Codified in `project_v1103_hold_finding.md` and `project_archetype_preflight_methodology.md`. Future cycles must:
+
+1. Build a 3-rep × 3-rep tier matrix (instance × cycle).
+2. Flag DETERMINISTIC LOSSES (strictly worse in all 3 reps) of previously-strong-tier cases as HOLD-grade signals regardless of aggregate metrics.
+3. Maintain an archetype-N fixture set as a pre-flight gate before any n=14 smoke or n=75 cycle.
+
+**Process lesson**: The ship verdict evolved in 3 steps over this session:
+- step 1: single-rep HOLD ("−6 Docker collapse")
+- step 2: 3-rep median TAG ("aggregates normalize")
+- step 3: 3-rep cohort-shift HOLD ("deterministic regression on previously rescued case")
+
+Each was a coherent interpretation of the available evidence. The decisive evidence came from the deterministic-cross-rep-trajectory analysis (not from any single metric). **Single-rep gates are dangerous AND median-normalized aggregates are dangerous. Cohort-shift methodology is required for HOLD/SHIP decisions on interventions that can redistribute outcomes.**
+
+**Affected files / artifacts**: `scripts/audit_v1103_suppression.py` (new); `benchmarks/swebench/subsets/v1104_archetype_n4.json` (new, the post-cycle archetype fixture); memory entries `project_v1103_hold_finding.md`, `project_psf_requests_5414_band_case.md`, `project_archetype_preflight_methodology.md`; `feedback_intervention_stacking_is_non_pareto.md` updated with v1.10.3 case study.
+
+### [2026-05-19] v1.10.4 cycle — hybrid D+B band response; sphinx-10435 recovered, sphinx-10323 regressed; the 10435/10323 mechanism duality
+
+**What happened**: After the v1.10.3 HOLD finding, the audit of `early_bail_suppressed_diffuse` events across v1.10.3 reps showed that 50% of HARMFUL trajectories had n_suppressions == 1 (the sphinx-10435 archetype: 1 silent suppression → soft_anchor at step 5 → terminate empty). Designed Hybrid D+B: fire a new `breadth_probe` message variant on the FIRST suppression per trajectory AND on the Nth suppression (N=3 escalation). breadth_probe explicitly does NOT set `early_bail_fired` so subsequent interventions still fire when score rises.
+
+Built `_EARLY_BAIL_MESSAGE_BREADTH_PROBE` constant + escalation logic in `loop.py:566-700`. New env `LUXE_EARLY_BAIL_BAND_RESPONSE` (default `breadth_probe_hybrid`; pin to `silent` for v1.10.3 backward-compat). 4 new regression tests. All 801 prior tests pass + 4 new = 805.
+
+**Validation gauntlet** (per `project_archetype_preflight_methodology.md`):
+
+1. **Unit tests** ✓
+2. **Archetype-4 preflight** ✓ — 3/4 Docker resolves (v1.10.2 r1 = 2/4, v1.10.3 r1 = 1/4). sphinx-10435 produced byte-identical 18-line patch to v1.10.2; matplotlib-14623 Docker-pass with new 13-line shape; 5414 Docker-pass with new shape; 1921 Docker-pass preserved.
+3. **n=14 smoke** ✓ — 0 regressions vs v1.10.3 baseline; 4 gains including sphinx-10435 strong + matplotlib-20826 empty→wrong_location + sphinx-10673 Docker pass.
+4. **n=75 3-rep** — mixed (see below).
+5. **maintain_suite** ✓ — 10/10 PASS, v1_release_gate=true.
+
+**n=75 3-rep result**:
+
+| metric | v1.10.3 3-rep median | **v1.10.4 3-rep median** |
+|---|---|---|
+| strong | 18 | **19** (best ever) |
+| plausible | 19 | 19 |
+| s+p | 37 | **38** (best ever) |
+| empty_patch | 15 | 15 |
+| Docker resolves | 35 | **37** |
+| Apples-to-apples (55 shared) | 33 | 34 (+1) |
+
+**Cohort-shift v1.10.4 vs v1.10.3**:
+- DETERMINISTIC GAIN: psf__requests-5414 (plausible 3/3 → strong 3/3 + Docker false→true 3/3)
+- DETERMINISTIC LOSS: **sphinx-doc__sphinx-10323** (wrong_location 3/3 → empty 3/3). NEW regression introduced by v1.10.4.
+- Modal gains: matplotlib-14623, matplotlib-20826, sphinx-10435 (recovered to 2/3 non-empty: 1 strong + 1 plausible + 1 empty)
+- Modal losses: matplotlib-25775, psf__requests-2317, sympy-11618
+- **0 new strong→empty regressions vs v1.10.2** (the class that drove v1.10.3 HOLD is closed)
+
+**The mechanism finding** — sphinx-10323 trajectory analysis revealed it is the **mechanism-inverse** of sphinx-10435:
+
+- sphinx-10435 needs the breadth_probe nudge to keep going. Under v1.10.3 silent-suppression, soft_anchor at step 5 terminates with empty. Under v1.10.4 breadth_probe at step 4, model continues exploring → writes 18-line strong patch.
+- sphinx-10323 needs blanket silent suppression to read enough. Under v1.10.3 silent-suppression, model runs 19 steps then writes a 15-line wrong_location patch. Under v1.10.4 breadth_probe at step 4 (after only 3 file reads), model commits a 50-line patch IMMEDIATELY — which is then citation-lint-blocked for lack of read grounding. Outcome: empty_patch.
+
+The two archetypes form a **Pareto-frontier pair** for the score<LOW band response policy. Any binary policy (silent vs probe) trades between them. v1.10.4 traded one for the other; the aggregate metrics improved but the cohort shifted.
+
+**Ship verdict: HOLD pending v1.10.5 design pass** targeted at the sphinx-10323 archetype. The architectural insight from this cycle: **the latent variable for the score<LOW band response should be a semantic-breadth signal (citation count, file diversity, or grep coverage) — not a temporal counter (step number or suppression count).** sphinx-10323's failure mode is that the model had enough hypothesis (the model's synthesizer.md shows a thoughtful RST-parsing analysis) but not enough citation grounding to pass the lint. A breadth_probe that fires only when `tool_calls_total < N OR file_diversity < K` would suppress on 10323 (it had 4 reads + grep) and fire on 10435 (which had 4 reads but score=0.0).
+
+**Process methodology validated**: archetype-driven evaluation works. The 5-instance archetype set (10435, 14623, 5414, 1921, plus the v1.10.4-discovered sphinx-10323) should be permanent. Per `project_archetype_preflight_methodology.md`, this is the bench-launch ritual going forward.
+
+**Affected files**: `src/luxe/agents/loop.py` (`_EARLY_BAIL_MESSAGE_BREADTH_PROBE` + `_BREADTH_PROBE_ESCALATION_COUNT` + new suppression-count state + hybrid firing logic; lines 232-700); `tests/test_loop_write_pressure.py` (+4 tests); `benchmarks/swebench/subsets/v1104_archetype_n4.json` (new); `scripts/audit_v1103_suppression.py` (new); `scripts/post_v1104_n75_pipeline.sh` (new). Acceptance artifacts under `acceptance/swebench/archetype_preflight_v1104/`, `acceptance/swebench/v1104_smoke_n14/`, `acceptance/swebench/post_specdd_v1104_n75/rep_{1,2,3}/`, `acceptance/v1104_maintain_suite/`, `acceptance/v1104_taxonomy/` (all gitignored). Memory entries: `project_v1104_ship_validation.md`, `project_archetype_preflight_methodology.md` (updated to 5 archetypes).

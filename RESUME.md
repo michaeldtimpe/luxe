@@ -41,7 +41,68 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-17 (v1.10.3 SHIP HELD — mechanism shift correct but composite worse at n=1; gh-auth + Mode C bug-hunt landed; need 3-rep before tag decision)
+## Current state — 2026-05-19 (v1.10.4 cycle complete; ship verdict HOLD pending v1.10.5 design pass on sphinx-10323 archetype)
+
+**Working tree**: 6 uncommitted v1.10.4-cycle file changes on `main` past `origin/main` (loop.py + tests/test_loop_write_pressure.py + 4 new fixtures/scripts). **NO TAG, NO PUSH.** 805 tests pass (801 baseline + 4 new breadth_probe tests) + 1 module-skip on bfcl_adapter.
+
+**Headline — v1.10.4 hybrid D+B band response delivers best-ever aggregate metrics but introduces one new deterministic regression**:
+
+| metric | v1.10.2 3-rep median | v1.10.3 3-rep median | **v1.10.4 3-rep median** |
+|---|---|---|---|
+| strong | 18 | 18 | **19** (best ever) |
+| plausible | 19 | 19 | 19 |
+| s+p | 37 | 37 | **38** (best ever) |
+| empty_patch | 15 | 15 | 15 |
+| Docker resolves (median) | 39 (single rep) | 35 | **37** |
+| Apples-to-apples on 55 shared | 35 | 33 | **34** (+1 vs v1.10.3) |
+
+**Cohort-shift v1.10.4 vs v1.10.3** (per-instance 3-rep × 3-rep matrix — the methodology that caught v1.10.3's hidden regression):
+- **DETERMINISTIC GAIN**: psf__requests-5414 (plausible→**strong** 3/3, Docker false→true 3/3). The cluster Docker regression that drove v1.10.3 HOLD is fully closed AND promoted.
+- **DETERMINISTIC LOSS**: **sphinx-doc__sphinx-10323** (wrong_location 3/3 → empty 3/3). NEW regression class introduced by v1.10.4 breadth_probe.
+- Modal gains: matplotlib-14623 (empty→mixed wrong_target/empty), matplotlib-20826 (empty→wrong_location), sphinx-10435 (empty 3/3 → 1 strong + 1 plausible + 1 empty — recovered but partial)
+- Modal losses: matplotlib-25775, psf__requests-2317, sympy-11618
+- **0 strong→empty regressions vs v1.10.2** — the class that drove v1.10.3 HOLD is closed.
+
+**Archetype-4 preflight gate (post-cycle codification of the methodology)** — `benchmarks/swebench/subsets/v1104_archetype_n4.json`:
+
+| archetype | v1.10.4 outcome | verdict |
+|---|---|---|
+| sphinx-10435 | tiers=[plausible, strong, empty] | partial — recovered from v1.10.3 empty 3/3 but only 1/3 strong (criterion was ≥2/3) |
+| matplotlib-14623 | Docker [T, no_report, T] | strict improvement vs v1.10.3 empty 3/3 |
+| psf__requests-5414 | tiers=[strong, strong, strong], Docker [T, T, T] | full win + tier promotion |
+| psf__requests-1921 | Docker [T, F, T] | 2/3 preserved (was 3/3 in v1.10.3 — harness flake on byte-identical patch) |
+
+**maintain_suite v1.10.4**: 10/10 PASS, score 40/50, v1_release_gate=true. No regression on the foundational benchmark.
+
+**BFCL v3**: SKIPPED (substrate incompatibility — `bfcl_eval` requires the pre-v1.10.1 `tree_sitter_languages` package; out of v1.10.4 scope).
+
+**The 10435/10323 mechanism duality (architectural finding of the v1.10.4 cycle)**:
+
+These two archetypes are mechanism-inverses for the score<LOW band response. sphinx-10435 needs the breadth_probe nudge at suppression #1 to keep going (without it, soft_anchor at step 5 fires with wrap-up wording and terminates the trajectory with empty). sphinx-10323 needs blanket silent suppression to read enough files before committing (with breadth_probe at suppression #1, model commits a 50-line patch at step 4 that's then citation-lint-blocked for lack of read grounding).
+
+Any binary band policy (silent vs probe) trades between them — they form a Pareto-frontier pair. v1.10.4's hybrid D+B preserves the breadth_probe fire on suppression #1 (which fixes sphinx-10435 et al.) but at the cost of sphinx-10323.
+
+**v1.10.5 direction** (architectural — not yet designed):
+
+The latent variable for the score<LOW band response should be a **semantic-breadth signal** (citation count, file diversity, grep coverage) — NOT a temporal counter (step number or suppression count). sphinx-10323's failure mode is that the model had a sound hypothesis (synthesizer.md shows thoughtful RST-parsing analysis) but insufficient citation grounding to pass the lint. A breadth_probe that fires conditional on `tool_calls_total < N OR file_diversity < K` would:
+- Suppress on sphinx-10323 (it had 4 reads + grep at step 4 — enough breadth to deserve silent)
+- Fire on sphinx-10435 (it had 4 reads at step 4 but with score=0.0 indicating no convergence — needs the nudge)
+
+This pattern matches the user's feedback from the v1.10.4 plan-mode review: "the next-level metric would be 'semantic breadth of explored hypotheses' rather than temporal counters."
+
+**Ship recommendation: HOLD v1.10.4 pending v1.10.5 design pass.** Net cohort is positive (5+ gains vs 1 deterministic + 3 modal losses) but the v1.10.3-cycle methodology — flag any new deterministic regression as HOLD-grade — applies symmetrically. Tagging v1.10.4 with sphinx-10323 as a known regression would damage the same historical-narrative-coherence the user flagged on v1.10.3.
+
+**Files changed this cycle (uncommitted)**:
+- `src/luxe/agents/loop.py` — `_EARLY_BAIL_MESSAGE_BREADTH_PROBE` + `_BREADTH_PROBE_ESCALATION_COUNT=3` constants; per-trajectory `suppression_count_in_trajectory` + `breadth_probe_fire_count` state; new env `LUXE_EARLY_BAIL_BAND_RESPONSE` (default `breadth_probe_hybrid`, opt-in legacy `silent`); new event kind `early_bail_breadth_probe_fired`
+- `tests/test_loop_write_pressure.py` — 4 new regression tests citing each archetype by name + updated existing test to pin `LUXE_EARLY_BAIL_BAND_RESPONSE=silent` for backward-compat verification
+- `benchmarks/swebench/subsets/v1104_archetype_n4.json` (new) — composition-style 4-archetype preflight fixture
+- `scripts/audit_v1103_suppression.py` (new) — full HARMLESS/HARMFUL/ORPHANED/OUTCOME_W classifier with --archetype-detail mode
+- `scripts/post_v1104_n75_pipeline.sh` (new) — n=75 pipeline parameterized by REP
+- Memory: `project_v1104_ship_validation.md` (new), `project_v1103_hold_finding.md` (new), `project_psf_requests_5414_band_case.md` (new), `project_archetype_preflight_methodology.md` (new), updated `feedback_intervention_stacking_is_non_pareto.md`
+
+**lessons.md updated** with two new sections: 2026-05-18 v1.10.3 HOLD via cohort-shift methodology; 2026-05-19 v1.10.4 hybrid D+B + 10435/10323 duality.
+
+## Earlier state — 2026-05-17 (v1.10.3 SHIP HELD — mechanism shift correct but composite worse at n=1; gh-auth + Mode C bug-hunt landed; need 3-rep before tag decision)
 
 **Working tree**: clean post-bench. **816 tests pass + 1 module-skip on bfcl_adapter**. **NO TAG, NO PUSH.** Five commits sit on `main` past `origin/main` (v1.10.2 docs + 4 v1.10.3-cycle commits).
 
