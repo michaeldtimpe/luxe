@@ -23,7 +23,9 @@ from luxe.agents.loop import (
     _ACTION_DENSITY_GATE_MIN_STEP,
     _ACTION_DENSITY_GATE_MIN_TOKENS,
     _ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL,
+    _BREADTH_PROBE_ESCALATION_COUNT,
     _EARLY_BAIL_MESSAGE,
+    _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
     _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
     _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
     _EARLY_BAIL_MIN_READS,
@@ -1249,21 +1251,26 @@ def test_convergence_gate_off_preserves_v19_behavior(monkeypatch):
 
 
 def test_convergence_gate_suppresses_early_bail_on_diffuse(monkeypatch):
-    """v1.10.3 — With LUXE_CONVERGENCE_GATE=1 and a diffuse-recon
-    trajectory (distinct paths → score < LOW_THRESHOLD), early_bail
-    is SILENTLY SUPPRESSED. No early_bail message lands in the chat
-    history; no soft_anchor / commit_imperative / exploratory variant
-    is emitted.
+    """v1.10.3 backward-compat — With LUXE_CONVERGENCE_GATE=1,
+    LUXE_EARLY_BAIL_BAND_RESPONSE=silent (the v1.10.3 mode), and a
+    diffuse-recon trajectory (distinct paths → score < LOW_THRESHOLD),
+    early_bail is SILENTLY SUPPRESSED. No early_bail message lands in
+    the chat history; no soft_anchor / commit_imperative / exploratory /
+    breadth_probe variant is emitted.
 
     History: v1.10 had this suppression behavior. v1.10.1 replaced it
     with an exploratory variant; v1.10.2 diversity-gated the LOW band.
     v1.10.3 reverted both after the n=75 3-rep variance baseline showed
     non-Pareto regression at the band level (pylint-6528 empty 2/3 reps
     under the exploratory variant).
+    v1.10.4 makes the v1.10.3 silent behavior opt-in via the
+    LUXE_EARLY_BAIL_BAND_RESPONSE=silent env. Default is now
+    breadth_probe_hybrid; this test pins silent for backward-compat.
     """
     monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "silent")
     monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
     # All distinct paths → reread_ratio=0, no greps, no edits, high
     # entropy → very low score (matplotlib-14623 archetype).
@@ -1296,6 +1303,233 @@ def test_convergence_gate_suppresses_early_bail_on_diffuse(monkeypatch):
     assert len(default_msgs) == 0, (
         f"default early_bail must NOT fire in LOW band under soft_anchor mode, "
         f"got {len(default_msgs)}"
+    )
+    # v1.10.4 — breadth_probe must ALSO not fire when band_response=silent
+    bp_msgs = [m for m in final
+               if m.get("role") == "user"
+               and _EARLY_BAIL_MESSAGE_BREADTH_PROBE in str(m.get("content", ""))]
+    assert len(bp_msgs) == 0, (
+        f"breadth_probe variant must NOT fire when band_response=silent, "
+        f"got {len(bp_msgs)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# v1.10.4 — conditional band response (Hybrid D+B) tests
+#
+# Design (per project_v1103_hold_finding.md + audit_v1103_suppression.py):
+#   - First suppression in a trajectory: fire breadth_probe (sphinx-10435
+#     archetype recovery — 50% of HARMFUL trajectories had n_supp == 1).
+#   - 2nd through (N-1)th suppression: silent (preserves matplotlib-14623
+#     design-accepted shape — avoids the v1.10.1 wasted-runway).
+#   - Nth suppression (N=3): re-fire breadth_probe (matplotlib-25775
+#     extreme-tail safety net).
+#   - breadth_probe does NOT set early_bail_fired — allows subsequent
+#     soft_anchor / commit_imperative to fire when score later rises
+#     (preserves 1921's step-7 soft_anchor → strong-tier path).
+# ---------------------------------------------------------------------------
+
+
+def test_breadth_probe_fires_on_first_suppression(monkeypatch):
+    """v1.10.4 — under the default breadth_probe_hybrid policy, the FIRST
+    suppression event in a trajectory must fire the breadth_probe message.
+
+    Archetype regression target: sphinx-doc__sphinx-10435 (deterministic
+    strong → empty across all 3 reps of v1.10.3 due to a single
+    suppression at step 4 leaving the trajectory to be killed by a
+    soft_anchor at step 5 with an empty patch).
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    # Default LUXE_EARLY_BAIL_BAND_RESPONSE is breadth_probe_hybrid;
+    # explicit for clarity.
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # Diffuse-recon: 8 distinct paths → score < LOW for the whole run.
+    scripted = [_read_resp_with_path(f"u{i}.py") for i in range(8)] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    bp_msgs = [m for m in final
+               if m.get("role") == "user"
+               and _EARLY_BAIL_MESSAGE_BREADTH_PROBE in str(m.get("content", ""))]
+    # 8 suppressions in a 9-step run → first fires + 3rd escalation fires = 2
+    assert len(bp_msgs) >= 1, (
+        "breadth_probe must fire at least once (first-suppression rule)"
+    )
+    # Verify no soft_anchor / commit_imperative / default fired in the
+    # LOW band (preserves the v1.10.3 invariant that the band's primary
+    # response is suppression, just with first-event nudge added).
+    soft_msgs = [m for m in final
+                 if m.get("role") == "user"
+                 and _EARLY_BAIL_MESSAGE_SOFT_ANCHOR in str(m.get("content", ""))]
+    assert len(soft_msgs) == 0, (
+        "soft_anchor must NOT fire in LOW band — breadth_probe is the "
+        f"v1.10.4 band response. Got {len(soft_msgs)} soft_anchor message(s)."
+    )
+
+
+def test_breadth_probe_re_fires_on_escalation_count(monkeypatch):
+    """v1.10.4 — with N=_BREADTH_PROBE_ESCALATION_COUNT, breadth_probe
+    fires on suppression #1 AND on suppression #N. Intervening
+    suppressions remain silent.
+
+    Archetype regression target: matplotlib-25775 (HARMFUL with
+    n_suppressions=7 in v1.10.3 rep_3 — silent-only suppression let the
+    trajectory drift for 11 steps before soft_anchor terminated it).
+    The escalation re-fire shortens the silent gap.
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # 10 distinct paths — ensures we exceed _BREADTH_PROBE_ESCALATION_COUNT
+    # consecutive suppressions in the LOW band.
+    scripted = [_read_resp_with_path(f"diffuse_{i}.py") for i in range(10)] + [
+        _terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    captured_events: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    orig_append = loop_mod.append_event
+
+    def _capture(run_id, kind, **fields):
+        captured_events.append((kind, fields))
+        return orig_append(run_id, kind, **fields)
+
+    monkeypatch.setattr(loop_mod, "append_event", _capture)
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-escalation",
+    )
+
+    breadth_events = [(k, f) for k, f in captured_events
+                      if k == "early_bail_breadth_probe_fired"]
+    assert len(breadth_events) >= 2, (
+        f"breadth_probe must fire ≥2 times (first + escalation), "
+        f"got {len(breadth_events)} fires. "
+        f"_BREADTH_PROBE_ESCALATION_COUNT={_BREADTH_PROBE_ESCALATION_COUNT}"
+    )
+    fire_reasons = [f.get("fire_reason") for _, f in breadth_events]
+    assert "first" in fire_reasons, (
+        f"breadth_probe events must include a 'first' fire_reason, "
+        f"got {fire_reasons}"
+    )
+    assert "escalation" in fire_reasons, (
+        f"breadth_probe events must include an 'escalation' fire_reason, "
+        f"got {fire_reasons}"
+    )
+    # Verify the escalation fire carries the correct suppression count.
+    escalation_events = [f for k, f in breadth_events
+                         if f.get("fire_reason") == "escalation"]
+    assert len(escalation_events) >= 1
+    assert escalation_events[0].get("suppression_count_so_far") == (
+        _BREADTH_PROBE_ESCALATION_COUNT), (
+        f"escalation must fire at suppression #{_BREADTH_PROBE_ESCALATION_COUNT}, "
+        f"got count={escalation_events[0].get('suppression_count_so_far')}"
+    )
+
+
+def test_breadth_probe_does_not_set_early_bail_fired(monkeypatch):
+    """v1.10.4 — breadth_probe firing must NOT set early_bail_fired. The
+    outer guard `not early_bail_fired` must remain False after a
+    breadth_probe fire so that, when convergence_score later rises into
+    the standard band (>= LOW), soft_anchor or commit_imperative can
+    still fire through the normal firing branch.
+
+    Archetype regression target: psf__requests-1921 (deterministic gain
+    in v1.10.3 — 3 silent suppressions at steps 4-6, then soft_anchor
+    at step 7 produces a strong patch). v1.10.4 must preserve this
+    step-7 soft_anchor opportunity.
+    """
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+
+    captured: list[tuple[str, dict]] = []
+
+    def _capture(run_id, kind, **fields):
+        captured.append((kind, fields))
+
+    monkeypatch.setattr(loop_mod, "append_event", _capture)
+    # Diffuse-recon throughout — score stays < LOW, suppression fires
+    # every step. We want to see suppressed_diffuse events continue to
+    # fire even AFTER breadth_probe fires (the "do not set
+    # early_bail_fired" invariant).
+    scripted = [_read_resp_with_path(f"unique_{i}.py") for i in range(8)] + [
+        _terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-no-set-fired",
+    )
+
+    suppress_events = [(k, f) for k, f in captured
+                       if k == "early_bail_suppressed_diffuse"]
+    breadth_events = [(k, f) for k, f in captured
+                      if k == "early_bail_breadth_probe_fired"]
+    # If early_bail_fired were set after the first breadth_probe, the
+    # outer guard would prevent any subsequent suppressed_diffuse events
+    # from being emitted. So we should see suppression count > 1 after
+    # breadth_probe's first fire.
+    assert len(breadth_events) >= 1, "breadth_probe should have fired"
+    counts = [f.get("suppression_count_so_far") for _, f in suppress_events]
+    assert max(counts) >= 2, (
+        f"suppressed_diffuse must continue to fire after breadth_probe — "
+        f"if early_bail_fired were set, the outer guard would block "
+        f"subsequent suppressions. Got suppression counts={counts}."
+    )
+
+
+def test_breadth_probe_silent_when_band_response_silent(monkeypatch):
+    """v1.10.4 — when LUXE_EARLY_BAIL_BAND_RESPONSE=silent, the v1.10.3
+    blanket-silent behavior is restored. No breadth_probe message
+    appears regardless of suppression count. Backward-compat guarantee
+    for downstream consumers that pin the v1.10.3 substrate.
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "silent")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    scripted = [_read_resp_with_path(f"u{i}.py") for i in range(10)] + [
+        _terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+    )
+
+    final = backend.calls[-1]
+    bp_msgs = [m for m in final
+               if m.get("role") == "user"
+               and _EARLY_BAIL_MESSAGE_BREADTH_PROBE in str(m.get("content", ""))]
+    assert len(bp_msgs) == 0, (
+        f"breadth_probe must NOT fire under band_response=silent, "
+        f"got {len(bp_msgs)} fires"
     )
 
 

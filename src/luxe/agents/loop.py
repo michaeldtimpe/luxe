@@ -315,12 +315,52 @@ _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE = (
 # outcomes.py preserves their CONFIDENCE_COLLAPSE classification for
 # back-compat analysis.
 
+# v1.10.4 — breadth_probe variant for the score<LOW band. Replaces
+# v1.10.3's blanket silent-suppression with a hybrid first-event +
+# count-based escalation rule. The v1.10.3 3-rep cohort-shift audit
+# (project_v1103_hold_finding.md, audit_v1103_suppression.py) showed
+# that 50% of HARMFUL trajectories under blanket silent-suppression
+# had n_suppressions == 1 — the sphinx-10435 archetype (1 supp →
+# soft_anchor at step 5 → empty_patch). Blanket silent removed the
+# only nudge the trajectory needed.
+#
+# Design constraints (per memory):
+#   - NO "rather than X" framing — reads as wrap-up (feedback memory).
+#   - NO "keep reading more files" instruction — v1.10.1 wasted-runway
+#     shape that broke matplotlib-14623.
+#   - NO "commit now" / "edit now" wording — that's soft_anchor's role
+#     in the mid band; firing it here would collapse trajectories that
+#     haven't yet converged on a target.
+#   - Short, neutral, conditional — offers two branches without
+#     forcing one. Acknowledges the diffuse-recon state without
+#     prescribing a single action.
+_EARLY_BAIL_MESSAGE_BREADTH_PROBE = (
+    "Mid-loop status: your read pattern is broad without a clear "
+    "hypothesis converging. If you have a candidate bug location, "
+    "focus your next reads on its function bodies and surrounding "
+    "context to confirm or rule it out. If you do not yet have a "
+    "candidate, continue gathering signal."
+)
+
 _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
     "default": _EARLY_BAIL_MESSAGE,
     "no_abstain": _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
     "soft_anchor": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
     "commit_imperative": _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE,
+    "breadth_probe": _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
 }
+
+# v1.10.4 — escalation count for the breadth_probe hybrid. After this
+# many cumulative silent suppressions on a single trajectory, re-fire
+# the breadth_probe message as a safety-net escalation. Catches the
+# extreme-tail HARMFUL cases (matplotlib-25775: 7 suppressions before
+# soft_anchor at step 11). N=3 fires the escalation at the 3rd
+# suppression event in the trajectory; the first event already fired
+# breadth_probe (per the hybrid first-event rule), so the 2nd and any
+# steps after the 3rd remain silent. Derived from the
+# audit_v1103_suppression.py HARMFUL count distribution: median
+# n_suppressions == 2; 80% of HARMFUL had n_suppressions in {1, 2, 3}.
+_BREADTH_PROBE_ESCALATION_COUNT = 3
 
 # v1.10 — convergence-score thresholds for conditional intervention
 # stacking. Picked to span the natural score range for the
@@ -454,6 +494,20 @@ def run_agent(
     # Off by default; adapter wires it on for SWE-bench. Falls back to
     # v1.9 semantics (no convergence-based gating) when disabled.
     convergence_gate_enabled = os.environ.get("LUXE_CONVERGENCE_GATE") == "1"
+    # v1.10.4 — band-response policy for the score<LOW suppression branch.
+    # "silent"               = v1.10.3 behavior (blanket silent suppression)
+    # "breadth_probe_hybrid" = v1.10.4 default (fire breadth_probe on the
+    #                         first suppression AND on the Nth escalation
+    #                         suppression where N=_BREADTH_PROBE_ESCALATION_COUNT;
+    #                         silent on intervening suppressions)
+    # The hybrid restores the v1.10.2-style first-event nudge that
+    # sphinx-10435 needs, while keeping suppression silent enough on
+    # subsequent events to avoid the v1.10.1 wasted-runway shape that
+    # broke matplotlib-14623.
+    _band_response = os.environ.get(
+        "LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    suppression_count_in_trajectory = 0
+    breadth_probe_fire_count = 0
     # v1.9 — convergence proxy. Track read_file call signatures so the gate
     # can suppress itself when the model has revisited the same file (strong
     # trajectories rerun reads ~3× more often than empties per the v18
@@ -606,7 +660,19 @@ def run_agent(
                 # v1.10.3 observability — compute recent_path_diversity
                 # and emit it on every suppression event so v1.11 mining
                 # has the topology signal without it being a gate trigger.
+                #
+                # v1.10.4 — band-response policy. The hybrid first-event
+                # variant fires breadth_probe on the FIRST suppression
+                # event (per-trajectory) and on the Nth escalation event
+                # (where N=_BREADTH_PROBE_ESCALATION_COUNT); the
+                # suppressed_diffuse event continues to fire every step
+                # for observability. breadth_probe does NOT set
+                # early_bail_fired — this allows subsequent interventions
+                # (soft_anchor / commit_imperative) to still fire when
+                # convergence_score rises above LOW (preserves 1921's
+                # step-7 soft_anchor → strong-tier path).
                 recent_diversity = recent_path_diversity(tool_history)
+                suppression_count_in_trajectory += 1
                 if log_calls:
                     append_event(
                         run_id, "early_bail_suppressed_diffuse",
@@ -615,7 +681,42 @@ def run_agent(
                         threshold=_CONVERGENCE_LOW_THRESHOLD,
                         tool_calls_total=result.tool_calls_total,
                         recent_path_diversity=recent_diversity,
+                        suppression_count_so_far=suppression_count_in_trajectory,
+                        band_response=_band_response,
                     )
+                if _band_response == "breadth_probe_hybrid":
+                    fire_reason = None
+                    if suppression_count_in_trajectory == 1:
+                        fire_reason = "first"
+                    elif (suppression_count_in_trajectory
+                          == _BREADTH_PROBE_ESCALATION_COUNT):
+                        fire_reason = "escalation"
+                    if fire_reason is not None:
+                        messages.append({
+                            "role": "user",
+                            "content": _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
+                        })
+                        breadth_probe_fire_count += 1
+                        # NOTE: do NOT set early_bail_fired = True here.
+                        # The outer guard re-evaluates each step; if
+                        # convergence_score later rises into the standard
+                        # band, soft_anchor (or commit_imperative at HIGH)
+                        # fires through the normal firing branch below.
+                        # last_intervention_step/_kind still record this
+                        # for habituation telemetry.
+                        last_intervention_step = step
+                        last_intervention_kind = "early_bail_breadth_probe"
+                        intervention_kinds_fired.add("early_bail_breadth_probe")
+                        if log_calls:
+                            append_event(
+                                run_id, "early_bail_breadth_probe_fired",
+                                phase=phase, step=step,
+                                convergence_score=convergence_score,
+                                suppression_count_so_far=(
+                                    suppression_count_in_trajectory),
+                                fire_reason=fire_reason,
+                                recent_path_diversity=recent_diversity,
+                            )
             else:
                 if early_bail_message is not None:
                     msg = early_bail_message
