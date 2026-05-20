@@ -41,9 +41,23 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-20 (v1.10.5c READY TO SHIP — first clean cohort-shift since v1.10.2)
+## Current state — 2026-05-20 (v1.10.5 SHIPPED — first clean cohort-shift since v1.10.2)
 
-**Working tree**: uncommitted v1.10.5 changes (loop.py + 6 new tests + 4 new subsets/scripts + memory + RESUME + lessons). **NO TAG, NO PUSH.** 808 tests pass + 1 skip.
+**Working tree**: clean post-ship. **808 tests pass + 1 skip.** **v1.10.5 tagged and pushed** to `origin/main` (commits `6f8ba67` + `9222857`, tag `v1.10.5` annotated with full release notes).
+
+## What to do next session
+
+This cycle ended in a clean ship state with no open blockers. A new session can resume by reading this section + the cycle-history table below, then choosing among the candidates from the plan file (`~/.claude/plans/frolicking-wiggling-cray.md` § "Next-session roadmap candidates"):
+
+- **A** — Continue loop-layer optimization on modal instances (matplotlib-25775, sphinx-10435 partial recovery). The v1.10.5 distinct_files framework suggests there's room. Diminishing returns expected.
+- **B** — Per-instance adaptive policy (multi-run trajectory history). Higher ceiling, ~1-2 weeks.
+- **C** — Above-loop signaling investigation (task semantics, traceback locality). Higher ceiling, ~2-3 weeks.
+- **D** — Substrate hygiene: BFCL `bfcl_eval` substrate revert so BFCL benches can run again. Out-of-cycle, unblocks parallel validation.
+- **E** — Methodology codification: extract `scripts/cohort_shift_3x3.py` as a standalone analyzer for future cycles. ~half day.
+
+No precommitted next cycle. Ask the user which candidate to pursue or whether to defer.
+
+## v1.10.5 cycle summary (just shipped)
 
 **Headline — v1.10.5c CLEARS ALL SHIP GATES, first clean cohort-shift since v1.10.2**:
 
