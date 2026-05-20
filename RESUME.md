@@ -41,7 +41,55 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-19 (v1.10.4 cycle complete; ship verdict HOLD pending v1.10.5 design pass on sphinx-10323 archetype)
+## Current state — 2026-05-20 (v1.10.5c READY TO SHIP — first clean cohort-shift since v1.10.2)
+
+**Working tree**: uncommitted v1.10.5 changes (loop.py + 6 new tests + 4 new subsets/scripts + memory + RESUME + lessons). **NO TAG, NO PUSH.** 808 tests pass + 1 skip.
+
+**Headline — v1.10.5c CLEARS ALL SHIP GATES, first clean cohort-shift since v1.10.2**:
+
+| metric | v1.10.4 median | **v1.10.5 median** | Δ |
+|---|---|---|---|
+| strong | 19 | **20** | +1 (best ever) |
+| plausible | 19 | 19 | 0 |
+| **s+p** | 38 | **39** | **+1 (best ever)** |
+| empty_patch | 15 | **13** | **−2 (= v1.10.2 best)** |
+| Docker resolves | 37 | 37 | 0 |
+| Apples-to-apples (56 shared) | 35 | **36** | +1 (back to v1.10.2 baseline) |
+| Apples-to-apples BEST rep | 35 | **37 (66.1%)** | best ever |
+
+**Cohort-shift v1.10.5 vs v1.10.4 (3-rep × 3-rep, the cycle's strictest gate)**:
+- **DETERMINISTIC LOSSES: 0** ← the methodology gate is CLEAR
+- **DETERMINISTIC GAINS: 1** (sphinx-10323: empty 3/3 → wrong_location 3/3, byte-identical to v1.10.3 — the v1.10.4 regression is fully resolved)
+- Modal gains: 2 (astropy-14096 + sphinx-10435 cohort improvements)
+- Modal losses: 0
+
+**Archetype outcomes — 3-rep deterministic** (all 6 archetypes):
+- sphinx-10435: tier improved to 2/3 strong (v1.10.4 had 1/3 strong); Docker F/F/F (within variance class)
+- matplotlib-14623: **Docker 3/3 T** (v1.10.4 had 2/3 due to no_report)
+- 5414: T/T/T (preserved load-bearing recovery)
+- 1921: **T/T/T** (improved from v1.10.4's 2/3 — substrate flake resolved)
+- **sphinx-10323: wrong_location 3/3** (byte-identical to v1.10.3 `7705189cbc`/708b — the v1.10.4 regression target FIXED)
+- **sympy-12419: T/T/T** (preserved at v1.10.4 baseline; the v1.10.5b regression target stable)
+
+**The breakthrough — distinct_files topology partition**: the v1.10.5c predicate `narrow_reader_signal = NOT (bm25_count > 0 AND grep_count == 0 AND distinct_files >= 2)` separates two mechanism-distinct failure modes that share the bm25-without-grep signature:
+- sphinx-10323 (distinct_files=2): synthesis-wandering with breadth → SUPPRESS first-event (let trajectory run v1.10.3-style; matches byte-identical patch)
+- sympy-12419 (distinct_files=1): single-file focus + premature-loop-kill → FIRE first-event (perturbs policy out of repeat-call local attractor)
+
+Both are deterministically separable at suppression #1 with observable loop-layer signals. This is the FIRST loop-layer predicate that empirically clears all 6 archetypes simultaneously.
+
+**Cycle deliverables (uncommitted)**:
+- `src/luxe/agents/loop.py`: `_v1105_synthesis_looping_signature(bm25, grep, distinct_files)` + predicate integration + 2 new fields in `early_bail_*` events (`grep_count`, `distinct_files`)
+- `tests/test_loop_write_pressure.py`: 6 new v1.10.5 tests (1 unit + 5 integration)
+- `benchmarks/swebench/subsets/`: v1105_sphinx_10323_probe.json, v1105c_sympy_12419_probe.json, v1105c_gate2_n5.json
+- `scripts/post_v1105_n75_pipeline.sh`
+- Memory entries: `project_v1105_predicate_probe_failure.md` (updated with corrected diagnosis), `project_v1105_ship_validation.md` (new)
+- MEMORY.md index updated
+
+**Mechanism-design lesson** (preserved in memory + lessons.md): predicate calibration must verify features at the actual event-emission point. The initial v1.10.5 predicate failure (which led to v1.10.5b smoke regression) traced to a hand-computed feature error, NOT substrate non-determinism. Substrate is fully deterministic at step 4 (verified 8 reps × 5 archetypes).
+
+**Ship recommendation**: TAG v1.10.5 as a regular ship release (not substrate). First clean cohort-shift pass since v1.10.2.
+
+## Earlier state — 2026-05-19 (v1.10.4 cycle complete; ship verdict HOLD pending v1.10.5 design pass on sphinx-10323 archetype)
 
 **Working tree**: 6 uncommitted v1.10.4-cycle file changes on `main` past `origin/main` (loop.py + tests/test_loop_write_pressure.py + 4 new fixtures/scripts). **NO TAG, NO PUSH.** 805 tests pass (801 baseline + 4 new breadth_probe tests) + 1 module-skip on bfcl_adapter.
 
