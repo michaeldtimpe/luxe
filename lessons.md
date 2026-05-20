@@ -2615,15 +2615,67 @@ Built `_EARLY_BAIL_MESSAGE_BREADTH_PROBE` constant + escalation logic in `loop.p
 - Modal losses: matplotlib-25775, psf__requests-2317, sympy-11618
 - **0 new strong→empty regressions vs v1.10.2** (the class that drove v1.10.3 HOLD is closed)
 
-**The mechanism finding** — sphinx-10323 trajectory analysis revealed it is the **mechanism-inverse** of sphinx-10435:
+**The mechanism finding** — sphinx-10323 trajectory analysis ORIGINALLY described as the "mechanism-inverse of sphinx-10435," but the post-cycle audit (2026-05-19) **revises this framing**:
 
-- sphinx-10435 needs the breadth_probe nudge to keep going. Under v1.10.3 silent-suppression, soft_anchor at step 5 terminates with empty. Under v1.10.4 breadth_probe at step 4, model continues exploring → writes 18-line strong patch.
-- sphinx-10323 needs blanket silent suppression to read enough. Under v1.10.3 silent-suppression, model runs 19 steps then writes a 15-line wrong_location patch. Under v1.10.4 breadth_probe at step 4 (after only 3 file reads), model commits a 50-line patch IMMEDIATELY — which is then citation-lint-blocked for lack of read grounding. Outcome: empty_patch.
+- sphinx-10435 needs the breadth_probe nudge to keep going. Under v1.10.3 silent-suppression, soft_anchor at step 5 terminates with empty. Under v1.10.4 breadth_probe at step 4, model continues exploring → writes 18-line strong patch (when it works; 1 of 3 reps).
+- sphinx-10323 **does not have a "needs silent suppression" failure mode in the simple way the original framing suggested**. The actual v1.10.4 trace shows: the model looped on RST-parser analysis for ~20 iterations (~36k chars of repetitive prose), never converged on a real code fix, wrote a 50-line `repo.sdd` scaffolding placeholder (NOT the actual buggy file sphinx/directives/code.py), and emitted a hallucinated citation (`index.rst.rst:155`, derived from the issue description's error message). Citation-lint correctly rejected the patch. Under v1.10.3 silent suppression, the model ran 19 steps and wrote a different small (15-line) patch to the wrong file — wrong_location tier, but at least passed lint. So 10323's failure mode is **synthesis-loop without grounding on the real buggy file**, not "premature commitment on a sound hypothesis." The breadth_probe nudge correlated with the failure but isn't the architectural root.
 
-The two archetypes form a **Pareto-frontier pair** for the score<LOW band response policy. Any binary policy (silent vs probe) trades between them. v1.10.4 traded one for the other; the aggregate metrics improved but the cohort shifted.
+The two archetypes are NOT pure mechanism-inverses. They share a common state at suppression #1 (both at score=0, low convergence) but have different downstream failure modes. v1.10.5 levers must address each separately.
 
-**Ship verdict: HOLD pending v1.10.5 design pass** targeted at the sphinx-10323 archetype. The architectural insight from this cycle: **the latent variable for the score<LOW band response should be a semantic-breadth signal (citation count, file diversity, or grep coverage) — not a temporal counter (step number or suppression count).** sphinx-10323's failure mode is that the model had enough hypothesis (the model's synthesizer.md shows a thoughtful RST-parsing analysis) but not enough citation grounding to pass the lint. A breadth_probe that fires only when `tool_calls_total < N OR file_diversity < K` would suppress on 10323 (it had 4 reads + grep) and fire on 10435 (which had 4 reads but score=0.0).
+**Updated post-cycle audit (2026-05-19) — loop-layer ceiling claim was overstated.** The "loop layer is approaching its information-theoretic ceiling" framing in the original lesson is too strong. A re-audit of all 10 v1.10.3 HARMFUL trajectories shows **80% (8/10) are signal-separable from HARMLESS-success cases at suppression #1**; only 20% (2/10) have byte-identical signal vectors to a HARMLESS-success. The collision class includes 10435↔14623 (originally identified) and the newly-found 5414↔10449 pair. So the ceiling exists at *specific collision points*, not as a universal architectural limit. v1.10.5 design space within the loop layer is wider than this lesson originally claimed; specifically, sphinx-10323 (diversity=3, bm25=1) IS separable from the 10435/14623 cluster (diversity=2, bm25=0), so a targeted predicate can fix one without disturbing the other. See plan file `~/.claude/plans/frolicking-wiggling-cray.md` (v1.10.5 plan) and the v1.10.5 cycle entry below for the corrected design path.
+
+**Ship verdict: HOLD pending v1.10.5 design pass.** Per the corrected diagnosis, v1.10.5 candidate is: condition first-event breadth_probe on `(diversity < 3) AND (bm25 == 0)` — fires for 10435/14623 cluster (preserves v1.10.4's load-bearing gain), suppresses for sphinx-10323 (recovers v1.10.3 wrong_location). Uncertainty: 5414/1921 currently rely on first-event fire; predicate suppresses them and relies on the escalation at suppression #3. Whether escalation alone preserves their v1.10.4 outcomes is the empirical question for the v1.10.5 archetype-4 probe.
 
 **Process methodology validated**: archetype-driven evaluation works. The 5-instance archetype set (10435, 14623, 5414, 1921, plus the v1.10.4-discovered sphinx-10323) should be permanent. Per `project_archetype_preflight_methodology.md`, this is the bench-launch ritual going forward.
 
 **Affected files**: `src/luxe/agents/loop.py` (`_EARLY_BAIL_MESSAGE_BREADTH_PROBE` + `_BREADTH_PROBE_ESCALATION_COUNT` + new suppression-count state + hybrid firing logic; lines 232-700); `tests/test_loop_write_pressure.py` (+4 tests); `benchmarks/swebench/subsets/v1104_archetype_n4.json` (new); `scripts/audit_v1103_suppression.py` (new); `scripts/post_v1104_n75_pipeline.sh` (new). Acceptance artifacts under `acceptance/swebench/archetype_preflight_v1104/`, `acceptance/swebench/v1104_smoke_n14/`, `acceptance/swebench/post_specdd_v1104_n75/rep_{1,2,3}/`, `acceptance/v1104_maintain_suite/`, `acceptance/v1104_taxonomy/` (all gitignored). Memory entries: `project_v1104_ship_validation.md`, `project_archetype_preflight_methodology.md` (updated to 5 archetypes).
+
+### [2026-05-20] v1.10.5c CLEAN SHIP — distinct_files topology partition closes the 10323/12419 mechanism-symmetric pair; first cohort-shift clean since v1.10.2
+
+**What happened**: After v1.10.4 shipped as substrate (sphinx-10323 deterministic regression vetoed a ship claim), v1.10.5 designed a corrected predicate that separates two mechanism-distinct failure modes sharing the bm25-without-grep signature. Two iterations:
+
+- **v1.10.5b (initial)**: predicate `NOT (bm25>0 AND grep==0)` recovered sphinx-10323 but broke sympy-12419 (11/11-prior-stable plausible → empty via consecutive-repeat-loop death spiral)
+- **v1.10.5c (refined)**: predicate `NOT (bm25>0 AND grep==0 AND distinct_files>=2)` ALSO clears sympy-12419. The `distinct_files=2` partition is the key insight.
+
+**Validation gauntlet** (per user-precommitted gates):
+1. ✓ Gate 1 (sympy-12419 targeted probe): first-event fired at step 4, 17-line plausible patch + Docker pass
+2. ✓ Gate 2 (archetype-4 + sphinx-10323 probe): 5/5 outcomes match expectations
+3. ✓ Gate 3 (n=14 smoke): sympy-12419 recovered + sphinx-10435 strong + all 12 others stable (matplotlib-20826 went empty but is in v1.10.2 variance class — not 11/11-stable, so within precommit's stopping-rule tolerance)
+4. ✓ Gate 4 (n=75 3-rep): ALL cohort-shift criteria cleared
+
+**3-rep results (cycle history table)**:
+
+| metric | v1.10.2 | v1.10.3 | v1.10.4 | **v1.10.5** |
+|---|---|---|---|---|
+| strong (median) | 18 | 18 | 19 | **20** (best ever) |
+| s+p (median) | 37 | 37 | 38 | **39** (best ever) |
+| empty_patch (median) | 15 | 15 | 15 | **13** (= v1.10.2 best, best ever) |
+| Docker apples-to-apples (median) | 36 | 33 | 35 | **36** (back to v1.10.2 baseline) |
+| Docker apples-to-apples BEST rep | 36 | 35 | 35 | **37 (66.1%)** |
+
+**Cohort-shift v1.10.5 vs v1.10.4 (3-rep × 3-rep, the cycle's primary gate)**: **0 deterministic losses + 1 deterministic gain (sphinx-10323 recovery)** — the cleanest cohort-shift result in the v1.7→v1.10 cycle history.
+
+**Archetype outcomes — all 6 cleanly resolved**:
+- sphinx-10435 (10435/14623 cluster): 2/3 strong patches (improved from v1.10.4 1/3)
+- matplotlib-14623: Docker 3/3 T (improved from v1.10.4 2/3)
+- 5414: T/T/T (preserved)
+- 1921: T/T/T (improved from v1.10.4 2/3 — substrate flake recovered)
+- **sphinx-10323: wrong_location 3/3 (byte-identical to v1.10.3 `7705189cbc`/708b)** — the v1.10.4 regression FIXED
+- **sympy-12419: T/T/T** — the v1.10.5b regression target stable
+
+**The mechanism finding — distinct_files=2 partition is mechanistically interpretable**:
+
+The bm25-without-grep signature catches TWO distinct failure modes:
+1. **sphinx-10323 archetype (distinct_files >= 2)**: synthesis-wandering with breadth → model retrieved candidate via corpus search, read multiple files, but never confirmed via grep → commits a citation-ungrounded patch that lint rejects. Suppressing first-event lets trajectory run v1.10.3-style and write a (shallow but lint-passing) wrong_location patch.
+
+2. **sympy-12419 archetype (distinct_files < 2)**: premature-loop-kill — single-file focus + bm25 retrieval but model hasn't expanded reading yet. First-event breadth_probe acts as a loop-state destabilizer, perturbing the policy out of a local attractor before `_MAX_CONSECUTIVE_REPEAT_STEPS=2` aborts.
+
+The `distinct_files=2` partition correctly separates these mechanism-symmetric cases using ONLY observable loop-layer signals at suppression #1. This is the first predicate that empirically separates the 10435/10323 + 12419 archetype trio cleanly.
+
+**Process lesson**: feature calibration must verify at the actual event-emission point. The initial v1.10.5 predicate (`diversity<3 AND bm25==0`) failed because hand-computed feature values from an explore agent were WRONG for the 10435/14623 cluster. The corrected v1.10.5c predicate works precisely because step-4 features are substrate-deterministic (verified 8 reps × 6 archetypes show byte-identical tool_history) — design space within the loop layer is real when features are correctly measured.
+
+**User-precommit lesson**: the user's "one more iteration then pivot" stopping rule was decisive. Without it the project could have entered "heuristic accretion mode" (every new edge case adds another AND <new_signal> clause). The precommit forced a clean decision boundary on what success looks like.
+
+**Affected files**: `src/luxe/agents/loop.py` (`_v1105_synthesis_looping_signature(bm25, grep, distinct_files)` helper + integration; new event fields `grep_count`, `distinct_files`); `tests/test_loop_write_pressure.py` (+6 tests: 1 unit + 5 integration); `benchmarks/swebench/subsets/v1105_sphinx_10323_probe.json` + `v1105c_sympy_12419_probe.json` + `v1105c_gate2_n5.json` (new); `scripts/post_v1105_n75_pipeline.sh` (new). Acceptance artifacts under `acceptance/swebench/v1105c_*/`, `acceptance/swebench/post_specdd_v1105_n75/rep_{1,2,3}/`, `acceptance/v1105_taxonomy/` (all gitignored). Memory entries: `project_v1105_predicate_probe_failure.md` (updated with corrected diagnosis + revised conclusion), `project_v1105_ship_validation.md` (new).
+
+**Ship recommendation**: tag v1.10.5 as a ship release (not substrate). First clean cohort-shift since v1.10.2.
