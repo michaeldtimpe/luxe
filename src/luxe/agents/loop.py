@@ -362,6 +362,54 @@ _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
 # n_suppressions == 2; 80% of HARMFUL had n_suppressions in {1, 2, 3}.
 _BREADTH_PROBE_ESCALATION_COUNT = 3
 
+# v1.10.5c — first-event breadth_probe gating predicate (REFINED again).
+#
+# History:
+#   v1.10.5a (initial): (diversity<3 AND bm25==0) — failed; calibrated
+#     from bad audit data. See project_v1105_predicate_probe_failure.md.
+#   v1.10.5b (corrected): NOT (bm25>0 AND grep==0) — fixed sphinx-10323
+#     but broke sympy-12419 (consecutive-repeat-loop death spiral).
+#   v1.10.5c (this iteration, FINAL local-predicate attempt per user
+#     precommit): add distinct_files>=2 clause to separate two
+#     mechanism-distinct failure modes that share the bm25-without-grep
+#     signature.
+#
+# Verified deterministic feature vectors at suppression #1 (step 4):
+#   archetype          bm25  grep  dist_f  desired   reason
+#   sphinx-10435        1     1     1      FIRE      grep present (NOT looping)
+#   matplotlib-14623    1     1     1      FIRE      grep present (NOT looping)
+#   psf-requests-5414   0     0     2      FIRE      no bm25 (NOT looping)
+#   psf-requests-1921   0     1     1      FIRE      grep present
+#   sphinx-10323        1     0     2      SUPPRESS  bm25-without-grep + multi-file
+#                                                    (synthesis-wandering pathology)
+#   sympy-12419         1     0     1      FIRE      bm25-without-grep BUT single-file
+#                                                    (premature-loop-kill pathology;
+#                                                     needs message as loop-state
+#                                                     destabilizer)
+#
+# The breadth_probe message serves TWO distinct jobs:
+#   (1) exploration broadening — directs the model toward case analysis
+#   (2) loop-state destabilization — perturbs policy out of local
+#       attractors before _MAX_CONSECUTIVE_REPEAT_STEPS=2 aborts
+# sphinx-10323 needs suppression of (1) [over-exploration → bad commit].
+# sympy-12419 needs (2) preserved [model gets stuck in 2-call repeat
+# without the perturbation]. distinct_files=2 partitions topology: deeper
+# reading already indicates breadth (suppress); single-file repetition
+# means model still needs external perturbation (fire).
+#
+# Escalation at suppression #_BREADTH_PROBE_ESCALATION_COUNT is NOT
+# gated on this predicate (different failure mode; targets matplotlib-25775).
+def _v1105_synthesis_looping_signature(bm25_count: int,
+                                       grep_count: int,
+                                       distinct_files: int) -> bool:
+    """True iff the trajectory shows the bm25-without-grep pattern AND
+    has accumulated breadth (distinct_files >= 2) at suppression #1.
+    This isolates sphinx-10323's synthesis-wandering pathology from
+    sympy-12419's premature-loop-kill pathology (both share bm25=1+
+    grep=0 but differ in distinct_files).
+    Exposed as a function for unit-testability."""
+    return bm25_count > 0 and grep_count == 0 and distinct_files >= 2
+
 # v1.10 — convergence-score thresholds for conditional intervention
 # stacking. Picked to span the natural score range for the
 # Qwen3.6-35B-A3B-6bit champion on SWE-bench:
@@ -673,6 +721,31 @@ def run_agent(
                 # step-7 soft_anchor → strong-tier path).
                 recent_diversity = recent_path_diversity(tool_history)
                 suppression_count_in_trajectory += 1
+                # v1.10.5 (corrected) — first-event gating predicate.
+                # See _v1105_synthesis_looping_signature() above for the
+                # full rationale + verified per-archetype feature data.
+                # narrow_reader_signal is True when first-event SHOULD
+                # fire (legacy field name preserved for event-log
+                # back-compat).
+                _bm25_count = sum(
+                    1 for h in tool_history
+                    if h.get("name") == "bm25_search"
+                )
+                _grep_count = sum(
+                    1 for h in tool_history
+                    if h.get("name") == "grep"
+                )
+                # v1.10.5c — distinct_files at firing point (read/edit/write
+                # tools only; non-read tools like bash, list_dir, bm25 don't
+                # contribute to "files inspected" count).
+                _distinct_files = len({
+                    h.get("path") for h in tool_history
+                    if h.get("name") in ("read_file", "edit_file", "write_file")
+                    and h.get("path")
+                })
+                narrow_reader_signal = not _v1105_synthesis_looping_signature(
+                    _bm25_count, _grep_count, _distinct_files
+                )
                 if log_calls:
                     append_event(
                         run_id, "early_bail_suppressed_diffuse",
@@ -683,10 +756,17 @@ def run_agent(
                         recent_path_diversity=recent_diversity,
                         suppression_count_so_far=suppression_count_in_trajectory,
                         band_response=_band_response,
+                        narrow_reader_signal=narrow_reader_signal,
+                        bm25_count=_bm25_count,
+                        grep_count=_grep_count,
+                        distinct_files=_distinct_files,
                     )
                 if _band_response == "breadth_probe_hybrid":
                     fire_reason = None
-                    if suppression_count_in_trajectory == 1:
+                    # v1.10.5 — gate first-event fire on narrow_reader_signal.
+                    # Escalation remains unconditional (different failure mode).
+                    if (suppression_count_in_trajectory == 1
+                            and narrow_reader_signal):
                         fire_reason = "first"
                     elif (suppression_count_in_trajectory
                           == _BREADTH_PROBE_ESCALATION_COUNT):
@@ -716,6 +796,10 @@ def run_agent(
                                     suppression_count_in_trajectory),
                                 fire_reason=fire_reason,
                                 recent_path_diversity=recent_diversity,
+                                narrow_reader_signal=narrow_reader_signal,
+                                bm25_count=_bm25_count,
+                                grep_count=_grep_count,
+                                distinct_files=_distinct_files,
                             )
             else:
                 if early_bail_message is not None:

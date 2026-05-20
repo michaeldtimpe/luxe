@@ -24,6 +24,7 @@ from luxe.agents.loop import (
     _ACTION_DENSITY_GATE_MIN_TOKENS,
     _ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL,
     _BREADTH_PROBE_ESCALATION_COUNT,
+    _v1105_synthesis_looping_signature,
     _EARLY_BAIL_MESSAGE,
     _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
     _EARLY_BAIL_MESSAGE_NO_ABSTAIN,
@@ -1379,21 +1380,29 @@ def test_breadth_probe_fires_on_first_suppression(monkeypatch):
 
 def test_breadth_probe_re_fires_on_escalation_count(monkeypatch):
     """v1.10.4 — with N=_BREADTH_PROBE_ESCALATION_COUNT, breadth_probe
-    fires on suppression #1 AND on suppression #N. Intervening
-    suppressions remain silent.
+    re-fires on suppression #N as a safety net.
 
     Archetype regression target: matplotlib-25775 (HARMFUL with
     n_suppressions=7 in v1.10.3 rep_3 — silent-only suppression let the
     trajectory drift for 11 steps before soft_anchor terminated it).
     The escalation re-fire shortens the silent gap.
+
+    v1.10.5 update: first-event firing is now narrow_reader_signal-gated.
+    This test verifies the escalation timing on a HIGH-diversity trajectory
+    (which suppresses first-event under v1.10.5) — escalation MUST still
+    fire at suppression #N independent of the narrow predicate. The
+    first-event-AND-escalation joint behavior on low-diversity trajectories
+    is covered by test_v1105_narrow_reader_predicate_fires_on_low_diversity.
     """
     monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
     monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
     monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
-    # 10 distinct paths — ensures we exceed _BREADTH_PROBE_ESCALATION_COUNT
-    # consecutive suppressions in the LOW band.
+    # 10 distinct paths — high diversity, score < LOW. Under v1.10.5 the
+    # first-event fire is suppressed by the narrow_reader predicate, but
+    # the escalation at suppression #N=_BREADTH_PROBE_ESCALATION_COUNT
+    # must STILL fire as the safety net.
     scripted = [_read_resp_with_path(f"diffuse_{i}.py") for i in range(10)] + [
         _terminal_resp()]
     backend = _ScriptedBackend(scripted)
@@ -1418,24 +1427,14 @@ def test_breadth_probe_re_fires_on_escalation_count(monkeypatch):
 
     breadth_events = [(k, f) for k, f in captured_events
                       if k == "early_bail_breadth_probe_fired"]
-    assert len(breadth_events) >= 2, (
-        f"breadth_probe must fire ≥2 times (first + escalation), "
-        f"got {len(breadth_events)} fires. "
-        f"_BREADTH_PROBE_ESCALATION_COUNT={_BREADTH_PROBE_ESCALATION_COUNT}"
-    )
-    fire_reasons = [f.get("fire_reason") for _, f in breadth_events]
-    assert "first" in fire_reasons, (
-        f"breadth_probe events must include a 'first' fire_reason, "
-        f"got {fire_reasons}"
-    )
-    assert "escalation" in fire_reasons, (
-        f"breadth_probe events must include an 'escalation' fire_reason, "
-        f"got {fire_reasons}"
-    )
-    # Verify the escalation fire carries the correct suppression count.
     escalation_events = [f for k, f in breadth_events
                          if f.get("fire_reason") == "escalation"]
-    assert len(escalation_events) >= 1
+    assert len(escalation_events) >= 1, (
+        f"escalation must fire at suppression #{_BREADTH_PROBE_ESCALATION_COUNT} "
+        f"regardless of narrow_reader_signal. Got {len(escalation_events)} "
+        f"escalation fires, {len(breadth_events)} total breadth_probe events."
+    )
+    # Verify the escalation fire carries the correct suppression count.
     assert escalation_events[0].get("suppression_count_so_far") == (
         _BREADTH_PROBE_ESCALATION_COUNT), (
         f"escalation must fire at suppression #{_BREADTH_PROBE_ESCALATION_COUNT}, "
@@ -1531,6 +1530,489 @@ def test_breadth_probe_silent_when_band_response_silent(monkeypatch):
         f"breadth_probe must NOT fire under band_response=silent, "
         f"got {len(bp_msgs)} fires"
     )
+
+
+# ---------------------------------------------------------------------------
+# v1.10.5 — narrow_reader_signal gate tests (CORRECTED)
+#
+# Design (per project_v1105_predicate_probe_failure.md post-mortem +
+# verified deterministic feature vectors at suppression #1):
+#
+#   archetype          bm25  grep  desired   predicate output
+#   sphinx-10435        1     1    FIRE      NOT (1>0 AND 1==0) = T fire ✓
+#   matplotlib-14623    1     1    FIRE      NOT (1>0 AND 1==0) = T fire ✓
+#   psf-requests-5414   0     0    FIRE      NOT (0>0 AND 0==0) = NOT F = T fire ✓
+#   psf-requests-1921   0     1    FIRE      NOT (0>0 AND ...) = T fire ✓
+#   sphinx-10323        1     0    SUPPRESS  NOT (1>0 AND 0==0) = NOT T = F suppress ✓
+#
+#   - First-event breadth_probe fires UNLESS the trajectory shows the
+#     bm25-without-grep pattern (sphinx-10323 synthesis-looping signature).
+#   - Escalation at suppression #3 remains unconditional (different failure
+#     mode, targets matplotlib-25775 archetype).
+# ---------------------------------------------------------------------------
+
+
+def test_v1105_synthesis_looping_signature_unit():
+    """Direct unit test of the v1.10.5c predicate helper. Verifies the
+    truth table against the 6 archetype feature vectors observed at
+    suppression #1 (5 from the archetype-4 set + sphinx-10323 + sympy-12419)."""
+    # sphinx-10435: bm25=1, grep=1, distinct_files=1 → grep present → fire
+    assert _v1105_synthesis_looping_signature(1, 1, 1) is False
+    # matplotlib-14623: same as 10435 → fire
+    assert _v1105_synthesis_looping_signature(1, 1, 1) is False
+    # 5414: bm25=0, grep=0, distinct_files=2 → no bm25 → fire
+    assert _v1105_synthesis_looping_signature(0, 0, 2) is False
+    # 1921: bm25=0, grep=1, distinct_files=1 → no bm25 → fire
+    assert _v1105_synthesis_looping_signature(0, 1, 1) is False
+    # sphinx-10323: bm25=1, grep=0, distinct_files=2 → all 3 conditions met → SUPPRESS
+    assert _v1105_synthesis_looping_signature(1, 0, 2) is True
+    # sympy-12419: bm25=1, grep=0, distinct_files=1 → distinct_files<2 → FIRE
+    # (v1.10.5c refinement — distinct_files separates 12419 from 10323)
+    assert _v1105_synthesis_looping_signature(1, 0, 1) is False
+    # Additional patterns:
+    # multiple bm25 + no grep + multi-file → still synthesis-wandering → suppress
+    assert _v1105_synthesis_looping_signature(3, 0, 3) is True
+    # bm25 + grep (any) → not looping → fire
+    assert _v1105_synthesis_looping_signature(2, 2, 5) is False
+    # bm25 + no grep + 0 files → premature → fire
+    assert _v1105_synthesis_looping_signature(1, 0, 0) is False
+
+
+def _bm25_tool() -> ToolDef:
+    """bm25_search tool stub for narrow_reader_signal tests."""
+    return ToolDef(
+        name="bm25_search",
+        description="bm25 corpus search",
+        parameters={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    )
+
+
+def _bm25_fn() -> dict[str, Any]:
+    return {"bm25_search": lambda args: (f"bm25 results for {args.get('query','')}", None)}
+
+
+def _bm25_resp(query: str = "find bug", completion_tokens: int = 200) -> ChatResponse:
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(id="b", name="bm25_search", arguments={"query": query})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
+    )
+
+
+def _list_dir_tool() -> ToolDef:
+    """list_dir tool stub. Returns no path-bearing arg in our test scenarios,
+    so tool_history entries have path=None — keeps diversity low while still
+    accumulating tool_calls_total."""
+    return ToolDef(
+        name="list_dir",
+        description="list a directory",
+        parameters={"type": "object", "properties": {}},
+    )
+
+
+def _list_dir_fn() -> dict[str, Any]:
+    return {"list_dir": lambda args: ("entries", None)}
+
+
+def _grep_tool() -> ToolDef:
+    return ToolDef(
+        name="grep",
+        description="grep search",
+        parameters={
+            "type": "object",
+            "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+            "required": ["pattern"],
+        },
+    )
+
+
+def _grep_fn() -> dict[str, Any]:
+    return {"grep": lambda args: (f"grep results for {args.get('pattern','')}", None)}
+
+
+def _grep_resp(pattern: str = "bug", path: str = "src/", index: int = 0,
+               completion_tokens: int = 200) -> ChatResponse:
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(
+            id=f"g{index}", name="grep",
+            arguments={"pattern": pattern, "path": path, "_idx": index})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
+    )
+
+
+def _list_dir_resp(index: int = 0, path: str | None = None,
+                   completion_tokens: int = 200) -> ChatResponse:
+    """list_dir call. If path is None, tool_history entry has path=None.
+    If path is set, the entry records that path (counted in diversity
+    but does NOT contribute to repeated_same_path_access since list_dir
+    is not in _READ_TOOLS).
+
+    Varying `index` makes each call unique to avoid dedup short-circuit
+    (list_dir is NOT in _DEDUP_EXEMPT_TOOLS, unlike read_file)."""
+    args: dict[str, Any] = {"_call_index": index}
+    if path is not None:
+        args["path"] = path
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(
+            id=f"d{index}", name="list_dir", arguments=args)],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
+    )
+
+
+def test_v1105_narrow_reader_predicate_fires_when_no_synthesis_loop(monkeypatch):
+    """v1.10.5 — first-event breadth_probe fires when the trajectory does
+    NOT show the bm25-without-grep synthesis-looping signature.
+
+    Archetype regression target: sphinx-doc__sphinx-10435 + matplotlib-14623
+    cluster (bm25=1, grep=1 at suppression #1 → NOT looping → fire).
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # Mix of list_dir calls — 2 with distinct paths + 6 without. Diversity
+    # in the windowed view = 2 (only path-bearing entries count), and
+    # file_entropy_last_K's _normalized_entropy ignores None entries so
+    # with only 2 distinct paths the entropy fraction is 1.0, file_entropy
+    # contribution = 0. Total score = 0 < LOW → suppression branch entered
+    # → narrow_reader_signal=(2<3 AND bm25=0)=True → breadth_probe fires.
+    scripted = [
+        _list_dir_resp(index=0, path="a/"),
+        _list_dir_resp(index=1, path="b/"),
+        _list_dir_resp(index=2),
+        _list_dir_resp(index=3),
+        _list_dir_resp(index=4),
+        _list_dir_resp(index=5),
+        _list_dir_resp(index=6),
+        _list_dir_resp(index=7),
+    ] + [_terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    captured: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: captured.append((kind, f)))
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_list_dir_tool()], tool_fns=_list_dir_fn(),
+        run_id="test-v1105-fire",
+    )
+
+    breadth = [(k, f) for k, f in captured if k == "early_bail_breadth_probe_fired"]
+    assert len(breadth) >= 1, (
+        f"breadth_probe should fire on narrow-reader trajectory "
+        f"(diversity=0 < threshold, "
+        f"bm25=0). got {len(breadth)} fires"
+    )
+    first_fires = [f for _, f in breadth if f.get("fire_reason") == "first"]
+    assert len(first_fires) == 1, (
+        f"exactly 1 first-event fire expected on narrow-reader trajectory, "
+        f"got {len(first_fires)}"
+    )
+    assert first_fires[0].get("narrow_reader_signal") is True
+
+
+def test_v1105_narrow_reader_predicate_fires_on_high_diversity_no_synthesis_loop(
+        monkeypatch):
+    """v1.10.5 (CORRECTED) — high-diversity alone does NOT suppress.
+    Under the corrected predicate, only the bm25-without-grep pattern
+    suppresses. High-diversity trajectories without that signature still
+    fire (and SHOULD — the v1.10.4 cycle showed 5414 needs the fire to
+    avoid reverting to the v1.10.3 wildcard-only patch).
+
+    Verifies the corrected predicate doesn't repeat the initial v1.10.5
+    design error (which conflated high-diversity with "no nudge needed").
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # 8 distinct read_file paths — diversity=8, bm25=0, grep=0
+    # → not looping signature → first-event fires
+    scripted = [_read_resp_with_path(f"unique_{i}.py") for i in range(8)] + [
+        _terminal_resp()]
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    captured: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: captured.append((kind, f)))
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-v1105-fire-high-div",
+    )
+
+    breadth = [(k, f) for k, f in captured if k == "early_bail_breadth_probe_fired"]
+    first_fires = [f for _, f in breadth if f.get("fire_reason") == "first"]
+    assert len(first_fires) == 1, (
+        f"breadth_probe first-event SHOULD fire on high-diversity bm25=0/grep=0 "
+        f"trajectory (5414 archetype). got {len(first_fires)} first fires"
+    )
+    # The fire event records narrow_reader_signal=True (firing condition)
+    assert first_fires[0].get("narrow_reader_signal") is True
+    assert first_fires[0].get("bm25_count") == 0
+    assert first_fires[0].get("grep_count") == 0
+
+
+def test_v1105_narrow_reader_predicate_suppresses_on_bm25_without_grep(monkeypatch):
+    """v1.10.5 (CORRECTED) — first-event is suppressed when the trajectory
+    invoked bm25_search WITHOUT also invoking grep. This is the
+    sphinx-10323 synthesis-looping signature (bm25=1, grep=0 at step 4).
+
+    Archetype regression target: sphinx-doc__sphinx-10323 (the v1.10.4
+    deterministic regression that v1.10.5 aims to fix).
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # v1.10.5c: bm25 + 2 distinct read_file paths + list_dirs.
+    # bm25=1, grep=0, distinct_files=2 → synthesis-wandering signature
+    # (sphinx-10323 archetype) → suppress first-event.
+    scripted = (
+        [_bm25_resp(query="find_bug")]
+        + [_read_resp_with_path("a/code.py")]
+        + [_read_resp_with_path("a/tests.py")]
+        + [
+            _list_dir_resp(index=3),
+            _list_dir_resp(index=4),
+            _list_dir_resp(index=5),
+            _list_dir_resp(index=6),
+            _list_dir_resp(index=7),
+        ]
+        + [_terminal_resp()]
+    )
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    captured: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: captured.append((kind, f)))
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_list_dir_tool(), _bm25_tool(), _read_tool()],
+        tool_fns={**_list_dir_fn(), **_bm25_fn(), **_read_fn()},
+        run_id="test-v1105-suppress-bm25",
+    )
+
+    breadth = [(k, f) for k, f in captured if k == "early_bail_breadth_probe_fired"]
+    first_fires = [f for _, f in breadth if f.get("fire_reason") == "first"]
+    assert len(first_fires) == 0, (
+        f"breadth_probe first-event must NOT fire on bm25-without-grep + "
+        f"multi-file (sphinx-10323 archetype). got {len(first_fires)} first-event fires"
+    )
+    suppressions = [(k, f) for k, f in captured
+                    if k == "early_bail_suppressed_diffuse"]
+    assert suppressions, "suppressed_diffuse events should still fire"
+    bm25_seen_events = [f for _, f in suppressions
+                        if f.get("bm25_count", 0) >= 1
+                        and f.get("grep_count", 0) == 0
+                        and f.get("distinct_files", 0) >= 2]
+    assert bm25_seen_events, (
+        "at least one suppression event should report bm25_count>=1 AND "
+        "grep_count==0 AND distinct_files>=2 (synthesis-wandering signature)"
+    )
+    assert bm25_seen_events[0].get("narrow_reader_signal") is False
+
+
+def test_v1105c_narrow_reader_fires_on_bm25_no_grep_single_file(monkeypatch):
+    """v1.10.5c — when bm25 invoked AND grep absent AND only 1 distinct
+    file read, predicate FIRES first-event (sympy-12419 archetype). The
+    distinct_files=1 boundary separates this premature-loop-kill case
+    from the sphinx-10323 synthesis-wandering case (distinct_files>=2).
+
+    Archetype regression target: sympy__sympy-12419 (bm25=1, grep=0,
+    distinct_files=1 at suppression #1; 11-of-11 stable as plausible
+    across v1.10.2/v1.10.3/v1.10.4 cycles; v1.10.5b broke it by
+    suppressing first-event → consecutive-repeat-loop death spiral at
+    step 7). The v1.10.5c refinement restores the fire.
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # bm25 + 1 read_file + list_dirs WITH paths (varied so entropy stays low).
+    # bm25=1, grep=0, distinct_files=1 (only the read_file path counts toward
+    # distinct_files; list_dir paths don't because list_dir not in
+    # {read_file, edit_file, write_file}).
+    # → synthesis_looping_signature = NOT (1>0 AND 0==0 AND 1>=2) = False
+    # → narrow_reader_signal = True → fire first-event
+    scripted = (
+        [_bm25_resp(query="find_bug")]
+        + [_read_resp_with_path("only/one.py")]
+        + [
+            _list_dir_resp(index=2, path="dir_a/"),
+            _list_dir_resp(index=3, path="dir_b/"),
+            _list_dir_resp(index=4, path="dir_c/"),
+            _list_dir_resp(index=5, path="dir_d/"),
+            _list_dir_resp(index=6, path="dir_e/"),
+        ]
+        + [_terminal_resp()]
+    )
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    captured: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: captured.append((kind, f)))
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_bm25_tool(), _list_dir_tool(), _read_tool()],
+        tool_fns={**_bm25_fn(), **_list_dir_fn(), **_read_fn()},
+        run_id="test-v1105c-fire-single-file",
+    )
+
+    breadth = [(k, f) for k, f in captured if k == "early_bail_breadth_probe_fired"]
+    first_fires = [f for _, f in breadth if f.get("fire_reason") == "first"]
+    assert len(first_fires) == 1, (
+        f"breadth_probe first-event SHOULD fire on bm25+no-grep+single-file "
+        f"(sympy-12419 archetype). got {len(first_fires)} first-event fires"
+    )
+    assert first_fires[0].get("narrow_reader_signal") is True
+    assert first_fires[0].get("bm25_count") >= 1
+    assert first_fires[0].get("grep_count") == 0
+    assert first_fires[0].get("distinct_files") == 1
+
+
+def test_v1105_narrow_reader_predicate_fires_on_bm25_with_grep(monkeypatch):
+    """v1.10.5 (CORRECTED) — bm25 AND grep both invoked → not synthesis-
+    looping → first-event fires. This is the 10435/14623 cluster pattern.
+
+    Archetype regression target: sphinx-doc__sphinx-10435 + matplotlib-14623
+    cluster (bm25=1, grep=1 at suppression #1 — the v1.10.4 load-bearing
+    case that v1.10.5 must preserve).
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # bm25 + grep + list_dirs → bm25=1, grep=1, no synthesis-looping
+    scripted = (
+        [_bm25_resp(query="find_bug")]
+        + [_grep_resp(pattern="bug")]
+        + [
+            _list_dir_resp(index=2, path="a/"),
+            _list_dir_resp(index=3, path="b/"),
+            _list_dir_resp(index=4),
+            _list_dir_resp(index=5),
+            _list_dir_resp(index=6),
+            _list_dir_resp(index=7),
+        ]
+        + [_terminal_resp()]
+    )
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    captured: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: captured.append((kind, f)))
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_bm25_tool(), _grep_tool(), _list_dir_tool()],
+        tool_fns={**_bm25_fn(), **_grep_fn(), **_list_dir_fn()},
+        run_id="test-v1105-fire-cluster",
+    )
+
+    breadth = [(k, f) for k, f in captured if k == "early_bail_breadth_probe_fired"]
+    first_fires = [f for _, f in breadth if f.get("fire_reason") == "first"]
+    assert len(first_fires) == 1, (
+        f"breadth_probe first-event SHOULD fire when bm25 AND grep both "
+        f"invoked (10435/14623 cluster). got {len(first_fires)} first fires"
+    )
+    assert first_fires[0].get("narrow_reader_signal") is True
+    assert first_fires[0].get("bm25_count") >= 1
+    assert first_fires[0].get("grep_count") >= 1
+
+
+def test_v1105_escalation_fires_independently_of_narrow_predicate(monkeypatch):
+    """v1.10.5 — escalation (fire_reason='escalation' at suppression #N=3)
+    is NOT gated on narrow_reader_signal. Even on synthesis-looping
+    trajectories where first-event is suppressed, the escalation re-fire
+    at suppression #3 still fires as a safety net.
+
+    Archetype regression target: matplotlib-25775 (7+ suppressions, soft_anchor
+    at step 11 — needs escalation safety net even if first-event suppressed).
+    """
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
+    # v1.10.5c: bm25 + 2 distinct read_file paths + list_dirs.
+    # bm25=1, grep=0, distinct_files=2 → synthesis-wandering signature
+    # → first-event suppressed. Trajectory has enough suppressions for
+    # escalation at #_BREADTH_PROBE_ESCALATION_COUNT.
+    scripted = (
+        [_bm25_resp(query="find_bug")]
+        + [_read_resp_with_path("a/code.py")]
+        + [_read_resp_with_path("a/tests.py")]
+        + [
+            _list_dir_resp(index=i, path=f"d{i}/")
+            for i in range(3, 9)
+        ]
+        + [_terminal_resp()]
+    )
+    backend = _ScriptedBackend(scripted)
+    role = _make_role()
+
+    captured: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: captured.append((kind, f)))
+
+    run_agent(
+        backend=backend, role_cfg=role,
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_bm25_tool(), _list_dir_tool(), _read_tool()],
+        tool_fns={**_bm25_fn(), **_list_dir_fn(), **_read_fn()},
+        run_id="test-v1105-escalation",
+    )
+
+    breadth = [(k, f) for k, f in captured if k == "early_bail_breadth_probe_fired"]
+    first_fires = [f for _, f in breadth if f.get("fire_reason") == "first"]
+    escalation_fires = [f for _, f in breadth if f.get("fire_reason") == "escalation"]
+    assert len(first_fires) == 0, (
+        f"first-event must be suppressed under bm25-without-grep pattern, "
+        f"got {len(first_fires)} first-event fires"
+    )
+    assert len(escalation_fires) >= 1, (
+        f"escalation must fire independently of narrow_reader_signal. "
+        f"got {len(escalation_fires)} escalation fires "
+        f"(_BREADTH_PROBE_ESCALATION_COUNT={_BREADTH_PROBE_ESCALATION_COUNT})"
+    )
+    # Verify escalation fires at the expected suppression count
+    assert escalation_fires[0].get("suppression_count_so_far") == (
+        _BREADTH_PROBE_ESCALATION_COUNT)
 
 
 def test_exploratory_mode_string_no_longer_dispatched(monkeypatch):

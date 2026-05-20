@@ -1,0 +1,10 @@
+{
+  "version": "v1.10.5c",
+  "n": 1,
+  "frozen_at": "2026-05-19",
+  "recipe": "Targeted probe for sympy-12419 under v1.10.5c refined predicate. The v1.10.5b predicate suppressed first-event on this instance (bm25=1, grep=0 signature shared with sphinx-10323) → repeat-loop death spiral at step 7 → empty patch (regressed from plausible 11/11 prior reps). The v1.10.5c refinement adds distinct_files>=2 to the suppression condition; sympy-12419 has distinct_files=1 → predicate should now FIRE first-event → plausible patch should be restored.",
+  "composition": {
+    "sympy__sympy-12419": "v1.10.5c critical check: must produce non-empty patch with first-event breadth_probe firing at step 4. If no fire OR if empty patch, abort to Option C per precommit."
+  },
+  "instance_ids": ["sympy__sympy-12419"]
+}

@@ -1,0 +1,10 @@
+{
+  "version": "v1.10.5",
+  "n": 1,
+  "frozen_at": "2026-05-19",
+  "recipe": "Single-instance probe for sphinx-10323 — the v1.10.4 deterministic regression that v1.10.5's corrected predicate aims to fix by suppressing first-event breadth_probe on the bm25-without-grep signature.",
+  "composition": {
+    "sphinx-doc__sphinx-10323": "Should produce a non-empty patch (wrong_location 3/3 in v1.10.3 silent mode). v1.10.4 hybrid fired breadth_probe at step 4 → empty 3/3. v1.10.5b corrected predicate should suppress (bm25=1, grep=0 at step 4 → synthesis-looping signature) → behavior reverts to v1.10.3-shape wrong_location."
+  },
+  "instance_ids": ["sphinx-doc__sphinx-10323"]
+}
