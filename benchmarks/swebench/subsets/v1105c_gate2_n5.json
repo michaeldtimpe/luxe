@@ -1,0 +1,20 @@
+{
+  "version": "v1.10.5c",
+  "n": 5,
+  "frozen_at": "2026-05-19",
+  "recipe": "Gate 2 verification subset for v1.10.5c — 4 archetypes + sphinx-10323. Per user precommit: archetype-4 must match v1.10.4 outcomes (Docker resolves where v1.10.4 had them) AND sphinx-10323 must stay suppressed (matching v1.10.3 wrong_location, not v1.10.4 empty).",
+  "composition": {
+    "sphinx-doc__sphinx-10435": "CONFIDENCE_COLLAPSE recovery archetype; v1.10.5c predicate fires (bm25=1, grep=1)",
+    "matplotlib__matplotlib-14623": "W3 founding case; v1.10.5c predicate fires (bm25=1, grep=1)",
+    "psf__requests-5414": "Cluster Docker regression; v1.10.5c predicate fires (bm25=0)",
+    "psf__requests-1921": "v1.10.3 gain to preserve; v1.10.5c predicate fires (bm25=0)",
+    "sphinx-doc__sphinx-10323": "v1.10.4 regression to recover; v1.10.5c predicate suppresses (bm25=1, grep=0, distinct_files=2)"
+  },
+  "instance_ids": [
+    "sphinx-doc__sphinx-10435",
+    "matplotlib__matplotlib-14623",
+    "psf__requests-5414",
+    "psf__requests-1921",
+    "sphinx-doc__sphinx-10323"
+  ]
+}
