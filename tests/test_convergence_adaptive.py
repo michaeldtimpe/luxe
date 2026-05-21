@@ -177,43 +177,55 @@ def test_within_run_state_does_not_mutate_inputs():
 
 # --- compute_intervention_bias + bias-not-lock invariant -----------------
 
-def test_bias_neutral_below_no_write_threshold():
-    state = AdaptiveState(step=3, consecutive_no_write=3, score_trend=0.0, score_log_len=2)
-    bias = compute_intervention_bias(state)
-    assert bias["write_pressure"] == 0.0
-    assert bias["early_bail"] == 0.0
-
-
-def test_bias_positive_when_no_write_exceeds_threshold():
-    state = AdaptiveState(
-        step=12, consecutive_no_write=_NO_WRITE_BIAS_THRESHOLD + 2,
-        score_trend=0.0, score_log_len=5,
-    )
-    bias = compute_intervention_bias(state)
-    assert bias["write_pressure"] > 0
-    assert bias["early_bail"] > 0
-
-
-def test_bias_capped_at_one_for_no_write():
-    state = AdaptiveState(
-        step=99, consecutive_no_write=999,
-        score_trend=0.0, score_log_len=5,
-    )
-    bias = compute_intervention_bias(state)
-    assert bias["write_pressure"] <= 1.0
-    assert bias["early_bail"] <= 1.0
+def test_bias_no_write_retired_write_pressure_pinned_at_zero():
+    """v1.11 Phase B — no_write → write_pressure/early_bail bias RETIRED
+    (Phase A: non-selective). The keys exist but are pinned at 0.0 regardless
+    of how deep the no-write streak runs, so write_pressure stays neutral."""
+    for nw in (3, _NO_WRITE_BIAS_THRESHOLD + 2, 999):
+        state = AdaptiveState(
+            step=12, consecutive_no_write=nw, score_trend=0.0, score_log_len=5)
+        bias = compute_intervention_bias(state)
+        assert bias["write_pressure"] == 0.0, f"no_write={nw} should not bias wp"
+        assert bias["early_bail"] == 0.0
 
 
 def test_bias_suppresses_soft_anchor_when_converging():
-    state = AdaptiveState(step=5, consecutive_no_write=2, score_trend=1.0, score_log_len=5)
+    """trend > 0 → back off commitment pressure (ungated; always safe)."""
+    state = AdaptiveState(
+        step=5, consecutive_no_write=2, score_trend=1.0, score_log_len=5,
+        convergence_score=0.05)
     bias = compute_intervention_bias(state)
     assert bias.get("soft_anchor", 0) < 0
 
 
-def test_bias_encourages_soft_anchor_when_drifting():
-    state = AdaptiveState(step=5, consecutive_no_write=2, score_trend=-1.0, score_log_len=5)
+def test_bias_promotes_soft_anchor_on_confirmed_collapse():
+    """trend <= 0 AND conv < LOW AND step >= _COLLAPSE_MIN_STEP → positive
+    soft_anchor bias (the score<LOW band-response promotion signal)."""
+    state = AdaptiveState(
+        step=7, consecutive_no_write=2, score_trend=-1.0, score_log_len=5,
+        convergence_score=0.05)
     bias = compute_intervention_bias(state)
     assert bias.get("soft_anchor", 0) > 0
+
+
+def test_bias_no_soft_anchor_promotion_before_collapse_min_step():
+    """The same collapse signature BEFORE _COLLAPSE_MIN_STEP must NOT promote
+    — Phase A showed empties only separate from preserves at step >= 7."""
+    state = AdaptiveState(
+        step=5, consecutive_no_write=2, score_trend=-1.0, score_log_len=5,
+        convergence_score=0.05)
+    bias = compute_intervention_bias(state)
+    assert bias.get("soft_anchor", 0.0) == 0.0
+
+
+def test_bias_no_soft_anchor_promotion_when_above_low_band():
+    """Confirmed-collapse step but convergence already above LOW (climbing
+    toward commit) must NOT promote — it is not the empty signature."""
+    state = AdaptiveState(
+        step=9, consecutive_no_write=2, score_trend=0.0, score_log_len=5,
+        convergence_score=0.20)
+    bias = compute_intervention_bias(state)
+    assert bias.get("soft_anchor", 0.0) == 0.0
 
 
 # --- bias-not-lock property test: random states → safe modulation --------
@@ -230,6 +242,7 @@ def test_bias_not_lock_invariant_random_states_never_saturate_modulation():
             consecutive_no_write=(rng.choice([None, rng.randint(0, 50)])),
             score_trend=rng.choice([None, -1.0, 0.0, 1.0]),
             score_log_len=rng.randint(0, 50),
+            convergence_score=rng.choice([None, 0.0, 0.05, 0.1, 0.4, 1.0]),
         )
         bias = compute_intervention_bias(state)
         for kind, b in bias.items():

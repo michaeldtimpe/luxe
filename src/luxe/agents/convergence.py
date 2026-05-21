@@ -280,7 +280,25 @@ _DEFAULT_MAX_DELTA = 0.3
 # non-write steps is the inflection point where the model has either
 # committed silently or stalled. Below 8: normal exploration window.
 # Above 8: hesitation-suppression bias starts to apply.
+# v1.11 Phase B NOTE: this threshold is RETIRED as a bias source — Phase A
+# calibration (project_v111_phaseA_calibration) proved no_write is
+# non-selective (read-heavy SUCCESS trajectories hit the same depths as
+# stalls; precision <=31% at every threshold). consecutive_no_write_steps is
+# still computed for the adaptive_state observability event, but it no longer
+# biases any intervention. Kept as a constant for back-compat / future mining.
 _NO_WRITE_BIAS_THRESHOLD = 8
+
+# v1.11 Phase B — score_trend → soft_anchor, the single live lever this cycle.
+# Phase A showed empty_patch trajectories separate from patched on convergence
+# VELOCITY, not raw inactivity: by step >= _COLLAPSE_MIN_STEP the empties sit
+# at/below LOW with a flat/falling trend while patched have turned positive and
+# climbed above LOW. When that confirmed-collapse signature holds, raise the
+# score<LOW band-response intensity toward a soft_anchor commitment nudge;
+# when the trajectory is self-recovering (trend > 0), suppress pressure.
+_COLLAPSE_MIN_STEP = 7
+_COLLAPSE_CONV_CEILING = 0.10        # mirrors loop._CONVERGENCE_LOW_THRESHOLD
+_SOFT_ANCHOR_COLLAPSE_BIAS = 0.5     # → modulation 1.25 (one slew step from 1.0)
+_SOFT_ANCHOR_RECOVERY_BIAS = -0.3    # back off while the model converges itself
 
 
 def consecutive_no_write_steps(history: Sequence[dict[str, Any]]) -> int:
@@ -339,6 +357,10 @@ class AdaptiveState:
     consecutive_no_write: int | None
     score_trend: float | None  # in {-1.0, 0.0, +1.0} or None if ablated
     score_log_len: int
+    # v1.11 Phase B — current convergence score (= score_log[-1]). Needed by
+    # the score_trend → soft_anchor gate to distinguish "stuck below LOW" from
+    # "climbing above LOW". Default None keeps pre-Phase-B constructors valid.
+    convergence_score: float | None = None
 
 
 def compute_within_run_state(
@@ -364,6 +386,7 @@ def compute_within_run_state(
             score_trajectory_trend(score_log) if score_trend_enabled else None
         ),
         score_log_len=len(score_log),
+        convergence_score=(score_log[-1] if score_log else None),
     )
 
 
@@ -381,25 +404,31 @@ def compute_intervention_bias(state: AdaptiveState) -> dict[str, float]:
     would functionally gate the intervention).
     """
     out: dict[str, float] = {}
-    # consecutive_no_write_steps → write_pressure / early_bail
-    if state.consecutive_no_write is not None:
-        if state.consecutive_no_write >= _NO_WRITE_BIAS_THRESHOLD:
-            # Hesitation building → bias toward earlier intervention.
-            # +0.3 per step beyond threshold, capped at +1.0.
-            excess = state.consecutive_no_write - _NO_WRITE_BIAS_THRESHOLD
-            out["write_pressure"] = min(1.0, 0.3 + 0.1 * excess)
-            out["early_bail"] = min(1.0, 0.3 + 0.1 * excess)
-        else:
-            out["write_pressure"] = 0.0
-            out["early_bail"] = 0.0
-    # score_trajectory_trend → suppress when converging, encourage when drifting
+    # v1.11 Phase B — no_write → write_pressure/early_bail bias RETIRED.
+    # Phase A proved the signal is non-selective (precision <=31%); keeping it
+    # active would perturb ~40% of healthy read-heavy preserves at threshold 8.
+    # Pinned at 0.0 so the keys still exist for the modulation pipeline but
+    # write_pressure/early_bail stay at neutral modulation (1.0). This makes
+    # soft_anchor the single moving lever this cycle (one-lever discipline).
+    out["write_pressure"] = 0.0
+    out["early_bail"] = 0.0
+    # score_trajectory_trend → soft_anchor (the single live lever).
     if state.score_trend is not None:
         if state.score_trend > 0:
             # Model converging on its own — suppress commitment pressure.
-            out["soft_anchor"] = out.get("soft_anchor", 0.0) - 0.3
-        elif state.score_trend < 0:
-            # Convergence drifting downward — early warning, encourage commit.
-            out["soft_anchor"] = out.get("soft_anchor", 0.0) + 0.3
+            # Ungated: backing off is always safe (preserves self-recovering
+            # trajectories such as matplotlib-14623 / sphinx-10323 successes).
+            out["soft_anchor"] = _SOFT_ANCHOR_RECOVERY_BIAS
+        elif (state.convergence_score is not None
+                and state.step >= _COLLAPSE_MIN_STEP
+                and state.convergence_score < _COLLAPSE_CONV_CEILING):
+            # Confirmed monotonic collapse in the score<LOW band (flat/falling
+            # trend, stuck below LOW, late enough that the signal is reliable
+            # per Phase A). Raise the band-response intensity toward a
+            # soft_anchor commitment nudge.
+            out["soft_anchor"] = _SOFT_ANCHOR_COLLAPSE_BIAS
+        else:
+            out["soft_anchor"] = 0.0
     return out
 
 

@@ -39,6 +39,18 @@ def _read_resp() -> ChatResponse:
     )
 
 
+def _read_resp_distinct(i: int) -> ChatResponse:
+    """Read a DISTINCT file each step → diffuse recon → convergence stays low
+    with a flat/falling trend (the empty_patch collapse signature)."""
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(
+            id=f"c{i}", name="read_file", arguments={"path": f"pkg/mod_{i}.py"})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=100),
+    )
+
+
 def _terminal() -> ChatResponse:
     return ChatResponse(text="done", finish_reason="stop",
                         timing=GenerationTiming(prompt_tokens=10, completion_tokens=10))
@@ -163,16 +175,15 @@ def test_adaptive_policy_modulation_neutral_below_bias_threshold(monkeypatch):
         assert e["modulation_early_bail"] == 1.0
 
 
-def test_adaptive_policy_modulation_increases_above_bias_threshold(monkeypatch):
-    """With consecutive_no_write significantly above the bias threshold
-    AND multiple steps to apply the slew-rate, modulation should rise
-    above 1.0 (bias toward earlier intervention)."""
+def test_no_write_write_pressure_retired_stays_pinned(monkeypatch):
+    """v1.11 Phase B — no_write bias RETIRED. Even with 15 consecutive
+    no-write steps (well past the old threshold 8), write_pressure AND
+    early_bail modulation must stay pinned at neutral 1.0."""
     monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
     monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
     events = _capture_events(monkeypatch)
 
-    # 15 reads + terminal — comfortably above _NO_WRITE_BIAS_THRESHOLD (8).
-    scripted = [_read_resp() for _ in range(15)] + [_terminal()]
+    scripted = [_read_resp_distinct(i) for i in range(15)] + [_terminal()]
     run_agent(
         backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
             model_key="test", num_ctx=4096, max_steps=20,
@@ -180,26 +191,24 @@ def test_adaptive_policy_modulation_increases_above_bias_threshold(monkeypatch):
         ),
         system_prompt="sys", task_prompt="do work",
         tool_defs=[_read_tool()], tool_fns=_read_fn(),
-        run_id="test-mod-rises",
+        run_id="test-wp-retired",
     )
 
     adaptive_events = [e for e in events if e["kind"] == "adaptive_state"]
-    # By the end of 15 no-write steps, modulation should have ratcheted up
-    # under the slew-rate limit.
-    last_mod = adaptive_events[-1]["modulation_write_pressure"]
-    assert last_mod > 1.0, f"expected modulation > 1.0 at trailing steps, got {last_mod}"
-    # Bias-not-lock: must stay strictly below _INTENSITY_MAX (1.5).
-    assert last_mod < 1.5
+    for e in adaptive_events:
+        assert e["modulation_write_pressure"] == 1.0
+        assert e["modulation_early_bail"] == 1.0
 
 
 def test_adaptive_policy_slew_rate_env_override(monkeypatch):
-    """LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP overrides default 0.3."""
+    """LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP bounds the per-step change
+    of the live soft_anchor modulation."""
     monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
     monkeypatch.setenv("LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP", "0.05")
     monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
     events = _capture_events(monkeypatch)
 
-    scripted = [_read_resp() for _ in range(15)] + [_terminal()]
+    scripted = [_read_resp_distinct(i) for i in range(15)] + [_terminal()]
     run_agent(
         backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
             model_key="test", num_ctx=4096, max_steps=20,
@@ -211,12 +220,94 @@ def test_adaptive_policy_slew_rate_env_override(monkeypatch):
     )
 
     adaptive_events = [e for e in events if e["kind"] == "adaptive_state"]
-    # With max_delta = 0.05, modulation cannot change by more than 0.05 per step.
-    mods = [e["modulation_write_pressure"] for e in adaptive_events]
+    # With max_delta = 0.05, soft_anchor modulation cannot jump > 0.05 per step.
+    mods = [e["modulation_soft_anchor"] for e in adaptive_events]
     for i in range(1, len(mods)):
         assert abs(mods[i] - mods[i - 1]) <= 0.05 + 1e-9, (
             f"step {i} delta {mods[i] - mods[i-1]} exceeded slew limit 0.05"
         )
+
+
+def test_soft_anchor_collapse_promote_fires_on_diffuse_stall(monkeypatch):
+    """The single live lever: a diffuse-recon stall (distinct reads, no
+    writes, convergence stuck < LOW, flat/falling trend) past
+    _COLLAPSE_MIN_STEP must promote the score<LOW band response to a one-shot
+    soft_anchor commitment nudge. Requires the SWE-bench env combo."""
+    monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    scripted = [_read_resp_distinct(i) for i in range(14)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
+            model_key="test", num_ctx=4096, max_steps=20,
+            max_tokens_per_turn=2048, temperature=0.0,
+        ),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-promote",
+    )
+
+    promotes = [e for e in events if e["kind"] == "soft_anchor_collapse_promote_fired"]
+    assert len(promotes) == 1, f"expected exactly one promotion, got {len(promotes)}"
+    assert promotes[0]["modulation_soft_anchor"] >= 1.2
+    # one-lever discipline: write_pressure never moved off neutral.
+    for e in events:
+        if e["kind"] == "adaptive_state":
+            assert e["modulation_write_pressure"] == 1.0
+
+
+def test_soft_anchor_collapse_promote_absent_when_adaptive_disabled(monkeypatch):
+    """Disable-equivalence: same trajectory + envs but LUXE_ADAPTIVE_POLICY
+    unset → no promotion event (v1.10.5 behavior preserved)."""
+    monkeypatch.delenv("LUXE_ADAPTIVE_POLICY", raising=False)
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    scripted = [_read_resp_distinct(i) for i in range(14)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
+            model_key="test", num_ctx=4096, max_steps=20,
+            max_tokens_per_turn=2048, temperature=0.0,
+        ),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-promote-off",
+    )
+
+    assert [e for e in events if e["kind"] == "soft_anchor_collapse_promote_fired"] == []
+
+
+def test_soft_anchor_collapse_promote_suppressed_when_recovering(monkeypatch):
+    """trend > 0 (model converging on its own — same-file re-reads) must keep
+    breadth_probe and NOT promote. This is the Pareto guard against the
+    historical W3 over-pressure regression class."""
+    monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    # Re-read the SAME file → convergence rises → trend > 0 → recovery branch.
+    scripted = [_read_resp() for _ in range(14)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
+            model_key="test", num_ctx=4096, max_steps=20,
+            max_tokens_per_turn=2048, temperature=0.0,
+        ),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-promote-recover",
+    )
+
+    assert [e for e in events if e["kind"] == "soft_anchor_collapse_promote_fired"] == []
 
 
 def test_adaptive_policy_ablation_score_trend_off(monkeypatch):
