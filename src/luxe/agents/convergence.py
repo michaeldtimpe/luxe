@@ -295,7 +295,12 @@ _NO_WRITE_BIAS_THRESHOLD = 8
 # climbed above LOW. When that confirmed-collapse signature holds, raise the
 # score<LOW band-response intensity toward a soft_anchor commitment nudge;
 # when the trajectory is self-recovering (trend > 0), suppress pressure.
-_COLLAPSE_MIN_STEP = 7
+# _COLLAPSE_MIN_STEP = 6: Phase A shows the conv<LOW gate becomes SELECTIVE at
+# step 6 (patched median conv climbs to 0.131 > LOW; empties stay ~0.0). Step 7
+# was too late — the Phase C smoke showed seaborn-3069 terminates at step 6, so
+# a step-7 gate never fires on short-trajectory empties. At step 6 the conv<LOW
+# gate still excludes patched (they have crossed LOW), preserving selectivity.
+_COLLAPSE_MIN_STEP = 6
 _COLLAPSE_CONV_CEILING = 0.10        # mirrors loop._CONVERGENCE_LOW_THRESHOLD
 _SOFT_ANCHOR_COLLAPSE_BIAS = 0.5     # → modulation 1.25 (one slew step from 1.0)
 _SOFT_ANCHOR_RECOVERY_BIAS = -0.3    # back off while the model converges itself
