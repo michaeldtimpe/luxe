@@ -38,10 +38,16 @@ from pathlib import Path
 CATEGORIES = ("simple_python", "multiple", "parallel", "parallel_multiple", "irrelevance")
 
 
-def load_results(run_dir: Path) -> dict[str, dict]:
-    """{problem_id: per-problem-json} across all BFCL categories."""
+def load_results(run_dir: Path, categories: tuple[str, ...] | None = None) -> dict[str, dict]:
+    """{problem_id: per-problem-json} across requested BFCL categories.
+
+    `categories=None` loads all 5 (full anchor). A subset enables cheap
+    probes — e.g. Stage 3 Phase 3b uses `("irrelevance",)` for a ~70 min
+    dispatch-layer regression detector before n=75 burns 30h.
+    """
+    targets = categories if categories is not None else CATEGORIES
     out: dict[str, dict] = {}
-    for cat in CATEGORIES:
+    for cat in targets:
         d = run_dir / cat
         if not d.is_dir():
             continue
@@ -149,9 +155,12 @@ def render(report: dict, gates: dict, label_a: str, label_b: str) -> str:
     out.append(f"new:       {report['total_new_pct']:.2f}%")
     out.append("")
     out.append("--- Hard gates ---")
-    tg = "PASS" if gates["total_pct_gate"] else "FAIL"
+    if gates.get("total_pct_skipped"):
+        out.append(f"  TOTAL >= {gates['total_pct_floor']:.2f}%       : SKIP (subset run; TOTAL not comparable to full anchor)")
+    else:
+        tg = "PASS" if gates["total_pct_gate"] else "FAIL"
+        out.append(f"  TOTAL >= {gates['total_pct_floor']:.2f}%       : {tg} ({gates['total_pct_value']:.2f}%)")
     ig = "PASS" if gates["irrelevance_gate"] else "FAIL"
-    out.append(f"  TOTAL >= {gates['total_pct_floor']:.2f}%       : {tg} ({gates['total_pct_value']:.2f}%)")
     out.append(f"  irrelevance == {gates['irrelevance_floor']:>3} : {ig} ({gates['irrelevance_value']})")
     out.append("")
     # Per-instance flip details (only when there are flips)
@@ -196,10 +205,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="Anchor BFCL run dir (contains per-category subdirs).")
     ap.add_argument("--new", type=Path, required=True,
                     help="New BFCL run dir to compare against the anchor.")
+    ap.add_argument("--categories", nargs="+", choices=list(CATEGORIES), default=None,
+                    help="Restrict comparison to a subset of BFCL v4 categories. "
+                         "Default: all 5 (full anchor). Use 'irrelevance' alone for "
+                         "the Stage 3 Phase 3b cheap dispatch-layer probe (~70 min). "
+                         "When a strict subset is passed, --total-floor is skipped "
+                         "(TOTAL is not comparable to the full-anchor 90.24%%).")
     ap.add_argument("--snapshot-out", type=Path, default=None,
                     help="Optional: emit per-problem snapshot JSONL.")
     ap.add_argument("--total-floor", type=float, default=90.00,
-                    help="Hard gate: TOTAL pass rate (%%) must be >= this.")
+                    help="Hard gate: TOTAL pass rate (%%) must be >= this. "
+                         "Skipped automatically when --categories is a strict subset.")
     ap.add_argument("--irrelevance-floor", type=int, default=240,
                     help="Hard gate: irrelevance pass count must be >= this.")
     ap.add_argument("--label-anchor", default="anchor")
@@ -211,8 +227,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"FATAL: missing run dir: {p}", file=sys.stderr)
             return 2
 
-    anchor = load_results(args.anchor)
-    new = load_results(args.new)
+    categories = tuple(args.categories) if args.categories else None
+    anchor = load_results(args.anchor, categories=categories)
+    new = load_results(args.new, categories=categories)
     if not anchor:
         print(f"FATAL: no per-problem JSONs found in anchor {args.anchor}", file=sys.stderr)
         return 2
@@ -221,7 +238,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     report = compare(anchor, new)
+    is_subset = categories is not None and len(categories) < len(CATEGORIES)
     gates = check_gates(report, args.total_floor, args.irrelevance_floor)
+    if is_subset:
+        # Subset runs cannot meaningfully compare TOTAL to the full-anchor floor.
+        # Mark the TOTAL gate as skipped (preserves irrelevance gate semantics).
+        gates["total_pct_gate"] = True
+        gates["total_pct_skipped"] = True
     print(render(report, gates, args.label_anchor, args.label_new))
 
     if args.snapshot_out:
