@@ -1,0 +1,7 @@
+{
+  "version": "v1.11-phaseC-smoke1",
+  "n": 1,
+  "frozen_at": "2026-05-21",
+  "recipe": "Single deterministic-empty instance to validate the Phase B lever end-to-end before the full Phase C run. Expect: rc=0 + soft_anchor_collapse_promote_fired in events.jsonl.",
+  "instance_ids": ["mwaskom__seaborn-3069"]
+}

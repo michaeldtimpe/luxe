@@ -209,13 +209,27 @@ def test_bias_promotes_soft_anchor_on_confirmed_collapse():
 
 
 def test_bias_no_soft_anchor_promotion_before_collapse_min_step():
-    """The same collapse signature BEFORE _COLLAPSE_MIN_STEP must NOT promote
-    — Phase A showed empties only separate from preserves at step >= 7."""
+    """The same collapse signature BEFORE _COLLAPSE_MIN_STEP must NOT promote.
+    Phase A: the conv<LOW gate is not yet selective below step 6 (patched also
+    sit below LOW at step 5)."""
     state = AdaptiveState(
         step=5, consecutive_no_write=2, score_trend=-1.0, score_log_len=5,
         convergence_score=0.05)
     bias = compute_intervention_bias(state)
     assert bias.get("soft_anchor", 0.0) == 0.0
+
+
+def test_bias_promotes_at_collapse_min_step_boundary():
+    """At exactly _COLLAPSE_MIN_STEP (6) the collapse signature promotes — the
+    Phase C smoke (seaborn-3069 terminates at step 6) requires the gate to fire
+    no later than step 6."""
+    from luxe.agents.convergence import _COLLAPSE_MIN_STEP
+    assert _COLLAPSE_MIN_STEP == 6
+    state = AdaptiveState(
+        step=_COLLAPSE_MIN_STEP, consecutive_no_write=2, score_trend=0.0,
+        score_log_len=5, convergence_score=0.0)
+    bias = compute_intervention_bias(state)
+    assert bias.get("soft_anchor", 0.0) > 0
 
 
 def test_bias_no_soft_anchor_promotion_when_above_low_band():

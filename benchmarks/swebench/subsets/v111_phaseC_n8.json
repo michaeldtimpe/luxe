@@ -1,0 +1,26 @@
+{
+  "version": "v1.11-phaseC",
+  "n": 8,
+  "frozen_at": "2026-05-21",
+  "recipe": "Phase C activation probe for the score_trend->soft_anchor lever. Union of the 6 v1.10.x archetypes (regression gate: 0 deterministic regressions vs v1.10.5) and the 2 deterministic empty_patch instances from the Phase A corpus (seaborn-3069 3/3 empty, sympy-13031 3/3 empty) that the lever should fire on. sphinx-10435 (3/7 empty in Phase A) is in the archetype set and doubles as a conversion target. Pass gate: (a) soft_anchor_collapse_promote_fired appears on >=1 empty, (b) 0 deterministic archetype regressions across 3 reps, (c) BFCL irrelevance holds 240/240.",
+  "composition": {
+    "sphinx-doc__sphinx-10435": "CONFIDENCE_COLLAPSE recovery; v1.10.5 baseline 2/3 strong. Also a lever conversion target (3/7 empty in Phase A corpus).",
+    "matplotlib__matplotlib-14623": "W3 founding case. v1.10.5 Docker 3/3 T. trend>0 self-recovery — must NOT be promoted (Pareto guard).",
+    "psf__requests-5414": "Cluster Docker regression case. v1.10.5 T/T/T. Must not regress.",
+    "psf__requests-1921": "v1.10.3 gain. v1.10.5 T/T/T. Must not regress.",
+    "sphinx-doc__sphinx-10323": "v1.10.4 regression FIXED in v1.10.5 (wrong_location 3/3). trend>0 self-recovery — must NOT be promoted.",
+    "sympy__sympy-12419": "v1.10.5c regression target FIXED (T/T/T). Must not regress.",
+    "mwaskom__seaborn-3069": "Phase A deterministic empty (3/3). Lever fire + conversion target.",
+    "sympy__sympy-13031": "Phase A deterministic empty (3/3, habituation cap at no_write=20). Lever fire + conversion target."
+  },
+  "instance_ids": [
+    "sphinx-doc__sphinx-10435",
+    "matplotlib__matplotlib-14623",
+    "psf__requests-5414",
+    "psf__requests-1921",
+    "sphinx-doc__sphinx-10323",
+    "sympy__sympy-12419",
+    "mwaskom__seaborn-3069",
+    "sympy__sympy-13031"
+  ]
+}
