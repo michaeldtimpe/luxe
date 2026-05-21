@@ -139,6 +139,86 @@ def test_adaptive_policy_ablation_no_write_off(monkeypatch):
         assert "score_trend" in e
 
 
+def test_adaptive_policy_modulation_neutral_below_bias_threshold(monkeypatch):
+    """At consecutive_no_write < 8 (the bias threshold), modulation must
+    stay at 1.0 → effective_wp_min_step == _WRITE_PRESSURE_MIN_STEP →
+    archetype-style short trajectories preserve v1.10.5 behavior."""
+    monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    # Only 4 reads then terminal — way below the bias threshold (8).
+    scripted = [_read_resp() for _ in range(4)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted), role_cfg=_role(),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-mod-neutral",
+    )
+
+    adaptive_events = [e for e in events if e["kind"] == "adaptive_state"]
+    # All modulation values should remain at exactly 1.0 (neutral).
+    for e in adaptive_events:
+        assert e["modulation_write_pressure"] == 1.0
+        assert e["modulation_early_bail"] == 1.0
+
+
+def test_adaptive_policy_modulation_increases_above_bias_threshold(monkeypatch):
+    """With consecutive_no_write significantly above the bias threshold
+    AND multiple steps to apply the slew-rate, modulation should rise
+    above 1.0 (bias toward earlier intervention)."""
+    monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    # 15 reads + terminal — comfortably above _NO_WRITE_BIAS_THRESHOLD (8).
+    scripted = [_read_resp() for _ in range(15)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
+            model_key="test", num_ctx=4096, max_steps=20,
+            max_tokens_per_turn=2048, temperature=0.0,
+        ),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-mod-rises",
+    )
+
+    adaptive_events = [e for e in events if e["kind"] == "adaptive_state"]
+    # By the end of 15 no-write steps, modulation should have ratcheted up
+    # under the slew-rate limit.
+    last_mod = adaptive_events[-1]["modulation_write_pressure"]
+    assert last_mod > 1.0, f"expected modulation > 1.0 at trailing steps, got {last_mod}"
+    # Bias-not-lock: must stay strictly below _INTENSITY_MAX (1.5).
+    assert last_mod < 1.5
+
+
+def test_adaptive_policy_slew_rate_env_override(monkeypatch):
+    """LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP overrides default 0.3."""
+    monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
+    monkeypatch.setenv("LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP", "0.05")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    scripted = [_read_resp() for _ in range(15)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
+            model_key="test", num_ctx=4096, max_steps=20,
+            max_tokens_per_turn=2048, temperature=0.0,
+        ),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-slew",
+    )
+
+    adaptive_events = [e for e in events if e["kind"] == "adaptive_state"]
+    # With max_delta = 0.05, modulation cannot change by more than 0.05 per step.
+    mods = [e["modulation_write_pressure"] for e in adaptive_events]
+    for i in range(1, len(mods)):
+        assert abs(mods[i] - mods[i - 1]) <= 0.05 + 1e-9, (
+            f"step {i} delta {mods[i] - mods[i-1]} exceeded slew limit 0.05"
+        )
+
+
 def test_adaptive_policy_ablation_score_trend_off(monkeypatch):
     monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
     monkeypatch.setenv("LUXE_ADAPTIVE_SCORE_TREND", "0")

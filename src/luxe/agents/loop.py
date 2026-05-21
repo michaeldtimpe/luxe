@@ -14,8 +14,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from luxe.agents.cohort_priors import load_prior_from_env
 from luxe.agents.convergence import (
+    _DEFAULT_MAX_DELTA,
+    _INTENSITY_NEUTRAL,
+    apply_slew_rate,
+    bias_to_modulation,
     compute_convergence_score,
+    compute_intervention_bias,
     compute_within_run_state,
     extract_path,
     recent_path_diversity,
@@ -553,10 +559,44 @@ def run_agent(
     # Per-signal ablation toggles (default ON when adaptive_policy_enabled).
     adaptive_no_write_enabled = os.environ.get("LUXE_ADAPTIVE_NO_WRITE", "1") == "1"
     adaptive_score_trend_enabled = os.environ.get("LUXE_ADAPTIVE_SCORE_TREND", "1") == "1"
+    # v1.11 Phase 3a — slew-rate limit; agents.sdd-pinned default 0.3.
+    # Bounds per-step intensity-modifier change. Override for ablation.
+    try:
+        adaptive_max_delta = float(
+            os.environ.get("LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP", "")
+            or _DEFAULT_MAX_DELTA
+        )
+    except ValueError:
+        adaptive_max_delta = _DEFAULT_MAX_DELTA
+    # Modulation state per intervention kind; starts neutral (1.0 = no change).
+    # Updated each step (slew-rate-limited) when adaptive_policy_enabled.
+    # v1.11 only WIRES write_pressure modulation into dispatch; early_bail
+    # and soft_anchor modulations are computed + emitted but not yet acted
+    # on (scope conservatism — narrow blast radius for first cycle).
+    intervention_modulation: dict[str, float] = {
+        "write_pressure": _INTENSITY_NEUTRAL,
+        "early_bail": _INTENSITY_NEUTRAL,
+        "soft_anchor": _INTENSITY_NEUTRAL,
+    }
     # Bounded per-step score log; owned by loop.py per the agents.sdd
     # composition boundary (convergence.py is the sole consumer, never
     # mutates it).
     score_log: list[float] = []
+    # v1.11 Phase 2 — cross-cycle prior (log-only this cycle). Read once
+    # at run start. Priors do NOT influence intervention intensity in
+    # v1.11 per agents.sdd ("priors-log-only" invariant); deferred to
+    # v1.11.1+. Loader is null-safe — missing/corrupt input returns None.
+    cohort_prior = load_prior_from_env()
+    if cohort_prior is not None and log_calls:
+        append_event(
+            run_id, "prior_loaded",
+            phase=phase,
+            instance_id=cohort_prior.get("instance_id"),
+            verdict=cohort_prior.get("verdict"),
+            tiers_a=cohort_prior.get("tiers_a"),
+            tiers_b=cohort_prior.get("tiers_b"),
+            rank_delta=cohort_prior.get("rank_delta"),
+        )
     # v1.10.4 — band-response policy for the score<LOW suppression branch.
     # "silent"               = v1.10.3 behavior (blanket silent suppression)
     # "breadth_probe_hybrid" = v1.10.4 default (fire breadth_probe on the
@@ -659,6 +699,13 @@ def run_agent(
                 no_write_enabled=adaptive_no_write_enabled,
                 score_trend_enabled=adaptive_score_trend_enabled,
             )
+            # v1.11 Phase 3a — compute bias → target modulation → slew-rate-limited update.
+            bias = compute_intervention_bias(adaptive_state)
+            for kind, prev_mod in list(intervention_modulation.items()):
+                target = bias_to_modulation(bias.get(kind, 0.0))
+                intervention_modulation[kind] = apply_slew_rate(
+                    prev_mod, target, max_delta=adaptive_max_delta,
+                )
             if log_calls:
                 append_event(
                     run_id, "adaptive_state",
@@ -667,6 +714,9 @@ def run_agent(
                     score_trend=adaptive_state.score_trend,
                     score_log_len=adaptive_state.score_log_len,
                     convergence_score=convergence_score,
+                    modulation_write_pressure=intervention_modulation["write_pressure"],
+                    modulation_early_bail=intervention_modulation["early_bail"],
+                    modulation_soft_anchor=intervention_modulation["soft_anchor"],
                 )
 
         # Mid-loop write-pressure injection (Mode B fix). Fires once per
@@ -676,10 +726,22 @@ def run_agent(
         # the deliverable into chat instead of committing it. The
         # synthetic user message interrupts the read-loop and forces a
         # write decision before further tool calls accumulate.
+        # v1.11 Phase 3a — adaptive policy modulates the effective min_step.
+        # mod=1.0 (neutral, default) preserves v1.10.5 behavior exactly.
+        # mod>1.0 (bias toward encouragement, fires earlier); mod<1.0
+        # (bias toward suppression, fires later). Bias-not-lock invariant
+        # holds because bias_to_modulation is eps-clamped strictly inside
+        # (_INTENSITY_MIN, _INTENSITY_MAX), so effective_min_step is
+        # strictly inside the bounded range (no always-fire or never-fire).
+        if adaptive_policy_enabled:
+            mod = intervention_modulation["write_pressure"]
+            effective_wp_min_step = max(2, int(round(_WRITE_PRESSURE_MIN_STEP * (2.0 - mod))))
+        else:
+            effective_wp_min_step = _WRITE_PRESSURE_MIN_STEP
         if (write_pressure_enabled
                 and not write_pressure_fired
                 and writes_seen == 0
-                and step >= _WRITE_PRESSURE_MIN_STEP
+                and step >= effective_wp_min_step
                 and result.tool_calls_total >= _WRITE_PRESSURE_MIN_TOOLS
                 and (result.completion_tokens >= _WRITE_PRESSURE_MIN_TOKENS
                      or result.tool_calls_total >= _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE)):
