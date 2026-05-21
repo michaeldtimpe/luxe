@@ -41,7 +41,29 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-20 (v1.10.5 SHIPPED — first clean cohort-shift since v1.10.2)
+## Current state — 2026-05-21 (v1.11 cycle — per-instance adaptive policy; Phase A+B done, Phase C running, Phase D queued)
+
+**v1.11 = candidate B from the v1.10.5 roadmap: per-instance adaptive policy.** Phases 0–4 (substrate + closed-loop priors, all log-only/inert) shipped 2026-05-20 evening (commits `8d1332e`..`924af08`). This session added Phase A (calibration) → Phase B (activation) → Phase C (probe, in flight) → Phase D (queued).
+
+**Working tree**: clean post-Phase-C-scaffold commit. **923 tests pass, 0 skip.** Commits on `main` past `924af08`: `d50b84f` (Phase A analyzer), `b026295` (Phase B lever), `8a75ebe` (Phase C scaffold + smoke fix). NOT pushed, NOT tagged — v1.11 tags only after Phase D ship gate.
+
+**Phase A — calibration (`scripts/analyze_v111_calibration.py`, project_v111_phaseA_calibration.md)**: offline analysis of the 71 retained Phase 3a/4 event streams. Two corrections caught by authoritative cross-check: (1) the substrate was NOT inert — write_pressure modulation departed 1.0 in 231 events; (2) diff_stat over-counts patches (use patch_present). **Decisive finding**: `consecutive_no_write` is non-selective (precision ≤31% at every threshold — read-heavy SUCCESS trajectories hit the same depths as stalls); `score_trend` (collapse velocity) separates empties at fire-time (step 6–8: empties stuck <LOW with flat/falling trend, patched climb above LOW). Recoverable regime: 8/12 empties still converging during the stall.
+
+**Phase B — activation (`b026295`, the single live lever)**:
+- `no_write → write_pressure/early_bail` bias **RETIRED** (pinned 0.0). write_pressure modulation now stays at neutral 1.0.
+- `score_trend → soft_anchor`: trend>0 backs off (recovery, ungated, preserves self-recovering successes); `trend≤0 AND conv<LOW AND step≥_COLLAPSE_MIN_STEP(6)` raises soft_anchor bias.
+- loop.py: score<LOW band-response **collapse promotion** (one-shot) — when slew-limited soft_anchor modulation crosses `_SOFT_ANCHOR_PROMOTE_MODULATION(1.2)`, raise the band response one rung (breadth_probe → soft_anchor commitment nudge). Frames as RESPONSE-INTENSITY modulation of the already-triggered early_bail predicate (predicate unchanged) → satisfies agents.sdd "bias-only" Must-not. Reuses v1.10-iterated soft_anchor wording. trend≤0 gate is the Pareto guard preserving matplotlib-14623 / sphinx-10323 successes.
+- agents.sdd Phase B invariants pinned. Disable-equivalence preserved.
+
+**Phase B SMOKE caught a calibration error** (`8a75ebe`): seaborn-3069 terminates at step 6, so the initial `_COLLAPSE_MIN_STEP=7` never fired on short-trajectory empties. Phase A confirms conv<LOW becomes selective at step 6 → lowered to 6. Re-run smoke confirms `soft_anchor_collapse_promote_fired` at step 6 (mod_sa 1.25), write_pressure pinned, recovery branch intact. Validates the "validate small before scaling" rule again.
+
+**Phase C — activation probe (RUNNING, `scripts/run_v111_phaseC.sh`)**: union subset `v111_phaseC_n8.json` (archetype-6 + 2 deterministic empties seaborn-3069 + sympy-13031) × 3 reps + BFCL irrelevance anchor. Gates (`scripts/analyze_v111_phaseC.py`): (a) promotion fires on ≥1 empty, (b) 0 deterministic archetype regressions, (c) BFCL irrelevance 240/240. Output: `acceptance/swebench/v111_phaseC_n8/`.
+
+**Phase D — ship gate (QUEUED, conditional on Phase C pass, `scripts/run_v111_phaseD.sh`)**: n=75 × 3 + per-rep Docker via `post_v111_n75_pipeline.sh`, cohort_shift vs v1.10.5. Floors: empty_patch ≤13 best-of-3, s+p ≥39, 0 deterministic losses, Docker ≥37. **Will NOT launch if Phase C fails the archetype gate** (don't burn ~18h on a regressing lever).
+
+**Open design note for next session**: the SDD-compliance framing of the collapse promotion (intensity-of-enabled-predicate vs enable) is defensible but is on the contested W3 band-response path. Phase C archetype gate is the empirical check. If Phase C shows archetype regression, the fallback is to revert Phase B's loop.py promotion (keep the no_write retirement, an unambiguous win) and reconsider the lever with user review.
+
+## Earlier state — 2026-05-20 (v1.10.5 SHIPPED — first clean cohort-shift since v1.10.2)
 
 **Working tree**: clean post-ship. **808 tests pass + 1 skip.** **v1.10.5 tagged and pushed** to `origin/main` (commits `6f8ba67` + `9222857`, tag `v1.10.5` annotated with full release notes).
 
