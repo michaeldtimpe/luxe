@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from luxe.agents.convergence import (
     compute_convergence_score,
+    compute_within_run_state,
     extract_path,
     recent_path_diversity,
 )
@@ -542,6 +543,20 @@ def run_agent(
     # Off by default; adapter wires it on for SWE-bench. Falls back to
     # v1.9 semantics (no convergence-based gating) when disabled.
     convergence_gate_enabled = os.environ.get("LUXE_CONVERGENCE_GATE") == "1"
+    # v1.11 Phase 1 — adaptive policy substrate. Computation + observability
+    # ONLY in Phase 1; modulation does NOT yet influence intervention
+    # dispatch (deferred to Phase 3a so any behavior change is gated under
+    # archetype-probe testing). Disable-equivalence invariant: when
+    # LUXE_ADAPTIVE_POLICY=0 (or unset), zero adaptive_state events are
+    # emitted and zero new state is computed — v1.10.5 byte-identical.
+    adaptive_policy_enabled = os.environ.get("LUXE_ADAPTIVE_POLICY") == "1"
+    # Per-signal ablation toggles (default ON when adaptive_policy_enabled).
+    adaptive_no_write_enabled = os.environ.get("LUXE_ADAPTIVE_NO_WRITE", "1") == "1"
+    adaptive_score_trend_enabled = os.environ.get("LUXE_ADAPTIVE_SCORE_TREND", "1") == "1"
+    # Bounded per-step score log; owned by loop.py per the agents.sdd
+    # composition boundary (convergence.py is the sole consumer, never
+    # mutates it).
+    score_log: list[float] = []
     # v1.10.4 — band-response policy for the score<LOW suppression branch.
     # "silent"               = v1.10.3 behavior (blanket silent suppression)
     # "breadth_probe_hybrid" = v1.10.4 default (fire breadth_probe on the
@@ -629,6 +644,30 @@ def run_agent(
         # v1.9 binary `same_file_read_twice_step` skip — see
         # luxe.agents.convergence module docstring for the design rationale.
         convergence_score = compute_convergence_score(tool_history)
+        # v1.11 Phase 1 — append to score_log + compute adaptive state.
+        # Guarded by LUXE_ADAPTIVE_POLICY to preserve disable-equivalence.
+        # Phase 1 behavior: emit observability event only; state does NOT
+        # influence intervention dispatch this phase.
+        if adaptive_policy_enabled:
+            score_log.append(convergence_score)
+            # Bounded growth: cap at 64 entries (covers max_steps for current
+            # configs with headroom). Drop oldest when over.
+            if len(score_log) > 64:
+                score_log[:] = score_log[-64:]
+            adaptive_state = compute_within_run_state(
+                score_log, tool_history, step,
+                no_write_enabled=adaptive_no_write_enabled,
+                score_trend_enabled=adaptive_score_trend_enabled,
+            )
+            if log_calls:
+                append_event(
+                    run_id, "adaptive_state",
+                    phase=phase, step=step,
+                    consecutive_no_write=adaptive_state.consecutive_no_write,
+                    score_trend=adaptive_state.score_trend,
+                    score_log_len=adaptive_state.score_log_len,
+                    convergence_score=convergence_score,
+                )
 
         # Mid-loop write-pressure injection (Mode B fix). Fires once per
         # run when the agent has done substantial reading + generation

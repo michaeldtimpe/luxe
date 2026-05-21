@@ -246,3 +246,197 @@ def extract_path(name: str, args: dict[str, Any]) -> str | None:
         if isinstance(v, str) and v:
             return v
     return None
+
+
+# ============================================================================
+# v1.11 Phase 1 — Group A adaptive-policy signals (substrate; no behavior
+# change in Phase 1)
+# ============================================================================
+#
+# Two within-run trajectory signals. Per agents.sdd v1.11 invariants:
+#   - bias-not-lock: signals never enable/disable an intervention, only
+#     modulate its timing/intensity within [_INTENSITY_MIN, _INTENSITY_MAX]
+#   - score_log ownership: loop.py owns the per-step score deque and passes
+#     it in; convergence.py is the sole consumer (stateless)
+#   - slew-rate limit: per-step modulation change bounded by
+#     _DEFAULT_MAX_DELTA (overridable via LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP)
+#   - disable-equivalence: when LUXE_ADAPTIVE_POLICY=0 (or unset), none of
+#     these functions are called by loop.py — v1.10.5 behavior preserved
+#     byte-identical
+#
+# Phase 1 wires computation + emits an adaptive_state observability event
+# from loop.py. It does NOT wire bias into intervention dispatch — that
+# happens in Phase 3a (archetype preflight) so any behavior change can be
+# isolated under the archetype probe.
+
+from dataclasses import dataclass, field
+
+_SCORE_TREND_WINDOW = 5
+_INTENSITY_MIN = 0.0
+_INTENSITY_MAX = 1.5
+_INTENSITY_NEUTRAL = 1.0
+_DEFAULT_MAX_DELTA = 0.3
+# Heuristic from v1.10.5 empty_patch trajectories: ~8 consecutive
+# non-write steps is the inflection point where the model has either
+# committed silently or stalled. Below 8: normal exploration window.
+# Above 8: hesitation-suppression bias starts to apply.
+_NO_WRITE_BIAS_THRESHOLD = 8
+
+
+def consecutive_no_write_steps(history: Sequence[dict[str, Any]]) -> int:
+    """Count of trailing non-write tool calls in the history.
+
+    Resets to 0 the moment a write_file/edit_file is observed. Targets
+    the `empty_patch` / `no_tool_call_emitted` hesitation class — the
+    longer this runs, the more the trajectory is stalling without
+    committing. Pure function over history.
+    """
+    n = 0
+    for entry in reversed(list(history)):
+        if entry.get("name") in _WRITE_TOOLS:
+            break
+        n += 1
+    return n
+
+
+def score_trajectory_trend(
+    score_log: Sequence[float],
+    window: int = _SCORE_TREND_WINDOW,
+) -> float:
+    """Slope sign over the last `window` convergence scores, in [-1, +1].
+
+    Returns:
+      +1.0  if scores are monotonically increasing (model is converging)
+      -1.0  if scores are monotonically decreasing (drift downward — early warning)
+       0.0  otherwise (mixed / flat / insufficient data)
+
+    Uses sign of last-minus-first within the window; resilient to noise
+    versus a least-squares fit because we only care about direction.
+    Pure function. `score_log` is OWNED by loop.py per the agents.sdd
+    composition boundary; convergence.py never mutates it.
+    """
+    window_vals = list(score_log)[-window:]
+    if len(window_vals) < 2:
+        return 0.0
+    delta = window_vals[-1] - window_vals[0]
+    eps = 1e-9
+    if delta > eps:
+        return 1.0
+    if delta < -eps:
+        return -1.0
+    return 0.0
+
+
+@dataclass(frozen=True)
+class AdaptiveState:
+    """Within-run trajectory state — computed once per loop step.
+
+    Per agents.sdd: pure value type, no mutation. Frozen so callers
+    can't accidentally update fields and expect persistence (the deque
+    in loop.py is the only mutable state in this subsystem).
+    """
+    step: int
+    consecutive_no_write: int | None
+    score_trend: float | None  # in {-1.0, 0.0, +1.0} or None if ablated
+    score_log_len: int
+
+
+def compute_within_run_state(
+    score_log: Sequence[float],
+    tool_history: Sequence[dict[str, Any]],
+    step: int,
+    *,
+    no_write_enabled: bool = True,
+    score_trend_enabled: bool = True,
+) -> AdaptiveState:
+    """Compose the within-run state from owned inputs.
+
+    `score_log` and `tool_history` are both owned by loop.py; this
+    function reads only. Per-signal `*_enabled` flags allow ablation
+    (driven by LUXE_ADAPTIVE_* env vars in loop.py).
+    """
+    return AdaptiveState(
+        step=step,
+        consecutive_no_write=(
+            consecutive_no_write_steps(tool_history) if no_write_enabled else None
+        ),
+        score_trend=(
+            score_trajectory_trend(score_log) if score_trend_enabled else None
+        ),
+        score_log_len=len(score_log),
+    )
+
+
+def compute_intervention_bias(state: AdaptiveState) -> dict[str, float]:
+    """Per-intervention bias deltas in [-1.0, +1.0].
+
+    Negative bias = suppress this intervention slightly (the model is
+    already trending toward the desired behavior on its own).
+    Positive bias = encourage earlier/stronger firing.
+
+    Bias-not-lock invariant: the returned deltas are advisory. The
+    caller (loop.py, future phase) must clamp the final modulation to
+    [_INTENSITY_MIN, _INTENSITY_MAX] AND apply slew-rate limiting AND
+    refuse to let the result reach exactly 0.0 or _INTENSITY_MAX (which
+    would functionally gate the intervention).
+    """
+    out: dict[str, float] = {}
+    # consecutive_no_write_steps → write_pressure / early_bail
+    if state.consecutive_no_write is not None:
+        if state.consecutive_no_write >= _NO_WRITE_BIAS_THRESHOLD:
+            # Hesitation building → bias toward earlier intervention.
+            # +0.3 per step beyond threshold, capped at +1.0.
+            excess = state.consecutive_no_write - _NO_WRITE_BIAS_THRESHOLD
+            out["write_pressure"] = min(1.0, 0.3 + 0.1 * excess)
+            out["early_bail"] = min(1.0, 0.3 + 0.1 * excess)
+        else:
+            out["write_pressure"] = 0.0
+            out["early_bail"] = 0.0
+    # score_trajectory_trend → suppress when converging, encourage when drifting
+    if state.score_trend is not None:
+        if state.score_trend > 0:
+            # Model converging on its own — suppress commitment pressure.
+            out["soft_anchor"] = out.get("soft_anchor", 0.0) - 0.3
+        elif state.score_trend < 0:
+            # Convergence drifting downward — early warning, encourage commit.
+            out["soft_anchor"] = out.get("soft_anchor", 0.0) + 0.3
+    return out
+
+
+def apply_slew_rate(
+    prev_modulation: float,
+    target_modulation: float,
+    max_delta: float = _DEFAULT_MAX_DELTA,
+) -> float:
+    """Bounded transition from prev → target modulation.
+
+    Prevents oscillation by capping per-step intensity change. Returned
+    value is always clamped to [_INTENSITY_MIN, _INTENSITY_MAX]. Pure.
+    """
+    if max_delta < 0:
+        max_delta = 0.0
+    delta = target_modulation - prev_modulation
+    if delta > max_delta:
+        delta = max_delta
+    elif delta < -max_delta:
+        delta = -max_delta
+    out = prev_modulation + delta
+    return max(_INTENSITY_MIN, min(_INTENSITY_MAX, out))
+
+
+def bias_to_modulation(
+    bias: float,
+    *,
+    neutral: float = _INTENSITY_NEUTRAL,
+) -> float:
+    """Convert a bias delta in [-1, +1] to a modulation factor in
+    [_INTENSITY_MIN, _INTENSITY_MAX], centered on `neutral` (default 1.0).
+
+    Bias-not-lock: the output is clamped strictly INSIDE [_INTENSITY_MIN,
+    _INTENSITY_MAX] using a small epsilon, so no signal combination can
+    produce exactly 0.0 (would gate) or _INTENSITY_MAX (would saturate).
+    """
+    eps = 1e-3
+    raw = neutral + bias * (_INTENSITY_MAX - neutral) if bias >= 0 \
+        else neutral + bias * (neutral - _INTENSITY_MIN)
+    return max(_INTENSITY_MIN + eps, min(_INTENSITY_MAX - eps, raw))
