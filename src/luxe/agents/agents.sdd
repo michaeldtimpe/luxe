@@ -18,6 +18,13 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - **Disable-equivalence**: `LUXE_ADAPTIVE_POLICY=0` (or unset) produces byte-identical behavior to v1.10.5
 - **Priors are log-only in v1.11**: `LUXE_LOAD_PRIORS=1` reads `~/.luxe/cohort-history/<instance>.json` and logs to events.jsonl, but does **not** influence intervention intensity (deferred to v1.11.1+)
 
+### Stage 3 / v1.11 Phase B activation (pinned 2026-05-21)
+
+- **Single live lever**: `soft_anchor` is the only intervention whose modulation affects dispatch. `score_trend` (collapse velocity), gated on `convergence_score < LOW AND step >= _COLLAPSE_MIN_STEP AND trend <= 0`, raises the score<LOW band-response intensity one rung (breadth_probe → one-shot soft_anchor commitment nudge). Phase A (`project_v111_phaseA_calibration`) selected score_trend over no_write — no_write is non-selective (precision ≤31%)
+- **no_write bias RETIRED**: the no_write → write_pressure/early_bail bias is pinned at 0.0 (was the v1.11 Phase 3a wired lever; Phase A disproved it). write_pressure modulation therefore stays at neutral 1.0. Exactly one modulation moves
+- **Intensity, not enable** (satisfies the "bias-only" Must-not below): the collapse promotion selects a higher-intensity *message variant* for the early_bail predicate that has ALREADY fired its eligibility check (`writes==0 AND reads>=N AND step>=min`). The signal never enables/disables the early_bail dispatch — it picks the band-response rung. One-shot per run; reuses the v1.10-iterated soft_anchor wording (no wrap-up trailer per [[feedback_soft_anchor_wording_reads_as_wrap_up]])
+- **Pareto guard**: gated on `trend <= 0` so self-recovering trajectories (matplotlib-14623 / sphinx-10323 successes, trend > 0) keep breadth_probe — the historical W3 non-Pareto class. Validated by the archetype-6 Phase C gate before any n=75 spend
+
 ## Must not
 - Inline prompt strings in `single.py` or `cli.py` (un-couples variants from runtime)
 - Add feature flags or backwards-compatibility shims for retired modes (swarm / micro / phased)
