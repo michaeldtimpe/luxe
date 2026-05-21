@@ -1,8 +1,10 @@
 """Tests for benchmarks/bfcl/adapter.py — problem loading + dispatch shape.
 
-PRELIMINARY (2026-05-03). Validates message construction and tool-spec
-extraction against the installed bfcl_eval data layout. Backend
-interaction is mocked.
+Validates message construction and tool-spec extraction against the
+vendored BFCL v4 data layout. Backend interaction is mocked.
+
+Data is loaded from `~/.luxe/bfcl-data/` (or `LUXE_BFCL_DATA_DIR`).
+Populate via `scripts/fetch_bfcl_data.sh`.
 """
 
 from __future__ import annotations
@@ -11,15 +13,9 @@ from typing import Any
 
 import pytest
 
-pytest.importorskip(
-    "bfcl_eval",
-    reason="bfcl_eval pins tree_sitter==0.21.3 which is incompatible with luxe's "
-    "tree-sitter-language-pack dependency. Install bfcl_eval in a separate venv "
-    "to exercise these tests.",
-)
-
 from benchmarks.bfcl.adapter import (
     SUPPORTED_CATEGORIES,
+    _bfcl_data_dir,
     _problem_messages,
     _problem_tools,
     load_ground_truth,
@@ -27,6 +23,17 @@ from benchmarks.bfcl.adapter import (
     run_problem_raw,
 )
 from luxe.backend import ChatResponse, GenerationTiming, ToolCallResponse
+
+try:
+    _DATA_DIR = _bfcl_data_dir()
+    _HAS_DATA = _DATA_DIR.is_dir()
+except FileNotFoundError:
+    _HAS_DATA = False
+
+pytestmark = pytest.mark.skipif(
+    not _HAS_DATA,
+    reason="BFCL v4 data not vendored. Run scripts/fetch_bfcl_data.sh.",
+)
 
 
 def test_load_problems_each_category():

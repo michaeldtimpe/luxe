@@ -128,9 +128,33 @@ SUPPORTED_CATEGORIES = (
 
 
 def _bfcl_data_dir() -> Path:
-    """Locate the installed bfcl_eval package's data dir."""
-    import bfcl_eval
-    return Path(bfcl_eval.__file__).parent / "data"
+    """Resolve the BFCL v4 data dir.
+
+    Resolution order:
+      1. `LUXE_BFCL_DATA_DIR` env var (explicit override).
+      2. `~/.luxe/bfcl-data/` (default vendored location populated by
+         `scripts/fetch_bfcl_data.sh`).
+      3. Fallback to the installed `bfcl_eval` package, if present.
+
+    `bfcl_eval` pins `tree_sitter==0.21.3` which conflicts with luxe's
+    `tree_sitter_language_pack` (v1.10.1 substrate); vendoring the data
+    avoids the venv-level conflict. See `scripts/fetch_bfcl_data.sh`.
+    """
+    override = os.environ.get("LUXE_BFCL_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    vendored = Path.home() / ".luxe" / "bfcl-data"
+    if vendored.is_dir():
+        return vendored
+    try:
+        import bfcl_eval
+        return Path(bfcl_eval.__file__).parent / "data"
+    except ImportError:
+        raise FileNotFoundError(
+            f"BFCL data not found at {vendored} and bfcl_eval not installed. "
+            "Run scripts/fetch_bfcl_data.sh to populate the default vendored location, "
+            "or set LUXE_BFCL_DATA_DIR to an existing BFCL v4 data directory."
+        )
 
 
 def _category_filename(category: str) -> str:
