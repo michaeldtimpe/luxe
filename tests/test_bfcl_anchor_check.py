@@ -35,6 +35,59 @@ def test_load_results_reads_all_categories(tmp_path: Path):
     assert out["simple_python_0"]["category"] == "simple_python"
 
 
+def test_load_results_filters_to_requested_categories(tmp_path: Path):
+    root = _make_run(tmp_path / "run", [
+        ("simple_python_0", "simple_python", True, ""),
+        ("simple_python_1", "simple_python", True, ""),
+        ("irrelevance_0", "irrelevance", True, ""),
+        ("parallel_0", "parallel", False, ""),
+    ])
+    out = load_results(root, categories=("irrelevance",))
+    assert set(out.keys()) == {"irrelevance_0"}
+    out = load_results(root, categories=("simple_python", "parallel"))
+    assert set(out.keys()) == {"simple_python_0", "simple_python_1", "parallel_0"}
+
+
+def test_main_categories_subset_skips_total_gate(tmp_path: Path):
+    """Phase 3b cheap-probe pattern: irrelevance-only run, TOTAL gate auto-skipped
+    because TOTAL on a subset is not comparable to the full-anchor 90.24% floor."""
+    a = _make_run(tmp_path / "a", [
+        ("ir1", "irrelevance", True, ""),
+        ("sp1", "simple_python", True, ""),
+        ("sp2", "simple_python", False, ""),
+    ])
+    b = _make_run(tmp_path / "b", [
+        ("ir1", "irrelevance", True, ""),
+        # Note: even with simple_python both failing in `b`, the TOTAL gate
+        # is skipped because we restrict to irrelevance only.
+        ("sp1", "simple_python", False, ""),
+        ("sp2", "simple_python", False, ""),
+    ])
+    rc = main(["--anchor", str(a), "--new", str(b),
+               "--categories", "irrelevance",
+               "--total-floor", "99.0",  # would fail if not skipped
+               "--irrelevance-floor", "1"])
+    assert rc == 0
+
+
+def test_main_categories_subset_still_enforces_irrelevance_floor(tmp_path: Path):
+    a = _make_run(tmp_path / "a", [
+        ("ir1", "irrelevance", True, ""),
+        ("ir2", "irrelevance", True, ""),
+        ("sp1", "simple_python", True, ""),
+    ])
+    b = _make_run(tmp_path / "b", [
+        ("ir1", "irrelevance", True, ""),
+        ("ir2", "irrelevance", False, "emitted_tool"),  # regression
+        ("sp1", "simple_python", True, ""),
+    ])
+    rc = main(["--anchor", str(a), "--new", str(b),
+               "--categories", "irrelevance",
+               "--total-floor", "0.0",
+               "--irrelevance-floor", "2"])
+    assert rc == 1
+
+
 def test_compare_perfect_agreement_no_flips(tmp_path: Path):
     a = _make_run(tmp_path / "a", [
         ("p1", "simple_python", True, "x"),
