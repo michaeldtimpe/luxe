@@ -54,4 +54,23 @@ for rep in rep_1 rep_2 rep_3; do
     fi
 done
 
+# --- strict gate: cohort_shift_3x3 v1.11 vs v1.10.5 (3-rep x 3-rep matrix) ---
+A1="acceptance/v1105_taxonomy/v1105_n75_full_stack_swebench.json"
+A2="acceptance/v1105_taxonomy/v1105_n75_rep_2_full_stack_swebench.json"
+A3="acceptance/v1105_taxonomy/v1105_n75_rep_3_full_stack_swebench.json"
+B1="acceptance/v111_taxonomy/v111_n75_full_stack_swebench.json"
+B2="acceptance/v111_taxonomy/v111_n75_rep_2_full_stack_swebench.json"
+B3="acceptance/v111_taxonomy/v111_n75_rep_3_full_stack_swebench.json"
+if [[ -f "$B1" && -f "$B2" && -f "$B3" ]]; then
+    log "COHORT-SHIFT 3x3 v1.11 vs v1.10.5 (the strictest ship gate)"
+    python -m scripts.cohort_shift_3x3 \
+        --cycle-a v1.10.5 "$A1" "$A2" "$A3" \
+        --cycle-b v1.11 "$B1" "$B2" "$B3" \
+        --snapshot-out acceptance/v111_taxonomy/v111_vs_v1105_snapshot.jsonl \
+        >> "$PIPE_LOG" 2>&1
+    log "cohort_shift_3x3 exit=$?  (0=clean, nonzero=deterministic regression — HOLD)"
+else
+    log "WARN cohort_shift_3x3 skipped — not all 3 v111 taxonomies present"
+fi
+
 log "Phase D pipeline complete. Review acceptance/swebench/post_v111_n75/."
