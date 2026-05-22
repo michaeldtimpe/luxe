@@ -17,9 +17,12 @@ TARGET="${LUXE_BFCL_DATA_DIR:-$HOME/.luxe/bfcl-data}"
 FORCE=0
 if [[ "${1:-}" == "--force" ]]; then FORCE=1; fi
 
-CATEGORIES=(simple_python multiple parallel parallel_multiple irrelevance)
+CATEGORIES=(simple_python multiple parallel parallel_multiple irrelevance multi_turn_base)
 # Ground-truth exists for all except irrelevance.
-GT_CATEGORIES=(simple_python multiple parallel parallel_multiple)
+# multi_turn_base is the stateful category (clean involved-class subset); its
+# state-based eval lives vendored under benchmarks/bfcl/multi_turn/ along with the
+# per-class func-doc tool specs (version-controlled in-repo, not fetched here).
+GT_CATEGORIES=(simple_python multiple parallel parallel_multiple multi_turn_base)
 
 mkdir -p "$TARGET/possible_answer"
 
