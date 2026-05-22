@@ -1,8 +1,10 @@
 """BFCL problem → luxe Backend invocation adapter (raw + agent modes).
 
-PRELIMINARY (2026-05-03). Loads BFCL v4 problems from the installed
-`bfcl_eval` package, runs them against the luxe backend, returns
-(actual_tool_calls, timing) per problem.
+PRELIMINARY (2026-05-03). Loads BFCL v4 problems from the vendored data
+dir (`~/.luxe/bfcl-data/`, see `_bfcl_data_dir`), runs them against the
+luxe backend, returns (actual_tool_calls, timing) per problem. The grader
+(`grade.py`) is pure-Python; `bfcl_eval` is NOT a dependency (do not install
+it — tree_sitter conflict; see `_bfcl_data_dir`).
 
 Two modes (per `~/.claude/plans/fancy-honking-lerdorf.md`):
 
@@ -128,17 +130,22 @@ SUPPORTED_CATEGORIES = (
 
 
 def _bfcl_data_dir() -> Path:
-    """Resolve the BFCL v4 data dir.
+    """Resolve the BFCL v4 data dir (data only — the grader is self-contained).
 
     Resolution order:
       1. `LUXE_BFCL_DATA_DIR` env var (explicit override).
       2. `~/.luxe/bfcl-data/` (default vendored location populated by
          `scripts/fetch_bfcl_data.sh`).
-      3. Fallback to the installed `bfcl_eval` package, if present.
 
-    `bfcl_eval` pins `tree_sitter==0.21.3` which conflicts with luxe's
-    `tree_sitter_language_pack` (v1.10.1 substrate); vendoring the data
-    avoids the venv-level conflict. See `scripts/fetch_bfcl_data.sh`.
+    This function resolves the problem/answer JSON ONLY. luxe's BFCL grader
+    (`benchmarks/bfcl/grade.py`) is pure-Python (function-name + arg-allowed-set
+    matching) and never imports `bfcl_eval` — there is no grading-path dependency
+    on it.
+
+    WARNING: do NOT `pip install bfcl_eval` to "fix" a missing data dir. `bfcl_eval`
+    pins `tree_sitter==0.21.3`, which conflicts with the `tree_sitter_language_pack`
+    that `src/luxe/symbols.py` imports (v1.10.1 substrate) and would poison the venv.
+    Vendoring the data (`scripts/fetch_bfcl_data.sh`) is the only supported path.
     """
     override = os.environ.get("LUXE_BFCL_DATA_DIR")
     if override:
@@ -146,15 +153,13 @@ def _bfcl_data_dir() -> Path:
     vendored = Path.home() / ".luxe" / "bfcl-data"
     if vendored.is_dir():
         return vendored
-    try:
-        import bfcl_eval
-        return Path(bfcl_eval.__file__).parent / "data"
-    except ImportError:
-        raise FileNotFoundError(
-            f"BFCL data not found at {vendored} and bfcl_eval not installed. "
-            "Run scripts/fetch_bfcl_data.sh to populate the default vendored location, "
-            "or set LUXE_BFCL_DATA_DIR to an existing BFCL v4 data directory."
-        )
+    raise FileNotFoundError(
+        f"BFCL data not found at {vendored}. "
+        "Run scripts/fetch_bfcl_data.sh to populate the default vendored location, "
+        "or set LUXE_BFCL_DATA_DIR to an existing BFCL v4 data directory. "
+        "Do NOT install bfcl_eval (it pins tree_sitter==0.21.3 and breaks "
+        "src/luxe/symbols.py's tree_sitter_language_pack import)."
+    )
 
 
 def _category_filename(category: str) -> str:

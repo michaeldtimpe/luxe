@@ -41,7 +41,38 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-21 (v1.11.1 offline gate-design CLOSED — STOP at Gate A′; loop-layer-predicate line EXHAUSTED; main unchanged)
+## Current state — 2026-05-22 (Track C grounding REFUTED its premise; Track D CLOSED — BFCL "irrelevance-only" was stale; full suite runs on current substrate)
+
+**Two roadmap tracks resolved by cheap grounding this session — neither needed a build.**
+
+**Track C (above-loop signaling) — premise REFUTED before any code.** The thesis was that
+task-semantics / traceback-locality signals (knowable above the loop) could fix what the loop layer
+can't. Grounding against the n=75 baseline taxonomy + `verified.jsonl` killed it: **locus discovery
+is already solved** — the model touches a gold target file *early* (≤4 steps) in **73/75 runs across
+every tier** (wrong_target 14/17 early, empty 9/13 early; only 2/75 never touch a gold file). And
+**tracebacks are rare and anti-correlated with success** (9/75 issues; 7 of those 9 are wrong_target;
+gold file named in 25/75, *more* common in wrong_target 9/17 than strong 7/20). So the failures are
+not "couldn't find the file" — they're "found the file, produced the wrong/no change": a
+**reasoning/content ceiling**, not a locality one. Surfacing file locations can't help discovery
+that already works ~96% of the time. See `lessons.md` 2026-05-22; [[project_trackc_locus_grounding]].
+
+**Track D (BFCL substrate hygiene) — CLOSED as record-correction, not an unblock.** RESUME framed it
+as "revert the bfcl_eval substrate so the full suite runs (irrelevance-only)." **Both halves were
+stale.** luxe's BFCL grader (`benchmarks/bfcl/grade.py`) is pure-Python (function-name + arg-allowed-set;
+5 categories) and **never imports `bfcl_eval`**; the data is vendored (`~/.luxe/bfcl-data/`, commit
+`dfdb0c8`). The `tree_sitter==0.21.3` conflict only ever affected *data access* via an old `import
+bfcl_eval` fallback, eliminated by vendoring. **Smoke (2026-05-22, raw, 5/category) confirms the
+current substrate supports end-to-end execution + grading across all 5 categories**: 20/25,
+nonzero passes in every non-irrelevance category (simple 4/5, multiple 5/5, parallel 4/5,
+parallel_multiple 2/5, irrelevance 5/5), no tree_sitter/bfcl_eval traceback. Fix shipped: removed the
+dead `import bfcl_eval` fallback in `adapter.py` + corrected docstrings/error to warn against
+installing `bfcl_eval`. **Only open item = measurement debt**: the last full-suite baseline is v1.8
+(2026-05-12, agent, 90.24%), frozen across the swap + 5 releases + v1.11. Re-baseline is a hand-off
+(commands below), not an unblock. See [[project_bfcl_full_suite_unblocked]].
+
+**Working tree**: `benchmarks/bfcl/adapter.py` + `RESUME.md` + `lessons.md` uncommitted (committing this session); 921 tests pass + 19/19 bfcl adapter. `scripts/analyze_v1111_gate_design.py` already committed (`7991293`).
+
+## Earlier state — 2026-05-21 (v1.11.1 offline gate-design CLOSED — STOP at Gate A′; loop-layer-predicate line EXHAUSTED; main unchanged)
 
 **v1.11.1 = candidate B′ (predicate redesign of the v1.11 lever), run OFFLINE-ONLY. Outcome: Phase A′ decision gate returned STOP — no loop-layer predicate separates recovery from stall — so no code was wired and no bench was spent.** `main` is unchanged from the v1.11 close (≈ v1.10.5 + calibrated observability). The v1.11.x adaptive loop-layer-predicate line is **exhausted**; next work should pivot to a different signal space (Track C) or housekeeping (Track D). See [[project_v1111_gate_design_stop]] and `lessons.md` 2026-05-21 v1.11.1 entry.
 
@@ -77,17 +108,22 @@ This document tracks the luxe production state across both hosts.
 
 ## What to do next session
 
-**v1.11.1 closed at Gate A′ with STOP** (offline-only; no code, no bench — see Current state above). The v1.11.x adaptive **loop-layer-predicate line is exhausted**: B′ (the natural v1.11 follow-on) is now ruled out, not pending. `main` is at v1.10.5 behavior + no_write retirement + calibrated observability. **No open blockers; nothing precommitted.** 921 tests pass; analyzer + docs uncommitted.
+**Four of the post-v1.11 roadmap tracks are now resolved by grounding (B′, C, D) or de-prioritized (A) — none of B′/C/D survived contact with the data, all at ~zero bench cost.** `main` is at v1.10.5 behavior + no_write retirement + calibrated observability + the Track D adapter cleanup. **No open blockers; nothing precommitted.**
 
-The remaining roadmap tracks (B′ removed):
+Status of the tracks:
 
-- **C (now the highest-ceiling open track) — Above-loop signaling.** v1.11.1 showed the score<LOW band is not separable with loop-observable signals; the fix must **change the signal space**. Investigate task-semantics / traceback-locality signals available *before/above* the inner loop (where the model decides WHERE to fix, not WHEN to commit). Higher ceiling, ~2–3 weeks. This is where the pylint-4661-class "late successful commit vs stall" ambiguity could actually be resolved.
-- **D (lower-effort interlude) — Substrate hygiene.** Revert the BFCL `bfcl_eval` substrate so the full BFCL suite runs again (irrelevance-only currently). Out-of-cycle housekeeping; good if a short, low-risk task is wanted before committing to Track C.
-- **A (diminishing returns) — Loop-layer optimization** on modal instances (matplotlib-25775, sphinx-10435 partial recovery). De-prioritized: v1.11.1 is evidence the loop layer is near its ceiling for this class.
+- **B′ / v1.11.x loop-layer predicate — CLOSED (exhausted).** v1.11 bench + v1.11.1 offline agree the score<LOW band is not separable with loop-observable signals. [[project_v1111_gate_design_stop]].
+- **C — above-loop signaling — CLOSED (premise refuted).** Locus discovery is already solved (73/75 touch the gold file early, all tiers); tracebacks rare + anti-correlated with success. Failures are a reasoning/content ceiling, not a "where" problem. [[project_trackc_locus_grounding]].
+- **D — BFCL substrate hygiene — CLOSED (record-correction done).** Full suite runs+grades on the current substrate (smoke-confirmed); dead `bfcl_eval` fallback removed; docs corrected. Residual = **optional re-baseline (measurement debt)**, handed off below.
+- **A — loop-layer modal tuning — de-prioritized.** Diminishing returns; v1.11.1 is evidence the loop layer is near its ceiling.
 
-**Pinned methodology** (carries forward): judge band-response levers on full-tier `cohort_shift_3x3`, never empty-count alone; **and** before any new intervention, screen its gate offline for class-separability against the retained corpus (`scripts/analyze_v1111_gate_design.py` is the reusable template) — if the target and protected classes aren't separable in the signal the gate reads, no amount of threshold tuning will fix it, so stop before coding.
+**The real frontier** the grounding keeps pointing at: the remaining failure mass (wrong_target/wrong_location/empty with the locus already found) is a **model reasoning/content ceiling** — what to change in the right file — which sits above all of A/B′/C/D. Above-loop prompt levers have washed out against it repeatedly (v1.7–v1.11). Genuinely new directions would be model-capability-level (a re-bench if a stronger champion appears — see CLAUDE.md single-champion policy) or accepting the current ceiling and shifting to a different benchmark/value axis. **This warrants a fresh user conversation, not another loop/prompt lever.**
 
-Ask the user which track to pursue (C, D, or defer).
+**Optional BFCL re-baseline (hand-off — do not auto-run; `[[feedback_offer_long_running_commands]]`)**. v1.8 target (agent, temp=0, 2026-05-12) total **90.24%**: simple 90.25 · multiple 88.5 · parallel 87.5 · parallel_multiple 83.0 · irrelevance 100.
+- Agent (~9h, apples-to-apples): `python -m benchmarks.bfcl.run --categories simple_python multiple parallel parallel_multiple irrelevance --mode agent --model qwen3.6-35b-a3b-6bit --base-url http://127.0.0.1:8000 --output acceptance/bfcl/post_v1105_full_n1235_agent/rep_1/`
+- Raw (~5–8h): same with `--mode raw` → `.../post_v1105_full_n1235_raw/rep_1/`. Compare per-category vs `acceptance/bfcl/post_specdd_v18_lever1/rep_1/summary.json`.
+
+**Pinned methodology** (the reusable lesson from this whole arc): **ground a roadmap track's premise against the actual code/artifacts/data before treating it as actionable.** B′, C, and D each looked like work and each dissolved under a cheap grounding pass (offline corpus mine / taxonomy join / artifact read + 10-min smoke). For interventions specifically: screen the gate offline for class-separability (`scripts/analyze_v1111_gate_design.py` is the template) — if target and protected classes aren't separable in the signal the gate reads, no threshold tuning fixes it. Judge band-response levers on full-tier `cohort_shift_3x3`, never empty-count alone.
 
 ## v1.10.5 cycle summary (just shipped)
 
