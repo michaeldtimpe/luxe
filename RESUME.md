@@ -66,9 +66,11 @@ current substrate supports end-to-end execution + grading across all 5 categorie
 nonzero passes in every non-irrelevance category (simple 4/5, multiple 5/5, parallel 4/5,
 parallel_multiple 2/5, irrelevance 5/5), no tree_sitter/bfcl_eval traceback. Fix shipped: removed the
 dead `import bfcl_eval` fallback in `adapter.py` + corrected docstrings/error to warn against
-installing `bfcl_eval`. **Only open item = measurement debt**: the last full-suite baseline is v1.8
-(2026-05-12, agent, 90.24%), frozen across the swap + 5 releases + v1.11. Re-baseline is a hand-off
-(commands below), not an unblock. See [[project_bfcl_full_suite_unblocked]].
+installing `bfcl_eval`. **Measurement debt now CLOSED**: full-suite re-baseline ran 2026-05-22 on
+the current substrate (agent, n=1240, ~9h) = **90.24% total, byte-identical to v1.8 every category**
+(simple 90.25 / multiple 88.50 / parallel 87.50 / parallel_multiple 83.00 / irrelevance 100), 0 errors
+— **confirms zero regression** across the swap + 5 releases + v1.11. Current-substrate reference =
+`acceptance/bfcl/post_v1105_full_n1235_agent/rep_1/`. See [[project_bfcl_full_suite_unblocked]].
 
 **Working tree**: clean. **921 tests pass + 19/19 bfcl adapter.** Commits this arc: `7991293` (v1.11.1 analyzer), `b25e0d0` (Track D), + this handoff — all pushed to `origin/main`. No tag (v1.11.1 was a STOP; Track D was hygiene/record-correction — neither is a behavior ship; `main` runtime ≈ v1.10.5).
 
@@ -119,10 +121,7 @@ Status of the tracks:
 
 **The real frontier** the grounding keeps pointing at: the remaining failure mass (wrong_target/wrong_location/empty with the locus already found) is a **model reasoning/content ceiling** — what to change in the right file — which sits above all of A/B′/C/D. Above-loop prompt levers have washed out against it repeatedly (v1.7–v1.11). Genuinely new directions would be model-capability-level (a re-bench if a stronger champion appears — see CLAUDE.md single-champion policy) or accepting the current ceiling and shifting to a different benchmark/value axis. **This warrants a fresh user conversation, not another loop/prompt lever.**
 
-**BFCL full re-baseline (SELECTED 2026-05-22 — agent path VERIFIED, ready to run; hand-off, ~8h; `[[feedback_offer_long_running_commands]]`)**. Agent-mode mini-smoke (`--limit 1` × 5 cats) on the current substrate: 5/5, no tree_sitter/bfcl_eval error, ~23s/problem → ~8h projected for n=1235. v1.8 target (agent, temp=0, 2026-05-12) total **90.24%**: simple 90.25 · multiple 88.5 · parallel 87.5 · parallel_multiple 83.0 · irrelevance 100.
-- **Run (agent, apples-to-apples)**: `python -m benchmarks.bfcl.run --categories simple_python multiple parallel parallel_multiple irrelevance --mode agent --model qwen3.6-35b-a3b-6bit --base-url http://127.0.0.1:8000 --output acceptance/bfcl/post_v1105_full_n1235_agent/rep_1/`
-- (raw variant, ~5–8h): same with `--mode raw` → `.../post_v1105_full_n1235_raw/rep_1/`.
-- **Compare** (turn-key, after the run): `python -m scripts.compare_bfcl --baseline acceptance/bfcl/post_specdd_v18_lever1/rep_1/summary.json --candidate acceptance/bfcl/post_v1105_full_n1235_agent/rep_1/summary.json` — per-category pass-rate Δ (flags ≥2pp moves; compares on rate since vendored category n differs, e.g. simple_python 400→399).
+**BFCL full re-baseline — DONE (2026-05-22).** Agent, n=1240, current substrate, ~9h (32,256s), exit 0, 0 errors: **90.24% total, byte-identical to v1.8 every category** (simple 90.25 / multiple 88.50 / parallel 87.50 / parallel_multiple 83.00 / irrelevance 100), Δ=+0.00pp across the board. Zero regression across the 6 releases since v1.8. Artifacts: `acceptance/bfcl/post_v1105_full_n1235_agent/rep_1/` (gitignored). Reproduce the compare: `python -m scripts.compare_bfcl --baseline acceptance/bfcl/post_specdd_v18_lever1/rep_1/summary.json --candidate acceptance/bfcl/post_v1105_full_n1235_agent/rep_1/summary.json`. (A raw-mode model-capability baseline was not run; optional.)
 
 **Pinned methodology** (the reusable lesson from this whole arc): **ground a roadmap track's premise against the actual code/artifacts/data before treating it as actionable.** B′, C, and D each looked like work and each dissolved under a cheap grounding pass (offline corpus mine / taxonomy join / artifact read + 10-min smoke). For interventions specifically: screen the gate offline for class-separability (`scripts/analyze_v1111_gate_design.py` is the template) — if target and protected classes aren't separable in the signal the gate reads, no threshold tuning fixes it. Judge band-response levers on full-tier `cohort_shift_3x3`, never empty-count alone.
 
