@@ -25,16 +25,17 @@ import importlib.resources
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from luxe.backend import Backend, ChatResponse
 from luxe.config import RoleConfig
 from luxe.spec import Requirement, Spec
-from luxe.tools.base import ToolDef
+from luxe.tools.base import ToolDef, dispatch_tool
 
 from .schemas import bfcl_func_spec_to_tool_def, make_stub_executor
+from .multi_turn.executor import build_tool_surface, to_call_string
 
 
 # Category-aware system prompt overrides (v1.7 priority #2). The default
@@ -57,6 +58,19 @@ _SYSTEM_PROMPTS: dict[str, str] = {
         "why the request is out of scope. Do not call any tool to gather "
         "information, verify, or attempt — declining is the correct "
         "action. Do not invent tool calls under any circumstance."
+    ),
+    # Multi-turn: the model completes each user turn by emitting tool calls that
+    # are executed against live stateful instances; it must ACT (not narrate) and
+    # use the provided tool definitions (not freeform python / markdown fences),
+    # then stop when the current turn's request is satisfied. Generation-quality
+    # lever — validated by the pre-Phase-4 transcript sanity check.
+    "multi_turn_base": (
+        "You are an assistant that completes the user's requests by calling the "
+        "provided tools. Each user message may need one or more tool calls. Always "
+        "act by emitting tool calls via the provided tool definitions — do NOT write "
+        "code in prose or markdown, and do not merely describe what you would do. Use "
+        "each tool's returned result to decide your next call. When the current "
+        "request is fully satisfied, stop calling tools."
     ),
     "default": "You are an assistant that calls tools to answer questions.",
 }
@@ -125,7 +139,11 @@ SUPPORTED_CATEGORIES = (
     "parallel",
     "parallel_multiple",
     "irrelevance",
-    # multi_turn deferred — needs state-tracking grader.
+    # `multi_turn_base` is supported via the dedicated stateful driver
+    # (`run_problem_multi_turn`) + grader (`grade.grade_multi_turn`); run.py routes
+    # it on `category.startswith("multi_turn")`. It is intentionally NOT in this
+    # default set (slower + its own clean-baseline semantics) — request it explicitly
+    # via `--categories multi_turn_base`.
 )
 
 
@@ -242,6 +260,10 @@ class BfclInvocationResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     error: str = ""
+    # Multi-turn only: authoritative grader input `list[turn][step][call_str]`,
+    # plus the full message transcript for debugging. Empty for single-turn modes.
+    decoded_turns: list[list[list[str]]] = field(default_factory=list)
+    transcript: list[dict[str, Any]] = field(default_factory=list)
 
 
 def run_problem_raw(
@@ -340,4 +362,135 @@ def run_problem_agent(
         wall_s=result.wall_s or (time.monotonic() - t0),
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
+    )
+
+
+# Multi-turn loop guardrails (named per plan). A turn ends when the model emits no
+# tool calls (it's done) or hits the per-turn step cap; the per-problem call cap +
+# repeated-payload detection bound pathological loops (malformed output, degeneracy).
+_MAX_STEPS_PER_TURN = 15
+_MAX_CALLS_PER_PROBLEM = 50
+
+
+def run_problem_multi_turn(
+    backend: Backend,
+    problem: dict[str, Any],
+    *,
+    system_prompt: str | None = None,
+    max_tokens: int = 1024,
+    temperature: float = 0.0,
+    num_ctx: int = 32768,
+) -> BfclInvocationResult:
+    """Clean multi-turn driver on `backend.chat` + `dispatch_tool` (no `run_agent`,
+    no luxe interventions — a clean capability baseline).
+
+    For each user turn: append its message(s); loop ≤ `_MAX_STEPS_PER_TURN` calling
+    `backend.chat`; execute emitted calls against the problem's LIVE persistent
+    involved-class instances (so the model sees real results) and record each step's
+    BFCL call-strings into `decoded_turns` (`list[turn][step][call_str]`, the grader
+    input). Assistant + tool messages are replayed in the EXACT OpenAI shape luxe's
+    own loop uses (`loop.py`), so multi-turn context is preserved verbatim. Grading is
+    separate — `grade.grade_multi_turn` re-executes the recorded call-strings on fresh
+    vendored instances.
+    """
+    pid = problem.get("id", "unknown")
+    involved = problem.get("involved_classes", [])
+    initial_config = problem.get("initial_config", {})
+    turns = problem.get("question", []) or []
+    if system_prompt is None:
+        system_prompt = _system_prompt_for("multi_turn_base")
+
+    t0 = time.monotonic()
+    try:
+        tool_defs, tool_fns, _instances = build_tool_surface(involved, initial_config)
+    except Exception as e:  # noqa: BLE001 — surface setup errors per problem
+        return BfclInvocationResult(
+            problem_id=pid, actual_calls=[], wall_s=time.monotonic() - t0,
+            error=f"build_tool_surface: {type(e).__name__}: {e}",
+        )
+    openai_tools = [td.to_openai() for td in tool_defs] if tool_defs else None
+
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    decoded_turns: list[list[list[str]]] = []
+    flat_calls: list[tuple[str, dict[str, Any]]] = []
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_calls = 0
+    seen_payloads: set[str] = set()
+    error = ""
+
+    try:
+        for turn_idx, turn in enumerate(turns):
+            turn_msgs = turn if isinstance(turn, list) else [turn]
+            for m in turn_msgs:
+                if isinstance(m, dict) and "role" in m and "content" in m:
+                    messages.append({"role": m["role"], "content": m["content"]})
+
+            turn_steps: list[list[str]] = []
+            for step in range(_MAX_STEPS_PER_TURN):
+                resp = backend.chat(
+                    messages=messages, tools=openai_tools,
+                    max_tokens=max_tokens, temperature=temperature, num_ctx=num_ctx,
+                )
+                prompt_tokens += resp.timing.prompt_tokens
+                completion_tokens += resp.timing.completion_tokens
+
+                if not resp.tool_calls:
+                    turn_steps.append([])  # no-op step → turn done (keeps alignment)
+                    if resp.text:
+                        messages.append({"role": "assistant", "content": resp.text})
+                    break
+
+                # Mirror loop.py's assistant-message shape verbatim (id + JSON args).
+                messages.append({
+                    "role": "assistant", "content": resp.text or "",
+                    "tool_calls": [
+                        {"id": tc.id or f"call_{turn_idx}_{step}_{i}", "type": "function",
+                         "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
+                        for i, tc in enumerate(resp.tool_calls)
+                    ],
+                })
+                payload_key = json.dumps(
+                    [(tc.name, tc.arguments) for tc in resp.tool_calls], sort_keys=True,
+                )
+
+                step_calls: list[str] = []
+                for i, tc in enumerate(resp.tool_calls):
+                    try:
+                        executed = dispatch_tool(tc.name, tc.arguments, tool_fns)
+                        content = executed.error or executed.result
+                    except Exception as e:  # noqa: BLE001 — never panic mid-sequence
+                        content = f"{type(e).__name__}: {e}"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id or f"call_{turn_idx}_{step}_{i}",
+                        "name": tc.name, "content": content,
+                    })
+                    step_calls.append(to_call_string(tc.name, tc.arguments))
+                    flat_calls.append((tc.name, tc.arguments))
+                    total_calls += 1
+
+                turn_steps.append(step_calls)
+
+                if payload_key in seen_payloads:
+                    break  # repeated identical tool_call payload → cycle, end turn
+                seen_payloads.add(payload_key)
+                if total_calls >= _MAX_CALLS_PER_PROBLEM:
+                    break
+
+            decoded_turns.append(turn_steps)
+            if total_calls >= _MAX_CALLS_PER_PROBLEM:
+                break
+    except Exception as e:  # noqa: BLE001
+        error = f"{type(e).__name__}: {e}"
+
+    return BfclInvocationResult(
+        problem_id=pid,
+        actual_calls=flat_calls,
+        wall_s=time.monotonic() - t0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        error=error,
+        decoded_turns=decoded_turns,
+        transcript=messages,
     )
