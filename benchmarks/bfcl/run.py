@@ -37,6 +37,15 @@ from .adapter import (  # noqa: E402
 from .grade import grade, grade_multi_turn  # noqa: E402
 
 
+def _json_default(o: Any) -> Any:
+    """Serialize multi_turn checker-detail state objects (GorillaFileSystem
+    Directory/File, Decimal, …) for retention via `str()` — the involved classes
+    define content-bearing `__repr__`s, and str() is cycle-safe (Directory holds a
+    `parent` back-reference, so recursing __dict__ would loop). Never invoked for
+    single-turn records."""
+    return str(o)
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--categories", nargs="+", default=list(SUPPORTED_CATEGORIES),
@@ -194,7 +203,15 @@ def main() -> int:
                     record["decoded_turns"] = result.decoded_turns
                     record["transcript"] = result.transcript
                     record["checker"] = grade_res.details
-                out_path.write_text(json.dumps(record, indent=2))
+                try:
+                    out_path.write_text(json.dumps(record, indent=2, default=_json_default))
+                except (TypeError, ValueError) as e:
+                    # Last resort: drop the heavy debug fields, keep the verdict so a
+                    # single un-serializable problem can't kill a long run.
+                    for k in ("checker", "transcript", "decoded_turns"):
+                        record.pop(k, None)
+                    record["error"] = (record.get("error") or "") + f" [retain_serialize_failed: {e}]"
+                    out_path.write_text(json.dumps(record, indent=2, default=str))
 
                 cat_pass += int(grade_res.passed)
                 cat_wall += result.wall_s
