@@ -65,15 +65,18 @@ This document tracks the luxe production state across both hosts.
 
 ## What to do next session
 
-This cycle ended in a clean ship state with no open blockers. A new session can resume by reading this section + the cycle-history table below, then choosing among the candidates from the plan file (`~/.claude/plans/frolicking-wiggling-cray.md` § "Next-session roadmap candidates"):
+**v1.11 closed without a tag** (lever reverted — net-negative at n=75; see the Current state section above). `main` is at v1.10.5 behavior + the no_write retirement (v1.10.5-neutral) + calibrated observability, pushed to `origin/main`. **No open blockers; nothing precommitted.** Working tree clean, 921 tests pass.
 
-- **A** — Continue loop-layer optimization on modal instances (matplotlib-25775, sphinx-10435 partial recovery). The v1.10.5 distinct_files framework suggests there's room. Diminishing returns expected.
-- **B** — Per-instance adaptive policy (multi-run trajectory history). Higher ceiling, ~1-2 weeks.
-- **C** — Above-loop signaling investigation (task semantics, traceback locality). Higher ceiling, ~2-3 weeks.
-- **D** — Substrate hygiene: BFCL `bfcl_eval` substrate revert so BFCL benches can run again. Out-of-cycle, unblocks parallel validation.
-- **E** — Methodology codification: extract `scripts/cohort_shift_3x3.py` as a standalone analyzer for future cycles. ~half day.
+Resume by reading the Current state section above, then choose:
 
-No precommitted next cycle. Ask the user which candidate to pursue or whether to defer.
+- **B′ (the natural follow-on) — v1.11.1: re-attempt the adaptive lever with a non-recovery-specific stall signal.** v1.11 proved the *mechanism* (score_trend→soft_anchor band-response promotion) is wired, Pareto-guarded, and SDD-compliant, but the `conv<LOW AND trend≤0` single-step gate derails mid-deep-dive recoveries (premature-commitment tier demotion). Next gate candidates: sustained `trend≤0` over K steps, or a semantic-breadth-saturation signal ("breadth not temporal counters"). The reverted bias still emits `modulation_soft_anchor` in the adaptive_state event — mine the v1.11 Phase D event streams (`~/.luxe/runs/`, joined via `acceptance/swebench/post_v111_n75/rep_*/run_id_manifest.json`) to design the better gate offline before any bench. `scripts/analyze_v111_calibration.py` is the template.
+- **A** — Loop-layer optimization on modal instances (matplotlib-25775, sphinx-10435 partial recovery). Diminishing returns expected.
+- **C** — Above-loop signaling investigation (task semantics, traceback locality). Higher ceiling, ~2–3 weeks.
+- **D** — Substrate hygiene: BFCL `bfcl_eval` substrate revert so the full BFCL suite runs again (irrelevance-only currently). Out-of-cycle.
+
+**Pinned methodology from v1.11** (apply to any future band-response lever): judge on full-tier `cohort_shift_3x3`, never empty-count alone; deep-dive the per-instance 3×3 matrix before any cut/ship call (the empty-only mid-run read called a tier-demoting lever "Pareto-neutral"). Archetype-6 + n=8 probes are necessary but too small to surface tier-demotion or conversion signal — the n=75 cohort_shift is the real gate.
+
+Ask the user which to pursue or whether to defer.
 
 ## v1.10.5 cycle summary (just shipped)
 
