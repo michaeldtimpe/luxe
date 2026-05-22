@@ -41,27 +41,23 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-21 (v1.11 cycle — per-instance adaptive policy; Phase A+B done, Phase C running, Phase D queued)
+## Current state — 2026-05-21 (v1.11 cycle CLOSED — lever tried + reverted; main ≈ v1.10.5 + calibrated observability; NOT tagged)
 
-**v1.11 = candidate B from the v1.10.5 roadmap: per-instance adaptive policy.** Phases 0–4 (substrate + closed-loop priors, all log-only/inert) shipped 2026-05-20 evening (commits `8d1332e`..`924af08`). This session added Phase A (calibration) → Phase B (activation) → Phase C (probe, in flight) → Phase D (queued).
+**v1.11 = candidate B (per-instance adaptive policy). Outcome: the activation lever was net-negative at n=75 and was reverted. No v1.11 tag.** `main` sits at v1.10.5 behavior plus the Phase A calibration finding (no_write retirement, v1.10.5-neutral) and observability. The next lever (v1.11.1) has a clear, data-backed design target.
 
-**Working tree**: clean post-Phase-C-scaffold commit. **923 tests pass, 0 skip.** Commits on `main` past `924af08`: `d50b84f` (Phase A analyzer), `b026295` (Phase B lever), `8a75ebe` (Phase C scaffold + smoke fix). NOT pushed, NOT tagged — v1.11 tags only after Phase D ship gate.
+**Working tree**: clean. **921 tests pass, 0 skip.** Commits on `main` past `924af08`: `d50b84f` (Phase A analyzer), `b026295` (Phase B lever), `8a75ebe` (Phase C scaffold + smoke fix), `f60eb5e` (RESUME), `b5d71f4` (**Phase B REVERT**). NOT pushed, NOT tagged.
 
-**Phase A — calibration (`scripts/analyze_v111_calibration.py`, project_v111_phaseA_calibration.md)**: offline analysis of the 71 retained Phase 3a/4 event streams. Two corrections caught by authoritative cross-check: (1) the substrate was NOT inert — write_pressure modulation departed 1.0 in 231 events; (2) diff_stat over-counts patches (use patch_present). **Decisive finding**: `consecutive_no_write` is non-selective (precision ≤31% at every threshold — read-heavy SUCCESS trajectories hit the same depths as stalls); `score_trend` (collapse velocity) separates empties at fire-time (step 6–8: empties stuck <LOW with flat/falling trend, patched climb above LOW). Recoverable regime: 8/12 empties still converging during the stall.
+**Phase A — calibration (`scripts/analyze_v111_calibration.py`, [[project_v111_phaseA_calibration]])**: over the 71 retained Phase 3a/4 event streams. Two cross-check corrections: substrate was NOT inert (write_pressure mod departed 1.0 in 231 events); diff_stat over-counts patches (use patch_present). **Decisive finding**: `consecutive_no_write` is non-selective (precision ≤31% — read-heavy successes hit the same depths as stalls); `score_trend` (collapse velocity) separates empties at fire-time (step 6–8). Retired the no_write→write_pressure bias (kept).
 
-**Phase B — activation (`b026295`, the single live lever)**:
-- `no_write → write_pressure/early_bail` bias **RETIRED** (pinned 0.0). write_pressure modulation now stays at neutral 1.0.
-- `score_trend → soft_anchor`: trend>0 backs off (recovery, ungated, preserves self-recovering successes); `trend≤0 AND conv<LOW AND step≥_COLLAPSE_MIN_STEP(6)` raises soft_anchor bias.
-- loop.py: score<LOW band-response **collapse promotion** (one-shot) — when slew-limited soft_anchor modulation crosses `_SOFT_ANCHOR_PROMOTE_MODULATION(1.2)`, raise the band response one rung (breadth_probe → soft_anchor commitment nudge). Frames as RESPONSE-INTENSITY modulation of the already-triggered early_bail predicate (predicate unchanged) → satisfies agents.sdd "bias-only" Must-not. Reuses v1.10-iterated soft_anchor wording. trend≤0 gate is the Pareto guard preserving matplotlib-14623 / sphinx-10323 successes.
-- agents.sdd Phase B invariants pinned. Disable-equivalence preserved.
+**Phase B → C → D — activation, tried and REVERTED**:
+- Lever: `score_trend → soft_anchor` score<LOW band-response collapse promotion (breadth_probe → soft_anchor nudge) gated on `conv<LOW AND step≥6 AND trend≤0`.
+- Phase C (archetype-6 + 2 empties ×3 + BFCL): all gates passed — lever fires, 0 archetype regressions, BFCL 240/240. But **0 lever-attributable conversions** even in the probe (seaborn-3069 took 4 nudges, didn't budge). Smoke caught + fixed a `_COLLAPSE_MIN_STEP` 7→6 error first.
+- **Phase D (n=75 ×3 + Docker + cohort_shift_3x3): HOLD.** cohort_shift = **3 deterministic losses, 0 gains**. 2 are lever-caused (promotion fired 3/3): xarray-3305 strong→plausible, pylint-4661 plausible→wrong_target — **premature-commitment tier demotion**. 1 (pylint-4604 wrong_target→empty, 0 promotions) is substrate drift. Aggregate: empty 13→16, s+p 39→37 (both floors missed); Docker ~wash (the 3 tier losses cost 0 Docker resolves).
+- **Reverted** (`b5d71f4`): loop.py promotion + constant + flag. **Kept**: no_write retirement, `convergence_score` field, the score_trend→soft_anchor bias (observability only — shows where a future stall signal would fire).
 
-**Phase B SMOKE caught a calibration error** (`8a75ebe`): seaborn-3069 terminates at step 6, so the initial `_COLLAPSE_MIN_STEP=7` never fired on short-trajectory empties. Phase A confirms conv<LOW becomes selective at step 6 → lowered to 6. Re-run smoke confirms `soft_anchor_collapse_promote_fired` at step 6 (mod_sa 1.25), write_pressure pinned, recovery branch intact. Validates the "validate small before scaling" rule again.
+**Methodology note**: the 2-rep, empty-only mid-run check read "Pareto-neutral" because the lever doesn't push to *empty* — it demotes *tier* (strong→plausible, plausible→wrong_target). Only the 3-rep full-tier `cohort_shift_3x3` caught it. Lesson: judge band-response levers on full-tier cohort_shift, never empty-count alone.
 
-**Phase C — activation probe (RUNNING, `scripts/run_v111_phaseC.sh`)**: union subset `v111_phaseC_n8.json` (archetype-6 + 2 deterministic empties seaborn-3069 + sympy-13031) × 3 reps + BFCL irrelevance anchor. Gates (`scripts/analyze_v111_phaseC.py`): (a) promotion fires on ≥1 empty, (b) 0 deterministic archetype regressions, (c) BFCL irrelevance 240/240. Output: `acceptance/swebench/v111_phaseC_n8/`.
-
-**Phase D — ship gate (QUEUED, conditional on Phase C pass, `scripts/run_v111_phaseD.sh`)**: n=75 × 3 + per-rep Docker via `post_v111_n75_pipeline.sh`, cohort_shift vs v1.10.5. Floors: empty_patch ≤13 best-of-3, s+p ≥39, 0 deterministic losses, Docker ≥37. **Will NOT launch if Phase C fails the archetype gate** (don't burn ~18h on a regressing lever).
-
-**Open design note for next session**: the SDD-compliance framing of the collapse promotion (intensity-of-enabled-predicate vs enable) is defensible but is on the contested W3 band-response path. Phase C archetype gate is the empirical check. If Phase C shows archetype regression, the fallback is to revert Phase B's loop.py promotion (keep the no_write retirement, an unambiguous win) and reconsider the lever with user review.
+**v1.11.1 design target (the real deliverable)**: the step-6 collapse signature (`conv<LOW AND trend≤0`) cannot distinguish a true stall from a mid-deep-dive transient dip, so the commitment nudge derails recovering trajectories. The `trend≤0` Pareto guard was necessary but not sufficient. Next lever needs a **non-recovery-specific** stall signal — sustained `trend≤0` over K steps, or a semantic-breadth-saturation signal (the "breadth not temporal counters" direction flagged in v1.10.4) — NOT a single-step snapshot. The reverted bias + observability events are left in place to mine for it.
 
 ## Earlier state — 2026-05-20 (v1.10.5 SHIPPED — first clean cohort-shift since v1.10.2)
 
