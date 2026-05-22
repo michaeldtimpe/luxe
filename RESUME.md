@@ -41,11 +41,20 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-22 (multi_turn BFCL — Phases 0–2 DONE; Phase 3 parity + Phase 4 baseline remain)
+## Current state — 2026-05-22 (multi_turn BFCL — CYCLE COMPLETE; champion baseline 63.0%)
 
-**Building the deferred BFCL `multi_turn` category** (stateful tool orchestration — a new capability
-axis, the chosen "next thing" after the post-v1.11 tracks closed). Plan + phase detail:
-`~/.claude/plans/serialized-noodling-reef.md`. Pushed to `origin/main`.
+**Shipped the deferred BFCL `multi_turn` category** (stateful tool orchestration — a new capability
+axis, the chosen "next thing" after the post-v1.11 tracks closed). All 4 phases done + pushed to
+`origin/main` (`433e8ac`). Plan/phase detail: `~/.claude/plans/serialized-noodling-reef.md`.
+
+**HEADLINE — champion (`Qwen3.6-35B-A3B-6bit`) first `multi_turn_base` baseline: 126/200 = 63.0%**
+(clean backend.chat generation, faithful vendored state-based grading; 0 errors, 3.7h,
+`acceptance/bfcl/multi_turn_base/rep_1/`). Failure modes: 49 instance_state_mismatch, 18
+execution_response_mismatch, 7 empty_turn_model_response. This is "luxe clean multi_turn" (no
+interventions) — the grader is leaderboard-faithful (parity-verified), generation is luxe's own
+clean trace. Reproduce: `python -m benchmarks.bfcl.run --categories multi_turn_base --output <dir>`.
+No `~/.luxe/runs` manifest (the multi_turn driver uses backend.chat, not run_agent — no run dirs);
+the per-problem JSONs + summary.json in the output dir are the complete record (gitignored).
 
 - **Phase 0 (audit gate) — PASS**: clean-subset (8 deterministic stdlib/numpy involved classes)
   covers **200/200 base problems**; grading is plain `==` on stdlib attrs (no normalization) →
@@ -61,9 +70,18 @@ axis, the chosen "next thing" after the post-v1.11 tracks closed). Plan + phase 
   + tool surface), `grade_multi_turn`, run.py routing + transcript retention. 7 tests + full suite
   **928 pass**; real-model n=2 smoke ran end-to-end (model used pwd/ls to navigate, state-graded, 0
   errors). The replay-idempotence test caught + fixed a `globals()` instance-cache leak.
-- **REMAINING**: **Phase 3** — parity (grade the same `decoded_turns` with vendored grader vs official
-  scorer on n≈20–30; triage decode-bug vs wiring-bug vs generation-signal). **Phase 4** — n=200 baseline
-  (hand-off), gated by a 5-problem prompt sanity check (model issues tool calls, not prose).
+- **Phase 3 (parity) — DONE** (`433e8ac`): `scripts/parity_multi_turn.py` re-grades the same
+  `decoded_turns` with the official bfcl_eval scorer (stale `.venv`); **n=25 parity = 25/25 match, 0
+  mismatch** (vendored == official, env-equivalent). Surfaced + fixed a JSON-serialize crash (raw
+  GorillaFileSystem `Directory` objects in the checker state-diff → `default=str` + write-fallback;
+  n=2 smoke missed it, n=25 caught it). Prompt gate PASS: 25/25 emit tool calls (mean 8.8/problem),
+  no prose-collapse.
+- **Phase 4 (baseline) — DONE**: n=200 → 63.0% (above; the n=25 sample's 40% was harder-than-average).
+
+**Multi_turn cycle CLOSED.** Optional follow-ons (not started): other sub-categories
+(miss_func/miss_param/long_context/composite) + the network/ML involved classes (WebSearchAPI,
+vector-memory) — each deferred in the plan pending demand; a 3-rep variance check on the 63% if a
+ship-grade number is wanted (single-rep at temp=0, but multi-turn compounds per-turn variance).
 
 ## Earlier state — 2026-05-22 (Track C grounding REFUTED its premise; Track D CLOSED — BFCL "irrelevance-only" was stale; full suite runs on current substrate)
 
