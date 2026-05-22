@@ -41,7 +41,31 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-22 (Track C grounding REFUTED its premise; Track D CLOSED — BFCL "irrelevance-only" was stale; full suite runs on current substrate)
+## Current state — 2026-05-22 (multi_turn BFCL — Phases 0–2 DONE; Phase 3 parity + Phase 4 baseline remain)
+
+**Building the deferred BFCL `multi_turn` category** (stateful tool orchestration — a new capability
+axis, the chosen "next thing" after the post-v1.11 tracks closed). Plan + phase detail:
+`~/.claude/plans/serialized-noodling-reef.md`. Pushed to `origin/main`.
+
+- **Phase 0 (audit gate) — PASS**: clean-subset (8 deterministic stdlib/numpy involved classes)
+  covers **200/200 base problems**; grading is plain `==` on stdlib attrs (no normalization) →
+  faithful by verbatim vendoring; official checker runs locally as a parity oracle.
+- **Phase 1 (vendor) — DONE** (`be45868`): official tree_sitter-free state-based eval vendored to
+  `benchmarks/bfcl/multi_turn/` (8 classes + checker + utils + config + func-docs); 200/200 GT-as-pred
+  PASS in MyEnv; corrupt→FAIL; oracle matches. `bfcl_eval` NOT in runtime (MyEnv); stale repo `.venv`
+  is the read-only vendor source / parity oracle only.
+- **Phase 2 (driver + grader) — DONE** (`2ee167e`): clean `backend.chat` loop
+  (`run_problem_multi_turn`) — NOT run_agent (no per-turn history seeding + interventions would
+  contaminate); live persistent instances during generation, vendored checker re-executes on fresh
+  instances during grading (faithful by construction). `executor.py` (serializer + fail-soft executor
+  + tool surface), `grade_multi_turn`, run.py routing + transcript retention. 7 tests + full suite
+  **928 pass**; real-model n=2 smoke ran end-to-end (model used pwd/ls to navigate, state-graded, 0
+  errors). The replay-idempotence test caught + fixed a `globals()` instance-cache leak.
+- **REMAINING**: **Phase 3** — parity (grade the same `decoded_turns` with vendored grader vs official
+  scorer on n≈20–30; triage decode-bug vs wiring-bug vs generation-signal). **Phase 4** — n=200 baseline
+  (hand-off), gated by a 5-problem prompt sanity check (model issues tool calls, not prose).
+
+## Earlier state — 2026-05-22 (Track C grounding REFUTED its premise; Track D CLOSED — BFCL "irrelevance-only" was stale; full suite runs on current substrate)
 
 **Two roadmap tracks resolved by cheap grounding this session — neither needed a build.**
 
