@@ -369,17 +369,6 @@ _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
 # n_suppressions == 2; 80% of HARMFUL had n_suppressions in {1, 2, 3}.
 _BREADTH_PROBE_ESCALATION_COUNT = 3
 
-# v1.11 Phase B — score_trend collapse-promotion threshold. The adaptive
-# policy's soft_anchor modulation rises above neutral (1.0) only when the
-# score_trend signal confirms a monotonic convergence collapse in the
-# score<LOW band (see convergence._SOFT_ANCHOR_COLLAPSE_BIAS → 1.25). When the
-# slew-limited modulation crosses this threshold, the score<LOW band response
-# is raised one intensity rung — from breadth_probe to a one-shot soft_anchor
-# commitment nudge. This modulates the RESPONSE INTENSITY of the already-
-# triggered early_bail predicate (its firing predicate is unchanged), so it
-# satisfies the agents.sdd "bias-only / never enable-disable" invariant.
-_SOFT_ANCHOR_PROMOTE_MODULATION = 1.2
-
 # v1.10.5c — first-event breadth_probe gating predicate (REFINED again).
 #
 # History:
@@ -581,11 +570,12 @@ def run_agent(
         adaptive_max_delta = _DEFAULT_MAX_DELTA
     # Modulation state per intervention kind; starts neutral (1.0 = no change).
     # Updated each step (slew-rate-limited) when adaptive_policy_enabled.
-    # v1.11 Phase B — soft_anchor is the single LIVE lever: its modulation
-    # drives the score<LOW band-response collapse promotion (see the
-    # suppression branch). write_pressure + early_bail modulations are pinned at
-    # neutral because their no_write bias source was RETIRED (Phase A: non-
-    # selective). They remain in the dict for observability + future cycles.
+    # v1.11 status: ALL THREE modulations are computed + emitted for
+    # observability but NONE acts on dispatch. The Phase B soft_anchor collapse
+    # promotion was reverted (net-negative at n=75 — premature-commitment tier
+    # demotion). write_pressure/early_bail bias was retired in Phase A
+    # (no_write non-selective). soft_anchor bias is still computed (shows where a
+    # future, more-specific stall signal would fire) but no consumer remains.
     intervention_modulation: dict[str, float] = {
         "write_pressure": _INTENSITY_NEUTRAL,
         "early_bail": _INTENSITY_NEUTRAL,
@@ -624,9 +614,6 @@ def run_agent(
         "LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
     suppression_count_in_trajectory = 0
     breadth_probe_fire_count = 0
-    # v1.11 Phase B — one-shot guard for the score_trend collapse promotion
-    # (soft_anchor nudge in the score<LOW band). Fires at most once per run.
-    soft_anchor_collapse_promoted = False
     # v1.9 — convergence proxy. Track read_file call signatures so the gate
     # can suppress itself when the model has revisited the same file (strong
     # trajectories rerun reads ~3× more often than empties per the v18
@@ -878,45 +865,19 @@ def run_agent(
                         grep_count=_grep_count,
                         distinct_files=_distinct_files,
                     )
-                # v1.11 Phase B — score_trend collapse promotion (one-shot).
-                # When the adaptive policy's soft_anchor modulation has risen
-                # above neutral (the slew-limited, bounded expression of a
-                # confirmed monotonic-collapse velocity signal in this
-                # score<LOW band), raise the band-response intensity one rung:
-                # deliver the soft_anchor commitment message ONCE rather than
-                # staying on breadth_probe/silent. This modulates the response
-                # intensity of the already-triggered early_bail predicate (its
-                # predicate is unchanged) — bias-only per agents.sdd. Reuses the
-                # v1.10-iterated soft_anchor wording (no wrap-up trailer). Gated
-                # on trend<=0 inside compute_intervention_bias, so self-
-                # recovering trajectories keep breadth_probe. Takes precedence
-                # over breadth_probe for this step (no double message).
-                promoted_this_step = False
-                if (adaptive_policy_enabled
-                        and not soft_anchor_collapse_promoted
-                        and intervention_modulation["soft_anchor"]
-                        >= _SOFT_ANCHOR_PROMOTE_MODULATION):
-                    messages.append({
-                        "role": "user",
-                        "content": _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
-                    })
-                    soft_anchor_collapse_promoted = True
-                    promoted_this_step = True
-                    # NOTE: do NOT set early_bail_fired — mirror breadth_probe so
-                    # a later band rise can still fire soft_anchor/commit.
-                    last_intervention_step = step
-                    last_intervention_kind = "soft_anchor_collapse_promote"
-                    intervention_kinds_fired.add("soft_anchor_collapse_promote")
-                    if log_calls:
-                        append_event(
-                            run_id, "soft_anchor_collapse_promote_fired",
-                            phase=phase, step=step,
-                            convergence_score=convergence_score,
-                            modulation_soft_anchor=(
-                                intervention_modulation["soft_anchor"]),
-                            score_trend=adaptive_state.score_trend,
-                        )
-                if not promoted_this_step and _band_response == "breadth_probe_hybrid":
+                # v1.11 Phase B — score_trend collapse promotion: REVERTED.
+                # The promotion (raise score<LOW band response breadth_probe →
+                # soft_anchor commitment nudge on the confirmed-collapse signal)
+                # was net-negative at n=75: it fired 3/3 on xarray-3305
+                # (strong→plausible) and pylint-4661 (plausible→wrong_target),
+                # demoting their tier via PREMATURE COMMITMENT, with 0 gains.
+                # Root cause: the step-6 collapse signature (trend<=0 AND
+                # conv<LOW) can't distinguish "stalled" from "mid-deep-dive with
+                # a transient low-trend dip", so the nudge derails recovering
+                # trajectories. soft_anchor modulation is still COMPUTED + emitted
+                # (observability for the v1.11.1 redesign) but nothing acts on it.
+                # See lessons.md 2026-05-21 + project_v111_phaseA_calibration.
+                if _band_response == "breadth_probe_hybrid":
                     fire_reason = None
                     # v1.10.5 — gate first-event fire on narrow_reader_signal.
                     # Escalation remains unconditional (different failure mode).

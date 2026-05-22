@@ -288,7 +288,12 @@ _DEFAULT_MAX_DELTA = 0.3
 # biases any intervention. Kept as a constant for back-compat / future mining.
 _NO_WRITE_BIAS_THRESHOLD = 8
 
-# v1.11 Phase B — score_trend → soft_anchor, the single live lever this cycle.
+# v1.11 Phase B — score_trend → soft_anchor. The CONSUMER (loop.py band-response
+# collapse promotion) was REVERTED after Phase D: net-negative at n=75 (premature-
+# commitment tier demotion on xarray-3305 + pylint-4661, 0 gains). This bias is
+# retained as OBSERVABILITY ONLY — it still drives modulation_soft_anchor in the
+# adaptive_state event so a future v1.11.1 redesign can see where a (more
+# specific) stall signal would fire, but nothing in dispatch acts on it.
 # Phase A showed empty_patch trajectories separate from patched on convergence
 # VELOCITY, not raw inactivity: by step >= _COLLAPSE_MIN_STEP the empties sit
 # at/below LOW with a flat/falling trend while patched have turned positive and
