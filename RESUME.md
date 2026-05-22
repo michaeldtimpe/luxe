@@ -70,7 +70,7 @@ installing `bfcl_eval`. **Only open item = measurement debt**: the last full-sui
 (2026-05-12, agent, 90.24%), frozen across the swap + 5 releases + v1.11. Re-baseline is a hand-off
 (commands below), not an unblock. See [[project_bfcl_full_suite_unblocked]].
 
-**Working tree**: `benchmarks/bfcl/adapter.py` + `RESUME.md` + `lessons.md` uncommitted (committing this session); 921 tests pass + 19/19 bfcl adapter. `scripts/analyze_v1111_gate_design.py` already committed (`7991293`).
+**Working tree**: clean. **921 tests pass + 19/19 bfcl adapter.** Commits this arc: `7991293` (v1.11.1 analyzer), `b25e0d0` (Track D), + this handoff — all pushed to `origin/main`. No tag (v1.11.1 was a STOP; Track D was hygiene/record-correction — neither is a behavior ship; `main` runtime ≈ v1.10.5).
 
 ## Earlier state — 2026-05-21 (v1.11.1 offline gate-design CLOSED — STOP at Gate A′; loop-layer-predicate line EXHAUSTED; main unchanged)
 
