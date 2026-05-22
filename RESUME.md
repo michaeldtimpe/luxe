@@ -41,9 +41,21 @@ lane in May (last closed: m5max_moe 2026-05-10, 30/30 across three
 MoE candidates) and is now the production lane alongside M1.
 This document tracks the luxe production state across both hosts.
 
-## Current state — 2026-05-21 (v1.11 cycle CLOSED — lever tried + reverted; main ≈ v1.10.5 + calibrated observability; NOT tagged)
+## Current state — 2026-05-21 (v1.11.1 offline gate-design CLOSED — STOP at Gate A′; loop-layer-predicate line EXHAUSTED; main unchanged)
 
-**v1.11 = candidate B (per-instance adaptive policy). Outcome: the activation lever was net-negative at n=75 and was reverted. No v1.11 tag.** `main` sits at v1.10.5 behavior plus the Phase A calibration finding (no_write retirement, v1.10.5-neutral) and observability. The next lever (v1.11.1) has a clear, data-backed design target.
+**v1.11.1 = candidate B′ (predicate redesign of the v1.11 lever), run OFFLINE-ONLY. Outcome: Phase A′ decision gate returned STOP — no loop-layer predicate separates recovery from stall — so no code was wired and no bench was spent.** `main` is unchanged from the v1.11 close (≈ v1.10.5 + calibrated observability). The v1.11.x adaptive loop-layer-predicate line is **exhausted**; next work should pivot to a different signal space (Track C) or housekeeping (Track D). See [[project_v1111_gate_design_stop]] and `lessons.md` 2026-05-21 v1.11.1 entry.
+
+**Working tree**: analyzer + docs uncommitted (`scripts/analyze_v1111_gate_design.py`, `lessons.md`, `RESUME.md`, memory). 921 tests pass (no src/ change). NOT pushed, NOT tagged.
+
+**What v1.11.1 did**: forked `analyze_v111_calibration.py` → `scripts/analyze_v1111_gate_design.py`. Mined the v1.10.5 BASELINE arm (`post_specdd_v1105_n75`, 225 retained event streams — uncontaminated, NOT lever-ON). Reconstructed two candidate gates per wall step: **C1** temporal-persistence (consecutive `trend≤0` via the production `score_trajectory_trend` over the `convergence_score` series; resets on positive trend) and **C2** breadth-saturation (steps since a new successfully-touched distinct file path). Joined to baseline tiers (`v1105_taxonomy`); classes re-derived from n=75. Cross-validation: offline single-step reconstruction reproduced **45/45** actual lever-ON `soft_anchor_collapse_promote_fired` events.
+
+**The STOP result**: band universe 92/225 (recovery 33, stall 59). The v1.11 single-step gate fired on **30/33 recovery** (quantifies the v1.11 failure). No predicate clears "0 recovery false-positives" with useful stall coverage: strict-C1 K=5 → 0 recovery but only 1 stall (useless); **C2 J=4** sheds xarray-3305 but still fires on pylint-4661 + 5 recovery; min_step sweep to 12 never clears; C1∧C2 conjunction at min_step=8 still fires on 6 recovery. **Root cause**: recovery and stall are structurally entangled in the score<LOW band — `pylint-4661` sits at conv=0.0 with saturated breadth for steps 6–9 (indistinguishable from a stall) and commits a plausible patch only at step 13. "Late successful committer" vs "stall" is a reasoning/commit-timing property, not loop-observable. A predicate-only redesign cannot rescue a non-Pareto lever when target and protected classes are entangled in the signal it reads.
+
+**Reproduce**: `python -m scripts.analyze_v1111_gate_design` (read-only; manifest → `acceptance/v1111_gate_design/run_id_manifest.json`).
+
+## Earlier state — 2026-05-21 (v1.11 cycle CLOSED — lever tried + reverted; main ≈ v1.10.5 + calibrated observability; NOT tagged)
+
+**v1.11 = candidate B (per-instance adaptive policy). Outcome: the activation lever was net-negative at n=75 and was reverted. No v1.11 tag.** `main` sits at v1.10.5 behavior plus the Phase A calibration finding (no_write retirement, v1.10.5-neutral) and observability. The v1.11.1 follow-on (above) closed the open design target: it's not solvable at the loop layer.
 
 **Working tree**: clean. **921 tests pass, 0 skip.** Commits on `main` past `924af08`: `d50b84f` (Phase A analyzer), `b026295` (Phase B lever), `8a75ebe` (Phase C scaffold + smoke fix), `f60eb5e` (RESUME), `b5d71f4` (**Phase B REVERT**). NOT pushed, NOT tagged.
 
@@ -65,18 +77,17 @@ This document tracks the luxe production state across both hosts.
 
 ## What to do next session
 
-**v1.11 closed without a tag** (lever reverted — net-negative at n=75; see the Current state section above). `main` is at v1.10.5 behavior + the no_write retirement (v1.10.5-neutral) + calibrated observability, pushed to `origin/main`. **No open blockers; nothing precommitted.** Working tree clean, 921 tests pass.
+**v1.11.1 closed at Gate A′ with STOP** (offline-only; no code, no bench — see Current state above). The v1.11.x adaptive **loop-layer-predicate line is exhausted**: B′ (the natural v1.11 follow-on) is now ruled out, not pending. `main` is at v1.10.5 behavior + no_write retirement + calibrated observability. **No open blockers; nothing precommitted.** 921 tests pass; analyzer + docs uncommitted.
 
-Resume by reading the Current state section above, then choose:
+The remaining roadmap tracks (B′ removed):
 
-- **B′ (the natural follow-on) — v1.11.1: re-attempt the adaptive lever with a non-recovery-specific stall signal.** v1.11 proved the *mechanism* (score_trend→soft_anchor band-response promotion) is wired, Pareto-guarded, and SDD-compliant, but the `conv<LOW AND trend≤0` single-step gate derails mid-deep-dive recoveries (premature-commitment tier demotion). Next gate candidates: sustained `trend≤0` over K steps, or a semantic-breadth-saturation signal ("breadth not temporal counters"). The reverted bias still emits `modulation_soft_anchor` in the adaptive_state event — mine the v1.11 Phase D event streams (`~/.luxe/runs/`, joined via `acceptance/swebench/post_v111_n75/rep_*/run_id_manifest.json`) to design the better gate offline before any bench. `scripts/analyze_v111_calibration.py` is the template.
-- **A** — Loop-layer optimization on modal instances (matplotlib-25775, sphinx-10435 partial recovery). Diminishing returns expected.
-- **C** — Above-loop signaling investigation (task semantics, traceback locality). Higher ceiling, ~2–3 weeks.
-- **D** — Substrate hygiene: BFCL `bfcl_eval` substrate revert so the full BFCL suite runs again (irrelevance-only currently). Out-of-cycle.
+- **C (now the highest-ceiling open track) — Above-loop signaling.** v1.11.1 showed the score<LOW band is not separable with loop-observable signals; the fix must **change the signal space**. Investigate task-semantics / traceback-locality signals available *before/above* the inner loop (where the model decides WHERE to fix, not WHEN to commit). Higher ceiling, ~2–3 weeks. This is where the pylint-4661-class "late successful commit vs stall" ambiguity could actually be resolved.
+- **D (lower-effort interlude) — Substrate hygiene.** Revert the BFCL `bfcl_eval` substrate so the full BFCL suite runs again (irrelevance-only currently). Out-of-cycle housekeeping; good if a short, low-risk task is wanted before committing to Track C.
+- **A (diminishing returns) — Loop-layer optimization** on modal instances (matplotlib-25775, sphinx-10435 partial recovery). De-prioritized: v1.11.1 is evidence the loop layer is near its ceiling for this class.
 
-**Pinned methodology from v1.11** (apply to any future band-response lever): judge on full-tier `cohort_shift_3x3`, never empty-count alone; deep-dive the per-instance 3×3 matrix before any cut/ship call (the empty-only mid-run read called a tier-demoting lever "Pareto-neutral"). Archetype-6 + n=8 probes are necessary but too small to surface tier-demotion or conversion signal — the n=75 cohort_shift is the real gate.
+**Pinned methodology** (carries forward): judge band-response levers on full-tier `cohort_shift_3x3`, never empty-count alone; **and** before any new intervention, screen its gate offline for class-separability against the retained corpus (`scripts/analyze_v1111_gate_design.py` is the reusable template) — if the target and protected classes aren't separable in the signal the gate reads, no amount of threshold tuning will fix it, so stop before coding.
 
-Ask the user which to pursue or whether to defer.
+Ask the user which track to pursue (C, D, or defer).
 
 ## v1.10.5 cycle summary (just shipped)
 
