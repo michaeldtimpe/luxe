@@ -31,9 +31,10 @@ from .adapter import (  # noqa: E402
     load_ground_truth,
     load_problems,
     run_problem_agent,
+    run_problem_multi_turn,
     run_problem_raw,
 )
-from .grade import grade  # noqa: E402
+from .grade import grade, grade_multi_turn  # noqa: E402
 
 
 def main() -> int:
@@ -86,7 +87,7 @@ def main() -> int:
 
     valid_categories: list[tuple[str, list[dict[str, Any]], dict[str, Any], Path]] = []
     for category in args.categories:
-        if category not in SUPPORTED_CATEGORIES:
+        if category not in SUPPORTED_CATEGORIES and not category.startswith("multi_turn"):
             print(f"  skipping unsupported category: {category}")
             continue
         try:
@@ -143,29 +144,39 @@ def main() -> int:
                 cat_skipped += 1
             else:
                 t0 = time.time()
-                if args.mode == "raw":
+                gt = gt_map.get(pid)
+                if category.startswith("multi_turn"):
+                    # Stateful multi-turn: own driver (clean backend.chat loop) +
+                    # state-based grader (vendored checker). gt is the per-turn GT
+                    # call-string lists; never flattened.
+                    result = run_problem_multi_turn(
+                        backend, problem,
+                        max_tokens=args.max_tokens,
+                        temperature=args.temperature,
+                        num_ctx=args.num_ctx,
+                    )
+                    grade_res = grade_multi_turn(result.decoded_turns, gt or [], problem)
+                elif args.mode == "raw":
                     result = run_problem_raw(
                         backend, problem,
                         max_tokens=args.max_tokens,
                         temperature=args.temperature,
                     )
+                    grade_res = grade(category, result.actual_calls, gt)
                 else:
                     # Lookup ground truth ahead of the run so Lever 1 can
                     # derive min_tool_calls. Note: passing GT structure
                     # leaks call cardinality (not values) per the v1.7
                     # priority #2 design; see adapter._spec_from_problem.
-                    pre_gt = gt_map.get(pid)
                     result = run_problem_agent(
                         backend, role_cfg, problem,
                         category=category,
-                        ground_truth=pre_gt,
+                        ground_truth=gt,
                     )
+                    grade_res = grade(category, result.actual_calls, gt)
                 elapsed = time.time() - t0
 
-                gt = gt_map.get(pid)
-                grade_res = grade(category, result.actual_calls, gt)
-
-                out_path.write_text(json.dumps({
+                record: dict[str, Any] = {
                     "id": pid,
                     "category": category,
                     "passed": grade_res.passed,
@@ -177,7 +188,13 @@ def main() -> int:
                     "prompt_tokens": result.prompt_tokens,
                     "completion_tokens": result.completion_tokens,
                     "error": result.error,
-                }, indent=2))
+                }
+                if category.startswith("multi_turn"):
+                    # Mandatory multi-turn retention: not mentally re-inspectable.
+                    record["decoded_turns"] = result.decoded_turns
+                    record["transcript"] = result.transcript
+                    record["checker"] = grade_res.details
+                out_path.write_text(json.dumps(record, indent=2))
 
                 cat_pass += int(grade_res.passed)
                 cat_wall += result.wall_s

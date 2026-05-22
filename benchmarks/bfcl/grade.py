@@ -32,6 +32,9 @@ class GradeResult:
     reason: str
     expected_calls: int = 0
     actual_calls: int = 0
+    # Multi-turn only: the full vendored-checker result dict (incl. `details`
+    # with state diffs). Retained per-problem for debugging; None for single-turn.
+    details: dict[str, Any] | None = None
 
 
 def _value_matches(actual: Any, allowed_list: list[Any]) -> bool:
@@ -159,11 +162,64 @@ def grade_irrelevance(
                        expected_calls=0, actual_calls=len(actual_calls))
 
 
+_MT_GRADE_SEQ = __import__("itertools").count()
+
+
+def grade_multi_turn(
+    decoded_turns: list[list[list[str]]],
+    ground_truth: list[list[str]],
+    test_entry: dict[str, Any],
+    *,
+    model_name: str | None = None,
+) -> GradeResult:
+    """Grade a multi_turn problem via the vendored state-based checker.
+
+    `decoded_turns` is the authoritative grader input shaped `list[turn][step][call_str]`;
+    `ground_truth` is `list[turn][call_str]`; `test_entry` is the problem dict
+    (initial_config, involved_classes, id). Faithful by construction — the vendored
+    `multi_turn_checker` (verbatim from bfcl_eval) re-executes the call-strings on fresh
+    instances and compares state. State-mismatch vs response-mismatch vs empty-turn are
+    kept distinct via the checker's `error_type`.
+
+    Intentionally NOT in `_GRADERS_BY_CATEGORY` (that dict assumes the flat single-turn
+    `(actual_calls, gt)` signature); run.py routes multi_turn here directly.
+    """
+    from benchmarks.bfcl.multi_turn.multi_turn_checker import multi_turn_checker
+
+    # Unique per-call model_name: the vendored checker caches involved-class
+    # instances in globals() keyed by (model_name, test_entry_id, class). A constant
+    # name would reuse a mutated instance across grade calls of the same problem (the
+    # replay-idempotence trap). Unique-per-call → fresh instances every call; the name
+    # is constant WITHIN a call, so intended within-problem turn persistence holds. The
+    # name has no effect on the verdict (only on instance-cache isolation).
+    if model_name is None:
+        model_name = f"luxe_grade_{next(_MT_GRADE_SEQ)}"
+
+    expected = sum(len(t) for t in ground_truth)
+    actual = sum(len(step) for turn in decoded_turns for step in turn)
+    try:
+        result = multi_turn_checker(
+            decoded_turns, ground_truth, test_entry, "multi_turn_base", model_name
+        )
+    except Exception as e:  # noqa: BLE001 — the checker can assert (length mismatch)
+        return GradeResult(
+            False, f"checker_error: {type(e).__name__}: {e}",
+            expected_calls=expected, actual_calls=actual,
+        )
+    passed = result.get("valid") is True
+    reason = "all_turns_matched" if passed else result.get("error_type", "unknown")
+    return GradeResult(
+        passed, reason, expected_calls=expected, actual_calls=actual, details=result,
+    )
+
+
 _GRADERS_BY_CATEGORY = {
     "simple_python": grade_simple,
     "multiple": grade_simple,
     "parallel": grade_parallel,
     "parallel_multiple": grade_parallel,
+    # multi_turn is NOT here — it needs the nested turn/step shape + the problem
+    # entry, so it has its own signature (`grade_multi_turn`) routed from run.py.
 }
 
 
