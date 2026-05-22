@@ -228,11 +228,14 @@ def test_adaptive_policy_slew_rate_env_override(monkeypatch):
         )
 
 
-def test_soft_anchor_collapse_promote_fires_on_diffuse_stall(monkeypatch):
-    """The single live lever: a diffuse-recon stall (distinct reads, no
-    writes, convergence stuck < LOW, flat/falling trend) past
-    _COLLAPSE_MIN_STEP must promote the score<LOW band response to a one-shot
-    soft_anchor commitment nudge. Requires the SWE-bench env combo."""
+def test_soft_anchor_collapse_promote_reverted_never_fires(monkeypatch):
+    """v1.11 Phase B REVERT regression guard. A diffuse-recon stall that DID
+    fire the promotion before the revert (distinct reads, no writes, conv stuck
+    < LOW, flat/falling trend past _COLLAPSE_MIN_STEP, full SWE-bench env combo)
+    must now produce NO soft_anchor_collapse_promote_fired event — the
+    promotion consumer was reverted (net-negative at n=75: premature-commitment
+    tier demotion). The soft_anchor modulation is still COMPUTED (observability)
+    but nothing in dispatch acts on it."""
     monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
     monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
     monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
@@ -248,66 +251,17 @@ def test_soft_anchor_collapse_promote_fires_on_diffuse_stall(monkeypatch):
         ),
         system_prompt="sys", task_prompt="do work",
         tool_defs=[_read_tool()], tool_fns=_read_fn(),
-        run_id="test-promote",
+        run_id="test-promote-reverted",
     )
 
-    promotes = [e for e in events if e["kind"] == "soft_anchor_collapse_promote_fired"]
-    assert len(promotes) == 1, f"expected exactly one promotion, got {len(promotes)}"
-    assert promotes[0]["modulation_soft_anchor"] >= 1.2
-    # one-lever discipline: write_pressure never moved off neutral.
-    for e in events:
-        if e["kind"] == "adaptive_state":
-            assert e["modulation_write_pressure"] == 1.0
-
-
-def test_soft_anchor_collapse_promote_absent_when_adaptive_disabled(monkeypatch):
-    """Disable-equivalence: same trajectory + envs but LUXE_ADAPTIVE_POLICY
-    unset → no promotion event (v1.10.5 behavior preserved)."""
-    monkeypatch.delenv("LUXE_ADAPTIVE_POLICY", raising=False)
-    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
-    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
-    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
-    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
-    events = _capture_events(monkeypatch)
-
-    scripted = [_read_resp_distinct(i) for i in range(14)] + [_terminal()]
-    run_agent(
-        backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
-            model_key="test", num_ctx=4096, max_steps=20,
-            max_tokens_per_turn=2048, temperature=0.0,
-        ),
-        system_prompt="sys", task_prompt="do work",
-        tool_defs=[_read_tool()], tool_fns=_read_fn(),
-        run_id="test-promote-off",
-    )
-
+    # No consumer remains: the promotion event must never appear.
     assert [e for e in events if e["kind"] == "soft_anchor_collapse_promote_fired"] == []
-
-
-def test_soft_anchor_collapse_promote_suppressed_when_recovering(monkeypatch):
-    """trend > 0 (model converging on its own — same-file re-reads) must keep
-    breadth_probe and NOT promote. This is the Pareto guard against the
-    historical W3 over-pressure regression class."""
-    monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
-    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
-    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
-    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
-    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
-    events = _capture_events(monkeypatch)
-
-    # Re-read the SAME file → convergence rises → trend > 0 → recovery branch.
-    scripted = [_read_resp() for _ in range(14)] + [_terminal()]
-    run_agent(
-        backend=_ScriptedBackend(scripted), role_cfg=RoleConfig(
-            model_key="test", num_ctx=4096, max_steps=20,
-            max_tokens_per_turn=2048, temperature=0.0,
-        ),
-        system_prompt="sys", task_prompt="do work",
-        tool_defs=[_read_tool()], tool_fns=_read_fn(),
-        run_id="test-promote-recover",
-    )
-
-    assert [e for e in events if e["kind"] == "soft_anchor_collapse_promote_fired"] == []
+    # Observability preserved: soft_anchor modulation still rises on the stall,
+    # and write_pressure stays pinned (no_write retired).
+    adaptive = [e for e in events if e["kind"] == "adaptive_state"]
+    assert any(e["modulation_soft_anchor"] > 1.0 for e in adaptive)
+    for e in adaptive:
+        assert e["modulation_write_pressure"] == 1.0
 
 
 def test_adaptive_policy_ablation_score_trend_off(monkeypatch):
