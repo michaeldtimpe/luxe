@@ -215,3 +215,145 @@ def test_long_context_extension_fires_in_generation():
     base_n = len(repr(vars(base["GorillaFileSystem"])["root"]))
     lc_n = len(repr(vars(lc["GorillaFileSystem"])["root"]))
     assert lc_n > base_n * 1.5  # extension materially enlarges the scenario
+
+
+# --- miss_func / miss_param: per-turn tool-withholding schedule --------------
+
+import re as _re  # noqa: E402
+
+_HAS_MISS = (_bfcl_data_dir() / "BFCL_v4_multi_turn_miss_func.json").is_file()
+_CALL_RE = _re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\(")
+
+
+def _call_name(call_str: str) -> str | None:
+    m = _CALL_RE.match(call_str)
+    return m.group(1).split(".")[-1] if m else None
+
+
+class _RecordingBackend:
+    """Captures the `tools` kwarg of every chat call; always returns an empty turn."""
+    def __init__(self):
+        self.tools_seen: list = []
+
+    def chat(self, **kw) -> ChatResponse:
+        self.tools_seen.append(kw.get("tools"))
+        return ChatResponse(text="done", tool_calls=[], timing=GenerationTiming())
+
+
+def test_miss_func_exposure_schedule_synthetic_boundary():
+    """The highest-value indexing guard: a synthetic {1:[ls], 2:[mkdir]} schedule must
+    expose `ls` AT turn 1 and `mkdir` AT turn 2 (strict `>` boundary), and hide the
+    `excluded_function` for the whole conversation. Catches any off-by-one in reveal."""
+    p = copy.deepcopy(_base_problem())
+    assert len(p["question"]) >= 3
+    full = {td.name for td in build_tool_surface(p["involved_classes"], p["initial_config"])[0]}
+    assert {"ls", "mkdir", "cp"} <= full  # the names we schedule must exist on the surface
+    p["missed_function"] = {"1": ["ls"], "2": ["mkdir"]}
+    p["excluded_function"] = ["cp"]
+    r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    exp = [set(t) for t in r.exposed_tool_names]
+    assert all("cp" not in t for t in exp)                       # excluded: hidden always
+    assert "ls" not in exp[0] and "mkdir" not in exp[0]          # turn 0: both held out
+    assert "ls" in exp[1] and "mkdir" not in exp[1]              # turn 1: ls revealed only
+    assert "ls" in exp[2] and "mkdir" in exp[2]                  # turn 2: both revealed
+
+
+@pytest.mark.skipif(not _HAS_MISS, reason="miss_func data not vendored")
+def test_miss_func_real_schedule_matches_holdout():
+    """On a real miss_func problem, each single-key holdout fn is absent before its
+    reveal turn and present from it onward; excluded fns are absent every turn."""
+    probs = load_problems("multi_turn_miss_func")
+    # pick a problem whose held-out fns each appear under exactly one reveal key
+    def single_key(p):
+        seen: dict[str, int] = {}
+        for k, fs in (p.get("missed_function") or {}).items():
+            for f in fs:
+                if f in seen:
+                    return False
+                seen[f] = int(k)
+        return bool(seen)
+    p = next(x for x in probs if single_key(x))
+    holdout = {int(k): set(v) for k, v in p["missed_function"].items()}
+    reveal_of = {f: rv for rv, fs in holdout.items() for f in fs}
+    excluded = set(p.get("excluded_function") or [])
+    r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    exp = [set(t) for t in r.exposed_tool_names]
+    for ti, names in enumerate(exp):
+        for f, rv in reveal_of.items():
+            if ti < rv:
+                assert f not in names, f"{f} should be hidden at turn {ti} (reveal {rv})"
+            else:
+                assert f in names, f"{f} should be exposed at turn {ti} (reveal {rv})"
+        assert excluded.isdisjoint(names)
+
+
+@pytest.mark.skipif(not _HAS_MISS, reason="miss_func data not vendored")
+def test_miss_func_gt_reachability_sample():
+    """Independent of grading (which is exposure-agnostic): every GT call must be
+    reachable under the driver's per-turn exposure for a sample of problems. Cross-checks
+    schedule × turn-indexing × dataset. (multi_turn_miss_func_49 is a known upstream quirk
+    — it uses a held-out fn before its reveal — and is excluded from this sample.)"""
+    gtm = load_ground_truth("multi_turn_miss_func")
+    probs = [p for p in load_problems("multi_turn_miss_func")
+             if p["id"] != "multi_turn_miss_func_49"][:25]
+    for p in probs:
+        r = run_problem_multi_turn(_ScriptedBackend([]), p)
+        exp = [set(t) for t in r.exposed_tool_names]
+        gt = gtm.get(p["id"]) or []
+        for t, turn in enumerate(gt):
+            for cs in turn:
+                nm = _call_name(cs)
+                if nm is None or t >= len(exp):
+                    continue
+                assert nm in exp[t], f"{p['id']} turn {t}: GT call {nm} not exposed"
+
+
+@pytest.mark.skipif(not _HAS_MISS, reason="miss_func data not vendored")
+def test_miss_func_49_known_quirk_reproduced():
+    """The lone upstream inconsistency: miss_func_49 holds out `tail` until turn 3 but
+    its GT uses `tail` at turn 1. Faithful reproduction = `tail` hidden at turn 1
+    (the model cannot call it early, exactly as the official harness would have it)."""
+    p = next(x for x in load_problems("multi_turn_miss_func") if x["id"] == "multi_turn_miss_func_49")
+    r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    exp = [set(t) for t in r.exposed_tool_names]
+    assert "tail" not in exp[1] and "tail" not in exp[0]   # held out before reveal=3
+    assert "tail" in exp[3]                                # exposed at the reveal turn
+
+
+def test_base_no_withholding_field_is_full_and_byte_identical_every_turn():
+    """Regression: a base problem carrying NEITHER withholding field must pass the FULL
+    serialized surface to backend.chat on every turn (asserted on the actual `tools`
+    kwarg, not an empty-hidden-set proxy). 182/200 base problems are in this class."""
+    p = next(x for x in load_problems("multi_turn_base")
+             if not x.get("excluded_function") and not x.get("missed_function"))
+    full = [td.to_openai() for td in build_tool_surface(p["involved_classes"], p["initial_config"])[0]]
+    full_names = [td.name for td in build_tool_surface(p["involved_classes"], p["initial_config"])[0]]
+    rec = _RecordingBackend()
+    r = run_problem_multi_turn(rec, p)
+    assert rec.tools_seen and all(t == full for t in rec.tools_seen)   # every chat saw full surface
+    assert r.exposed_tool_names and all(n == full_names for n in r.exposed_tool_names)
+
+
+def test_excluded_function_applied_uniformly_including_base():
+    """Faithfulness: `excluded_function` is removed for the WHOLE conversation in EVERY
+    multi_turn category, including base (18/200 base problems carry it — upstream excludes
+    them; base GT never calls them). The pre-refactor driver ignored this field."""
+    p = next(x for x in load_problems("multi_turn_base") if x.get("excluded_function"))
+    excluded = set(p["excluded_function"])
+    full_names = {td.name for td in build_tool_surface(p["involved_classes"], p["initial_config"])[0]}
+    assert excluded & full_names  # the excluded fn really is on the unfiltered surface
+    r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    for names in r.exposed_tool_names:
+        assert excluded.isdisjoint(names)  # hidden every turn
+
+
+@pytest.mark.skipif(not _HAS_MISS, reason="miss_func/miss_param data not vendored")
+def test_grade_accepts_miss_categories_gt_as_pred():
+    """The vendored checker accepts the new test_category strings and grades GT-as-pred
+    as a pass (grading is exposure-agnostic — confirms category wiring, not generation)."""
+    for cat in ("multi_turn_miss_func", "multi_turn_miss_param"):
+        gtm = load_ground_truth(cat)
+        for p in load_problems(cat)[:10]:
+            gt = gtm.get(p["id"]) or []
+            r = grade_multi_turn([[turn] for turn in gt], gt, p)
+            assert r.passed, (cat, p["id"], r.reason)
