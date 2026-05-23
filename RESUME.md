@@ -81,10 +81,25 @@ verified). Reproduce: `python -m benchmarks.bfcl.run --categories multi_turn_bas
   no prose-collapse.
 - **Phase 4 (baseline) — DONE**: n=200 → 63.0% (above; the n=25 sample's 40% was harder-than-average).
 
-**Multi_turn cycle CLOSED.** Optional follow-ons (not started): other sub-categories
-(miss_func/miss_param/long_context/composite) + the network/ML involved classes (WebSearchAPI,
-vector-memory) — each deferred in the plan pending demand; a 3-rep variance check on the 63% if a
-ship-grade number is wanted (single-rep at temp=0, but multi-turn compounds per-turn variance).
+**Multi_turn cycle CLOSED** (base 63.0% ship-grade). Follow-on work (2026-05-22/23):
+
+- **Part A — improve GorillaFileSystem (scoped guidance): NON-PARETO WASH, kept clean.** Opt-in
+  `LUXE_MT_CLASS_GUIDANCE=1` (default off, byte-identical, scoped to GFS-involved problems) appends
+  file-system precision guidance. Exact 0-variance A/B (clean rep_1 vs `enhanced_rep_1`): overall
+  63.0%→63.5%, GFS 42%→44%, **net +1 (4 fixed: base_11/13/15/38, 3 broke: base_6/33/35)**, non-GFS
+  150/150 byte-identical. The 3 regressions are **under-action** (base_6 writes 5→2; base_33 calls
+  6→5) — the precision guidance trades over-action failures for under-action failures (classic
+  non-Pareto; it DID cut GFS over-calling 8.3→7.8). Marginal/wash → **clean stays the default**; the
+  guidance mechanism stays opt-in + documented (not a win). Another prompt-lever-washout datapoint,
+  but with EXACT attribution (the 0-variance gift). `scripts/ab_multi_turn.py`.
+- **Part B — expand**: grader precondition RESOLVED (official eval uses `multi_turn_checker` only for
+  ALL multi_turn categories → `grade_multi_turn` already faithful). **long_context** generation fix
+  shipped (`build_tool_surface` now forwards `long_context=` to `_load_scenario` — extension fires,
+  GFS tree 466→12054; test added); n=200 baseline RUNNING. **miss_func/miss_param DEFERRED** — need
+  dynamic per-turn tool-withholding (`missed_function` held out then re-added at its turn;
+  `excluded_function` removed) whose generation-side correctness parity can't validate; mechanics
+  documented (base_handler.py:108/176, utils.py:788), implement carefully (not rushed overnight).
+- Optional: a 3-rep variance on long_context once baselined (base was 0-variance, expect same).
 
 ## Earlier state — 2026-05-22 (Track C grounding REFUTED its premise; Track D CLOSED — BFCL "irrelevance-only" was stale; full suite runs on current substrate)
 

@@ -2759,3 +2759,35 @@ Built the deferred BFCL `multi_turn` category end-to-end (Phases 0–4, all comm
 **Generation signal vs grader fidelity are separate axes.** The number is "luxe CLEAN multi_turn" (grader leaderboard-faithful; generation is luxe's own clean trace, not BFCL's handler). The n=25 parity sample read 40% but the full n=200 is 63% — small curated samples can mislead on the *score* (they don't on grader *correctness*).
 
 **Affected files**: `benchmarks/bfcl/multi_turn/` (vendored eval + `executor.py`), `benchmarks/bfcl/adapter.py` (`run_problem_multi_turn` + fields + prompt), `grade.py` (`grade_multi_turn`), `run.py` (route + retention + serialize fix), `scripts/parity_multi_turn.py`, `scripts/fetch_bfcl_data.sh`, `tests/test_bfcl_multi_turn.py`. Baseline: `acceptance/bfcl/multi_turn_base/rep_1/` (gitignored). Memory: `project_bfcl_multi_turn_baseline.md` (new). Plan: `~/.claude/plans/serialized-noodling-reef.md`.
+
+### [2026-05-23] multi_turn Part A — scoped GorillaFileSystem guidance is a non-Pareto WASH (+1); keep clean. The 0-variance gift = exact lever attribution.
+
+Tried to lift the multi_turn weak spot (GorillaFileSystem 42%) with **scoped, opt-in** per-class
+system-prompt guidance (`LUXE_MT_CLASS_GUIDANCE=1`; injected only when GFS ∈ involved_classes →
+non-GFS problems byte-identical by construction). Guidance targeted the diagnosed failures
+(path-semantics confusion + over-acting/uncertainty-collapse on writes): cwd-relative names, assume
+prior ops succeeded / don't retry a different way, do exactly what's asked.
+
+**Exact A/B (clean rep_1 vs enhanced, n=200, temp=0 → 0 variance so every diff is causal):** overall
+63.0%→63.5%, GFS 42%→44%, **net +1** — 4 fixed (base_11/13/15/38), 3 broke (base_6/33/35),
+non-GFS 150/150 byte-identical. The guidance DID cut GFS over-calling (mean 8.3→7.8). But the 3
+regressions are **under-action**: base_6 writes 5→2, base_33 calls 6→5 — the precision/"don't retry,
+do exactly what's asked" guidance suppressed writes that were genuinely needed. So it trades
+**over-action failures for under-action failures** — classic non-Pareto, netting ~0.
+
+**Decision: keep clean as default; guidance stays opt-in + documented (not a win).** A net +1 with 3
+deterministic regressions is a wash, and matches the project's long prompt-lever-washout record
+(deliberation amplifiers; v1.7–v1.11). The mechanical "net>0 → ship" is wrong here — ship is a
+judgment call (small net + regressions = wash). **Methodological win**: 0-variance determinism turned
+the lever eval from a noisy statistical question into an EXACT one — 4 named fixes, 3 named breaks,
+each mechanistically characterized (over- vs under-action). That clean attribution is itself the
+durable value, and is why the wash verdict is trustworthy without replication.
+
+**Also (Part B)**: grader precondition resolved — the official eval grades ALL multi_turn categories
+with `multi_turn_checker` only (not the irrelevance checker), so `grade_multi_turn` is faithful for
+miss_func/miss_param/long_context. Caught + fixed a long_context generation/grading mismatch
+(`build_tool_surface` must forward `long_context=` to `_load_scenario` or generation uses base state
+while grading uses the extension — extension fires 466→12054). miss_func/miss_param deferred (dynamic
+per-turn tool-withholding; parity can't validate the generation side).
+
+**Affected files**: `benchmarks/bfcl/adapter.py` (`_CLASS_GUIDANCE` + scoped injection + `category`/`long_context`), `benchmarks/bfcl/multi_turn/executor.py` (`long_context` param), `run.py`, `scripts/ab_multi_turn.py` (new), `tests/test_bfcl_multi_turn.py`. Artifacts: `acceptance/bfcl/multi_turn_base/{rep_1,enhanced_rep_1}/`, `multi_turn_long_context/rep_1/`. Memory: `project_bfcl_multi_turn_baseline.md` (updated).
