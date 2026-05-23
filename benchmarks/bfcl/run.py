@@ -160,6 +160,7 @@ def main() -> int:
                     # call-string lists; never flattened.
                     result = run_problem_multi_turn(
                         backend, problem,
+                        category=category,
                         max_tokens=args.max_tokens,
                         temperature=args.temperature,
                         num_ctx=args.num_ctx,

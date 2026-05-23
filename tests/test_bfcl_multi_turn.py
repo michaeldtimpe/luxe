@@ -184,3 +184,22 @@ def test_class_guidance_scoped_absent_when_no_gfs(monkeypatch):
              if "GorillaFileSystem" not in x["involved_classes"])
     r = run_problem_multi_turn(_ScriptedBackend([]), p)
     assert _GUIDANCE_MARKER not in _sysprompt(r)
+
+
+# --- Part B: long_context generation/grading consistency --------------------
+
+def test_long_context_extension_fires_in_generation():
+    """generation must load the SAME extension scenario the grader uses for
+    long_context (build_tool_surface long_context=True) — else state mismatch by
+    construction."""
+    import json as _json
+    f = _bfcl_data_dir() / "BFCL_v4_multi_turn_long_context.json"
+    if not f.is_file():
+        pytest.skip("long_context data not vendored")
+    probs = [_json.loads(l) for l in open(f)]
+    p = next(x for x in probs if "GorillaFileSystem" in x["involved_classes"])
+    _d, _fn, base = build_tool_surface(p["involved_classes"], p["initial_config"], long_context=False)
+    _d2, _fn2, lc = build_tool_surface(p["involved_classes"], p["initial_config"], long_context=True)
+    base_n = len(repr(vars(base["GorillaFileSystem"])["root"]))
+    lc_n = len(repr(vars(lc["GorillaFileSystem"])["root"]))
+    assert lc_n > base_n * 1.5  # extension materially enlarges the scenario

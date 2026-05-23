@@ -396,6 +396,7 @@ def run_problem_multi_turn(
     backend: Backend,
     problem: dict[str, Any],
     *,
+    category: str = "multi_turn_base",
     system_prompt: str | None = None,
     max_tokens: int = 1024,
     temperature: float = 0.0,
@@ -424,9 +425,11 @@ def run_problem_multi_turn(
         extra = "".join(_CLASS_GUIDANCE[c] for c in involved if c in _CLASS_GUIDANCE)
         system_prompt = system_prompt + extra
 
+    long_context = "long_context" in category
     t0 = time.monotonic()
     try:
-        tool_defs, tool_fns, _instances = build_tool_surface(involved, initial_config)
+        tool_defs, tool_fns, _instances = build_tool_surface(
+            involved, initial_config, long_context=long_context)
     except Exception as e:  # noqa: BLE001 — surface setup errors per problem
         return BfclInvocationResult(
             problem_id=pid, actual_calls=[], wall_s=time.monotonic() - t0,

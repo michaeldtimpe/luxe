@@ -89,6 +89,8 @@ def make_stateful_executor(instance: Any, method_name: str) -> ToolFn:
 def build_tool_surface(
     involved_classes: list[str],
     initial_config: dict[str, Any],
+    *,
+    long_context: bool = False,
 ) -> tuple[list[ToolDef], dict[str, ToolFn], dict[str, Any]]:
     """Instantiate a problem's involved classes (live, for generation) and build
     the model's tool surface from the vendored func-doc specs.
@@ -99,6 +101,11 @@ def build_tool_surface(
     name the model emits falls through `dispatch_tool` as "Unknown tool").
     Classes in STATELESS_CLASSES skip `_load_scenario`; others load a DEEP-COPIED
     initial_config (pristine per problem — no shared-object bleed).
+
+    `long_context` is forwarded to `_load_scenario` so the GENERATION instances load
+    the same extension scenario the vendored checker uses when grading the
+    long_context category — without it, the model would see the base state but be
+    graded against the extension state.
     """
     tool_defs: list[ToolDef] = []
     tool_fns: dict[str, ToolFn] = {}
@@ -109,7 +116,8 @@ def build_tool_surface(
         instance = getattr(module, class_name)()
         if class_name not in STATELESS_CLASSES:
             instance._load_scenario(
-                copy.deepcopy(initial_config.get(class_name, {}))
+                copy.deepcopy(initial_config.get(class_name, {})),
+                long_context=long_context,
             )
         instances[class_name] = instance
 
