@@ -195,6 +195,17 @@ def grade_multi_turn(
     if model_name is None:
         model_name = f"luxe_grade_{next(_MT_GRADE_SEQ)}"
 
+    # Pad to the GT turn count. A truncated trajectory (e.g. a backend context-overflow
+    # aborted the dialogue mid-problem, as long_context can at small num_ctx) leaves
+    # fewer decoded turns than GT; without padding the checker indexes out of range.
+    # Each padded turn is one empty step ([[]]) — so the checker still instantiates the
+    # involved classes for that turn but executes no model calls → the unreached turns'
+    # state won't match GT → graded as a FAILURE (the correct outcome), not a checker_error.
+    if len(decoded_turns) < len(ground_truth):
+        decoded_turns = list(decoded_turns) + [
+            [[]] for _ in range(len(ground_truth) - len(decoded_turns))
+        ]
+
     expected = sum(len(t) for t in ground_truth)
     actual = sum(len(step) for turn in decoded_turns for step in turn)
     try:
