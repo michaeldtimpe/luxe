@@ -2791,3 +2791,43 @@ while grading uses the extension — extension fires 466→12054). miss_func/mis
 per-turn tool-withholding; parity can't validate the generation side).
 
 **Affected files**: `benchmarks/bfcl/adapter.py` (`_CLASS_GUIDANCE` + scoped injection + `category`/`long_context`), `benchmarks/bfcl/multi_turn/executor.py` (`long_context` param), `run.py`, `scripts/ab_multi_turn.py` (new), `tests/test_bfcl_multi_turn.py`. Artifacts: `acceptance/bfcl/multi_turn_base/{rep_1,enhanced_rep_1}/`, `multi_turn_long_context/rep_1/`. Memory: `project_bfcl_multi_turn_baseline.md` (updated).
+
+---
+
+### [2026-05-23] `excluded_function` silently ignored: a faithfulness gap hiding in base/long_context
+
+**What happened**: While adding `miss_func`/`miss_param` (per-turn tool-withholding), the new generic
+surface filter read both `missed_function` and `excluded_function` from each problem. A scoped
+"base must stay byte-identical" regression test then FAILED — the driver was now hiding `cp` on
+`multi_turn_base_0`. Investigation: **18/200 problems in EVERY multi_turn category (base, long_context,
+miss_func, miss_param) carry a non-empty `excluded_function` (e.g. `['cp']`)**, and the pre-existing
+`run_problem_multi_turn` IGNORED that field entirely — it exposed the excluded functions to the model.
+Upstream BFCL removes them (and base GT never calls `cp`/`mv`/`rm`: 0 violations), so the prior base
+(63.0%, M1) and long_context (58.5%, M5) baselines were measured with excluded functions wrongly on the
+tool surface.
+
+**Root cause**: `excluded_function` is applied at function-list construction time in upstream BFCL, NOT
+in the multi-turn handler loop (which only injects `missed_function`). luxe's vendored path builds the
+surface from `involved_classes` via `build_tool_surface` and never subtracted `excluded_function`. The
+field was assumed to be a miss_*-only concern; it is in fact present across all categories. The
+byte-identity assumption in the plan ("base/long_context carry neither field") was simply wrong.
+
+**Fix / takeaway**: apply `excluded_function` uniformly in the driver (hidden the whole conversation),
+which is the faithful behavior. Impact was fully characterized before recording: faithful long_context =
+**57.5% (115/200)**, down from the unfaithful 58.5% — **exactly 2 deterministic flips (`_1`, `_40`,
+True→False), both within the 18 excluded_function problems, 0 flips outside (determinism confirmed)**.
+Note the flips were NOT the 2 problems that *called* `cp` in the old run — removing a tool from the
+surface perturbs the prompt (hence generation) even when the model never calls it. Per the in-the-loop
+call: long_context was re-measured faithfully (`m5_faithful_rep_1/`); base 63.0% keeps the gap as an M1
+number with a documented caveat (re-run on M5 if a clean base number is needed). General principle: a
+"keep it byte-identical" claim must be *verified against the data's actual fields*, not assumed — and a
+scoped regression test on the real surface is what caught it (the plan's reviewers explicitly asked for
+asserting on the serialized tool list, not an empty-hidden-set proxy). This is also why the recorded
+baseline-of-record must come from the faithful driver, not a luck-of-the-defaults run.
+
+**Affected files**: `benchmarks/bfcl/adapter.py` (`run_problem_multi_turn` per-turn surface +
+`excluded_function`/`missed_function` parse + `exposed_tool_names`), `benchmarks/bfcl/run.py` (retention),
+`scripts/fetch_bfcl_data.sh` (categories + blocking GT pre-flight), `tests/test_bfcl_multi_turn.py` (+12
+tests incl. faithful-exclusion + base full-surface). Commit `4b5d462`. Artifacts:
+`acceptance/bfcl/multi_turn_{miss_func,miss_param}/m5_rep_1/`, `multi_turn_long_context/m5_faithful_rep_1/`.
+Memory: `project_bfcl_multi_turn_miss_baselines.md` (new), `project_bfcl_multi_turn_long_context_baseline.md` (updated).
