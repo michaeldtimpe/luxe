@@ -17,14 +17,18 @@ TARGET="${LUXE_BFCL_DATA_DIR:-$HOME/.luxe/bfcl-data}"
 FORCE=0
 if [[ "${1:-}" == "--force" ]]; then FORCE=1; fi
 
-CATEGORIES=(simple_python multiple parallel parallel_multiple irrelevance multi_turn_base multi_turn_long_context)
+CATEGORIES=(simple_python multiple parallel parallel_multiple irrelevance multi_turn_base multi_turn_long_context multi_turn_miss_func multi_turn_miss_param)
 # Ground-truth exists for all except irrelevance.
 # multi_turn_* are the stateful categories (clean involved-class subset); their
 # state-based eval lives vendored under benchmarks/bfcl/multi_turn/ along with the
 # per-class func-doc tool specs (version-controlled in-repo, not fetched here).
 # long_context reuses the vendored long_context.py extension data + the checker's
-# long_context flag. (miss_func/miss_param need per-turn tool-withholding — pending.)
-GT_CATEGORIES=(simple_python multiple parallel parallel_multiple multi_turn_base multi_turn_long_context)
+# long_context flag. miss_func/miss_param are generation-side tool-withholding
+# categories: miss_func holds a function out of the tool surface until the turn keyed
+# in `missed_function`, then exposes it; both carry `excluded_function` (removed for the
+# whole conversation). The withholding is applied in the driver (run_problem_multi_turn);
+# grading reuses the same vendored state-based checker (category-agnostic).
+GT_CATEGORIES=(simple_python multiple parallel parallel_multiple multi_turn_base multi_turn_long_context multi_turn_miss_func multi_turn_miss_param)
 
 mkdir -p "$TARGET/possible_answer"
 
@@ -49,6 +53,18 @@ done
 
 for cat in "${GT_CATEGORIES[@]}"; do
     fetch "possible_answer/BFCL_v4_${cat}.json"
+done
+
+# Blocking pre-flight: the miss_func/miss_param cycle is moot without ground truth.
+# Fail loudly here rather than silently baselining against an empty GT map
+# (load_ground_truth returns {} for a missing file — that would grade everything fail).
+for cat in multi_turn_miss_func multi_turn_miss_param; do
+    gt="$TARGET/possible_answer/BFCL_v4_${cat}.json"
+    if [[ ! -s "$gt" ]]; then
+        echo "FATAL: ground truth missing or empty: $gt" >&2
+        echo "  $cat cannot be baselined without it — aborting." >&2
+        exit 1
+    fi
 done
 
 echo

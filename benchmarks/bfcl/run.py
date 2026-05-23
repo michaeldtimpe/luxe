@@ -204,6 +204,9 @@ def main() -> int:
                     record["decoded_turns"] = result.decoded_turns
                     record["transcript"] = result.transcript
                     record["checker"] = grade_res.details
+                    # Per-turn exposed tool surface (the only record of the withholding
+                    # schedule for miss_func/miss_param; full surface for base/long_context).
+                    record["exposed_tool_names"] = result.exposed_tool_names
                 try:
                     out_path.write_text(json.dumps(record, indent=2, default=_json_default))
                 except (TypeError, ValueError) as e:

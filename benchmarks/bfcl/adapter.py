@@ -264,6 +264,12 @@ class BfclInvocationResult:
     # plus the full message transcript for debugging. Empty for single-turn modes.
     decoded_turns: list[list[list[str]]] = field(default_factory=list)
     transcript: list[dict[str, Any]] = field(default_factory=list)
+    # Multi-turn only: the ordered tool names EXPOSED to the model at each turn
+    # (`list[turn][name]`). For miss_func/miss_param this shrinks pre-reveal and grows
+    # at the reveal turn; for base/long_context it is the full surface every turn. Kept
+    # for generation-side auditability (the grader is exposure-agnostic, so this is the
+    # only record of the per-turn surface schedule).
+    exposed_tool_names: list[list[str]] = field(default_factory=list)
 
 
 def run_problem_raw(
@@ -435,10 +441,33 @@ def run_problem_multi_turn(
             problem_id=pid, actual_calls=[], wall_s=time.monotonic() - t0,
             error=f"build_tool_surface: {type(e).__name__}: {e}",
         )
-    openai_tools = [td.to_openai() for td in tool_defs] if tool_defs else None
+    # Full surface, serialized once and kept ordered; filtered per turn below.
+    openai_tools_full = [(td.name, td.to_openai()) for td in tool_defs]
+
+    # Generation-side tool-withholding (miss_func / miss_param). Both fields are
+    # ABSENT for base/long_context, so `excluded` is empty and `holdout` is {} → the
+    # per-turn surface == the full surface every turn (byte-identical generation).
+    #   excluded_function : removed for the WHOLE conversation.
+    #   missed_function   : {turn_idx: [names]} — held out until that turn, then exposed
+    #                       from that turn ONWARD. Faithful to upstream base_handler,
+    #                       which `.extend()`s the function list AT `turn_idx` (so the fn
+    #                       is available AT turn_idx — hence the strict `>` in `hidden`).
+    # tool_fns stays COMPLETE: only the exposed DOCS are filtered. If the model emits a
+    # held-out/excluded call anyway, the underlying method still exists and executes —
+    # matching BFCL's decode-and-execute path (the unchanged state-based checker judges
+    # on final state, not on a banned-tool penalty).
+    excluded = set(problem.get("excluded_function") or [])
+    try:
+        holdout = {int(k): set(v) for k, v in (problem.get("missed_function") or {}).items()}
+    except (AttributeError, TypeError, ValueError) as e:
+        return BfclInvocationResult(
+            problem_id=pid, actual_calls=[], wall_s=time.monotonic() - t0,
+            error=f"bad missed_function for {pid}: {type(e).__name__}: {e}",
+        )
 
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     decoded_turns: list[list[list[str]]] = []
+    exposed_tool_names: list[list[str]] = []
     flat_calls: list[tuple[str, dict[str, Any]]] = []
     prompt_tokens = 0
     completion_tokens = 0
@@ -452,6 +481,15 @@ def run_problem_multi_turn(
             for m in turn_msgs:
                 if isinstance(m, dict) and "role" in m and "content" in m:
                     messages.append({"role": m["role"], "content": m["content"]})
+
+            # Exposed surface for THIS turn: hide excluded fns (whole conversation) +
+            # holdout fns not yet revealed. `reveal > turn_idx` is strict so a fn keyed
+            # `k` is exposed AT turn k (matches upstream's inject-at-turn semantics).
+            hidden = excluded | {f for reveal, fs in holdout.items()
+                                 if reveal > turn_idx for f in fs}
+            turn_tool_names = [nm for nm, _ in openai_tools_full if nm not in hidden]
+            openai_tools = [oa for nm, oa in openai_tools_full if nm not in hidden] or None
+            exposed_tool_names.append(turn_tool_names)
 
             turn_steps: list[list[str]] = []
             for step in range(_MAX_STEPS_PER_TURN):
@@ -520,4 +558,5 @@ def run_problem_multi_turn(
         error=error,
         decoded_turns=decoded_turns,
         transcript=messages,
+        exposed_tool_names=exposed_tool_names,
     )
