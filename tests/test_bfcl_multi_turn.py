@@ -152,3 +152,35 @@ def test_driver_smoke_mock_backend_shape_and_transcript():
     # the live tool result was fed back as a role:tool message
     tool_msg = next(m for m in result.transcript if m["role"] == "tool")
     assert "current_working_directory" in tool_msg["content"]
+
+
+# --- Part A: scoped per-class guidance ---------------------------------------
+
+_GUIDANCE_MARKER = "File-system tips"
+
+
+def _sysprompt(result) -> str:
+    return result.transcript[0]["content"]
+
+
+def test_class_guidance_off_by_default():
+    p = _base_problem()  # involves GorillaFileSystem
+    r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    assert _GUIDANCE_MARKER not in _sysprompt(r)  # flag unset → byte-identical to clean
+
+
+def test_class_guidance_injected_when_flag_and_gfs(monkeypatch):
+    monkeypatch.setenv("LUXE_MT_CLASS_GUIDANCE", "1")
+    p = _base_problem()  # GorillaFileSystem present
+    assert "GorillaFileSystem" in p["involved_classes"]
+    r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    assert _GUIDANCE_MARKER in _sysprompt(r)
+
+
+def test_class_guidance_scoped_absent_when_no_gfs(monkeypatch):
+    monkeypatch.setenv("LUXE_MT_CLASS_GUIDANCE", "1")
+    # a problem WITHOUT GorillaFileSystem → guidance must NOT be injected (scoped)
+    p = next(x for x in load_problems("multi_turn_base")
+             if "GorillaFileSystem" not in x["involved_classes"])
+    r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    assert _GUIDANCE_MARKER not in _sysprompt(r)
