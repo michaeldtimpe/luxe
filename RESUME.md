@@ -92,14 +92,20 @@ verified). Reproduce: `python -m benchmarks.bfcl.run --categories multi_turn_bas
   non-Pareto; it DID cut GFS over-calling 8.3→7.8). Marginal/wash → **clean stays the default**; the
   guidance mechanism stays opt-in + documented (not a win). Another prompt-lever-washout datapoint,
   but with EXACT attribution (the 0-variance gift). `scripts/ab_multi_turn.py`.
-- **Part B — expand**: grader precondition RESOLVED (official eval uses `multi_turn_checker` only for
-  ALL multi_turn categories → `grade_multi_turn` already faithful). **long_context** generation fix
-  shipped (`build_tool_surface` now forwards `long_context=` to `_load_scenario` — extension fires,
-  GFS tree 466→12054; test added); n=200 baseline RUNNING. **miss_func/miss_param DEFERRED** — need
-  dynamic per-turn tool-withholding (`missed_function` held out then re-added at its turn;
-  `excluded_function` removed) whose generation-side correctness parity can't validate; mechanics
-  documented (base_handler.py:108/176, utils.py:788), implement carefully (not rushed overnight).
-- Optional: a 3-rep variance on long_context once baselined (base was 0-variance, expect same).
+- **Part B — long_context: baseline = 39.0% (78/200) at num_ctx=32768, but CONTEXT-LIMITED — not a
+  clean capability number.** Generation fix shipped (`build_tool_surface` forwards `long_context=` to
+  `_load_scenario`; extension fires, GFS tree 466→12054). **43/200 (21.5%) FAIL on context-overflow**
+  — oMLX 400 "Prompt too long: ~35K exceeds 32768" as the big extension tool-results accumulate (the
+  category is DESIGNED to exceed 32K). So 39% UNDERSTATES long_context capability. Grader robustness
+  fix shipped (`grade_multi_turn` pads truncated trajectories to GT length → graded as fail, not a
+  checker IndexError; +test). **A proper long_context baseline needs num_ctx > 32768 — but that
+  approaches the 36GB GPU-wired cap ([[project_omlx_host_capacity]]); raising it risks an MLX OOM/crash
+  on the shared oMLX. NOT auto-launched overnight — IN-THE-LOOP CALL** (suggest trying num_ctx≈49152,
+  watch memory). Grader self-derives test_category from the problem id, so generation+grading are
+  consistent (verified).
+- **miss_func/miss_param DEFERRED** — need dynamic per-turn tool-withholding (`missed_function` held
+  out then re-added at its turn; `excluded_function` removed) whose generation-side correctness parity
+  can't validate; mechanics documented (base_handler.py:108/176, utils.py:788). Implement carefully (not rushed).
 
 ## Earlier state — 2026-05-22 (Track C grounding REFUTED its premise; Track D CLOSED — BFCL "irrelevance-only" was stale; full suite runs on current substrate)
 

@@ -98,6 +98,18 @@ def test_grade_multi_turn_pass_and_fail():
     assert rb.passed is False and rb.reason != "all_turns_matched"
 
 
+def test_grade_multi_turn_truncated_trajectory_grades_as_fail_not_error():
+    """A trajectory shorter than GT (e.g. backend context-overflow aborted it) must grade
+    as a failure, not IndexError the checker (was a long_context bug at small num_ctx)."""
+    p = _base_problem()
+    gt = load_ground_truth("multi_turn_base")[p["id"]]
+    assert len(gt) >= 2
+    truncated = [[gt[0]]]  # only the first turn decoded; GT has more
+    r = grade_multi_turn(truncated, gt, p)
+    assert r.passed is False
+    assert not r.reason.startswith("checker_error")  # padded + graded, not crashed
+
+
 def test_grade_multi_turn_replay_idempotent():
     """Same decoded_turns graded twice → identical verdict (no state leakage from
     the vendored executor's globals()-based instance persistence)."""
