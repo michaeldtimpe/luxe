@@ -1,49 +1,47 @@
 # luxe — session resume document
 
-## ⇒ NEXT SESSION (M5 Max, 128 GB): BFCL multi_turn `long_context` proper baseline
+## ✅ DONE (2026-05-23, M5 Max 128 GB): BFCL multi_turn `long_context` PROPER baseline = 58.5%
 
-**Why this is on the M5**: the M1 Max host has a 36 GB GPU-wired cap, so `multi_turn_long_context`
-ran at `num_ctx=32768` and was **context-limited — 39.0% (78/200) with 43/200 failing on context
-overflow** (oMLX 400 "Prompt too long: ~35K > 32768" as the big extension tool-results accumulate).
-The category is *designed* to exceed 32K. The M5's 128 GB easily handles a large `num_ctx`, giving
-the *proper* (capability, not context-limited) long_context baseline. This is a self-contained task —
-everything needed is in the repo (the M5 clone has no access to the M1's `~/.claude` memory/plan).
+**Result: `multi_turn_long_context` proper (capability, not context-limited) baseline = 117/200 = 58.50%**
+on the M5 Max at `num_ctx=131072`, temp=0, champion `Qwen3.6-35B-A3B-6bit`. **0 context overflows
+(`grep -c "Prompt too long"` = 0), 0 errors, 200/200 graded.** Wall 5734s (~1.6h), avg 28.7s/problem,
+22.65M prompt + 392.9K completion tokens. Per-problem max prompt = 820,859 tokens *summed across the
+problem's turns* — each individual oMLX call stayed under the 131072 served window, which is why there
+were 0 overflows. Failure modes (mirror base's shape): 56 instance_state_mismatch, 19
+execution_response_mismatch, 8 empty_turn_model_response. Artifacts:
+`acceptance/bfcl/multi_turn_long_context/m5_rep_1/` (summary.json + 200 per-problem JSONs + stdout.log;
+gitignored). See [[project_bfcl_multi_turn_long_context_baseline]].
 
-**Setup on the M5 (clone is the only input):**
-1. `git clone` this repo (`origin/main`); `python ≥3.11`.
-2. `pip install -e ".[dev,bfcl]"` — luxe + pytest + **mpmath** (the vendored MathAPI needs it).
-   **Do NOT `pip install bfcl_eval`** (it pins `tree_sitter==0.21.3` and breaks `src/luxe/symbols.py`;
-   the multi_turn evaluator is vendored under `benchmarks/bfcl/multi_turn/`, incl. the func-doc tool specs).
-3. oMLX serving the champion `Qwen3.6-35B-A3B-6bit` on `localhost:8000` (platform-stable; same model
-   as M1). **Crucial**: the M1's "max context window of 32768" was oMLX's *served* context, not just the
-   GPU-wired cap — so configure the M5's oMLX to serve the champion with a context window ≥ the
-   `--num-ctx` you pass below (≥131072). Verify via `GET /health` / oMLX config before the run; the M5's
-   128 GB makes the larger KV cache affordable (the M1 couldn't — it would exceed the 36 GB wired cap).
-4. `bash scripts/fetch_bfcl_data.sh` — fetches the problem + GT JSON for all categories incl.
-   `multi_turn_long_context` into `~/.luxe/bfcl-data/` (needs network).
-5. Sanity: `python -m pytest tests/test_bfcl_multi_turn.py` (confirms the vendored eval + mpmath load;
-   the long_context extension-fires test should pass).
+**This closes the M1 measurement debt.** The M1 host's 36 GB GPU-wired cap forced `num_ctx=32768`, which
+made this category **context-limited — 39.0% (78/200) with 43/200 failing on context overflow** (the
+category is *designed* to exceed 32K). The M5's 128 GB serves a 131072 window comfortably (oMLX
+`max_model_memory` ~116 GB, model ~30.5 GB resident), so 58.5% is the **capability** number: +19.5pp
+over M1, and the 43 overflow-failures are fully resolved. The champion is platform-stable; the number is
+per-host (M5 substrate). Grader is vendored-verbatim + parity-verified on M1 (25/25 == official); the
+multi_turn driver uses `backend.chat` (no `~/.luxe/runs` manifest — per-problem JSONs + summary.json
+are the record). long_context (58.5%) sits just below base (63.0%), as expected for the harder category.
 
-**Run the proper long_context baseline** (M5 can afford a big context window):
+**Reproduce** (resume-safe — the runner skips any per-problem `<id>.json` already on disk and folds it
+into the totals, so a dropped run continues where it left off; use `.venv/bin/python` on this host):
 ```
-python -m benchmarks.bfcl.run --categories multi_turn_long_context \
+.venv/bin/python -m benchmarks.bfcl.run --categories multi_turn_long_context \
   --num-ctx 131072 --temperature 0 \
   --model qwen3.6-35b-a3b-6bit --base-url http://127.0.0.1:8000 \
   --output acceptance/bfcl/multi_turn_long_context/m5_rep_1/
 ```
-- **Verify**: `grep -c "Prompt too long" acceptance/bfcl/multi_turn_long_context/m5_rep_1/stdout.log`
-  should be **0** (the 43 M1 overflows gone). If any remain, raise `--num-ctx` toward the model's max.
-- Optional anchor: also re-run `--categories multi_turn_base --num-ctx 131072` to confirm the **63.0%**
-  base baseline holds on M5 substrate (clean M5-vs-M1 comparison; M1 base was 0-variance).
-- **Record** the M5 long_context number in RESUME + a memory entry (note it's M5 substrate; the
-  champion is platform-stable but numbers are per-host). The grader is vendored-verbatim + already
-  parity-verified (25/25 == official on M1), so no re-parity needed; the multi_turn driver uses
-  `backend.chat` (no `~/.luxe/runs` manifest — per-problem JSONs + summary.json are the record).
+Setup (if re-running on a fresh M5 clone): `pip install -e ".[dev,bfcl]"` (luxe + pytest + **mpmath**;
+do **NOT** `pip install bfcl_eval` — it pins `tree_sitter==0.21.3` and breaks `src/luxe/symbols.py`; the
+evaluator is vendored under `benchmarks/bfcl/multi_turn/`). `bash scripts/fetch_bfcl_data.sh` for the
+data. oMLX must serve the champion with a context window ≥ `--num-ctx` (verify `GET /health`).
 
-**Still deferred (either host, separate task)**: `miss_func`/`miss_param` need dynamic per-turn
-tool-withholding (`missed_function` held out then re-added at its turn; `excluded_function` removed —
-mechanics at base_handler.py:108/176, utils.py:788). Part A (scoped GorillaFileSystem guidance) was a
-non-Pareto wash — kept clean (opt-in `LUXE_MT_CLASS_GUIDANCE`, default off). Full multi_turn detail below.
+## ⇒ NEXT SESSION: BFCL multi_turn `miss_func`/`miss_param` (only remaining deferred category)
+
+With base (63.0%) and long_context (58.5%) both baselined, the **only** remaining un-baselined multi_turn
+category is `miss_func`/`miss_param`. These need dynamic per-turn tool-withholding (`missed_function` held
+out then re-added at its turn; `excluded_function` removed) whose generation-side correctness parity
+*can't* validate — implement carefully, not rushed. Mechanics: base_handler.py:108/176, utils.py:788.
+Part A (scoped GorillaFileSystem guidance) was a non-Pareto wash — kept clean (opt-in
+`LUXE_MT_CLASS_GUIDANCE`, default off). Full multi_turn detail below.
 
 ## Champion: `Qwen3.6-35B-A3B-6bit` (single, platform-stable, daily driver on M1 + M5)
 
