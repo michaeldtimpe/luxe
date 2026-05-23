@@ -47,14 +47,17 @@ This document tracks the luxe production state across both hosts.
 axis, the chosen "next thing" after the post-v1.11 tracks closed). All 4 phases done + pushed to
 `origin/main` (`433e8ac`). Plan/phase detail: `~/.claude/plans/serialized-noodling-reef.md`.
 
-**HEADLINE — champion (`Qwen3.6-35B-A3B-6bit`) first `multi_turn_base` baseline: 126/200 = 63.0%**
-(clean backend.chat generation, faithful vendored state-based grading; 0 errors, 3.7h,
-`acceptance/bfcl/multi_turn_base/rep_1/`). Failure modes: 49 instance_state_mismatch, 18
-execution_response_mismatch, 7 empty_turn_model_response. This is "luxe clean multi_turn" (no
-interventions) — the grader is leaderboard-faithful (parity-verified), generation is luxe's own
-clean trace. Reproduce: `python -m benchmarks.bfcl.run --categories multi_turn_base --output <dir>`.
-No `~/.luxe/runs` manifest (the multi_turn driver uses backend.chat, not run_agent — no run dirs);
-the per-problem JSONs + summary.json in the output dir are the complete record (gitignored).
+**HEADLINE — champion (`Qwen3.6-35B-A3B-6bit`) `multi_turn_base` baseline: 126/200 = 63.0%, SHIP-GRADE
+(exactly deterministic over 3 reps).** 3-rep variance (`scripts/variance_multi_turn.py`):
+rep_1=rep_2=rep_3=63.0%, spread 0.0%, **0 flips across 200×3** (126 stable-pass + 74 stable-fail) —
+multi_turn at temp=0 is fully deterministic on this substrate (stronger than SWE-bench's ±2 noise).
+Clean backend.chat generation, faithful vendored state-based grading; 0 errors, ~3.5h/rep,
+`acceptance/bfcl/multi_turn_base/rep_{1,2,3}/`. Failure modes: 49 instance_state_mismatch, 18
+execution_response_mismatch, 7 empty_turn. Deep-dive (per-class): GorillaFileSystem 42% (hardest) →
+TradingBot 88% (easiest); turn-depth-independent; over-calling correlates with failure; no guardrail
+distortion. This is "luxe clean multi_turn" (no interventions; grader leaderboard-faithful, parity-
+verified). Reproduce: `python -m benchmarks.bfcl.run --categories multi_turn_base --output <dir>`. No
+`~/.luxe/runs` manifest (backend.chat driver, no run dirs); per-problem JSONs + summary.json are the record.
 
 - **Phase 0 (audit gate) — PASS**: clean-subset (8 deterministic stdlib/numpy involved classes)
   covers **200/200 base problems**; grading is plain `==` on stdlib attrs (no normalization) →
