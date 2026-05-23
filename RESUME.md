@@ -1,47 +1,71 @@
 # luxe — session resume document
 
-## ✅ DONE (2026-05-23, M5 Max 128 GB): BFCL multi_turn `long_context` PROPER baseline = 58.5%
+## ✅ DONE (2026-05-23, M5 Max 128 GB): BFCL multi_turn SWEEP COMPLETE — all 4 categories baselined
 
-**Result: `multi_turn_long_context` proper (capability, not context-limited) baseline = 117/200 = 58.50%**
-on the M5 Max at `num_ctx=131072`, temp=0, champion `Qwen3.6-35B-A3B-6bit`. **0 context overflows
-(`grep -c "Prompt too long"` = 0), 0 errors, 200/200 graded.** Wall 5734s (~1.6h), avg 28.7s/problem,
-22.65M prompt + 392.9K completion tokens. Per-problem max prompt = 820,859 tokens *summed across the
-problem's turns* — each individual oMLX call stayed under the 131072 served window, which is why there
-were 0 overflows. Failure modes (mirror base's shape): 56 instance_state_mismatch, 19
-execution_response_mismatch, 8 empty_turn_model_response. Artifacts:
-`acceptance/bfcl/multi_turn_long_context/m5_rep_1/` (summary.json + 200 per-problem JSONs + stdout.log;
-gitignored). See [[project_bfcl_multi_turn_long_context_baseline]].
+**The multi_turn category sweep is closed.** All four categories now have a faithful champion
+(`Qwen3.6-35B-A3B-6bit`, temp=0) baseline. Difficulty order is as expected (adversarial categories
+hardest):
 
-**This closes the M1 measurement debt.** The M1 host's 36 GB GPU-wired cap forced `num_ctx=32768`, which
-made this category **context-limited — 39.0% (78/200) with 43/200 failing on context overflow** (the
-category is *designed* to exceed 32K). The M5's 128 GB serves a 131072 window comfortably (oMLX
-`max_model_memory` ~116 GB, model ~30.5 GB resident), so 58.5% is the **capability** number: +19.5pp
-over M1, and the 43 overflow-failures are fully resolved. The champion is platform-stable; the number is
-per-host (M5 substrate). Grader is vendored-verbatim + parity-verified on M1 (25/25 == official); the
-multi_turn driver uses `backend.chat` (no `~/.luxe/runs` manifest — per-problem JSONs + summary.json
-are the record). long_context (58.5%) sits just below base (63.0%), as expected for the harder category.
+| category | baseline | host | num_ctx | artifacts |
+|---|---|---|---|---|
+| `multi_turn_base` | **63.0%** (126/200) | M1 | 32768 | `acceptance/bfcl/multi_turn_base/rep_{1,2,3}/` (M1; ⚠ pre-excluded_function-fix, see caveat) |
+| `multi_turn_long_context` | **57.5%** (115/200) | M5 | 131072 | `acceptance/bfcl/multi_turn_long_context/m5_faithful_rep_1/` |
+| `multi_turn_miss_func` | **50.0%** (100/200) | M5 | 32768 | `acceptance/bfcl/multi_turn_miss_func/m5_rep_1/` |
+| `multi_turn_miss_param` | **45.5%** (91/200) | M5 | 32768 | `acceptance/bfcl/multi_turn_miss_param/m5_rep_1/` |
 
-**Reproduce** (resume-safe — the runner skips any per-problem `<id>.json` already on disk and folds it
-into the totals, so a dropped run continues where it left off; use `.venv/bin/python` on this host):
+All M5 runs: **0 overflows, 0 errors, 200/200 graded**. miss_func: wall 6650s, avg 33.2s, failure modes
+55 instance_state_mismatch / 29 empty_turn / 16 execution_response_mismatch. miss_param: wall 5287s, avg
+26.4s, 65 instance_state_mismatch / 29 empty_turn / 15 execution_response_mismatch. **The miss_*
+categories show ~4× the `empty_turn` rate of base/long_context (29 vs ~8)** — the model gives up more
+often when a needed tool/param is withheld (the intended challenge). See
+[[project_bfcl_multi_turn_miss_baselines]] and [[project_bfcl_multi_turn_long_context_baseline]].
+
+**Mechanic (shipped `4b5d462`):** `run_problem_multi_turn` now derives the exposed tool surface PER TURN
+from two problem fields — `missed_function {turn:[names]}` (held out until that turn, exposed from it
+onward; strict `>` so a fn keyed k is available AT turn k, matching upstream `base_handler`) and
+`excluded_function` (hidden the whole conversation). `tool_fns` stays complete (only exposed DOCS are
+filtered — faithful to BFCL decode-and-execute); the vendored state-based checker is unchanged. Routing,
+grading, and data-loading were already category-agnostic (the checker self-derives `test_category` from
+the id). Per-turn `exposed_tool_names` is recorded (the only record of the withholding schedule, since
+the grader is exposure-agnostic). Validation: audit 200/200 in-scope each category; reveal semantics
+proven (off-by-one `>=` would spike GT-unreachable from 1→206); GT-as-pred 200/200 both; +12 tests; full
+suite **940 pass**. No parity oracle on M5 (`bfcl_eval` absent) — relied on the M1-parity-verified
+category-agnostic grader + generation-side validation (the parity blind spot the plan flagged).
+
+**⚠ `excluded_function` faithfulness fix (CAVEAT for base + old long_context).** The pre-`4b5d462`
+driver IGNORED `excluded_function`, so 18/200 problems in EVERY category had `cp`/`mv`/`rm` wrongly
+exposed (upstream — and the GT — exclude them; base GT never calls them). The fix applies it uniformly.
+Impact, fully characterized: **long_context dropped 58.5%→57.5% — exactly 2 deterministic flips
+(`_1`, `_40`, both True→False), both within the 18, 0 flips outside (determinism confirmed)**. So the old
+M5 long_context 58.5% (`m5_rep_1/`) was inflated by 2; the faithful number is **57.5%**
+(`m5_faithful_rep_1/`). **`multi_turn_base` 63.0% is the M1 number and still carries this gap** (no M5
+base run exists; per the in-the-loop call, base was NOT re-measured — re-run on M5 with the fix if a
+clean base number is ever needed; blast radius likely similarly tiny). Lesson recorded in `lessons.md`
+2026-05-23.
+
+**Reproduce** (resume-safe; `.venv/bin/python` on this host — bare `python3` is Homebrew 3.14 w/o luxe):
 ```
-.venv/bin/python -m benchmarks.bfcl.run --categories multi_turn_long_context \
-  --num-ctx 131072 --temperature 0 \
-  --model qwen3.6-35b-a3b-6bit --base-url http://127.0.0.1:8000 \
-  --output acceptance/bfcl/multi_turn_long_context/m5_rep_1/
+# miss_func / miss_param (NOT long_context → 32768 fine):
+.venv/bin/python -m benchmarks.bfcl.run --categories multi_turn_miss_func multi_turn_miss_param \
+  --num-ctx 32768 --temperature 0 --model qwen3.6-35b-a3b-6bit --base-url http://127.0.0.1:8000 \
+  --output <dir>/   # NB: one --output → <dir>/<category>/ subdirs; use per-category dirs for convention
+# long_context faithful (needs the big window):
+.venv/bin/python -m benchmarks.bfcl.run --categories multi_turn_long_context --num-ctx 131072 ...
 ```
-Setup (if re-running on a fresh M5 clone): `pip install -e ".[dev,bfcl]"` (luxe + pytest + **mpmath**;
-do **NOT** `pip install bfcl_eval` — it pins `tree_sitter==0.21.3` and breaks `src/luxe/symbols.py`; the
-evaluator is vendored under `benchmarks/bfcl/multi_turn/`). `bash scripts/fetch_bfcl_data.sh` for the
-data. oMLX must serve the champion with a context window ≥ `--num-ctx` (verify `GET /health`).
+Setup on a fresh M5 clone: `pip install -e ".[dev,bfcl]"` (incl. **mpmath**; do **NOT** install
+`bfcl_eval` — breaks `src/luxe/symbols.py`). `bash scripts/fetch_bfcl_data.sh` (now fetches all 4
+multi_turn categories + a blocking GT pre-flight).
 
-## ⇒ NEXT SESSION: BFCL multi_turn `miss_func`/`miss_param` (only remaining deferred category)
+## ⇒ NEXT SESSION: multi_turn sweep is CLOSED — pick the next axis
 
-With base (63.0%) and long_context (58.5%) both baselined, the **only** remaining un-baselined multi_turn
-category is `miss_func`/`miss_param`. These need dynamic per-turn tool-withholding (`missed_function` held
-out then re-added at its turn; `excluded_function` removed) whose generation-side correctness parity
-*can't* validate — implement carefully, not rushed. Mechanics: base_handler.py:108/176, utils.py:788.
-Part A (scoped GorillaFileSystem guidance) was a non-Pareto wash — kept clean (opt-in
-`LUXE_MT_CLASS_GUIDANCE`, default off). Full multi_turn detail below.
+The 4 standalone multi_turn categories are done. Genuinely-remaining multi_turn work is the **`composite`
+sub-category** (combines miss_func + miss_param + long_context perturbations in one problem — the
+hardest), if a fuller multi_turn picture is wanted; the per-turn-withholding + long_context machinery is
+now all in place, so composite is mostly a wiring + audit task. Otherwise this is a good point for a
+**fresh user conversation** on the next value axis (the post-v1.11 grounding concluded the SWE-bench
+loop/prompt levers are near their ceiling — see "What to do next session" further below). Part A (scoped
+GorillaFileSystem guidance) remains a non-Pareto wash, kept clean (opt-in `LUXE_MT_CLASS_GUIDANCE`,
+default off). Full multi_turn detail below.
 
 ## Champion: `Qwen3.6-35B-A3B-6bit` (single, platform-stable, daily driver on M1 + M5)
 
