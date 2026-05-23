@@ -73,8 +73,11 @@ def main() -> int:
         print(f"\n=== calls/problem [{label}]: clean mean {mean(cc):.1f} med {median(cc):.0f} "
               f"→ enhanced mean {mean(ec):.1f} med {median(ec):.0f} ===")
 
-    print(f"\nVERDICT: net GFS flips {len(fail2pass)-len(pass2fail):+d}; "
-          f"{'SHIP enhanced (net-positive)' if (len(fail2pass)>len(pass2fail) and not diff_nongfs) else 'KEEP clean (wash/negative or scoping bug) — document'}")
+    net = len(fail2pass) - len(pass2fail)
+    print(f"\nNET GorillaFileSystem flips: {net:+d}  ({len(fail2pass)} fixed, {len(pass2fail)} broke)")
+    print("NOTE: the ship decision is a judgment call, not mechanical. A small net WITH deterministic")
+    print("regressions is a non-Pareto wash (over-action↔under-action trade) — keep clean default unless")
+    print("the net is clearly material AND the regressions are diagnosably fixable. Non-GFS must be byte-identical.")
     return 0
 
 
