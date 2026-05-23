@@ -371,6 +371,26 @@ def run_problem_agent(
 _MAX_STEPS_PER_TURN = 15
 _MAX_CALLS_PER_PROBLEM = 50
 
+# Per-involved-class generation guidance (OPT-IN via LUXE_MT_CLASS_GUIDANCE=1; default
+# OFF → byte-identical to the clean baseline). SCOPED: appended only when the named
+# class is in a problem's involved_classes, so problems without that class are
+# untouched (exact A/B by construction). Tuned to the GorillaFileSystem failure
+# diagnosis: path-semantics confusion + uncertainty-collapse on WRITES (the grader does
+# not penalize extra reads — state=final-state, response=GT⊆model — so the guidance is
+# writes-focused and does NOT mandate pwd/ls probing). Map is extensible per class.
+_CLASS_GUIDANCE: dict[str, str] = {
+    "GorillaFileSystem": (
+        "\n\nFile-system tips: your working directory PERSISTS across calls. Refer to "
+        "files and directories by their plain name in the current directory (e.g. "
+        "touch(file_name='photo.jpg')); do not prefix names with './', '../', or an "
+        "absolute path unless you have already cd'd into a subdirectory. Assume each "
+        "operation succeeded unless its result says otherwise — never repeat an "
+        "operation a different way or with an alternate path. Do exactly what is asked; "
+        "do not create extra files or directories. Track the current directory yourself; "
+        "only call pwd/ls if a tool result is unexpected."
+    ),
+}
+
 
 def run_problem_multi_turn(
     backend: Backend,
@@ -399,6 +419,10 @@ def run_problem_multi_turn(
     turns = problem.get("question", []) or []
     if system_prompt is None:
         system_prompt = _system_prompt_for("multi_turn_base")
+    # Opt-in scoped per-class guidance (default off → byte-identical to clean baseline).
+    if os.environ.get("LUXE_MT_CLASS_GUIDANCE") == "1":
+        extra = "".join(_CLASS_GUIDANCE[c] for c in involved if c in _CLASS_GUIDANCE)
+        system_prompt = system_prompt + extra
 
     t0 = time.monotonic()
     try:
