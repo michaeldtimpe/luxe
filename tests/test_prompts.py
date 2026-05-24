@@ -522,3 +522,33 @@ def test_task_overlay_is_frozen():
     overlay = TaskOverlay(by_task={"implement": "cot"})
     with pytest.raises(Exception):
         overlay.by_task = {"implement": "sot"}  # type: ignore[misc]
+
+
+# --- reflect / verifier prompt surface (agents.sdd: new verifier wording needs
+# a test here, even though it lives in reflect.py, not PROMPT_REGISTRY) --------
+
+def test_reflect_multi_turn_prompt_is_benchmark_generic():
+    """Anti-overfitting (agents.sdd Must-not): the multi_turn verifier must NOT
+    encode benchmark semantics — never phrase the gap as 'a tool call was warranted'.
+    It asks about the user's REQUEST being carried out."""
+    from luxe.agents.reflect import assemble_multi_turn
+    p = assemble_multi_turn("get the average", "Assistant said:\n- 91.67").lower()
+    assert "tool call" not in p and "tool_call" not in p
+    assert "carried out" in p
+
+
+def test_reflect_swebench_prompt_targets_issue_resolution():
+    from luxe.agents.reflect import assemble_swebench
+    p = assemble_swebench("Bug: X crashes", "--- a/x.py\n+++ b/x.py").lower()
+    assert "resolve" in p and "issue" in p
+
+
+def test_reflect_system_prompt_is_critique_only():
+    """The verifier must be told NOT to re-solve and to report ONLY functional
+    problems (defends against second-pass solving + pedantic style nits)."""
+    from luxe.agents.reflect import _VERIFIER_SYSTEM
+    s = _VERIFIER_SYSTEM.lower()
+    assert "do not rewrite" in s or "do not re-solve" in s or "not rewrite or re-solve" in s
+    assert "functional" in s
+    # explicitly excludes style/idiom from what counts as a problem
+    assert "style" in s

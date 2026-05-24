@@ -10,6 +10,31 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - Mode B write-pressure injection (v1.4.1) is opt-in via `LUXE_WRITE_PRESSURE=1`
 - SpecDD Lever 2 chain block (`_build_sdd_block`) is appended after the variant's `task_prefix`
 
+### Reflection / verify stage invariants (Track 1, pinned 2026-05-24)
+
+- **reflect surface ownership**: `reflect.py` is the single source of truth for the
+  verifier/critique prompt surface (the `_VERIFIER_SYSTEM` + per-driver templates). This
+  is DISTINCT from `PROMPT_REGISTRY` (task-completion variants) by design — the verifier
+  is a separate "second-look" critic, not a `run_agent` task prompt. New verifier prompt
+  wording still requires a test in `tests/test_prompts.py` (the registry rule's intent).
+- **opt-in + disable-equivalence**: the stage is gated by `LUXE_REFLECT` (default unset →
+  off). With it off, generation is byte-identical (the primitive is pure; call sites gate).
+- **verify-only is non-perturbing**: a verify call is a SEPARATE `backend.chat`; in
+  verify-only mode it never mutates the work being judged. So Phase 1 can be measured
+  offline by replaying it over stored transcripts without changing any benchmark verdict.
+- **`gap` requires a substantiated FUNCTIONAL BLOCKER**: `gap=true` only when the model
+  both asserts it AND supplies ≥1 deficiency; stylistic/suboptimal observations never flip
+  it (defends the false-gap metric). Unparseable verdicts fail CLOSED (gap=false).
+- **deterministic, no persistence**: temp=0; reflect must not read or write cross-run state.
+
+## Must not (reflect)
+
+- Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —
+  evaluator-shaped phrasing is forbidden (anti-overfitting). The multi_turn verifier asks
+  about the *request being carried out*, never about tool calls.
+- Let verify-only mutate the generation transcript, or let Phase 2 repair invoke tools
+  outside the original trajectory's tool surface (pre-registered repair budget).
+
 ### Stage 3 / v1.11 adaptive-policy invariants (pinned 2026-05-20)
 
 - **score_log ownership**: `loop.py` owns the per-step convergence-score deque; `convergence.py` (`compute_convergence_score`) stays stateless. Composition boundary is the `_compute_within_run_state(score_log, tool_history, step)` signature — loop.py is the sole writer, convergence.py is the sole consumer
