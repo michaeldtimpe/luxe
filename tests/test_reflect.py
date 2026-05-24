@@ -106,6 +106,47 @@ def test_multi_turn_context_no_actions():
     assert "(none)" in out  # the give-up shape: no actions
 
 
+def test_multi_turn_context_skips_repair_nudge():
+    """A Phase 2 repair nudge is injected as a `_luxe_repair`-marked user message; it
+    must be invisible to a later verify (else it becomes a phantom 'ask')."""
+    transcript = [
+        _msg("system", "s"),
+        _msg("user", "do x"),
+        _msg("assistant", "can't"),
+        {"role": "user", "content": "complete it now", "_luxe_repair": True},
+    ]
+    task, out = R.multi_turn_verify_context(transcript, [[[]]])
+    assert "do x" in task
+    assert "complete it now" not in task  # the injected nudge is not a user ask
+
+
+# --- repair_nudge (Phase 2) -------------------------------------------------
+
+def test_repair_nudge_carries_deficiencies():
+    v = R.Verdict(gap=True, deficiencies=(
+        R.Deficiency("book the flight", "no book_flight call", "concrete_local"),
+        R.Deficiency("", "blank what is dropped", "vague"),
+    ))
+    nudge = R.repair_nudge(v)
+    assert "book the flight" in nudge          # the verifier's cited unmet ask
+    assert "blank what" not in nudge           # an empty `what` is not listed
+    assert "did not fully carry out" in nudge  # the generic corrective frame
+
+
+def test_repair_nudge_generic_when_no_deficiencies():
+    nudge = R.repair_nudge(R.Verdict(gap=False))
+    assert "Still not done" not in nudge
+    assert nudge.strip()  # still a usable corrective message
+
+
+def test_repair_nudge_has_no_benchmark_semantics():
+    """Anti-overfit: the corrective nudge must not encode evaluator/benchmark phrasing."""
+    nudge = R.repair_nudge(R.Verdict(gap=True, deficiencies=(R.Deficiency("x", "y", "vague"),)))
+    low = nudge.lower()
+    for banned in ("tool call", "state-checker", "checker", "warranted", "bfcl", "benchmark"):
+        assert banned not in low
+
+
 # --- env gate ---------------------------------------------------------------
 
 def test_reflect_disabled_by_default(monkeypatch):

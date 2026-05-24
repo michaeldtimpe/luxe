@@ -207,6 +207,9 @@ def main() -> int:
                     # Per-turn exposed tool surface (the only record of the withholding
                     # schedule for miss_func/miss_param; full surface for base/long_context).
                     record["exposed_tool_names"] = result.exposed_tool_names
+                    # Turn indices where the opt-in reflect→repair stage fired (empty
+                    # when LUXE_REFLECT is off); lets the A/B attribute flips to repair.
+                    record["repair_turns"] = result.repair_turns
                 try:
                     out_path.write_text(json.dumps(record, indent=2, default=_json_default))
                 except (TypeError, ValueError) as e:

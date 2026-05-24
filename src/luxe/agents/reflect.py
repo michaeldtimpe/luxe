@@ -328,7 +328,8 @@ def multi_turn_verify_context(
     user_requests = [
         str(m.get("content") or "").strip()
         for m in transcript
-        if m.get("role") == "user" and str(m.get("content") or "").strip()
+        if m.get("role") == "user" and not m.get("_luxe_repair")
+        and str(m.get("content") or "").strip()
     ]
     prose = [
         str(m.get("content") or "").strip()
@@ -346,3 +347,33 @@ def multi_turn_verify_context(
         + ("\n".join(f"- {a}" for a in actions) if actions else "- (none)")
     )
     return task, "\n\n".join(out_parts)
+
+
+# --- Phase 2 repair: the bounded corrective re-prompt -------------------------
+
+# Generic corrective nudge (NOT a verifier prompt — agents.sdd anti-overfit rule
+# governs the verifier surface, not this). It carries NO benchmark semantics: no
+# "tool call", no state-checker / turn-path language. It re-states that the request
+# is unfinished, names the verifier's own deficiencies (critique, not a solution —
+# Phase 2 consumes the verdict by design), and counters the dominant repairable
+# give-up mode ("tool-unavailable anchoring") with generic agent guidance.
+_REPAIR_NUDGE_BODY = (
+    "Your previous response did not fully carry out the request. Re-check the tools "
+    "available to you right now and complete what was asked — do not assume a listed "
+    "tool is unavailable, and do not stop until the request is done."
+)
+
+
+def repair_nudge(verdict: Verdict) -> str:
+    """Build the one corrective re-prompt for a flagged give-up turn (Phase 2).
+
+    Grounds the nudge in the verdict's own deficiencies (the unmet asks the verifier
+    cited) so the re-prompt is specific without re-solving the task for the model.
+    Caller injects this as a `_luxe_repair`-marked user message — the marker keeps it
+    out of any later verify context (`multi_turn_verify_context`).
+    """
+    asks = "\n".join(f"- {d.what}" for d in verdict.deficiencies if d.what)
+    body = _REPAIR_NUDGE_BODY
+    if asks:
+        body += "\n\nStill not done:\n" + asks
+    return body

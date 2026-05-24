@@ -27,6 +27,27 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   it (defends the false-gap metric). Unparseable verdicts fail CLOSED (gap=false).
 - **deterministic, no persistence**: temp=0; reflect must not read or write cross-run state.
 
+### Phase 2 repair invariants (multi_turn; pinned 2026-05-24)
+
+- **two-gate fire (give-up signature AND verify gap)**: the repair stage fires only when
+  a turn produced ZERO tool calls (`adapter._is_giveup_turn` — the empty_turn give-up
+  signature) AND a separate verify call returns `gap=true`. The structural gate goes
+  FIRST — it gates the expensive verify call and, by construction, skips the verifier's
+  reporting-gap false-gaps (which have non-empty action sets). A verify call is never
+  made on a turn that already acted.
+- **locked repair budget**: exactly ONE corrective re-prompt per flagged turn (a single
+  `_luxe_repair`-marked user nudge + one bounded step pass over the SAME exposed tool
+  surface). Hard stop: no re-verify, no second repair, no loop. The per-turn step cap +
+  per-problem call cap still bound the re-prompt (`_MAX_STEPS_PER_TURN`/`_MAX_CALLS_PER_PROBLEM`).
+- **same tool surface**: the repair re-prompt is driven with the turn's already-computed
+  `openai_tools` (the per-turn exposed surface) — repair may NOT widen the surface or
+  invoke tools outside the original trajectory's surface (pre-registered budget).
+- **append-to-same-turn**: repair output extends `decoded_turns[-1]` (the give-up turn),
+  never a new turn entry — turn count must stay aligned with the GT turn count.
+- **generic nudge**: `reflect.repair_nudge` carries no benchmark semantics; it re-states
+  the request as unfinished and lists the verifier's deficiencies (consuming the verdict,
+  not re-solving). The `_luxe_repair` marker keeps the nudge out of later verify contexts.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —
