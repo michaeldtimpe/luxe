@@ -347,6 +347,105 @@ def test_excluded_function_applied_uniformly_including_base():
         assert excluded.isdisjoint(names)  # hidden every turn
 
 
+# --- Phase 2: gated reflect→repair stage ------------------------------------
+
+from luxe.agents import reflect  # noqa: E402
+from luxe.agents.reflect import Deficiency, Verdict  # noqa: E402
+
+
+def _one_turn_problem() -> dict:
+    """A base problem truncated to a single user turn — makes the two-gate repair
+    assertions exact (no trailing turns to also trigger the gate)."""
+    p = copy.deepcopy(_base_problem())
+    p["question"] = p["question"][:1]
+    return p
+
+
+def _cd_call() -> ChatResponse:
+    return ChatResponse(
+        text="", timing=GenerationTiming(),
+        tool_calls=[ToolCallResponse(id="c1", name="cd", arguments={"folder": "document"})],
+    )
+
+
+def test_repair_off_by_default_never_verifies(monkeypatch):
+    """Flag off → the verify call is never made and no repair fires (byte-identical)."""
+    monkeypatch.delenv("LUXE_REFLECT", raising=False)
+    calls: list = []
+    monkeypatch.setattr(reflect, "verify", lambda *a, **k: calls.append(1) or Verdict(gap=True))
+    r = run_problem_multi_turn(_ScriptedBackend([]), _one_turn_problem())  # empty → give-up
+    assert calls == []
+    assert r.repair_turns == []
+
+
+def test_repair_fires_on_giveup_and_gap(monkeypatch):
+    monkeypatch.setenv("LUXE_REFLECT", "1")
+    verdict = Verdict(gap=True, deficiencies=(Deficiency("create the report", "", "concrete_local"),))
+    monkeypatch.setattr(reflect, "verify", lambda *a, **k: verdict)
+    # turn 0: give-up (empty); repair re-prompt then emits a real call.
+    scripted = [ChatResponse(text="I cannot do that", tool_calls=[], timing=GenerationTiming()), _cd_call()]
+    r = run_problem_multi_turn(_ScriptedBackend(scripted), _one_turn_problem())
+    assert r.repair_turns == [0]
+    flat = [c for step in r.decoded_turns[0] for c in step]
+    assert any("cd(" in c for c in flat)  # repair output appended to the SAME turn
+    nudge = next((m for m in r.transcript if m.get("_luxe_repair")), None)
+    assert nudge is not None and nudge["role"] == "user"
+    assert "create the report" in nudge["content"]  # consumes the verdict's deficiency
+
+
+def test_repair_skipped_on_nonempty_turn(monkeypatch):
+    """The structural gate: a turn that ACTED is never sent to verify (skips the
+    reporting-gap false-gaps, which have non-empty action sets)."""
+    monkeypatch.setenv("LUXE_REFLECT", "1")
+    calls: list = []
+    monkeypatch.setattr(reflect, "verify", lambda *a, **k: calls.append(1) or Verdict(gap=True))
+    r = run_problem_multi_turn(_ScriptedBackend([_cd_call()]), _one_turn_problem())
+    assert calls == []          # verify not invoked on a non-empty turn
+    assert r.repair_turns == []
+
+
+def test_repair_skipped_when_verify_abstains(monkeypatch):
+    """Give-up signature present but verify returns gap=false → no repair."""
+    monkeypatch.setenv("LUXE_REFLECT", "1")
+    monkeypatch.setattr(reflect, "verify", lambda *a, **k: Verdict(gap=False))
+    r = run_problem_multi_turn(_ScriptedBackend([]), _one_turn_problem())
+    assert r.repair_turns == []
+    assert not any(m.get("_luxe_repair") for m in r.transcript)
+
+
+def test_repair_skipped_on_unparseable_verdict(monkeypatch):
+    """A verify call error/unparseable verdict fails CLOSED → no spurious repair."""
+    monkeypatch.setenv("LUXE_REFLECT", "1")
+    monkeypatch.setattr(reflect, "verify", lambda *a, **k: Verdict(gap=False, error="verify_call_failed"))
+    r = run_problem_multi_turn(_ScriptedBackend([]), _one_turn_problem())
+    assert r.repair_turns == []
+
+
+def test_repair_stays_on_same_tool_surface(monkeypatch):
+    """The repair re-prompt must use the give-up turn's exposed surface — a held-out
+    fn stays hidden, and every generation chat in the turn sees an identical surface."""
+    monkeypatch.setenv("LUXE_REFLECT", "1")
+    monkeypatch.setattr(reflect, "verify", lambda *a, **k: Verdict(gap=True))
+    p = _one_turn_problem()
+    full = sorted(td.name for td in build_tool_surface(p["involved_classes"], p["initial_config"])[0])
+    held = next(n for n in full if n != "cd")
+    p["missed_function"] = {"1": [held]}  # revealed at turn 1 → hidden at turn 0
+
+    class _Rec:
+        def __init__(self): self.surfaces: list[list[str]] = []
+        def chat(self, **kw) -> ChatResponse:
+            self.surfaces.append([t["function"]["name"] for t in (kw.get("tools") or [])])
+            # call #2 is the repair re-prompt → emit one real call; else empty.
+            return _cd_call() if len(self.surfaces) == 2 else ChatResponse(
+                text="", tool_calls=[], timing=GenerationTiming())
+
+    rec = _Rec()
+    r = run_problem_multi_turn(rec, p)
+    assert r.repair_turns == [0]
+    assert all(held not in names for names in rec.surfaces)          # held fn never exposed
+    assert len({tuple(s) for s in rec.surfaces}) == 1               # identical surface across the turn
+
+
 @pytest.mark.skipif(not _HAS_MISS, reason="miss_func/miss_param data not vendored")
 def test_grade_accepts_miss_categories_gt_as_pred():
     """The vendored checker accepts the new test_category strings and grades GT-as-pred

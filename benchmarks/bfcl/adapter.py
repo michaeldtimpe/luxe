@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from luxe.agents import reflect as R
 from luxe.backend import Backend, ChatResponse
 from luxe.config import RoleConfig
 from luxe.spec import Requirement, Spec
@@ -270,6 +271,11 @@ class BfclInvocationResult:
     # for generation-side auditability (the grader is exposure-agnostic, so this is the
     # only record of the per-turn surface schedule).
     exposed_tool_names: list[list[str]] = field(default_factory=list)
+    # Multi-turn only: turn indices where the opt-in reflect→repair stage fired
+    # (LUXE_REFLECT=1). Empty when the flag is off (byte-identical) or no give-up was
+    # both detected (give-up signature) AND confirmed (verify gap). Lets the A/B
+    # attribute fail→pass flips to repair.
+    repair_turns: list[int] = field(default_factory=list)
 
 
 def run_problem_raw(
@@ -377,6 +383,19 @@ def run_problem_agent(
 _MAX_STEPS_PER_TURN = 15
 _MAX_CALLS_PER_PROBLEM = 50
 
+
+def _is_giveup_turn(turn_steps: list[list[str]]) -> bool:
+    """True iff the turn emitted ZERO tool calls (the empty_turn give-up signature).
+
+    This is the cheap structural pre-gate for the Phase 2 reflect→repair stage: it
+    targets the give-up failure mass (the model produced no actions for the turn) while
+    SKIPPING the verifier's reporting-gap false-gaps, which by definition have a
+    non-empty action set. ("near-empty/malformed" turns collapse to zero real calls —
+    prose-only give-ups and unparseable output both record no call-strings — so the
+    zero-call test captures them and keeps the false-gap skip clean.)
+    """
+    return not any(step for step in turn_steps)
+
 # Per-involved-class generation guidance (OPT-IN via LUXE_MT_CLASS_GUIDANCE=1; default
 # OFF → byte-identical to the clean baseline). SCOPED: appended only when the named
 # class is in a problem's involved_classes, so problems without that class are
@@ -468,6 +487,7 @@ def run_problem_multi_turn(
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     decoded_turns: list[list[list[str]]] = []
     exposed_tool_names: list[list[str]] = []
+    repair_turns: list[int] = []
     flat_calls: list[tuple[str, dict[str, Any]]] = []
     prompt_tokens = 0
     completion_tokens = 0
@@ -475,6 +495,66 @@ def run_problem_multi_turn(
     seen_payloads: set[str] = set()
     error = ""
 
+    def _drive_turn(openai_tools: list | None, turn_idx: int) -> list[list[str]]:
+        """One pass of the inner step loop: chat → execute → record, ≤ step/call caps.
+        Mutates the shared transcript + counters. Used for both the initial turn AND
+        the Phase 2 repair re-prompt (so they share execution + cap semantics exactly).
+        """
+        nonlocal prompt_tokens, completion_tokens, total_calls
+        turn_steps: list[list[str]] = []
+        for step in range(_MAX_STEPS_PER_TURN):
+            resp = backend.chat(
+                messages=messages, tools=openai_tools,
+                max_tokens=max_tokens, temperature=temperature, num_ctx=num_ctx,
+            )
+            prompt_tokens += resp.timing.prompt_tokens
+            completion_tokens += resp.timing.completion_tokens
+
+            if not resp.tool_calls:
+                turn_steps.append([])  # no-op step → turn done (keeps alignment)
+                if resp.text:
+                    messages.append({"role": "assistant", "content": resp.text})
+                break
+
+            # Mirror loop.py's assistant-message shape verbatim (id + JSON args).
+            messages.append({
+                "role": "assistant", "content": resp.text or "",
+                "tool_calls": [
+                    {"id": tc.id or f"call_{turn_idx}_{step}_{i}", "type": "function",
+                     "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
+                    for i, tc in enumerate(resp.tool_calls)
+                ],
+            })
+            payload_key = json.dumps(
+                [(tc.name, tc.arguments) for tc in resp.tool_calls], sort_keys=True,
+            )
+
+            step_calls: list[str] = []
+            for i, tc in enumerate(resp.tool_calls):
+                try:
+                    executed = dispatch_tool(tc.name, tc.arguments, tool_fns)
+                    content = executed.error or executed.result
+                except Exception as e:  # noqa: BLE001 — never panic mid-sequence
+                    content = f"{type(e).__name__}: {e}"
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id or f"call_{turn_idx}_{step}_{i}",
+                    "name": tc.name, "content": content,
+                })
+                step_calls.append(to_call_string(tc.name, tc.arguments))
+                flat_calls.append((tc.name, tc.arguments))
+                total_calls += 1
+
+            turn_steps.append(step_calls)
+
+            if payload_key in seen_payloads:
+                break  # repeated identical tool_call payload → cycle, end turn
+            seen_payloads.add(payload_key)
+            if total_calls >= _MAX_CALLS_PER_PROBLEM:
+                break
+        return turn_steps
+
+    reflect_on = R.reflect_enabled()
     try:
         for turn_idx, turn in enumerate(turns):
             turn_msgs = turn if isinstance(turn, list) else [turn]
@@ -491,59 +571,29 @@ def run_problem_multi_turn(
             openai_tools = [oa for nm, oa in openai_tools_full if nm not in hidden] or None
             exposed_tool_names.append(turn_tool_names)
 
-            turn_steps: list[list[str]] = []
-            for step in range(_MAX_STEPS_PER_TURN):
-                resp = backend.chat(
-                    messages=messages, tools=openai_tools,
-                    max_tokens=max_tokens, temperature=temperature, num_ctx=num_ctx,
-                )
-                prompt_tokens += resp.timing.prompt_tokens
-                completion_tokens += resp.timing.completion_tokens
-
-                if not resp.tool_calls:
-                    turn_steps.append([])  # no-op step → turn done (keeps alignment)
-                    if resp.text:
-                        messages.append({"role": "assistant", "content": resp.text})
-                    break
-
-                # Mirror loop.py's assistant-message shape verbatim (id + JSON args).
-                messages.append({
-                    "role": "assistant", "content": resp.text or "",
-                    "tool_calls": [
-                        {"id": tc.id or f"call_{turn_idx}_{step}_{i}", "type": "function",
-                         "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
-                        for i, tc in enumerate(resp.tool_calls)
-                    ],
-                })
-                payload_key = json.dumps(
-                    [(tc.name, tc.arguments) for tc in resp.tool_calls], sort_keys=True,
-                )
-
-                step_calls: list[str] = []
-                for i, tc in enumerate(resp.tool_calls):
-                    try:
-                        executed = dispatch_tool(tc.name, tc.arguments, tool_fns)
-                        content = executed.error or executed.result
-                    except Exception as e:  # noqa: BLE001 — never panic mid-sequence
-                        content = f"{type(e).__name__}: {e}"
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id or f"call_{turn_idx}_{step}_{i}",
-                        "name": tc.name, "content": content,
-                    })
-                    step_calls.append(to_call_string(tc.name, tc.arguments))
-                    flat_calls.append((tc.name, tc.arguments))
-                    total_calls += 1
-
-                turn_steps.append(step_calls)
-
-                if payload_key in seen_payloads:
-                    break  # repeated identical tool_call payload → cycle, end turn
-                seen_payloads.add(payload_key)
-                if total_calls >= _MAX_CALLS_PER_PROBLEM:
-                    break
-
+            turn_steps = _drive_turn(openai_tools, turn_idx)
             decoded_turns.append(turn_steps)
+
+            # --- Phase 2 reflect→repair (OPT-IN via LUXE_REFLECT; default-off → none of
+            # this runs and generation is byte-identical). Two-gate fire: a structural
+            # give-up signature (zero-call turn) gates the EXPENSIVE verify call (which
+            # also skips the verifier's reporting-gap false-gaps — they have non-empty
+            # actions), then verify must confirm a functional gap. On fire: ONE corrective
+            # re-prompt over the SAME exposed surface, hard stop (no re-verify, no loop).
+            if (reflect_on and openai_tools
+                    and total_calls < _MAX_CALLS_PER_PROBLEM
+                    and _is_giveup_turn(turn_steps)):
+                task_v, out_v = R.multi_turn_verify_context(messages, decoded_turns)
+                verdict = R.verify(backend, driver="multi_turn",
+                                   task=task_v, output=out_v, num_ctx=num_ctx)
+                if verdict.ok and verdict.gap:
+                    messages.append({
+                        "role": "user", "content": R.repair_nudge(verdict),
+                        "_luxe_repair": True,
+                    })
+                    decoded_turns[-1].extend(_drive_turn(openai_tools, turn_idx))
+                    repair_turns.append(turn_idx)
+
             if total_calls >= _MAX_CALLS_PER_PROBLEM:
                 break
     except Exception as e:  # noqa: BLE001
@@ -559,4 +609,5 @@ def run_problem_multi_turn(
         decoded_turns=decoded_turns,
         transcript=messages,
         exposed_tool_names=exposed_tool_names,
+        repair_turns=repair_turns,
     )
