@@ -8,16 +8,18 @@ hardest):
 
 | category | baseline | host | num_ctx | artifacts |
 |---|---|---|---|---|
-| `multi_turn_base` | **63.0%** (126/200) | M1 | 32768 | `acceptance/bfcl/multi_turn_base/rep_{1,2,3}/` (M1; ⚠ pre-excluded_function-fix, see caveat) |
+| `multi_turn_base` | **63.5%** (127/200) | M5 | 32768 | `acceptance/bfcl/multi_turn_base/m5_faithful_rep_1/` (faithful; supersedes M1 63.0%/126) |
 | `multi_turn_long_context` | **57.5%** (115/200) | M5 | 131072 | `acceptance/bfcl/multi_turn_long_context/m5_faithful_rep_1/` |
 | `multi_turn_miss_func` | **50.0%** (100/200) | M5 | 32768 | `acceptance/bfcl/multi_turn_miss_func/m5_rep_1/` |
 | `multi_turn_miss_param` | **45.5%** (91/200) | M5 | 32768 | `acceptance/bfcl/multi_turn_miss_param/m5_rep_1/` |
 
-All M5 runs: **0 overflows, 0 errors, 200/200 graded**. miss_func: wall 6650s, avg 33.2s, failure modes
-55 instance_state_mismatch / 29 empty_turn / 16 execution_response_mismatch. miss_param: wall 5287s, avg
-26.4s, 65 instance_state_mismatch / 29 empty_turn / 15 execution_response_mismatch. **The miss_*
-categories show ~4× the `empty_turn` rate of base/long_context (29 vs ~8)** — the model gives up more
-often when a needed tool/param is withheld (the intended challenge). See
+All M5 runs: **0 overflows, 0 errors, 200/200 graded**. base (M5 faithful): 127/200, wall 4056s, avg
+20.3s, 47 instance_state_mismatch / 17 execution_response_mismatch / 9 empty_turn. miss_func: wall 6650s,
+avg 33.2s, failure modes 55 instance_state_mismatch / 29 empty_turn / 16 execution_response_mismatch.
+miss_param: wall 5287s, avg 26.4s, 65 instance_state_mismatch / 29 empty_turn / 15
+execution_response_mismatch. **The miss_* categories show ~4× the `empty_turn` rate of base/long_context
+(29 vs ~8)** — the model gives up more often when a needed tool/param is withheld (the intended
+challenge). See
 [[project_bfcl_multi_turn_miss_baselines]] and [[project_bfcl_multi_turn_long_context_baseline]].
 
 **Mechanic (shipped `4b5d462`):** `run_problem_multi_turn` now derives the exposed tool surface PER TURN
@@ -38,10 +40,11 @@ exposed (upstream — and the GT — exclude them; base GT never calls them). Th
 Impact, fully characterized: **long_context dropped 58.5%→57.5% — exactly 2 deterministic flips
 (`_1`, `_40`, both True→False), both within the 18, 0 flips outside (determinism confirmed)**. So the old
 M5 long_context 58.5% (`m5_rep_1/`) was inflated by 2; the faithful number is **57.5%**
-(`m5_faithful_rep_1/`). **`multi_turn_base` 63.0% is the M1 number and still carries this gap** (no M5
-base run exists; per the in-the-loop call, base was NOT re-measured — re-run on M5 with the fix if a
-clean base number is ever needed; blast radius likely similarly tiny). Lesson recorded in `lessons.md`
-2026-05-23.
+(`m5_faithful_rep_1/`). **`multi_turn_base` was then re-measured faithfully on M5 = 63.5% (127/200)**
+(`m5_faithful_rep_1/`), superseding the M1 63.0% (126/200). The +1 cannot be cleanly attributed to the
+fix alone — no M5-*unfaithful* base run exists to diff against, so it conflates the excluded_function fix
+with any M1→M5 substrate difference — but it confirms the impact is tiny (consistent with long_context's
+2-problem move). Lesson recorded in `lessons.md` 2026-05-23.
 
 **Reproduce** (resume-safe; `.venv/bin/python` on this host — bare `python3` is Homebrew 3.14 w/o luxe):
 ```
@@ -56,14 +59,16 @@ Setup on a fresh M5 clone: `pip install -e ".[dev,bfcl]"` (incl. **mpmath**; do 
 `bfcl_eval` — breaks `src/luxe/symbols.py`). `bash scripts/fetch_bfcl_data.sh` (now fetches all 4
 multi_turn categories + a blocking GT pre-flight).
 
-## ⇒ NEXT SESSION: multi_turn sweep is CLOSED — pick the next axis
+## ⇒ NEXT SESSION: multi_turn sweep is CLOSED (all of BFCL v4) — pick the next axis
 
-The 4 standalone multi_turn categories are done. Genuinely-remaining multi_turn work is the **`composite`
-sub-category** (combines miss_func + miss_param + long_context perturbations in one problem — the
-hardest), if a fuller multi_turn picture is wanted; the per-turn-withholding + long_context machinery is
-now all in place, so composite is mostly a wiring + audit task. Otherwise this is a good point for a
-**fresh user conversation** on the next value axis (the post-v1.11 grounding concluded the SWE-bench
-loop/prompt levers are near their ceiling — see "What to do next session" further below). Part A (scoped
+**BFCL v4 has exactly 4 multi_turn categories** (verified 2026-05-23 against the upstream data dir:
+`base`, `long_context`, `miss_func`, `miss_param`) — **all now baselined**. There is **no `composite`
+data file in v4** (it was a v3 category that v4 dropped; the vendored checker still *references*
+`"composite"` at `multi_turn_checker.py:49/66` because it was copied from an older `bfcl_eval`, but no v4
+dataset exists to run it). So the multi_turn capability axis is **genuinely 100% complete** — there is no
+remaining standalone multi_turn category to baseline. This is a clean point for a **fresh user
+conversation** on the next value axis (the post-v1.11 grounding concluded the SWE-bench loop/prompt
+levers are near their ceiling — see "What to do next session" further below). Part A (scoped
 GorillaFileSystem guidance) remains a non-Pareto wash, kept clean (opt-in `LUXE_MT_CLASS_GUIDANCE`,
 default off). Full multi_turn detail below.
 
