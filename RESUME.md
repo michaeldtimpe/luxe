@@ -1,6 +1,6 @@
 # luxe — session resume document
 
-## ⇒ ACTIVE (2026-05-24): reflection/verify cycle — Phase 1 gate PASSED, NEXT = Phase 2 repair
+## ⇒ ACTIVE (2026-05-24): reflection/verify cycle — Phase 2 repair = HOLD (miss_func +6 net, but non-Pareto + kill-warning); CYCLE CLOSED
 
 **First feature-adding cycle since the multi_turn sweep closed.** Goal = move benchmark scores;
 **all invariants firm** (single-champion, mono-only, temp=0/reproducibility, vertical+oMLX-only).
@@ -50,18 +50,58 @@ work here (the catch-22 didn't bite) — a real positive result. Nuance: the 10 
 state-checker ignores), not pedantry — so the pass sample isn't fully flawless w.r.t. the user's ask.
 Detection misses (4): `miss_func_33` (wrong recipient), `_142` (partial), `_122` (malformed→fooled), `_93`.
 
-**⇒ NEXT (user chose: Proceed to Phase 2 repair):**
-1. Build the **gated verify→repair** stage. Fire repair on **verify-flag AND a low-action give-up
-   signature** (empty/near-empty/malformed turn) — this targets give-ups while SKIPPING the
-   reporting-gap false-gaps (which have non-empty actions). Respect agents.sdd bias-not-lock + the
-   locked repair budget (1 re-prompt, no new tools, hard stop). Wire into `run_problem_multi_turn`
-   (benchmarks/bfcl/adapter.py + run.py), opt-in `LUXE_REFLECT`, default-off byte-identical.
-2. **Full-generation A/B on miss_func** (clean vs reflect-on): `scripts/ab_multi_turn_miss.py` (TO
-   WRITE — fork of the GFS `ab_multi_turn.py`). Ship gate: net fail2pass>0, **zero non-Pareto
-   regression** (no pass→fail on a non-empty-turn problem), watch `empty_turn→state_mismatch`
-   migration as a HARD kill-warning. miss_func wall ≈ 6650s/arm; miss_param ≈ 5287s (low-value here).
-3. Expected upside is bounded (miss_func give-ups only, ~single-digit pp); miss_param won't move.
-4. Tasks still open: #3 (live verify wiring — folds into Phase 2), #6 (Track 0 forge A/B, not started).
+**PHASE 2 repair — BUILT + COMMITTED (`5916478`), default-off byte-identical; full A/B DONE → HOLD.**
+The gated verify→repair stage is wired into `run_problem_multi_turn` (opt-in `LUXE_REFLECT`):
+- **Two-gate fire** — `adapter._is_giveup_turn` (a ZERO-call turn = the empty_turn give-up
+  signature) gates the expensive verify call AND, by construction, skips the verifier's
+  reporting-gap false-gaps (they have non-empty action sets); verify must THEN return `gap=true`.
+- **Budget (locked):** ONE `_luxe_repair`-marked corrective nudge (`reflect.repair_nudge`,
+  generic, consumes the verdict's deficiencies, no benchmark semantics) + one bounded re-prompt
+  over the SAME exposed tool surface, appended to the same turn (`decoded_turns[-1]`), hard stop
+  (no re-verify, no loop). `repair_turns` records where it fired. `agents.sdd` Phase 2 invariants added.
+- `scripts/ab_multi_turn_miss.py` is the ship-gate instrument; **+10 tests; full suite 965 pass.**
+- **Byte-identity validated on REAL problems:** refactored off-path reproduces `m5_rep_1` exactly
+  for miss_func_7/9/15 (empty_turn, 0 fire). Host = **M5 Max (Mac17,6, 128 GB)** = the m5_rep_1
+  baseline host → temp=0 determinism means **`m5_rep_1` is a valid clean arm** (only the reflect
+  arm is being run).
+
+**⇒ PHASE 2 A/B VERDICT = HOLD (keep `LUXE_REFLECT` opt-in; ship gate FAILED on 2 of 3 criteria).**
+Reflect arm `acceptance/bfcl/multi_turn_miss_func/reflect_arm/` (200/200, 0 errors, 9623s); clean =
+`m5_rep_1` (reused, M5/temp-0 valid). `scripts/ab_multi_turn_miss.py`:
+
+| metric | result |
+|---|---|
+| overall pass | clean **50.0% (100)** → reflect **53.0% (106)**, Δ **+6** |
+| flips | **8 fail→pass / 2 pass→fail** (net +6) |
+| repair fired | **66/200** |
+| no-op leaks (non-fired ≠ clean) | **0** ✓ (repair is a clean no-op off-target) |
+| **empty_turn→mismatch migrations** | **16** ✗ (the HARD kill-warning) |
+
+The **+6 score is real** but it FAILS the pre-registered Pareto+safety gate: **2 pass→fail regressions**
+AND **16 give-ups turned into WRONG actions**. Repair makes the model act-when-uncertain, and ungrounded
+it is wrong far more than right: **8 fixes vs 18 made-worse (16 migrations + 2 regressions)**. Both
+score regressions are **Phase-1 false-gaps (16.7%) materializing as damage** — verify false-flagged a
+*deliberately-empty* turn in a passing problem, and the "don't stop until it's done" nudge induced
+over-action/runaway: `_112` spiraled into 40+ `get_symbol_by_name` calls (hit the 50-call cap, never
+advanced → empty_turn); `_184` over-booked on turn 0 → instance_state_mismatch. The 8 genuine fixes are
+real give-up→complete conversions (`_7/_39/_94/_100/_146/_154/_164/_194`). Smoke→full consistency was
+exact (`_7` fix, `_9`/`_15` migrate). **Negative datapoint BANKED** (the plan treats it as first-class).
+
+**Why HOLD despite +3pp:** the gain is bought by encouraging a behavior (ungrounded action) that won't
+generalize and is *less safe* than a give-up (an empty turn is a safe failure; a wrong action is not).
+Same shape as the Part-A GFS-guidance non-Pareto wash — a score nudge with deterministic regressions
+stays opt-in. `LUXE_REFLECT` remains off by default; the stage + A/B harness stay in-tree, documented.
+
+**⇒ NEXT (cycle effectively closed; options, none precommitted):**
+1. **Optional refinement (would need a re-bench):** the 2 regressions are budget/false-gap-driven — a
+   much tighter repair budget (≤2–3 steps, not the full 15) would likely kill the `_112` runaway and may
+   recover both regressions; tightening the give-up gate to skip turns the *clean* model deliberately
+   left empty would cut false-fires. **Neither touches the 16 migrations** — those are the core limit
+   (self-repair without fresh grounding acts wrong), so even a Pareto-clean refinement is a *small* win.
+2. Borderline label spot-check (14 non-`clear` labels) — low-value now (gate cleared comfortably; the
+   action moved to repair quality). On-disk only.
+3. Untouched cycle tracks: Track 0 (forge-vs-luxe loop A/B), Track 2 (tiered compaction). Or pick a new
+   value axis (multi_turn sweep is closed; SWE-bench loop near ceiling per prior grounding).
 
 **Reproduce:** Phase 0 `.venv/bin/python -m scripts.analyze_empty_turn_convertible`; relabel dump
 `.venv/bin/python -m scripts.dump_empty_turn_for_labeling`; Phase 1 `.venv/bin/python -m
