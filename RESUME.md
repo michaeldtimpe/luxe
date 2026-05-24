@@ -1,5 +1,75 @@
 # luxe — session resume document
 
+## ⇒ ACTIVE (2026-05-24): reflection/verify cycle — Phase 1 gate PASSED, NEXT = Phase 2 repair
+
+**First feature-adding cycle since the multi_turn sweep closed.** Goal = move benchmark scores;
+**all invariants firm** (single-champion, mono-only, temp=0/reproducibility, vertical+oMLX-only).
+Two external research reports (forge, Hermes) were mapped against the code + `.sdd` and mostly cut
+(invariant-conflicts / out-of-scope / already-done). The one novel+compatible idea: a **same-model
+verify/reflect pass** targeting the residual "right file, wrong/no change" + premature give-up mass.
+Plan (approved): `~/.claude/plans/glistening-squishing-alpaca.md`.
+
+**Cycle shape (locked pre-registrations):**
+- **Track 1 (main): reflect pass — verify-only first, then repair.** Gate: per-axis detection
+  (miss_func ≥40%, miss_param moot) AND false-gap ≤20%; fire policy ≤5%→always-on / 5–20%→gated /
+  >20%→kill. Repair budget: 1 re-prompt/turn (mt), 1 loop re-open ≤3 steps (swe), **no new tools**,
+  hard stop. Verifier is **critique-only / functional-blocker-only / benchmark-generic** (anti-overfit).
+- **Track 0 (parallel, NOT STARTED): forge-vs-luxe loop A/B** — scratch `~/Downloads/forge-luxe-research/`,
+  48h timebox, decisive-win = ≥3 more resolves n=14 AND ≥5pp n=75 AND portability (≤1.5× inflation).
+  Gates the SWE-bench half only (multi_turn doesn't use run_agent's loop).
+- **Track 2 (conditional, NOT STARTED): tiered compaction** — auto-cut unless long_context elision
+  fires + drops needed context / attention-dilution shown. (Evidence so far: 0 overflows at 131072 → likely cut.)
+- **CUT:** Anthropic eval-judge.
+
+**WHAT'S DONE (this session, all on `main`; tree committed):**
+- `src/luxe/agents/reflect.py` — the verify primitive: whole-conversation multi_turn framing
+  (robust to message-less reveal turns; abstains on alt-completions), critique-only prompts,
+  `gap` derived from ≥1 substantiated **functional-blocker** deficiency, **last-JSON** parser +
+  high token budget (the champion is a heavy reasoner — see lessons), `response_format` json nudge.
+- `src/luxe/backend.py` — minimal `response_format` param (disable-equivalent).
+- `src/luxe/agents/agents.sdd` — reflect/verify surface contract (opt-in `LUXE_REFLECT`, disable-equiv,
+  verify-only non-perturbing, functional-blocker gate, no benchmark-semantic prompts).
+- `tests/test_reflect.py` + `tests/test_prompts.py` reflect tests; **full suite 955 pass**.
+- `scripts/analyze_empty_turn_convertible.py` (Phase 0), `scripts/dump_empty_turn_for_labeling.py`
+  (labeling dump), `scripts/measure_reflect_phase1.py` (label-grounded gate, per-pid verdicts saved).
+
+**PHASE 0 grounding (honest, supersedes the Plan-agent's "41 convertible"):** hand-labeled all 58
+empty_turn failures (the `over_acted` structural heuristic is unreliable). **miss_func: ~22 unmet
+(repairable give-ups) / 7 met; miss_param: ~4 unmet / ~25 met.** miss_param empty_turns are MOSTLY
+the model competently resolving the ambiguous param and completing the task — the state-checker fails
+it on a turn-path technicality (NOT give-ups, NOT repairable). Dominant miss_func mode: model claims a
+*withheld-then-revealed* tool "isn't available" and gives up ("tool-unavailable anchoring"). Labels:
+`acceptance/bfcl/reflect_phase0/giveup_labels.json` (**gitignored — on-disk only, same-machine**;
+~9 `borderline` flags PENDING USER SPOT-CHECK; recreate via the dump script + re-label if lost).
+
+**PHASE 1 verify-only gate = PASS** (`acceptance/bfcl/reflect_phase1/verify_only_result.json`,
+118 calls, 0 errors): **miss_func detection 81.8% (18/22)**, **false-gap 16.7% (10/60)** → **fire
+policy = gated-only**. Headline: same-model temp=0 self-verification CAN separate give-ups from correct
+work here (the catch-22 didn't bite) — a real positive result. Nuance: the 10 false-gaps are mostly
+**verifier-vs-state-checker divergence** (the verifier flags "confirm/convey/report" sub-asks the
+state-checker ignores), not pedantry — so the pass sample isn't fully flawless w.r.t. the user's ask.
+Detection misses (4): `miss_func_33` (wrong recipient), `_142` (partial), `_122` (malformed→fooled), `_93`.
+
+**⇒ NEXT (user chose: Proceed to Phase 2 repair):**
+1. Build the **gated verify→repair** stage. Fire repair on **verify-flag AND a low-action give-up
+   signature** (empty/near-empty/malformed turn) — this targets give-ups while SKIPPING the
+   reporting-gap false-gaps (which have non-empty actions). Respect agents.sdd bias-not-lock + the
+   locked repair budget (1 re-prompt, no new tools, hard stop). Wire into `run_problem_multi_turn`
+   (benchmarks/bfcl/adapter.py + run.py), opt-in `LUXE_REFLECT`, default-off byte-identical.
+2. **Full-generation A/B on miss_func** (clean vs reflect-on): `scripts/ab_multi_turn_miss.py` (TO
+   WRITE — fork of the GFS `ab_multi_turn.py`). Ship gate: net fail2pass>0, **zero non-Pareto
+   regression** (no pass→fail on a non-empty-turn problem), watch `empty_turn→state_mismatch`
+   migration as a HARD kill-warning. miss_func wall ≈ 6650s/arm; miss_param ≈ 5287s (low-value here).
+3. Expected upside is bounded (miss_func give-ups only, ~single-digit pp); miss_param won't move.
+4. Tasks still open: #3 (live verify wiring — folds into Phase 2), #6 (Track 0 forge A/B, not started).
+
+**Reproduce:** Phase 0 `.venv/bin/python -m scripts.analyze_empty_turn_convertible`; relabel dump
+`.venv/bin/python -m scripts.dump_empty_turn_for_labeling`; Phase 1 `.venv/bin/python -m
+scripts.measure_reflect_phase1` (needs oMLX up; ~1hr; `--smoke N` for a quick check). oMLX on
+`localhost:8000`, champion loaded as `Qwen3.6-35B-A3B-6bit` (lowercase alias resolves). `.venv/bin/python`
+on this host. **CAVEAT:** the verifier needs the high token budget + last-JSON parser — json-mode /
+`/no_think` / prefill do NOT suppress this champion's reasoning (lessons.md 2026-05-24).
+
 ## ✅ DONE (2026-05-23, M5 Max 128 GB): BFCL multi_turn SWEEP COMPLETE — all 4 categories baselined
 
 **The multi_turn category sweep is closed.** All four categories now have a faithful champion

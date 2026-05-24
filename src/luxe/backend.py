@@ -170,6 +170,7 @@ class Backend:
         temperature: float = 0.2,
         num_ctx: int | None = None,
         repeat_penalty: float | None = None,
+        response_format: dict[str, Any] | None = None,
         on_retry: Callable[[RetryDecision, int], None] | None = None,
     ) -> ChatResponse:
         body: dict[str, Any] = {
@@ -181,6 +182,11 @@ class Backend:
         }
         if tools:
             body["tools"] = tools
+        if response_format is not None:
+            # Constrained decoding (e.g. {"type": "json_object"}). Suppresses the
+            # reasoning preamble for thinking models — load-bearing for the reflect
+            # verifier, which must emit a parseable verdict, not a CoT trace.
+            body["response_format"] = response_format
         if num_ctx is not None:
             body.setdefault("extra_body", {})["num_ctx"] = num_ctx
         if repeat_penalty is not None:

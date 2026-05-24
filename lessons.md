@@ -30,6 +30,25 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-05-24] reflect cycle Phase 0/1: heuristic over-counted, the champion reasons, verifier ≠ state-checker
+
+**What happened**: Building the verify/reflect pass (reflection cycle Track 1) surfaced four distinct surprises before any repair code was written.
+
+1. **The Plan-agent's grounding over-counted the convertible set 41 → 26 (hand-labeled).** A structural heuristic (`over_acted_pre_reveal`: model acted on a pre-reveal turn where GT expected nothing) was used to split genuine give-ups from "alt-completions". It mislabels in BOTH directions: it called `miss_func_100`/`_15` (real give-ups — "provide credentials", "this is confusing") *alt*, and over-credited miss_param. Hand-labeling all 58 empty_turn failures gave **miss_func ~22 unmet / 7 met; miss_param ~4 unmet / ~25 met**.
+2. **miss_param empty_turns are mostly the benchmark being stricter than reality.** In ~25/29, the model competently resolved the ambiguous parameter itself and completed the task; the state-based checker fails it only on a *turn-path technicality* (acted at turn k instead of the GT's turn k+1). These are NOT give-ups and a verify-repair pass legitimately cannot/should not touch them. The repairable signal is almost entirely in **miss_func** ("tool-unavailable anchoring": the model claims a withheld-then-revealed tool "isn't available" and gives up).
+3. **The champion is a heavy reasoner and resists structured output.** `response_format={"type":"json_object"}` is only weakly enforced by this oMLX/MLX build; `/no_think`, `chat_template_kwargs.enable_thinking=false`, and assistant-prefill all FAILED to suppress the CoT. The model reasons for hundreds–thousands of tokens, sometimes loops ("Proceeds. Done. Output."), and emits the JSON verdict mid-stream. Working fix: generous budget (max_tokens=3000) + extract the **LAST** balanced JSON object carrying the key (not the first — that catches a reasoning-draft or an embedded deficiency dict).
+4. **The verifier and the state-checker measure different things.** Phase 1 false-gap was 16.7% (10/60 objective passes), but inspection showed they're mostly not pedantry: the verifier flags "confirm/convey/report" sub-asks the state-checker ignores (state correct, user-facing report missing). So a state-checker "pass" is not fully flawless w.r.t. the user's full request.
+
+**Root cause**: (1)/(2) the give-up-vs-alt distinction is semantic, not structural — a model can act on one turn and still abandon the key ask. (3) reasoning models need the answer extracted from the tail, not coerced terse, on a server without grammar-constrained decoding. (4) state-based grading and request-satisfaction grading are genuinely different objectives.
+
+**Fix / takeaway**:
+- For detection metrics, **hand-label the ground truth** (agent reads verify-context: asks + actions + GT-at-failed-turn; user spot-checks ~25%). Don't trust a structural proxy for a semantic split. Labels: `acceptance/bfcl/reflect_phase0/giveup_labels.json`.
+- For structured output from a reasoning champion on this substrate: **budget for the CoT + last-JSON extraction**, don't fight the reasoning. (`reflect.py::_extract_json` takes the last object with the key.)
+- **Phase 1 GATE PASSED**: miss_func detection 81.8%, false-gap 16.7% → gated-only. Same-model temp=0 self-verification CAN separate give-ups from correct work here — contradicts the "self-verification is weak" prior for this failure class. Banked as a result regardless of Phase 2.
+- For Phase 2, gate the repair on **verify-flag AND a low-action give-up signature** so it targets give-ups and skips the reporting-gap false-gaps (which have non-empty action sets).
+
+**Affected files**: `src/luxe/agents/reflect.py` (new), `src/luxe/backend.py` (`response_format` param), `src/luxe/agents/agents.sdd` (reflect surface contract), `tests/{test_reflect,test_prompts}.py`, `scripts/{analyze_empty_turn_convertible,dump_empty_turn_for_labeling,measure_reflect_phase1}.py`. Full state: `RESUME.md` top section.
+
 ### [2026-05-17] Citation-grounding directive: same-day revert from prompt regression
 
 **What happened**: Mode C (line-number hallucination in final-report prose, `project_doc_config_three_modes.md`) had been deferred since v1.4. The Step 1 plan was a prompt-level fix: add a citation-grounding directive to `_BASELINE_SYSTEM` and `_HADS_SYSTEM` saying "Prefer exact line citations grounded in observed tool output. If you need to cite a line you haven't read, perform another `read_file` or `grep` call to confirm before citing. Only omit line numbers as a last resort — never invent them." The wording was tightened per code review to defend against citation-avoidance. Shipped, then a 3-rep nothing-doc-config A/B was run. Result: rep 1 emitted 0 citations (lint passed vacuously, 384s wall, no abort), rep 2 emitted 0 citations + ABORTED "Stuck in loop" at 143s, rep 3 produced no final report + ABORTED "Stuck in loop" at 459s. Historical v1.4.1 baseline on the same fixture was 10/10 PASS with no aborts. Same-day revert; lesson saved as `feedback_citation_grounding_caused_loop_and_avoidance.md`.
