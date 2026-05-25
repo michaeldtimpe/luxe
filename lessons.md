@@ -85,7 +85,7 @@ Each entry follows this structure:
 - **Smoke predicted the full run exactly** (`_7` fix, `_9`/`_15` migrate) — the n=3 live smoke before the ~3h run was worth it and would have justified a design rethink before spending the compute, had the user chosen.
 - Possible refinement if revisited (re-bench required): a much tighter repair budget (≤2–3 steps, not 15) to kill runaways + a give-up gate that skips turns the clean model deliberately left empty. Both target the 2 regressions; **neither touches the 16 migrations** (the core self-repair-without-grounding limit), so the ceiling on this lever is low.
 
-**Affected files**: `benchmarks/bfcl/adapter.py` (`_drive_turn`, `_is_giveup_turn`, gated repair, `repair_turns`), `src/luxe/agents/reflect.py` (`repair_nudge` + `_luxe_repair` filter), `benchmarks/bfcl/run.py`, `src/luxe/agents/agents.sdd` (Phase 2 invariants), `scripts/ab_multi_turn_miss.py`, `tests/{test_bfcl_multi_turn,test_reflect}.py` (+10; suite 965). Commit `5916478`. Result artifacts: `acceptance/bfcl/multi_turn_miss_func/reflect_arm/` (gitignored). Full state: `RESUME.md` top section.
+**Affected files**: `benchmarks/bfcl/adapter.py` (`_drive_turn`, `_is_giveup_turn`, gated repair, `repair_turns`), `src/luxe/agents/reflect.py` (`repair_nudge` + `_luxe_repair` filter), `benchmarks/bfcl/run.py`, `src/luxe/agents/agents.sdd` (Phase 2 invariants), `scripts/ab_multi_turn_miss.py`, `tests/{test_bfcl_multi_turn,test_reflect}.py` (+10; suite 965). Commit `7c621c8`. Result artifacts: `acceptance/bfcl/multi_turn_miss_func/reflect_arm/` (gitignored). Full state: `RESUME.md` top section.
 
 ### [2026-05-17] Citation-grounding directive: same-day revert from prompt regression
 
