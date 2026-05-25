@@ -16,10 +16,15 @@ The pass sample is OBJECTIVE (state-checker passes only), frozen + fixed-seed +
 category-stratified (defends the false-gap threshold against sample drift). It is
 printed for the ~25% human spot-check the plan requires.
 
-Usage:
+Usage (online — needs oMLX up, one short verify completion per problem, ~100 calls):
     .venv/bin/python -m scripts.measure_reflect_phase1 [--smoke N] [--pass-per-cat 30]
         [--model qwen3.6-35b-a3b-6bit] [--base-url http://127.0.0.1:8000]
-Needs oMLX up (one short verify completion per problem; ~100 calls total).
+
+Usage (offline recompute — NO oMLX): reuse the frozen per-pid verdicts and recompute the
+gate against the CURRENT labels (e.g. after a borderline spot-check relabel):
+    .venv/bin/python -m scripts.measure_reflect_phase1 \\
+        --from-verdicts acceptance/bfcl/reflect_phase1/verify_only_result.json
+With labels unchanged this must reproduce the stored gate EXACTLY (0.818 / 0.167 / true).
 """
 
 from __future__ import annotations
@@ -70,6 +75,13 @@ def _cat_of(pid: str) -> str:
     return "multi_turn_miss_func" if "miss_func" in pid else "multi_turn_miss_param"
 
 
+def _eff_label(v: dict[str, Any]) -> str:
+    """Effective label: a spot-check `reviewed_label` overrides the original `label`,
+    preserving provenance (the original `label`/`confidence` stay intact in the JSON).
+    A no-op when no relabel is present → the online run stays behavior-identical."""
+    return v.get("reviewed_label") or v["label"]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", type=Path,
@@ -82,35 +94,65 @@ def main() -> int:
     ap.add_argument("--base-url", default="http://127.0.0.1:8000")
     ap.add_argument("--out", type=Path,
                     default=ROOT / "acceptance" / "bfcl" / "reflect_phase1" / "verify_only_result.json")
+    ap.add_argument("--from-verdicts", type=Path, default=None,
+                    help="OFFLINE recompute: load the per-pid 'verdicts' block from this "
+                         "verify_only_result.json and recompute detection/false-gap/gate "
+                         "against the CURRENT labels — no oMLX, no verify re-run. The "
+                         "canonical result file is NOT overwritten in this mode.")
     args = ap.parse_args()
 
     manifest = json.loads(args.manifest.read_text())
     labels = json.loads(args.labels.read_text())["labels"]
-    backend = Backend(model=args.model, base_url=args.base_url)
-    if not backend.health():
-        print(f"ERROR: oMLX not healthy at {args.base_url}. Start it, then re-run.")
-        return 2
 
-    # Cohorts grounded in the HAND LABELS (not the unreliable structural heuristic).
-    unmet = [(_cat_of(p), p) for p, v in labels.items() if v["label"] == "unmet"]
-    met = [(_cat_of(p), p) for p, v in labels.items() if v["label"] == "met"]
+    # Cohorts grounded in the HAND LABELS (effective label = reviewed_label or label, so a
+    # borderline spot-check relabel moves detection/met-abstain; the frozen pass sample is
+    # untouched → false-gap is computed on the same objective sample either way). The
+    # effective-label indirection is a no-op without a relabel, so the online run is
+    # behavior-identical to before.
+    unmet = [(_cat_of(p), p) for p, v in labels.items() if _eff_label(v) == "unmet"]
+    met = [(_cat_of(p), p) for p, v in labels.items() if _eff_label(v) == "met"]
     passes = _frozen_pass_sample(manifest, args.pass_per_cat)
 
-    print(f"Phase 1 verify-only — model={args.model}")
-    print(f"  cohorts (hand-labeled): unmet={len(unmet)} met={len(met)} pass_sample={len(passes)}")
-
-    # Verify EVERY problem once; verdicts are saved per-pid so detection/false-gap can be
-    # recomputed instantly against revised labels (a few are borderline, pending spot-check).
-    all_items = {pid: cat for cat, pid in (unmet + met + passes)}
-    if args.smoke:
-        all_items = dict(list(all_items.items())[: args.smoke * 3])
-    verdicts: dict[str, dict] = {}
-    for i, (pid, cat) in enumerate(all_items.items()):
-        v = _verify_record(backend, cat, pid)
-        verdicts[pid] = {"gap": v.gap, "ok": v.ok, "cat": cat,
-                         "specificity": [d.specificity for d in v.deficiencies]}
-        if (i + 1) % 15 == 0:
-            print(f"    verified {i+1}/{len(all_items)}", flush=True)
+    if args.from_verdicts is not None:
+        # OFFLINE recompute: skip Backend / health / the verify loop entirely and reuse the
+        # frozen per-pid verdicts. Everything downstream is the SAME metric code → a true
+        # mirror of the online run (no drift).
+        if not args.from_verdicts.is_file():
+            print(f"ERROR: --from-verdicts file not found: {args.from_verdicts}")
+            return 2
+        try:
+            verdicts = json.loads(args.from_verdicts.read_text())["verdicts"]
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"ERROR: {args.from_verdicts} has no usable 'verdicts' block "
+                  f"({type(e).__name__}: {e}).")
+            return 2
+        print(f"Phase 1 verify-only RECOMPUTE (offline) — verdicts ← {args.from_verdicts}")
+        print(f"  cohorts (effective labels): unmet={len(unmet)} met={len(met)} pass_sample={len(passes)}")
+        # Resiliency: a cohort pid missing from the saved verdicts is WARNed and excluded
+        # from its denominator by _rate (the `p in verdicts` filter) — never a KeyError.
+        for _c, p in (unmet + met + passes):
+            if p not in verdicts:
+                print(f"  WARN: no saved verdict for {p} (excluded from its cohort denominator)")
+    else:
+        # ONLINE path: one short verify completion per problem (needs oMLX).
+        backend = Backend(model=args.model, base_url=args.base_url)
+        if not backend.health():
+            print(f"ERROR: oMLX not healthy at {args.base_url}. Start it, then re-run.")
+            return 2
+        print(f"Phase 1 verify-only — model={args.model}")
+        print(f"  cohorts (hand-labeled): unmet={len(unmet)} met={len(met)} pass_sample={len(passes)}")
+        # Verify EVERY problem once; verdicts are saved per-pid so detection/false-gap can be
+        # recomputed instantly (offline, --from-verdicts) against revised labels.
+        all_items = {pid: cat for cat, pid in (unmet + met + passes)}
+        if args.smoke:
+            all_items = dict(list(all_items.items())[: args.smoke * 3])
+        verdicts: dict[str, dict] = {}
+        for i, (pid, cat) in enumerate(all_items.items()):
+            v = _verify_record(backend, cat, pid)
+            verdicts[pid] = {"gap": v.gap, "ok": v.ok, "cat": cat,
+                             "specificity": [d.specificity for d in v.deficiencies]}
+            if (i + 1) % 15 == 0:
+                print(f"    verified {i+1}/{len(all_items)}", flush=True)
 
     def _rate(items: list[tuple[str, str]], axis: str | None = None) -> tuple[int, int, int]:
         sub = [(c, p) for c, p in items if p in verdicts and (axis is None or c == axis)]
@@ -144,6 +186,12 @@ def main() -> int:
     print(f"miss_func detection={det_func:.1%} [floor 40%]  false_gap={false_gap:.1%} [ceiling 20%]")
     print(f"GATE: {'PASS → proceed to Phase 2' if gate else 'FAIL → KILL + bank negative'}   FIRE: {fire}")
     print("=" * 66)
+
+    if args.from_verdicts is not None:
+        # Recompute is print-only — it must never clobber the frozen verdicts/canonical
+        # result. Redirect stdout if you want to capture the recomputed gate.
+        print("\n(recompute only — frozen verdicts + canonical result left untouched)")
+        return 0
 
     result = {"model": args.model, "seed": _SEED, "smoke": args.smoke,
               "metrics": metrics, "miss_func_detection": det_func,

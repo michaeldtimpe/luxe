@@ -37,8 +37,11 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   made on a turn that already acted.
 - **locked repair budget**: exactly ONE corrective re-prompt per flagged turn (a single
   `_luxe_repair`-marked user nudge + one bounded step pass over the SAME exposed tool
-  surface). Hard stop: no re-verify, no second repair, no loop. The per-turn step cap +
-  per-problem call cap still bound the re-prompt (`_MAX_STEPS_PER_TURN`/`_MAX_CALLS_PER_PROBLEM`).
+  surface). Hard stop: no re-verify, no second repair, no loop. The re-prompt's step loop is
+  capped at `_REPAIR_MAX_STEPS` (=4) — TIGHTER than the initial turn's `_MAX_STEPS_PER_TURN`
+  (=15) — to bound the over-action/runaway mode (the Phase-2 `miss_func_112` 6-step/51-call
+  spiral); `_MAX_CALLS_PER_PROBLEM` still backstops the whole problem. The cap is
+  artifact-scoped (covers every observed Phase-2 repair in the A/B archive), not re-benched.
 - **same tool surface**: the repair re-prompt is driven with the turn's already-computed
   `openai_tools` (the per-turn exposed surface) — repair may NOT widen the surface or
   invoke tools outside the original trajectory's surface (pre-registered budget).

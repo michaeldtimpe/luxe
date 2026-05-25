@@ -103,6 +103,14 @@ stays opt-in. `LUXE_REFLECT` remains off by default; the stage + A/B harness sta
 3. Untouched cycle tracks: Track 0 (forge-vs-luxe loop A/B), Track 2 (tiered compaction). Or pick a new
    value axis (multi_turn sweep is closed; SWE-bench loop near ceiling per prior grounding).
 
+**⇒ SAVED PLAN for options 1+2 (approved-pending, NOT STARTED): `~/.claude/plans/noble-squishing-kahn.md`.**
+Two **hygiene/closure** follow-ups — **NO re-bench, HOLD stands, no ship-status change**: (1) a tight
+repair-budget cap `_REPAIR_MAX_STEPS=4` in `benchmarks/bfcl/adapter.py` (artifact-scoped: covers all 8
+observed Phase-2 fixes, bounds the `_112` runaway) + agents.sdd + a cap test; (2) borderline give-up label
+spot-check (`--only-borderline` dump) + instant offline gate recompute (`measure_reflect_phase1
+--from-verdicts`) from the frozen per-pid verdicts, reproducing 0.818/0.167/true before any relabel. The
+plan opens with a self-contained RESUME STATUS header — a fresh session can pick it up directly.
+
 **Reproduce:** Phase 0 `.venv/bin/python -m scripts.analyze_empty_turn_convertible`; relabel dump
 `.venv/bin/python -m scripts.dump_empty_turn_for_labeling`; Phase 1 `.venv/bin/python -m
 scripts.measure_reflect_phase1` (needs oMLX up; ~1hr; `--smoke N` for a quick check). oMLX on

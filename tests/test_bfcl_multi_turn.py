@@ -12,6 +12,7 @@ import copy
 import pytest
 
 from benchmarks.bfcl.adapter import (
+    _REPAIR_MAX_STEPS,
     _bfcl_data_dir,
     load_ground_truth,
     load_problems,
@@ -444,6 +445,43 @@ def test_repair_stays_on_same_tool_surface(monkeypatch):
     assert r.repair_turns == [0]
     assert all(held not in names for names in rec.surfaces)          # held fn never exposed
     assert len({tuple(s) for s in rec.surfaces}) == 1               # identical surface across the turn
+
+
+def test_repair_respects_tight_step_cap(monkeypatch):
+    """The repair re-drive is bounded by `_REPAIR_MAX_STEPS`, tighter than the initial
+    turn's `_MAX_STEPS_PER_TURN`. The construction isolates the cap as the ONLY stop that
+    can fire: verify is forced to gap=True, the initial turn gives up (empty → fires
+    repair), and every repair step emits ONE UNIQUE non-empty call — a unique payload
+    defeats the `seen_payloads` dedup-stop and a non-empty response defeats the empty-stop.
+    A zero-call turn records exactly one `[]` step before repair, so the fired turn holds
+    `1 + _REPAIR_MAX_STEPS` steps: index 0 is the give-up, the next `_REPAIR_MAX_STEPS` are
+    the capped repair re-drive. Total repair calls = `_REPAIR_MAX_STEPS` (=4 → ≤5 with the
+    give-up step, far under `_MAX_CALLS_PER_PROBLEM`=50, so that backstop cannot pre-empt
+    the cap). Asserts STRUCTURE only — that the cap is the controlling stop — never a
+    passing grade or a `_112`-style recovery (recovery is an unproven inference)."""
+    monkeypatch.setenv("LUXE_REFLECT", "1")
+    monkeypatch.setattr(reflect, "verify", lambda *a, **k: Verdict(gap=True))
+
+    class _UniquePerStep:
+        """Initial chat gives up (empty); every later chat emits a unique non-empty call."""
+        def __init__(self): self.n = 0
+        def chat(self, **_kw) -> ChatResponse:
+            self.n += 1
+            if self.n == 1:  # initial turn → give up so repair fires
+                return ChatResponse(text="I cannot", tool_calls=[], timing=GenerationTiming())
+            return ChatResponse(  # repair step → unique payload (defeats dedup) + non-empty
+                text="", timing=GenerationTiming(),
+                tool_calls=[ToolCallResponse(id=f"c{self.n}", name="cd",
+                                             arguments={"folder": f"d{self.n}"})])
+
+    r = run_problem_multi_turn(_UniquePerStep(), _one_turn_problem())
+    assert r.repair_turns == [0]
+    steps = r.decoded_turns[-1]
+    assert len(steps) == 1 + _REPAIR_MAX_STEPS         # give-up step + capped repair drive
+    assert steps[0] == []                              # index 0: the zero-call give-up
+    repair_steps = steps[1:]
+    assert len(repair_steps) == _REPAIR_MAX_STEPS      # the cap is the controlling stop
+    assert all(len(s) == 1 for s in repair_steps)      # one unique call per repair step
 
 
 @pytest.mark.skipif(not _HAS_MISS, reason="miss_func/miss_param data not vendored")

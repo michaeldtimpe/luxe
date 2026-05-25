@@ -382,6 +382,15 @@ def run_problem_agent(
 # repeated-payload detection bound pathological loops (malformed output, degeneracy).
 _MAX_STEPS_PER_TURN = 15
 _MAX_CALLS_PER_PROBLEM = 50
+# Phase 2 repair re-prompt step cap (opt-in LUXE_REFLECT only) — tighter than the initial
+# turn's _MAX_STEPS_PER_TURN. Artifact-scoped to the Phase-2 A/B archive
+# (acceptance/bfcl/multi_turn_miss_func/reflect_arm/): all observed successful Phase-2
+# repairs terminated within 4 steps (miss_func_94 = 4, the rest 1–3 — they stop by emitting
+# an empty response), so range(4) covers each one's natural termination while bounding the
+# repair-runaway mode (the miss_func_112 6-step / 51-call spiral that hit
+# _MAX_CALLS_PER_PROBLEM and graded empty_turn). This is a property of the archived traces,
+# NOT a universal-determinism guarantee, and was NOT re-benched.
+_REPAIR_MAX_STEPS = 4
 
 
 def _is_giveup_turn(turn_steps: list[list[str]]) -> bool:
@@ -495,14 +504,21 @@ def run_problem_multi_turn(
     seen_payloads: set[str] = set()
     error = ""
 
-    def _drive_turn(openai_tools: list | None, turn_idx: int) -> list[list[str]]:
+    def _drive_turn(openai_tools: list | None, turn_idx: int,
+                    max_steps: int = _MAX_STEPS_PER_TURN) -> list[list[str]]:
         """One pass of the inner step loop: chat → execute → record, ≤ step/call caps.
         Mutates the shared transcript + counters. Used for both the initial turn AND
         the Phase 2 repair re-prompt (so they share execution + cap semantics exactly).
+
+        `max_steps` bounds the step loop. It defaults to `_MAX_STEPS_PER_TURN`, keeping
+        the initial-turn call site byte-identical; the Phase 2 repair call site passes the
+        tighter `_REPAIR_MAX_STEPS`. The step cap has exactly one consumer — the `range(...)`
+        below — so no other per-turn state inherits the budget, and the default arg keeps a
+        future caller from silently picking up the tight repair cap.
         """
         nonlocal prompt_tokens, completion_tokens, total_calls
         turn_steps: list[list[str]] = []
-        for step in range(_MAX_STEPS_PER_TURN):
+        for step in range(max_steps):
             resp = backend.chat(
                 messages=messages, tools=openai_tools,
                 max_tokens=max_tokens, temperature=temperature, num_ctx=num_ctx,
@@ -591,7 +607,8 @@ def run_problem_multi_turn(
                         "role": "user", "content": R.repair_nudge(verdict),
                         "_luxe_repair": True,
                     })
-                    decoded_turns[-1].extend(_drive_turn(openai_tools, turn_idx))
+                    decoded_turns[-1].extend(
+                        _drive_turn(openai_tools, turn_idx, max_steps=_REPAIR_MAX_STEPS))
                     repair_turns.append(turn_idx)
 
             if total_calls >= _MAX_CALLS_PER_PROBLEM:
