@@ -28,8 +28,11 @@ env/
 # Luxe runtime state — per-run checkpoints, repo locks, MCP audit log
 .luxe/
 
-# Claude Code local state (settings, plan files, scheduled-task locks)
-.claude/
+# Claude Code: track shared project settings + hooks; ignore local state
+# (settings.local.json, plan/scheduled-task locks, anything else under .claude/)
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 
 # Local repo clones (cloned by `luxe maintain <url>`)
 local-cache/
