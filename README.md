@@ -338,6 +338,16 @@ bench runner resumption decisions.
 
 Tests run without a live oMLX server (HTTP transport mocked).
 
+## Research notes
+
+External-project teardowns kept for cross-pollination. These also touch
+sibling projects (`micro-mind`, `mage-hands`), not luxe alone.
+
+- [`docs/research/forge-overlap-analysis.md`](docs/research/forge-overlap-analysis.md)
+  — forge ↔ luxe ↔ micro-mind overlap + candidate port items.
+- [`docs/research/hermes-harvest-backlog.md`](docs/research/hermes-harvest-backlog.md)
+  — Hermes Agent (Nous Research) feature backlog harvest.
+
 ## Project state
 
 - `RESUME.md` — current state, active task, exact launch commands. Read first.
