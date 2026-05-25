@@ -50,7 +50,7 @@ work here (the catch-22 didn't bite) — a real positive result. Nuance: the 10 
 state-checker ignores), not pedantry — so the pass sample isn't fully flawless w.r.t. the user's ask.
 Detection misses (4): `miss_func_33` (wrong recipient), `_142` (partial), `_122` (malformed→fooled), `_93`.
 
-**PHASE 2 repair — BUILT + COMMITTED (`5916478`), default-off byte-identical; full A/B DONE → HOLD.**
+**PHASE 2 repair — BUILT + COMMITTED (`7c621c8`), default-off byte-identical; full A/B DONE → HOLD.**
 The gated verify→repair stage is wired into `run_problem_multi_turn` (opt-in `LUXE_REFLECT`):
 - **Two-gate fire** — `adapter._is_giveup_turn` (a ZERO-call turn = the empty_turn give-up
   signature) gates the expensive verify call AND, by construction, skips the verifier's
@@ -103,7 +103,7 @@ stays opt-in. `LUXE_REFLECT` remains off by default; the stage + A/B harness sta
 3. Untouched cycle tracks: Track 0 (forge-vs-luxe loop A/B), Track 2 (tiered compaction). Or pick a new
    value axis (multi_turn sweep is closed; SWE-bench loop near ceiling per prior grounding).
 
-**⇒ Phase 2 follow-ups SHIPPED (`fa8f089`; plan `~/.claude/plans/noble-squishing-kahn.md`) — hygiene/closure,
+**⇒ Phase 2 follow-ups SHIPPED (`8fadd92`; plan `~/.claude/plans/noble-squishing-kahn.md`) — hygiene/closure,
 NO re-bench, HOLD stands, no ship-status change.** (1) tight repair-budget cap `_REPAIR_MAX_STEPS=4` in
 `benchmarks/bfcl/adapter.py` (artifact-scoped: covers every observed Phase-2 repair, bounds the `_112`
 runaway) + agents.sdd + cap test (`test_repair_respects_tight_step_cap`; full suite 966). (2) borderline-label
