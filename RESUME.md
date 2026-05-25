@@ -109,11 +109,35 @@ NO re-bench, HOLD stands, no ship-status change.** (1) tight repair-budget cap `
 runaway) + agents.sdd + cap test (`test_repair_respects_tight_step_cap`; full suite 966). (2) borderline-label
 tooling: `dump_empty_turn_for_labeling --only-borderline` (prints the 14 pending labels + saved verdicts
 side-by-side) and `measure_reflect_phase1 --from-verdicts` (offline gate recompute from the frozen per-pid
-verdicts — no oMLX; reproduces 0.818/0.167/true **bit-exactly**). **Remaining = the user-driven borderline
-spot-check:** review the 14 (`--only-borderline`), add `reviewed_label`/`review_note` in `giveup_labels.json`
-(gitignored, on-disk; original `label`/`confidence` preserved), then re-run `--from-verdicts`; if detection
-shifts materially, refresh this section + `lessons.md` 2026-05-24 + memory. (NB: Phase 1 saved
-gap/ok/specificity, not the deficiency free-text, so the dump shows specificity tags.)
+verdicts — no oMLX; reproduces 0.818/0.167/true **bit-exactly**). (NB: Phase 1 saved gap/ok/specificity, not
+the deficiency free-text, so the dump shows specificity tags.)
+
+**⇒ Borderline spot-check DONE (2026-05-25; plan `~/.claude/plans/velvety-purring-forest.md`).** User reviewed
+all 14 borderline give-up labels; outcome encoded as `reviewed_label`/`review_note` in `giveup_labels.json`
+(originals preserved; rationale archived at `acceptance/bfcl/reflect_phase0/borderline_review.md`). **13/14
+upheld, 1 flip** (`miss_param_159` met→unmet — wrong insurance cost 50 vs 500; verify had correctly flagged
+it). Recompute (`measure_reflect_phase1 --from-verdicts`): **miss_func detection 81.8% (18/22) and false_gap
+16.7% UNCHANGED, GATE PASS**; only the (un-gated) miss_param detection moved 3/4→4/5. The human review
+**validates** the detection figure rather than changing it — **Item 2 fully closed**.
+
+**⇒ WS2 DONE = BANK (2026-05-25): "acted-but-wrong-binding" axis sized, NO lever.** Read-only
+`scripts/analyze_acted_but_wrong.py` (+ `tests/test_wrong_binding_sizing.py`, 11 tests; full suite **977**)
+diffed model vs GT calls over the never-examined acted-but-wrong mass (`instance_state`/`execution_response`
+failures, **A=151** = 71 miss_func + 80 miss_param; disjoint from the 58 give-ups). Buckets: gt_value_mismatch
+58 (38.4%), **omission 60**, extra_action 33, path_divergence 0. **A counterfactual deep-dive replaced the
+eyeball skim** (`scripts/verify_wrong_binding_attribution.py`): substitute GT value(s) back + re-run the
+vendored state checker (sanity-gated: reproduces 58/58 stored verdicts) → a fail→PASS flip = DECISIVE binding.
+**DECISIVE wrong-binding = 21/151 = 13.9%** (by subtype: string_format 17, numeric 7, **recipient_id 0**).
+Two corrections to the first writeup: string_format is NOT mostly benign (17 decisive) but those are almost
+all **exact-free-text-content** matches (reproduce the author's exact tweet/message/ticket wording — the
+content ceiling, not a binding); and **recipient_id is 0-decisive** (the human review's "wrong recipient"
+headline is never the sole cause in the acted set). **Pre-registered gate → BANK**: 21 < 30 and 13.9% < 20%
+(below the size bar) + no dominant separable addressable cluster + the only fix is washed-out exact-content
+enforcement. Taxonomy is the deliverable: the mass is mostly omission (the obligation/final-step ceiling, same
+family as the give-up HOLD) + GT/content rigidity — not a new addressable axis; the 50.0%/45.5% baselines are
+partly depressed by benchmark exactness. Manifest `acceptance/bfcl/wrong_binding/sizing_manifest.json`
+(gitignored); lessons.md + memory `project_acted_but_wrong_sizing.md`. **Borderline-review plan fully executed
++ deep-dive-confirmed.**
 
 **Reproduce:** Phase 0 `.venv/bin/python -m scripts.analyze_empty_turn_convertible`; relabel dump
 `.venv/bin/python -m scripts.dump_empty_turn_for_labeling`; Phase 1 `.venv/bin/python -m
