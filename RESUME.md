@@ -103,13 +103,17 @@ stays opt-in. `LUXE_REFLECT` remains off by default; the stage + A/B harness sta
 3. Untouched cycle tracks: Track 0 (forge-vs-luxe loop A/B), Track 2 (tiered compaction). Or pick a new
    value axis (multi_turn sweep is closed; SWE-bench loop near ceiling per prior grounding).
 
-**⇒ SAVED PLAN for options 1+2 (approved-pending, NOT STARTED): `~/.claude/plans/noble-squishing-kahn.md`.**
-Two **hygiene/closure** follow-ups — **NO re-bench, HOLD stands, no ship-status change**: (1) a tight
-repair-budget cap `_REPAIR_MAX_STEPS=4` in `benchmarks/bfcl/adapter.py` (artifact-scoped: covers all 8
-observed Phase-2 fixes, bounds the `_112` runaway) + agents.sdd + a cap test; (2) borderline give-up label
-spot-check (`--only-borderline` dump) + instant offline gate recompute (`measure_reflect_phase1
---from-verdicts`) from the frozen per-pid verdicts, reproducing 0.818/0.167/true before any relabel. The
-plan opens with a self-contained RESUME STATUS header — a fresh session can pick it up directly.
+**⇒ Phase 2 follow-ups SHIPPED (`fa8f089`; plan `~/.claude/plans/noble-squishing-kahn.md`) — hygiene/closure,
+NO re-bench, HOLD stands, no ship-status change.** (1) tight repair-budget cap `_REPAIR_MAX_STEPS=4` in
+`benchmarks/bfcl/adapter.py` (artifact-scoped: covers every observed Phase-2 repair, bounds the `_112`
+runaway) + agents.sdd + cap test (`test_repair_respects_tight_step_cap`; full suite 966). (2) borderline-label
+tooling: `dump_empty_turn_for_labeling --only-borderline` (prints the 14 pending labels + saved verdicts
+side-by-side) and `measure_reflect_phase1 --from-verdicts` (offline gate recompute from the frozen per-pid
+verdicts — no oMLX; reproduces 0.818/0.167/true **bit-exactly**). **Remaining = the user-driven borderline
+spot-check:** review the 14 (`--only-borderline`), add `reviewed_label`/`review_note` in `giveup_labels.json`
+(gitignored, on-disk; original `label`/`confidence` preserved), then re-run `--from-verdicts`; if detection
+shifts materially, refresh this section + `lessons.md` 2026-05-24 + memory. (NB: Phase 1 saved
+gap/ok/specificity, not the deficiency free-text, so the dump shows specificity tags.)
 
 **Reproduce:** Phase 0 `.venv/bin/python -m scripts.analyze_empty_turn_convertible`; relabel dump
 `.venv/bin/python -m scripts.dump_empty_turn_for_labeling`; Phase 1 `.venv/bin/python -m
