@@ -59,6 +59,12 @@ Read the relevant `.sdd` before editing any file under that subtree.
 4. **`oMLX` is on `localhost:8000`** with key `OMLX_API_KEY=omlx-sdb25582k3mq8pf9`.
 5. **Read `RESUME.md` first** for current project state and active tasks.
 6. **Read `lessons.md`** for postmortems of every historical surprise.
+7. **Git: rebase, never merge.** `origin/main` enforces linear history (no merge
+   commits, no force-push — admin-bypass only). Integrate remote changes with
+   `git fetch` + rebase; never create a merge commit. A committed PreToolUse hook
+   (`.claude/hooks/precommit-pull.sh`, wired in `.claude/settings.json`) plus
+   repo-local `pull.rebase`/`rebase.autoStash` auto-rebase before each commit. See
+   `lessons.md` 2026-05-25 + memory `feedback_git_linear_history`.
 
 ## When the user asks for new work
 
