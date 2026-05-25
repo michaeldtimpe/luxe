@@ -1,5 +1,33 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-05-25) — all work landed; tree clean, in sync; NO task in flight
+
+**Repo state:** `main` is linear + in sync with `origin/main` (HEAD `4327593`); working tree clean; full
+suite **978 pass**. Nothing is in progress — this is a clean cold start.
+
+**What closed (all committed + pushed):**
+- **Reflect/verify cycle: CLOSED.** Phase 2 repair = HOLD (`LUXE_REFLECT` stays opt-in). The borderline
+  give-up label spot-check is DONE — 13/14 upheld, 1 non-gate-moving flip (`miss_param_159`); gate UNCHANGED
+  (miss_func detection **81.8%**, false_gap **16.7%**, PASS). Detail in the ACTIVE section below +
+  [[project_reflect_cycle_phase1]].
+- **WS2 "acted-but-wrong-binding" sizing → BANK** (no lever). State-checker-decisive wrong-bindings = only
+  **21/151 (13.9%)**, below the escalation bar; dominated by exact-free-text-content (the content ceiling),
+  `recipient_id` 0-decisive. Tools: `scripts/analyze_acted_but_wrong.py` +
+  `scripts/verify_wrong_binding_attribution.py` (+ `tests/test_wrong_binding_sizing.py`).
+  [[project_acted_but_wrong_sizing]].
+- **Git workflow hardened.** `origin/main` enforces linear history (no merge commits / no force-push;
+  admin-bypass only). A committed PreToolUse hook (`.claude/hooks/precommit-pull.sh`, wired in
+  `.claude/settings.json`) + repo-local `pull.rebase`/`rebase.autoStash` auto-rebase before every commit.
+  **Rebase, never merge.** [[feedback_git_linear_history]].
+
+**Next (nothing precommitted):** the cycle is closed; the residual multi_turn failure mass is a
+reasoning/obligation + benchmark-rigidity ceiling, not a new addressable axis. Untouched options remain
+(Track 0 forge-vs-luxe loop A/B; Track 2 tiered compaction) or pick a fresh value axis — this warrants a new
+conversation, not a continuation. Read `CLAUDE.md` + this file + `lessons.md` (2026-05-25 entries) first.
+Executed plans (now DONE): `~/.claude/plans/noble-squishing-kahn.md`, `~/.claude/plans/velvety-purring-forest.md`.
+
+---
+
 ## ⇒ ACTIVE (2026-05-24): reflection/verify cycle — Phase 2 repair = HOLD (miss_func +6 net, but non-Pareto + kill-warning); CYCLE CLOSED
 
 **First feature-adding cycle since the multi_turn sweep closed.** Goal = move benchmark scores;
