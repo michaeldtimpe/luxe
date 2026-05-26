@@ -1,8 +1,8 @@
 # luxe — session resume document
 
-## ⇒ SESSION HANDOFF (2026-05-26) — Track 0 WASH + edit-quality investigation CLOSED (refined-port REFUTED); working-tree drafts + a default-OFF source change, NOT committed; NO task in flight
+## ⇒ SESSION HANDOFF (2026-05-26) — Track 0 WASH + edit-quality investigation CLOSED (refined-port REFUTED); diagnostic flag + docs SHIPPED (`122831d`); NO task in flight
 
-**TL;DR for a cold start.** Two investigations executed today: (1) Track 0 forge-vs-luxe at n=75 → **WASH** (architecture line retired); (2) edit-quality follow-up that diagnosed luxe's early_bail family as the degrader, ablated it, and tested a refined port → all conclusions banked, **no source change ships**. **Working tree has 6 modified files** (2 doc drafts + 4 luxe-tree source files for a default-OFF diagnostic flag); per CLAUDE.md "ask first", nothing is committed or pushed. **Pristine main is intact at HEAD `7f80d79`.**
+**TL;DR for a cold start.** Two investigations executed: (1) Track 0 forge-vs-luxe at n=75 → **WASH** (architecture line retired); (2) edit-quality follow-up that diagnosed luxe's early_bail family as the degrader, ablated it, and tested a refined port → all conclusions banked, **no behavior ships**. The investigation infrastructure (default-OFF `LUXE_EARLY_BAIL_COMMIT_ONLY` flag in loop.py + adapter/CLI plumbing + 2 unit tests) and both docs landed as one commit `122831d` on 2026-05-26. Local `main` is **ahead of `origin/main` by 1** (push pending user approval). Working tree clean.
 
 ---
 
@@ -34,11 +34,11 @@
 - **No source change ships.** The trade-off documented across these two investigations matches luxe's v1.7→v1.11 tuning history and the 2026-05-24 reflect-cycle HOLD: relaxing premature-commitment pressure trades empty→wrong-action for some empty→resolve. The net is non-Pareto on the wrong-target axis.
 - **Edit-quality is a real and now-mechanistically-characterized phenomenon** but not portable as a luxe lever via existing interventions. The diagnostic + ablation infrastructure is the durable output.
 
-### Working-tree state (NOT committed; review and commit-or-revert at your discretion)
+### Shipped state — commit `122831d` (one commit, 6 files; behavior byte-identical with baseline)
 
-**Documentation drafts (2 files):**
+**Documentation (2 files):**
 - `RESUME.md` (this entry).
-- `lessons.md` (2026-05-26 entry: Track 0 + edit-quality investigation, ~50 lines).
+- `lessons.md` (2026-05-26 entries: Track 0 WASH + edit-quality investigation).
 
 **Luxe-source diagnostic infrastructure (4 files, default OFF + byte-identical):**
 - `src/luxe/agents/loop.py` (+46/−11): the `LUXE_EARLY_BAIL_COMMIT_ONLY` env var + breadth_probe/soft_anchor suppression + commit_imperative preservation + a new `early_bail_suppressed_commit_only` observability event.
@@ -58,7 +58,7 @@
 ### Suggested cold-start sequence in the new session
 
 1. Read this RESUME entry + the 2026-05-26 `lessons.md` entry.
-2. `git diff` and decide which of the 6 working-tree files to **commit, keep-but-not-commit, or revert**. The luxe-source changes are clean and default-OFF; they cost nothing but add a diagnostic lever for future investigations. Recommend committing them as-is (no behavior change for any user); the doc drafts are similarly low-risk.
+2. Push `122831d` to `origin/main` if not already pushed (auto-rebase hook will fast-forward; `git status` to check ahead/behind). The commit is intentionally low-risk (default-OFF flag + docs).
 3. **Track 0 + edit-quality lines are now closed.** No follow-up is precommitted. Options remain: Track 2 (tiered compaction) was already noted as likely-cut; pick a fresh value axis (BFCL ceiling, new benchmark, model-capability re-bench if a stronger MoE appears — see CLAUDE.md single-champion policy).
 
 ---
