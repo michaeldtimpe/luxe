@@ -11,6 +11,10 @@ auto-memory.
 ## Must
 - Mono-only execution mode (single capable model, full tool surface)
 - temp=0.0 in production fixture configs
+- Pin `Qwen3.6-35B-A3B-6bit` as the single champion MoE model (configured in
+  `configs/single_64gb.yaml`); the m5max_moe bake-off (2026-05-10) is settled
+- No per-task model selection, model fan-out, or router; re-bench only on
+  explicit user request and write results under `acceptance/m5max_moe_<id>/`
 - All mono prompt edits go through `src/luxe/agents/prompts.py` registry
 - Pin `--work-dir ~/.luxe/bench-workspace` for bench runs (random tempdir leaks into prompts)
 - `oMLX` `idle_timeout_seconds: 1800` (null keeps models resident forever)
@@ -22,6 +26,7 @@ auto-memory.
 - Use `--no-verify`, `--no-gpg-sign`, or other hook-skip flags
 - Force-push to `main` or `master`
 - Configure dense >30B mxfp8 models (don't fit on 64GB Mac under load)
+- Promote configs from `configs/_archive/` (reference-only; not the champion)
 
 ## Owns
 - src/luxe/**
