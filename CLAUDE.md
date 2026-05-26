@@ -44,6 +44,25 @@ Every directory of consequence has a `<dir>/<dir>.sdd` contract listing
 
 Read the relevant `.sdd` before editing any file under that subtree.
 
+## Opt-in modes (default off, byte-identical when disabled)
+
+Three subsystems are gated by env vars and default to **off**. Each has
+invariants in its `.sdd` you must read before enabling:
+
+- **Reflect / verify stage** (`LUXE_REFLECT=1`) — a separate `backend.chat`
+  critique pass. Verify-only by default (non-perturbing). See
+  `src/luxe/agents/agents.sdd` § "Reflection / verify stage invariants".
+- **Adaptive policy** (`LUXE_ADAPTIVE_POLICY=1`) — convergence-score-based
+  intervention-intensity modulation. **Bias-not-lock**: never gates dispatch.
+  Slew-rate limited via `LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP`. See
+  `agents.sdd` § "Stage 3 / v1.11 adaptive-policy invariants".
+- **Cohort priors** (`LUXE_LOAD_PRIORS=1`) — reads
+  `~/.luxe/cohort-history/<instance>.json`. **Log-only in v1.11** (does not
+  influence intervention intensity); promotion deferred to v1.11.1+.
+
+If you toggle any of these on, walk the relevant `.sdd` section first —
+unbiased flips can silently change benchmark behavior.
+
 ## When working on this repo
 
 1. **Mono only.** No swarm/micro/phased — they're retired. Don't add
