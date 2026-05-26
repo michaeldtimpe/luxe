@@ -341,6 +341,7 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
                     "abort_reason": ev.get("abort_reason", "") or "",
                     "final_text_chars": int(ev.get("final_text_chars", 0)),
                     "escalated": bool(ev.get("escalated", False)),
+                    "peak_context_pressure": float(ev.get("peak_context_pressure", 0.0)),
                 }
         out["events_kinds"] = kind_counts
 
@@ -695,6 +696,11 @@ class Diagnostics:
     # accurate prefill/decode TPS see backend streaming work (stage 2).
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Peak context_pressure (0.0-1.0 fraction of role_cfg.num_ctx) observed
+    # across all steps of the mono run. Sourced from AgentResult via the
+    # single_mode_done event. Populated 2026-05-26+; older artefacts default
+    # to 0.0 (predate the measurement, not bad data).
+    peak_context_pressure: float = 0.0
     stages_completed: list[str] = field(default_factory=list)
     stages_resumed: list[str] = field(default_factory=list)
     validator_status: str = ""
@@ -820,6 +826,9 @@ def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
         test_passed=artefacts.get("test_passed"),
         events_kinds=dict(artefacts.get("events_kinds", {})),
         single_mode=artefacts.get("single_mode"),
+        peak_context_pressure=float(
+            (artefacts.get("single_mode") or {}).get("peak_context_pressure", 0.0)
+        ),
         microstep_count=int(artefacts.get("microstep_count_total", 0)),
         microstep_rejects=int(artefacts.get("microstep_rejects_total", 0)),
         blackboard_bytes=int(artefacts.get("blackboard_bytes_total", 0)),
