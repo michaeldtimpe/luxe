@@ -60,6 +60,7 @@
 1. Read this RESUME entry + the 2026-05-26 `lessons.md` entry.
 2. Push `122831d` to `origin/main` if not already pushed (auto-rebase hook will fast-forward; `git status` to check ahead/behind). The commit is intentionally low-risk (default-OFF flag + docs).
 3. **Track 0 + edit-quality lines are now closed.** No follow-up is precommitted. Options remain: Track 2 (tiered compaction) was already noted as likely-cut; pick a fresh value axis (BFCL ceiling, new benchmark, model-capability re-bench if a stronger MoE appears — see CLAUDE.md single-champion policy).
+4. **Graceful context lifecycle (G1)** is now scoped at [`docs/g1-context-lifecycle-design.md`](docs/g1-context-lifecycle-design.md) — empirical basis: ~25% of SWE-bench `empty_patch` failures are `EMPTY_PATCH_CONTEXT_EXHAUSTED`, stable across 11 versions (see `docs/research/e1-context-cliff-report.md`). Design only, no implementation cycle queued; the doc lists six candidate levers with tie-in points. Entry point for whichever cycle picks this up next.
 
 ---
 
