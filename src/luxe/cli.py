@@ -289,7 +289,8 @@ def maintain(
                      schema_rejects=single_result.schema_rejects,
                      aborted=single_result.aborted,
                      abort_reason=single_result.abort_reason,
-                     final_text_chars=len(single_result.final_text or ""))
+                     final_text_chars=len(single_result.final_text or ""),
+                     peak_context_pressure=single_result.peak_context_pressure)
         if detected_task in _WRITE_TASKS:
             _ds = _diff_against_base(repo_path, prep.base_sha)
             append_event(spec.run_id, "diff_stat",
