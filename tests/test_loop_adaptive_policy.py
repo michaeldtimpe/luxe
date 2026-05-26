@@ -283,3 +283,65 @@ def test_adaptive_policy_ablation_score_trend_off(monkeypatch):
     for e in adaptive_events:
         assert e["score_trend"] is None
         assert e["consecutive_no_write"] is not None
+
+
+# ── Refined-port (LUXE_EARLY_BAIL_COMMIT_ONLY) tests — 2026-05-26 ──────────
+# Suppress soft_anchor + breadth_probe variants; keep commit_imperative
+# (fires at convergence_score >= _CONVERGENCE_HIGH_THRESHOLD). Default OFF.
+
+def test_early_bail_commit_only_suppresses_low_conv_variants(monkeypatch):
+    """With flag ON + diffuse-recon reads (distinct files → low convergence,
+    breadth_probe band) the breadth_probe + soft_anchor variants must not fire,
+    and the new `early_bail_suppressed_commit_only` observability event must
+    appear when the firing branch is reached."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_COMMIT_ONLY", "1")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    scripted = [_read_resp_distinct(i) for i in range(10)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted),
+        role_cfg=RoleConfig(model_key="test", num_ctx=4096, max_steps=15,
+                            max_tokens_per_turn=2048, temperature=0.0),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-commit-only-low",
+    )
+
+    # breadth_probe + soft_anchor SUPPRESSED under commit_only
+    assert [e for e in events if e["kind"] == "early_bail_breadth_probe_fired"] == []
+    fired = [e for e in events if e["kind"] == "early_bail_fired"]
+    assert all(e.get("msg_variant") != "soft_anchor" for e in fired), \
+        f"soft_anchor variant should be suppressed under commit_only; fired={fired}"
+
+
+def test_early_bail_commit_only_preserves_commit_imperative(monkeypatch):
+    """With flag ON + same-file reads (high convergence) + standard early_bail
+    triggers, commit_imperative MUST still fire (msg_variant='commit_imperative').
+    This is the whole point of the refined port — keep the high-convergence
+    imperative, lose only the low/mid-convergence variants."""
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_COMMIT_ONLY", "1")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    # Same-file reads → convergence climbs above HIGH (0.40) → commit_imperative
+    # branch is selected. _read_resp reads x.py repeatedly.
+    scripted = [_read_resp() for _ in range(6)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted),
+        role_cfg=RoleConfig(model_key="test", num_ctx=4096, max_steps=10,
+                            max_tokens_per_turn=2048, temperature=0.0),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-commit-only-high",
+    )
+
+    fired = [e for e in events if e["kind"] == "early_bail_fired"]
+    assert any(e.get("msg_variant") == "commit_imperative" for e in fired), \
+        f"commit_imperative must still fire under commit_only at high conv; fired={fired}"

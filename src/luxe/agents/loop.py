@@ -532,6 +532,17 @@ def run_agent(
     early_bail_enabled = os.environ.get("LUXE_EARLY_BAIL") == "1"
     early_bail_fired = False
     early_bail_step: int | None = None  # v1.9: needed by post-bail rescue gate
+    # Refined port (2026-05-26 edit-quality investigation, project_track0_*) —
+    # when LUXE_EARLY_BAIL_COMMIT_ONLY=1 AND mode=soft_anchor, suppress the
+    # mid/low-convergence variants (breadth_probe, soft_anchor) and let only
+    # commit_imperative (score >= _CONVERGENCE_HIGH_THRESHOLD) fire. The Phase-1
+    # diagnostic showed soft_anchor + breadth_probe correlate with degraded edit
+    # quality on the 3 forge-only wins at n=75; the +10.67pp --no-early-bail
+    # ablation cleared resolves but failed the wrong-target watchdog (3-4 new
+    # wrong_target migrations from baseline empty_patch). This flag tests whether
+    # keeping the high-convergence imperative recovers the watchdog cleanly.
+    # Default OFF (byte-identical with baseline).
+    early_bail_commit_only = os.environ.get("LUXE_EARLY_BAIL_COMMIT_ONLY") == "1"
     prose_burst_enabled = os.environ.get("LUXE_PROSE_BURST") == "1"
     prose_burst_fired = False
     # v1.9 — LUXE_ACTION_DENSITY_GATE (staged escalation second-stage rescue
@@ -877,7 +888,10 @@ def run_agent(
                 # trajectories. soft_anchor modulation is still COMPUTED + emitted
                 # (observability for the v1.11.1 redesign) but nothing acts on it.
                 # See lessons.md 2026-05-21 + project_v111_phaseA_calibration.
-                if _band_response == "breadth_probe_hybrid":
+                if _band_response == "breadth_probe_hybrid" and not early_bail_commit_only:
+                    # Refined port (LUXE_EARLY_BAIL_COMMIT_ONLY): suppress
+                    # breadth_probe entirely. Only commit_imperative (HIGH
+                    # band, lines ~926-930) fires under refined port.
                     fire_reason = None
                     # v1.10.5 — gate first-event fire on narrow_reader_signal.
                     # Escalation remains unconditional (different failure mode).
@@ -918,6 +932,8 @@ def run_agent(
                                 distinct_files=_distinct_files,
                             )
             else:
+                msg: str | None
+                msg_variant: str
                 if early_bail_message is not None:
                     msg = early_bail_message
                     msg_variant = "kwarg"
@@ -928,25 +944,46 @@ def run_agent(
                             and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
                         msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
                         msg_variant = "commit_imperative"
+                    elif early_bail_commit_only and mode == "soft_anchor":
+                        # Refined port (LUXE_EARLY_BAIL_COMMIT_ONLY): suppress
+                        # soft_anchor at mid convergence. Don't set
+                        # early_bail_fired so commit_imperative can still fire
+                        # on a later step if convergence climbs above HIGH.
+                        msg = None
+                        msg_variant = "suppressed_commit_only"
                     else:
                         msg = _EARLY_BAIL_MESSAGE_MODES.get(
                             mode, _EARLY_BAIL_MESSAGE)
                         msg_variant = mode
-                messages.append({"role": "user", "content": msg})
-                early_bail_fired = True
-                early_bail_step = step
-                last_intervention_step = step
-                last_intervention_kind = "early_bail"
-                intervention_kinds_fired.add("early_bail")
-                if log_calls:
+                if msg is not None:
+                    messages.append({"role": "user", "content": msg})
+                    early_bail_fired = True
+                    early_bail_step = step
+                    last_intervention_step = step
+                    last_intervention_kind = "early_bail"
+                    intervention_kinds_fired.add("early_bail")
+                    if log_calls:
+                        append_event(
+                            run_id, "early_bail_fired",
+                            phase=phase, step=step,
+                            tool_calls_total=result.tool_calls_total,
+                            completion_tokens=result.completion_tokens,
+                            reads=result.tool_calls_total - writes_seen,
+                            convergence_score=convergence_score,
+                            msg_variant=msg_variant,
+                        )
+                elif log_calls:
+                    # Refined-port observability: record the suppression so
+                    # post-hoc analysis can see how often commit_only saved a
+                    # mid-band soft_anchor fire without acting on it.
                     append_event(
-                        run_id, "early_bail_fired",
+                        run_id, "early_bail_suppressed_commit_only",
                         phase=phase, step=step,
                         tool_calls_total=result.tool_calls_total,
                         completion_tokens=result.completion_tokens,
                         reads=result.tool_calls_total - writes_seen,
                         convergence_score=convergence_score,
-                        msg_variant=msg_variant,
+                        configured_mode=os.environ.get("LUXE_EARLY_BAIL_MODE", "default"),
                     )
 
         # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,

@@ -267,6 +267,7 @@ def run_instance(
     early_bail: bool = True,
     action_density_gate: bool = True,
     convergence_gate: bool = True,
+    early_bail_commit_only: bool = False,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -336,6 +337,11 @@ def run_instance(
         extra_env = {**(extra_env or {}), "LUXE_ACTION_DENSITY_GATE": "1"}
     if convergence_gate:
         extra_env = {**(extra_env or {}), "LUXE_CONVERGENCE_GATE": "1"}
+    # Refined-port ablation (2026-05-26 edit-quality investigation): suppress
+    # soft_anchor + breadth_probe variants; commit_imperative (score >= HIGH)
+    # still fires. See loop.py around line 532 for the gate.
+    if early_bail_commit_only:
+        extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_COMMIT_ONLY": "1"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
