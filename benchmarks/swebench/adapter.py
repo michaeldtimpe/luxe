@@ -268,6 +268,7 @@ def run_instance(
     action_density_gate: bool = True,
     convergence_gate: bool = True,
     early_bail_commit_only: bool = False,
+    tiered_compact: bool = False,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -342,6 +343,11 @@ def run_instance(
     # still fires. See loop.py around line 532 for the gate.
     if early_bail_commit_only:
         extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_COMMIT_ONLY": "1"}
+    # forge-hybrid Phase 2 (A): wire TieredCompact when flagged; default OFF.
+    # Replaces the elide_old_tool_results call at loop.py's pre-chat
+    # compaction site with the 3-phase strategy.
+    if tiered_compact:
+        extra_env = {**(extra_env or {}), "LUXE_TIERED_COMPACT": "1"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,

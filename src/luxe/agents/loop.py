@@ -37,7 +37,11 @@ from luxe.agents.guardrails import (
 )
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
-from luxe.context import context_pressure, elide_old_tool_results
+from luxe.context import (
+    TieredCompact,
+    context_pressure,
+    elide_old_tool_results,
+)
 from luxe.run_state import append_event
 from luxe.spec import Spec
 from luxe.spec_validator import validate as spec_validate
@@ -131,6 +135,16 @@ _DEDUP_EXEMPT_TOOLS = {"read_file"}
 # calls, 9092 completion tokens, 0 writes; model declared "comprehensive
 # picture" prematurely, hallucinated content from priors, never committed).
 _WRITE_TOOLS = frozenset({"write_file", "edit_file"})
+
+# forge-hybrid Phase 2 (A) — recovery-marker event names by tool. Emitted on
+# every tool_call after compaction has fired anywhere in the run; characterizes
+# whether compaction is followed by productive read/grep/edit activity.
+_COMPACTION_RECOVERY_EVENT_BY_TOOL: dict[str, str] = {
+    "read_file": "read_after_compact",
+    "grep": "grep_after_compact",
+    "write_file": "edit_after_compact",
+    "edit_file": "edit_after_compact",
+}
 
 # Post-write drift detector. Once at least one write has succeeded, any
 # run of non-write tool calls that each return zero bytes (or hit the
@@ -569,6 +583,21 @@ def run_agent(
     # Off by default; adapter wires it on for SWE-bench. Falls back to
     # v1.9 semantics (no convergence-based gating) when disabled.
     convergence_gate_enabled = os.environ.get("LUXE_CONVERGENCE_GATE") == "1"
+    # forge-hybrid Phase 2 (A) — TieredCompact context compaction. Default OFF
+    # (byte-identical baseline preserved via the existing elide_old_tool_results
+    # fallback). When LUXE_TIERED_COMPACT=1, the 3-phase compaction strategy
+    # replaces elide at the pre-chat compaction site. Run-cumulative counters
+    # below feed the resolve-time telemetry event.
+    tiered_compact_enabled = os.environ.get("LUXE_TIERED_COMPACT") == "1"
+    _tiered_compactor: TieredCompact | None = (
+        TieredCompact() if tiered_compact_enabled else None
+    )
+    compaction_tool_results_dropped_total = 0
+    compaction_total_tokens_dropped = 0
+    compaction_max_phase_this_run = 0
+    compaction_phase_at_first_write: int | None = None
+    last_compaction_phase: int = 0  # latest phase >0; reset to 0 only on resolve event
+
     # v1.11 Phase 1 — adaptive policy substrate. Computation + observability
     # ONLY in Phase 1; modulation does NOT yet influence intervention
     # dispatch (deferred to Phase 3a so any behavior change is gated under
@@ -1093,7 +1122,26 @@ def run_agent(
                         requirement_kind=rr.requirement.kind,
                     )
 
-        messages = elide_old_tool_results(messages, role_cfg.num_ctx)
+        if tiered_compact_enabled and _tiered_compactor is not None:
+            cr = _tiered_compactor.compact(messages, role_cfg.num_ctx)
+            messages = cr.messages
+            if cr.phase_reached > 0:
+                compaction_tool_results_dropped_total += cr.tool_results_dropped
+                compaction_total_tokens_dropped += (cr.tokens_before - cr.tokens_after)
+                if cr.phase_reached > compaction_max_phase_this_run:
+                    compaction_max_phase_this_run = cr.phase_reached
+                last_compaction_phase = cr.phase_reached
+                if log_calls:
+                    append_event(
+                        run_id, "compaction_phase_reached",
+                        phase=phase, step=step,
+                        phase_reached=cr.phase_reached,
+                        tokens_before=cr.tokens_before,
+                        tokens_after=cr.tokens_after,
+                        tool_results_dropped=cr.tool_results_dropped,
+                    )
+        else:
+            messages = elide_old_tool_results(messages, role_cfg.num_ctx)
 
         try:
             resp: ChatResponse = backend.chat(
@@ -1315,6 +1363,19 @@ def run_agent(
             if tc.name in _WRITE_TOOLS and not executed.error:
                 writes_seen += 1
                 post_write_idle_tools = 0
+                # forge-hybrid Phase 2 (A) — capture compaction phase at the
+                # first successful write. Used by the resolve-time telemetry
+                # to attribute write-step gating to compaction state. Fires
+                # at most once per run.
+                if (tiered_compact_enabled
+                        and compaction_phase_at_first_write is None):
+                    compaction_phase_at_first_write = compaction_max_phase_this_run
+                    if log_calls:
+                        append_event(
+                            run_id, "compaction_phase_at_first_write",
+                            phase=phase, step=step,
+                            phase_reached=compaction_phase_at_first_write,
+                        )
                 # v1.10 — post-intervention write telemetry. Capture
                 # time-to-first-write and sustained-write-burst signals
                 # for any trajectory where an intervention fired earlier.
@@ -1355,6 +1416,20 @@ def run_agent(
                     # back to None for tools without a path-like arg.
                     path=extract_path(tc.name, tc.arguments),
                 )
+                # forge-hybrid Phase 2 (A) — post-compact recovery markers.
+                # Emits one of three event types whenever a recovery-class
+                # tool runs after compaction has fired anywhere in the run.
+                # Used to characterize whether compaction is followed by
+                # productive read/grep/edit activity (the search-geometry
+                # signal flagged in the plan's risk register).
+                if compaction_max_phase_this_run > 0:
+                    recovery_event = _COMPACTION_RECOVERY_EVENT_BY_TOOL.get(tc.name)
+                    if recovery_event is not None:
+                        append_event(
+                            run_id, recovery_event,
+                            phase=phase, step=step, name=tc.name,
+                            compaction_max_phase=compaction_max_phase_this_run,
+                        )
 
         pwi_exit = PostWriteIdleExitGuard.should_exit(
             post_write_idle_tools=post_write_idle_tools,
@@ -1400,6 +1475,21 @@ def run_agent(
         result.final_text = resp.text if 'resp' in dir() else ""
         result.aborted = True
         result.abort_reason = f"Max steps reached ({role_cfg.max_steps})"
+
+    # forge-hybrid Phase 2 (A) — resolve-time compaction telemetry. Emits the
+    # final per-run cumulative state so post-hoc analysis can attribute
+    # outcomes to compaction state. Fires regardless of resolve/abort/max_steps
+    # — all paths route through this single return.
+    if tiered_compact_enabled and log_calls:
+        append_event(
+            run_id, "compaction_phase_at_resolve",
+            phase=phase,
+            max_phase_reached=compaction_max_phase_this_run,
+            phase_at_first_write=compaction_phase_at_first_write,
+            tool_results_dropped_total=compaction_tool_results_dropped_total,
+            total_tokens_dropped=compaction_total_tokens_dropped,
+            aborted=result.aborted,
+        )
 
     result.wall_s = time.monotonic() - t0
     return result

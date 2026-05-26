@@ -156,6 +156,13 @@ def main() -> int:
                         "convergence_score >= HIGH). Tests whether the high-convergence "
                         "imperative recovers the wrong-target watchdog that --no-early-bail "
                         "failed. Default off; no effect if --no-early-bail is also set.")
+    p.add_argument("--tiered-compact", action="store_true",
+                   help="forge-hybrid Phase 2 (A): set LUXE_TIERED_COMPACT=1 so the "
+                        "3-phase compaction strategy (drop _luxe_nudge messages, truncate "
+                        "tool_results, drop tool_results, drop text/clear tool_call "
+                        "content) replaces the default elide_old_tool_results at the "
+                        "pre-chat compaction site. Default off; baseline is byte-"
+                        "identical when this flag is absent.")
     args = p.parse_args()
 
     if not args.dataset.is_file():
@@ -253,6 +260,7 @@ def main() -> int:
             action_density_gate=not args.no_action_density_gate,
             convergence_gate=not args.no_convergence_gate,
             early_bail_commit_only=args.early_bail_commit_only,
+            tiered_compact=args.tiered_compact,
         )
         results.append(result)
 
