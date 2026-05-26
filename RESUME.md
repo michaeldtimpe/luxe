@@ -1,6 +1,95 @@
 # luxe — session resume document
 
-## ⇒ SESSION HANDOFF (2026-05-25) — all work landed; tree clean, in sync; NO task in flight
+## ⇒ SESSION HANDOFF (2026-05-26) — Track 0 WASH + edit-quality investigation CLOSED (refined-port REFUTED); working-tree drafts + a default-OFF source change, NOT committed; NO task in flight
+
+**TL;DR for a cold start.** Two investigations executed today: (1) Track 0 forge-vs-luxe at n=75 → **WASH** (architecture line retired); (2) edit-quality follow-up that diagnosed luxe's early_bail family as the degrader, ablated it, and tested a refined port → all conclusions banked, **no source change ships**. **Working tree has 6 modified files** (2 doc drafts + 4 luxe-tree source files for a default-OFF diagnostic flag); per CLAUDE.md "ask first", nothing is committed or pushed. **Pristine main is intact at HEAD `7f80d79`.**
+
+---
+
+### Today's two investigations (chronological)
+
+**1. Track 0 forge-vs-luxe loop A/B → WASH at n=75 (the architecture line retires).**
+- luxe 30/75 (40.0%) | forge 32/75 (42.67%) → Δ +2 (+2.67pp). Gate #2 ≥5pp **FAIL**.
+- Paired completion-tokens ratio 1.97× (n=25 paired). Gate #3 ≤1.5× **FAIL.**
+- Joint = WASH. 0 harness errors, 75/75 valid pairs.
+- The clean Pareto superset at n=14 (forge ⊇ luxe) **did not hold at n=75** — at scale it's a +5/−3 trade with 3 luxe-exclusive resolves now existing (django-11333, xarray-3095, sympy-12096). Confirmed the "n=14 can't separate small real edge from favorable draw" caveat.
+- Cost-of-success surprise (median tokens/resolve): forge 4,344 vs luxe 8,574 → forge **0.51×**. Aggregate 1.97× comes from forge running full budget on hopeless cases.
+- 5 new forge fragilities at scale: `ToolCallError: Retries exhausted` (heavy-reasoner malformed emissions) — hidden at n=14.
+
+**2. Edit-quality investigation (the durable observation from Track 0):**
+
+*Phase 1 — Forensic diagnostic* (read `~/.luxe/runs/<run_id>/events.jsonl`): on the 4 edit-quality differential instances, 100% correlation between luxe-intervention firing and edit-quality degradation. The 3 forge-only wins (django-10880, requests-1724, sphinx-10673) each had 2-3 luxe `early_bail` family interventions fire (soft_anchor + breadth_probe — all "commit now / narrow / write now" pressure). The 1 forge loss (django-11333) had **zero** luxe interventions fire — clean luxe trajectory + correct patch.
+
+*Phase 2 — Ablation `--no-early-bail`*:
+- n=14: **+2 resolves clean, watchdog clean** → proceeded to n=75.
+- n=75: **+8 resolves (+10.67pp)** but watchdog **FAILED** (4 wrong_target migrations: matplotlib-25775, pylint-6528, sympy-13091, sympy-17318). Per pre-registered band: **STOP, non-Pareto repeat** of v1.7→v1.11 trade.
+- Cost-of-success at n=75: **+10.67pp** resolves with only 3 genuine wrong_target damages (historical "10/18" warning did NOT reproduce). **2.2× faster wall** (no intervention tokens → cleaner convergence).
+
+*Phase 3 — Refined port `LUXE_EARLY_BAIL_COMMIT_ONLY=1`* (hypothesis: keep commit_imperative at score ≥0.40, suppress soft_anchor + breadth_probe — the high-conv imperative is the protective variant):
+- n=14: **+1 resolves AND 1 watchdog hit** → STOP per pre-registered band, hypothesis **REFUTED**.
+- The pivotal instance is **matplotlib-20826**: baseline empty → `--no-early-bail` RESOLVED → refined commit_only **wrong_target**. commit_imperative fired (score climbed to ≥0.40), drove a premature commit to the wrong place. **commit_imperative ALSO degrades edit quality** — the whole early_bail family pressures premature commits; isolating commit_imperative doesn't help.
+
+### What stays vs ships
+
+- **No source change ships.** The trade-off documented across these two investigations matches luxe's v1.7→v1.11 tuning history and the 2026-05-24 reflect-cycle HOLD: relaxing premature-commitment pressure trades empty→wrong-action for some empty→resolve. The net is non-Pareto on the wrong-target axis.
+- **Edit-quality is a real and now-mechanistically-characterized phenomenon** but not portable as a luxe lever via existing interventions. The diagnostic + ablation infrastructure is the durable output.
+
+### Working-tree state (NOT committed; review and commit-or-revert at your discretion)
+
+**Documentation drafts (2 files):**
+- `RESUME.md` (this entry).
+- `lessons.md` (2026-05-26 entry: Track 0 + edit-quality investigation, ~50 lines).
+
+**Luxe-source diagnostic infrastructure (4 files, default OFF + byte-identical):**
+- `src/luxe/agents/loop.py` (+46/−11): the `LUXE_EARLY_BAIL_COMMIT_ONLY` env var + breadth_probe/soft_anchor suppression + commit_imperative preservation + a new `early_bail_suppressed_commit_only` observability event.
+- `benchmarks/swebench/run.py` (+8): new `--early-bail-commit-only` CLI flag.
+- `benchmarks/swebench/adapter.py` (+6): plumb the new parameter through `run_instance`.
+- `tests/test_loop_adaptive_policy.py` (+62): 2 new tests (low/mid-conv suppression, high-conv preservation). PASS.
+
+**Test suite: 910 tests pass** (zero regression from default-OFF byte-identity).
+
+**Memory (outside repo, written):**
+- `project_track0_forge_n75_wash.md` (Track 0 result).
+- The edit-quality investigation result is captured in `lessons.md` + this RESUME entry; a dedicated memory file is not required (no future-recall recommendation arises since the lever was refuted).
+
+**Scratch (retained for any future re-use, outside repo):**
+- `~/Downloads/forge-luxe-research/` — forge venv, grading venv, all per-instance + grading dirs, comparator JSONs, harness scripts, full `NOTES.md` briefing.
+
+### Suggested cold-start sequence in the new session
+
+1. Read this RESUME entry + the 2026-05-26 `lessons.md` entry.
+2. `git diff` and decide which of the 6 working-tree files to **commit, keep-but-not-commit, or revert**. The luxe-source changes are clean and default-OFF; they cost nothing but add a diagnostic lever for future investigations. Recommend committing them as-is (no behavior change for any user); the doc drafts are similarly low-risk.
+3. **Track 0 + edit-quality lines are now closed.** No follow-up is precommitted. Options remain: Track 2 (tiered compaction) was already noted as likely-cut; pick a fresh value axis (BFCL ceiling, new benchmark, model-capability re-bench if a stronger MoE appears — see CLAUDE.md single-champion policy).
+
+---
+
+## ⇒ PREVIOUS SESSION HANDOFF (Track 0 WASH only, written overnight before edit-quality investigation) — superseded by the entry above
+
+**TL;DR.** Track 0 ran to a clean honest WASH at n=75 (the largest test the smoke-then-scale plan called for). The architecture line ("forge's loop beats luxe's") **retires for this stack**; mechanistic observations preserved. **Working-tree changes are uncommitted** (this RESUME entry + a `lessons.md` entry); review the diffs and commit if you want. Per-CLAUDE.md "ask first," nothing was pushed or committed overnight.
+
+**Track 0 result (Milestone 2, n=75, co-graded 2026-05-26):**
+- **luxe 30/75 (40.0%) | forge 32/75 (42.67%) → Δ +2 (+2.67pp).** Gate #2 ≥5pp **FAIL.**
+- **Paired completion-tokens ratio 1.97×** (n=25 both-have-tokens). Gate #3 ≤1.5× **FAIL.**
+- **Joint verdict: WASH** (both gates FAIL). 0 harness errors, 75/75 valid pairs.
+- The clean Pareto **superset at n=14 was a small-n favorable draw** — at n=75 forge is a +5/−3 trade (3 *luxe-exclusive* resolves now exist: django-11333, xarray-3095, sympy-12096), not a superset. The language discipline ("n=14 can't separate a small real edge from a favorable draw") was right.
+
+**What survives the wash (durable, luxe-portable observations):**
+- **Give-up-avoidance** is a real but two-sided mechanism. matplotlib-13989 reproduces at n=75 (forge converts a luxe give-up) — and 3 other forge wins follow the same shape (matplotlib-24870, psf-requests-1724, django-10880). BUT 2 *luxe-exclusive* forge losses (xarray-3095, sympy-12096) come from forge running to max_iter where luxe's earlier termination landed the fix → the same trade luxe's v1.7→v1.11 tuned aggressively *toward* bailing, and that the reflect-cycle closed as HOLD for. Predicted by prior history; confirmed at scale.
+- **Edit-quality wins are real but rare**: sphinx-10673 reproduces (forge's content correct on the same 2 files where luxe's was buggy); psf-requests-1724 similar.
+- **Cost-of-success (median tokens-per-resolved): forge 4,344 vs luxe 8,574 → forge 0.51×.** Forge is half the per-success cost when it succeeds; aggregate 1.97× comes from burning the full 30-step budget on unconvertible cases.
+- **New scale-only forge fragility: 5 `ToolCallError` ("Retries exhausted after 3 consecutive failed attempts")** against the champion's output shape (heavy-reasoner malformed tool emissions). Hidden at n=14, real at n=75.
+- Forge's `respond`-terminal discipline actually **scaled UP**: max_iterations 64% at n=14 → 45% at n=75 (terminal_respond 36/75). Less wall-heavy than the smoke suggested.
+
+**Why no port-the-mechanism follow-up was queued:**
+The smoke's clean superset suggested "relax luxe's early-bail." n=75 refutes the *clean* part — at scale, relaxing early-bail would likely *trade* give-up→resolve for resolve→empty (the v1.7→v1.11 / reflect-HOLD non-Pareto pattern, now reproduced under forge's loop). The wash is the honest outcome; no luxe lever change is queued.
+
+**Working tree (drafts, uncommitted):** This RESUME entry + a 2026-05-26 entry in `lessons.md`. Memory: `project_track0_forge_n75_wash.md` (written to memory dir, outside repo). Scratch artifacts retained under `~/Downloads/forge-luxe-research/` (full comparator JSON at `results/phase2_comparison.json`, briefing in `NOTES.md`, both arms' per-instance + grading dirs).
+
+**Next (nothing precommitted):** Track 0 architecture line is closed; Track 2 (tiered compaction) was already noted as likely-cut (0 overflows at 131072); pick a fresh value axis. This warrants a new conversation. Plan: `~/.claude/plans/binary-gathering-panda.md` (executed). Executed plans (now DONE): `~/.claude/plans/noble-squishing-kahn.md`, `~/.claude/plans/velvety-purring-forest.md`, `~/.claude/plans/binary-gathering-panda.md`.
+
+---
+
+## ⇒ PREVIOUS SESSION HANDOFF (2026-05-25) — all work landed; tree clean, in sync; NO task in flight
 
 **Repo state:** `main` is linear + in sync with `origin/main` (HEAD `4327593`); working tree clean; full
 suite **978 pass**. Nothing is in progress — this is a clean cold start.
