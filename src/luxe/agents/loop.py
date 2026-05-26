@@ -26,6 +26,15 @@ from luxe.agents.convergence import (
     extract_path,
     recent_path_diversity,
 )
+from luxe.agents.guardrails import (
+    ActionDensityGateGuard,
+    ConsecutiveRepeatGuard,
+    EarlyBailGuard,
+    HabituationExitGuard,
+    PostWriteIdleExitGuard,
+    ProseBurstGuard,
+    WritePressureGuard,
+)
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import context_pressure, elide_old_tool_results
@@ -740,26 +749,27 @@ def run_agent(
         # the deliverable into chat instead of committing it. The
         # synthetic user message interrupts the read-loop and forces a
         # write decision before further tool calls accumulate.
-        # v1.11 Phase 3a — adaptive policy modulates the effective min_step.
-        # mod=1.0 (neutral, default) preserves v1.10.5 behavior exactly.
-        # mod>1.0 (bias toward encouragement, fires earlier); mod<1.0
-        # (bias toward suppression, fires later). Bias-not-lock invariant
-        # holds because bias_to_modulation is eps-clamped strictly inside
-        # (_INTENSITY_MIN, _INTENSITY_MAX), so effective_min_step is
-        # strictly inside the bounded range (no always-fire or never-fire).
-        if adaptive_policy_enabled:
-            mod = intervention_modulation["write_pressure"]
-            effective_wp_min_step = max(2, int(round(_WRITE_PRESSURE_MIN_STEP * (2.0 - mod))))
-        else:
-            effective_wp_min_step = _WRITE_PRESSURE_MIN_STEP
-        if (write_pressure_enabled
-                and not write_pressure_fired
-                and writes_seen == 0
-                and step >= effective_wp_min_step
-                and result.tool_calls_total >= _WRITE_PRESSURE_MIN_TOOLS
-                and (result.completion_tokens >= _WRITE_PRESSURE_MIN_TOKENS
-                     or result.tool_calls_total >= _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE)):
-            messages.append({"role": "user", "content": _WRITE_PRESSURE_MESSAGE})
+        # Write-pressure guard. Decision logic extracted to
+        # luxe.agents.guardrails.WritePressureGuard (forge-hybrid Phase 1).
+        # Loop owns state mutation (the *_fired flag, intervention tracking
+        # vars, event emission) so behavior is unchanged on the wire.
+        wp_decision = WritePressureGuard.check(
+            write_pressure_enabled=write_pressure_enabled,
+            write_pressure_fired=write_pressure_fired,
+            writes_seen=writes_seen,
+            step=step,
+            tool_calls_total=result.tool_calls_total,
+            completion_tokens=result.completion_tokens,
+            adaptive_policy_enabled=adaptive_policy_enabled,
+            intervention_modulation_write_pressure=intervention_modulation["write_pressure"],
+        )
+        if wp_decision is not None:
+            messages.append({
+                "role": "user",
+                "content": wp_decision.message,
+                "_luxe_nudge": True,
+                "_luxe_nudge_type": WritePressureGuard.nudge_type,
+            })
             write_pressure_fired = True
             last_intervention_step = step
             last_intervention_kind = "write_pressure"
@@ -780,211 +790,61 @@ def run_agent(
         # edit OR explicitly decline-with-justification. Mutually
         # compatible with WRITE_PRESSURE — both can fire in the same run
         # since they target different trajectory shapes.
-        if (early_bail_enabled
-                and not early_bail_fired
-                and writes_seen == 0
-                and step >= _EARLY_BAIL_MIN_STEP
-                and (result.tool_calls_total - writes_seen) >= _EARLY_BAIL_MIN_READS):
-            # v1.10.3 — REVERT to v1.10 silent-suppression in score<LOW band.
-            # History:
-            #   v1.10:   suppress entirely below LOW threshold (diffuse-recon;
-            #            commitment pressure hurts exploratory recovery).
-            #   v1.10.1: replaced suppression with exploratory variant.
-            #            matplotlib-14623 was rescued; pylint-6528 regressed.
-            #   v1.10.2: added recent_path_diversity gating to split the
-            #            LOW band (high-diversity → exploratory, low-diversity
-            #            → soft_anchor fallback). 3-rep variance baseline
-            #            (project_v1102_variance_baseline.md) showed
-            #            pylint-6528 empty in 2 of 3 reps — non-Pareto
-            #            confirmed at the band level (W3 collateral).
-            #   v1.10.3: revert to v1.10 silent-suppression. Keep
-            #            recent_path_diversity computation + emission as
-            #            observability for future cycles (v1.11 lever
-            #            sizing depends on diversity-distribution data),
-            #            but stop using it as a gate trigger.
-            # Resolution precedence: explicit kwarg > env mode > default.
-            # Only soft_anchor mode is dynamic; static modes (default,
-            # no_abstain, explicit kwarg) bypass the band logic.
-            suppress_for_convergence = (
-                convergence_gate_enabled
-                and convergence_score < _CONVERGENCE_LOW_THRESHOLD
-                and early_bail_message is None
-                and os.environ.get("LUXE_EARLY_BAIL_MODE", "default") == "soft_anchor"
-            )
-            if suppress_for_convergence:
-                # Match v1.10 semantics: do NOT set early_bail_fired here.
-                # Suppression events emit every step the predicate is
-                # satisfied below the LOW band — bloats the log slightly
-                # but lets post-hoc analysis see how long the diffuse-
-                # recon band persisted. The outer `not early_bail_fired`
-                # guard ensures the firing branch can still pick up later
-                # if convergence rises above LOW.
-                #
-                # v1.10.3 observability — compute recent_path_diversity
-                # and emit it on every suppression event so v1.11 mining
-                # has the topology signal without it being a gate trigger.
-                #
-                # v1.10.4 — band-response policy. The hybrid first-event
-                # variant fires breadth_probe on the FIRST suppression
-                # event (per-trajectory) and on the Nth escalation event
-                # (where N=_BREADTH_PROBE_ESCALATION_COUNT); the
-                # suppressed_diffuse event continues to fire every step
-                # for observability. breadth_probe does NOT set
-                # early_bail_fired — this allows subsequent interventions
-                # (soft_anchor / commit_imperative) to still fire when
-                # convergence_score rises above LOW (preserves 1921's
-                # step-7 soft_anchor → strong-tier path).
-                recent_diversity = recent_path_diversity(tool_history)
-                suppression_count_in_trajectory += 1
-                # v1.10.5 (corrected) — first-event gating predicate.
-                # See _v1105_synthesis_looping_signature() above for the
-                # full rationale + verified per-archetype feature data.
-                # narrow_reader_signal is True when first-event SHOULD
-                # fire (legacy field name preserved for event-log
-                # back-compat).
-                _bm25_count = sum(
-                    1 for h in tool_history
-                    if h.get("name") == "bm25_search"
-                )
-                _grep_count = sum(
-                    1 for h in tool_history
-                    if h.get("name") == "grep"
-                )
-                # v1.10.5c — distinct_files at firing point (read/edit/write
-                # tools only; non-read tools like bash, list_dir, bm25 don't
-                # contribute to "files inspected" count).
-                _distinct_files = len({
-                    h.get("path") for h in tool_history
-                    if h.get("name") in ("read_file", "edit_file", "write_file")
-                    and h.get("path")
-                })
-                narrow_reader_signal = not _v1105_synthesis_looping_signature(
-                    _bm25_count, _grep_count, _distinct_files
-                )
-                if log_calls:
-                    append_event(
-                        run_id, "early_bail_suppressed_diffuse",
-                        phase=phase, step=step,
-                        convergence_score=convergence_score,
-                        threshold=_CONVERGENCE_LOW_THRESHOLD,
-                        tool_calls_total=result.tool_calls_total,
-                        recent_path_diversity=recent_diversity,
-                        suppression_count_so_far=suppression_count_in_trajectory,
-                        band_response=_band_response,
-                        narrow_reader_signal=narrow_reader_signal,
-                        bm25_count=_bm25_count,
-                        grep_count=_grep_count,
-                        distinct_files=_distinct_files,
-                    )
-                # v1.11 Phase B — score_trend collapse promotion: REVERTED.
-                # The promotion (raise score<LOW band response breadth_probe →
-                # soft_anchor commitment nudge on the confirmed-collapse signal)
-                # was net-negative at n=75: it fired 3/3 on xarray-3305
-                # (strong→plausible) and pylint-4661 (plausible→wrong_target),
-                # demoting their tier via PREMATURE COMMITMENT, with 0 gains.
-                # Root cause: the step-6 collapse signature (trend<=0 AND
-                # conv<LOW) can't distinguish "stalled" from "mid-deep-dive with
-                # a transient low-trend dip", so the nudge derails recovering
-                # trajectories. soft_anchor modulation is still COMPUTED + emitted
-                # (observability for the v1.11.1 redesign) but nothing acts on it.
-                # See lessons.md 2026-05-21 + project_v111_phaseA_calibration.
-                if _band_response == "breadth_probe_hybrid" and not early_bail_commit_only:
-                    # Refined port (LUXE_EARLY_BAIL_COMMIT_ONLY): suppress
-                    # breadth_probe entirely. Only commit_imperative (HIGH
-                    # band, lines ~926-930) fires under refined port.
-                    fire_reason = None
-                    # v1.10.5 — gate first-event fire on narrow_reader_signal.
-                    # Escalation remains unconditional (different failure mode).
-                    if (suppression_count_in_trajectory == 1
-                            and narrow_reader_signal):
-                        fire_reason = "first"
-                    elif (suppression_count_in_trajectory
-                          == _BREADTH_PROBE_ESCALATION_COUNT):
-                        fire_reason = "escalation"
-                    if fire_reason is not None:
-                        messages.append({
-                            "role": "user",
-                            "content": _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
-                        })
-                        breadth_probe_fire_count += 1
-                        # NOTE: do NOT set early_bail_fired = True here.
-                        # The outer guard re-evaluates each step; if
-                        # convergence_score later rises into the standard
-                        # band, soft_anchor (or commit_imperative at HIGH)
-                        # fires through the normal firing branch below.
-                        # last_intervention_step/_kind still record this
-                        # for habituation telemetry.
-                        last_intervention_step = step
-                        last_intervention_kind = "early_bail_breadth_probe"
-                        intervention_kinds_fired.add("early_bail_breadth_probe")
-                        if log_calls:
-                            append_event(
-                                run_id, "early_bail_breadth_probe_fired",
-                                phase=phase, step=step,
-                                convergence_score=convergence_score,
-                                suppression_count_so_far=(
-                                    suppression_count_in_trajectory),
-                                fire_reason=fire_reason,
-                                recent_path_diversity=recent_diversity,
-                                narrow_reader_signal=narrow_reader_signal,
-                                bm25_count=_bm25_count,
-                                grep_count=_grep_count,
-                                distinct_files=_distinct_files,
-                            )
-            else:
-                msg: str | None
-                msg_variant: str
-                if early_bail_message is not None:
-                    msg = early_bail_message
-                    msg_variant = "kwarg"
-                else:
-                    mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
-                    if (convergence_gate_enabled
-                            and mode == "soft_anchor"
-                            and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
-                        msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
-                        msg_variant = "commit_imperative"
-                    elif early_bail_commit_only and mode == "soft_anchor":
-                        # Refined port (LUXE_EARLY_BAIL_COMMIT_ONLY): suppress
-                        # soft_anchor at mid convergence. Don't set
-                        # early_bail_fired so commit_imperative can still fire
-                        # on a later step if convergence climbs above HIGH.
-                        msg = None
-                        msg_variant = "suppressed_commit_only"
-                    else:
-                        msg = _EARLY_BAIL_MESSAGE_MODES.get(
-                            mode, _EARLY_BAIL_MESSAGE)
-                        msg_variant = mode
-                if msg is not None:
-                    messages.append({"role": "user", "content": msg})
-                    early_bail_fired = True
-                    early_bail_step = step
-                    last_intervention_step = step
-                    last_intervention_kind = "early_bail"
-                    intervention_kinds_fired.add("early_bail")
-                    if log_calls:
-                        append_event(
-                            run_id, "early_bail_fired",
-                            phase=phase, step=step,
-                            tool_calls_total=result.tool_calls_total,
-                            completion_tokens=result.completion_tokens,
-                            reads=result.tool_calls_total - writes_seen,
-                            convergence_score=convergence_score,
-                            msg_variant=msg_variant,
-                        )
-                elif log_calls:
-                    # Refined-port observability: record the suppression so
-                    # post-hoc analysis can see how often commit_only saved a
-                    # mid-band soft_anchor fire without acting on it.
-                    append_event(
-                        run_id, "early_bail_suppressed_commit_only",
-                        phase=phase, step=step,
-                        tool_calls_total=result.tool_calls_total,
-                        completion_tokens=result.completion_tokens,
-                        reads=result.tool_calls_total - writes_seen,
-                        convergence_score=convergence_score,
-                        configured_mode=os.environ.get("LUXE_EARLY_BAIL_MODE", "default"),
-                    )
+        eb_outcome = EarlyBailGuard.evaluate(
+            early_bail_enabled=early_bail_enabled,
+            early_bail_fired=early_bail_fired,
+            writes_seen=writes_seen,
+            step=step,
+            tool_calls_total=result.tool_calls_total,
+            early_bail_message=early_bail_message,
+            early_bail_commit_only=early_bail_commit_only,
+            convergence_gate_enabled=convergence_gate_enabled,
+            convergence_score=convergence_score,
+            band_response=_band_response,
+            suppression_count_in_trajectory=suppression_count_in_trajectory,
+            tool_history=tool_history,
+            recent_path_diversity=recent_path_diversity(tool_history),
+        )
+        if eb_outcome is not None:
+            # Apply state mutations the loop owns. The guard tells us how
+            # much to change suppression_count / breadth_probe_fire_count,
+            # whether to set early_bail_fired, and which intervention-kind
+            # to record on the trackers.
+            suppression_count_in_trajectory += eb_outcome.suppression_count_delta
+            breadth_probe_fire_count += eb_outcome.breadth_probe_fire_delta
+            if eb_outcome.sets_early_bail_fired:
+                early_bail_fired = True
+                early_bail_step = step
+            if eb_outcome.decision is not None:
+                msg_dict: dict[str, Any] = {
+                    "role": "user",
+                    "content": eb_outcome.decision.message,
+                }
+                if eb_outcome.nudge_type is not None:
+                    msg_dict["_luxe_nudge"] = True
+                    msg_dict["_luxe_nudge_type"] = eb_outcome.nudge_type
+                messages.append(msg_dict)
+            if eb_outcome.last_intervention_kind is not None:
+                last_intervention_step = step
+                last_intervention_kind = eb_outcome.last_intervention_kind
+                intervention_kinds_fired.add(eb_outcome.last_intervention_kind)
+            if log_calls:
+                if eb_outcome.suppress_event is not None:
+                    ev_name, ev_payload = eb_outcome.suppress_event
+                    # Loop owns the completion_tokens counter; fill it for
+                    # events that carry it (commit_only suppression).
+                    payload = {
+                        k: (result.completion_tokens if k == "completion_tokens" and v is None else v)
+                        for k, v in ev_payload.items()
+                    }
+                    append_event(run_id, ev_name, phase=phase, step=step, **payload)
+                if eb_outcome.fire_event is not None:
+                    ev_name, ev_payload = eb_outcome.fire_event
+                    payload = {
+                        k: (result.completion_tokens if k == "completion_tokens" and v is None else v)
+                        for k, v in ev_payload.items()
+                    }
+                    append_event(run_id, ev_name, phase=phase, step=step, **payload)
 
         # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,
         # action_density_gate, and the action_density_sample observability
@@ -1023,41 +883,40 @@ def run_agent(
             and same_file_read_twice_step is not None
             and same_file_read_twice_step <= step
         )
-        if (action_density_gate_enabled
-                and not action_density_gate_fired
-                and writes_seen == 0
-                and step >= _ACTION_DENSITY_GATE_MIN_STEP
-                and result.completion_tokens >= _ACTION_DENSITY_GATE_MIN_TOKENS
-                and result.tool_calls_total <= _ACTION_DENSITY_GATE_MAX_TOOLS
-                and not (v110_suppress or v19_suppress)):
-            fire_mode: str | None
-            if early_bail_step is None:
-                fire_mode = "standalone"
-                turns_since_bail = None
-            elif step - early_bail_step >= _ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL:
-                fire_mode = "post_bail_rescue"
-                turns_since_bail = step - early_bail_step
-            else:
-                fire_mode = None  # bail grace period — hold gate
-                turns_since_bail = None
-            if fire_mode is not None:
-                messages.append({"role": "user", "content": _ACTION_DENSITY_GATE_MESSAGE})
-                action_density_gate_fired = True
-                last_intervention_step = step
-                last_intervention_kind = "action_density_gate"
-                intervention_kinds_fired.add("action_density_gate")
-                if log_calls:
-                    append_event(
-                        run_id, "action_density_gate_fired",
-                        phase=phase, step=step,
-                        fire_mode=fire_mode,
-                        turns_since_bail=turns_since_bail,
-                        tool_calls_total=result.tool_calls_total,
-                        completion_tokens=result.completion_tokens,
-                        action_density=action_density,
-                        same_file_read_twice_step=same_file_read_twice_step,
-                        convergence_score=convergence_score,
-                    )
+        adg_decision = ActionDensityGateGuard.check(
+            action_density_gate_enabled=action_density_gate_enabled,
+            action_density_gate_fired=action_density_gate_fired,
+            writes_seen=writes_seen,
+            step=step,
+            completion_tokens=result.completion_tokens,
+            tool_calls_total=result.tool_calls_total,
+            v110_suppress=v110_suppress,
+            v19_suppress=v19_suppress,
+            early_bail_step=early_bail_step,
+        )
+        if adg_decision is not None:
+            messages.append({
+                "role": "user",
+                "content": adg_decision.message,
+                "_luxe_nudge": True,
+                "_luxe_nudge_type": ActionDensityGateGuard.nudge_type,
+            })
+            action_density_gate_fired = True
+            last_intervention_step = step
+            last_intervention_kind = "action_density_gate"
+            intervention_kinds_fired.add("action_density_gate")
+            if log_calls:
+                append_event(
+                    run_id, "action_density_gate_fired",
+                    phase=phase, step=step,
+                    fire_mode=adg_decision.metadata["fire_mode"],
+                    turns_since_bail=adg_decision.metadata["turns_since_bail"],
+                    tool_calls_total=result.tool_calls_total,
+                    completion_tokens=result.completion_tokens,
+                    action_density=action_density,
+                    same_file_read_twice_step=same_file_read_twice_step,
+                    convergence_score=convergence_score,
+                )
         elif (action_density_gate_enabled and not action_density_gate_fired
               and v110_suppress and log_calls):
             # Observability — record the v1.10 suppression once when it
@@ -1096,8 +955,21 @@ def run_agent(
             and writes_seen == 0
             and completion_delta_last_step >= _PROSE_BURST_MIN_DELTA
         )
-        if prose_burst_enabled and prose_burst_now and not prose_burst_fired:
-            messages.append({"role": "user", "content": _PROSE_BURST_MESSAGE})
+        pb_decision = ProseBurstGuard.check(
+            prose_burst_enabled=prose_burst_enabled,
+            prose_burst_fired=prose_burst_fired,
+            step=step,
+            tool_calls_total=result.tool_calls_total,
+            writes_seen=writes_seen,
+            completion_delta_last_step=completion_delta_last_step,
+        )
+        if pb_decision is not None:
+            messages.append({
+                "role": "user",
+                "content": pb_decision.message,
+                "_luxe_nudge": True,
+                "_luxe_nudge_type": ProseBurstGuard.nudge_type,
+            })
             prose_burst_fired = True
             last_intervention_step = step
             last_intervention_kind = "prose_burst"
@@ -1136,20 +1008,21 @@ def run_agent(
         # post_write_idle_exit shapes). Founding instance: sympy-13031 fired
         # all three distinct interventions by step 15, zero writes through
         # max_steps. `resp` is from the prior iteration's backend.chat call.
-        if (len(intervention_kinds_fired) >= _HABITUATION_EXIT_MIN_KINDS
-                and first_write_step_after_intervention is None
-                and step >= _HABITUATION_EXIT_MIN_STEP):
+        hab_exit = HabituationExitGuard.should_exit(
+            intervention_kinds_fired=intervention_kinds_fired,
+            first_write_step_after_intervention=first_write_step_after_intervention,
+            step=step,
+            last_intervention_step=last_intervention_step,
+            tool_calls_total=result.tool_calls_total,
+            completion_tokens=result.completion_tokens,
+        )
+        if hab_exit is not None:
             result.final_text = resp.text or "" if 'resp' in dir() else ""
             if log_calls:
                 append_event(
                     run_id, "habituation_exit",
                     phase=phase, step=step,
-                    interventions_fired=sorted(intervention_kinds_fired),
-                    since_last_intervention=(
-                        step - last_intervention_step
-                        if last_intervention_step is not None else None),
-                    tool_calls_total=result.tool_calls_total,
-                    completion_tokens=result.completion_tokens,
+                    **hab_exit,
                 )
             break
 
@@ -1483,14 +1356,17 @@ def run_agent(
                     path=extract_path(tc.name, tc.arguments),
                 )
 
-        if post_write_idle_tools >= _POST_WRITE_IDLE_MAX:
+        pwi_exit = PostWriteIdleExitGuard.should_exit(
+            post_write_idle_tools=post_write_idle_tools,
+            writes_seen=writes_seen,
+        )
+        if pwi_exit is not None:
             result.final_text = resp.text or ""
             if log_calls:
                 append_event(
                     run_id, "post_write_idle_exit",
                     phase=phase, step=step,
-                    idle_tools=post_write_idle_tools,
-                    writes_seen=writes_seen,
+                    **pwi_exit,
                 )
             break
 
@@ -1503,13 +1379,13 @@ def run_agent(
                     step_had_repeat=True,
                     consecutive_repeat_steps=consecutive_repeat_steps,
                 )
-            if consecutive_repeat_steps >= _MAX_CONSECUTIVE_REPEAT_STEPS:
+            cr_abort = ConsecutiveRepeatGuard.should_abort(
+                consecutive_repeat_steps=consecutive_repeat_steps,
+            )
+            if cr_abort is not None:
                 result.final_text = resp.text or ""
                 result.aborted = True
-                result.abort_reason = (
-                    f"Stuck in loop — repeated same tool calls "
-                    f"{consecutive_repeat_steps} consecutive turns"
-                )
+                result.abort_reason = cr_abort["abort_reason"]
                 break
         else:
             consecutive_repeat_steps = 0
