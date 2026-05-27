@@ -589,8 +589,18 @@ def run_agent(
     # replaces elide at the pre-chat compaction site. Run-cumulative counters
     # below feed the resolve-time telemetry event.
     tiered_compact_enabled = os.environ.get("LUXE_TIERED_COMPACT") == "1"
+    # Override the default compact_threshold (0.75) for stress-testing. Lower
+    # values force compaction to fire at lower context pressure — useful for
+    # surfacing the lever's behavior on workloads that rarely hit the default
+    # trigger. Out-of-band values (<=0 or >=1) silently fall back to default.
+    try:
+        _tc_threshold = float(os.environ.get("LUXE_TIERED_COMPACT_THRESHOLD", "0.75"))
+        if not (0.0 < _tc_threshold < 1.0):
+            _tc_threshold = 0.75
+    except ValueError:
+        _tc_threshold = 0.75
     _tiered_compactor: TieredCompact | None = (
-        TieredCompact() if tiered_compact_enabled else None
+        TieredCompact(compact_threshold=_tc_threshold) if tiered_compact_enabled else None
     )
     compaction_tool_results_dropped_total = 0
     compaction_total_tokens_dropped = 0
