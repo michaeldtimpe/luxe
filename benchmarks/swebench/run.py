@@ -163,6 +163,11 @@ def main() -> int:
                         "content) replaces the default elide_old_tool_results at the "
                         "pre-chat compaction site. Default off; baseline is byte-"
                         "identical when this flag is absent.")
+    p.add_argument("--tiered-compact-threshold", type=float, default=None,
+                   help="Override the TieredCompact compact_threshold (default 0.75). "
+                        "Lower values force compaction to fire at lower context pressure; "
+                        "use 0.40-0.50 for stress-testing the lever. No effect without "
+                        "--tiered-compact. Out-of-band values silently fall back to 0.75.")
     args = p.parse_args()
 
     if not args.dataset.is_file():
@@ -261,6 +266,7 @@ def main() -> int:
             convergence_gate=not args.no_convergence_gate,
             early_bail_commit_only=args.early_bail_commit_only,
             tiered_compact=args.tiered_compact,
+            tiered_compact_threshold=args.tiered_compact_threshold,
         )
         results.append(result)
 

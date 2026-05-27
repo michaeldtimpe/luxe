@@ -269,6 +269,7 @@ def run_instance(
     convergence_gate: bool = True,
     early_bail_commit_only: bool = False,
     tiered_compact: bool = False,
+    tiered_compact_threshold: float | None = None,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -348,6 +349,11 @@ def run_instance(
     # compaction site with the 3-phase strategy.
     if tiered_compact:
         extra_env = {**(extra_env or {}), "LUXE_TIERED_COMPACT": "1"}
+        if tiered_compact_threshold is not None:
+            extra_env = {
+                **(extra_env or {}),
+                "LUXE_TIERED_COMPACT_THRESHOLD": str(tiered_compact_threshold),
+            }
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
