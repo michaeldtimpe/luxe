@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "n": 1,
+  "frozen_at": "2026-05-26",
+  "recipe": "Single-instance diagnostic for the forge-hybrid Phase 2 (A) n=14 smoke anomaly. pylint-4604 produced a 16-line patch in baseline (May 25) but 0 lines in treatment (May 26) with max_phase=0 (compaction never fired). This re-run isolates whether the divergence is substrate non-determinism or a Phase 1 (C) refactor bug.",
+  "instance_ids": [
+    "pylint-dev__pylint-4604"
+  ]
+}
