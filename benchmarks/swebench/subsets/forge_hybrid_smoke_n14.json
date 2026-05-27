@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "n": 14,
+  "frozen_at": "2026-05-26",
+  "recipe": "Mirrors the 14 instances from acceptance/swebench/track0_smoke/luxe_arm (the canonical pre-Phase-2 n=14 smoke baseline). Used as the treatment subset for forge-hybrid Phase 2 (A) TieredCompact A/B.",
+  "instance_ids": [
+    "sphinx-doc__sphinx-10435",
+    "sympy__sympy-13031",
+    "matplotlib__matplotlib-20676",
+    "matplotlib__matplotlib-20826",
+    "sphinx-doc__sphinx-10673",
+    "astropy__astropy-12907",
+    "django__django-10914",
+    "django__django-10973",
+    "scikit-learn__scikit-learn-10844",
+    "pytest-dev__pytest-10081",
+    "matplotlib__matplotlib-13989",
+    "mwaskom__seaborn-3069",
+    "sympy__sympy-12419",
+    "pylint-dev__pylint-4604"
+  ]
+}
