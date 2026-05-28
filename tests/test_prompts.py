@@ -404,6 +404,67 @@ def test_swebench_strict_only_overlay_fires_only_on_bugfix_tasks():
         assert task_id == "baseline", f"{task_type} leaked to overlay"
 
 
+def test_swebench_bugfix_respond_variant_carries_respond_clause():
+    """forge-hybrid Phase 3 (B2): the respond variant adds the explicit
+    respond-tool guidance clause + replaces step (6) 'final report' with
+    the respond call. Both the clause and the step-replacement must be
+    present, and the baseline counterexample / unmodified variants must
+    NOT carry the clause."""
+    from luxe.agents.prompts import PROMPT_REGISTRY
+    assert "swebench_bugfix_respond" in PROMPT_REGISTRY
+    respond_v = PROMPT_REGISTRY["swebench_bugfix_respond"]
+    base_v = PROMPT_REGISTRY["swebench_bugfix"]
+    cex_v = PROMPT_REGISTRY["swebench_bugfix_counterexample"]
+
+    # Clause text and step replacement land in respond variant only.
+    assert "call `respond(message=...)`" in respond_v.task_prefix
+    assert "watchdog will reject premature calls" in respond_v.task_prefix
+    assert "call `respond(message=...)` with a brief summary" in respond_v.task_prefix
+    # Old step-(6) text is gone in respond variant.
+    assert "(6) final report\n" not in respond_v.task_prefix
+    # Base and counterexample retain the original step (6) and do NOT
+    # mention respond — strict isolation.
+    assert "(6) final report\n" in base_v.task_prefix
+    assert "(6) final report\n" in cex_v.task_prefix
+    assert "respond(message=" not in base_v.task_prefix
+    assert "respond(message=" not in cex_v.task_prefix
+
+
+def test_swebench_strict_respond_only_overlay_registered_and_routes_only_bugfix():
+    """The B2 overlay maps bugfix -> swebench_bugfix_respond; other task
+    types fall through. Activated via configs/single_64gb_swebench_respond.yaml."""
+    from luxe.agents.prompts import (
+        PROMPT_REGISTRY,
+        TASK_OVERLAYS,
+        get_overlay,
+        resolve_prompt_ids,
+    )
+    assert "swebench_strict_respond_only" in TASK_OVERLAYS
+    overlay = get_overlay("swebench_strict_respond_only")
+    assert overlay is not None
+    assert overlay.by_task == {"bugfix": "swebench_bugfix_respond"}
+    assert "swebench_bugfix_respond" in PROMPT_REGISTRY
+    # bugfix routes to the respond variant
+    sys_id, task_id = resolve_prompt_ids(
+        "bugfix",
+        system_prompt_id="baseline",
+        task_prompt_id="baseline",
+        task_overlay_id="swebench_strict_respond_only",
+    )
+    assert sys_id == "swebench_bugfix_respond"
+    assert task_id == "swebench_bugfix_respond"
+    # Other task types do NOT pick up the overlay
+    for other in ("implement", "document", "manage", "review", "summarize"):
+        sys_id, task_id = resolve_prompt_ids(
+            other,
+            system_prompt_id="baseline",
+            task_prompt_id="baseline",
+            task_overlay_id="swebench_strict_respond_only",
+        )
+        assert sys_id == "baseline", f"{other} leaked to overlay"
+        assert task_id == "baseline", f"{other} leaked to overlay"
+
+
 def test_swebench_bugfix_variant_contains_anti_reproducer_directives():
     """Surface-level guard against accidental edits that drop the key
     directives. The smoke run we're defending against was specifically

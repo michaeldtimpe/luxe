@@ -258,6 +258,36 @@ _SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX = _SWEBENCH_TASK_PREFIX.replace(
 assert _SWEBENCH_COUNTEREXAMPLE_CLAUSE in _SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX
 
 
+# forge-hybrid Phase 3 (B2) — respond-terminal protocol clause. Pairs with
+# the LUXE_RESPOND_TERMINAL=1 lever (src/luxe/tools/respond.py). The B1
+# disambiguation arm (tool exposed, prompt unchanged) showed 0/14 organic
+# adoption — the champion doesn't discover the respond tool from its
+# presence alone. B2 adds explicit guidance so we can distinguish whether
+# the prompt encouraging termination is what changes behavior, vs the
+# structured tool surface itself.
+#
+# The clause inserts into the Linear protocol at step (6), replacing
+# "final report" with an explicit "call respond(message=...) with a brief
+# summary of the change". Watchdogs in the loop catch premature / no-write
+# / passive-surrender / compaction-phantom shapes.
+_SWEBENCH_RESPOND_CLAUSE = (
+    "When the edit is complete and you have verified it, call "
+    "`respond(message=...)` with a brief summary of the change. This "
+    "terminates the loop cleanly. Do NOT call `respond` before writing "
+    "the deliverable — the watchdog will reject premature calls.\n\n"
+)
+assert "  (6) final report\n\n" in _SWEBENCH_TASK_PREFIX, (
+    "swebench prompt structure changed; respond-clause insert point "
+    "is no longer present"
+)
+_SWEBENCH_RESPOND_TASK_PREFIX = _SWEBENCH_TASK_PREFIX.replace(
+    "  (6) final report\n\n",
+    "  (6) call `respond(message=...)` with a brief summary of the change\n\n"
+    + _SWEBENCH_RESPOND_CLAUSE,
+)
+assert _SWEBENCH_RESPOND_CLAUSE in _SWEBENCH_RESPOND_TASK_PREFIX
+
+
 PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "baseline": PromptVariant(
         system=_BASELINE_SYSTEM,
@@ -294,6 +324,10 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "swebench_bugfix_counterexample": PromptVariant(
         system=_BASELINE_SYSTEM,
         task_prefix=_SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX,
+    ),
+    "swebench_bugfix_respond": PromptVariant(
+        system=_BASELINE_SYSTEM,
+        task_prefix=_SWEBENCH_RESPOND_TASK_PREFIX,
     ),
 }
 
@@ -374,6 +408,14 @@ TASK_OVERLAYS: dict[str, TaskOverlay] = {
     # baseline overlay so the A/B is one config-flag apart.
     "swebench_strict_counterexample_only": TaskOverlay(by_task={
         "bugfix": "swebench_bugfix_counterexample",
+    }),
+    # swebench_strict_respond_only — forge-hybrid Phase 3 (B2) variant that
+    # pairs with LUXE_RESPOND_TERMINAL=1. Adds explicit guidance telling the
+    # model to call respond(message=...) at the end of the linear protocol.
+    # The B1 smoke (2026-05-28) confirmed the tool alone has 0/14 organic
+    # adoption — the prompt nudge is the load-bearing change.
+    "swebench_strict_respond_only": TaskOverlay(by_task={
+        "bugfix": "swebench_bugfix_respond",
     }),
 }
 
