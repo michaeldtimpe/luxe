@@ -155,6 +155,17 @@ class TieredCompact:
 
     TRUNCATE_CHARS = 200
 
+    # Default phase_thresholds (0.50, 0.85, 0.95) — shipped 2026-05-28 as the
+    # forge-hybrid cycle's only Pareto-positive default. n=75 rep-1+rep-2
+    # validation: resolve-rate equivalent to baseline (60/75 then 58/75 vs
+    # baseline 58/75, within substrate noise ±2.8) AND 42-56% wall savings
+    # AND 2 protected wrong_target instances healed (matplotlib-25775,
+    # pylint-6528) AND zero new wrong_target damages. Aggressive phase 1
+    # (fire at 50% pressure) captures recovery wins; conservative phase 3
+    # (fire at 95% pressure, observed 1/75 firing rate) avoids the
+    # destructive reasoning-drop mode. See lessons.md 2026-05-28 entry.
+    _DEFAULT_PHASE_THRESHOLDS: tuple[float, float, float] = (0.50, 0.85, 0.95)
+
     def __init__(
         self,
         keep_recent: int = 3,
@@ -166,9 +177,7 @@ class TieredCompact:
         if phase_thresholds is not None:
             self._phase_triggers = phase_thresholds
         else:
-            self._phase_triggers = (
-                compact_threshold, compact_threshold, compact_threshold,
-            )
+            self._phase_triggers = self._DEFAULT_PHASE_THRESHOLDS
 
     @staticmethod
     def _find_eligible_end(messages: list[dict[str, Any]], keep_recent: int) -> int:

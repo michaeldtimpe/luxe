@@ -51,6 +51,62 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   the request as unfinished and lists the verifier's deficiencies (consuming the verdict,
   not re-solving). The `_luxe_repair` marker keeps the nudge out of later verify contexts.
 
+### forge-hybrid Phase 2 (A) compaction invariants (pinned 2026-05-28, DEFAULT-ON)
+
+- **TieredCompact ships default-ON** (`LUXE_TIERED_COMPACT` defaults to enabled; set to "0"
+  to disable for ablation). The 4-arm n=75 sweep (OFF / 0.75 / 0.50 / 0.40) + 4-arm
+  n=14 stress + 2-rep noise validation at phase_thresholds=(0.50, 0.85, 0.95) jointly
+  established: resolve rate is equivalent to no-compaction baseline within substrate
+  noise band (±2.8 at n=75); wall improvement is 42-56% (well outside substrate wall
+  noise ~20%); 2 protected wrong_target instances (matplotlib-25775, pylint-6528) heal
+  via phase-1 fires; zero new wrong_target damages. This is the cycle's only Pareto-
+  positive lever.
+- **Default phase_thresholds = (0.50, 0.85, 0.95)** owned by
+  `luxe.context.TieredCompact._DEFAULT_PHASE_THRESHOLDS`. Aggressive phase 1 (50% pressure)
+  captures protective phase-1 wins (drop _luxe_nudge + truncate tool_results); conservative
+  phase 3 (95% pressure) avoids the destructive reasoning-drop mode (observed at 1/75
+  firing rate at this threshold). The phase-1-helps / phase-3-hurts split is the cycle's
+  load-bearing design finding.
+- **Strict counter discipline**: `writes_seen`, `reads`, `tool_calls_total`, and all
+  `*_fired` flags are explicit integer/boolean state owned by `run_agent`. They are
+  NEVER recomputed by scanning `messages`. Compaction can drop arbitrary message-level
+  content from the eligible region; loop state must stay consistent under compaction.
+  This is a regression guard against any future "lazy fix" that derives counters from
+  message inspection.
+- **Marker-based nudge identification**: TieredCompact identifies droppable nudges
+  via the `_luxe_nudge` (and `_luxe_repair`) keys on message dicts, NOT by body-text
+  matching. Body-text matching is FORBIDDEN — it's fragile under message-text drift.
+  Every guardrail that injects a nudge MUST tag the message with `_luxe_nudge=True` and
+  `_luxe_nudge_type="<guard_name>"`. See `docs/luxe-markers-audit.md`.
+- **Protected messages**: `messages[0]` (system prompt) and `messages[1]` (original
+  task) are NEVER eligible for compaction. The last `keep_recent` assistant-message
+  iterations are also protected. Compaction operates only on messages indexed
+  `[2, eligible_end)`.
+
+### forge-hybrid Phase 3 (B) respond-terminal invariants (pinned 2026-05-28, opt-in)
+
+- **`LUXE_RESPOND_TERMINAL` defaults OFF.** The B1+B2 smoke at n=14 confirmed the
+  champion does NOT call the respond tool organically (0/14 adoption) and does NOT
+  call it under explicit prompt guidance (0/14 adoption with `swebench_bugfix_respond`).
+  The lever is in-tree as infrastructure but does not engage on this champion; future
+  cycles may re-attempt if a different champion is fielded.
+- **4 watchdog gates** when the flag IS set: (1) compaction-phantom (Phase ≥2 + writes==0),
+  (2) early-respond (writes==0 + step<4), (3) no-writes-late (writes==0 + step≥4),
+  (4) passive-surrender (writes≥1 + step≤last_write_step). First match wins; non-terminal
+  gates inject typed reprompt + continue.
+
+### forge-hybrid Phase 4 (D) trajectory-shape invariants (pinned 2026-05-28, opt-in)
+
+- **`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE` defaults OFF.** The D smoke at n=14 confirmed
+  the locked predicate (`sustained_low_trend ≥ 3 AND grep_vs_read_ratio < 0.5 AND
+  breadth_saturation < 0.6`) is too narrow for this champion at num_ctx=32768: 0/14
+  suppression fires across the smoke set. The lever is in-tree as infrastructure but
+  the predicate does not engage; future cycles may trace-mine to find empirically-grounded
+  thresholds.
+- **Implicit dependency on `LUXE_ADAPTIVE_POLICY=1`** for `score_log` population. With
+  adaptive policy off, the predicate is a no-op (sustained_low_trend = 0). This is a
+  documented coupling, not a bug.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —
