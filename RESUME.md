@@ -1,5 +1,85 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-05-28) — Extended-benchmark suite SHIPPED (5 new evals + scaffolding + tests) + 6-bit baseline established; commit local, push pending
+
+**TL;DR for a cold start.** Added a broad-capability benchmark layer (MMLU / ARC-Challenge / GSM8K / CodeNeedle / Perplexity) alongside the agentic suite (BFCL / SWE-bench / maintain_suite). Captured a clean baseline of the *existing* agentic benchmarks on Qwen3.6-35B-A3B-6bit. All new code is in this commit; existing HTTP `Backend` is unchanged so the agentic-suite path carries zero risk. The mlx_lm in-process backend is a sibling path used only by logprob-based evals — necessary because oMLX silently drops `logprobs` / `top_logprobs` on both `/v1/chat/completions` and `/v1/completions`. Local main has this work staged for commit; push pending user approval. Working tree dirty as planned: new dirs + 3 pre-existing m5 edits to `benchmarks/swebench/*` + `src/luxe/agents/loop.py`. `lessons.md` has an unrelated entry written by the user.
+
+**Companion private repo:** session artifacts (plan, summary, baseline numbers) live at `michaeldtimpe/extended-bench-luxe-research` (private). The luxe repo holds the code; the research repo holds the design + session log.
+
+---
+
+### What landed in this commit
+
+**5 new benchmarks** under `benchmarks/` (each: `run.py + adapter.py + grade.py`):
+- `gsm8k/` — 8-shot CoT (Wei et al. canonical exemplars), `####`-marker extraction with `<think>`-block stripping
+- `codeneedle/` — vendored upstream `extract.py` (esprima AST) + `scorer.py` (SequenceMatcher); manifest frozen at seed=42 with 11 needles in http_server.py + 16 in jquery.js
+- `mmlu/` — 5-shot per-subject (Hendrycks protocol), first-token logprob over A/B/C/D via mlx_lm direct
+- `arc_challenge/` — 0-shot, variable choice count (3/4/5), first-token logprob via mlx_lm direct
+- `perplexity/` — sliding-window over WikiText-103 test, in-process mlx_lm (internal regression metric only, NOT leaderboard-comparable)
+
+**Shared scaffolding** in `benchmarks/_eval_common/`:
+- `extract.py` — `extract_gsm8k_answer`, `extract_choice_letter`, `strip_think_blocks` (think-blocks stripped before all answer extraction)
+- `choices.py` — `format_mc_prompt` handling 3/4/5 options
+- `fewshot.py` — `deterministic_sample` + `GSM8K_8SHOT_EXEMPLARS` (Wei et al. verbatim)
+- `logprob.py` — `plan_sliding_windows` (no double-counting; boundary tokens correctly skipped when stride=window) + `aggregate`
+- `meta.py` — `build_run_meta` collecting eval_suite_version, protocol_version, dataset sha256, model_id, sampling, luxe_commit, timestamp_utc
+- `dataset.py` — `cache_dir`, `sha256_verify`, `jsonl_load`
+- `mlx_direct.py` — `MLXDirectBackend` wrapping `mlx_lm.load`; exposes `token_logprobs_from_ids` (perplexity) and `first_token_top_logprobs` + `score_choices` (MMLU/ARC). **Sequencing constraint: do not run while oMLX holds the same weights** — ~25 GB doubled
+
+**Scripts:**
+- `fetch_{gsm8k,arc,mmlu,wikitext}_data.py` — vendor data to `~/.luxe/<bench>-data/` with sha256 capture
+- `build_codeneedle_manifest.py` — one-shot manifest freezer
+- `run_eval_suite.sh` — sequences HTTP-Backend phase (gsm8k, codeneedle) before mlx_direct phase (mmlu, arc, perplexity), with an oMLX-stop prompt between
+- `aggregate_eval_suite.py` — reads all summaries → markdown
+
+**Tests:** 102 offline unit tests (pure-function, ~0.1s); `tests/test_mlx_direct_smoke.py` gated by new `live_model` pytest marker
+
+**Dependencies:** new optional-deps group `extended-bench = ["esprima>=4.0", "mlx_lm>=0.31", "datasets>=2.0"]` in `pyproject.toml`
+
+**Plan file:** `/Users/michaeltimpe/.claude/plans/dazzling-tickling-bengio.md` (also copied into research repo as `PLAN.md`)
+
+### Baseline numbers captured this session (existing agentic suite)
+
+Stored at `acceptance/eval_suite_baseline/2026-05-27_6bit/`. Wall: ~13h 8min total (BFCL → maintain_suite → swebench-smoke3 chain).
+
+**BFCL raw — 1150/1640 (70.12%)** on Qwen3.6-35B-A3B-6bit, temp=0:
+- simple_python 400 → 84.25% | multiple 200 → 81.50% | parallel 200 → 65.50% | parallel_multiple 200 → 48.00%
+- irrelevance 240 → 92.08% | multi_turn_long_context 200 → 39.00%
+
+**maintain_suite — 10/10 pass, 40/50 score, v1-release-eligible.** 2 fixtures lost a point on `pr_opened` (failing tests at PR-open → draft PR opened instead).
+
+**SWE-bench preds-only smoke — 3/3 patches produced.** astropy 12907 / 13033 / 13236 (13/14/26-line patches). FAIL_TO_PASS correctness scoring deferred (needs Docker harness against `predictions.json`).
+
+### Dependencies + dataset state
+
+- `~/.luxe/{gsm8k,arc,mmlu,wikitext}-data/` all populated, row counts match expected, sha256 recorded in fetch logs:
+  - gsm8k test 1319 / train 7473 (sha256 `3730d312f6e34405`, `17f347dc51477c50`)
+  - arc challenge_test 1172 (sha256 `062fe98a0d64b0bb`)
+  - mmlu test 14042 / dev 285 / 57 subjects (sha256 `30225733916644b7`, `147bce5b06a81d81`)
+  - wikitext-103-raw test 1,289,979 chars (sha256 `aca2f46735043bcf`)
+- `.venv` updated: `esprima 4.0.1`, `mlx_lm 0.31.3`, `mlx 0.31.2`, `sentencepiece 0.2.1`, `datasets` already present
+
+### How to continue in a new session
+
+1. **First-time setup** (already done on this machine, included here for reproducibility):
+   - `pip install -e .[extended-bench]`
+   - `python scripts/fetch_{gsm8k,arc,mmlu,wikitext}_data.py`
+2. **Run the new suite** (oMLX must be free for the mlx_direct phase; the runner prompts you to stop it between phases):
+   - `bash scripts/run_eval_suite.sh --limit 100` for calibration; expect MMLU 65–80%, ARC 75–85%, GSM8K 70–85%
+   - `bash scripts/run_eval_suite.sh` for the full run (slow — multiple hours)
+3. **Establish baseline** after a verified clean run: copy `summary.md` to `acceptance/eval_suite/baselines/<model_id>_v0.1.0.md` and commit
+4. **Next iteration**: SWE-bench Docker harness on the smoke-3 `predictions.json` to get real FAIL_TO_PASS pass rates; consider patching oMLX to surface logprobs so MMLU/ARC can share the HTTP path
+
+### Open items (none blocking)
+
+- mlx_lm-direct smoke test (`tests/test_mlx_direct_smoke.py`) deferred until oMLX freed
+- Hardcoded sha256 values in fetch scripts not yet pinned (captured in this session's logs; pin in a follow-up)
+- Baseline-comparison tooling: first-run baseline is manual; auto-diff/alert is a follow-up
+
+---
+
+(historical sessions below)
+
 ## ⇒ SESSION HANDOFF (2026-05-26) — Track 0 WASH + edit-quality investigation CLOSED (refined-port REFUTED); diagnostic flag + docs SHIPPED (`122831d`); NO task in flight
 
 **TL;DR for a cold start.** Two investigations executed: (1) Track 0 forge-vs-luxe at n=75 → **WASH** (architecture line retired); (2) edit-quality follow-up that diagnosed luxe's early_bail family as the degrader, ablated it, and tested a refined port → all conclusions banked, **no behavior ships**. The investigation infrastructure (default-OFF `LUXE_EARLY_BAIL_COMMIT_ONLY` flag in loop.py + adapter/CLI plumbing + 2 unit tests) and both docs landed as one commit `122831d` on 2026-05-26. Local `main` is **ahead of `origin/main` by 1** (push pending user approval). Working tree clean.
