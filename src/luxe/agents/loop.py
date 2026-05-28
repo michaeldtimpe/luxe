@@ -181,6 +181,51 @@ _WRITE_PRESSURE_MESSAGE = (
     "a first draft that captures the structure, then refine."
 )
 
+# forge-hybrid Phase 3 (B1) — respond terminal tool watchdog constants.
+# Default OFF; the loop only intercepts respond calls when
+# LUXE_RESPOND_TERMINAL=1 (and the tool is in the surface only under the
+# same gate, set by single.py). See src/luxe/tools/respond.py for the
+# tool surface and src/luxe/tools/tools.sdd for the contract.
+#
+# Minimum step before respond is allowed without intervention when no
+# write has occurred. Steps below this with writes_seen==0 trip the
+# "premature respond" watchdog; steps at or above it trip the
+# "no_writes_late" watchdog (soft give-up). Calibrated at 4 to match
+# _EARLY_BAIL_MIN_STEP — the same trajectory shape early_bail catches
+# is the canonical premature-summarize failure mode for respond.
+_RESPOND_MIN_STEP = 4
+
+_RESPOND_PREMATURE_NUDGE = (
+    "Mid-loop notice: you called `respond` after only {step} steps "
+    "without writing or editing any file. The deliverable for this "
+    "task is a concrete change, not a summary. Continue with "
+    "`read_file`/`grep` to locate the issue, then `edit_file`/"
+    "`write_file`, then call `respond`."
+)
+
+_RESPOND_NO_WRITES_LATE_NUDGE = (
+    "Mid-loop notice: you've spent {step} steps gathering information "
+    "without writing any file, and now you're calling `respond`. If the "
+    "existing code is correct and no change is needed, state that "
+    "explicitly and call `respond` again. Otherwise, write or edit the "
+    "relevant file first."
+)
+
+_RESPOND_PASSIVE_SURRENDER_NUDGE = (
+    "Mid-loop notice: you wrote a file in step {last_write_step} and "
+    "immediately called `respond` without verifying. Use "
+    "`read_file`/`grep`/`bash` to confirm the change is correct, then "
+    "call `respond`."
+)
+
+_RESPOND_COMPACTION_PHANTOM_NUDGE = (
+    "Mid-loop notice: context compaction has dropped tool_result content "
+    "from earlier in this trajectory, but you have not yet written any "
+    "file. Calling `respond` now would summarize from a compacted view. "
+    "Use `read_file`/`grep` to re-verify the file you intend to change, "
+    "then `edit_file`/`write_file`, then call `respond`."
+)
+
 # Early-bail intervention (v1.7 priority #1). Fires once per run when the
 # agent has read enough to plan but hasn't written. Targets SWE-bench's
 # "no_abort, zero writes" empty_patch class: 10 of 18 v3 paired-mechanism
@@ -599,14 +644,39 @@ def run_agent(
             _tc_threshold = 0.75
     except ValueError:
         _tc_threshold = 0.75
+    # Per-phase override: comma-separated "p1,p2,p3" (e.g., "0.50,0.85,0.95").
+    # When set + valid, overrides the single-threshold knob. Mirrors forge's
+    # TieredCompact.phase_thresholds. Malformed values silently fall back.
+    _tc_phase_thresholds: tuple[float, float, float] | None = None
+    _phase_raw = os.environ.get("LUXE_TIERED_COMPACT_PHASE_THRESHOLDS", "")
+    if _phase_raw:
+        try:
+            _parts = [float(x.strip()) for x in _phase_raw.split(",")]
+            if len(_parts) == 3 and all(0.0 < p < 1.0 for p in _parts):
+                _tc_phase_thresholds = (_parts[0], _parts[1], _parts[2])
+        except ValueError:
+            pass
     _tiered_compactor: TieredCompact | None = (
-        TieredCompact(compact_threshold=_tc_threshold) if tiered_compact_enabled else None
+        TieredCompact(
+            compact_threshold=_tc_threshold,
+            phase_thresholds=_tc_phase_thresholds,
+        ) if tiered_compact_enabled else None
     )
     compaction_tool_results_dropped_total = 0
     compaction_total_tokens_dropped = 0
     compaction_max_phase_this_run = 0
     compaction_phase_at_first_write: int | None = None
     last_compaction_phase: int = 0  # latest phase >0; reset to 0 only on resolve event
+
+    # forge-hybrid Phase 3 (B1) — respond terminal tool. Default OFF
+    # (byte-identical baseline preserved). When LUXE_RESPOND_TERMINAL=1,
+    # the model can call respond(message=...) to exit the loop, gated by
+    # 4 watchdogs (compaction-phantom, early-respond, no-writes-late,
+    # passive-surrender). See src/luxe/tools/respond.py + tools.sdd.
+    respond_terminal_enabled = os.environ.get("LUXE_RESPOND_TERMINAL") == "1"
+    first_write_step: int | None = None
+    last_write_step: int | None = None
+    respond_terminated = False
 
     # v1.11 Phase 1 — adaptive policy substrate. Computation + observability
     # ONLY in Phase 1; modulation does NOT yet influence intervention
@@ -1345,6 +1415,103 @@ def run_agent(
                     post_write_idle_tools += 1
                 continue
 
+            # forge-hybrid Phase 3 (B1) — respond terminal tool watchdog
+            # intercept. Runs BEFORE dispatch when LUXE_RESPOND_TERMINAL=1
+            # and the model calls `respond`. Four gates apply in this
+            # priority order; first match wins. Three gates inject a
+            # reprompt + continue (do not terminate). The terminal path
+            # (no gate fires) sets result.final_text + breaks both the
+            # inner tool_calls loop and the outer step loop.
+            if respond_terminal_enabled and tc.name == "respond":
+                message = str(tc.arguments.get("message", ""))
+                # Gate 1: compaction × respond (highest priority).
+                if (compaction_max_phase_this_run >= 2
+                        and writes_seen == 0):
+                    messages.append({
+                        "role": "user",
+                        "content": _RESPOND_COMPACTION_PHANTOM_NUDGE,
+                        "_luxe_nudge": True,
+                        "_luxe_nudge_type": "respond_compaction_phantom",
+                    })
+                    if log_calls:
+                        append_event(
+                            run_id, "respond_compaction_phantom",
+                            phase=phase, step=step,
+                            writes_seen=writes_seen,
+                            compaction_max_phase=compaction_max_phase_this_run,
+                            message_chars=len(message),
+                        )
+                    continue
+                # Gate 2: early-respond watchdog (writes==0, step < MIN).
+                if writes_seen == 0 and step < _RESPOND_MIN_STEP:
+                    messages.append({
+                        "role": "user",
+                        "content": f"Mid-loop notice: you called `respond` after only {step} steps without writing or editing any file. The deliverable for this task is a concrete change, not a summary. Continue with `read_file`/`grep` to locate the issue, then `edit_file`/`write_file`, then call `respond`.",
+                        "_luxe_nudge": True,
+                        "_luxe_nudge_type": "respond_premature",
+                    })
+                    if log_calls:
+                        append_event(
+                            run_id, "respond_premature",
+                            phase=phase, step=step,
+                            writes_seen=writes_seen,
+                            message_chars=len(message),
+                        )
+                    continue
+                # Gate 3: no-writes-late (soft give-up).
+                if writes_seen == 0 and step >= _RESPOND_MIN_STEP:
+                    messages.append({
+                        "role": "user",
+                        "content": f"Mid-loop notice: you've spent {step} steps gathering information without writing any file, and now you're calling `respond`. If the existing code is correct and no change is needed, state that explicitly and call `respond` again. Otherwise, write or edit the relevant file first.",
+                        "_luxe_nudge": True,
+                        "_luxe_nudge_type": "respond_no_writes_late",
+                    })
+                    if log_calls:
+                        append_event(
+                            run_id, "respond_no_writes_late",
+                            phase=phase, step=step,
+                            writes_seen=writes_seen,
+                            message_chars=len(message),
+                        )
+                    continue
+                # Gate 4: anti-cheap-exit (passive surrender). At this
+                # point writes_seen >= 1. PASS iff at least one step
+                # elapsed since the most recent write (verification
+                # opportunity). FAIL if same-step respond after a write.
+                if not (last_write_step is not None and step > last_write_step):
+                    messages.append({
+                        "role": "user",
+                        "content": f"Mid-loop notice: you wrote a file in step {last_write_step} and immediately called `respond` without verifying. Use `read_file`/`grep`/`bash` to confirm the change is correct, then call `respond`.",
+                        "_luxe_nudge": True,
+                        "_luxe_nudge_type": "respond_passive_surrender",
+                    })
+                    if log_calls:
+                        append_event(
+                            run_id, "respond_passive_surrender",
+                            phase=phase, step=step,
+                            writes_seen=writes_seen,
+                            last_write_step=last_write_step,
+                            message_chars=len(message),
+                        )
+                    continue
+                # All gates passed → terminate cleanly. Set final_text,
+                # emit the terminate event, flip the two-level break flag,
+                # and break the inner tool_calls loop. The outer step loop
+                # checks `respond_terminated` immediately after the inner
+                # loop ends so post-dispatch gates (post_write_idle,
+                # consecutive_repeat) do not re-fire on the partial step.
+                result.final_text = message
+                if log_calls:
+                    append_event(
+                        run_id, "respond_called",
+                        phase=phase, step=step,
+                        writes_seen=writes_seen,
+                        message_chars=len(message),
+                        compaction_max_phase=compaction_max_phase_this_run,
+                    )
+                respond_terminated = True
+                break
+
             executed = dispatch_tool(
                 tc.name, tc.arguments, tool_fns,
                 cache=cache, cacheable=cacheable,
@@ -1373,6 +1540,13 @@ def run_agent(
             if tc.name in _WRITE_TOOLS and not executed.error:
                 writes_seen += 1
                 post_write_idle_tools = 0
+                # forge-hybrid Phase 3 (B1) — track first/last write step
+                # for the respond terminal-tool watchdogs (passive-surrender
+                # gate inspects last_write_step). Unconditional bookkeeping;
+                # used only when respond_terminal_enabled is True.
+                if first_write_step is None:
+                    first_write_step = step
+                last_write_step = step
                 # forge-hybrid Phase 2 (A) — capture compaction phase at the
                 # first successful write. Used by the resolve-time telemetry
                 # to attribute write-step gating to compaction state. Fires
@@ -1440,6 +1614,15 @@ def run_agent(
                             phase=phase, step=step, name=tc.name,
                             compaction_max_phase=compaction_max_phase_this_run,
                         )
+
+        # forge-hybrid Phase 3 (B1) — clean two-level exit. The inner
+        # tool_calls loop broke with respond_terminated set; the model's
+        # final message is already on result.final_text. Skip the
+        # post-dispatch gates (post_write_idle_exit, consecutive_repeat)
+        # so they don't re-fire on the partial step, and break the outer
+        # step loop without setting result.aborted.
+        if respond_terminated:
+            break
 
         pwi_exit = PostWriteIdleExitGuard.should_exit(
             post_write_idle_tools=post_write_idle_tools,

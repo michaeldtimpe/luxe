@@ -18,7 +18,9 @@ from luxe.backend import Backend
 from luxe.config import RoleConfig
 from luxe.sdd import SddParseError
 from luxe.spec_resolver import find_all_sdd, format_sdd_block
-from luxe.tools import analysis, cve_lookup as cve_lookup_mod, fs, git, shell
+import os
+
+from luxe.tools import analysis, cve_lookup as cve_lookup_mod, fs, git, respond as respond_mod, shell
 from luxe.tools.base import ToolCache, ToolDef, ToolFn
 from luxe import search as search_mod
 from luxe import symbols as symbols_mod
@@ -82,6 +84,14 @@ def _build_full_tool_surface(
         defs.append(cve_lookup_mod.cve_lookup_def())
         fns.update(cve_lookup_mod.TOOL_FNS)
         cacheable.update(cve_lookup_mod.CACHEABLE)
+
+    # forge-hybrid Phase 3 (B) — respond terminal tool. Gated behind
+    # LUXE_RESPOND_TERMINAL=1; not registered (and not in the wire surface)
+    # when the env var is absent. The loop's special-case handler
+    # intercepts respond calls BEFORE dispatch in that mode.
+    if os.environ.get("LUXE_RESPOND_TERMINAL") == "1":
+        defs.append(respond_mod.respond_def())
+        fns.update(respond_mod.TOOL_FNS)
 
     if tool_allowlist is not None:
         allowed = set(tool_allowlist)

@@ -270,6 +270,8 @@ def run_instance(
     early_bail_commit_only: bool = False,
     tiered_compact: bool = False,
     tiered_compact_threshold: float | None = None,
+    tiered_compact_phase_thresholds: str | None = None,
+    respond_terminal: bool = False,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -354,6 +356,15 @@ def run_instance(
                 **(extra_env or {}),
                 "LUXE_TIERED_COMPACT_THRESHOLD": str(tiered_compact_threshold),
             }
+        if tiered_compact_phase_thresholds is not None:
+            extra_env = {
+                **(extra_env or {}),
+                "LUXE_TIERED_COMPACT_PHASE_THRESHOLDS": tiered_compact_phase_thresholds,
+            }
+    # forge-hybrid Phase 3 (B1): expose the respond terminal tool + 4-gate
+    # watchdog stack when flagged. Default OFF; baseline is byte-identical.
+    if respond_terminal:
+        extra_env = {**(extra_env or {}), "LUXE_RESPOND_TERMINAL": "1"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
