@@ -30,6 +30,16 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-05-27] llmtop missed BFCL despite matching the process — model detector required a `/` in `--model`
+
+**What happened**: Kicked off the 6bit baseline (BFCL full / maintain_suite / swebench smoke3) in the background as PID 71035 (bash wrapper → PID 71038 `python -m benchmarks.bfcl.run --model Qwen3.6-35B-A3B-6bit …`). `llmtop` showed Python in the matching-processes pane but **no entry under Active Models**, so a glance at the dashboard read like "nothing's running."
+
+**Root cause**: llmtop has four model sources (`src/sample/models.rs`): API probes (ollama/omlx/lmstudio), per-process FFI scan of mmap'd weight files, cmdline file paths, and cmdline HF repo ids. BFCL is an API *client* — it doesn't mmap weights, the `--model` value (`Qwen3.6-35B-A3B-6bit`) is a bare label with no `/` and no file extension. So all four sources missed it: API probe (BFCL exposes none), FFI scan (no mmap'd `.safetensors`), path scanner (no `/`), HF-repo-id scanner (requires exactly one `/`). The process was matched (`LLM_NAMES` contains "python"), it just produced zero `ModelEntry`s.
+
+**Fix / takeaway**: Added a `looks_like_bare_model_label` branch to the cmdline flag scanner in [llmtop-rs](https://github.com/michaeldtimpe/llmtop) (`src/sample/models.rs`). When `--model` (or any HF-flag *except* `-m`) carries a value that's not an HF repo id, not a path, not a URL, ≥ 3 chars, in `[A-Za-z0-9._-:]`, and contains at least one of `[0-9._-:]` (so `auto`/`default`/`latest` don't get promoted), emit a `cmdline` `ModelEntry` with `resident_bytes = None` (the caller may be a client, not a server, so process RSS is not a weights signal). `-m` is excluded from the bare-label branch because python overloads it for module names — `python -m benchmarks.bfcl.run` would otherwise emit `benchmarks.bfcl.run` as a model. The general principle: **when a tool's detectors all key on the same assumed format (here: HuggingFace `org/repo`), they share a blind spot for any caller that legitimately uses a different convention** (here: server-resolved opaque labels in BFCL/lm-eval). Worth listing the format-assumptions of each detector explicitly so the gap is visible. Also: a "matched process with no attributed model" is itself a signal — llmtop could show a hint row in that case instead of staying silent. Filed as a follow-up.
+
+**Affected files**: External — `~/Downloads/llmtop-rs/src/sample/models.rs` (new `looks_like_bare_model_label`, new emit branch with `-m` exclusion), `~/Downloads/llmtop-rs/README.md` (detection-section rewrite covering both HF and bare-label shapes). No luxe code changed.
+
 ### [2026-05-25] WS2: sizing the "acted-but-wrong-binding" axis → BANK (a raw-size bar passes, but precision + separability don't)
 
 **What happened**: After the spot-check, a read-only sizing pass (`scripts/analyze_acted_but_wrong.py`) characterized the never-examined acted-but-wrong multi_turn failures (`instance_state_mismatch` + `execution_response_mismatch`; A=151 = 71 miss_func + 80 miss_param) — disjoint from the 58 hand-labeled give-ups. Buckets: `gt_value_mismatch` 58 (38.4% of A), `omission` 60, `extra_action` 33, `path_divergence` 0. Of 79 mismatched params: string_format 60, numeric 12, recipient_id 7.
