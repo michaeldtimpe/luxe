@@ -355,6 +355,116 @@ def score_trajectory_trend(
     return 0.0
 
 
+# ============================================================================
+# Phase 4 (D) — trajectory-shape predicate (selective early_bail suppression)
+# ============================================================================
+#
+# Background: the n=75 forge-hybrid `--no-early-bail` ablation showed
+# early_bail damages SOME instances (3 wrong_target regressions) while
+# protecting OTHERS. The trajectory-shape predicate detects "deep localized
+# reading with stable convergence" and suppresses early_bail on those
+# specific shapes — capturing the +8 fix-shape wins without re-introducing
+# the 3 wrong_target damages.
+#
+# All four signals are pure functions of the bounded tool_history +
+# score_log; the predicate composes them via locked thresholds.
+W = 4  # window size for trajectory-shape signals
+
+
+@dataclass(frozen=True)
+class ShapeSignals:
+    grep_vs_read_ratio: float
+    sustained_low_trend: int
+    breadth_saturation: float
+    post_bail_call_rate: float
+
+
+def trajectory_shape_signals(
+    history: Sequence[dict[str, Any]],
+    score_log: Sequence[float],
+    step: int,
+    *,
+    early_bail_step: int | None = None,
+) -> ShapeSignals:
+    """Compute the 4 trajectory-shape signals used by the Phase 4 (D)
+    selective early_bail suppression predicate.
+
+    Window: last W=4 tool-call entries (or all if fewer exist).
+
+    Signals (locked spec — DO NOT vary the formulas):
+    - grep_vs_read_ratio = sum_grep / (sum_read + 1) over W
+    - sustained_low_trend = max K with non-increasing convergence_score over K
+    - breadth_saturation = unique_files / total_calls in W
+    - post_bail_call_rate = tool_calls_in_W_post_bail / W (0.0 if no bail)
+    """
+    window = list(history)[-W:]
+
+    # grep_vs_read_ratio over the window
+    sum_grep = sum(1 for h in window if h.get("name") in _GREP_TOOLS)
+    sum_read = sum(1 for h in window if h.get("name") in _READ_TOOLS)
+    grep_vs_read_ratio = sum_grep / (sum_read + 1)
+
+    # sustained_low_trend: walk score_log backward counting consecutive
+    # non-increasing deltas (score_log[t] - score_log[t-1] <= 0).
+    scores = list(score_log)
+    if len(scores) < 2:
+        sustained_low_trend = 0
+    else:
+        k = 0
+        for i in range(len(scores) - 1, 0, -1):
+            if scores[i] - scores[i - 1] <= 0:
+                k += 1
+            else:
+                break
+        sustained_low_trend = k
+
+    # breadth_saturation: unique_files / total_calls in W
+    total_calls = len(window)
+    if total_calls == 0:
+        breadth_saturation = 0.0
+    else:
+        unique_files = len({h.get("path") for h in window})
+        breadth_saturation = unique_files / total_calls
+
+    # post_bail_call_rate: fraction of W-window entries with step >= early_bail_step
+    if early_bail_step is None:
+        post_bail_call_rate = 0.0
+    else:
+        post_bail_count = sum(
+            1 for h in window
+            if h.get("step") is not None and h["step"] >= early_bail_step
+        )
+        post_bail_call_rate = post_bail_count / W
+
+    return ShapeSignals(
+        grep_vs_read_ratio=grep_vs_read_ratio,
+        sustained_low_trend=sustained_low_trend,
+        breadth_saturation=breadth_saturation,
+        post_bail_call_rate=post_bail_call_rate,
+    )
+
+
+# Initial predicate (Phase 4 D hypothesis; testable, not retrofitted):
+# Suppress early_bail when the model is in deep localized reading with
+# stable (non-decreasing) convergence. The n=75 forge-hybrid plan locks
+# these thresholds; refine via re-bench, not by tuning the predicate.
+_SHAPE_SUPPRESS_SUSTAINED_LOW_TREND_MIN = 3
+_SHAPE_SUPPRESS_GREP_VS_READ_RATIO_MAX = 0.5
+_SHAPE_SUPPRESS_BREADTH_SATURATION_MAX = 0.6
+
+
+def should_suppress_for_trajectory_shape(signals: ShapeSignals) -> bool:
+    """Phase 4 (D) suppression predicate: 'deep localized reading with
+    stable convergence' — model is converging on a real target,
+    premature commit pressure hurts. Returns True to suppress.
+    """
+    return (
+        signals.sustained_low_trend >= _SHAPE_SUPPRESS_SUSTAINED_LOW_TREND_MIN
+        and signals.grep_vs_read_ratio < _SHAPE_SUPPRESS_GREP_VS_READ_RATIO_MAX
+        and signals.breadth_saturation < _SHAPE_SUPPRESS_BREADTH_SATURATION_MAX
+    )
+
+
 @dataclass(frozen=True)
 class AdaptiveState:
     """Within-run trajectory state — computed once per loop step.

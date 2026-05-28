@@ -913,6 +913,8 @@ def run_agent(
             suppression_count_in_trajectory=suppression_count_in_trajectory,
             tool_history=tool_history,
             recent_path_diversity=recent_path_diversity(tool_history),
+            score_log=score_log,
+            early_bail_step=early_bail_step,
         )
         if eb_outcome is not None:
             # Apply state mutations the loop owns. The guard tells us how

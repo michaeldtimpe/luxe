@@ -268,6 +268,7 @@ def run_instance(
     action_density_gate: bool = True,
     convergence_gate: bool = True,
     early_bail_commit_only: bool = False,
+    early_bail_trajectory_shape: bool = False,
     tiered_compact: bool = False,
     tiered_compact_threshold: float | None = None,
     tiered_compact_phase_thresholds: str | None = None,
@@ -346,6 +347,13 @@ def run_instance(
     # still fires. See loop.py around line 532 for the gate.
     if early_bail_commit_only:
         extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_COMMIT_ONLY": "1"}
+    # forge-hybrid Phase 4 (D) — selective early_bail suppression on the
+    # "deep localized reading with stable convergence" trajectory shape.
+    # Targets the +8 fix-shape wins that --no-early-bail captured at n=75
+    # without re-introducing the 3 wrong_target damages. See
+    # luxe.agents.convergence.should_suppress_for_trajectory_shape.
+    if early_bail_trajectory_shape:
+        extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_TRAJECTORY_SHAPE": "1"}
     # forge-hybrid Phase 2 (A): wire TieredCompact when flagged; default OFF.
     # Replaces the elide_old_tool_results call at loop.py's pre-chat
     # compaction site with the 3-phase strategy.

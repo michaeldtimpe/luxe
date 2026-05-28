@@ -156,6 +156,13 @@ def main() -> int:
                         "convergence_score >= HIGH). Tests whether the high-convergence "
                         "imperative recovers the wrong-target watchdog that --no-early-bail "
                         "failed. Default off; no effect if --no-early-bail is also set.")
+    p.add_argument("--early-bail-trajectory-shape", action="store_true",
+                   help="forge-hybrid Phase 4 (D) selective-suppression lever: set "
+                        "LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1 so EarlyBailGuard suppresses "
+                        "early_bail when trajectory-shape signals indicate the model is "
+                        "in deep localized reading with stable convergence (the +8 "
+                        "fix-shape trajectories that --no-early-bail rescued at n=75). "
+                        "Default off; baseline byte-identical when unset.")
     p.add_argument("--tiered-compact", action="store_true",
                    help="forge-hybrid Phase 2 (A): set LUXE_TIERED_COMPACT=1 so the "
                         "3-phase compaction strategy (drop _luxe_nudge messages, truncate "
@@ -280,6 +287,7 @@ def main() -> int:
             action_density_gate=not args.no_action_density_gate,
             convergence_gate=not args.no_convergence_gate,
             early_bail_commit_only=args.early_bail_commit_only,
+            early_bail_trajectory_shape=args.early_bail_trajectory_shape,
             tiered_compact=args.tiered_compact,
             tiered_compact_threshold=args.tiered_compact_threshold,
             tiered_compact_phase_thresholds=args.tiered_compact_phase_thresholds,

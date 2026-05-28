@@ -345,3 +345,194 @@ def test_early_bail_commit_only_preserves_commit_imperative(monkeypatch):
     fired = [e for e in events if e["kind"] == "early_bail_fired"]
     assert any(e.get("msg_variant") == "commit_imperative" for e in fired), \
         f"commit_imperative must still fire under commit_only at high conv; fired={fired}"
+
+
+# ── Phase 4 (D) trajectory-shape predicate tests — 2026-05-28 ──────────────
+# Selective early_bail suppression on "deep localized reading with stable
+# convergence". Gated by LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1; default OFF.
+
+from luxe.agents.convergence import (
+    ShapeSignals,
+    should_suppress_for_trajectory_shape,
+    trajectory_shape_signals,
+)
+
+
+def test_signals_compute_correctly_on_known_history():
+    """Hand-crafted history + score_log → each of the 4 signals comes out
+    to a specific, hand-verifiable value over the W=4 window."""
+    # W=4 window with: 1 grep + 3 reads, all on the same path → low
+    # grep_vs_read_ratio, low breadth_saturation. Score_log monotonically
+    # non-increasing (4 deltas) → sustained_low_trend = 4. early_bail_step=2
+    # so all 4 entries (steps 3-6) qualify as post-bail → rate = 4/4 = 1.0.
+    history = [
+        {"step": 3, "name": "grep", "path": "pkg/mod.py"},
+        {"step": 4, "name": "read_file", "path": "pkg/mod.py"},
+        {"step": 5, "name": "read_file", "path": "pkg/mod.py"},
+        {"step": 6, "name": "read_file", "path": "pkg/mod.py"},
+    ]
+    score_log = [0.5, 0.4, 0.4, 0.3, 0.2]
+    signals = trajectory_shape_signals(
+        history, score_log, step=6, early_bail_step=2,
+    )
+    # 1 grep / (3 reads + 1) = 0.25
+    assert signals.grep_vs_read_ratio == 0.25
+    # 4 consecutive non-increasing deltas
+    assert signals.sustained_low_trend == 4
+    # 1 unique path / 4 calls = 0.25
+    assert signals.breadth_saturation == 0.25
+    # all 4 in W have step >= 2 → 4/4 = 1.0
+    assert signals.post_bail_call_rate == 1.0
+
+
+def test_predicate_fires_on_fix_shape():
+    """sustained_low_trend=4, grep_vs_read_ratio=0.2, breadth_saturation=0.4
+    → True (deep localized reading with stable convergence)."""
+    signals = ShapeSignals(
+        grep_vs_read_ratio=0.2,
+        sustained_low_trend=4,
+        breadth_saturation=0.4,
+        post_bail_call_rate=0.0,
+    )
+    assert should_suppress_for_trajectory_shape(signals) is True
+
+
+def test_predicate_does_not_fire_on_wrong_target_shape():
+    """sustained_low_trend=4, grep_vs_read_ratio=0.2, breadth_saturation=0.8
+    → False (breadth too high → not localized)."""
+    signals = ShapeSignals(
+        grep_vs_read_ratio=0.2,
+        sustained_low_trend=4,
+        breadth_saturation=0.8,
+        post_bail_call_rate=0.0,
+    )
+    assert should_suppress_for_trajectory_shape(signals) is False
+
+
+def test_flag_off_byte_identical(monkeypatch):
+    """Without LUXE_EARLY_BAIL_TRAJECTORY_SHAPE, EarlyBailGuard evaluation
+    matches the pre-Phase-4 baseline behavior: no
+    `early_bail_suppressed_trajectory_shape` event is emitted regardless
+    of the trajectory shape."""
+    monkeypatch.delenv("LUXE_EARLY_BAIL_TRAJECTORY_SHAPE", raising=False)
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    # Same-file reads → high convergence + sustained trend; would fire the
+    # trajectory-shape predicate if the env var were set.
+    scripted = [_read_resp() for _ in range(8)] + [_terminal()]
+    run_agent(
+        backend=_ScriptedBackend(scripted),
+        role_cfg=RoleConfig(model_key="test", num_ctx=4096, max_steps=12,
+                            max_tokens_per_turn=2048, temperature=0.0),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool()], tool_fns=_read_fn(),
+        run_id="test-traj-shape-off",
+    )
+
+    assert [e for e in events
+            if e["kind"] == "early_bail_suppressed_trajectory_shape"] == []
+
+
+def _noop_resp(i: int) -> ChatResponse:
+    """Call a pathless 'noop' tool with unique args per step (so the
+    loop's consecutive_repeat dedup doesn't abort the trajectory).
+    Path-less tool history entries keep both convergence_score and
+    breadth_saturation flat — the minimal way to construct a trajectory
+    where sustained_low_trend climbs without the breadth-saturation
+    signal also climbing."""
+    return ChatResponse(
+        text="",
+        tool_calls=[ToolCallResponse(
+            id=f"n{i}", name="noop", arguments={"n": i})],
+        finish_reason="tool_calls",
+        timing=GenerationTiming(prompt_tokens=100, completion_tokens=100),
+    )
+
+
+def _noop_tool() -> ToolDef:
+    return ToolDef(
+        name="noop", description="no-op",
+        parameters={"type": "object",
+                    "properties": {"n": {"type": "integer"}},
+                    "required": []},
+    )
+
+
+def _noop_fn() -> dict[str, Any]:
+    return {"noop": lambda args: ("ok", None)}
+
+
+def test_suppression_event_emits_with_correct_fields(monkeypatch):
+    """With LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1 + a trajectory whose shape
+    matches the suppression predicate, the loop emits
+    `early_bail_suppressed_trajectory_shape` with all 4 signal values.
+
+    Strategy: 4 distinct-file reads (steps 1-4) push the convergence
+    score down to 0.0 and trigger the convergence_gate's diffuse
+    suppression at step 4 (early_bail_fired stays False). Then 4 noop
+    calls (steps 5-8) keep both the convergence score AND the W=4 window
+    flat (path=None entries). At step 8 the score_log shows sustained
+    non-increasing deltas (sustained_low_trend >= 3) AND the W=4 window
+    contains only path=None entries (breadth_saturation = 0.25) — the
+    trajectory-shape predicate fires before the convergence_gate
+    diffuse-suppression branch is reached.
+    """
+    monkeypatch.setenv("LUXE_EARLY_BAIL_TRAJECTORY_SHAPE", "1")
+    monkeypatch.setenv("LUXE_ADAPTIVE_POLICY", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
+    monkeypatch.setenv("LUXE_EARLY_BAIL_MODE", "soft_anchor")
+    monkeypatch.setenv("LUXE_CONVERGENCE_GATE", "1")
+    monkeypatch.setenv("LUXE_LOG_TOOL_CALLS", "1")
+    events = _capture_events(monkeypatch)
+
+    scripted = (
+        [_read_resp_distinct(i) for i in range(4)]
+        + [_noop_resp(i) for i in range(6)]
+        + [_terminal()]
+    )
+    tool_fns = {**_read_fn(), **_noop_fn()}
+    run_agent(
+        backend=_ScriptedBackend(scripted),
+        role_cfg=RoleConfig(model_key="test", num_ctx=4096, max_steps=15,
+                            max_tokens_per_turn=2048, temperature=0.0),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_read_tool(), _noop_tool()],
+        tool_fns=tool_fns,
+        run_id="test-traj-shape-emit",
+    )
+
+    suppressed = [e for e in events
+                  if e["kind"] == "early_bail_suppressed_trajectory_shape"]
+    assert suppressed, (
+        f"expected at least one early_bail_suppressed_trajectory_shape event; "
+        f"all events kinds = {[e['kind'] for e in events]}"
+    )
+    sample = suppressed[0]
+    for k in (
+        "sustained_low_trend",
+        "grep_vs_read_ratio",
+        "breadth_saturation",
+        "post_bail_call_rate",
+        "step",
+        "phase",
+    ):
+        assert k in sample, (
+            f"missing field {k} in early_bail_suppressed_trajectory_shape "
+            f"payload {sample}"
+        )
+
+
+def test_score_log_too_short_returns_zero_trend():
+    """score_log with 0 or 1 entries → sustained_low_trend = 0 (can't
+    compute a delta without at least 2 entries)."""
+    history = [{"step": 1, "name": "read_file", "path": "x.py"}]
+    # 0-entry score_log
+    signals_empty = trajectory_shape_signals(history, [], step=1)
+    assert signals_empty.sustained_low_trend == 0
+    # 1-entry score_log
+    signals_one = trajectory_shape_signals(history, [0.5], step=1)
+    assert signals_one.sustained_low_trend == 0
