@@ -142,6 +142,14 @@ class TieredCompact:
     own keep_recent=2 because SWE-bench trajectories run 12-30 steps),
     compact_threshold=0.75.
 
+    Per-phase thresholds (phase_thresholds): a (phase1, phase2, phase3) tuple
+    of trigger fractions. When set, each phase fires at its own threshold.
+    The forge-hybrid Phase 2 (A) n=75 4-arm sweep showed phase 1 fires HEAL
+    protected wrong_target instances while phase 3 fires DESTROY existing
+    patches — so the right tuning is aggressive phase 1 + conservative phase 3
+    (e.g., (0.50, 0.85, 0.95)). When phase_thresholds is None, falls back to
+    compact_threshold for all 3 phases (backwards compat).
+
     See `docs/luxe-markers-audit.md` for the nudge-marker classification.
     """
 
@@ -151,9 +159,16 @@ class TieredCompact:
         self,
         keep_recent: int = 3,
         compact_threshold: float = 0.75,
+        phase_thresholds: tuple[float, float, float] | None = None,
     ) -> None:
         self.keep_recent = keep_recent
         self.compact_threshold = compact_threshold
+        if phase_thresholds is not None:
+            self._phase_triggers = phase_thresholds
+        else:
+            self._phase_triggers = (
+                compact_threshold, compact_threshold, compact_threshold,
+            )
 
     @staticmethod
     def _find_eligible_end(messages: list[dict[str, Any]], keep_recent: int) -> int:
@@ -189,8 +204,10 @@ class TieredCompact:
                 tokens_after=tokens_before,
                 tool_results_dropped=0,
             )
-        trigger = int(ctx_limit * self.compact_threshold)
-        if tokens_before < trigger:
+        t1 = int(ctx_limit * self._phase_triggers[0])
+        t2 = int(ctx_limit * self._phase_triggers[1])
+        t3 = int(ctx_limit * self._phase_triggers[2])
+        if tokens_before < t1:
             return CompactionResult(
                 messages=list(messages),
                 phase_reached=0,
@@ -203,7 +220,7 @@ class TieredCompact:
 
         result, dropped = self._phase1(messages, eligible_end)
         tokens_after = estimate_messages_tokens(result)
-        if tokens_after < trigger:
+        if tokens_after < t2:
             return CompactionResult(
                 messages=result,
                 phase_reached=1,
@@ -214,7 +231,7 @@ class TieredCompact:
 
         result, dropped = self._phase2(messages, eligible_end)
         tokens_after = estimate_messages_tokens(result)
-        if tokens_after < trigger:
+        if tokens_after < t3:
             return CompactionResult(
                 messages=result,
                 phase_reached=2,

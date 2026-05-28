@@ -269,6 +269,46 @@ def test_tiered_compact_zero_ctx_limit_no_op():
     assert cr.messages == messages
 
 
+def test_tiered_compact_phase_thresholds_overrides_single_threshold():
+    """phase_thresholds tuple overrides compact_threshold; each phase fires at own trigger."""
+    tc = TieredCompact(
+        keep_recent=2,
+        compact_threshold=0.75,
+        phase_thresholds=(0.50, 0.85, 0.95),
+    )
+    # Internal triggers reflect the tuple, not the single threshold.
+    assert tc._phase_triggers == (0.50, 0.85, 0.95)
+
+
+def test_tiered_compact_phase_thresholds_none_falls_back():
+    """When phase_thresholds is None, falls back to compact_threshold for all 3."""
+    tc = TieredCompact(keep_recent=2, compact_threshold=0.60)
+    assert tc._phase_triggers == (0.60, 0.60, 0.60)
+
+
+def test_tiered_compact_phase_thresholds_aggressive_p1_conservative_p3():
+    """Aggressive phase 1 (0.50) + conservative phase 3 (0.95) — capture phase 1 wins
+    without phase 3 destruction. The forge-hybrid Phase 2 (A) n=75 4-arm finding."""
+    # Build a trajectory that exceeds phase 1 trigger but not phase 3.
+    messages = _build_deep_trajectory(
+        n_iterations=8,
+        tool_result_size=2000,
+        nudge_indices=(0, 1, 2, 3, 4, 5),
+    )
+    # ctx_limit=4000 → triggers: p1=2000, p2=3400, p3=3800.
+    # tokens_before is well above 2000 so phase 1 fires.
+    # Phase 1's truncation alone should bring tokens below the lenient
+    # phase 2 trigger (3400) — so it stops at phase 1.
+    cr = TieredCompact(
+        keep_recent=2,
+        phase_thresholds=(0.50, 0.85, 0.95),
+    ).compact(messages, ctx_limit=4000)
+    assert cr.phase_reached == 1, f"expected phase 1 fire with aggressive p1; got {cr.phase_reached}"
+    # And nudges should be gone from the eligible region.
+    nudges_remaining = [m for m in cr.messages if m.get("_luxe_nudge")]
+    assert len(nudges_remaining) <= 2  # keep_recent=2 protects last 2 iterations
+
+
 def test_tiered_compact_short_trajectory_protects_everything():
     """When fewer than keep_recent iterations exist, eligible_end is 2 (nothing eligible)."""
     messages = _build_deep_trajectory(n_iterations=2, tool_result_size=20000)
