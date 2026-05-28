@@ -3000,3 +3000,46 @@ The 1 firing run (sphinx-10673) **aborted** — phase 3 dropped 24,888 tokens an
 - **Bench-as-truth caveat updated**: the existing "bench-as-truth" pattern in CLAUDE.md assumes the bench output IS the truth on a given run. With substrate non-determinism documented, a single bench run is one DRAW from a distribution. For change-detection A/Bs, multi-rep is now table stakes; for ceiling-finding (best-of-N), single-rep remains adequate.
 
 **Affected files**: `src/luxe/context.py` (TieredCompact + CompactionResult), `src/luxe/agents/loop.py` (gated branch + telemetry), `benchmarks/swebench/{run,adapter}.py` (`--tiered-compact` flag), `tests/test_context.py` (+11), `benchmarks/swebench/subsets/forge_hybrid_smoke_n14.json` (pinned instance set), `benchmarks/swebench/subsets/forge_hybrid_pylint_4604_diagnostic.json` (single-instance noise probe), `acceptance/forge-hybrid/` (treatment_n14, pylint_4604_diagnostic, pylint_4604_diagnostic_rep2, baseline_n14_rep{1,2,3}; all gitignored), `acceptance/forge-hybrid/protected.json` (17 protected instances from the prior --no-early-bail ablation). Commit `18ac49c` (feat: TieredCompact). Plan: `~/.claude/plans/starry-hopping-phoenix.md`.
+
+### [2026-05-28] Forge-hybrid cycle CLOSES: A ships default-ON, B+D refuted at smoke (the cycle's design hypotheses honestly held the line)
+
+**What happened**: The forge-hybrid cycle ran 4 axes (C=guardrails refactor / A=TieredCompact compaction / B=respond terminal tool / D=trajectory-shape suppression) per plan `~/.claude/plans/starry-hopping-phoenix.md`. Final scoreboard: **C shipped as pure plumbing (foundation, byte-identical). A shipped default-ON at phase_thresholds=(0.50, 0.85, 0.95) after 4-arm n=75 sweep + 2-rep n=75 noise validation (resolves equivalent to baseline within substrate noise; 42-56% wall reduction; 2 protected wrong_target instances healed). B refuted at n=14 smoke (champion does NOT call the `respond` tool — 0/14 adoption WITHOUT prompt change, 0/14 adoption WITH explicit prompt guidance; the disambiguation framing settled it cleanly). D refuted at n=14 smoke (locked trajectory-shape predicate `sustained_low_trend≥3 AND grep_vs_read_ratio<0.5 AND breadth_saturation<0.6` fired 0/14 times — too narrow for this champion at num_ctx=32768). Joint Phase 5 trivial: only A survives, joint = A solo (already validated).** Cycle infrastructure for B+D stays in-tree default-OFF so future cycles can refine without re-implementing.
+
+**The A 5-arm sweep deserves preservation**: a single-threshold compact_threshold knob (0.75 → 0.50 → 0.40) traded resolves for wall savings within noise, but the n=75 4-arm pattern surfaced a **phase-1-helps / phase-3-hurts split**: phase-1 fires HEAL the protected wrong_target instances (matplotlib-25775: 0→37 lines, pylint-6528: 0→58/65 lines) while phase-3 fires DESTROY existing patches (psf__requests-6028: 15→0, sphinx-10673: 34→0 with abort at threshold=0.50). The fix was forge's `phase_thresholds` API (each phase gets its own trigger) — aggressive phase 1 (0.50) + conservative phase 3 (0.95) captured the heals without the destructions. The phase_thresholds=(0.50, 0.85, 0.95) tuning produced **the cycle's only Pareto-positive lever**: +0/-2 resolves vs baseline at n=75 across 2 reps (within substrate noise band ±2.8), but 42-56% wall reduction (well outside substrate wall noise ~20%) AND zero protected wrong_target damages AND 2 protected heals. Default-ON shipped.
+
+**Root cause / insight**:
+
+1. **The plan's "byte-identical baseline" assumption was wrong** — substrate non-determinism on Qwen3.6-35B-A3B-6bit at temp=0 is real and ±2 patches at n=14 / ±2.8 patches at n=75. This was characterized via 3-rep baseline + pylint-4604 single-instance diagnostic ({0, 16, 16, 19} across 4 identical-config runs); banked separately in [[project_substrate_noise_temp0_not_deterministic]]. Every A/B in this cycle had to be re-interpreted against the measured noise band. The cycle's 4-arm sweep + 2-rep validation pattern is the working answer: multi-rep at n=75 averages noise enough to surface real effects.
+
+2. **The phase-1-helps / phase-3-hurts split is the cycle's load-bearing design finding.** A single-threshold lever can't capture it (lowering threshold increases ALL three phases together). The phase_thresholds tuple decouples them. Phase 1 (drop nudges + truncate tool_results) is the "good" lever — it preserves model context and reduces wall. Phase 3 (drop reasoning + clear tool_call content) is the "bad" lever — it can destroy active trajectories. Aggressive p1 + conservative p3 = capture wins, avoid destruction.
+
+3. **B's disambiguation framing succeeded as designed.** B1 (tool only, no prompt) and B2 (tool + prompt) BOTH had 0 adoption — the champion ignores the respond tool even with explicit guidance. The B2 prompt change DID produce +1 patch and 2 new wins (matplotlib-13989, matplotlib-20676) but **the mechanism is not respond — it's the prompt change incidentally encouraging more aggressive edits**. This is a clean negative datapoint and an unexpected positive prompt finding (orthogonal to the lever).
+
+4. **D was a clean STOP per pre-registered gate.** The plan locked the predicate thresholds (`sustained_low_trend≥3 AND grep_vs_read_ratio<0.5 AND breadth_saturation<0.6`) and pre-registered "STOP if suppression does NOT fire on ≥1 of the 8 known +8 fix-shape instances." Zero suppression fires at n=14 → STOP. The plan also explicitly forbade "refine via tuning the predicate" — that path leads to retrospective-pattern-hallucination on benchmark-specific shapes. Bank as default-OFF with documented finding; trace-mine in a future cycle if pursued.
+
+5. **The cycle's discipline held the line on multiple anti-patterns.** No tuning-spiral on D's predicate. No premature default-ON on A before noise validation. No ship of B's 0-adoption result as a "ship anyway because wall is faster" (the wall savings on B2 are substrate noise, not respond). The smoke→n=75→rep-2 escalation pattern caught what each step was designed to catch.
+
+**Fix / takeaway**:
+
+- **A ships default-ON** (commit pending): `LUXE_TIERED_COMPACT` defaults to enabled (`os.environ.get(..., "1") != "0"`); `TieredCompact._DEFAULT_PHASE_THRESHOLDS = (0.50, 0.85, 0.95)`. Set `LUXE_TIERED_COMPACT=0` for ablation. SDD invariant pinned in `src/luxe/agents/agents.sdd`.
+- **B + D stay default-OFF in-tree** (infrastructure preserved). `LUXE_RESPOND_TERMINAL` and `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE` remain opt-in env vars. Future cycles can refine without re-implementing — the watchdog set for respond, the signal computation for D are all production-ready.
+- **Cycle's working pattern for substrate non-determinism**: 3-rep baseline first (characterize noise floor), then multi-rep at n=14 for smoke, then 2-rep validation at n=75 for ship decisions. This caught every false-positive in the cycle.
+- **Phase-1-helps / phase-3-hurts as a portable insight**: any future compaction-like lever should decouple its aggressiveness phases. Single-knob tunings cannot capture the trade-off.
+- **The plan's pre-registered gates are the cycle's actual product as much as the code.** A's joint-Pareto bar, B's adoption-≥-8 threshold, D's instance-ID-anchored suppression check — each gate caught what it was designed to catch. The discipline of running the analysis through the locked gate (rather than against intuition) prevented bias on every axis result.
+
+**What ships** (per cycle closeout, this commit):
+- `src/luxe/context.py`: `TieredCompact._DEFAULT_PHASE_THRESHOLDS = (0.50, 0.85, 0.95)`.
+- `src/luxe/agents/loop.py`: `LUXE_TIERED_COMPACT` defaults to ON; set to "0" to disable.
+- `src/luxe/agents/agents.sdd`: 3 new invariant sections — Phase 2 (A) compaction (DEFAULT-ON), Phase 3 (B) respond-terminal (opt-in, lever doesn't engage on this champion), Phase 4 (D) trajectory-shape (opt-in, predicate too narrow).
+- `tests/test_context.py`: test renamed + paired counterpart for explicit-override-wins. Suite stays green at 1071 passed + 1 skipped.
+
+**Bench artifacts** (gitignored, ~/Downloads/luxe/acceptance/forge-hybrid/):
+- `baseline_n14_rep{1,2,3}/` + `tiered_compact/treatment_n14/` (the 4-arm n=14 noise characterization)
+- `tiered_compact/treatment_n75/` (Phase 2 A default-threshold n=75)
+- `tiered_compact_stress_t040/` + `tiered_compact_n75_t050/` + `tiered_compact_stress_n75_t040/` (single-threshold 4-arm n=75 sweep — surfaced the phase split)
+- `tiered_compact_n75_p50_85_95/` + `tiered_compact_n75_p50_85_95_rep2/` (phase_thresholds 2-rep validation)
+- `respond_terminal_b1_smoke_n14/` + `respond_terminal_b2_smoke_n14/` (B disambiguation)
+- `trajectory_shape_d_smoke_n14/` (D smoke)
+- `baseline_n75/` + `protected.json` (cycle anchors)
+
+**Affected files (shipped commits):** `4581d38` (C refactor), `18ac49c` (A infra), `0c10379` (A threshold-override), `633940e` (substrate noise lessons), `3afa14e` (A phase_thresholds), `ed08bbc` (B respond + watchdogs), `d0efbd6` (D trajectory shape), `c178d98` (B2 prompt variant), this commit (A default-ON + SDD invariants + closeout). Plan: `~/.claude/plans/starry-hopping-phoenix.md`. Memory: `project_substrate_noise_temp0_not_deterministic.md` (separate), `project_forge_hybrid_cycle_outcome.md` (this cycle's closeout).

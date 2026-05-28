@@ -280,10 +280,29 @@ def test_tiered_compact_phase_thresholds_overrides_single_threshold():
     assert tc._phase_triggers == (0.50, 0.85, 0.95)
 
 
-def test_tiered_compact_phase_thresholds_none_falls_back():
-    """When phase_thresholds is None, falls back to compact_threshold for all 3."""
+def test_tiered_compact_default_phase_thresholds_shipped_aggressive_p1_conservative_p3():
+    """When phase_thresholds is None, falls back to the SHIPPED default
+    (0.50, 0.85, 0.95) — the forge-hybrid 2026-05-28 default-ON tuning.
+    This default replaced the 2026-05-27 single-threshold fallback after
+    the n=75 rep-1+rep-2 validation showed aggressive phase 1 captures
+    protected wrong_target heals while conservative phase 3 avoids the
+    reasoning-drop destruction mode."""
     tc = TieredCompact(keep_recent=2, compact_threshold=0.60)
-    assert tc._phase_triggers == (0.60, 0.60, 0.60)
+    # compact_threshold is no longer the fallback when phase_thresholds=None;
+    # the locked default tuple is shipped instead.
+    assert tc._phase_triggers == (0.50, 0.85, 0.95)
+    assert tc._phase_triggers == TieredCompact._DEFAULT_PHASE_THRESHOLDS
+
+
+def test_tiered_compact_phase_thresholds_explicit_override_wins():
+    """When the caller passes phase_thresholds explicitly, it wins over the
+    shipped default (and over compact_threshold)."""
+    tc = TieredCompact(
+        keep_recent=2,
+        compact_threshold=0.60,
+        phase_thresholds=(0.40, 0.70, 0.90),
+    )
+    assert tc._phase_triggers == (0.40, 0.70, 0.90)
 
 
 def test_tiered_compact_phase_thresholds_aggressive_p1_conservative_p3():

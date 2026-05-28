@@ -628,12 +628,15 @@ def run_agent(
     # Off by default; adapter wires it on for SWE-bench. Falls back to
     # v1.9 semantics (no convergence-based gating) when disabled.
     convergence_gate_enabled = os.environ.get("LUXE_CONVERGENCE_GATE") == "1"
-    # forge-hybrid Phase 2 (A) — TieredCompact context compaction. Default OFF
-    # (byte-identical baseline preserved via the existing elide_old_tool_results
-    # fallback). When LUXE_TIERED_COMPACT=1, the 3-phase compaction strategy
-    # replaces elide at the pre-chat compaction site. Run-cumulative counters
-    # below feed the resolve-time telemetry event.
-    tiered_compact_enabled = os.environ.get("LUXE_TIERED_COMPACT") == "1"
+    # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
+    # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
+    # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
+    # rate equivalent to no-compaction baseline (within substrate noise band
+    # ±2.8 at n=75), 42-56% wall savings, 2 protected wrong_target instances
+    # healed (matplotlib-25775, pylint-6528). Set LUXE_TIERED_COMPACT=0 to
+    # disable for ablation; any other value (or unset) keeps it ON. Default
+    # phase_thresholds come from TieredCompact._DEFAULT_PHASE_THRESHOLDS.
+    tiered_compact_enabled = os.environ.get("LUXE_TIERED_COMPACT", "1") != "0"
     # Override the default compact_threshold (0.75) for stress-testing. Lower
     # values force compaction to fire at lower context pressure — useful for
     # surfacing the lever's behavior on workloads that rarely hit the default
