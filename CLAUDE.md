@@ -44,9 +44,26 @@ Every directory of consequence has a `<dir>/<dir>.sdd` contract listing
 
 Read the relevant `.sdd` before editing any file under that subtree.
 
+## Default-ON: TieredCompact context compaction
+
+`LUXE_TIERED_COMPACT` defaults to **ON** as of 2026-05-28 (forge-hybrid cycle
+closeout, commit `9be486c`). All `run_agent` callers — SWE-bench,
+maintain_suite, BFCL — get 3-phase context compaction at
+`phase_thresholds=(0.50, 0.85, 0.95)`. Validated at n=75 across 2 reps:
+resolves equivalent to baseline within substrate noise band (±2.8); 42-56%
+wall reduction; 2 protected wrong_target instances healed; zero new damages.
+
+- **Disable for ablation**: `LUXE_TIERED_COMPACT=0`. **If a workload behaves
+  unexpectedly, try this first.** Compaction default-ON is the largest
+  behavior change shipped in 2026-05.
+- **Retune**: `LUXE_TIERED_COMPACT_PHASE_THRESHOLDS="p1,p2,p3"` or
+  `LUXE_TIERED_COMPACT_THRESHOLD=<f>` (single-knob, sets all 3 phases).
+- See `src/luxe/agents/agents.sdd` § "forge-hybrid Phase 2 (A) compaction
+  invariants" for the pinned tuning rationale + counter-discipline rules.
+
 ## Opt-in modes (default off, byte-identical when disabled)
 
-Three subsystems are gated by env vars and default to **off**. Each has
+Five subsystems are gated by env vars and default to **off**. Each has
 invariants in its `.sdd` you must read before enabling:
 
 - **Reflect / verify stage** (`LUXE_REFLECT=1`) — a separate `backend.chat`
@@ -59,6 +76,18 @@ invariants in its `.sdd` you must read before enabling:
 - **Cohort priors** (`LUXE_LOAD_PRIORS=1`) — reads
   `~/.luxe/cohort-history/<instance>.json`. **Log-only in v1.11** (does not
   influence intervention intensity); promotion deferred to v1.11.1+.
+- **Respond terminal tool** (`LUXE_RESPOND_TERMINAL=1`) — exposes a
+  `respond(message=...)` tool with 4 watchdog gates (early-respond,
+  no-writes-late, passive-surrender, compaction-phantom). Forge-hybrid
+  Phase 3 (B) infrastructure; champion does not adopt the lever at any
+  tested promotion (n=14 smoke 2026-05-28: 0/14 adoption with or without
+  prompt guidance). Default-OFF; refute documented in `lessons.md`.
+- **Trajectory-shape early_bail suppression** (`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1`)
+  — selectively suppresses `early_bail` when the model is in deep
+  localized reading with stable convergence. Forge-hybrid Phase 4 (D)
+  infrastructure; locked predicate fired 0/14 at n=14 smoke (too narrow
+  for this champion at num_ctx=32768). Implicit dependency on
+  `LUXE_ADAPTIVE_POLICY=1` for `score_log` population. Default-OFF.
 
 If you toggle any of these on, walk the relevant `.sdd` section first —
 unbiased flips can silently change benchmark behavior.
