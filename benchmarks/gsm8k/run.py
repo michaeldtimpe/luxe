@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
 
         question = row["question"]
         gold = extract_gold_answer(row["answer"])
-        messages = build_messages(question)
+        messages = build_messages(question, think=args.think)
 
         t_start = time.time()
         try:
@@ -163,7 +163,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--model", default="Qwen3.6-35B-A3B-6bit")
     p.add_argument("--base-url", default="http://127.0.0.1:8000")
     p.add_argument("--temperature", type=float, default=0.0)
-    p.add_argument("--max-tokens", type=int, default=512)
+    # 4096 fits a full Qwen3 think+answer pass; 512 truncates mid-think
+    # at temperature=0 on word problems (verified via calibration).
+    p.add_argument("--max-tokens", type=int, default=4096)
     p.add_argument("--num-ctx", type=int, default=8192)
     p.add_argument("--resume", action="store_true", default=True, help="Skip items with existing JSON (default true).")
     p.add_argument("--no-resume", dest="resume", action="store_false")

@@ -124,8 +124,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--output", required=True)
     p.add_argument("--corpus", default=None)
     p.add_argument("--model", default="mlx-community/Qwen3.6-35B-A3B-6bit")
-    p.add_argument("--window", type=int, default=32768)
-    p.add_argument("--stride", type=int, default=16384)
+    # mlx_lm Qwen3.6 RoPE breaks at ≥16K context (PPL collapses to ~20k+).
+    # Defaults sit comfortably below that cliff. Upstream comparison would
+    # want 32K/16K once mlx_lm's long-context implementation is fixed.
+    p.add_argument("--window", type=int, default=8192)
+    p.add_argument("--stride", type=int, default=4096)
     p.add_argument(
         "--max-tokens-eval",
         type=int,

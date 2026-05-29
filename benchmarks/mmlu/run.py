@@ -60,7 +60,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no rows for subject {args.subject!r}", file=sys.stderr)
             return 2
     if args.limit is not None:
-        test_rows = test_rows[: args.limit]
+        # Stratify across subjects so --limit doesn't collapse to one subject.
+        full_by_subject = index_by_subject(test_rows)
+        n_subj = len(full_by_subject)
+        per_subj_base = args.limit // n_subj
+        remainder = args.limit % n_subj
+        selected: list[dict] = []
+        for i, (subj, rows) in enumerate(sorted(full_by_subject.items())):
+            take = per_subj_base + (1 if i < remainder else 0)
+            selected.extend(rows[:take])
+        test_rows = selected
 
     by_subject = index_by_subject(test_rows)
 
@@ -100,11 +109,18 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
             user_prompt = build_prompt(row, fewshot)
-            # Apply chat template for parity with how oMLX serves the model
+            # Apply chat template with enable_thinking=False. Default for Qwen3
+            # opens an unclosed <think> block, so the model's next token is
+            # thinking content (Here/Okay/...), pushing A/B/C/D off the
+            # distribution. enable_thinking=False emits `<think>\n\n</think>\n\n`
+            # so the next token slot is the answer.
             messages = [{"role": "user", "content": user_prompt}]
             try:
                 prompt_text = backend.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
                 )
             except Exception:
                 prompt_text = user_prompt  # fallback if tokenizer lacks chat template
