@@ -38,6 +38,14 @@ def extract_gold_answer(row_answer: str) -> float:
     return val
 
 
-def build_messages(question: str) -> list[dict[str, str]]:
-    """Build a chat-completion messages list for one GSM8K question."""
-    return [{"role": "user", "content": build_gsm8k_8shot_prompt(question)}]
+def build_messages(question: str, think: bool = True) -> list[dict[str, str]]:
+    """Build a chat-completion messages list for one GSM8K question.
+
+    When think=False, prepends Qwen3's `/no_think` soft-switch so the chat
+    template emits no `<think>` block. The 8-shot CoT prompt itself supplies
+    the reasoning structure; matches published GSM8K methodology.
+    """
+    prompt = build_gsm8k_8shot_prompt(question)
+    if not think:
+        prompt = "/no_think\n" + prompt
+    return [{"role": "user", "content": prompt}]

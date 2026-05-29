@@ -71,10 +71,14 @@ def main(argv: list[str] | None = None) -> int:
 
         valid = valid_letters_for(row)
         user_prompt = build_prompt(row)
+        # enable_thinking=False: see mmlu/run.py comment for rationale.
         messages = [{"role": "user", "content": user_prompt}]
         try:
             prompt_text = backend.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
             )
         except Exception:
             prompt_text = user_prompt

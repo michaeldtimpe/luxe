@@ -23,11 +23,19 @@ def main(argv: list[str] | None = None) -> int:
     sections.append("")
 
     meta_block = None
-    for bench in ("gsm8k", "codeneedle", "mmlu", "arc_challenge", "perplexity"):
-        bench_dir = run_dir / bench
+    # gsm8k can land at canonical `gsm8k/` or split into `gsm8k_think/`
+    # `gsm8k_nothink/` (deployed-mode + canonical-methodology pair).
+    bench_dirs: list[tuple[str, str]] = []
+    for variant in ("gsm8k", "gsm8k_think", "gsm8k_nothink"):
+        if (run_dir / variant / "summary.json").exists():
+            bench_dirs.append(("gsm8k", variant))
+    for bench in ("codeneedle", "mmlu", "arc_challenge", "perplexity"):
+        bench_dirs.append((bench, bench))
+    for bench, subdir in bench_dirs:
+        bench_dir = run_dir / subdir
         summary_path = bench_dir / "summary.json"
         if not summary_path.exists():
-            sections.append(f"## {bench}")
+            sections.append(f"## {subdir}")
             sections.append("(not run)")
             sections.append("")
             continue
@@ -35,8 +43,11 @@ def main(argv: list[str] | None = None) -> int:
         meta = s.get("meta") or {}
         if meta_block is None and meta:
             meta_block = meta
-        sections.append(f"## {bench}")
+        sections.append(f"## {subdir}")
         sections.append(f"- protocol: `{meta.get('benchmark_protocol_version', '?')}`")
+        if bench == "gsm8k":
+            samp = meta.get("sampling") or {}
+            sections.append(f"- think_mode: `{samp.get('think_mode')}`  max_tokens: `{samp.get('max_tokens')}`")
 
         results = s.get("results") or s.get("results_by_corpus") or {}
         sections.extend(_render_results(bench, results))
