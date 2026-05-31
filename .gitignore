@@ -39,7 +39,6 @@ local-cache/
 
 # Run/benchmark artifacts kept locally unless explicitly tracked
 runs/
-acceptance/
 logs/run_evaluation/
 results/**/*.log
 results/**/*.tmp
@@ -53,8 +52,12 @@ results/**/*.partial
 /warrens/
 
 # Bench artefacts — fixture state lives in acceptance/; per-suite JSON
-# dumps are timestamped and not source-of-truth.
-acceptance/
+# dumps are timestamped and not source-of-truth. Canonical, hand-promoted
+# baseline summaries under acceptance/eval_suite/baselines/ are tracked.
+acceptance/*
+!acceptance/eval_suite/
+acceptance/eval_suite/*
+!acceptance/eval_suite/baselines/
 benchmarks/bench_*.json
 benchmarks/small_models_*.json
 
