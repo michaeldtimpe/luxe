@@ -32,6 +32,30 @@ If a re-bench is ever needed, follow `~/Downloads/luxe/RESUME.md` §
 "M5 Max MoE bake-off" structure and produce results under
 `acceptance/m5max_moe_<rebench-id>/`.
 
+**Sanctioned exception — `luxe chat` model slots.** The interactive REPL
+(`src/luxe/chat/`, shipped 2026-06-01) exposes opt-in `chat`/`plan`/`code` model
+slots via `configs/chat.yaml` `slots:`. This is the ONLY sanctioned per-work-type
+model selection (carve-out noted in `src/luxe/luxe.sdd`). It defaults to
+champion-everywhere (no fan-out; byte-identical model selection), and is scoped
+to the interactive front-end — never the benchmark/maintain path. Do not extend
+fan-out beyond this.
+
+## Interactive front-end (`luxe chat` / `luxe compare`)
+
+Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
+2026-06-01 handoff + memory `project_luxe_chat_interactive_overhaul.md`.
+
+- **`luxe chat`** — REPL. Each turn = one `run_single` call; conversation +
+  project memory inject ONLY via the new `run_single(extra_context="")` seam
+  (default `""` = byte-identical). Read-only tools by default (`/write` toggles).
+- **`luxe compare run/review`** — side-by-side single-task comparison (3 modes,
+  incl. luxe-vs-bare substrate ablation), blind + vote.
+- **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
+  memory (repo `.luxe/memory.md`); must NOT read `~/.claude/` or repo `CLAUDE.md`.
+- **`backend.py` streaming** is gated (`stream`/`on_token`); the loop still calls
+  non-stream, so the deterministic path is untouched. Keep it that way.
+- New work here walks `src/luxe/{chat,compare,memory}/<dir>.sdd` first.
+
 ## Architecture: SpecDD Lever 2 `.sdd` chain
 
 Every directory of consequence has a `<dir>/<dir>.sdd` contract listing

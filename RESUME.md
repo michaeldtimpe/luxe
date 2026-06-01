@@ -1,5 +1,61 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-06-01) — Interactive `luxe chat` overhaul SHIPPED (REPL + compare + memory + opt-in model slots); commit `280675a`, pushed; deployed to m5 + neo
+
+**TL;DR for a cold start.** First user-facing interface work in a long time.
+**Additive** Claude-CLI-style overhaul; the existing one-shot `luxe maintain`,
+the benchmark harness, and the deterministic `run_agent` loop are byte-identical
+to before. Four new capabilities, all opt-in / default-preserving:
+
+1. **`luxe chat`** — interactive REPL. Each turn = exactly one `run_single` call;
+   conversation state lives in the REPL (transcript-fold into `goal=` + a tagged
+   `extra_context` block), never forks `run_agent`. Live tool output via the
+   existing `on_tool_event` seam, markdown answers, footer
+   (slot·model·write-mode·steps·tokens·swaps). Slash cmds `/model /use /write
+   /memory /compare /resume /clear`. Ctrl-C aborts at next tool boundary + saves
+   partial transcript. **Read-only tools by default**; `/write` toggles.
+2. **Model slots** (`config.py` `SlotConfig`/`ChatSlots`/`model_for_slot`):
+   opt-in chat/plan/code model selection. Default (no `slots:` / empty
+   model_key) → champion everywhere, byte-identical to `single_64gb`. The
+   **sanctioned exception** to the single-champion / no-fan-out invariant
+   (carve-out line in `luxe.sdd`). Distinct slot models → sequential weight swap
+   (`unload_all_loaded`+`thermal_guard`), instrumented.
+3. **Compare** (`luxe compare run/review`, `/compare`): 3 modes — (1) luxe-vs-bare
+   substrate ablation (`os.environ` save/restore disables compaction +
+   interventions + baseline prompt), (2) two prompt variants, (3) vs another
+   model. Sequential, blind + vote + free-text rationale → `~/.luxe/compare/<id>/
+   votes.jsonl`, replayable. Reuses benchmark `Variant` + `make_overlay`.
+4. **Memory** (`src/luxe/memory/`): `~/.luxe/sessions/<id>/` transcripts (resume;
+   gc keep-50/30d) + curated-first project memory (repo `.luxe/memory.md` always
+   injected; auto facts unpromoted until `/memory promote`). Never reads
+   `~/.claude/` or repo `CLAUDE.md`.
+
+**Load-bearing invariants honored.** Memory/history inject ONLY via the new
+`run_single(extra_context="")` seam (default `""` = byte-identical; benchmark/
+maintain pass nothing). `backend.py` `stream`/`on_token` gated — default request
+body byte-identical, `on_token` inert when `stream=False` (asserted); the loop
+still calls non-stream (streaming is infrastructure only). Summarizer
+(`chat/summarize.py`) is non-model, deterministic, versioned (`trunc-v1`).
+Context precedence: current turn > project memory > conversation summary.
+
+**New packages:** `src/luxe/{chat,compare,memory}/`, each with its own `.sdd`.
+**Dep:** `prompt_toolkit` as optional `[chat]` extra (`pip install -e .[chat]`;
+degrades to `input()`). **Tests:** 76 new incl. determinism byte-identity gates;
+full suite **1199 passed** (the only skip/error is `test_mlx_direct_smoke.py`,
+which needs the optional `mlx` native module — pre-existing, env-gated).
+
+**Deployed 2026-06-01** to **m5** (this host; `pip install -e .[dev,chat]` in the
+existing `.venv`) and **neo** (fresh clone at `~/Downloads/luxe`, venv from
+`/opt/homebrew/bin/python3.11`). **neo has NO local oMLX** — point
+`omlx_base_url` at m5 over Tailscale to use chat there, or start oMLX on neo.
+
+**Deferred (flagged in-plan):** KV-preserving multi-turn (needs
+`run_agent(seed_messages=)`), token-level streaming into the loop, model-based
+summarizer. Plan: `~/.claude/plans/crispy-juggling-starlight.md`. Memory:
+`project_luxe_chat_interactive_overhaul.md`.
+
+---
+
 ## ⇒ SESSION HANDOFF (2026-05-28) — Forge-hybrid cycle CLOSED; TieredCompact ships DEFAULT-ON at phase_thresholds=(0.50, 0.85, 0.95); B+D refuted, banked in-tree default-OFF
 
 **TL;DR for a cold start.** The forge-hybrid cycle (`~/.claude/plans/starry-hopping-phoenix.md`, executed 2026-05-26 → 2026-05-28) ran 4 axis ports from forge and closed with A shipping default-ON and B+D refuted at smoke. **Compaction is now default-ON for ALL `run_agent` callers** (SWE-bench, maintain_suite, BFCL) — `LUXE_TIERED_COMPACT` defaults to enabled; `TieredCompact._DEFAULT_PHASE_THRESHOLDS = (0.50, 0.85, 0.95)`. Set `LUXE_TIERED_COMPACT=0` for ablation. This is the cycle's only Pareto-positive lever: resolves equivalent to no-compaction baseline (within substrate noise ±2.8 at n=75 across 2 reps), wall reduced 42-56%, 2 protected wrong_target instances healed (matplotlib-25775, pylint-6528). Phase 3 (B) respond-terminal tool: 0/14 organic adoption + 0/14 with explicit prompt guidance → champion ignores the lever; infra in-tree default-OFF behind `LUXE_RESPOND_TERMINAL`. Phase 4 (D) trajectory-shape suppression: locked predicate (`sustained_low_trend≥3 AND grep_vs_read_ratio<0.5 AND breadth_saturation<0.6`) fired 0/14 at smoke → too narrow for this champion at num_ctx=32768; infra in-tree default-OFF behind `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`. Phase 5 trivial = A solo (already validated). Shipped + pushed across 9 commits (`4581d38` → `9be486c`).
