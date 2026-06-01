@@ -132,7 +132,7 @@ case "$CELL" in
     ;;
 esac
 
-OUT_ROOT="acceptance/agentic_ablation/${CELL}"
+OUT_ROOT="${ABLATION_OUT_ROOT:-acceptance/agentic_ablation}/${CELL}"
 mkdir -p "$OUT_ROOT"
 LOG_DIR="${OUT_ROOT}/_logs"
 mkdir -p "$LOG_DIR"
@@ -158,20 +158,34 @@ fi
 if [[ $RUN_BFCL -eq 1 ]]; then
   IFS=',' read -ra BFCL_CAT_ARR <<<"$BFCL_CATEGORIES"
   echo "--- BFCL agentic (categories: ${BFCL_CATEGORIES}) ---"
+  set +e
   python -m benchmarks.bfcl.run \
     --categories "${BFCL_CAT_ARR[@]}" \
     --mode agent \
     --output "${OUT_ROOT}/bfcl" \
     $BFCL_LIMIT \
     2>&1 | tee "${LOG_DIR}/bfcl.log"
+  b_rc=${PIPESTATUS[0]}
+  set -e
+  # Per-item caching means a re-run resumes; a crash here shouldn't skip the
+  # rest of this cell's benchmarks (partial data over no data).
+  [[ $b_rc -ne 0 ]] && echo "  note: BFCL exited rc=${b_rc} — continuing to remaining benchmarks"
 fi
 
 # --- maintain_suite ---
 if [[ $RUN_MAINTAIN -eq 1 ]]; then
   echo "--- maintain_suite --all ---"
+  set +e
   python -m benchmarks.maintain_suite.run --all \
     --output "${OUT_ROOT}/maintain_suite" \
     2>&1 | tee "${LOG_DIR}/maintain_suite.log"
+  m_rc=${PIPESTATUS[0]}
+  set -e
+  # maintain_suite returns 1 whenever the v1_release_gate (>=8/10 passing) is
+  # not met. For an ablation cell that is an EXPECTED, non-fatal outcome — we
+  # measure, we don't gate — and summary.json is already written. Don't let it
+  # abort the cell before SWE-bench runs.
+  [[ $m_rc -ne 0 ]] && echo "  note: maintain_suite exited rc=${m_rc} (v1 gate unmet or fixture error) — continuing"
 fi
 
 # --- SWE-bench ---
@@ -200,20 +214,28 @@ if [[ $RUN_SWEBENCH -eq 1 ]]; then
       ;;
   esac
 
+  set +e
   python -m benchmarks.swebench.run \
     --smoke "$SWE_SMOKE" \
     --output "$SWE_OUT" \
     "${SWE_FLAGS[@]}" \
     2>&1 | tee "${LOG_DIR}/swebench_preds.log"
+  p_rc=${PIPESTATUS[0]}
+  set -e
+  [[ $p_rc -ne 0 ]] && echo "  note: SWE-bench preds exited rc=${p_rc} — continuing"
 
   if [[ $RUN_HARNESS -eq 1 && -f "${SWE_OUT}/predictions.json" ]]; then
     echo "--- SWE-bench Docker harness (workers=${HARNESS_WORKERS}) ---"
+    set +e
     python scripts/ablation_harness.py \
       --predictions "${SWE_OUT}/predictions.json" \
       --output-dir "${SWE_OUT}/harness" \
       --run-id "ablation_${CELL}_swe_smoke${SWE_SMOKE}" \
       --max-workers "$HARNESS_WORKERS" \
       2>&1 | tee "${LOG_DIR}/swebench_harness.log"
+    h_rc=${PIPESTATUS[0]}
+    set -e
+    [[ $h_rc -ne 0 ]] && echo "  note: SWE-bench harness exited rc=${h_rc} — preds preserved, scoring incomplete"
   fi
 fi
 
