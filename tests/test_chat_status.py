@@ -39,13 +39,22 @@ def _flat(segs) -> str:
 
 def test_read_only_mode_chip(slots):
     out = _flat(fields(ChatSession(), slots, "", StatusState()))
-    assert "READ-ONLY" in out and "WRITE" not in out
+    assert "read-only" in out and "write" not in out
 
 
 def test_write_and_bash_chips(slots):
     out = _flat(fields(ChatSession(write_enabled=True, unrestricted_bash=True),
                        slots, "", StatusState()))
-    assert "WRITE" in out and "BASH" in out
+    assert "write" in out and "bash" in out
+
+
+def test_colours_track_terminal_ansi_palette(slots):
+    # llmtop draws from ANSI 0-15; luxe must too (ptk ansi* names) so both track
+    # the iTerm2 profile. Path=cyan, model=magenta, no hard-coded hex.
+    from luxe.chat.status import _C
+    assert _C["cyan"][0] == "ansicyan" and _C["magenta"][0] == "ansimagenta"
+    assert _C["white"][1] == "default"  # values use terminal default fg (light-bg safe)
+    assert all(not p.startswith("#") for p, _r in _C.values())  # no hard-coded RGB
 
 
 def test_model_pinned_last(slots):

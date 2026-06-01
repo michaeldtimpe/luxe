@@ -27,16 +27,24 @@ from dataclasses import dataclass
 
 from luxe.chat.session import tier_label
 
+# Colours mirror the active yet-another-statusline theme (llmtop): every slot is
+# drawn from the terminal's own ANSI palette (indices 0-15) so luxe tracks the
+# same iTerm2 profile as the Claude statusline instead of hard-coding RGB — and
+# values use the terminal default fg (NOT white, which vanishes on a light bg).
+# llmtop role map: path/ctx=cyan(6), branch/ok=green(2), dirty/alert=red(1),
+# warn=yellow(3), label/commit=gray(8), model=magenta(5).
 # Semantic colour -> (prompt_toolkit style, Rich markup tag).
 _C: dict[str, tuple[str, str]] = {
-    "red": ("#ff6b6b", "red"),
-    "yellow": ("#ffcc55", "yellow"),
-    "green": ("#66e066", "green"),
-    "orange": ("#ffa040", "dark_orange3"),
-    "cyan": ("#66d9ff", "cyan"),
-    "blue": ("#88aaff", "blue"),
-    "dim": ("#888888", "dim"),
-    "white": ("#ffffff", "white"),
+    "red":     ("ansired",         "red"),
+    "yellow":  ("ansiyellow",      "yellow"),
+    "green":   ("ansigreen",       "green"),
+    "orange":  ("ansiyellow",      "yellow"),       # llmtop is ANSI-only; no orange slot
+    "cyan":    ("ansicyan",        "cyan"),
+    "blue":    ("ansiblue",        "blue"),
+    "magenta": ("ansimagenta",     "magenta"),
+    "dim":     ("ansibrightblack", "bright_black"),  # llmtop label/commit = gray(8)
+    "default": ("",                "default"),        # white_brt = terminal default fg
+    "white":   ("",                "default"),        # alias → default (light-bg safe)
     "": ("", ""),
 }
 
@@ -169,17 +177,19 @@ def _git_segment(repo: str) -> list[Span] | None:
     if gi is None or not gi.branch:
         return None
     label_clr = {"drift": "red", "pending": "yellow", "clean": "green"}[gi.state]
-    spans: list[Span] = [_sp("git", label_clr), _sp(" ", ""), _sp(gi.branch, "cyan")]
+    # branch=green(2), commit=gray(8), dirty markers +~-R=red(1), ahead=warn(3),
+    # behind=alert(1), ✓=safe(2) — the llmtop git role map.
+    spans: list[Span] = [_sp("git", label_clr), _sp(" ", ""), _sp(gi.branch, "green")]
     if gi.commit:
         spans.append(_sp(f"/{gi.commit}", "dim"))
     if gi.untracked:
-        spans.append(_sp(f" +{gi.untracked}", "yellow"))
+        spans.append(_sp(f" +{gi.untracked}", "red"))
     if gi.modified:
-        spans.append(_sp(f" ~{gi.modified}", "yellow"))
+        spans.append(_sp(f" ~{gi.modified}", "red"))
     if gi.deleted:
-        spans.append(_sp(f" -{gi.deleted}", "yellow"))
+        spans.append(_sp(f" -{gi.deleted}", "red"))
     if gi.renamed:
-        spans.append(_sp(f" R{gi.renamed}", "yellow"))
+        spans.append(_sp(f" R{gi.renamed}", "red"))
     if gi.ahead:
         spans.append(_sp(f" ↑{gi.ahead}", "yellow"))
     if gi.behind:
@@ -227,21 +237,21 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     (higher = dropped first); git/ctx/model are protected (priority 1)."""
     segs: list[Segment] = []
 
-    # mode chips (luxe-specific; chat.sdd requires write-mode visible) ----
+    # mode (luxe-specific; chat.sdd requires write-mode visible) — flat coloured
+    # text in the YASL borderless style, traffic-light semantics.
     if session.write_enabled:
-        chip: list[Span] = [(" WRITE ", "bg:#8a6d00 #ffffff bold", "black on yellow")]
+        chip: list[Span] = [_sp("write", "yellow")]
         if session.unrestricted_bash:
-            chip += [(" ", "", ""), (" BASH ", "bg:#8a1c1c #ffffff bold", "white on red")]
+            chip += [_sp(" ", ""), _sp("bash", "red")]
         segs.append(Segment(chip, priority=1))
     else:
-        segs.append(Segment([(" READ-ONLY ", "bg:#1f5c2f #ffffff bold", "white on green")],
-                            priority=1))
+        segs.append(Segment([_sp("read-only", "green")], priority=1))
 
-    # home-relative path (elastic: middle-ellipsised before any segment drops)
+    # home-relative path (cyan = llmtop pwd; elastic: ellipsised before drops)
     if repo:
         home = os.path.expanduser("~")
         shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
-        segs.append(Segment([_sp(shown, "blue")], priority=2, path=True))
+        segs.append(Segment([_sp(shown, "cyan")], priority=2, path=True))
 
     # git (protected) -----------------------------------------------------
     git_seg = _git_segment(repo)
@@ -265,12 +275,12 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     if state.opened_at:
         started = time.strftime("%d-%b-%y %H:%M", time.localtime(state.opened_at)).lower()
         now = time.strftime("%H:%M", time.localtime())
-        segs.append(Segment([_sp("start ", "dim"), _sp(started, "white"),
-                             _sp(" · last ", "dim"), _sp(now, "white")], priority=7))
+        segs.append(Segment([_sp("start ", "dim"), _sp(started, "default"),
+                             _sp(" · last ", "dim"), _sp(now, "default")], priority=7))
 
-    # model pinned last (protected) --------------------------------------
+    # model pinned last (magenta = llmtop model slot) --------------------
     model = state.model or slots.model_for("chat")
-    segs.append(Segment([_sp(f"{state.slot}:{_short_model(model)}", "cyan")], priority=1))
+    segs.append(Segment([_sp(f"{state.slot}:{_short_model(model)}", "magenta")], priority=1))
 
     return segs
 
@@ -338,7 +348,7 @@ def toolbar(session, slots, repo: str, state: StatusState, width: int | None = N
     parts: list[tuple[str, str]] = []
     for i, seg in enumerate(fit(fields(session, slots, repo, state), w)):
         if i:
-            parts.append(("#666666", " · "))
+            parts.append(("ansibrightblack", " · "))
         parts += [(style, text) for (text, style, _rich) in seg.spans]
     return FormattedText(parts)
 
@@ -352,7 +362,7 @@ def status_markup(session, slots, repo: str, state: StatusState,
         chunk = "".join(f"[{rich}]{text}[/]" if rich else text
                         for (text, _ptk, rich) in seg.spans)
         out_segs.append(chunk)
-    return "[dim]·[/] " + " [dim]·[/] ".join(out_segs)
+    return "[bright_black]·[/] " + " [bright_black]·[/] ".join(out_segs)
 
 
 def to_rich_text(segments: list[Segment]):
@@ -362,7 +372,7 @@ def to_rich_text(segments: list[Segment]):
     t = Text()
     for i, seg in enumerate(segments):
         if i:
-            t.append(" · ", style="grey42")
+            t.append(" · ", style="bright_black")
         for text, _ptk, rich in seg.spans:
             t.append(text, style=(rich or None))
     return t
