@@ -66,6 +66,13 @@ def test_ctx_shows_percent_and_window_size(slots):
     assert "ctx 42%" in out and "128K" in out  # 131072 → 128K (K-token convention)
 
 
+def test_ctx_shows_size_before_first_turn(slots):
+    # Window size is known from config immediately — no "default", no % yet.
+    st = StatusState(num_ctx=32768, has_turn=False)
+    out = _flat(fields(ChatSession(), slots, "", st))
+    assert "ctx 32K" in out and "%" not in out and "default" not in out
+
+
 def test_slot_is_its_own_segment(slots):
     segs = fields(ChatSession(), slots, "", StatusState(slot="chat", model="Champ-9000"))
     seg_texts = [_flat([s]) for s in segs]

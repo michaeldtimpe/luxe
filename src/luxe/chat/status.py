@@ -273,9 +273,12 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     # ctx: `ctx N% <window-size>` (label = default fg; % used; size in the K/M
     # context convention). Before the first turn, show the configured tier.
     ctx_spans: list[Span] = [_S("ctx ", _DEFAULT)]
-    if state.has_turn and state.num_ctx:
-        ctx_spans.append(_S(f"{state.ctx_pressure:.0%}", _DEFAULT))
-        ctx_spans.append(_S(f" {_ctx_size(state.num_ctx)}", _GREY))
+    if state.num_ctx:
+        # window size is known from config immediately; the % appears once a
+        # turn has measured usage.
+        if state.has_turn:
+            ctx_spans.append(_S(f"{state.ctx_pressure:.0%} ", _DEFAULT))
+        ctx_spans.append(_S(_ctx_size(state.num_ctx), _GREY))
     else:
         tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
         ctx_spans.append(_S(tier, _GREY))
