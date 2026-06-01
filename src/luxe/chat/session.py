@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from luxe.agents.prompts import READ_ONLY_CHAT_HINT
 from luxe.chat.summarize import SUMMARIZER_VERSION, fold_history
 from luxe.memory import project as project_mem
 
@@ -54,8 +55,11 @@ class ChatSession:
         """Assemble the tagged `extra_context` block + record the fold version.
 
         Returns (extra_context, fold_version). `extra_context` is "" only on a
-        clean first turn with no project memory — keeping that path's prompt as
-        close to legacy as possible (the current message is already the Goal).
+        clean first turn with no project memory AND write mode on — keeping that
+        path's prompt as close to legacy as possible (the current message is
+        already the Goal). In read-only mode a low-precedence `<session_mode>`
+        hint is always present so the model points the user at /write rather than
+        claiming luxe can't create or edit files.
         """
         memory_block = ""
         if self.repo_path:
@@ -64,12 +68,16 @@ class ChatSession:
         history_text, fold_version = self.fold(budget_chars=budget_chars)
 
         parts: list[str] = []
+        # Lowest precedence: session-mode framing comes first so user/memory text
+        # always reads as higher-priority. String lives in the prompt registry.
+        if not self.write_enabled:
+            parts.append(f"<session_mode>\n{READ_ONLY_CHAT_HINT}\n</session_mode>")
         if memory_block:
             parts.append(memory_block)
         if history_text:
             parts.append(f"<conversation_history>\n{history_text}\n</conversation_history>")
         if not parts:
-            # First turn, no memory: nothing to disambiguate; the Goal carries it.
+            # First turn, no memory, write mode on: nothing to disambiguate.
             return "", fold_version
         # Something precedes the request — echo it last for recency.
         parts.append(f"<current_request>\n{current_user_message.strip()}\n</current_request>")

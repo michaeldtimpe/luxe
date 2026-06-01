@@ -115,8 +115,12 @@ def _use(args, ctx: CommandContext) -> CommandResult:
 
 def _write(args, ctx: CommandContext) -> CommandResult:
     ctx.session.write_enabled = not ctx.session.write_enabled
-    state = "[yellow]ON[/]" if ctx.session.write_enabled else "[green]OFF[/]"
-    ctx.console.print(f"write tools: {state}")
+    if ctx.session.write_enabled:
+        ctx.console.print("write tools: [yellow]ON[/] "
+                          "[dim](write_file, edit_file, bash enabled — /write to disable)[/]")
+    else:
+        ctx.console.print("write tools: [green]OFF[/] "
+                          "[dim](read-only; /write to enable file creation/edits)[/]")
     return CommandResult(handled=True)
 
 
