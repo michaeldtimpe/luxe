@@ -135,7 +135,11 @@ def run_single(
     )
 
     if extra_tool_defs:
-        defs = defs + list(extra_tool_defs)
+        # Same-named extras OVERRIDE the base def (e.g. chat dev mode swaps the
+        # allowlisted `bash` for an unrestricted one). MCP tools are namespaced
+        # and never collide, so this only fires for deliberate overrides.
+        override_names = {d.name for d in extra_tool_defs}
+        defs = [d for d in defs if d.name not in override_names] + list(extra_tool_defs)
     if extra_tool_fns:
         fns = {**fns, **extra_tool_fns}
 

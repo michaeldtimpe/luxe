@@ -459,3 +459,44 @@ class TestBashChainRejection:
         assert result == ""
         assert err is not None
         assert "parse" in err.lower() or "quote" in err.lower()
+
+
+class TestUnrestrictedBash:
+    """Opt-in chat dev mode (chat.sdd): make_bash_fn(unrestricted=True) drops the
+    allowlist + chain/redirect guards. The DEFAULT fn stays hardened so the
+    benchmark/maintain path is unchanged."""
+
+    def test_default_fn_still_hardened(self, tmp_repo: Path):
+        # The module-level TOOL_FNS["bash"] must keep rejecting non-allowlisted.
+        result, err = shell.TOOL_FNS["bash"]({"command": "mkdir foo"})
+        assert err is not None and "allowlist" in err.lower()
+
+    def test_unrestricted_allows_non_allowlisted_binary(self, tmp_repo: Path):
+        fn = shell.make_bash_fn(unrestricted=True)
+        result, err = fn({"command": "mkdir -p subdir/nested"})
+        assert err is None
+        assert (tmp_repo / "subdir/nested").is_dir()
+
+    def test_unrestricted_allows_chains(self, tmp_repo: Path):
+        fn = shell.make_bash_fn(unrestricted=True)
+        result, err = fn({"command": "mkdir -p a && echo done > a/marker.txt"})
+        assert err is None
+        assert (tmp_repo / "a/marker.txt").read_text().strip() == "done"
+
+    def test_unrestricted_path_form_binary_runs(self, tmp_repo: Path):
+        # The m1 failure: ./venv/bin/pip was rejected by the allowlist. Path-form
+        # binaries run fine in dev mode.
+        (tmp_repo / "venv/bin").mkdir(parents=True)
+        script = tmp_repo / "venv/bin/echoer"
+        script.write_text("#!/bin/sh\necho hi\n")
+        script.chmod(0o755)
+        fn = shell.make_bash_fn(unrestricted=True)
+        result, err = fn({"command": "./venv/bin/echoer"})
+        assert err is None and "hi" in result
+
+    def test_unrestricted_def_overrides_in_run_single(self):
+        # Sanity: extra_tool_defs with name 'bash' replaces (not duplicates) the
+        # base def — the override contract run_single relies on for dev mode.
+        d = shell.unrestricted_bash_def()
+        assert d.name == "bash"
+        assert "ANY shell command" in d.description

@@ -38,6 +38,12 @@ never touches this module.
   forbids any expansion. Resize is never silent — high context pressure only
   *suggests* the next tier; the user opts in. The benchmark/maintain path never
   reads `num_ctx_max` and is unaffected.
+- `/bash` toggles unrestricted shell (default OFF = hardened allowlist). When ON
+  AND write mode is on, the turn passes `unrestricted_bash_def()` +
+  `make_bash_fn(unrestricted=True)` through `run_single`'s extra-tool seam,
+  overriding the allowlisted bash for that run only. Effective only in write mode
+  (bash is stripped in read-only). Visible on the slot line every turn. The
+  benchmark/maintain path passes no extra tools, so its bash stays allowlisted.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature

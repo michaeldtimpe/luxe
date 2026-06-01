@@ -77,32 +77,73 @@ def _validate_command(command: str) -> tuple[list[str], str | None]:
     return tokens, None
 
 
-def _bash(args: dict[str, Any]) -> tuple[str, str | None]:
+# Dev-mode (unrestricted) runs need a longer budget — `pip install`, `npm ci`,
+# and builds routinely exceed the 60s allowlisted ceiling.
+_UNRESTRICTED_TIMEOUT = 600
+
+
+def _bash(args: dict[str, Any], *, unrestricted: bool = False) -> tuple[str, str | None]:
     repo_root = get_repo_root()
     if repo_root is None:
         return "", "Repo root not set"
 
     command = args["command"]
-    tokens, err = _validate_command(command)
-    if err:
-        return "", err
-
-    binary = tokens[0]
-    if binary not in _ALLOWLIST:
-        return "", f"Command '{binary}' not in allowlist. Allowed: {sorted(_ALLOWLIST)}"
+    if unrestricted:
+        # Opt-in `luxe chat` dev mode (chat.sdd): no allowlist, no chain/redirect
+        # rejection. cwd is the repo root but this is NOT a sandbox.
+        if not command.strip():
+            return "", "Empty command"
+        timeout = _UNRESTRICTED_TIMEOUT
+    else:
+        tokens, err = _validate_command(command)
+        if err:
+            return "", err
+        binary = tokens[0]
+        if binary not in _ALLOWLIST:
+            return "", f"Command '{binary}' not in allowlist. Allowed: {sorted(_ALLOWLIST)}"
+        timeout = _TIMEOUT
 
     try:
         proc = subprocess.run(
             command, shell=True,
             capture_output=True, text=True,
-            cwd=repo_root, timeout=_TIMEOUT,
+            cwd=repo_root, timeout=timeout,
         )
         output = proc.stdout + proc.stderr
         if len(output) > _MAX_OUTPUT:
             output = output[:_MAX_OUTPUT] + f"\n... (truncated at {_MAX_OUTPUT} bytes)"
         return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
     except subprocess.TimeoutExpired:
-        return "", f"Command timed out after {_TIMEOUT}s"
+        return "", f"Command timed out after {timeout}s"
+
+
+def make_bash_fn(*, unrestricted: bool = False) -> ToolFn:
+    """Build a bash tool fn. `unrestricted=True` (chat dev mode only) drops the
+    allowlist + chain/redirect guards; the default is the hardened allowlist."""
+    def _fn(args: dict[str, Any]) -> tuple[str, str | None]:
+        return _bash(args, unrestricted=unrestricted)
+    return _fn
+
+
+def unrestricted_bash_def() -> ToolDef:
+    """Tool def advertised in `luxe chat` dev mode so the model knows it can run
+    any command (venv/pip/build/test), not just the allowlisted binaries."""
+    return ToolDef(
+        name="bash",
+        description=(
+            "Run ANY shell command for development work — chains (&&, |), "
+            "redirects (>), venv activation, pip/npm install, builds, and tests "
+            "are all allowed. Runs with the working directory at the repo root "
+            "but is NOT sandboxed, so avoid destructive commands outside the repo."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Shell command to execute"},
+            },
+            "required": ["command"],
+        },
+    )
 
 
 def tool_defs() -> list[ToolDef]:

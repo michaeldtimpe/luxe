@@ -12,9 +12,18 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
 - `cve_lookup` is gated to `task_type == "manage"` only (surface bloat regresses implement)
 - New honesty-pattern guards land with a regression test in `tests/test_tools.py`
 
+- `bash` defaults to the hardened allowlist + chain/redirect rejection
+  (`_validate_command`). The module `TOOL_FNS["bash"]` MUST stay restricted —
+  every benchmark/maintain run uses it. The unrestricted variant
+  (`make_bash_fn(unrestricted=True)` + `unrestricted_bash_def()`) is reachable
+  ONLY via `luxe chat` dev mode (opt-in `/bash`, write-mode only), passed through
+  `run_single`'s extra-tool seam; it never becomes the default fn
+
 ## Must not
 - Bypass `_safe()` path scoping in any new tool
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)
+- Wire unrestricted bash into the benchmark/maintain path or the default
+  `TOOL_FNS` — it is a chat-front-end carve-out only
 
 ## Owns
 - src/luxe/tools/**

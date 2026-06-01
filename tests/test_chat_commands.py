@@ -170,6 +170,24 @@ def test_ctx_unknown_tier(ctx):
     assert "Unknown size" in _text(ctx)
 
 
+def test_bash_mode_toggles(ctx):
+    assert ctx.session.unrestricted_bash is False
+    cmd.dispatch("/bash", ctx)
+    assert ctx.session.unrestricted_bash is True
+    assert "UNRESTRICTED" in _text(ctx)
+    cmd.dispatch("/bash", ctx)
+    assert ctx.session.unrestricted_bash is False
+    assert "allowlisted" in _text(ctx)
+
+
+def test_bash_mode_warns_when_read_only(ctx):
+    # bash is only exposed in write mode; enabling unrestricted while read-only
+    # should hint the user to /write.
+    assert ctx.session.write_enabled is False
+    cmd.dispatch("/bash", ctx)
+    assert "/write" in _text(ctx)
+
+
 def test_compare_hook_invoked(ctx):
     seen = []
     ctx.on_compare = lambda task: seen.append(task)

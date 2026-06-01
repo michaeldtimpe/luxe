@@ -43,6 +43,7 @@ _HELP = """[bold]luxe chat commands[/]
   [cyan]/use[/] <slot>                pin the next turn to chat|plan|code
   [cyan]/ctx[/] [small|medium|large|xlarge]   show or set context window size
   [cyan]/write[/]                     toggle write tools (default: read-only)
+  [cyan]/bash[/]                      toggle unrestricted shell (default: allowlisted)
   [cyan]/memory[/] list|add|promote|forget|edit
   [cyan]/compare[/] <task>            run two configs side-by-side
   [cyan]/compare review[/] [id]       replay a stored comparison
@@ -66,6 +67,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/use": _use,
         "/ctx": _ctx,
         "/write": _write,
+        "/bash": _bash_mode,
         "/memory": _memory,
         "/compare": _compare,
         "/resume": _resume,
@@ -167,6 +169,21 @@ def _write(args, ctx: CommandContext) -> CommandResult:
     else:
         ctx.console.print("write tools: [green]OFF[/] "
                           "[dim](read-only; /write to enable file creation/edits)[/]")
+    return CommandResult(handled=True)
+
+
+def _bash_mode(args, ctx: CommandContext) -> CommandResult:
+    ctx.session.unrestricted_bash = not ctx.session.unrestricted_bash
+    if ctx.session.unrestricted_bash:
+        ctx.console.print(
+            "shell: [red]UNRESTRICTED[/] [dim](any command — chains, pipes, "
+            "redirects, venv/pip/build/test; cwd=repo root, NOT sandboxed)[/]")
+        if not ctx.session.write_enabled:
+            ctx.console.print("[yellow]· note: bash is only exposed in write mode — "
+                              "run /write to enable it[/]")
+    else:
+        ctx.console.print("shell: [green]allowlisted[/] "
+                          "[dim](safe binaries only; /bash for unrestricted dev mode)[/]")
     return CommandResult(handled=True)
 
 

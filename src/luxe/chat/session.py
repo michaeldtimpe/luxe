@@ -68,6 +68,7 @@ class ChatSession:
     project_hash: str = ""
     languages: frozenset = field(default_factory=frozenset)
     write_enabled: bool = False
+    unrestricted_bash: bool = False  # set by /bash; only effective in write mode
     pinned_slot: str | None = None  # set by /use; consumed on the next turn
     num_ctx_override: int | None = None  # set by /ctx; clamped per-turn to num_ctx_max
     turns: list[ChatTurn] = field(default_factory=list)

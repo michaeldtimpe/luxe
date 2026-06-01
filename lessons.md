@@ -3113,3 +3113,49 @@ benchmark-visible), `src/luxe/agents/prompts.py` (`READ_ONLY_CHAT_HINT` — B),
 `src/luxe/mcp/server.py:168-182` (`_MUTATION_TOOL_NAMES` + `make_read_only_role`),
 `src/luxe/chat/repl.py:158` (read-only gate), `src/luxe/chat/chat.sdd` ("Write
 tools default OFF … `/write` toggles"). Memory: `feedback_luxe_dev_platform_write_mode.md`.
+
+### [2026-06-01] m1 dogfooding — bash allowlist blocks real dev; fix is a chat-only `/bash` carve-out (not a global loosen)
+
+**What happened**: Live m1 use (scaffolding `mlx-gateway` — venv + pip install)
+hit the bash allowlist three ways: (1) `mkdir` absent (model worked around it
+with `python -c os.makedirs`); (2) `./venv/bin/pip` and `./venv/bin/python`
+**rejected even though `pip`/`python` ARE allowlisted** — `_bash` matches
+`tokens[0]` exactly, so the path form ≠ the bare name; (3) chains/redirects
+(`&&`, `|`, `>`) blocked (hardened 2026-05-02 vs `cat x && rm -rf /` bypass).
+Net: `write_file`/`edit_file` worked (the create-first fixes landed), but the
+venv install step was dead. Separately, the user noticed the rainbow prompt /
+tok-s / timestamps weren't on m1 — correct, they'd been reverted earlier ("no UI
+port ATM"); m1 was otherwise current.
+
+**Root cause / decision**: The allowlist is a deliberate, benchmark-visible
+security boundary — globally loosening it would need an A/B and weakens the
+maintain path. So the user chose a **chat-only opt-in dev mode** instead.
+`/bash` toggles `session.unrestricted_bash`; when ON + write mode, the turn
+passes `unrestricted_bash_def()` + `make_bash_fn(unrestricted=True)` through
+`run_single`'s extra-tool seam (which now lets same-named `extra_tool_defs`
+OVERRIDE the base def). That run gets arbitrary shell (chains/pipes/redirects,
+path-form binaries, 600s timeout, cwd=repo root, NOT sandboxed). The default
+`TOOL_FNS["bash"]` and the entire benchmark/maintain path stay allowlisted —
+byte-identical, because they pass no extra tools.
+
+**Fix / takeaway**:
+- **Chat-only carve-outs are the pattern for "dev-platform" capability** that
+  would otherwise disturb the benchmark substrate: read-only→`/write`,
+  `num_ctx`→`/ctx`, allowlisted-bash→`/bash`. Each is opt-in, write/chat-scoped,
+  and routed so the deterministic path never sees it. tools.sdd now forbids
+  wiring unrestricted bash into the default fn or benchmark path.
+- **The `tokens[0]` exact-match is correct for the allowlist** (path-form is
+  exactly how a planted `./x/python` would bypass), so the venv-path gap is NOT
+  a bug to "fix" globally — it's resolved by dev mode where the user accepts the
+  loosened boundary.
+- **UI port un-reverted + shipped** (rainbow banner, color-shifting arrows,
+  `tok/s`, start/end timestamps + elapsed). No benchmark surface.
+
+**Affected files**: `src/luxe/tools/shell.py` (`make_bash_fn`,
+`unrestricted_bash_def`, `_bash(unrestricted=)`), `src/luxe/agents/single.py`
+(extra_tool_defs override-by-name), `src/luxe/chat/{session,commands,repl}.py`
+(`/bash` + `unrestricted_bash` + per-turn wiring + slot-line indicator),
+`src/luxe/chat/render.py` + `repl.py` (UI port), `configs/` (unchanged),
+`tools.sdd` + `chat.sdd` + `CLAUDE.md`. Tests: +14 (TestUnrestrictedBash, /bash
+toggle, render port). Suite 1223 passed, 4 mlx env-skips. Memory:
+`feedback_luxe_dev_platform_write_mode.md`.
