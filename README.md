@@ -91,6 +91,8 @@ luxe maintain <repo> "<goal>" [--task review|implement|bugfix|document|summarize
                               [--config <path>] [--allow-dirty] [--yes]
                               [--watch-ci] [--keep-loaded]
                               [--spec-yaml <path>] [--save-report]
+luxe chat   [--repo <path>] [--config <path>]   # interactive Claude-CLI-style agent
+            [--chat-model/--plan-model/--code-model <id>] [--resume <id>]
 luxe pr     <run-id> [--push-only]              # resume a partially-completed PR cycle
 luxe runs   list | luxe runs gc                 # housekeeping
 luxe unload [--except <model-id>]               # free oMLX RAM (auto-runs after maintain)
@@ -110,6 +112,34 @@ luxe maintain ~/code/my-app "review the auth module for security bugs" --task re
 # Resume just the PR cycle (commit / push / create / watch_ci) after auth expired
 luxe pr <run-id>
 ```
+
+### Interactive chat tiers
+
+`luxe chat` is the same champion (`Qwen3.6-35B-A3B-6bit`) wrapped in the
+agentic loop. How much luxe *harness* sits on top of the model is a spectrum
+controlled by the `LUXE_*` substrate flags (`src/luxe/agents/loop.py`) and the
+role's prompt overlay. Three shortcuts pin the useful points (the wrappers live
+in `~/dotfiles/bin`, synced across hosts; they assume luxe at `~/Downloads/luxe`,
+override with `LUXE_HOME`):
+
+| Command | Substrate (`loop.py`) | Prompt / SpecDD | Config |
+|---|---|---|---|
+| `luxe`      | tiered-compaction on only *(shipped default)* | `manage_strict_only` overlay | `configs/chat.yaml` |
+| `luxe-bare` | **all interventions off** | baseline prompts, **no SDD** | `configs/chat_bare.yaml` |
+| `luxe-full` | **all validated levers on** | `manage_strict_only` overlay | `configs/chat.yaml` |
+
+- **`luxe-bare`** is the "plain Claude-CLI clone" — the raw champion. It exports
+  `LUXE_TIERED_COMPACT=0 LUXE_REFLECT=0 LUXE_ADAPTIVE_POLICY=0
+  LUXE_WRITE_PRESSURE=0 LUXE_EARLY_BAIL=0 LUXE_PROSE_BURST=0
+  LUXE_ACTION_DENSITY_GATE=0 LUXE_CONVERGENCE_GATE=0 LUXE_REPROMPT_ON_DOC=0`
+  and points `chat` at `configs/chat_bare.yaml` (identical to `chat.yaml` minus
+  the `task_overlay_id: manage_strict_only` line → `RoleConfig` baseline
+  prompts). Equivalent to `luxe compare` mode-1's "bare champion" side.
+- **`luxe-full`** flips every *validated* lever to `1`. The three default-OFF
+  *refuted* experimental flags (`LUXE_RESPOND_TERMINAL`,
+  `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`, `LUXE_EARLY_BAIL_COMMIT_ONLY`) stay off.
+- The model weights never change — bare vs full is purely harness scaffolding.
+- chat starts read-only; type `/write` in the REPL to enable edits + `bash`.
 
 ## Production model
 

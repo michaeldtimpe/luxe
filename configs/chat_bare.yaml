@@ -1,0 +1,68 @@
+omlx_base_url: "http://127.0.0.1:8000"
+
+# BARE champion config — luxe as a plain Claude-CLI-style clone.
+# Identical to chat.yaml EXCEPT the `manage_strict_only` task overlay is
+# removed, so the monolith role falls back to RoleConfig defaults
+# (system_prompt_id: baseline, task_prompt_id: baseline, no overlay) — i.e.
+# no SDD/prompt-shaping enhancements. Pair with the bare-substrate env flags
+# (LUXE_TIERED_COMPACT=0 LUXE_REFLECT=0 LUXE_ADAPTIVE_POLICY=0
+#  LUXE_WRITE_PRESSURE=0 LUXE_EARLY_BAIL=0 LUXE_PROSE_BURST=0
+#  LUXE_ACTION_DENSITY_GATE=0) to fully disable the loop.py substrate.
+# This mirrors compare mode-1's "bare champion" side (_BARE_SUBSTRATE_ENV +
+# system_prompt_id="baseline").
+
+profile:
+  name: "Interactive chat (64 GB) — BARE"
+  description: "luxe chat REPL — bare champion, no SDD/overlay enhancements."
+  memory_budget_gb: 64
+  peak_model_gb: 30.0
+
+models:
+  monolith: "Qwen3.6-35B-A3B-6bit"
+
+roles:
+  monolith:
+    model_key: monolith
+    num_ctx: 32768
+    max_steps: 30
+    max_tokens_per_turn: 8192
+    temperature: 0.0
+    # task_overlay_id intentionally omitted -> baseline prompts (no SDD).
+    tools:
+      - read_file
+      - list_dir
+      - glob
+      - grep
+      - bm25_search
+      - find_symbol
+      - write_file
+      - edit_file
+      - git_diff
+      - git_log
+      - git_show
+      - bash
+      - lint
+      - typecheck
+      - security_scan
+      - deps_audit
+      - cve_lookup
+
+task_types:
+  review:
+    description: "Code review — single-model agentic loop"
+    pipeline: [monolith]
+  implement:
+    description: "Feature implementation — single-model agentic loop"
+    pipeline: [monolith]
+  bugfix:
+    description: "Bug investigation and fix — single-model agentic loop"
+    pipeline: [monolith]
+  document:
+    description: "Documentation generation — single-model agentic loop"
+    pipeline: [monolith]
+  summarize:
+    description: "Codebase summarization — single-model agentic loop"
+    pipeline: [monolith]
+  manage:
+    description: "Repository management — single-model agentic loop"
+    pipeline: [monolith]
