@@ -56,7 +56,9 @@ never touches this module.
   banner names the initial mode + toggles; the status-bar chips show live state.
 - The status bar (`chat/status.py`) order (user spec):
   `path · git · ctx · cache · start · last · write · bash · slot · model`.
-  `ctx` = `ctx N% <window-size>` (size in the K/M context convention, e.g. 128K);
+  `ctx` = `ctx N% <window-size>` (size in the K/M context convention, e.g. 128K;
+  the size shows immediately — seeded from the slot's role num_ctx at startup —
+  and the % appears once a turn measures usage);
   `cache` = resident prompt size (luxe has no cross-turn prompt cache — each turn
   is a fresh `run_single`, so it's the prompt/KV size processed last turn, NOT an
   Anthropic-style cache); `write`/`bash` show explicit on/off; the luxe mode
