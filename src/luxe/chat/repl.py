@@ -9,6 +9,7 @@ same seam via `CancelToken` + `ChatCancelled`.
 from __future__ import annotations
 
 import signal
+import time
 from typing import Callable
 
 from rich.console import Console
@@ -19,7 +20,10 @@ from luxe.chat import commands as cmd
 from luxe.chat.render import (
     CancelToken,
     ChatCancelled,
+    arrow_prompt_markup,
     make_tool_event,
+    pick_no_adjacent_repeats,
+    rainbow_banner,
     render_final,
     render_footer,
 )
@@ -50,17 +54,26 @@ def _default_reader(console: Console) -> Callable[[], str]:
     """Return a line reader — prompt_toolkit if available, else input()."""
     try:
         from prompt_toolkit import PromptSession
+        from prompt_toolkit.formatted_text import FormattedText
         from prompt_toolkit.history import InMemoryHistory
 
         pt = PromptSession(history=InMemoryHistory())
 
         def read() -> str:
-            return pt.prompt("luxe › ")
+            # Fresh colors each turn → the arrows shift per render.
+            colors = pick_no_adjacent_repeats(3)
+            message = FormattedText(
+                [("", "luxe ")]
+                + [(f"bold fg:{c}", "›") for c in colors]
+                + [("", " ")]
+            )
+            return pt.prompt(message)
 
         return read
     except Exception:  # prompt_toolkit not installed → degrade gracefully
         def read() -> str:
-            return input("luxe › ")
+            console.print(arrow_prompt_markup("luxe"), end="")
+            return input()
 
         return read
 
@@ -107,7 +120,7 @@ def run_chat_repl(
     if resume_session_id:
         ctx.on_resume(resume_session_id)
 
-    console.print(f"[bold cyan]luxe chat[/]  [dim]session={meta.session_id}[/]")
+    console.print(rainbow_banner("luxe chat") + f"  [dim]session={meta.session_id}[/]")
     console.print(f"[dim]repo: {repo_path or '(none)'} · "
                   f"slots: {slots.slot_models()} · read-only (/, /help for commands)[/]")
 
@@ -155,12 +168,24 @@ def _run_turn(
     session.pinned_slot = None
 
     model = slots.model_for(slot)
-    console.print(f"[dim]slot: {slot} · model: {model}[/]")
+    dev_bash = session.write_enabled and session.unrestricted_bash
+    bash_note = " · [red]bash:unrestricted[/]" if dev_bash else ""
+    console.print(f"[dim]slot: {slot} · model: {model}{bash_note}[/]")
 
     backend = slots.backend_for(slot)
     slot_cfg = cfg.slot_config(slot)
     base_role = cfg.role(slot_cfg.role)
     role_cfg = base_role if session.write_enabled else make_read_only_role(base_role)
+
+    # Chat dev mode (chat.sdd): swap the allowlisted bash for an unrestricted one
+    # for THIS run only. Chat-scoped via run_single's extra-tool seam — the
+    # benchmark/maintain path never passes these, so its bash is untouched.
+    extra_tool_defs = None
+    extra_tool_fns = None
+    if dev_bash:
+        from luxe.tools.shell import make_bash_fn, unrestricted_bash_def
+        extra_tool_defs = [unrestricted_bash_def()]
+        extra_tool_fns = {"bash": make_bash_fn(unrestricted=True)}
 
     # `/ctx` size override (chat-only) — clamp to the role's hard ceiling so a
     # tier request can never exceed what this box/model can hold.
@@ -193,6 +218,7 @@ def _run_turn(
     on_event = make_tool_event(console, cancel)
     interrupted = False
     result = None
+    started_at = time.time()
     try:
         with Status("[dim]generating…[/]", console=console, spinner="dots"):
             result = run_single(
@@ -201,6 +227,8 @@ def _run_turn(
                 goal=message,
                 task_type=task_type,
                 languages=languages,
+                extra_tool_defs=extra_tool_defs,
+                extra_tool_fns=extra_tool_fns,
                 on_tool_event=on_event,
                 run_id=run_id,
                 phase="chat",
@@ -210,6 +238,7 @@ def _run_turn(
         interrupted = True
         console.print("[yellow]· interrupted — partial turn saved[/]")
     finally:
+        ended_at = time.time()
         if prev_handler is not None:
             try:
                 signal.signal(signal.SIGINT, prev_handler)
@@ -227,6 +256,8 @@ def _run_turn(
             result=result,
             swap_count=slots.stats.count,
             swap_seconds=slots.stats.seconds,
+            started_at=started_at,
+            ended_at=ended_at,
         )
         # Auto-suggest a larger window (never resizes silently — chat.sdd).
         if result.peak_context_pressure >= CTX_SUGGEST_PRESSURE:

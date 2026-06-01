@@ -60,6 +60,14 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     clamped to the role's `num_ctx_max` (`configs/chat.yaml`; `0` = no
     expansion). NOT dynamic/auto — high pressure only *suggests* the next tier.
     Benchmark/maintain ignore `num_ctx_max`.
+  - **`/bash` toggles unrestricted shell** (chat-only dev mode; default OFF =
+    hardened allowlist). When ON + write mode, the turn swaps in
+    `make_bash_fn(unrestricted=True)` via `run_single`'s extra-tool seam — any
+    command, chains/pipes/redirects, cwd=repo root but NOT sandboxed. The default
+    `TOOL_FNS["bash"]` and the benchmark path stay allowlisted (`tools.sdd`).
+  - The REPL shows a randomized rainbow banner + per-render color-shifting prompt
+    arrows; the footer carries `tok/s` and start/end timestamps + elapsed
+    (`chat/render.py`).
 - **`luxe compare run/review`** — side-by-side single-task comparison (3 modes,
   incl. luxe-vs-bare substrate ablation), blind + vote.
 - **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
