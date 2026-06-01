@@ -144,11 +144,13 @@ def run_chat_repl(
     if resume_session_id:
         ctx.on_resume(resume_session_id)
 
-    mode_line = ("[yellow]write+bash (dev mode)[/]" if dev_mode
-                 else "read-only")
+    mode_line = ("[yellow]DEV MODE — write + unrestricted shell ON[/]" if dev_mode
+                 else "[green]read-only[/] · [green]allowlisted shell[/] "
+                      "[dim](/write, /bash, or restart with --dev)[/]")
     console.print(rainbow_banner("luxe chat") + f"  [dim]session={meta.session_id}[/]")
     console.print(f"[dim]repo: {repo_path or '(none)'} · "
-                  f"slots: {slots.slot_models()} · {mode_line} (/, /help for commands)[/]")
+                  f"slots: {slots.slot_models()}[/]")
+    console.print(f"mode: {mode_line}  [dim](/help for commands)[/]")
 
     try:
         while True:
@@ -204,15 +206,24 @@ def _run_turn(
     base_role = cfg.role(slot_cfg.role)
     role_cfg = base_role if session.write_enabled else make_read_only_role(base_role)
 
-    # Chat dev mode (chat.sdd): swap the allowlisted bash for an unrestricted one
-    # for THIS run only. Chat-scoped via run_single's extra-tool seam — the
-    # benchmark/maintain path never passes these, so its bash is untouched.
+    # Chat bash (chat.sdd), swapped for THIS run only via run_single's extra-tool
+    # seam — benchmark/maintain never pass these, so their bash is untouched.
+    # Dev mode → unrestricted; plain write mode → allowlisted bash whose rejections
+    # explain the flag state (/bash) instead of leaving the model to retry.
     extra_tool_defs = None
     extra_tool_fns = None
-    if dev_bash:
-        from luxe.tools.shell import make_bash_fn, unrestricted_bash_def
-        extra_tool_defs = [unrestricted_bash_def()]
-        extra_tool_fns = {"bash": make_bash_fn(unrestricted=True)}
+    if session.write_enabled:
+        from luxe.tools.shell import (
+            make_bash_fn,
+            restricted_bash_def,
+            unrestricted_bash_def,
+        )
+        if session.unrestricted_bash:
+            extra_tool_defs = [unrestricted_bash_def()]
+            extra_tool_fns = {"bash": make_bash_fn(unrestricted=True)}
+        else:
+            extra_tool_defs = [restricted_bash_def()]
+            extra_tool_fns = {"bash": make_bash_fn(restricted_hint=True)}
 
     # `/ctx` size override (chat-only) — clamp to the role's hard ceiling so a
     # tier request can never exceed what this box/model can hold.

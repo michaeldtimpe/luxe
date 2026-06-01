@@ -500,3 +500,23 @@ class TestUnrestrictedBash:
         d = shell.unrestricted_bash_def()
         assert d.name == "bash"
         assert "ANY shell command" in d.description
+
+    def test_restricted_hint_explains_flag_state_on_allowlist_reject(self, tmp_repo: Path):
+        fn = shell.make_bash_fn(restricted_hint=True)
+        _out, err = fn({"command": "mkdir foo"})
+        assert err is not None and "/bash" in err and "not in allowlist" in err
+
+    def test_restricted_hint_explains_flag_state_on_chain_reject(self, tmp_repo: Path):
+        fn = shell.make_bash_fn(restricted_hint=True)
+        _out, err = fn({"command": "ls && ls"})
+        assert err is not None and "/bash" in err
+        assert err.index("/bash") < 80  # survives the 80-char tool-line truncation
+
+    def test_restricted_hint_NOT_added_to_real_errors(self, tmp_repo: Path):
+        # Mismatched quotes is a genuine error, not a flag state — no /bash hint.
+        fn = shell.make_bash_fn(restricted_hint=True)
+        _out, err = fn({"command": "echo 'unclosed"})
+        assert err is not None and "/bash" not in err
+
+    def test_restricted_bash_def_tells_model_to_surface_flag(self):
+        assert "/bash" in shell.restricted_bash_def().description

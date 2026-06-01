@@ -46,6 +46,14 @@ never touches this module.
   benchmark/maintain path passes no extra tools, so its bash stays allowlisted.
 - `luxe chat --dev` starts with write + unrestricted bash ON (sticky equivalent
   of `/write` + `/bash`), so dev work doesn't re-toggle each session
+- Defaults stay safe (read-only + allowlisted bash) but the state must be VISIBLE
+  and flag-gated failures must be SELF-EXPLAINING: write mode (non-dev) injects
+  `restricted_bash_def()` + `make_bash_fn(restricted_hint=True)` so an
+  allowlist/chain/substitution rejection front-loads "enable unrestricted dev mode
+  with /bash" onto the error (survives the 80-char tool-line truncation) and the
+  def tells the model to surface the flag rather than retry. Genuine errors
+  (mismatched quotes, timeouts, non-zero exit) are NOT augmented. The startup
+  banner names the initial mode + toggles; the status-bar chips show live state.
 - The status bar (`chat/status.py`) format = the applicable segments of the
   user's `yet-another-statusline` (path · state-coloured `git branch/commit
   +U ~M -D RN ↑a ↓b ✓` · `ctx N%` · rate · `start…last…` · model-last) + luxe
