@@ -116,7 +116,7 @@ def run_chat_repl(
 
     # Static bottom-toolbar status bar (chat.sdd lightweight variant): refreshed
     # from `status` between turns; the reader pins it under the input line.
-    status = StatusState()
+    status = StatusState(opened_at=time.time())
     reader = reader or _default_reader(
         console,
         toolbar_fn=lambda: status_mod.toolbar(session, slots, repo_path, status),

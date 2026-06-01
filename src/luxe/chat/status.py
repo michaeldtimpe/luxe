@@ -1,63 +1,196 @@
-"""Bottom-toolbar status bar for `luxe chat` (lightweight prompt_toolkit variant).
+"""Bottom-toolbar status bar for `luxe chat` — a port of the applicable segments
+from the user's `yet-another-statusline` format (compact, Monaco-safe, ` · `
+separated, model pinned last).
 
-Renders a single static bar pinned under the input line while you type. It is
-NOT live during a model turn (the tool tail-log streams above instead); it
-refreshes between turns from `StatusState`, which the REPL updates after each
-turn. Git branch/dirty is TTL-cached so it doesn't shell out on every keystroke.
+WHAT PORTED (applies to luxe): home-relative path · state-coloured git label
+`git <branch>/<commit> +U ~M -D RN ↑a ↓b ✓` · `ctx N%` (zone-coloured) · gen rate
+· `start <date time> · last <HH:MM>` session timing · `<slot>:<model>` last.
+WHAT DIDN'T (Claude-Code-subscription specifics): 5h/7d plan quotas, cache-read
+tokens, $ cost, thinking-effort pill. Plus luxe-specific WRITE/BASH/READ-ONLY
+mode chips (chat.sdd requires write-mode visibility every turn).
 
-`fields()` is the single source of truth for segment order + content; both the
-prompt_toolkit toolbar and the plain-text fallback render from it, so the two
-never drift. Swap the field list here to restyle the bar.
+LIGHTWEIGHT variant: a static bar pinned under the input line, refreshed from
+`StatusState` BETWEEN turns (the tool tail-log streams above for live progress).
+`fields()` is the single source of segment order/content; `toolbar()`
+(prompt_toolkit) and `status_markup()` (plain-input fallback) both render from it.
+Unlike YASL there is no width-responsive segment-dropping yet — prompt_toolkit
+truncates the bar; the path is shown home-relative but not middle-ellipsised.
 """
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
 
 from luxe.chat.session import tier_label
 
+# Semantic colour -> (prompt_toolkit style, Rich markup tag).
+_C: dict[str, tuple[str, str]] = {
+    "red": ("#ff6b6b", "red"),
+    "yellow": ("#ffcc55", "yellow"),
+    "green": ("#66e066", "green"),
+    "orange": ("#ffa040", "dark_orange3"),
+    "cyan": ("#66d9ff", "cyan"),
+    "blue": ("#88aaff", "blue"),
+    "dim": ("#888888", "dim"),
+    "white": ("#ffffff", "white"),
+    "": ("", ""),
+}
+
+# A styled span: (text, ptk_style, rich_style). A segment is a list of spans.
+Span = tuple[str, str, str]
+
+
+def _sp(text: str, colour: str = "") -> Span:
+    p, r = _C.get(colour, ("", ""))
+    return (text, p, r)
+
+
+# ---------------------------------------------------------------- git ------
+
 _GIT_TTL = 5.0
-_git_cache: dict[str, tuple[float, tuple[str, int] | None]] = {}
+_git_cache: dict[str, tuple[float, "GitInfo | None"]] = {}
 
 
-def git_status(repo: str) -> tuple[str, int] | None:
-    """(branch, dirty_file_count) for `repo`, or None if not a git repo.
-    TTL-cached so per-keystroke toolbar redraws don't spawn git each time."""
+@dataclass
+class GitInfo:
+    branch: str = ""
+    commit: str = ""
+    untracked: int = 0
+    modified: int = 0
+    deleted: int = 0
+    renamed: int = 0
+    ahead: int = 0
+    behind: int = 0
+    has_upstream: bool = False
+    detached: bool = False
+
+    @property
+    def clean(self) -> bool:
+        return not (self.untracked or self.modified or self.deleted
+                    or self.renamed or self.ahead or self.behind)
+
+    @property
+    def state(self) -> str:
+        if self.detached or self.behind:
+            return "drift"      # red
+        if self.untracked or self.modified or self.deleted or self.renamed or self.ahead:
+            return "pending"    # yellow
+        return "clean"          # green
+
+
+def _run_git(repo: str, *args: str) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(["git", "-C", repo, *args],
+                              capture_output=True, text=True, timeout=2)
+    except Exception:
+        return None
+
+
+def git_info(repo: str) -> GitInfo | None:
+    """Rich git state for `repo`, or None if not a git repo. TTL-cached so a
+    per-keystroke toolbar redraw doesn't spawn git each time. Mirrors the
+    yet-another-statusline porcelain=v1 -b parse."""
     if not repo:
         return None
     now = time.monotonic()
     hit = _git_cache.get(repo)
     if hit and (now - hit[0]) < _GIT_TTL:
         return hit[1]
-    res: tuple[str, int] | None
-    try:
-        br = subprocess.run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"],
-                            capture_output=True, text=True, timeout=2)
-        if br.returncode != 0:
-            res = None
-        else:
-            st = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
-                                capture_output=True, text=True, timeout=2)
-            dirty = sum(1 for ln in st.stdout.splitlines() if ln.strip())
-            res = (br.stdout.strip() or "HEAD", dirty)
-    except Exception:
-        res = None
+
+    res: GitInfo | None = None
+    head = _run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    if head is not None and head.returncode == 0:
+        branch = head.stdout.strip()
+        detached = branch == "HEAD"
+        gi = GitInfo(branch=branch, detached=detached)
+        sha = _run_git(repo, "rev-parse", "--short=9", "HEAD")
+        if sha is not None and sha.returncode == 0:
+            gi.commit = sha.stdout.strip()
+        st = _run_git(repo, "status", "--porcelain=v1", "-b", "-z",
+                      "--untracked-files=normal")
+        if st is not None and st.returncode == 0:
+            _parse_porcelain(st.stdout, gi)
+        res = gi
+
     _git_cache[repo] = (now, res)
     return res
 
 
+def _parse_porcelain(out: str, gi: GitInfo) -> None:
+    entries = [e for e in out.split("\0") if e]
+    i = 0
+    if entries and entries[0].startswith("##"):
+        header = entries[0]
+        gi.has_upstream = "..." in header
+        m = re.search(r"ahead (\d+)", header)
+        gi.ahead = int(m.group(1)) if m else 0
+        m = re.search(r"behind (\d+)", header)
+        gi.behind = int(m.group(1)) if m else 0
+        i = 1
+    while i < len(entries):
+        entry = entries[i]
+        if len(entry) < 2:
+            i += 1
+            continue
+        x, y = entry[0], entry[1]
+        if x == "R" or y == "R":
+            gi.renamed += 1
+            i += 2  # rename consumes the original-name field
+            continue
+        if x == "?" and y == "?":
+            gi.untracked += 1
+        elif x == "A" or y == "A":
+            gi.untracked += 1
+        elif x == "D" or y == "D":
+            gi.deleted += 1
+        elif x == "M" or y == "M":
+            gi.modified += 1
+        i += 1
+
+
+def _git_segment(repo: str) -> list[Span] | None:
+    gi = git_info(repo)
+    if gi is None or not gi.branch:
+        return None
+    label_clr = {"drift": "red", "pending": "yellow", "clean": "green"}[gi.state]
+    spans: list[Span] = [_sp("git", label_clr), _sp(" ", ""), _sp(gi.branch, "cyan")]
+    if gi.commit:
+        spans.append(_sp(f"/{gi.commit}", "dim"))
+    if gi.untracked:
+        spans.append(_sp(f" +{gi.untracked}", "yellow"))
+    if gi.modified:
+        spans.append(_sp(f" ~{gi.modified}", "yellow"))
+    if gi.deleted:
+        spans.append(_sp(f" -{gi.deleted}", "yellow"))
+    if gi.renamed:
+        spans.append(_sp(f" R{gi.renamed}", "yellow"))
+    if gi.ahead:
+        spans.append(_sp(f" ↑{gi.ahead}", "yellow"))
+    if gi.behind:
+        spans.append(_sp(f" ↓{gi.behind}", "red"))
+    if gi.clean and gi.has_upstream and not gi.detached:
+        spans.append(_sp(" ✓", "green"))
+    return spans
+
+
+# -------------------------------------------------------------- state ------
+
+
 @dataclass
 class StatusState:
-    """Mutable snapshot of the last completed turn; updated by the REPL."""
+    """Mutable snapshot the REPL updates after each turn; toolbar reads it."""
     slot: str = "chat"
     model: str = ""
     wall_s: float = 0.0
     tok_per_s: float = 0.0
     ctx_pressure: float = 0.0
     steps: int = 0
-    has_turn: bool = False  # False until the first turn completes
+    has_turn: bool = False
+    opened_at: float = 0.0  # session start (epoch); 0 = unknown
 
 
 def _short_model(model: str) -> str:
@@ -65,49 +198,69 @@ def _short_model(model: str) -> str:
     return name if len(name) <= 22 else name[:21] + "…"
 
 
-def fields(session, slots, repo: str, state: StatusState) -> list[tuple[str, str, str]]:
-    """Ordered status segments as (text, ptk_style, rich_style) tuples.
+def _ctx_zone_colour(pressure: float) -> str:
+    if pressure < 0.50:
+        return "green"
+    if pressure < 0.80:
+        return "yellow"
+    if pressure < 0.95:
+        return "orange"
+    return "red"
 
-    THE place to change the bar's format. ptk_style is a prompt_toolkit style
-    string; rich_style is the equivalent Rich markup tag (or "" for default).
-    """
-    out: list[tuple[str, str, str]] = []
 
-    # --- mode chips -------------------------------------------------------
+def fields(session, slots, repo: str, state: StatusState) -> list[list[Span]]:
+    """Ordered status segments (each a list of styled spans). THE place to change
+    the bar's format. Order mirrors yet-another-statusline (path · git · ctx ·
+    rate · timing · model-last) with luxe mode chips pinned first."""
+    segs: list[list[Span]] = []
+
+    # mode chips (luxe-specific; chat.sdd requires write-mode visible) ----
     if session.write_enabled:
-        out.append((" WRITE ", "bg:#8a6d00 #ffffff bold", "black on yellow"))
+        chip: list[Span] = [(" WRITE ", "bg:#8a6d00 #ffffff bold", "black on yellow")]
         if session.unrestricted_bash:
-            out.append((" BASH ", "bg:#8a1c1c #ffffff bold", "white on red"))
+            chip += [(" ", "", ""), (" BASH ", "bg:#8a1c1c #ffffff bold", "white on red")]
+        segs.append(chip)
     else:
-        out.append((" READ-ONLY ", "bg:#1f5c2f #ffffff bold", "white on green"))
+        segs.append([(" READ-ONLY ", "bg:#1f5c2f #ffffff bold", "white on green")])
 
-    # --- slot:model -------------------------------------------------------
-    model = state.model or slots.model_for("chat")
-    out.append((f" {state.slot}:{_short_model(model)}", "", "cyan"))
+    # home-relative path --------------------------------------------------
+    if repo:
+        home = os.path.expanduser("~")
+        shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
+        segs.append([_sp(shown, "blue")])
 
-    # --- context window ---------------------------------------------------
+    # git -----------------------------------------------------------------
+    git_seg = _git_segment(repo)
+    if git_seg:
+        segs.append(git_seg)
+
+    # context occupancy ---------------------------------------------------
+    ctx_spans: list[Span] = [_sp("ctx ", "dim")]
+    if state.has_turn:
+        ctx_spans.append(_sp(f"{state.ctx_pressure:.0%}", _ctx_zone_colour(state.ctx_pressure)))
     tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
-    ctx = f" ctx {tier}"
+    ctx_spans.append(_sp(f" {tier}", "dim"))
+    segs.append(ctx_spans)
+
+    # generation rate + wall (luxe local gen; YASL's /m is Claude-API) ----
     if state.has_turn:
-        ctx += f" {state.ctx_pressure:.0%}"
-    out.append((ctx, "", "magenta"))
+        segs.append([_sp(f"{state.tok_per_s:.0f}tok/s {state.wall_s:.1f}s", "dim")])
 
-    # --- last turn timing/rate -------------------------------------------
-    if state.has_turn:
-        out.append((f" {state.wall_s:.1f}s {state.tok_per_s:.0f}tok/s",
-                    "", "dim"))
+    # session timing: start <date time> · last <HH:MM> --------------------
+    if state.opened_at:
+        started = time.strftime("%d-%b-%y %H:%M", time.localtime(state.opened_at)).lower()
+        now = time.strftime("%H:%M", time.localtime())
+        segs.append([_sp("start ", "dim"), _sp(started, "white"),
+                     _sp(" · last ", "dim"), _sp(now, "white")])
 
-    # --- git --------------------------------------------------------------
-    gs = git_status(repo)
-    if gs is not None:
-        branch, dirty = gs
-        out.append((f" ⎇ {branch}", "#88aaff", "blue"))
-        if dirty:
-            out.append((f" ●{dirty}", "#ffcc55 bold", "yellow"))
-        else:
-            out.append((" ✓", "#66e066", "green"))
+    # model pinned last ---------------------------------------------------
+    model = state.model or slots.model_for("chat")
+    segs.append([_sp(f"{state.slot}:{_short_model(model)}", "cyan")])
 
-    return out
+    return segs
+
+
+# ------------------------------------------------------------- render ------
 
 
 def toolbar(session, slots, repo: str, state: StatusState):
@@ -115,16 +268,19 @@ def toolbar(session, slots, repo: str, state: StatusState):
     from prompt_toolkit.formatted_text import FormattedText
 
     parts: list[tuple[str, str]] = []
-    for i, (text, style, _rich) in enumerate(fields(session, slots, repo, state)):
+    for i, seg in enumerate(fields(session, slots, repo, state)):
         if i:
-            parts.append(("", " "))
-        parts.append((style, text))
+            parts.append(("#666666", " · "))
+        parts += [(style, text) for (text, style, _rich) in seg]
     return FormattedText(parts)
 
 
 def status_markup(session, slots, repo: str, state: StatusState) -> str:
     """Rich-markup one-liner for the plain-input fallback (no prompt_toolkit)."""
-    chunks = []
-    for text, _style, rich in fields(session, slots, repo, state):
-        chunks.append(f"[{rich}]{text.strip()}[/]" if rich else text.strip())
-    return "[dim]· " + " · ".join(chunks) + "[/]"
+    out_segs: list[str] = []
+    for seg in fields(session, slots, repo, state):
+        chunk = "".join(
+            f"[{rich}]{text}[/]" if rich else text for (text, _ptk, rich) in seg
+        )
+        out_segs.append(chunk)
+    return "[dim]·[/] " + " [dim]·[/] ".join(out_segs)

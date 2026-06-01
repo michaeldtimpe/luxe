@@ -48,10 +48,14 @@ never touches this module.
   of `/write` + `/bash`), so dev work doesn't re-toggle each session
 - The bottom-toolbar status bar (`chat/status.py`) is the LIGHTWEIGHT variant:
   a static bar pinned under the input line, refreshed from `StatusState` BETWEEN
-  turns (not live mid-turn — the tool tail-log streams above for that). `fields()`
-  is the single source of segment order/content; `toolbar()` (prompt_toolkit) and
+  turns (not live mid-turn — the tool tail-log streams above for that). Format =
+  the applicable segments of the user's `yet-another-statusline` (path · state-
+  coloured `git branch/commit +U ~M -D RN ↑a ↓b ✓` · `ctx N%` · rate · `start…last…`
+  · model-last) + luxe WRITE/BASH/READ-ONLY chips; plan-quota/cache/cost/effort
+  segments are Claude-Code-only and omitted. `fields()` (→ list[list[Span]]) is
+  the single source of order/content; `toolbar()` (prompt_toolkit) and
   `status_markup()` (plain-input fallback) both render from it so they never
-  drift. Git branch/dirty is TTL-cached to avoid per-keystroke `git` spawns.
+  drift. Git state is TTL-cached to avoid per-keystroke `git` spawns.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature
