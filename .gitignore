@@ -39,7 +39,7 @@ local-cache/
 
 # Run/benchmark artifacts kept locally unless explicitly tracked
 runs/
-logs/run_evaluation/
+logs/
 results/**/*.log
 results/**/*.tmp
 results/**/*.partial
