@@ -1,0 +1,31 @@
+# compare
+
+Side-by-side single-task comparison — give one task, get two outputs to
+compare, with blind + vote + rationale capture. Additive; reuses the
+benchmark `Variant`/`make_overlay` machinery and `run_single`.
+
+## Must
+- Reuse `benchmarks/maintain_suite/run.py::Variant` + `make_overlay` (import,
+  never duplicate) to pin each side's model + prompt + sampling
+- Run side A then side B SEQUENTIALLY; two model weight-sets cannot coexist in
+  oMLX RAM (~25 GB doubled). Cross-model (mode 3) inserts
+  `unload_all_loaded(except_for=[model])` + `thermal_guard` between sides
+- Mode 1 (luxe-enhanced vs bare champion) drives the bare side via an
+  `os.environ` save/restore context manager (LUXE_TIERED_COMPACT=0, interventions
+  off, baseline prompt); env overrides must be restored after each side
+- Each side gets its own `run_id` so existing `~/.luxe/runs/<run_id>/` logging
+  works unchanged
+- A non-determinism disclaimer prints immediately before the vote prompt
+  (champion is not byte-deterministic at temp=0; this is qualitative, not a
+  controlled benchmark)
+- Votes record `{winner, reason?}` to an append-only `votes.jsonl` (best-of-N
+  re-votes); a reader powers `/compare review` and `luxe compare review <id>`
+  so the file is never write-only
+
+## Must not
+- Run the two sides concurrently / hold two model weight-sets resident at once
+- Present single-task deltas as statistically meaningful
+- Mutate global env without restoring it (mode-1 substrate toggles)
+
+## Owns
+- src/luxe/compare/**

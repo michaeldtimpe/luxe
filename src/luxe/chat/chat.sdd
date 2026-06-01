@@ -1,0 +1,43 @@
+# chat
+
+Interactive terminal REPL front-end — the Claude-CLI-style daily driver.
+Additive: reuses `run_single` / the tool surface / the prompt registry
+unchanged. The deterministic benchmark path (`luxe maintain`, `benchmarks/`)
+never touches this module.
+
+## Must
+- Every user turn drives exactly ONE `run_single()` call; conversation state
+  lives in `ChatSession`, folded into `goal=` + a tagged `extra_context` block —
+  never by forking `run_agent`'s message loop or changing its signature
+- Context precedence (highest wins): current user turn > project memory >
+  conversation summary. `extra_context` is tagged `<project_memory>` /
+  `<conversation_history>` / `<current_request>` so history can't read as commands
+- Default slot config = champion in chat/plan/code (`model_for_slot` returns the
+  monolith model when `slots` is None or `model_key=""`); byte-identical model
+  selection to `single_64gb.yaml`
+- Multi-slot fan-out activates ONLY on explicit `configs/chat.yaml` `slots:` —
+  the sanctioned, opt-in exception to luxe.sdd "no per-task model selection",
+  scoped to this front-end
+- Slot routing is visible: the render footer shows the fired slot + model every
+  turn; `/use <slot>` and `/model <slot> <id>` are explicit user overrides
+- Different-model slot use sequences weight swaps via
+  `Backend.unload_all_loaded` + `thermal_guard`; swap count + seconds are
+  instrumented and surfaced; keep chat-slot model resident, group code work
+- The history summarizer (`chat/summarize.py`) is NON-model, deterministic, and
+  versioned (`SUMMARIZER_VERSION`); its output is persisted to `fold.jsonl`
+- Ctrl-C during a turn aborts at the next tool boundary, persists the partial
+  transcript, and returns to the prompt (no process exit)
+- Write tools default OFF (read-only, reusing the `serve`/`make_read_only_role`
+  precedent); `/write` toggles; write-mode is shown in the footer every turn
+
+## Must not
+- Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature
+  (preserves benchmark determinism)
+- Introduce any system/task prompt strings here — those stay in
+  `agents/prompts.py`. `extra_context` is runtime conversation framing, not a
+  registry prompt
+- Auto-open PRs from a chat turn (the PR cycle stays in `luxe maintain`/`luxe pr`)
+- Let `configs/chat.yaml` change the behavior of `single_64gb.yaml` / maintain
+
+## Owns
+- src/luxe/chat/**

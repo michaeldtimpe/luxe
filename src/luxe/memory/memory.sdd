@@ -1,0 +1,30 @@
+# memory
+
+Durable session + project memory for the chat front-end. Separate from the
+prompt registry and from the deterministic benchmark path.
+
+## Must
+- Session transcripts live under `~/.luxe/sessions/<session_id>/` (`meta.json` +
+  append-only `transcript.jsonl` + `fold.jsonl`), mirroring `run_state.py` idioms
+- `gc_sessions` default eviction: keep the most recent 50 sessions AND drop
+  anything older than 30 days
+- Project memory has two tiers with explicit confidence:
+  - repo-local `<repo>/.luxe/memory.md` — user-curated, committable, priority,
+    ALWAYS injected
+  - `~/.luxe/memory/<project_hash>/facts.jsonl` — auto-captured, `confidence: auto`,
+    NEVER injected until promoted to `confidence: manual`
+  - `project_hash = sha256(abspath(repo_root))[:12]`
+- Memory is injected ONLY as the `<project_memory>` block inside `run_single`'s
+  `extra_context`, NEVER by editing `PROMPT_REGISTRY` or the `system_prompt`
+- `run_single`'s `extra_context` defaults to "" → byte-identical to legacy when
+  no memory/conversation is present
+
+## Must not
+- Read or write `~/.claude/` (Claude Code's own memory)
+- Read the repo-root `CLAUDE.md` (Claude Code's project-memory file; names are
+  close enough to invite a refactor mistake)
+- Touch `src/luxe/agents/prompts.py` or `src/luxe/agents/loop.py` (memory injects
+  only via `run_single`'s `extra_context`, never the registry or the loop)
+
+## Owns
+- src/luxe/memory/**

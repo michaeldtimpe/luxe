@@ -1,0 +1,72 @@
+omlx_base_url: "http://127.0.0.1:8000"
+
+profile:
+  name: "Interactive chat (64 GB)"
+  description: "luxe chat REPL — champion drives every slot by default."
+  memory_budget_gb: 64
+  peak_model_gb: 30.0
+
+models:
+  # The pinned champion. Add more entries here to point a chat slot at a
+  # different MLX model the oMLX server can load, e.g.:
+  #   coder_30b: "Qwen3-Coder-Next-80B"
+  monolith: "Qwen3.6-35B-A3B-6bit"
+
+roles:
+  monolith:
+    model_key: monolith
+    num_ctx: 32768
+    max_steps: 30
+    max_tokens_per_turn: 8192
+    temperature: 0.0
+    task_overlay_id: manage_strict_only
+    tools:
+      - read_file
+      - list_dir
+      - glob
+      - grep
+      - bm25_search
+      - find_symbol
+      - write_file
+      - edit_file
+      - git_diff
+      - git_log
+      - git_show
+      - bash
+      - lint
+      - typecheck
+      - security_scan
+      - deps_audit
+      - cve_lookup
+
+task_types:
+  review:
+    description: "Code review — single-model agentic loop"
+    pipeline: [monolith]
+  implement:
+    description: "Feature implementation — single-model agentic loop"
+    pipeline: [monolith]
+  bugfix:
+    description: "Bug investigation and fix — single-model agentic loop"
+    pipeline: [monolith]
+  document:
+    description: "Documentation generation — single-model agentic loop"
+    pipeline: [monolith]
+  summarize:
+    description: "Codebase summarization — single-model agentic loop"
+    pipeline: [monolith]
+  manage:
+    description: "Repository management — single-model agentic loop"
+    pipeline: [monolith]
+
+# Opt-in model fan-out for the chat front-end. OMITTED here => every slot
+# resolves to the champion (no fan-out; byte-identical to single_64gb.yaml's
+# model selection). Uncomment and point a slot at another `models:` entry to
+# experiment. This is the sole sanctioned per-work-type model selection
+# (see luxe.sdd). RAM note: two weight-sets can't coexist in oMLX, so distinct
+# slot models incur a sequential weight swap when a turn routes to them.
+#
+# slots:
+#   chat: {model_key: monolith}
+#   plan: {model_key: monolith}
+#   code: {model_key: coder_30b}

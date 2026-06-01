@@ -10,7 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from luxe.agents.single import _build_full_tool_surface, _build_sdd_block
+from luxe.agents import single as single_mod
+from luxe.agents.loop import AgentResult
+from luxe.agents.single import _build_full_tool_surface, _build_sdd_block, run_single
+from luxe.config import RoleConfig
 from luxe.tools import fs
 
 
@@ -129,3 +132,48 @@ class TestSddBlockInjection:
             assert _build_sdd_block() == ""
         finally:
             fs._REPO_ROOT = None
+
+
+# --- extra_context injection seam (chat front-end) ------------------------
+
+
+class TestExtraContextSeam:
+    """run_single's `extra_context` is the single chat-injection seam. The
+    default ("") must produce a task_prompt byte-identical to legacy callers;
+    a non-empty block is appended verbatim after the .sdd block."""
+
+    def _capture_task_prompt(self, monkeypatch, **kwargs) -> str:
+        captured: dict[str, str] = {}
+
+        def fake_run_agent(backend, role_cfg, *, task_prompt, **_):
+            captured["task_prompt"] = task_prompt
+            return AgentResult()
+
+        monkeypatch.setattr(single_mod, "run_agent", fake_run_agent)
+        role = RoleConfig(model_key="monolith", tools=["read_file"])
+        run_single(
+            backend=object(),
+            role_cfg=role,
+            goal="do the thing",
+            task_type="review",
+            languages=frozenset({"python"}),
+            **kwargs,
+        )
+        return captured["task_prompt"]
+
+    def test_default_extra_context_is_byte_identical(self, monkeypatch):
+        # No repo root => no .sdd block; isolates the seam.
+        fs._REPO_ROOT = None
+        without = self._capture_task_prompt(monkeypatch)
+        explicit_empty = self._capture_task_prompt(monkeypatch, extra_context="")
+        assert without == explicit_empty
+        # Legacy shape preserved exactly.
+        assert without.startswith("Task type: review\nGoal: do the thing\n\n")
+        assert "<conversation_history>" not in without
+
+    def test_non_empty_extra_context_appended_verbatim(self, monkeypatch):
+        fs._REPO_ROOT = None
+        base = self._capture_task_prompt(monkeypatch)
+        block = "\n\n<project_memory>\nuse ruff\n</project_memory>"
+        with_ctx = self._capture_task_prompt(monkeypatch, extra_context=block)
+        assert with_ctx == base + block

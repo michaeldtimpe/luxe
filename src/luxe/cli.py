@@ -553,6 +553,159 @@ def maintain(
             pass
 
 
+@main.command(name="chat")
+@click.option("--repo", "repo", default=".", help="Repo to work in (default: cwd)")
+@click.option("--config", "config_path", default=None,
+              help="Path to config YAML (default: configs/chat.yaml)")
+@click.option("--resume", "resume_session_id", default=None,
+              help="Resume a prior chat session by id")
+@click.option("--chat-model", default=None, help="Override the chat-slot model")
+@click.option("--plan-model", default=None, help="Override the plan-slot model")
+@click.option("--code-model", default=None, help="Override the code-slot model")
+@click.option("--keep-loaded", is_flag=True, default=False,
+              help="Skip the post-session model unload.")
+def chat_cmd(
+    repo: str, config_path: str | None, resume_session_id: str | None,
+    chat_model: str | None, plan_model: str | None, code_model: str | None,
+    keep_loaded: bool,
+):
+    """Interactive terminal agent (Claude-CLI-style). Default: champion in
+    every slot, read-only tools (toggle with /write)."""
+    from luxe.chat import run_chat_repl
+    from luxe.locks import LockHeld, acquire_repo_lock
+    from luxe.tools.fs import set_repo_root
+
+    repo_path = _resolve_repo(repo)
+    cfg = load_config(config_path or _default_chat_config())
+
+    # CLI per-slot overrides become an ad-hoc model + slots block so the user
+    # can point a slot at any oMLX-loadable model without editing YAML.
+    _apply_slot_overrides(cfg, chat_model, plan_model, code_model)
+
+    set_repo_root(repo_path)
+
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+    console.print("[dim]· Building BM25 + symbol indices…[/]")
+    bm25 = search_mod.build_bm25_index(repo_path)
+    sym_idx = symbols_mod.build_symbol_index(repo_path)
+    search_mod.set_index(bm25)
+    symbols_mod.set_index(sym_idx)
+    languages = _detect_languages_for_repo(repo_path)
+
+    try:
+        ctx = acquire_repo_lock(repo_path, f"chat-{int(time.time())}")
+        ctx.__enter__()
+    except LockHeld as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(3)
+
+    try:
+        run_chat_repl(
+            cfg, repo_path, languages,
+            console=console,
+            keep_loaded=keep_loaded,
+            resume_session_id=resume_session_id,
+        )
+    finally:
+        search_mod.reset_index()
+        symbols_mod.reset_index()
+        try:
+            ctx.__exit__(None, None, None)
+        except Exception:
+            pass
+
+
+def _default_chat_config() -> str:
+    return str(Path(__file__).parent.parent.parent / "configs" / "chat.yaml")
+
+
+def _apply_slot_overrides(cfg, chat_model, plan_model, code_model) -> None:
+    """Fold --chat/plan/code-model CLI flags into cfg.models + cfg.slots."""
+    from luxe.config import ChatSlots, SlotConfig
+
+    overrides = {"chat": chat_model, "plan": plan_model, "code": code_model}
+    if not any(overrides.values()):
+        return
+    if cfg.slots is None:
+        cfg.slots = ChatSlots()
+    for slot, model_id in overrides.items():
+        if not model_id:
+            continue
+        # Register the model under a synthetic key and point the slot at it.
+        key = f"_slot_{slot}"
+        cfg.models[key] = model_id
+        setattr(cfg.slots, slot, SlotConfig(model_key=key))
+
+
+@main.group(name="compare")
+def compare_group():
+    """Run or review side-by-side single-task comparisons."""
+
+
+@compare_group.command(name="run")
+@click.argument("task")
+@click.option("--repo", default=".", help="Repo to work in (default: cwd)")
+@click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
+@click.option("--mode", type=click.Choice(["1", "2", "3"]), default="1",
+              help="1=luxe-vs-bare 2=two-prompts 3=vs-another-model")
+@click.option("--model-b", default=None, help="Second model id (mode 3)")
+@click.option("--prompt-a", default="baseline", help="Prompt variant A (mode 2)")
+@click.option("--prompt-b", default="cot", help="Prompt variant B (mode 2)")
+@click.option("--blind", is_flag=True, help="Hide which side is which before voting")
+@click.option("--keep-loaded", is_flag=True, default=False)
+def compare_run_cmd(task, repo, config_path, mode, model_b, prompt_a, prompt_b, blind, keep_loaded):
+    """Run TASK through two configurations and present them side by side."""
+    from luxe.compare import build_sides, run_compare
+    from luxe.compare import present, store
+    from luxe.tools.fs import set_repo_root
+
+    repo_path = _resolve_repo(repo)
+    cfg = load_config(config_path or _default_chat_config())
+    set_repo_root(repo_path)
+
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+    console.print("[dim]· Building BM25 + symbol indices…[/]")
+    search_mod.set_index(search_mod.build_bm25_index(repo_path))
+    symbols_mod.set_index(symbols_mod.build_symbol_index(repo_path))
+    languages = _detect_languages_for_repo(repo_path)
+
+    champion = cfg.model_for_slot("chat")
+    side_a, side_b = build_sides(
+        int(mode), model_id=champion, model_b=model_b,
+        prompt_a=prompt_a, prompt_b=prompt_b,
+    )
+    try:
+        console.print("[dim]· running side A, then side B (sequential)…[/]")
+        result = run_compare(
+            side_a, side_b,
+            task=task, task_type=_infer_task_type(task), languages=languages,
+            omlx_base_url=cfg.omlx_base_url, blind=blind,
+            on_status=lambda m: console.print(f"[dim]· {m}[/]"),
+        )
+        store.save(result)
+        present.render_side_by_side(console, result)
+        present.prompt_vote(console, result)
+    finally:
+        search_mod.reset_index()
+        symbols_mod.reset_index()
+        if not keep_loaded:
+            from luxe.backend import Backend
+            try:
+                Backend(model="(unload-probe)").unload_all_loaded()
+            except Exception:
+                pass
+
+
+@compare_group.command(name="review")
+@click.argument("compare_id", required=False, default="")
+def compare_review_cmd(compare_id):
+    """Replay a stored comparison and tally its votes (no arg: list them)."""
+    from luxe.compare import store
+    store.review(compare_id, console=console)
+
+
 @main.command(name="unload")
 @click.option("--except", "except_for", multiple=True,
               help="Model ID(s) to keep resident (repeatable). Default: unload all.")

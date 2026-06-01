@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from luxe.config import RoleConfig, load_config
+from luxe.config import ChatSlots, PipelineConfig, RoleConfig, SlotConfig, load_config
 
 
 def test_load_default_config(config_path: Path):
@@ -121,3 +121,77 @@ def test_role_config_repeat_penalty_accepts_float(tmp_path: Path):
     mono = cfg.role("monolith")
     assert mono.repeat_penalty == 1.05
     assert mono.system_prompt_id == "cot"
+
+
+# --- chat model slots (opt-in fan-out, default champion-everywhere) ---
+
+def test_slots_absent_resolves_every_slot_to_champion(config_path: Path):
+    """single_64gb.yaml has no `slots:` block — every chat slot must resolve
+    to the champion, identical to model_for_role('monolith')."""
+    cfg = load_config(config_path)
+    assert cfg.slots is None
+    champ = cfg.model_for_role("monolith")
+    for slot in ("chat", "plan", "code"):
+        assert cfg.model_for_slot(slot) == champ
+
+
+def test_chat_yaml_default_is_champion_everywhere():
+    """The shipped configs/chat.yaml ships with `slots:` omitted → champion
+    in every slot (byte-identical model selection to single_64gb)."""
+    chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
+    cfg = load_config(chat_cfg)
+    assert cfg.slots is None
+    champ = cfg.model_for_role("monolith")
+    assert cfg.model_for_slot("chat") == champ
+    assert cfg.model_for_slot("plan") == champ
+    assert cfg.model_for_slot("code") == champ
+
+
+def test_empty_model_key_falls_back_to_champion():
+    """An explicit `slots:` block with empty model_keys still resolves to the
+    champion — only a non-empty model_key activates fan-out."""
+    slots = ChatSlots()  # all default SlotConfig() => model_key=""
+    cfg = PipelineConfig(
+        models={"monolith": "Champ-Model"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        slots=slots,
+    )
+    assert cfg.model_for_slot("code") == "Champ-Model"
+
+
+def test_distinct_slot_model_activates_fanout():
+    cfg = PipelineConfig(
+        models={"monolith": "Champ-Model", "coder": "Coder-Model"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        slots=ChatSlots(code=SlotConfig(model_key="coder")),
+    )
+    assert cfg.model_for_slot("chat") == "Champ-Model"
+    assert cfg.model_for_slot("code") == "Coder-Model"
+
+
+def test_slots_round_trip_through_yaml(tmp_path: Path):
+    overlay = tmp_path / "chat_overlay.yaml"
+    overlay.write_text(
+        "omlx_base_url: http://127.0.0.1:8000\n"
+        "models: {monolith: Champ, coder: Coder}\n"
+        "roles:\n"
+        "  monolith:\n"
+        "    model_key: monolith\n"
+        "    tools: [read_file]\n"
+        "task_types:\n"
+        "  review: {description: x, pipeline: [monolith]}\n"
+        "slots:\n"
+        "  code: {model_key: coder}\n"
+    )
+    cfg = load_config(overlay)
+    assert cfg.model_for_slot("code") == "Coder"
+    assert cfg.model_for_slot("chat") == "Champ"
+
+
+def test_unknown_slot_raises():
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+    )
+    with pytest.raises(KeyError):
+        cfg.model_for_slot("planner")
