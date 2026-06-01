@@ -3043,3 +3043,51 @@ The 1 firing run (sphinx-10673) **aborted** — phase 3 dropped 24,888 tokens an
 - `baseline_n75/` + `protected.json` (cycle anchors)
 
 **Affected files (shipped commits):** `4581d38` (C refactor), `18ac49c` (A infra), `0c10379` (A threshold-override), `633940e` (substrate noise lessons), `3afa14e` (A phase_thresholds), `ed08bbc` (B respond + watchdogs), `d0efbd6` (D trajectory shape), `c178d98` (B2 prompt variant), this commit (A default-ON + SDD invariants + closeout). Plan: `~/.claude/plans/starry-hopping-phoenix.md`. Memory: `project_substrate_noise_temp0_not_deterministic.md` (separate), `project_forge_hybrid_cycle_outcome.md` (this cycle's closeout).
+
+### [2026-06-01] `luxe chat` "I have no file-creation tool" is read-only mode, NOT a missing capability
+
+**What happened**: In a `luxe chat` session the agent reported it could not
+scaffold a project — "I do not have a file creation/edit tool … no `write_file`
+or equivalent," listing only `read_file`/`list_dir`/`glob`/`grep`/git/lint/etc.
+This read as a platform gap. It is not. luxe **has** the full mutation surface:
+`write_file` (`src/luxe/tools/fs.py:480` — *"creates parent dirs", overwrites if
+exists*, i.e. it can scaffold whole directory trees), `edit_file` (unique-string
+replace + `replace_all`), and `bash` (`src/luxe/tools/shell.py:111`).
+
+**Root cause**: `luxe chat` opens **read-only by default** (chat.sdd invariant,
+reusing the `serve`/`make_read_only_role` precedent). `make_read_only_role`
+(`src/luxe/mcp/server.py:174`) strips the `_MUTATION_TOOL_NAMES =
+{write_file, edit_file, bash}` set from the role's tools before the turn runs
+(`repl.py:158` — `role_cfg = base_role if session.write_enabled else
+make_read_only_role(base_role)`). So the model genuinely does not see the write
+tools, and honestly reports their absence — but the absence is a per-session
+gate, not a capability the build lacks. **`/write` toggles `session.write_enabled`;
+the next turn keeps the mutation tools and the footer shows `mode: write`.**
+
+**Fix / takeaway**:
+
+- **No code change shipped.** The capability is correct and the read-only default
+  is deliberate (don't let a chat turn mutate the tree without an explicit opt-in).
+  The user confirmed the direction: luxe should be a development-style platform in
+  the same vein as the Claude CLI — and the primitives for that already exist.
+- **The discoverability gap is the real (deferred) issue**: a read-only-mode agent
+  declares itself incapable instead of telling the user to `/write`, and
+  `write_file`'s description leads with "Overwrites if exists" which can read as
+  edit-only. Two low-risk, SDD-respecting follow-ups were scoped but NOT taken this
+  session (no behavior change without a bench-minded decision): (A) reword
+  `write_file`/`edit_file` descriptions so create-semantics are unmistakable —
+  pure description, model-visible; (B) inject a read-only-mode hint (via
+  `agents/prompts.py`, never inline) so the agent says "enable write mode with
+  `/write`" rather than "I can't create files."
+- **UI-port aside**: porting the retired `luxe_cli` REPL flourishes (randomized
+  rainbow `.:. luxe .:.` banner, per-render color-shifting prompt arrows, `tok/s`,
+  start/end timestamps + elapsed) into `src/luxe/chat/{render,repl}.py` was
+  prototyped and **deferred ("no UI port ATM")** — fully reconstructable from the
+  session transcript if revived. The functional metrics (token counts, `wall_s`,
+  Rich-colored tool lines) already live in the shipped footer.
+
+**Affected files**: none shipped — doc + memory only. Refs: `src/luxe/tools/fs.py`
+(`write_file`/`edit_file`), `src/luxe/tools/shell.py` (`bash`),
+`src/luxe/mcp/server.py:168-182` (`_MUTATION_TOOL_NAMES` + `make_read_only_role`),
+`src/luxe/chat/repl.py:158` (read-only gate), `src/luxe/chat/chat.sdd` ("Write
+tools default OFF … `/write` toggles"). Memory: `feedback_luxe_dev_platform_write_mode.md`.
