@@ -14,7 +14,7 @@ from typing import Callable
 
 from rich.console import Console
 
-from luxe.chat.session import ChatSession
+from luxe.chat.session import CTX_TIERS, ChatSession, tier_label
 from luxe.chat.slots import SlotManager
 from luxe.memory import project as project_mem
 
@@ -41,6 +41,7 @@ _HELP = """[bold]luxe chat commands[/]
   [cyan]/help[/]                      show this help
   [cyan]/model[/] [slot] [model_id]   show slots, or repoint chat|plan|code
   [cyan]/use[/] <slot>                pin the next turn to chat|plan|code
+  [cyan]/ctx[/] [small|medium|large|xlarge]   show or set context window size
   [cyan]/write[/]                     toggle write tools (default: read-only)
   [cyan]/memory[/] list|add|promote|forget|edit
   [cyan]/compare[/] <task>            run two configs side-by-side
@@ -63,6 +64,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/help": _help,
         "/model": _model,
         "/use": _use,
+        "/ctx": _ctx,
         "/write": _write,
         "/memory": _memory,
         "/compare": _compare,
@@ -110,6 +112,50 @@ def _use(args, ctx: CommandContext) -> CommandResult:
         return CommandResult(handled=True)
     ctx.session.pinned_slot = args[0]
     ctx.console.print(f"[green]✓[/] next turn pinned to slot [cyan]{args[0]}[/]")
+    return CommandResult(handled=True)
+
+
+def _ctx(args, ctx: CommandContext) -> CommandResult:
+    # Display against the conversational `chat` slot (the default route).
+    ceiling = ctx.slots.ctx_ceiling("chat")
+    base = ctx.slots.role_for("chat").num_ctx
+    active = ctx.session.num_ctx_override or base
+
+    def _tiers_line() -> str:
+        bits = []
+        for name, n in CTX_TIERS.items():
+            mark = "[dim](>max)[/]" if n > ceiling else ""
+            bits.append(f"{name} [dim]{n}[/]{mark}")
+        return "  ".join(bits)
+
+    if not args:
+        eff = min(active, ceiling)
+        clamp = f" [dim](clamped from {active})[/]" if eff != active else ""
+        ctx.console.print(
+            f"context window: [cyan]{tier_label(eff)}[/] [dim]num_ctx {eff}[/]{clamp}"
+            f"  [dim]· max {ceiling}[/]")
+        ctx.console.print(f"[dim]tiers:[/] {_tiers_line()}")
+        ctx.console.print("[dim]Bigger windows hold more code but cost KV-cache "
+                          "RAM and tokens. Set with /ctx <tier>.[/]")
+        return CommandResult(handled=True)
+
+    tier = args[0].lower()
+    if tier not in CTX_TIERS:
+        ctx.console.print(f"[yellow]Unknown size {tier!r}; expected "
+                          f"{'|'.join(CTX_TIERS)}.[/]")
+        return CommandResult(handled=True)
+
+    requested = CTX_TIERS[tier]
+    ctx.session.num_ctx_override = requested
+    eff = min(requested, ceiling)
+    if eff != requested:
+        ctx.console.print(
+            f"[yellow]✓[/] context → [cyan]{tier}[/] requested ({requested}), "
+            f"[yellow]clamped to {eff}[/] [dim](this box's max; raise num_ctx_max "
+            f"in the config to go higher)[/]")
+    else:
+        ctx.console.print(f"[green]✓[/] context → [cyan]{tier}[/] "
+                          f"[dim](num_ctx {eff}; applies next turn)[/]")
     return CommandResult(handled=True)
 
 

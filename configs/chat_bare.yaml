@@ -24,6 +24,7 @@ roles:
   monolith:
     model_key: monolith
     num_ctx: 32768
+    num_ctx_max: 131072  # /ctx ceiling (chat-only); see configs/chat.yaml
     max_steps: 30
     max_tokens_per_turn: 8192
     temperature: 0.0

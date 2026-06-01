@@ -60,6 +60,16 @@ class SlotManager:
     def slot_models(self) -> dict[str, str]:
         return {s: self.model_for(s) for s in _SLOTS}
 
+    def role_for(self, slot: str):
+        """RoleConfig that drives `run_single` for turns routed to `slot`."""
+        return self.cfg.role(self.cfg.slot_config(slot).role)
+
+    def ctx_ceiling(self, slot: str) -> int:
+        """Hard num_ctx ceiling for `/ctx` on this slot: the role's
+        `num_ctx_max`, or its `num_ctx` when no expansion is configured."""
+        role = self.role_for(slot)
+        return role.num_ctx_max or role.num_ctx
+
     def set_override(self, slot: str, model_id: str) -> None:
         if slot not in _SLOTS:
             raise KeyError(f"Unknown slot {slot!r}; expected one of {_SLOTS}.")

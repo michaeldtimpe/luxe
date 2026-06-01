@@ -29,6 +29,15 @@ never touches this module.
   transcript, and returns to the prompt (no process exit)
 - Write tools default OFF (read-only, reusing the `serve`/`make_read_only_role`
   precedent); `/write` toggles; write-mode is shown in the footer every turn
+- In read-only mode a lowest-precedence `<session_mode>` block (string =
+  `prompts.READ_ONLY_CHAT_HINT`, never inlined here) is injected so the model
+  points the user at `/write` instead of claiming luxe can't create/edit files
+- `/ctx <tier>` sets a per-session `num_ctx` override (small/medium/large/xlarge);
+  it is CHAT-ONLY and always clamped to the role's `num_ctx_max` (config) so a
+  request can never exceed what the box/model holds. `num_ctx_max: 0` (default)
+  forbids any expansion. Resize is never silent — high context pressure only
+  *suggests* the next tier; the user opts in. The benchmark/maintain path never
+  reads `num_ctx_max` and is unaffected.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature

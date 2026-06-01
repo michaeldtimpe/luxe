@@ -127,6 +127,49 @@ def test_memory_add_list_promote_forget(ctx):
     assert project_mem.load_memory(repo).facts == []
 
 
+def _ctx_with_ceiling(tmp_path, monkeypatch, num_ctx_max):
+    monkeypatch.setattr(slots_mod, "Backend", FakeBackend)
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(
+            model_key="monolith", num_ctx=32768, num_ctx_max=num_ctx_max)},
+    )
+    out = io.StringIO()
+    console = Console(file=out, force_terminal=False, width=120)
+    c = cmd.CommandContext(console=console, session=ChatSession(),
+                           slots=slots_mod.SlotManager(cfg))
+    c._out = out  # type: ignore[attr-defined]
+    return c
+
+
+def test_ctx_show_lists_tiers_and_current(ctx):
+    cmd.dispatch("/ctx", ctx)
+    out = _text(ctx)
+    assert "context window" in out
+    assert "small" in out and "xlarge" in out
+
+
+def test_ctx_set_within_ceiling_no_clamp(tmp_path, monkeypatch):
+    c = _ctx_with_ceiling(tmp_path, monkeypatch, num_ctx_max=131072)
+    cmd.dispatch("/ctx large", c)
+    assert c.session.num_ctx_override == 65536
+    assert "clamped" not in c._out.getvalue()
+
+
+def test_ctx_set_above_ceiling_warns_and_clamps(tmp_path, monkeypatch):
+    c = _ctx_with_ceiling(tmp_path, monkeypatch, num_ctx_max=8192)
+    cmd.dispatch("/ctx xlarge", c)
+    # Stored unclamped; the per-turn apply (repl) clamps to the ceiling.
+    assert c.session.num_ctx_override == 131072
+    out = c._out.getvalue()
+    assert "clamped to 8192" in out
+
+
+def test_ctx_unknown_tier(ctx):
+    cmd.dispatch("/ctx humongous", ctx)
+    assert "Unknown size" in _text(ctx)
+
+
 def test_compare_hook_invoked(ctx):
     seen = []
     ctx.on_compare = lambda task: seen.append(task)

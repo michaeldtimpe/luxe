@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from luxe.chat.session import ChatSession, ChatTurn
+from luxe.chat.session import (
+    CTX_TIERS,
+    ChatSession,
+    ChatTurn,
+    next_tier_up,
+    tier_label,
+)
 from luxe.memory import project as project_mem
 
 
@@ -98,6 +104,25 @@ def test_precedence_order_memory_then_history_then_current(repo: Path):
     assert i_mem < i_hist < i_cur  # documented precedence ordering
     # current request is the LAST-seen content
     assert ctx.rstrip().endswith("</current_request>")
+
+
+def test_ctx_tier_label_exact_and_custom():
+    assert tier_label(CTX_TIERS["medium"]) == "medium"
+    assert tier_label(32768) == "medium"
+    assert tier_label(40000) == "custom(40000)"
+
+
+def test_next_tier_up_respects_ceiling():
+    # From medium with a 128K ceiling → large is the next step up.
+    assert next_tier_up(32768, 131072) == ("large", 65536)
+    # From medium with only an 8K ceiling → nothing fits.
+    assert next_tier_up(32768, 8192) is None
+    # Already at the top tier.
+    assert next_tier_up(131072, 131072) is None
+
+
+def test_num_ctx_override_defaults_off():
+    assert ChatSession().num_ctx_override is None
 
 
 def test_unpromoted_facts_do_not_leak_into_context(repo: Path):

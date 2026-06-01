@@ -20,6 +20,37 @@ from luxe.agents.prompts import READ_ONLY_CHAT_HINT
 from luxe.chat.summarize import SUMMARIZER_VERSION, fold_history
 from luxe.memory import project as project_mem
 
+# Context-window size tiers for the `/ctx` flag (chat-only). The actual window
+# applied each turn is clamped to the role's `num_ctx_max` (config.py) so a tier
+# request can never exceed what the box/model can hold. medium = the shipped
+# default (configs/chat.yaml num_ctx). xlarge = the BFCL-proven 128K ceiling.
+CTX_TIERS: dict[str, int] = {
+    "small": 8192,
+    "medium": 32768,
+    "large": 65536,
+    "xlarge": 131072,
+}
+
+# Suggest bumping the window up once a turn's peak context pressure crosses this.
+CTX_SUGGEST_PRESSURE = 0.85
+
+
+def tier_label(num_ctx: int) -> str:
+    """Name for an exact tier value, else `custom(<n>)`."""
+    for name, n in CTX_TIERS.items():
+        if n == num_ctx:
+            return name
+    return f"custom({num_ctx})"
+
+
+def next_tier_up(num_ctx: int, ceiling: int) -> tuple[str, int] | None:
+    """Smallest tier strictly larger than `num_ctx` and within `ceiling`,
+    as (name, value), or None when already at/above the headroom."""
+    for name, n in CTX_TIERS.items():
+        if n > num_ctx and n <= ceiling:
+            return name, n
+    return None
+
 
 @dataclass
 class ChatTurn:
@@ -38,6 +69,7 @@ class ChatSession:
     languages: frozenset = field(default_factory=frozenset)
     write_enabled: bool = False
     pinned_slot: str | None = None  # set by /use; consumed on the next turn
+    num_ctx_override: int | None = None  # set by /ctx; clamped per-turn to num_ctx_max
     turns: list[ChatTurn] = field(default_factory=list)
 
     # -- history --------------------------------------------------------------
