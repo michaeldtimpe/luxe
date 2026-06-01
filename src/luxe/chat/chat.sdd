@@ -54,17 +54,19 @@ never touches this module.
   def tells the model to surface the flag rather than retry. Genuine errors
   (mismatched quotes, timeouts, non-zero exit) are NOT augmented. The startup
   banner names the initial mode + toggles; the status-bar chips show live state.
-- The status bar (`chat/status.py`) format = the applicable segments of the
-  user's `yet-another-statusline` (path · state-coloured `git branch/commit
-  +U ~M -D RN ↑a ↓b ✓` · `ctx N%` · rate · `start…last…` · model-last) + luxe
-  WRITE/BASH/READ-ONLY chips; plan-quota/cache/cost/effort segments are
-  Claude-Code-only and omitted. `fields()` (→ `list[Segment]`, each with a
-  drop-`priority`) is the single source of order/content; `toolbar()`
-  (prompt_toolkit bottom bar, input phase), `status_markup()` (plain-input
-  fallback), and `to_rich_text()`/`LiveActivity` (in-turn live bar) all render
-  from it so they never drift. `fit(segs, width)` is responsive: it drops
-  low-value segments (priority ≥4: rate, timing) highest-first, then
-  middle-ellipsises the elastic path; git/ctx/model (priority 1–2) are protected.
+- The status bar (`chat/status.py`) order (user spec):
+  `path · git · ctx · cache · start · last · write · bash · model`.
+  `ctx` = `ctx N% (used/size)`; `cache` = resident prompt size (luxe has no
+  cross-turn prompt cache — each turn is a fresh `run_single`, so it's the prompt/
+  KV size processed last turn, NOT an Anthropic-style cache); `write`/`bash` show
+  explicit on/off; the model is pinned last. `fields()` (→ `list[Segment]`, each
+  with a drop-`priority`) is the single source of order/content; `toolbar()`
+  (prompt_toolkit bottom bar — its grey/reversed background is overridden to
+  `bg:default` so the bar sits on the terminal background), `status_markup()`
+  (plain-input fallback), and `to_rich_text()`/`LiveActivity` (in-turn live bar)
+  all render from it so they never drift. `fit(segs, width)` is responsive: it
+  drops low-value segments (cache=8, start/last=7) highest-first, then
+  middle-ellipsises the elastic path; path/git/ctx/model (priority 1–2) protected.
   Git state is TTL-cached to avoid per-keystroke `git` spawns.
 - Colours follow the user's ACTIVE Claude statusline theme, resolved LIVE by
   `chat/theme.py`: read the theme name (`CLAUDE_STATUSLINE_THEME` env →
@@ -72,10 +74,13 @@ never touches this module.
   yet-another-statusline `themes` module via the `~/.claude/statusline_command.py`
   symlink, and convert each role's ANSI escape to a (ptk, Rich) pair — ANSI 0-15
   → NAMED colours (track the iTerm2 profile), 16-255 → fixed xterm value,
-  rgb/default pass through. Spans are styled by theme ROLE (pwd/branch/commit/
-  dirty/label/ctx/model/white_brt/safe/warn/alert), cached per process. Falls
-  back to a built-in llmtop-equivalent ANSI map if the repo/symlink/import is
-  absent. NOTE: this reads only the theme-name file and imports the user's pure
+  rgb/default pass through. The GIT segment is styled by theme ROLE
+  (branch/commit/dirty/safe/warn/alert), cached per process; the rest use a
+  sparing luxe palette per the user's spec (ANSI-named so it still tracks the
+  terminal profile): path BLUE, model YELLOW, write-on yellow / bash-on red /
+  off grey, grey labels + separators, values = terminal default fg (light-bg
+  safe). Falls back to a built-in llmtop-equivalent ANSI map if the
+  repo/symlink/import is absent. NOTE: this reads only the theme-name file and imports the user's pure
   themes module for COLOURS — it is NOT the memory subsystem and injects no
   `~/.claude` content into context (the luxe.sdd/chat.sdd `~/.claude` prohibition
   is scoped to context/memory, not UI theming).

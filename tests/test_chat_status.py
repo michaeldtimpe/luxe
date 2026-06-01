@@ -37,15 +37,38 @@ def _flat(segs) -> str:
     return " · ".join("".join(t for t, _p, _r in seg.spans) for seg in segs)
 
 
-def test_read_only_mode_chip(slots):
+def test_mode_shows_on_off_explicitly(slots):
     out = _flat(fields(ChatSession(), slots, "", StatusState()))
-    assert "read-only" in out and "write" not in out
+    assert "write off" in out and "bash off" in out
 
 
-def test_write_and_bash_chips(slots):
+def test_mode_on_when_enabled(slots):
     out = _flat(fields(ChatSession(write_enabled=True, unrestricted_bash=True),
                        slots, "", StatusState()))
-    assert "write" in out and "bash" in out
+    assert "write on" in out and "bash on" in out
+
+
+def test_segment_order_matches_spec(slots):
+    # path · git(absent, no repo) · ctx · cache · start · last · write · bash · model
+    st = StatusState(slot="chat", model="m", ctx_pressure=0.1, num_ctx=32768,
+                     prompt_tokens=9000, has_turn=True, opened_at=1_000_000.0)
+    labels = [_flat([seg]) for seg in fields(ChatSession(), slots, "/r", st)]
+
+    def pos(token): return next(i for i, l in enumerate(labels) if token in l)
+    assert pos("/r") < pos("ctx ") < pos("cache ") < pos("start ") < pos("last ") \
+        < pos("write ") < pos("bash ") < pos("chat:m")
+
+
+def test_ctx_shows_used_and_size_in_parens(slots):
+    st = StatusState(ctx_pressure=0.42, num_ctx=131072, has_turn=True)
+    out = _flat(fields(ChatSession(), slots, "", st))
+    assert "ctx 42%" in out and "(" in out and "/" in out and ")" in out
+
+
+def test_cache_shows_resident_prompt_size(slots):
+    st = StatusState(prompt_tokens=92378, has_turn=True)
+    out = _flat(fields(ChatSession(), slots, "", st))
+    assert "cache " in out and "92k" in out
 
 
 def test_colours_resolve_through_active_theme_fallback(slots, monkeypatch):
@@ -74,15 +97,15 @@ def test_ctx_tier_shown_when_overridden(slots):
     assert "xlarge" in out
 
 
-def test_rate_only_after_a_turn(slots):
-    cold = _flat(fields(ChatSession(), slots, "", StatusState()))
-    assert "tok/s" not in cold
-    warm = _flat(fields(ChatSession(), slots, "",
-                        StatusState(wall_s=4.0, tok_per_s=50.0, has_turn=True)))
-    assert "50tok/s" in warm
+def test_rate_not_in_status_bar(slots):
+    # Per the user's spec the bar omits gen rate (it lives in the post-turn
+    # footer). cache replaces it in the segment list.
+    out = _flat(fields(ChatSession(), slots, "",
+                       StatusState(tok_per_s=50.0, has_turn=True)))
+    assert "tok/s" not in out
 
 
-def test_timing_segment_when_opened(slots):
+def test_timing_segments_when_opened(slots):
     out = _flat(fields(ChatSession(), slots, "", StatusState(opened_at=1_000_000.0)))
     assert "start " in out and "last " in out
 
@@ -145,12 +168,13 @@ def _bar_len(segs) -> int:
 def test_fit_drops_low_priority_first(slots):
     s = ChatSession(num_ctx_override=131072)
     st = StatusState(slot="chat", model="Qwen3.6-35B-A3B-6bit",
-                     wall_s=12.3, tok_per_s=68, has_turn=True, opened_at=1_000_000.0)
+                     ctx_pressure=0.1, num_ctx=131072, prompt_tokens=9000,
+                     has_turn=True, opened_at=1_000_000.0)
     full = status_mod.fields(s, slots, "/Users/x/Downloads/luxe", st)
-    fitted = status_mod.fit(full, 60)
+    fitted = status_mod.fit(full, 55)
     txt = " · ".join("".join(t for t, _p, _r in seg.spans) for seg in fitted)
-    # rate (priority 9) and timing (7) drop before the protected git/model.
-    assert "tok/s" not in txt and "start " not in txt
+    # cache (priority 8) and start/last (7) drop before the protected ctx/model.
+    assert "cache " not in txt and "start " not in txt
     assert "chat:" in txt  # model protected, pinned last
     assert _bar_len(fitted) < _bar_len(full)  # fit actually shrank the bar
 

@@ -68,9 +68,11 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
   - The REPL shows a randomized rainbow banner + per-render color-shifting prompt
     arrows; the footer carries `tok/s` and start/end timestamps + elapsed
     (`chat/render.py`).
-  - **Status bar** (`chat/status.py`): models the user's `yet-another-statusline`
-    format (path · state-coloured git `branch/commit +U ~M -D RN ↑a ↓b ✓` · ctx% ·
-    rate · start…last… · model-last) + luxe WRITE/BASH/READ-ONLY chips. `fields()`
+  - **Status bar** (`chat/status.py`): order `path · git · ctx · cache · start ·
+    last · write · bash · model` (`ctx N% (used/size)`; `cache`=resident prompt
+    size — no cross-turn cache; `write`/`bash` on/off; model last). Sparing palette
+    (path blue, model yellow, write-on yellow/bash-on red, grey else); git keeps
+    the theme's role colours. `fields()`
     (→ `Segment` list with drop-`priority`) is the single source; `fit()` is
     responsive (drop low-value first → middle-ellipsis path; git/ctx/model
     protected). Live during a turn via `rich.Live` + `LiveActivity` when
