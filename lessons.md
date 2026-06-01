@@ -3081,14 +3081,23 @@ the next turn keeps the mutation tools and the footer shows `mode: write`.**
   even on the first turn). The model now points the user at `/write` instead of
   claiming luxe can't create files. The `/write` toggle message also gained a
   one-line explanation of what it enables.
-- **CAVEAT — (A) is benchmark-visible and un-benched.** `mutation_defs()` feeds the
-  tool schema for ALL `run_single` callers (maintain, SWE-bench), not just chat, so
-  the reworded `write_file` description reaches the champion on every bench run.
-  It's strictly more accurate and plausibly helps give-up-vs-create behavior, but
-  per bench-as-truth it has NOT been re-run through `maintain_suite`. If a bench
-  drifts, this is a suspect; the clean test is an A/B of the old vs new description
-  string. (B) is chat-only — benchmark/maintain pass `extra_context=""` and never
-  see `<session_mode>`.
+- **(A) is benchmark-visible — A/B'd and cleared (n=10 smoke, 2026-06-01).**
+  `mutation_defs()` feeds the tool schema for ALL `run_single` callers, so the
+  reworded description reaches the champion on every bench run. A/B via a default-OFF
+  `LUXE_WRITE_FILE_DESC_LEGACY` env gate (working-tree diagnostic, reverted after):
+  NEW (shipped) vs OLD (legacy string), all 10 maintain_suite fixtures, identical
+  substrate otherwise. **Result: WASH / safe.** Both arms **10/10 PASS, 40/50**
+  (the 4/5 is the expected offline `pr_opened` miss, not a real fail). Decisively,
+  **write_file usage was byte-identical: 2 calls in each arm, on the same two
+  create-a-new-file fixtures** (SECURITY-AUDIT.md, CONFIG.md) — the model already
+  used write_file for new files and edit_file for in-place edits under BOTH
+  descriptions, so the rewording neither broke nor changed tool selection. Wall
+  478s vs 494s and completion tokens 31.8k vs 36.8k both favor NEW but sit inside
+  substrate noise (single rep). The worry the rewording motivated — confused
+  tool-calling — is refuted. Artifacts (gitignored): `acceptance/writedesc_ab/{new,old}/`.
+  Caveat: n=10 single-rep catches regressions/breaks, not a within-noise improvement;
+  no multi-rep escalation since outcomes were identical. (B) is chat-only — benchmark/
+  maintain pass `extra_context=""` and never see `<session_mode>`.
 - **UI-port aside**: porting the retired `luxe_cli` REPL flourishes (randomized
   rainbow `.:. luxe .:.` banner, per-render color-shifting prompt arrows, `tok/s`,
   start/end timestamps + elapsed) into `src/luxe/chat/{render,repl}.py` was
