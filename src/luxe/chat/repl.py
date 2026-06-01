@@ -27,6 +27,7 @@ from luxe.chat.render import (
     render_final,
     render_footer,
 )
+from luxe.chat import status as status_mod
 from luxe.chat.session import (
     CTX_SUGGEST_PRESSURE,
     ChatSession,
@@ -34,6 +35,7 @@ from luxe.chat.session import (
     next_tier_up,
 )
 from luxe.chat.slots import SlotManager
+from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
 from luxe.memory import project as project_mem
 from luxe.memory import session as session_store
@@ -50,8 +52,14 @@ _SLOT_FOR_TASK = {
 }
 
 
-def _default_reader(console: Console) -> Callable[[], str]:
-    """Return a line reader — prompt_toolkit if available, else input()."""
+def _default_reader(
+    console: Console,
+    *,
+    toolbar_fn: Callable[[], object] | None = None,
+    status_markup_fn: Callable[[], str] | None = None,
+) -> Callable[[], str]:
+    """Return a line reader — prompt_toolkit (with a static bottom-toolbar status
+    bar) if available, else input() with the status printed above the prompt."""
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.formatted_text import FormattedText
@@ -67,11 +75,13 @@ def _default_reader(console: Console) -> Callable[[], str]:
                 + [(f"bold fg:{c}", "›") for c in colors]
                 + [("", " ")]
             )
-            return pt.prompt(message)
+            return pt.prompt(message, bottom_toolbar=toolbar_fn)
 
         return read
     except Exception:  # prompt_toolkit not installed → degrade gracefully
         def read() -> str:
+            if status_markup_fn is not None:
+                console.print(status_markup_fn())
             console.print(arrow_prompt_markup("luxe"), end="")
             return input()
 
@@ -88,17 +98,29 @@ def run_chat_repl(
     resume_session_id: str | None = None,
     reader: Callable[[], str] | None = None,
     infer_task_type: Callable[[str], str] | None = None,
+    dev_mode: bool = False,
 ) -> None:
     from luxe.cli import _infer_task_type  # reuse the maintain heuristic
 
     infer = infer_task_type or _infer_task_type
-    reader = reader or _default_reader(console)
 
     slots = SlotManager(cfg, on_status=lambda m: console.print(f"[dim]· {m}[/]"))
     session = ChatSession(
         repo_path=repo_path,
         project_hash=project_mem.project_hash(repo_path) if repo_path else "",
         languages=languages,
+    )
+    if dev_mode:
+        session.write_enabled = True
+        session.unrestricted_bash = True
+
+    # Static bottom-toolbar status bar (chat.sdd lightweight variant): refreshed
+    # from `status` between turns; the reader pins it under the input line.
+    status = StatusState()
+    reader = reader or _default_reader(
+        console,
+        toolbar_fn=lambda: status_mod.toolbar(session, slots, repo_path, status),
+        status_markup_fn=lambda: status_mod.status_markup(session, slots, repo_path, status),
     )
     meta = session_store.new_session(
         repo_path=repo_path,
@@ -120,9 +142,11 @@ def run_chat_repl(
     if resume_session_id:
         ctx.on_resume(resume_session_id)
 
+    mode_line = ("[yellow]write+bash (dev mode)[/]" if dev_mode
+                 else "read-only")
     console.print(rainbow_banner("luxe chat") + f"  [dim]session={meta.session_id}[/]")
     console.print(f"[dim]repo: {repo_path or '(none)'} · "
-                  f"slots: {slots.slot_models()} · read-only (/, /help for commands)[/]")
+                  f"slots: {slots.slot_models()} · {mode_line} (/, /help for commands)[/]")
 
     try:
         while True:
@@ -141,7 +165,7 @@ def run_chat_repl(
                 if res.exit:
                     break
                 continue
-            _run_turn(line, session, slots, cfg, languages, console, cancel, infer)
+            _run_turn(line, session, slots, cfg, languages, console, cancel, infer, status)
     finally:
         if not keep_loaded:
             slots.unload_all()
@@ -160,6 +184,7 @@ def _run_turn(
     console: Console,
     cancel: CancelToken,
     infer: Callable[[str], str],
+    status: StatusState | None = None,
 ) -> None:
     from luxe.mcp.server import make_read_only_role
 
@@ -259,6 +284,15 @@ def _run_turn(
             started_at=started_at,
             ended_at=ended_at,
         )
+        if status is not None:
+            status.slot = slot
+            status.model = model
+            status.wall_s = result.wall_s
+            status.tok_per_s = (result.completion_tokens / result.wall_s
+                                if result.wall_s > 0 else 0.0)
+            status.ctx_pressure = result.peak_context_pressure
+            status.steps = result.steps
+            status.has_turn = True
         # Auto-suggest a larger window (never resizes silently — chat.sdd).
         if result.peak_context_pressure >= CTX_SUGGEST_PRESSURE:
             nxt = next_tier_up(role_cfg.num_ctx, ctx_ceiling)
