@@ -263,12 +263,13 @@ def _run_turn(
     result = None
     started_at = time.time()
 
-    def _call(on_event):
+    def _call(on_event, on_token=None):
         return run_single(
             backend, role_cfg, goal=message, task_type=task_type,
             languages=languages, extra_tool_defs=extra_tool_defs,
             extra_tool_fns=extra_tool_fns, on_tool_event=on_event,
-            run_id=run_id, phase="chat", extra_context=extra_context,
+            on_token=on_token, run_id=run_id, phase="chat",
+            extra_context=extra_context,
         )
 
     try:
@@ -279,6 +280,9 @@ def _run_turn(
             live_state = StatusState(
                 slot=slot, model=model,
                 opened_at=(status.opened_at if status else 0.0),
+                num_ctx=role_cfg.num_ctx,  # show ctx size during the turn
+                ctx_pressure=(status.ctx_pressure if status else 0.0),
+                has_turn=(status.has_turn if status else False),  # last-known %
             )
             activity = status_mod.LiveActivity(
                 session, slots, session.repo_path, live_state, started_at)
@@ -289,7 +293,7 @@ def _run_turn(
                     activity.note(tc)
                     if cancel.requested:
                         raise ChatCancelled()
-                result = _call(_on_event)
+                result = _call(_on_event, activity.on_token)
         else:
             with Status("[dim]generating…[/]", console=console, spinner="dots"):
                 result = _call(make_tool_event(console, cancel))
