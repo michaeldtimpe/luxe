@@ -69,10 +69,11 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     arrows; the footer carries `tok/s` and start/end timestamps + elapsed
     (`chat/render.py`).
   - **Status bar** (`chat/status.py`): order `path · git · ctx · cache · start ·
-    last · write · bash · model` (`ctx N% (used/size)`; `cache`=resident prompt
-    size — no cross-turn cache; `write`/`bash` on/off; model last). Sparing palette
-    (path blue, model yellow, write-on yellow/bash-on red, grey else); git keeps
-    the theme's role colours. `fields()`
+    last · write · bash · slot · model` (`ctx N% <size>` e.g. 128K; `cache`=resident
+    prompt size — no cross-turn cache; `write`/`bash` on/off; slot+model last).
+    Palette: path blue (fixed hex), slot purple, model yellow, state on=green/off=red,
+    ctx/write/bash labels in default fg, grey else; git keeps the theme's role
+    colours. Startup banner minimal (bar shows repo/slot/model/mode). `fields()`
     (→ `Segment` list with drop-`priority`) is the single source; `fit()` is
     responsive (drop low-value first → middle-ellipsis path; git/ctx/model
     protected). Live during a turn via `rich.Live` + `LiveActivity` when

@@ -55,11 +55,14 @@ never touches this module.
   (mismatched quotes, timeouts, non-zero exit) are NOT augmented. The startup
   banner names the initial mode + toggles; the status-bar chips show live state.
 - The status bar (`chat/status.py`) order (user spec):
-  `path · git · ctx · cache · start · last · write · bash · model`.
-  `ctx` = `ctx N% (used/size)`; `cache` = resident prompt size (luxe has no
-  cross-turn prompt cache — each turn is a fresh `run_single`, so it's the prompt/
-  KV size processed last turn, NOT an Anthropic-style cache); `write`/`bash` show
-  explicit on/off; the model is pinned last. `fields()` (→ `list[Segment]`, each
+  `path · git · ctx · cache · start · last · write · bash · slot · model`.
+  `ctx` = `ctx N% <window-size>` (size in the K/M context convention, e.g. 128K);
+  `cache` = resident prompt size (luxe has no cross-turn prompt cache — each turn
+  is a fresh `run_single`, so it's the prompt/KV size processed last turn, NOT an
+  Anthropic-style cache); `write`/`bash` show explicit on/off; the luxe mode
+  (slot, e.g. `chat`) is its own segment, then the model name pinned last. The
+  startup banner is intentionally minimal (session + /help) — repo/slot/model/mode
+  are NOT reprinted there since the bar already shows them. `fields()` (→ `list[Segment]`, each
   with a drop-`priority`) is the single source of order/content; `toolbar()`
   (prompt_toolkit bottom bar — its grey/reversed background is overridden to
   `bg:default` so the bar sits on the terminal background), `status_markup()`
@@ -76,10 +79,12 @@ never touches this module.
   → NAMED colours (track the iTerm2 profile), 16-255 → fixed xterm value,
   rgb/default pass through. The GIT segment is styled by theme ROLE
   (branch/commit/dirty/safe/warn/alert), cached per process; the rest use a
-  sparing luxe palette per the user's spec (ANSI-named so it still tracks the
-  terminal profile): path BLUE, model YELLOW, write-on yellow / bash-on red /
-  off grey, grey labels + separators, values = terminal default fg (light-bg
-  safe). Falls back to a built-in llmtop-equivalent ANSI map if the
+  sparing luxe palette per the user's spec: path BLUE (fixed hex — the terminal's
+  ANSI-blue slot renders orange on the user's profile), luxe-mode/slot PURPLE,
+  model name YELLOW, state on=GREEN/off=RED, `ctx`/`write`/`bash` LABEL words in
+  terminal default fg ("white"/prominent — true white would vanish on the light
+  bg), other labels + separators grey, values = default fg. Falls back to a
+  built-in llmtop-equivalent ANSI map if the
   repo/symlink/import is absent. NOTE: this reads only the theme-name file and imports the user's pure
   themes module for COLOURS — it is NOT the memory subsystem and injects no
   `~/.claude` content into context (the luxe.sdd/chat.sdd `~/.claude` prohibition

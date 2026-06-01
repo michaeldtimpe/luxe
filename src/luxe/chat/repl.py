@@ -151,13 +151,10 @@ def run_chat_repl(
     if resume_session_id:
         ctx.on_resume(resume_session_id)
 
-    mode_line = ("[yellow]DEV MODE — write + unrestricted shell ON[/]" if dev_mode
-                 else "[green]read-only[/] · [green]allowlisted shell[/] "
-                      "[dim](/write, /bash, or restart with --dev)[/]")
-    console.print(rainbow_banner("luxe chat") + f"  [dim]session={meta.session_id}[/]")
-    console.print(f"[dim]repo: {repo_path or '(none)'} · "
-                  f"slots: {slots.slot_models()}[/]")
-    console.print(f"mode: {mode_line}  [dim](/help for commands)[/]")
+    # The status bar (under the prompt) already shows repo path, slot/model, and
+    # write/bash state — so the banner stays minimal to avoid duplicating it.
+    console.print(rainbow_banner("luxe chat")
+                  + f"  [dim]session={meta.session_id} · /help for commands[/]")
 
     try:
         while True:

@@ -49,20 +49,27 @@ def test_mode_on_when_enabled(slots):
 
 
 def test_segment_order_matches_spec(slots):
-    # path · git(absent, no repo) · ctx · cache · start · last · write · bash · model
-    st = StatusState(slot="chat", model="m", ctx_pressure=0.1, num_ctx=32768,
-                     prompt_tokens=9000, has_turn=True, opened_at=1_000_000.0)
+    # path · ctx · cache · start · last · write · bash · slot · model
+    st = StatusState(slot="chat", model="Champ-9000", ctx_pressure=0.1,
+                     num_ctx=32768, prompt_tokens=9000, has_turn=True,
+                     opened_at=1_000_000.0)
     labels = [_flat([seg]) for seg in fields(ChatSession(), slots, "/r", st)]
 
     def pos(token): return next(i for i, l in enumerate(labels) if token in l)
     assert pos("/r") < pos("ctx ") < pos("cache ") < pos("start ") < pos("last ") \
-        < pos("write ") < pos("bash ") < pos("chat:m")
+        < pos("write ") < pos("bash ") < pos("chat") < pos("Champ-9000")
 
 
-def test_ctx_shows_used_and_size_in_parens(slots):
+def test_ctx_shows_percent_and_window_size(slots):
     st = StatusState(ctx_pressure=0.42, num_ctx=131072, has_turn=True)
     out = _flat(fields(ChatSession(), slots, "", st))
-    assert "ctx 42%" in out and "(" in out and "/" in out and ")" in out
+    assert "ctx 42%" in out and "128K" in out  # 131072 → 128K (K-token convention)
+
+
+def test_slot_is_its_own_segment(slots):
+    segs = fields(ChatSession(), slots, "", StatusState(slot="chat", model="Champ-9000"))
+    seg_texts = [_flat([s]) for s in segs]
+    assert "chat" in seg_texts and "Champ-9000" in seg_texts  # separate segments
 
 
 def test_cache_shows_resident_prompt_size(slots):
@@ -89,7 +96,7 @@ def test_colours_resolve_through_active_theme_fallback(slots, monkeypatch):
 def test_model_pinned_last(slots):
     segs = fields(ChatSession(), slots, "", StatusState(model="Qwen3.6-35B-A3B-6bit"))
     last = "".join(t for t, _p, _r in segs[-1].spans)
-    assert "chat:Qwen3.6-35B-A3B-6bit" in last
+    assert last == "Qwen3.6-35B-A3B-6bit"  # model name alone, pinned last
 
 
 def test_ctx_tier_shown_when_overridden(slots):
@@ -175,7 +182,7 @@ def test_fit_drops_low_priority_first(slots):
     txt = " · ".join("".join(t for t, _p, _r in seg.spans) for seg in fitted)
     # cache (priority 8) and start/last (7) drop before the protected ctx/model.
     assert "cache " not in txt and "start " not in txt
-    assert "chat:" in txt  # model protected, pinned last
+    assert "Qwen3.6-35B-A3B-6bit" in txt  # model protected, pinned last
     assert _bar_len(fitted) < _bar_len(full)  # fit actually shrank the bar
 
 
