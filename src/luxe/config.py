@@ -31,6 +31,32 @@ class RoleConfig(BaseModel):
     repeat_penalty: float | None = None
 
 
+class SlotConfig(BaseModel):
+    """A single model slot for the interactive `luxe chat` front-end.
+
+    `model_key` indexes `PipelineConfig.models`; an empty string falls back to
+    the `monolith` role's model_key (the champion). `role` selects which
+    `RoleConfig` drives `run_single` for turns routed to this slot.
+    """
+
+    model_key: str = ""
+    role: str = "monolith"
+
+
+class ChatSlots(BaseModel):
+    """Per-work-type model slots for `luxe chat` (opt-in fan-out).
+
+    Default-constructed slots have empty `model_key`, so `model_for_slot`
+    resolves every slot to the champion — byte-identical model selection to a
+    config with no `slots:` block at all. See luxe.sdd for the sanctioned-exception
+    contract.
+    """
+
+    chat: SlotConfig = Field(default_factory=SlotConfig)
+    plan: SlotConfig = Field(default_factory=SlotConfig)
+    code: SlotConfig = Field(default_factory=SlotConfig)
+
+
 class TaskTypeConfig(BaseModel):
     description: str = ""
     pipeline: list[str] = Field(default_factory=list)
@@ -50,6 +76,9 @@ class PipelineConfig(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
     task_types: dict[str, TaskTypeConfig] = Field(default_factory=dict)
+    # Interactive-only model slots (`luxe chat`). None or empty model_keys =>
+    # champion-everywhere (no fan-out). Read only by the chat front-end.
+    slots: ChatSlots | None = None
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:
@@ -59,6 +88,26 @@ class PipelineConfig(BaseModel):
     def model_for_role(self, role_name: str) -> str:
         role_cfg = self.role(role_name)
         return self.models[role_cfg.model_key]
+
+    def slot_config(self, slot: str) -> SlotConfig:
+        """Return the SlotConfig for `slot`, defaulting to an empty SlotConfig
+        (which resolves to the champion) when `slots:` is absent."""
+        if slot not in ("chat", "plan", "code"):
+            raise KeyError(f"Unknown chat slot: {slot}. Expected chat|plan|code.")
+        if self.slots is None:
+            return SlotConfig()
+        return getattr(self.slots, slot)
+
+    def model_for_slot(self, slot: str) -> str:
+        """Resolve a chat slot to a concrete model id.
+
+        Falls back to the `monolith` role's model whenever the slot's
+        `model_key` is empty, so an unconfigured slot is the champion — identical
+        to `model_for_role("monolith")`.
+        """
+        sc = self.slot_config(slot)
+        key = sc.model_key or self.role("monolith").model_key
+        return self.models[key]
 
     def task_type(self, name: str) -> TaskTypeConfig:
         if name not in self.task_types:

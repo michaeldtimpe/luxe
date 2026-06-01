@@ -34,6 +34,10 @@ extended-bench = [
     "mlx_lm>=0.31",
     "datasets>=2.0",
 ]
+# Interactive `luxe chat` REPL. prompt_toolkit gives the line editor (history,
+# multi-line, key handling); without it the REPL degrades to input(). Not a
+# base dep so benchmark/headless installs stay lean.
+chat = ["prompt_toolkit>=3.0"]
 
 [project.scripts]
 luxe = "luxe.cli:main"

@@ -115,12 +115,20 @@ def run_single(
     on_tool_event: OnToolEvent | None = None,
     run_id: str | None = None,
     phase: str = "main",
+    extra_context: str = "",
 ) -> AgentResult:
     """Run the single-mode agent end-to-end on a goal.
 
     `role_cfg.tools` (from configs/single_64gb.yaml's `monolith` role) is the
     allowlist of native tools. Anything in `extra_tool_defs` (e.g. MCP tools)
     is appended unconditionally — MCP tools are namespaced and can't collide.
+
+    `extra_context` is an optional runtime context block appended after the
+    SpecDD `.sdd` block — the single injection seam for the interactive chat
+    front-end's conversation history + project memory. It defaults to "" so
+    every existing caller (maintain, benchmarks) produces a byte-identical
+    `task_prompt`; only `luxe chat` passes a non-empty block. It is NOT a
+    registry prompt (see agents.sdd / chat.sdd: prompts stay in the registry).
     """
     defs, fns, cacheable = _build_full_tool_surface(
         languages, role_cfg.tools or None, task_type=task_type
@@ -145,6 +153,7 @@ def run_single(
         f"Goal: {goal}\n\n"
         f"{task_variant.task_prefix}"
         f"{sdd_block}"
+        f"{extra_context}"
     )
 
     return run_agent(

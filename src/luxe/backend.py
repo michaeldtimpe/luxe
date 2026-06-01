@@ -172,13 +172,15 @@ class Backend:
         repeat_penalty: float | None = None,
         response_format: dict[str, Any] | None = None,
         on_retry: Callable[[RetryDecision, int], None] | None = None,
+        stream: bool = False,
+        on_token: Callable[[str], None] | None = None,
     ) -> ChatResponse:
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "stream": False,
+            "stream": stream,
         }
         if tools:
             body["tools"] = tools
@@ -191,6 +193,12 @@ class Backend:
             body.setdefault("extra_body", {})["num_ctx"] = num_ctx
         if repeat_penalty is not None:
             body.setdefault("extra_body", {})["repeat_penalty"] = repeat_penalty
+
+        # Opt-in streaming path for the interactive chat front-end. The default
+        # (stream=False) leaves the body byte-identical to the legacy request and
+        # never touches `on_token` — the benchmark/maintain path is unchanged.
+        if stream:
+            return self._chat_stream(body, on_token=on_token, on_retry=on_retry)
 
         attempt = 0
         last_decision: RetryDecision | None = None
@@ -282,6 +290,146 @@ class Backend:
         # Loop exhausted without success
         reason = last_decision.reason if last_decision else "unknown"
         raise BackendError(f"oMLX retries exhausted after {self.max_attempts} attempts ({reason})")
+
+    def _chat_stream(
+        self,
+        body: dict[str, Any],
+        *,
+        on_token: Callable[[str], None] | None = None,
+        on_retry: Callable[[RetryDecision, int], None] | None = None,
+    ) -> ChatResponse:
+        """SSE streaming path (chat front-end only).
+
+        Reconstructs the same `ChatResponse` shape the non-stream path returns,
+        firing `on_token(delta)` for each text fragment so the REPL can render
+        live. Retries only cover connection establishment (via classify_failure);
+        once tokens flow, a mid-stream error aborts the turn — acceptable for an
+        interactive front-end (the user just retypes). Never used by benchmarks.
+        """
+        # Ask oMLX to include a usage block in the terminal chunk.
+        body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+
+        attempt = 0
+        last_decision: RetryDecision | None = None
+        request_t0 = time.monotonic()
+
+        while attempt < self.max_attempts:
+            t0 = time.monotonic()
+            text_parts: list[str] = []
+            tool_frags: dict[int, dict[str, Any]] = {}
+            finish_reason = ""
+            usage: dict[str, Any] = {}
+            ttft = 0.0
+            started = False
+            try:
+                with self._client.stream("POST", "/v1/chat/completions", json=body) as resp:
+                    if resp.status_code >= 400:
+                        resp.read()
+                        decision = classify_failure(
+                            status_code=resp.status_code,
+                            body=resp.text,
+                            elapsed_since_start_s=time.monotonic() - request_t0,
+                            attempt=attempt,
+                            max_attempts=self.max_attempts,
+                        )
+                        last_decision = decision
+                        if not decision.retry:
+                            raise BackendError(
+                                f"oMLX returned {resp.status_code}: {resp.text[:200]} "
+                                f"({decision.reason})"
+                            )
+                        if on_retry:
+                            on_retry(decision, attempt)
+                        time.sleep(decision.delay_s)
+                        attempt += 1
+                        continue
+
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        if line.startswith("data: "):
+                            line = line[len("data: "):]
+                        line = line.strip()
+                        if not line or line == "[DONE]":
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        # Usage-only terminal chunk has empty choices.
+                        if chunk.get("usage"):
+                            usage = chunk["usage"]
+                        for choice in chunk.get("choices", []):
+                            delta = choice.get("delta", {}) or {}
+                            piece = delta.get("content") or ""
+                            if piece:
+                                if not started:
+                                    ttft = time.monotonic() - t0
+                                    started = True
+                                text_parts.append(piece)
+                                if on_token:
+                                    on_token(piece)
+                            for tc in delta.get("tool_calls") or []:
+                                idx = tc.get("index", 0)
+                                slot = tool_frags.setdefault(
+                                    idx, {"id": "", "name": "", "arguments": ""}
+                                )
+                                if tc.get("id"):
+                                    slot["id"] = tc["id"]
+                                fn = tc.get("function") or {}
+                                if fn.get("name"):
+                                    slot["name"] = fn["name"]
+                                if fn.get("arguments"):
+                                    slot["arguments"] += fn["arguments"]
+                            if choice.get("finish_reason"):
+                                finish_reason = choice["finish_reason"]
+
+                wall = time.monotonic() - t0
+                tc_list: list[ToolCallResponse] = []
+                for idx in sorted(tool_frags):
+                    frag = tool_frags[idx]
+                    raw = frag["arguments"] or "{}"
+                    try:
+                        args = json.loads(raw)
+                    except json.JSONDecodeError:
+                        args = {"_raw": raw}
+                    tc_list.append(ToolCallResponse(
+                        id=frag["id"], name=frag["name"], arguments=args,
+                    ))
+
+                return ChatResponse(
+                    text="".join(text_parts),
+                    tool_calls=tc_list,
+                    finish_reason=finish_reason,
+                    timing=GenerationTiming(
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage.get("completion_tokens", 0),
+                        total_s=wall,
+                        time_to_first_token_s=ttft,
+                    ),
+                    retries=attempt,
+                )
+            except (httpx.HTTPError, OSError) as exc:
+                decision = classify_failure(
+                    exc=exc,
+                    elapsed_since_start_s=time.monotonic() - request_t0,
+                    attempt=attempt,
+                    max_attempts=self.max_attempts,
+                )
+                last_decision = decision
+                if not decision.retry:
+                    raise BackendError(
+                        f"oMLX stream failed: {type(exc).__name__}: {exc} ({decision.reason})"
+                    ) from exc
+                if on_retry:
+                    on_retry(decision, attempt)
+                time.sleep(decision.delay_s)
+                attempt += 1
+
+        reason = last_decision.reason if last_decision else "unknown"
+        raise BackendError(
+            f"oMLX stream retries exhausted after {self.max_attempts} attempts ({reason})"
+        )
 
     def health(self) -> bool:
         try:
