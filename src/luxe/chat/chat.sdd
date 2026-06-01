@@ -91,11 +91,18 @@ never touches this module.
   themes module for COLOURS — it is NOT the memory subsystem and injects no
   `~/.claude` content into context (the luxe.sdd/chat.sdd `~/.claude` prohibition
   is scoped to context/memory, not UI theming).
-- During a turn (when `console.is_terminal`) the REPL renders a `rich.Live`:
-  tool tail-log scrolls above a status bar that ticks live (spinner/elapsed/tool
-  count via `LiveActivity`, auto-refresh). Non-terminal (tests, piped) falls back
-  to the `Status` spinner + line streaming — deterministic loop untouched either
-  way. `transient=True` clears the in-turn bar; the footer prints below.
+- During a turn (when `console.is_terminal`) the REPL renders a `rich.Live` with
+  THREE stacked lines via `LiveActivity`: (1) a live preview of the text the model
+  is currently streaming (so a long generation isn't opaque), (2) the activity
+  line (spinner · elapsed · tool count · current tool), (3) the status bar. Tool
+  tail-log lines scroll above via `live.console.print`. Streaming is fed by the
+  chat-only `on_token` seam (run_single→run_agent→backend.chat stream=True);
+  `LiveActivity.on_token` buffers the current chunk (cleared on each tool
+  dispatch). The live bar seeds `num_ctx` (shows `ctx N% <size>`, % = last
+  completed turn's measured pressure — live mid-turn pressure isn't exposed).
+  Non-terminal (tests, piped) falls back to `Status` + line streaming, non-stream
+  (`on_token=None`) — deterministic loop untouched. `transient=True` clears the
+  in-turn region; the final answer + footer print below.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature

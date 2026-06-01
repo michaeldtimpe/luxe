@@ -292,7 +292,7 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
 
     # start / last (separate segments, droppable) ------------------------
     if state.opened_at:
-        started = time.strftime("%d-%b-%y %H:%M", time.localtime(state.opened_at)).lower()
+        started = time.strftime("%H:%M", time.localtime(state.opened_at))
         segs.append(Segment([_S("start ", _GREY), _S(started, _DEFAULT)], priority=7))
     now = time.strftime("%H:%M", time.localtime())
     segs.append(Segment([_S("last ", _GREY), _S(now, _DEFAULT)], priority=7))
@@ -414,9 +414,14 @@ _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 class LiveActivity:
-    """Rich renderable for the in-turn live bar: spinner + ticking elapsed +
-    tool count + current tool, followed by the fitted status segments. Re-renders
-    under rich.Live auto-refresh so the clock/spinner animate during generation."""
+    """Rich renderable for the in-turn live view — THREE stacked lines so a long
+    generation isn't opaque:
+      1. a live preview of the text the model is currently streaming (so you can
+         see it "thinking"/writing during the gaps between tool calls);
+      2. the activity line (spinner · elapsed · tool count · current tool);
+      3. the status bar.
+    Re-renders under rich.Live auto-refresh so the clock/spinner/preview animate.
+    Tool-call lines scroll above this region via `live.console.print`."""
 
     def __init__(self, session, slots, repo: str, state: StatusState, started_at: float):
         self.session = session
@@ -426,23 +431,41 @@ class LiveActivity:
         self.started_at = started_at
         self.tools = 0
         self.last_tool = ""
+        self._stream = ""  # text streamed since the last tool dispatch
 
     def note(self, tc) -> None:
         self.tools += 1
         self.last_tool = getattr(tc, "name", "") or ""
+        self._stream = ""  # a tool call ends the current generation chunk
+
+    def on_token(self, delta: str) -> None:
+        # Keep a bounded rolling buffer of the live generation.
+        self._stream = (self._stream + delta)[-2000:]
 
     def __rich__(self):
+        from rich.console import Group
         from rich.text import Text
 
+        width = _term_width()
         elapsed = max(0.0, time.time() - self.started_at)
         frame = _SPINNER[int(elapsed * 10) % len(_SPINNER)]
-        head = Text()
-        head.append(f"{frame} ", style="cyan")
-        head.append(f"{elapsed:5.1f}s ", style="bold")
-        head.append(f"·{self.tools} tools", style="dim")
+
+        lines = []
+        # 1. live streaming preview (last non-blank line, truncated to width)
+        tail = next((ln for ln in reversed(self._stream.splitlines()) if ln.strip()), "")
+        if tail:
+            if len(tail) > width - 2:
+                tail = "…" + tail[-(width - 3):]
+            lines.append(Text(tail, style="bright_black"))
+        # 2. activity line
+        act = Text()
+        act.append(f"{frame} ", style="cyan")
+        act.append(f"{elapsed:5.1f}s ", style="bold")
+        act.append(f"·{self.tools} tools", style="bright_black")
         if self.last_tool:
-            head.append(f" · {self.last_tool}", style="yellow")
-        head.append("  ", style="")
-        segs = fit(fields(self.session, self.slots, self.repo, self.state), _term_width())
-        head.append_text(to_rich_text(segs))
-        return head
+            act.append(f" · {self.last_tool}", style="yellow")
+        lines.append(act)
+        # 3. status bar
+        lines.append(to_rich_text(fit(fields(self.session, self.slots, self.repo,
+                                             self.state), width)))
+        return Group(*lines)

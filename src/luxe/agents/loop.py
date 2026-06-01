@@ -553,6 +553,7 @@ def run_agent(
     phase: str = "main",
     spec: Spec | None = None,
     early_bail_message: str | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> AgentResult:
     """Run the agent loop: chat → tool calls → dispatch → repeat.
 
@@ -1236,6 +1237,10 @@ def run_agent(
                 temperature=role_cfg.temperature,
                 num_ctx=role_cfg.num_ctx,
                 repeat_penalty=role_cfg.repeat_penalty,
+                # Chat front-end only: stream tokens for the live tail. None
+                # (benchmark/maintain) → stream=False → byte-identical request.
+                stream=on_token is not None,
+                on_token=on_token,
             )
         except Exception as e:
             result.aborted = True

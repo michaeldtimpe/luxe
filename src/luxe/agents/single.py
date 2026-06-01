@@ -12,6 +12,8 @@ norm.
 
 from __future__ import annotations
 
+from typing import Callable
+
 from luxe.agents.loop import AgentResult, OnToolEvent, run_agent
 from luxe.agents.prompts import get as get_prompt, resolve_prompt_ids
 from luxe.backend import Backend
@@ -113,6 +115,7 @@ def run_single(
     extra_tool_fns: dict[str, ToolFn] | None = None,
     cache: ToolCache | None = None,
     on_tool_event: OnToolEvent | None = None,
+    on_token: Callable[[str], None] | None = None,
     run_id: str | None = None,
     phase: str = "main",
     extra_context: str = "",
@@ -169,6 +172,7 @@ def run_single(
         cache=cache,
         cacheable=cacheable,
         on_tool_event=on_tool_event,
+        on_token=on_token,
         run_id=run_id,
         phase=phase,
     )

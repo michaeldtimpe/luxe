@@ -177,3 +177,27 @@ class TestExtraContextSeam:
         block = "\n\n<project_memory>\nuse ruff\n</project_memory>"
         with_ctx = self._capture_task_prompt(monkeypatch, extra_context=block)
         assert with_ctx == base + block
+
+
+class TestStreamingSeam:
+    """run_single forwards `on_token` to run_agent (chat live tail). Default
+    None keeps the benchmark path non-streaming."""
+
+    def _captured_on_token(self, monkeypatch, **kwargs):
+        captured = {}
+
+        def fake_run_agent(backend, role_cfg, *, on_token=None, **_):
+            captured["on_token"] = on_token
+            return AgentResult()
+
+        monkeypatch.setattr(single_mod, "run_agent", fake_run_agent)
+        run_single(backend=object(), role_cfg=RoleConfig(model_key="monolith"),
+                   goal="g", task_type="review", languages=frozenset(), **kwargs)
+        return captured["on_token"]
+
+    def test_default_on_token_is_none(self, monkeypatch):
+        assert self._captured_on_token(monkeypatch) is None
+
+    def test_on_token_forwarded(self, monkeypatch):
+        cb = lambda d: None
+        assert self._captured_on_token(monkeypatch, on_token=cb) is cb

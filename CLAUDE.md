@@ -96,8 +96,11 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
   incl. luxe-vs-bare substrate ablation), blind + vote.
 - **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
   memory (repo `.luxe/memory.md`); must NOT read `~/.claude/` or repo `CLAUDE.md`.
-- **`backend.py` streaming** is gated (`stream`/`on_token`); the loop still calls
-  non-stream, so the deterministic path is untouched. Keep it that way.
+- **`backend.py` streaming** is gated (`stream`/`on_token`). As of 2026-06-01 the
+  loop wires it CHAT-ONLY: `run_single`/`run_agent` take an `on_token` that, when
+  set (interactive chat live tail), makes `backend.chat` stream. Benchmark/maintain
+  pass `on_token=None` → `stream=False` → byte-identical request, deterministic
+  path untouched. Do NOT pass `on_token` from the benchmark/maintain path.
 - New work here walks `src/luxe/{chat,compare,memory}/<dir>.sdd` first.
 
 ## Architecture: SpecDD Lever 2 `.sdd` chain
