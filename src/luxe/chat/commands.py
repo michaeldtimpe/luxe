@@ -73,7 +73,8 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/resume": _resume,
         "/clear": _clear,
         "/quit": _quit,
-        "/exit": _quit,
+        "/exit": _quit,   # hidden alias (not listed in /help)
+        "/q": _quit,      # hidden quick-exit alias
     }
     fn = handlers.get(cmd)
     if fn is None:

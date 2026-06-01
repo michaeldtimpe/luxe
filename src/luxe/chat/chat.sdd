@@ -46,16 +46,23 @@ never touches this module.
   benchmark/maintain path passes no extra tools, so its bash stays allowlisted.
 - `luxe chat --dev` starts with write + unrestricted bash ON (sticky equivalent
   of `/write` + `/bash`), so dev work doesn't re-toggle each session
-- The bottom-toolbar status bar (`chat/status.py`) is the LIGHTWEIGHT variant:
-  a static bar pinned under the input line, refreshed from `StatusState` BETWEEN
-  turns (not live mid-turn — the tool tail-log streams above for that). Format =
-  the applicable segments of the user's `yet-another-statusline` (path · state-
-  coloured `git branch/commit +U ~M -D RN ↑a ↓b ✓` · `ctx N%` · rate · `start…last…`
-  · model-last) + luxe WRITE/BASH/READ-ONLY chips; plan-quota/cache/cost/effort
-  segments are Claude-Code-only and omitted. `fields()` (→ list[list[Span]]) is
-  the single source of order/content; `toolbar()` (prompt_toolkit) and
-  `status_markup()` (plain-input fallback) both render from it so they never
-  drift. Git state is TTL-cached to avoid per-keystroke `git` spawns.
+- The status bar (`chat/status.py`) format = the applicable segments of the
+  user's `yet-another-statusline` (path · state-coloured `git branch/commit
+  +U ~M -D RN ↑a ↓b ✓` · `ctx N%` · rate · `start…last…` · model-last) + luxe
+  WRITE/BASH/READ-ONLY chips; plan-quota/cache/cost/effort segments are
+  Claude-Code-only and omitted. `fields()` (→ `list[Segment]`, each with a
+  drop-`priority`) is the single source of order/content; `toolbar()`
+  (prompt_toolkit bottom bar, input phase), `status_markup()` (plain-input
+  fallback), and `to_rich_text()`/`LiveActivity` (in-turn live bar) all render
+  from it so they never drift. `fit(segs, width)` is responsive: it drops
+  low-value segments (priority ≥4: rate, timing) highest-first, then
+  middle-ellipsises the elastic path; git/ctx/model (priority 1–2) are protected.
+  Git state is TTL-cached to avoid per-keystroke `git` spawns.
+- During a turn (when `console.is_terminal`) the REPL renders a `rich.Live`:
+  tool tail-log scrolls above a status bar that ticks live (spinner/elapsed/tool
+  count via `LiveActivity`, auto-refresh). Non-terminal (tests, piped) falls back
+  to the `Status` spinner + line streaming — deterministic loop untouched either
+  way. `transient=True` clears the in-turn bar; the footer prints below.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature

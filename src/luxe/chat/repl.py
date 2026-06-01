@@ -13,6 +13,7 @@ import time
 from typing import Callable
 
 from rich.console import Console
+from rich.live import Live
 from rich.status import Status
 
 from luxe.agents.single import run_single
@@ -21,6 +22,7 @@ from luxe.chat.render import (
     CancelToken,
     ChatCancelled,
     arrow_prompt_markup,
+    format_tool_call,
     make_tool_event,
     pick_no_adjacent_repeats,
     rainbow_banner,
@@ -240,25 +242,40 @@ def _run_turn(
     except (ValueError, OSError):
         prev_handler = None  # not in main thread (e.g. tests)
 
-    on_event = make_tool_event(console, cancel)
     interrupted = False
     result = None
     started_at = time.time()
+
+    def _call(on_event):
+        return run_single(
+            backend, role_cfg, goal=message, task_type=task_type,
+            languages=languages, extra_tool_defs=extra_tool_defs,
+            extra_tool_fns=extra_tool_fns, on_tool_event=on_event,
+            run_id=run_id, phase="chat", extra_context=extra_context,
+        )
+
     try:
-        with Status("[dim]generating…[/]", console=console, spinner="dots"):
-            result = run_single(
-                backend,
-                role_cfg,
-                goal=message,
-                task_type=task_type,
-                languages=languages,
-                extra_tool_defs=extra_tool_defs,
-                extra_tool_fns=extra_tool_fns,
-                on_tool_event=on_event,
-                run_id=run_id,
-                phase="chat",
-                extra_context=extra_context,
+        if console.is_terminal:
+            # Live layout (chat.sdd): tool lines scroll above a status bar that
+            # ticks live during the turn (spinner/elapsed/tool count). transient
+            # clears the bar when the turn ends; the footer then prints below.
+            live_state = StatusState(
+                slot=slot, model=model,
+                opened_at=(status.opened_at if status else 0.0),
             )
+            activity = status_mod.LiveActivity(
+                session, slots, session.repo_path, live_state, started_at)
+            with Live(activity, console=console, refresh_per_second=10,
+                      transient=True) as live:
+                def _on_event(tc):
+                    live.console.print(format_tool_call(tc))
+                    activity.note(tc)
+                    if cancel.requested:
+                        raise ChatCancelled()
+                result = _call(_on_event)
+        else:
+            with Status("[dim]generating…[/]", console=console, spinner="dots"):
+                result = _call(make_tool_event(console, cancel))
     except (ChatCancelled, KeyboardInterrupt):
         interrupted = True
         console.print("[yellow]· interrupted — partial turn saved[/]")
