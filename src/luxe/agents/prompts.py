@@ -332,6 +332,24 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
 }
 
 
+# Read-only-mode framing for `luxe chat`. Lives here (registry = single source
+# of truth for prompt strings; chat.sdd forbids prompt strings in the chat
+# module). Injected by ChatSession.build_extra_context ONLY when write mode is
+# off, so the model stops reporting "luxe can't create/edit files" and instead
+# points the user at /write. Benchmark/maintain never see this (they pass
+# extra_context="").
+READ_ONLY_CHAT_HINT = (
+    "This is an interactive read-only chat turn: the write_file, edit_file, and "
+    "bash tools are intentionally withheld right now. luxe fully supports them — "
+    "they are gated off by default and the user enables them on demand. If "
+    "carrying out this request needs creating, editing, or running files, do "
+    "whatever read-only analysis you can and then tell the user to type /write "
+    "to turn on write tools. Never claim luxe lacks the ability to create or "
+    "edit files; it has write_file (creates files and parent directories), "
+    "edit_file, and bash once write mode is on."
+)
+
+
 def get(prompt_id: str) -> PromptVariant:
     """Look up a PromptVariant by id. Raises KeyError with a list of
     available ids if the lookup misses — surfaces typos quickly during

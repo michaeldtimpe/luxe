@@ -25,11 +25,43 @@ def repo(tmp_path: Path) -> Path:
     return r
 
 
-def test_first_turn_no_memory_is_empty_context(repo: Path):
-    s = ChatSession(repo_path=str(repo))
+def test_first_turn_no_memory_write_mode_is_empty_context(repo: Path):
+    # Write mode ON + first turn + no memory → legacy byte-identical empty block.
+    s = ChatSession(repo_path=str(repo), write_enabled=True)
     ctx, version = s.build_extra_context("what does foo do?")
     assert ctx == ""  # Goal carries the message; nothing else to disambiguate
     assert version == "trunc-v1"
+
+
+def test_read_only_injects_session_mode_hint_even_on_first_turn(repo: Path):
+    # Default (read-only) first turn now carries the /write hint so the model
+    # never reports luxe can't create/edit files.
+    s = ChatSession(repo_path=str(repo))
+    assert s.write_enabled is False
+    ctx, _ = s.build_extra_context("scaffold a new project")
+    assert "<session_mode>" in ctx
+    assert "/write" in ctx
+    assert "<current_request>" in ctx  # echo restored once anything precedes it
+
+
+def test_write_mode_drops_the_session_mode_hint(repo: Path):
+    s = ChatSession(repo_path=str(repo), write_enabled=True)
+    s.add_turn(ChatTurn(user="hi", assistant="hello"))
+    ctx, _ = s.build_extra_context("now what?")
+    assert "<session_mode>" not in ctx
+
+
+def test_session_mode_hint_is_lowest_precedence(repo: Path):
+    (repo / ".luxe").mkdir()
+    project_mem.repo_memory_file(repo).write_text("Pref: concise.\n")
+    s = ChatSession(repo_path=str(repo))  # read-only
+    s.add_turn(ChatTurn(user="earlier", assistant="answer"))
+    ctx, _ = s.build_extra_context("current ask")
+    i_mode = ctx.index("<session_mode>")
+    i_mem = ctx.index("<project_memory>")
+    i_hist = ctx.index("<conversation_history>")
+    i_cur = ctx.index("<current_request>")
+    assert i_mode < i_mem < i_hist < i_cur
 
 
 def test_memory_only_injects_project_block_and_echo(repo: Path):
@@ -70,7 +102,7 @@ def test_precedence_order_memory_then_history_then_current(repo: Path):
 
 def test_unpromoted_facts_do_not_leak_into_context(repo: Path):
     project_mem.add_fact(repo, "secret auto fact", confidence="auto")
-    s = ChatSession(repo_path=str(repo))
+    s = ChatSession(repo_path=str(repo), write_enabled=True)  # write mode = no mode hint
     ctx, _ = s.build_extra_context("hello")
     assert "secret auto fact" not in ctx
     assert ctx == ""  # nothing injected

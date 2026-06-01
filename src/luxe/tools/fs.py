@@ -478,7 +478,12 @@ def mutation_defs() -> list[ToolDef]:
     return [
         ToolDef(
             name="write_file",
-            description="Write content to a file (creates parent dirs). Overwrites if exists.",
+            description=(
+                "Create a new file, or overwrite an existing one, with the given "
+                "content. Missing parent directories are created automatically — "
+                "use this to scaffold brand-new files and whole directory trees, "
+                "not only to rewrite files that already exist."
+            ),
             parameters={
                 "type": "object",
                 "properties": {

@@ -3066,19 +3066,29 @@ the next turn keeps the mutation tools and the footer shows `mode: write`.**
 
 **Fix / takeaway**:
 
-- **No code change shipped.** The capability is correct and the read-only default
-  is deliberate (don't let a chat turn mutate the tree without an explicit opt-in).
-  The user confirmed the direction: luxe should be a development-style platform in
-  the same vein as the Claude CLI — and the primitives for that already exist.
-- **The discoverability gap is the real (deferred) issue**: a read-only-mode agent
-  declares itself incapable instead of telling the user to `/write`, and
-  `write_file`'s description leads with "Overwrites if exists" which can read as
-  edit-only. Two low-risk, SDD-respecting follow-ups were scoped but NOT taken this
-  session (no behavior change without a bench-minded decision): (A) reword
-  `write_file`/`edit_file` descriptions so create-semantics are unmistakable —
-  pure description, model-visible; (B) inject a read-only-mode hint (via
-  `agents/prompts.py`, never inline) so the agent says "enable write mode with
-  `/write`" rather than "I can't create files."
+- The read-only default is deliberate (don't let a chat turn mutate the tree
+  without an explicit opt-in). The user confirmed the direction: luxe should be a
+  development-style platform in the same vein as the Claude CLI — the primitives
+  already exist.
+- **The discoverability gap is now FIXED (same session).** Two SDD-respecting
+  follow-ups shipped: (A) `write_file`'s description was reworded from "Write
+  content to a file (creates parent dirs). Overwrites if exists." to lead with
+  *create* semantics ("Create a new file, or overwrite an existing one … use this
+  to scaffold brand-new files and whole directory trees"); (B) a `READ_ONLY_CHAT_HINT`
+  string was added to the prompt registry (`agents/prompts.py` — chat.sdd forbids
+  prompt strings in the chat module) and injected by `ChatSession.build_extra_context`
+  as a lowest-precedence `<session_mode>` block ONLY when write mode is off (works
+  even on the first turn). The model now points the user at `/write` instead of
+  claiming luxe can't create files. The `/write` toggle message also gained a
+  one-line explanation of what it enables.
+- **CAVEAT — (A) is benchmark-visible and un-benched.** `mutation_defs()` feeds the
+  tool schema for ALL `run_single` callers (maintain, SWE-bench), not just chat, so
+  the reworded `write_file` description reaches the champion on every bench run.
+  It's strictly more accurate and plausibly helps give-up-vs-create behavior, but
+  per bench-as-truth it has NOT been re-run through `maintain_suite`. If a bench
+  drifts, this is a suspect; the clean test is an A/B of the old vs new description
+  string. (B) is chat-only — benchmark/maintain pass `extra_context=""` and never
+  see `<session_mode>`.
 - **UI-port aside**: porting the retired `luxe_cli` REPL flourishes (randomized
   rainbow `.:. luxe .:.` banner, per-render color-shifting prompt arrows, `tok/s`,
   start/end timestamps + elapsed) into `src/luxe/chat/{render,repl}.py` was
@@ -3086,8 +3096,11 @@ the next turn keeps the mutation tools and the footer shows `mode: write`.**
   session transcript if revived. The functional metrics (token counts, `wall_s`,
   Rich-colored tool lines) already live in the shipped footer.
 
-**Affected files**: none shipped — doc + memory only. Refs: `src/luxe/tools/fs.py`
-(`write_file`/`edit_file`), `src/luxe/tools/shell.py` (`bash`),
+**Affected files**: `src/luxe/tools/fs.py` (write_file description rework — A,
+benchmark-visible), `src/luxe/agents/prompts.py` (`READ_ONLY_CHAT_HINT` — B),
+`src/luxe/chat/session.py` (`<session_mode>` injection — B), `src/luxe/chat/commands.py`
+(`/write` message), `tests/test_chat_session.py` (+3 tests), `CLAUDE.md` + this
+`lessons.md` entry. Refs: `src/luxe/tools/shell.py` (`bash`),
 `src/luxe/mcp/server.py:168-182` (`_MUTATION_TOOL_NAMES` + `make_read_only_role`),
 `src/luxe/chat/repl.py:158` (read-only gate), `src/luxe/chat/chat.sdd` ("Write
 tools default OFF … `/write` toggles"). Memory: `feedback_luxe_dev_platform_write_mode.md`.
