@@ -55,10 +55,12 @@ def _sep_style() -> tuple[str, str]:
 # user's spec: path blue, model yellow, write-on yellow / bash-on red, everything
 # else grey label + default-fg value. git keeps the theme's role colours.
 _GREY = ("ansibrightblack", "bright_black")
-_DEFAULT = ("", "default")
-_BLUE = ("ansiblue", "blue")
-_YELLOW = ("ansiyellow", "yellow")
-_RED = ("ansired", "red")
+_DEFAULT = ("", "default")           # "white" labels: terminal default fg (light-bg safe)
+_BLUE = ("#2563eb", "#2563eb")       # path — fixed hex (terminal ANSI blue renders orange here)
+_YELLOW = ("ansiyellow", "yellow")   # model name
+_PURPLE = ("ansimagenta", "magenta")  # luxe mode / slot
+_GREEN = ("ansigreen", "green")      # state ON
+_RED = ("ansired", "red")            # state OFF
 
 
 def _S(text: str, style: tuple[str, str]) -> Span:
@@ -71,6 +73,16 @@ def _human(n: int) -> str:
     if n < 1_000_000:
         return f"{n / 1000:.1f}k" if n < 10_000 else f"{n / 1000:.0f}k"
     return f"{n / 1_000_000:.1f}m"
+
+
+def _ctx_size(n: int) -> str:
+    """Context window size in the K/M convention used for context windows
+    (binary, K-tokens): 131072 → '128K', 1048576 → '1.0M', 8192 → '8K'."""
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f}M"
+    if n >= 1024:
+        return f"{n / 1024:.0f}K"
+    return str(n)
 
 
 @dataclass
@@ -258,12 +270,12 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     if git_seg:
         segs.append(Segment(git_seg, priority=1))
 
-    # ctx: `ctx N% (used/size)` once a turn has run, else the configured tier
-    ctx_spans: list[Span] = [_S("ctx ", _GREY)]
+    # ctx: `ctx N% <window-size>` (label = default fg; % used; size in the K/M
+    # context convention). Before the first turn, show the configured tier.
+    ctx_spans: list[Span] = [_S("ctx ", _DEFAULT)]
     if state.has_turn and state.num_ctx:
-        used = int(state.ctx_pressure * state.num_ctx)
         ctx_spans.append(_S(f"{state.ctx_pressure:.0%}", _DEFAULT))
-        ctx_spans.append(_S(f" ({_human(used)}/{_human(state.num_ctx)})", _GREY))
+        ctx_spans.append(_S(f" {_ctx_size(state.num_ctx)}", _GREY))
     else:
         tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
         ctx_spans.append(_S(tier, _GREY))
@@ -282,17 +294,18 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     now = time.strftime("%H:%M", time.localtime())
     segs.append(Segment([_S("last ", _GREY), _S(now, _DEFAULT)], priority=7))
 
-    # write on/off · bash on/off (explicit state) ------------------------
-    segs.append(Segment([_S("write ", _GREY),
+    # write on/off · bash on/off — label default fg, state ON=green / OFF=red
+    segs.append(Segment([_S("write ", _DEFAULT),
                          _S("on" if session.write_enabled else "off",
-                            _YELLOW if session.write_enabled else _GREY)], priority=3))
-    segs.append(Segment([_S("bash ", _GREY),
+                            _GREEN if session.write_enabled else _RED)], priority=3))
+    segs.append(Segment([_S("bash ", _DEFAULT),
                          _S("on" if session.unrestricted_bash else "off",
-                            _RED if session.unrestricted_bash else _GREY)], priority=3))
+                            _GREEN if session.unrestricted_bash else _RED)], priority=3))
 
-    # model pinned last (yellow) -----------------------------------------
+    # luxe mode (slot) as its own segment in purple, then the model name (yellow)
+    segs.append(Segment([_S(state.slot, _PURPLE)], priority=2))
     model = state.model or slots.model_for("chat")
-    segs.append(Segment([_S(f"{state.slot}:{_short_model(model)}", _YELLOW)], priority=1))
+    segs.append(Segment([_S(_short_model(model), _YELLOW)], priority=1))
 
     return segs
 
