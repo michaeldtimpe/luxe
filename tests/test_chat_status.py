@@ -48,13 +48,19 @@ def test_write_and_bash_chips(slots):
     assert "write" in out and "bash" in out
 
 
-def test_colours_track_terminal_ansi_palette(slots):
-    # llmtop draws from ANSI 0-15; luxe must too (ptk ansi* names) so both track
-    # the iTerm2 profile. Path=cyan, model=magenta, no hard-coded hex.
-    from luxe.chat.status import _C
-    assert _C["cyan"][0] == "ansicyan" and _C["magenta"][0] == "ansimagenta"
-    assert _C["white"][1] == "default"  # values use terminal default fg (light-bg safe)
-    assert all(not p.startswith("#") for p, _r in _C.values())  # no hard-coded RGB
+def test_colours_resolve_through_active_theme_fallback(slots, monkeypatch):
+    # With no YASL theme available, the fallback (llmtop-equivalent ANSI) is used:
+    # path=cyan, model=magenta, values=terminal default, all ANSI-named (no hex).
+    from luxe.chat import theme as theme_mod
+    monkeypatch.setattr(theme_mod, "_load_yasl_theme", lambda name: None)
+    theme_mod.reset_cache()
+    try:
+        rs = theme_mod.role_styles(force=True)
+        assert rs["pwd"][0] == "ansicyan" and rs["model"][0] == "ansimagenta"
+        assert rs["white_brt"][1] == "default"
+        assert all(not p.startswith("#") for p, _r in rs.values())
+    finally:
+        theme_mod.reset_cache()
 
 
 def test_model_pinned_last(slots):

@@ -75,9 +75,13 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     responsive (drop low-value first → middle-ellipsis path; git/ctx/model
     protected). Live during a turn via `rich.Live` + `LiveActivity` when
     `is_terminal` (tool log scrolls above a ticking bar); falls back to line
-    streaming otherwise. Colours track the user's active yet-another-statusline
-    theme (`llmtop`) via the terminal ANSI palette (`_C` = `ansi*`/Rich names, no
-    hex; values use default fg, light-bg safe). **`luxe chat --dev`** starts write+bash ON. Hidden exit
+    streaming otherwise. Colours follow the user's ACTIVE Claude statusline theme,
+    resolved LIVE by `chat/theme.py` (reads `~/.claude/statusline-theme`, imports
+    the user's yet-another-statusline `themes` module via the `statusline_command.py`
+    symlink, converts each role's ANSI escape → ptk/Rich; ANSI 0-15 stay named so
+    they track the terminal profile, 16-255 fixed). Built-in llmtop fallback if
+    the repo is absent. Theming reads only the name file — NOT the memory
+    subsystem (the `~/.claude` prohibition is scoped to context/memory). **`luxe chat --dev`** starts write+bash ON. Hidden exit
     aliases: `/exit`, `/q` (both = `/quit`).
   - **Flag-state failures self-explain.** Defaults are safe (read-only +
     allowlisted bash) and shown in the banner + chips; in write mode a restricted

@@ -27,34 +27,27 @@ from dataclasses import dataclass
 
 from luxe.chat.session import tier_label
 
-# Colours mirror the active yet-another-statusline theme (llmtop): every slot is
-# drawn from the terminal's own ANSI palette (indices 0-15) so luxe tracks the
-# same iTerm2 profile as the Claude statusline instead of hard-coding RGB — and
-# values use the terminal default fg (NOT white, which vanishes on a light bg).
-# llmtop role map: path/ctx=cyan(6), branch/ok=green(2), dirty/alert=red(1),
-# warn=yellow(3), label/commit=gray(8), model=magenta(5).
-# Semantic colour -> (prompt_toolkit style, Rich markup tag).
-_C: dict[str, tuple[str, str]] = {
-    "red":     ("ansired",         "red"),
-    "yellow":  ("ansiyellow",      "yellow"),
-    "green":   ("ansigreen",       "green"),
-    "orange":  ("ansiyellow",      "yellow"),       # llmtop is ANSI-only; no orange slot
-    "cyan":    ("ansicyan",        "cyan"),
-    "blue":    ("ansiblue",        "blue"),
-    "magenta": ("ansimagenta",     "magenta"),
-    "dim":     ("ansibrightblack", "bright_black"),  # llmtop label/commit = gray(8)
-    "default": ("",                "default"),        # white_brt = terminal default fg
-    "white":   ("",                "default"),        # alias → default (light-bg safe)
-    "": ("", ""),
-}
+# Colours follow the user's ACTIVE Claude statusline theme (resolved live by
+# `chat/theme.py`): each span is styled by a theme ROLE (pwd/branch/commit/dirty/
+# label/ctx/model/white_brt/safe/warn/alert), drawn from the terminal ANSI
+# palette so luxe tracks the same iTerm2 profile as the Claude statusline.
+from luxe.chat import theme as theme_mod
 
 # A styled span: (text, ptk_style, rich_style).
 Span = tuple[str, str, str]
 
 
-def _sp(text: str, colour: str = "") -> Span:
-    p, r = _C.get(colour, ("", ""))
-    return (text, p, r)
+def _sp(text: str, role: str = "") -> Span:
+    """Span styled by the active theme's ROLE (see chat/theme.role_styles)."""
+    if not role:
+        return (text, "", "")
+    ptk, rich = theme_mod.role_styles().get(role, ("", ""))
+    return (text, ptk, rich)
+
+
+def _sep_style() -> tuple[str, str]:
+    """(ptk, rich) for the ` · ` separator — the theme's label/gray role."""
+    return theme_mod.role_styles().get("label", ("", ""))
 
 
 @dataclass
@@ -176,26 +169,26 @@ def _git_segment(repo: str) -> list[Span] | None:
     gi = git_info(repo)
     if gi is None or not gi.branch:
         return None
-    label_clr = {"drift": "red", "pending": "yellow", "clean": "green"}[gi.state]
-    # branch=green(2), commit=gray(8), dirty markers +~-R=red(1), ahead=warn(3),
-    # behind=alert(1), ✓=safe(2) — the llmtop git role map.
-    spans: list[Span] = [_sp("git", label_clr), _sp(" ", ""), _sp(gi.branch, "green")]
+    label_role = {"drift": "alert", "pending": "warn", "clean": "safe"}[gi.state]
+    # git label=state, branch, commit=gray, dirty markers +~-R, ahead=warn,
+    # behind=alert, ✓=safe — each via the active theme's role.
+    spans: list[Span] = [_sp("git", label_role), _sp(" ", ""), _sp(gi.branch, "branch")]
     if gi.commit:
-        spans.append(_sp(f"/{gi.commit}", "dim"))
+        spans.append(_sp(f"/{gi.commit}", "commit"))
     if gi.untracked:
-        spans.append(_sp(f" +{gi.untracked}", "red"))
+        spans.append(_sp(f" +{gi.untracked}", "dirty"))
     if gi.modified:
-        spans.append(_sp(f" ~{gi.modified}", "red"))
+        spans.append(_sp(f" ~{gi.modified}", "dirty"))
     if gi.deleted:
-        spans.append(_sp(f" -{gi.deleted}", "red"))
+        spans.append(_sp(f" -{gi.deleted}", "dirty"))
     if gi.renamed:
-        spans.append(_sp(f" R{gi.renamed}", "red"))
+        spans.append(_sp(f" R{gi.renamed}", "dirty"))
     if gi.ahead:
-        spans.append(_sp(f" ↑{gi.ahead}", "yellow"))
+        spans.append(_sp(f" ↑{gi.ahead}", "warn"))
     if gi.behind:
-        spans.append(_sp(f" ↓{gi.behind}", "red"))
+        spans.append(_sp(f" ↓{gi.behind}", "alert"))
     if gi.clean and gi.has_upstream and not gi.detached:
-        spans.append(_sp(" ✓", "green"))
+        spans.append(_sp(" ✓", "safe"))
     return spans
 
 
@@ -220,14 +213,12 @@ def _short_model(model: str) -> str:
     return name if len(name) <= 22 else name[:21] + "…"
 
 
-def _ctx_zone_colour(pressure: float) -> str:
+def _ctx_zone_role(pressure: float) -> str:
     if pressure < 0.50:
-        return "green"
-    if pressure < 0.80:
-        return "yellow"
+        return "safe"
     if pressure < 0.95:
-        return "orange"
-    return "red"
+        return "warn"
+    return "alert"
 
 
 def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
@@ -240,18 +231,18 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     # mode (luxe-specific; chat.sdd requires write-mode visible) — flat coloured
     # text in the YASL borderless style, traffic-light semantics.
     if session.write_enabled:
-        chip: list[Span] = [_sp("write", "yellow")]
+        chip: list[Span] = [_sp("write", "warn")]
         if session.unrestricted_bash:
-            chip += [_sp(" ", ""), _sp("bash", "red")]
+            chip += [_sp(" ", ""), _sp("bash", "alert")]
         segs.append(Segment(chip, priority=1))
     else:
-        segs.append(Segment([_sp("read-only", "green")], priority=1))
+        segs.append(Segment([_sp("read-only", "safe")], priority=1))
 
-    # home-relative path (cyan = llmtop pwd; elastic: ellipsised before drops)
+    # home-relative path (pwd role; elastic: ellipsised before drops)
     if repo:
         home = os.path.expanduser("~")
         shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
-        segs.append(Segment([_sp(shown, "cyan")], priority=2, path=True))
+        segs.append(Segment([_sp(shown, "pwd")], priority=2, path=True))
 
     # git (protected) -----------------------------------------------------
     git_seg = _git_segment(repo)
@@ -259,28 +250,28 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
         segs.append(Segment(git_seg, priority=1))
 
     # context occupancy (protected) --------------------------------------
-    ctx_spans: list[Span] = [_sp("ctx ", "dim")]
+    ctx_spans: list[Span] = [_sp("ctx ", "label")]
     if state.has_turn:
-        ctx_spans.append(_sp(f"{state.ctx_pressure:.0%}", _ctx_zone_colour(state.ctx_pressure)))
+        ctx_spans.append(_sp(f"{state.ctx_pressure:.0%}", _ctx_zone_role(state.ctx_pressure)))
     tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
-    ctx_spans.append(_sp(f" {tier}", "dim"))
+    ctx_spans.append(_sp(f" {tier}", "label"))
     segs.append(Segment(ctx_spans, priority=2))
 
     # generation rate + wall (dropped first on overflow) -----------------
     if state.has_turn:
-        segs.append(Segment([_sp(f"{state.tok_per_s:.0f}tok/s {state.wall_s:.1f}s", "dim")],
+        segs.append(Segment([_sp(f"{state.tok_per_s:.0f}tok/s {state.wall_s:.1f}s", "label")],
                             priority=9))
 
     # session timing: start <date time> · last <HH:MM> (droppable) -------
     if state.opened_at:
         started = time.strftime("%d-%b-%y %H:%M", time.localtime(state.opened_at)).lower()
         now = time.strftime("%H:%M", time.localtime())
-        segs.append(Segment([_sp("start ", "dim"), _sp(started, "default"),
-                             _sp(" · last ", "dim"), _sp(now, "default")], priority=7))
+        segs.append(Segment([_sp("start ", "label"), _sp(started, "white_brt"),
+                             _sp(" · last ", "label"), _sp(now, "white_brt")], priority=7))
 
-    # model pinned last (magenta = llmtop model slot) --------------------
+    # model pinned last (model role) -------------------------------------
     model = state.model or slots.model_for("chat")
-    segs.append(Segment([_sp(f"{state.slot}:{_short_model(model)}", "magenta")], priority=1))
+    segs.append(Segment([_sp(f"{state.slot}:{_short_model(model)}", "model")], priority=1))
 
     return segs
 
@@ -345,10 +336,11 @@ def toolbar(session, slots, repo: str, state: StatusState, width: int | None = N
     from prompt_toolkit.formatted_text import FormattedText
 
     w = width if width is not None else _term_width() - 1
+    sep_ptk = _sep_style()[0]
     parts: list[tuple[str, str]] = []
     for i, seg in enumerate(fit(fields(session, slots, repo, state), w)):
         if i:
-            parts.append(("ansibrightblack", " · "))
+            parts.append((sep_ptk, " · "))
         parts += [(style, text) for (text, style, _rich) in seg.spans]
     return FormattedText(parts)
 
@@ -362,7 +354,9 @@ def status_markup(session, slots, repo: str, state: StatusState,
         chunk = "".join(f"[{rich}]{text}[/]" if rich else text
                         for (text, _ptk, rich) in seg.spans)
         out_segs.append(chunk)
-    return "[bright_black]·[/] " + " [bright_black]·[/] ".join(out_segs)
+    sep_rich = _sep_style()[1] or "default"
+    sep = f"[{sep_rich}]·[/]"
+    return f"{sep} " + f" {sep} ".join(out_segs)
 
 
 def to_rich_text(segments: list[Segment]):
@@ -370,9 +364,10 @@ def to_rich_text(segments: list[Segment]):
     from rich.text import Text
 
     t = Text()
+    sep_rich = _sep_style()[1] or None
     for i, seg in enumerate(segments):
         if i:
-            t.append(" · ", style="bright_black")
+            t.append(" · ", style=sep_rich)
         for text, _ptk, rich in seg.spans:
             t.append(text, style=(rich or None))
     return t
