@@ -20,9 +20,12 @@ import json
 import sys
 from pathlib import Path
 
+# Run-by-path puts sys.path[0] at scripts/, not the repo root — so add both
+# REPO_ROOT (for the top-level `benchmarks` package) and src/ (for `luxe`).
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT / "src"))
+for _p in (str(REPO_ROOT), str(REPO_ROOT / "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,9 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     summary_path = args.output_dir.parent / "harness_summary.json"
     write_harness_summary(results, summary_path)
 
+    # run_harness returns dict[str, HarnessResult]; iterate values and read
+    # dataclass attributes (mirrors write_harness_summary above).
     n = len(results)
-    n_resolved = sum(1 for r in results if r.get("resolved"))
-    n_errored = sum(1 for r in results if r.get("error"))
+    n_resolved = sum(1 for r in results.values() if r.resolved)
+    n_errored = sum(1 for r in results.values() if r.error)
     rate = n_resolved / n if n else 0.0
     print(f"  harness DONE: resolved {n_resolved}/{n} ({rate:.2%}), errored {n_errored}")
     print(f"  summary written: {summary_path}")
