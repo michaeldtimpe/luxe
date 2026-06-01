@@ -66,12 +66,19 @@ never touches this module.
   low-value segments (priority ≥4: rate, timing) highest-first, then
   middle-ellipsises the elastic path; git/ctx/model (priority 1–2) are protected.
   Git state is TTL-cached to avoid per-keystroke `git` spawns.
-- Colours mirror the user's active yet-another-statusline theme (`llmtop`): `_C`
-  uses ANSI palette names (`ansi*` / Rich named colours, NO hard-coded hex) so
-  luxe tracks the same iTerm2 profile, and values use the terminal default fg
-  (light-bg safe — never white). Role map: path/ctx cyan, branch/clean green,
-  dirty/behind red, pending/ahead yellow, label/commit gray, model magenta; mode
-  = flat traffic-light text (read-only green / write yellow / bash red).
+- Colours follow the user's ACTIVE Claude statusline theme, resolved LIVE by
+  `chat/theme.py`: read the theme name (`CLAUDE_STATUSLINE_THEME` env →
+  `~/.claude/statusline-theme` → `claude-dark`), import the user's
+  yet-another-statusline `themes` module via the `~/.claude/statusline_command.py`
+  symlink, and convert each role's ANSI escape to a (ptk, Rich) pair — ANSI 0-15
+  → NAMED colours (track the iTerm2 profile), 16-255 → fixed xterm value,
+  rgb/default pass through. Spans are styled by theme ROLE (pwd/branch/commit/
+  dirty/label/ctx/model/white_brt/safe/warn/alert), cached per process. Falls
+  back to a built-in llmtop-equivalent ANSI map if the repo/symlink/import is
+  absent. NOTE: this reads only the theme-name file and imports the user's pure
+  themes module for COLOURS — it is NOT the memory subsystem and injects no
+  `~/.claude` content into context (the luxe.sdd/chat.sdd `~/.claude` prohibition
+  is scoped to context/memory, not UI theming).
 - During a turn (when `console.is_terminal`) the REPL renders a `rich.Live`:
   tool tail-log scrolls above a status bar that ticks live (spinner/elapsed/tool
   count via `LiveActivity`, auto-refresh). Non-terminal (tests, piped) falls back
