@@ -75,7 +75,9 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     responsive (drop low-value first → middle-ellipsis path; git/ctx/model
     protected). Live during a turn via `rich.Live` + `LiveActivity` when
     `is_terminal` (tool log scrolls above a ticking bar); falls back to line
-    streaming otherwise. **`luxe chat --dev`** starts write+bash ON. Hidden exit
+    streaming otherwise. Colours track the user's active yet-another-statusline
+    theme (`llmtop`) via the terminal ANSI palette (`_C` = `ansi*`/Rich names, no
+    hex; values use default fg, light-bg safe). **`luxe chat --dev`** starts write+bash ON. Hidden exit
     aliases: `/exit`, `/q` (both = `/quit`).
   - **Flag-state failures self-explain.** Defaults are safe (read-only +
     allowlisted bash) and shown in the banner + chips; in write mode a restricted
