@@ -40,13 +40,25 @@ _C: dict[str, tuple[str, str]] = {
     "": ("", ""),
 }
 
-# A styled span: (text, ptk_style, rich_style). A segment is a list of spans.
+# A styled span: (text, ptk_style, rich_style).
 Span = tuple[str, str, str]
 
 
 def _sp(text: str, colour: str = "") -> Span:
     p, r = _C.get(colour, ("", ""))
     return (text, p, r)
+
+
+@dataclass
+class Segment:
+    """A status-bar segment: styled spans + responsive-fit metadata."""
+    spans: list[Span]
+    priority: int = 5    # higher → dropped sooner when the bar overflows
+    path: bool = False   # the elastic path segment (middle-ellipsised, not dropped)
+
+
+def _seg_text(seg: Segment) -> str:
+    return "".join(t for t, _p, _r in seg.spans)
 
 
 # ---------------------------------------------------------------- git ------
@@ -208,79 +220,187 @@ def _ctx_zone_colour(pressure: float) -> str:
     return "red"
 
 
-def fields(session, slots, repo: str, state: StatusState) -> list[list[Span]]:
-    """Ordered status segments (each a list of styled spans). THE place to change
-    the bar's format. Order mirrors yet-another-statusline (path · git · ctx ·
-    rate · timing · model-last) with luxe mode chips pinned first."""
-    segs: list[list[Span]] = []
+def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
+    """Ordered status segments. THE place to change the bar's format. Order
+    mirrors yet-another-statusline (path · git · ctx · rate · timing · model-last)
+    with luxe mode chips pinned first. `priority` drives responsive drop order
+    (higher = dropped first); git/ctx/model are protected (priority 1)."""
+    segs: list[Segment] = []
 
     # mode chips (luxe-specific; chat.sdd requires write-mode visible) ----
     if session.write_enabled:
         chip: list[Span] = [(" WRITE ", "bg:#8a6d00 #ffffff bold", "black on yellow")]
         if session.unrestricted_bash:
             chip += [(" ", "", ""), (" BASH ", "bg:#8a1c1c #ffffff bold", "white on red")]
-        segs.append(chip)
+        segs.append(Segment(chip, priority=1))
     else:
-        segs.append([(" READ-ONLY ", "bg:#1f5c2f #ffffff bold", "white on green")])
+        segs.append(Segment([(" READ-ONLY ", "bg:#1f5c2f #ffffff bold", "white on green")],
+                            priority=1))
 
-    # home-relative path --------------------------------------------------
+    # home-relative path (elastic: middle-ellipsised before any segment drops)
     if repo:
         home = os.path.expanduser("~")
         shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
-        segs.append([_sp(shown, "blue")])
+        segs.append(Segment([_sp(shown, "blue")], priority=2, path=True))
 
-    # git -----------------------------------------------------------------
+    # git (protected) -----------------------------------------------------
     git_seg = _git_segment(repo)
     if git_seg:
-        segs.append(git_seg)
+        segs.append(Segment(git_seg, priority=1))
 
-    # context occupancy ---------------------------------------------------
+    # context occupancy (protected) --------------------------------------
     ctx_spans: list[Span] = [_sp("ctx ", "dim")]
     if state.has_turn:
         ctx_spans.append(_sp(f"{state.ctx_pressure:.0%}", _ctx_zone_colour(state.ctx_pressure)))
     tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
     ctx_spans.append(_sp(f" {tier}", "dim"))
-    segs.append(ctx_spans)
+    segs.append(Segment(ctx_spans, priority=2))
 
-    # generation rate + wall (luxe local gen; YASL's /m is Claude-API) ----
+    # generation rate + wall (dropped first on overflow) -----------------
     if state.has_turn:
-        segs.append([_sp(f"{state.tok_per_s:.0f}tok/s {state.wall_s:.1f}s", "dim")])
+        segs.append(Segment([_sp(f"{state.tok_per_s:.0f}tok/s {state.wall_s:.1f}s", "dim")],
+                            priority=9))
 
-    # session timing: start <date time> · last <HH:MM> --------------------
+    # session timing: start <date time> · last <HH:MM> (droppable) -------
     if state.opened_at:
         started = time.strftime("%d-%b-%y %H:%M", time.localtime(state.opened_at)).lower()
         now = time.strftime("%H:%M", time.localtime())
-        segs.append([_sp("start ", "dim"), _sp(started, "white"),
-                     _sp(" · last ", "dim"), _sp(now, "white")])
+        segs.append(Segment([_sp("start ", "dim"), _sp(started, "white"),
+                             _sp(" · last ", "dim"), _sp(now, "white")], priority=7))
 
-    # model pinned last ---------------------------------------------------
+    # model pinned last (protected) --------------------------------------
     model = state.model or slots.model_for("chat")
-    segs.append([_sp(f"{state.slot}:{_short_model(model)}", "cyan")])
+    segs.append(Segment([_sp(f"{state.slot}:{_short_model(model)}", "cyan")], priority=1))
 
     return segs
+
+
+# ------------------------------------------------------- responsive fit ----
+
+_SEP_LEN = 3  # len(" · ")
+
+
+def _middle_ellipsis(s: str, maxlen: int) -> str:
+    if maxlen <= 1 or len(s) <= maxlen:
+        return s if len(s) <= maxlen else s[: max(0, maxlen - 1)] + "…"
+    keep = maxlen - 1
+    left = keep // 2
+    right = keep - left
+    return s[:left] + "…" + (s[-right:] if right else "")
+
+
+def fit(segments: list[Segment], width: int) -> list[Segment]:
+    """Drop lowest-value segments (highest priority first) until the bar fits
+    `width`; then middle-ellipsis the path. git/ctx/model (priority 1–2) survive;
+    the path shrinks rather than dropping. Mirrors yet-another-statusline."""
+    if width <= 0:
+        return segments
+
+    def total(segs: list[Segment]) -> int:
+        if not segs:
+            return 0
+        return sum(len(_seg_text(s)) for s in segs) + _SEP_LEN * (len(segs) - 1)
+
+    segs = list(segments)
+    while total(segs) > width:
+        droppable = [s for s in segs if s.priority >= 4 and not s.path]
+        if not droppable:
+            break
+        segs.remove(max(droppable, key=lambda s: s.priority))
+
+    if total(segs) > width:
+        path_seg = next((s for s in segs if s.path), None)
+        if path_seg and path_seg.spans:
+            over = total(segs) - width
+            text = _seg_text(path_seg)
+            new = _middle_ellipsis(text, max(8, len(text) - over))
+            t, p, r = path_seg.spans[0]
+            path_seg.spans = [(new, p, r)]
+    return segs
+
+
+def _term_width(default: int = 100) -> int:
+    import shutil
+    try:
+        return shutil.get_terminal_size((default, 24)).columns
+    except Exception:
+        return default
 
 
 # ------------------------------------------------------------- render ------
 
 
-def toolbar(session, slots, repo: str, state: StatusState):
-    """prompt_toolkit bottom_toolbar value (FormattedText)."""
+def toolbar(session, slots, repo: str, state: StatusState, width: int | None = None):
+    """prompt_toolkit bottom_toolbar value (FormattedText), fitted to width."""
     from prompt_toolkit.formatted_text import FormattedText
 
+    w = width if width is not None else _term_width() - 1
     parts: list[tuple[str, str]] = []
-    for i, seg in enumerate(fields(session, slots, repo, state)):
+    for i, seg in enumerate(fit(fields(session, slots, repo, state), w)):
         if i:
             parts.append(("#666666", " · "))
-        parts += [(style, text) for (text, style, _rich) in seg]
+        parts += [(style, text) for (text, style, _rich) in seg.spans]
     return FormattedText(parts)
 
 
-def status_markup(session, slots, repo: str, state: StatusState) -> str:
+def status_markup(session, slots, repo: str, state: StatusState,
+                  width: int | None = None) -> str:
     """Rich-markup one-liner for the plain-input fallback (no prompt_toolkit)."""
+    w = width if width is not None else _term_width()
     out_segs: list[str] = []
-    for seg in fields(session, slots, repo, state):
-        chunk = "".join(
-            f"[{rich}]{text}[/]" if rich else text for (text, _ptk, rich) in seg
-        )
+    for seg in fit(fields(session, slots, repo, state), w):
+        chunk = "".join(f"[{rich}]{text}[/]" if rich else text
+                        for (text, _ptk, rich) in seg.spans)
         out_segs.append(chunk)
     return "[dim]·[/] " + " [dim]·[/] ".join(out_segs)
+
+
+def to_rich_text(segments: list[Segment]):
+    """Render fitted segments as a Rich Text (for the live in-turn status bar)."""
+    from rich.text import Text
+
+    t = Text()
+    for i, seg in enumerate(segments):
+        if i:
+            t.append(" · ", style="grey42")
+        for text, _ptk, rich in seg.spans:
+            t.append(text, style=(rich or None))
+    return t
+
+
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+class LiveActivity:
+    """Rich renderable for the in-turn live bar: spinner + ticking elapsed +
+    tool count + current tool, followed by the fitted status segments. Re-renders
+    under rich.Live auto-refresh so the clock/spinner animate during generation."""
+
+    def __init__(self, session, slots, repo: str, state: StatusState, started_at: float):
+        self.session = session
+        self.slots = slots
+        self.repo = repo
+        self.state = state
+        self.started_at = started_at
+        self.tools = 0
+        self.last_tool = ""
+
+    def note(self, tc) -> None:
+        self.tools += 1
+        self.last_tool = getattr(tc, "name", "") or ""
+
+    def __rich__(self):
+        from rich.text import Text
+
+        elapsed = max(0.0, time.time() - self.started_at)
+        frame = _SPINNER[int(elapsed * 10) % len(_SPINNER)]
+        head = Text()
+        head.append(f"{frame} ", style="cyan")
+        head.append(f"{elapsed:5.1f}s ", style="bold")
+        head.append(f"·{self.tools} tools", style="dim")
+        if self.last_tool:
+            head.append(f" · {self.last_tool}", style="yellow")
+        head.append("  ", style="")
+        segs = fit(fields(self.session, self.slots, self.repo, self.state), _term_width())
+        head.append_text(to_rich_text(segs))
+        return head

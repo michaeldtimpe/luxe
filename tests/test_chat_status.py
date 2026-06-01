@@ -33,8 +33,8 @@ def slots(monkeypatch):
 
 
 def _flat(segs) -> str:
-    """Flatten list[list[Span]] to plain text for assertions."""
-    return " · ".join("".join(t for t, _p, _r in seg) for seg in segs)
+    """Flatten list[Segment] to plain text for assertions."""
+    return " · ".join("".join(t for t, _p, _r in seg.spans) for seg in segs)
 
 
 def test_read_only_mode_chip(slots):
@@ -50,7 +50,7 @@ def test_write_and_bash_chips(slots):
 
 def test_model_pinned_last(slots):
     segs = fields(ChatSession(), slots, "", StatusState(model="Qwen3.6-35B-A3B-6bit"))
-    last = "".join(t for t, _p, _r in segs[-1])
+    last = "".join(t for t, _p, _r in segs[-1].spans)
     assert "chat:Qwen3.6-35B-A3B-6bit" in last
 
 
@@ -121,3 +121,50 @@ def test_git_segment_via_markup_monkeypatched(slots, monkeypatch):
         branch="feature/x", commit="abc123def", modified=2, ahead=1, has_upstream=True))
     out = status_markup(ChatSession(), slots, "/some/repo", StatusState())
     assert "feature/x" in out and "~2" in out and "↑1" in out
+
+
+def _bar_len(segs) -> int:
+    return sum(len("".join(t for t, _p, _r in s.spans)) for s in segs) + 3 * (len(segs) - 1)
+
+
+def test_fit_drops_low_priority_first(slots):
+    s = ChatSession(num_ctx_override=131072)
+    st = StatusState(slot="chat", model="Qwen3.6-35B-A3B-6bit",
+                     wall_s=12.3, tok_per_s=68, has_turn=True, opened_at=1_000_000.0)
+    full = status_mod.fields(s, slots, "/Users/x/Downloads/luxe", st)
+    fitted = status_mod.fit(full, 60)
+    txt = " · ".join("".join(t for t, _p, _r in seg.spans) for seg in fitted)
+    # rate (priority 9) and timing (7) drop before the protected git/model.
+    assert "tok/s" not in txt and "start " not in txt
+    assert "chat:" in txt  # model protected, pinned last
+    assert _bar_len(fitted) < _bar_len(full)  # fit actually shrank the bar
+
+
+def test_fit_middle_ellipsis_path_when_still_over(slots):
+    deep = "/Users/x/" + "/".join(f"segment{i}" for i in range(20))
+    s = ChatSession()
+    full = status_mod.fields(s, slots, deep, StatusState())
+    fitted = status_mod.fit(full, 40)
+    path_seg = next(seg for seg in fitted if seg.path)
+    path_text = "".join(t for t, _p, _r in path_seg.spans)
+    # Path is middle-ellipsised and much shorter than the original (the bar can't
+    # go below the protected segments' minimum, which is expected best-effort).
+    assert "…" in path_text and len(path_text) < len(deep)
+
+
+def test_fit_keeps_everything_when_wide(slots):
+    s = ChatSession()
+    full = status_mod.fields(s, slots, "/r", StatusState())
+    assert len(status_mod.fit(full, 500)) == len(full)
+
+
+def test_live_activity_renders_spinner_and_elapsed(slots):
+    from rich.console import Console
+    import io
+    act = status_mod.LiveActivity(ChatSession(write_enabled=True), slots, "",
+                                  StatusState(slot="chat", model="m"), started_at=0.0)
+    act.note(type("TC", (), {"name": "bash"})())
+    out = io.StringIO()
+    Console(file=out, width=200).print(act.__rich__())
+    text = out.getvalue()
+    assert "tools" in text and "bash" in text

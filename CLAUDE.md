@@ -68,11 +68,15 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
   - The REPL shows a randomized rainbow banner + per-render color-shifting prompt
     arrows; the footer carries `tok/s` and start/end timestamps + elapsed
     (`chat/render.py`).
-  - **Status bar** (`chat/status.py`): static prompt_toolkit bottom-toolbar
-    (mode/bash chips · slot:model · ctx tier+pressure · last-turn s/tok-s · git
-    branch+dirty). Lightweight variant — refreshed BETWEEN turns, not live
-    mid-turn. `fields()` is the single source for segment order; edit there to
-    restyle. **`luxe chat --dev`** starts write+bash ON (sticky /write + /bash).
+  - **Status bar** (`chat/status.py`): models the user's `yet-another-statusline`
+    format (path · state-coloured git `branch/commit +U ~M -D RN ↑a ↓b ✓` · ctx% ·
+    rate · start…last… · model-last) + luxe WRITE/BASH/READ-ONLY chips. `fields()`
+    (→ `Segment` list with drop-`priority`) is the single source; `fit()` is
+    responsive (drop low-value first → middle-ellipsis path; git/ctx/model
+    protected). Live during a turn via `rich.Live` + `LiveActivity` when
+    `is_terminal` (tool log scrolls above a ticking bar); falls back to line
+    streaming otherwise. **`luxe chat --dev`** starts write+bash ON. Hidden exit
+    aliases: `/exit`, `/q` (both = `/quit`).
 - **`luxe compare run/review`** — side-by-side single-task comparison (3 modes,
   incl. luxe-vs-bare substrate ablation), blind + vote.
 - **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
