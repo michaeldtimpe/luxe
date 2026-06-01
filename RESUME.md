@@ -44,10 +44,20 @@ degrades to `input()`). **Tests:** 76 new incl. determinism byte-identity gates;
 full suite **1199 passed** (the only skip/error is `test_mlx_direct_smoke.py`,
 which needs the optional `mlx` native module — pre-existing, env-gated).
 
-**Deployed 2026-06-01** to **m5** (this host; `pip install -e .[dev,chat]` in the
-existing `.venv`) and **neo** (fresh clone at `~/Downloads/luxe`, venv from
-`/opt/homebrew/bin/python3.11`). **neo has NO local oMLX** — point
-`omlx_base_url` at m5 over Tailscale to use chat there, or start oMLX on neo.
+**Deployed 2026-06-01** to **m5**, **m1**, and **neo** — `luxe` symlinked into
+`/opt/homebrew/bin` on each (just type `luxe`); `OMLX_API_KEY` added to `~/.zshrc`
+on m1+neo. **m5 + m1** run the 35B champion via oMLX:8000 (model cached, key
+authenticates). **neo runs the micro-mind champion** (`Qwen2.5-1.5B-Instruct-Q8_0`
+GGUF — the 35B won't fit neo RAM) via **llama-server on :8080**, NOT oMLX (oMLX
+can't serve GGUF; luxe's Backend is OpenAI-compatible so it points straight at
+:8080). neo's `configs/chat.yaml` is pinned via `git update-index --skip-worktree`
+(omlx_base_url→:8080, model→the GGUF id, num_ctx 8192, repeat_penalty 1.1,
+max_tokens 2048). llama-server runs as launchd agent
+`com.micromind.llama-server.plist` (RunAtLoad + KeepAlive; flags from micro-mind's
+validated config + `--repeat-penalty 1.1` server-side since luxe sends it under
+extra_body, which llama.cpp ignores). Validated the model-slots design in the
+wild: same luxe substrate, a 1.5B brain on the low-RAM box. See `~/Downloads/
+micro-mind` for the champion's provenance (neo-llm-bench, 2026-05-14).
 
 **Deferred (flagged in-plan):** KV-preserving multi-turn (needs
 `run_agent(seed_messages=)`), token-level streaming into the loop, model-based
