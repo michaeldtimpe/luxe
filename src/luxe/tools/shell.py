@@ -117,12 +117,48 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False) -> tuple[str, str
         return "", f"Command timed out after {timeout}s"
 
 
-def make_bash_fn(*, unrestricted: bool = False) -> ToolFn:
-    """Build a bash tool fn. `unrestricted=True` (chat dev mode only) drops the
-    allowlist + chain/redirect guards; the default is the hardened allowlist."""
+# Substrings that identify a rejection that ONLY happens because unrestricted
+# shell is off — i.e. a flag-state failure, not a real error. (Mismatched quotes,
+# empty command, timeouts, and non-zero exits are real and not augmented.)
+_FLAG_GATED_MARKERS = ("not in allowlist", "operators not allowed",
+                       "substitution not allowed")
+
+
+def make_bash_fn(*, unrestricted: bool = False, restricted_hint: bool = False) -> ToolFn:
+    """Build a bash tool fn. `unrestricted=True` (chat dev mode) drops the
+    allowlist + chain/redirect guards. `restricted_hint=True` (chat write mode,
+    bash still allowlisted) front-loads a flag-state explanation onto any
+    allowlist/chain/substitution rejection so the output reflects WHY it failed
+    and how to fix it — instead of the model silently retrying variants."""
     def _fn(args: dict[str, Any]) -> tuple[str, str | None]:
-        return _bash(args, unrestricted=unrestricted)
+        out, err = _bash(args, unrestricted=unrestricted)
+        if err and restricted_hint and any(m in err for m in _FLAG_GATED_MARKERS):
+            err = ("restricted shell — enable unrestricted dev mode with /bash "
+                   "(or start `luxe chat --dev`). Original: " + err)
+        return out, err
     return _fn
+
+
+def restricted_bash_def() -> ToolDef:
+    """Allowlisted bash def for chat WRITE (non-dev) mode — same surface as the
+    default, but the description tells the model to surface the flag state rather
+    than retry rejected commands forever."""
+    return ToolDef(
+        name="bash",
+        description=(
+            f"Run a shell command (allowlisted binaries: {', '.join(sorted(_ALLOWLIST))}; "
+            "no chains/pipes/redirects). Scoped to repo root. If a command is "
+            "rejected for the allowlist or a shell operator, do NOT keep retrying "
+            "variants — tell the user to enable unrestricted shell with /bash."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Shell command to execute"},
+            },
+            "required": ["command"],
+        },
+    )
 
 
 def unrestricted_bash_def() -> ToolDef:

@@ -77,6 +77,12 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     `is_terminal` (tool log scrolls above a ticking bar); falls back to line
     streaming otherwise. **`luxe chat --dev`** starts write+bash ON. Hidden exit
     aliases: `/exit`, `/q` (both = `/quit`).
+  - **Flag-state failures self-explain.** Defaults are safe (read-only +
+    allowlisted bash) and shown in the banner + chips; in write mode a restricted
+    bash rejection front-loads "enable unrestricted dev mode with /bash" onto the
+    error (`make_bash_fn(restricted_hint=True)`), so the model surfaces the toggle
+    instead of retrying. Genuine errors aren't augmented. Chat-only — benchmark
+    bash untouched.
 - **`luxe compare run/review`** — side-by-side single-task comparison (3 modes,
   incl. luxe-vs-bare substrate ablation), blind + vote.
 - **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
