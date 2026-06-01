@@ -66,8 +66,15 @@ def _default_reader(
         from prompt_toolkit import PromptSession
         from prompt_toolkit.formatted_text import FormattedText
         from prompt_toolkit.history import InMemoryHistory
+        from prompt_toolkit.styles import Style
 
-        pt = PromptSession(history=InMemoryHistory())
+        # Drop prompt_toolkit's default grey/reversed bottom-toolbar bar so the
+        # status bar sits on the terminal background (user: "match the terminal").
+        toolbar_style = Style.from_dict({
+            "bottom-toolbar": "noreverse bg:default fg:default",
+            "bottom-toolbar.text": "noreverse bg:default",
+        })
+        pt = PromptSession(history=InMemoryHistory(), style=toolbar_style)
 
         def read() -> str:
             # Fresh colors each turn → the arrows shift per render.
@@ -319,6 +326,8 @@ def _run_turn(
             status.tok_per_s = (result.completion_tokens / result.wall_s
                                 if result.wall_s > 0 else 0.0)
             status.ctx_pressure = result.peak_context_pressure
+            status.num_ctx = role_cfg.num_ctx
+            status.prompt_tokens = result.prompt_tokens
             status.steps = result.steps
             status.has_turn = True
         # Auto-suggest a larger window (never resizes silently — chat.sdd).

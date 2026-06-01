@@ -50,6 +50,29 @@ def _sep_style() -> tuple[str, str]:
     return theme_mod.role_styles().get("label", ("", ""))
 
 
+# Sparing luxe palette (ANSI-named so it tracks the terminal profile; values use
+# the terminal default fg so they read on light OR dark backgrounds). Per the
+# user's spec: path blue, model yellow, write-on yellow / bash-on red, everything
+# else grey label + default-fg value. git keeps the theme's role colours.
+_GREY = ("ansibrightblack", "bright_black")
+_DEFAULT = ("", "default")
+_BLUE = ("ansiblue", "blue")
+_YELLOW = ("ansiyellow", "yellow")
+_RED = ("ansired", "red")
+
+
+def _S(text: str, style: tuple[str, str]) -> Span:
+    return (text, style[0], style[1])
+
+
+def _human(n: int) -> str:
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n / 1000:.1f}k" if n < 10_000 else f"{n / 1000:.0f}k"
+    return f"{n / 1_000_000:.1f}m"
+
+
 @dataclass
 class Segment:
     """A status-bar segment: styled spans + responsive-fit metadata."""
@@ -203,6 +226,8 @@ class StatusState:
     wall_s: float = 0.0
     tok_per_s: float = 0.0
     ctx_pressure: float = 0.0
+    num_ctx: int = 0        # effective context window of the last turn
+    prompt_tokens: int = 0  # resident prompt size (shown as "cache")
     steps: int = 0
     has_turn: bool = False
     opened_at: float = 0.0  # session start (epoch); 0 = unknown
@@ -213,65 +238,61 @@ def _short_model(model: str) -> str:
     return name if len(name) <= 22 else name[:21] + "…"
 
 
-def _ctx_zone_role(pressure: float) -> str:
-    if pressure < 0.50:
-        return "safe"
-    if pressure < 0.95:
-        return "warn"
-    return "alert"
-
-
 def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
-    """Ordered status segments. THE place to change the bar's format. Order
-    mirrors yet-another-statusline (path · git · ctx · rate · timing · model-last)
-    with luxe mode chips pinned first. `priority` drives responsive drop order
-    (higher = dropped first); git/ctx/model are protected (priority 1)."""
+    """Ordered status segments. THE place to change the bar's format. Order (user
+    spec): path · git · ctx · cache · start · last · write · bash · model.
+    `priority` drives responsive drop order (higher = dropped first); path/git/
+    ctx/model are protected (1-2). git keeps the active theme's role colours; the
+    rest use the sparing luxe palette (path blue, model yellow, grey labels,
+    default-fg values)."""
     segs: list[Segment] = []
 
-    # mode (luxe-specific; chat.sdd requires write-mode visible) — flat coloured
-    # text in the YASL borderless style, traffic-light semantics.
-    if session.write_enabled:
-        chip: list[Span] = [_sp("write", "warn")]
-        if session.unrestricted_bash:
-            chip += [_sp(" ", ""), _sp("bash", "alert")]
-        segs.append(Segment(chip, priority=1))
-    else:
-        segs.append(Segment([_sp("read-only", "safe")], priority=1))
-
-    # home-relative path (pwd role; elastic: ellipsised before drops)
+    # home-relative path (blue; elastic: ellipsised before any segment drops)
     if repo:
         home = os.path.expanduser("~")
         shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
-        segs.append(Segment([_sp(shown, "pwd")], priority=2, path=True))
+        segs.append(Segment([_S(shown, _BLUE)], priority=2, path=True))
 
-    # git (protected) -----------------------------------------------------
+    # git (theme-coloured) — slots in after path when inside a repo
     git_seg = _git_segment(repo)
     if git_seg:
         segs.append(Segment(git_seg, priority=1))
 
-    # context occupancy (protected) --------------------------------------
-    ctx_spans: list[Span] = [_sp("ctx ", "label")]
-    if state.has_turn:
-        ctx_spans.append(_sp(f"{state.ctx_pressure:.0%}", _ctx_zone_role(state.ctx_pressure)))
-    tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
-    ctx_spans.append(_sp(f" {tier}", "label"))
+    # ctx: `ctx N% (used/size)` once a turn has run, else the configured tier
+    ctx_spans: list[Span] = [_S("ctx ", _GREY)]
+    if state.has_turn and state.num_ctx:
+        used = int(state.ctx_pressure * state.num_ctx)
+        ctx_spans.append(_S(f"{state.ctx_pressure:.0%}", _DEFAULT))
+        ctx_spans.append(_S(f" ({_human(used)}/{_human(state.num_ctx)})", _GREY))
+    else:
+        tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
+        ctx_spans.append(_S(tier, _GREY))
     segs.append(Segment(ctx_spans, priority=2))
 
-    # generation rate + wall (dropped first on overflow) -----------------
+    # cache: resident prompt size (luxe has no cross-turn prompt cache — each turn
+    # is a fresh run_single; this is the prompt/KV size processed last turn)
     if state.has_turn:
-        segs.append(Segment([_sp(f"{state.tok_per_s:.0f}tok/s {state.wall_s:.1f}s", "label")],
-                            priority=9))
+        segs.append(Segment([_S("cache ", _GREY), _S(_human(state.prompt_tokens), _DEFAULT)],
+                            priority=8))
 
-    # session timing: start <date time> · last <HH:MM> (droppable) -------
+    # start / last (separate segments, droppable) ------------------------
     if state.opened_at:
         started = time.strftime("%d-%b-%y %H:%M", time.localtime(state.opened_at)).lower()
-        now = time.strftime("%H:%M", time.localtime())
-        segs.append(Segment([_sp("start ", "label"), _sp(started, "white_brt"),
-                             _sp(" · last ", "label"), _sp(now, "white_brt")], priority=7))
+        segs.append(Segment([_S("start ", _GREY), _S(started, _DEFAULT)], priority=7))
+    now = time.strftime("%H:%M", time.localtime())
+    segs.append(Segment([_S("last ", _GREY), _S(now, _DEFAULT)], priority=7))
 
-    # model pinned last (model role) -------------------------------------
+    # write on/off · bash on/off (explicit state) ------------------------
+    segs.append(Segment([_S("write ", _GREY),
+                         _S("on" if session.write_enabled else "off",
+                            _YELLOW if session.write_enabled else _GREY)], priority=3))
+    segs.append(Segment([_S("bash ", _GREY),
+                         _S("on" if session.unrestricted_bash else "off",
+                            _RED if session.unrestricted_bash else _GREY)], priority=3))
+
+    # model pinned last (yellow) -----------------------------------------
     model = state.model or slots.model_for("chat")
-    segs.append(Segment([_sp(f"{state.slot}:{_short_model(model)}", "model")], priority=1))
+    segs.append(Segment([_S(f"{state.slot}:{_short_model(model)}", _YELLOW)], priority=1))
 
     return segs
 
