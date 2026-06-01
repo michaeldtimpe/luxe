@@ -12,6 +12,12 @@ from pydantic import BaseModel, Field
 class RoleConfig(BaseModel):
     model_key: str
     num_ctx: int = 8192
+    # Hard ceiling for the interactive `luxe chat` /ctx size flag. 0 (default)
+    # means "no expansion" — /ctx can never raise num_ctx above `num_ctx`, so a
+    # box that hasn't opted in stays exactly where it is. Set per-machine to the
+    # largest window the model + RAM can hold (e.g. 131072 on a 64 GB M-series).
+    # Chat-only: the benchmark/maintain path never reads it.
+    num_ctx_max: int = 0
     max_steps: int = 12
     max_tokens_per_turn: int = 2048
     temperature: float = 0.2

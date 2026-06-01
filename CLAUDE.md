@@ -53,8 +53,13 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips
     `{write_file, edit_file, bash}` until `/write` flips `session.write_enabled`.
     A chat agent in read-only mode will *honestly report it has no file-creation
-    tool*; that's the gate, not a gap. Tell the user to `/write`. See
-    `lessons.md` 2026-06-01 + memory `feedback_luxe_dev_platform_write_mode`.
+    tool*; that's the gate, not a gap. The read-only `<session_mode>` hint now
+    tells it to point the user at `/write`. See `lessons.md` 2026-06-01 + memory
+    `feedback_luxe_dev_platform_write_mode`.
+  - **Context window is `/ctx <small|medium|large|xlarge>`** (chat-only),
+    clamped to the role's `num_ctx_max` (`configs/chat.yaml`; `0` = no
+    expansion). NOT dynamic/auto — high pressure only *suggests* the next tier.
+    Benchmark/maintain ignore `num_ctx_max`.
 - **`luxe compare run/review`** — side-by-side single-task comparison (3 modes,
   incl. luxe-vs-bare substrate ablation), blind + vote.
 - **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project

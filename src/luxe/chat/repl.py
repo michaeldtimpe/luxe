@@ -23,7 +23,12 @@ from luxe.chat.render import (
     render_final,
     render_footer,
 )
-from luxe.chat.session import ChatSession, ChatTurn
+from luxe.chat.session import (
+    CTX_SUGGEST_PRESSURE,
+    ChatSession,
+    ChatTurn,
+    next_tier_up,
+)
 from luxe.chat.slots import SlotManager
 from luxe.config import PipelineConfig
 from luxe.memory import project as project_mem
@@ -157,6 +162,14 @@ def _run_turn(
     base_role = cfg.role(slot_cfg.role)
     role_cfg = base_role if session.write_enabled else make_read_only_role(base_role)
 
+    # `/ctx` size override (chat-only) — clamp to the role's hard ceiling so a
+    # tier request can never exceed what this box/model can hold.
+    ctx_ceiling = base_role.num_ctx_max or base_role.num_ctx
+    if session.num_ctx_override:
+        effective_ctx = min(session.num_ctx_override, ctx_ceiling)
+        if effective_ctx != role_cfg.num_ctx:
+            role_cfg = role_cfg.model_copy(update={"num_ctx": effective_ctx})
+
     extra_context, fold_version = session.build_extra_context(message)
 
     turn_idx = len(session.turns)
@@ -215,6 +228,14 @@ def _run_turn(
             swap_count=slots.stats.count,
             swap_seconds=slots.stats.seconds,
         )
+        # Auto-suggest a larger window (never resizes silently — chat.sdd).
+        if result.peak_context_pressure >= CTX_SUGGEST_PRESSURE:
+            nxt = next_tier_up(role_cfg.num_ctx, ctx_ceiling)
+            if nxt:
+                console.print(
+                    f"[dim]· context pressure {result.peak_context_pressure:.0%} — "
+                    f"`/ctx {nxt[0]}` (num_ctx {nxt[1]}) gives more headroom[/]"
+                )
 
     session_store.append_turn(
         session.session_id, "assistant",
