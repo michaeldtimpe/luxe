@@ -48,6 +48,13 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
 - **`luxe chat`** — REPL. Each turn = one `run_single` call; conversation +
   project memory inject ONLY via the new `run_single(extra_context="")` seam
   (default `""` = byte-identical). Read-only tools by default (`/write` toggles).
+  - **Read-only default ≠ missing capability.** luxe has the full mutation
+    surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
+    `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips
+    `{write_file, edit_file, bash}` until `/write` flips `session.write_enabled`.
+    A chat agent in read-only mode will *honestly report it has no file-creation
+    tool*; that's the gate, not a gap. Tell the user to `/write`. See
+    `lessons.md` 2026-06-01 + memory `feedback_luxe_dev_platform_write_mode`.
 - **`luxe compare run/review`** — side-by-side single-task comparison (3 modes,
   incl. luxe-vs-bare substrate ablation), blind + vote.
 - **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
