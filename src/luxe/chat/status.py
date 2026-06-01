@@ -56,7 +56,7 @@ def _sep_style() -> tuple[str, str]:
 # else grey label + default-fg value. git keeps the theme's role colours.
 _GREY = ("ansibrightblack", "bright_black")
 _DEFAULT = ("", "default")           # "white" labels: terminal default fg (light-bg safe)
-_BLUE = ("#2563eb", "#2563eb")       # path — fixed hex (terminal ANSI blue renders orange here)
+_CYAN = ("ansicyan", "cyan")         # path (ANSI cyan; the terminal's ANSI-blue slot renders orange)
 _YELLOW = ("ansiyellow", "yellow")   # model name
 _PURPLE = ("ansimagenta", "magenta")  # luxe mode / slot
 _GREEN = ("ansigreen", "green")      # state ON
@@ -263,7 +263,7 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     if repo:
         home = os.path.expanduser("~")
         shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
-        segs.append(Segment([_S(shown, _BLUE)], priority=2, path=True))
+        segs.append(Segment([_S(shown, _CYAN)], priority=2, path=True))
 
     # git (theme-coloured) — slots in after path when inside a repo
     git_seg = _git_segment(repo)
