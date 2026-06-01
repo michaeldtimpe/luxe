@@ -4,12 +4,12 @@
 turn, the tagged `extra_context` block passed to `run_single`. The assembly
 encodes the documented precedence (chat.sdd):
 
-    current user turn  >  project memory  >  conversation summary
+    current user turn  >  system_constraints  >  project memory  >  conversation summary
 
 Structurally: `Goal:` (in run_single) carries the current message at the TOP;
-`extra_context` then carries `<project_memory>`, `<conversation_history>`, and
-a trailing `<current_request>` echo so the model's LAST-seen text is the ask,
-not a fact dump.
+`extra_context` then carries `<system_constraints>` (if any), `<project_memory>`,
+`<conversation_history>`, and a trailing `<current_request>` echo so the model's
+LAST-seen text is the ask, not a fact dump.
 """
 
 from __future__ import annotations
@@ -72,6 +72,7 @@ class ChatSession:
     pinned_slot: str | None = None  # set by /use; consumed on the next turn
     num_ctx_override: int | None = None  # set by /ctx; clamped per-turn to num_ctx_max
     turns: list[ChatTurn] = field(default_factory=list)
+    system_constraints: list[str] = field(default_factory=list)  # set by /sys; injected every turn
 
     # -- history --------------------------------------------------------------
 
@@ -109,6 +110,11 @@ class ChatSession:
             parts.append(memory_block)
         if history_text:
             parts.append(f"<conversation_history>\n{history_text}\n</conversation_history>")
+        # System constraints sit above project memory and history — the user's
+        # explicit rules should override anything the model infers from context.
+        if self.system_constraints:
+            numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(self.system_constraints))
+            parts.insert(0, f"<system_constraints>\nYou MUST follow these constraints for every turn in this session:\n{numbered}\n</system_constraints>")
         if not parts:
             # First turn, no memory, write mode on: nothing to disambiguate.
             return "", fold_version

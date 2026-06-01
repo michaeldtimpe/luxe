@@ -44,6 +44,7 @@ _HELP = """[bold]luxe chat commands[/]
   [cyan]/ctx[/] [small|medium|large|xlarge]   show or set context window size
   [cyan]/write[/]                     toggle write tools (default: read-only)
   [cyan]/bash[/]                      toggle unrestricted shell (default: allowlisted)
+  [cyan]/sys[/] [add <rule>|list|clear]  manage session-scoped system constraints
   [cyan]/memory[/] list|add|promote|forget|edit
   [cyan]/compare[/] <task>            run two configs side-by-side
   [cyan]/compare review[/] [id]       replay a stored comparison
@@ -68,6 +69,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/ctx": _ctx,
         "/write": _write,
         "/bash": _bash_mode,
+        "/sys": _sys,
         "/memory": _memory,
         "/compare": _compare,
         "/resume": _resume,
@@ -185,6 +187,55 @@ def _bash_mode(args, ctx: CommandContext) -> CommandResult:
     else:
         ctx.console.print("shell: [green]allowlisted[/] "
                           "[dim](safe binaries only; /bash for unrestricted dev mode)[/]")
+    return CommandResult(handled=True)
+
+
+def _sys(args, ctx: CommandContext) -> CommandResult:
+    """Manage session-scoped system constraints injected into every turn's context."""
+    sub = args[0].lower() if args else "list"
+
+    if sub == "list":
+        constraints = ctx.session.system_constraints
+        if not constraints:
+            ctx.console.print("[dim](no system constraints set — use /sys add <rule>)[/]")
+        else:
+            ctx.console.print(f"[bold]system constraints[/] [dim]({len(constraints)} active)[/]")
+            for i, c in enumerate(constraints):
+                ctx.console.print(f"  [cyan]{i}[/] {c}")
+        return CommandResult(handled=True)
+
+    if sub == "add":
+        rule = " ".join(args[1:]).strip()
+        if not rule:
+            ctx.console.print("[yellow]Usage: /sys add <rule>[/]")
+            return CommandResult(handled=True)
+        ctx.session.system_constraints.append(rule)
+        idx = len(ctx.session.system_constraints) - 1
+        ctx.console.print(f"[green]✓[/] constraint [cyan]{idx}[/] added "
+                          f"[dim](injected into every subsequent turn)[/]")
+        return CommandResult(handled=True)
+
+    if sub == "remove":
+        if len(args) < 2:
+            ctx.console.print("[yellow]Usage: /sys remove <index>[/]")
+            return CommandResult(handled=True)
+        try:
+            idx = int(args[1])
+            removed = ctx.session.system_constraints.pop(idx)
+            ctx.console.print(f"[green]✓[/] removed constraint [cyan]{idx}[/]: {removed}")
+        except (ValueError, IndexError):
+            ctx.console.print(f"[yellow]No constraint at index {args[1]!r}. "
+                              f"Use /sys list to see indices.[/]")
+        return CommandResult(handled=True)
+
+    if sub == "clear":
+        count = len(ctx.session.system_constraints)
+        ctx.session.system_constraints.clear()
+        ctx.console.print(f"[green]✓[/] cleared {count} constraint(s)")
+        return CommandResult(handled=True)
+
+    ctx.console.print(f"[yellow]Unknown /sys subcommand {sub!r}. "
+                      f"Expected: add <rule> | list | remove <index> | clear[/]")
     return CommandResult(handled=True)
 
 
