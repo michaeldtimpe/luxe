@@ -564,10 +564,13 @@ def maintain(
 @click.option("--code-model", default=None, help="Override the code-slot model")
 @click.option("--keep-loaded", is_flag=True, default=False,
               help="Skip the post-session model unload.")
+@click.option("--dev", "dev_mode", is_flag=True, default=False,
+              help="Start in dev mode: write tools + unrestricted shell ON "
+                   "(equivalent to /write + /bash). Skips per-session toggling.")
 def chat_cmd(
     repo: str, config_path: str | None, resume_session_id: str | None,
     chat_model: str | None, plan_model: str | None, code_model: str | None,
-    keep_loaded: bool,
+    keep_loaded: bool, dev_mode: bool,
 ):
     """Interactive terminal agent (Claude-CLI-style). Default: champion in
     every slot, read-only tools (toggle with /write)."""
@@ -606,6 +609,7 @@ def chat_cmd(
             console=console,
             keep_loaded=keep_loaded,
             resume_session_id=resume_session_id,
+            dev_mode=dev_mode,
         )
     finally:
         search_mod.reset_index()

@@ -44,6 +44,14 @@ never touches this module.
   overriding the allowlisted bash for that run only. Effective only in write mode
   (bash is stripped in read-only). Visible on the slot line every turn. The
   benchmark/maintain path passes no extra tools, so its bash stays allowlisted.
+- `luxe chat --dev` starts with write + unrestricted bash ON (sticky equivalent
+  of `/write` + `/bash`), so dev work doesn't re-toggle each session
+- The bottom-toolbar status bar (`chat/status.py`) is the LIGHTWEIGHT variant:
+  a static bar pinned under the input line, refreshed from `StatusState` BETWEEN
+  turns (not live mid-turn — the tool tail-log streams above for that). `fields()`
+  is the single source of segment order/content; `toolbar()` (prompt_toolkit) and
+  `status_markup()` (plain-input fallback) both render from it so they never
+  drift. Git branch/dirty is TTL-cached to avoid per-keystroke `git` spawns.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature
