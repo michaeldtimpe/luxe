@@ -416,12 +416,17 @@ def preflight(
     discover a missing `gh` or a dirty tree mid-run after burning compute.
     """
     cfg = cfg or load_pr_config()
-    assert_gh_auth()
-    assert_clean_tree(repo_path, allow_dirty=allow_dirty, confirm_callback=confirm_callback)
+    if task_type in _WRITE_TASK_TYPES:
+        assert_gh_auth()
+        assert_clean_tree(repo_path, allow_dirty=allow_dirty, confirm_callback=confirm_callback)
+        branch_name = plan_branch_name(task_type, goal, repo_path, cfg)
+    else:
+        branch_name = ""
+
     return PRPreflight(
         base_branch=detect_base_branch(repo_path),
         base_sha=head_sha(repo_path),
-        branch_name=plan_branch_name(task_type, goal, repo_path, cfg),
+        branch_name=branch_name,
         test_command=detect_test_command(repo_path, cfg),
     )
 

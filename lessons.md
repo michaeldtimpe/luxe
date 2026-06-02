@@ -3159,3 +3159,17 @@ byte-identical, because they pass no extra tools.
 `tools.sdd` + `chat.sdd` + `CLAUDE.md`. Tests: +14 (TestUnrestrictedBash, /bash
 toggle, render port). Suite 1223 passed, 4 mlx env-skips. Memory:
 `feedback_luxe_dev_platform_write_mode.md`.
+
+### [2026-06-01] CLI preflight gating & task inference keyword expansion
+
+**What happened**: Users encountered preflight blocks and task misclassification when using the CLI. The task auto-detector `_infer_task_type` matched only a few keywords (e.g. `implement`, `fix`), falling back to `review` (which operates as a read-only task) for common code-writing verbs like `refactor` or `optimize`. Furthermore, preflight checked GitHub API credentials and Git clean tree status unconditionally for all tasks—even read-only `review` and `summarize` tasks where no PR is ever created—resulting in immediate startup crashes on dirty local checkouts or machines without configured `gh auth`.
+
+**Root cause**: Auto-detection keywords were overly narrow, missing core programming operations that require modifications. Additionally, preflight assertions were globally enforced instead of being restricted to code-modifying (write) tasks.
+
+**Fix / takeaway**:
+- **Gated Preflight**: Gated `assert_gh_auth()`, `assert_clean_tree()`, and `plan_branch_name()` in `src/luxe/pr.py` to `_WRITE_TASK_TYPES` only. Read-only tasks successfully pass preflight without raising auth or dirty-tree errors, returning an empty branch name.
+- **Robust Keyword Inference**: Expanded the keywords in `_infer_task_type` (`src/luxe/cli.py`) to map programming verbs like `refactor`, `rewrite`, `optimize`, `patch`, `resolve`, `configure`, and `comment` to their appropriate write-task categories.
+- Added test coverage in `tests/test_pr_flow.py` for task type auto-detection and gated preflight behaviour.
+
+**Affected files**: `src/luxe/pr.py` (gated preflight checks), `src/luxe/cli.py` (expanded keyword inference, graceful empty branch logging), `tests/test_pr_flow.py` (+3 tests). Suite 1259 passed, 6 skipped, 2 warnings in 30.49s.
+
