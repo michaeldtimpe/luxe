@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import shutil
 import subprocess
+import sys
 from typing import Any
 
 from luxe.tools.base import ToolDef, ToolFn
@@ -11,6 +14,41 @@ from luxe.tools.fs import get_repo_root
 
 _MAX_FINDINGS = 150
 _TIMEOUT = 60
+
+
+def _skipped(tool: str) -> tuple[str, str | None]:
+    """A SUCCESSFUL, machine-readable 'not run' result (B3).
+
+    Returning an error here is dangerous: agents read 'Tool not found' as
+    'lint passed' and proceed on a false signal. A structured `status:skipped`
+    makes the absence explicit and parseable without derailing the loop.
+    """
+    payload = {
+        "status": "skipped",
+        "reason": (f"{tool} is not available (not on PATH, not importable as a "
+                   f"Python module, and uvx unavailable). Install it (e.g. "
+                   f"`pip install {tool}`) or run via uvx to enable this check."),
+        "findings": [],
+        "count": 0,
+    }
+    return json.dumps(payload, indent=2), None
+
+
+def _resolve(tool: str, module: str | None = None,
+             allow_uvx: bool = False) -> list[str] | None:
+    """Resolve an argv prefix that runs `tool`, or None if unavailable.
+
+    Order (no installs, ever): PATH binary → `python -m <module>` (only if the
+    module is importable in THIS interpreter) → `uvx <tool>` (ephemeral, never
+    touches the project venv). Provisioning stays a human concern.
+    """
+    if shutil.which(tool):
+        return [tool]
+    if module and importlib.util.find_spec(module) is not None:
+        return [sys.executable, "-m", module]
+    if allow_uvx and shutil.which("uvx"):
+        return ["uvx", tool]
+    return None
 
 
 def _run_tool(cmd: list[str], parse_json: bool = False) -> tuple[str, str | None]:
@@ -28,51 +66,66 @@ def _run_tool(cmd: list[str], parse_json: bool = False) -> tuple[str, str | None
                 data = json.loads(output)
                 if isinstance(data, list):
                     data = data[:_MAX_FINDINGS]
-                return json.dumps({"findings": data, "count": len(data)}, indent=2), None
+                return json.dumps({"status": "ok", "findings": data,
+                                   "count": len(data)}, indent=2), None
             except json.JSONDecodeError:
                 pass
         lines = output.strip().splitlines()[:_MAX_FINDINGS]
-        return json.dumps({"findings": lines, "count": len(lines)}, indent=2), None
+        return json.dumps({"status": "ok", "findings": lines,
+                           "count": len(lines)}, indent=2), None
     except FileNotFoundError:
-        return "", f"Tool not found: {cmd[0]}"
+        # Resolution should prevent this, but degrade structurally if it slips.
+        return _skipped(cmd[0])
     except subprocess.TimeoutExpired:
         return "", f"{cmd[0]} timed out after {_TIMEOUT}s"
 
 
+def _run_resolved(tool: str, tail: list[str], *, module: str | None = None,
+                  allow_uvx: bool = False, parse_json: bool = False) -> tuple[str, str | None]:
+    prefix = _resolve(tool, module=module, allow_uvx=allow_uvx)
+    if prefix is None:
+        return _skipped(tool)
+    return _run_tool(prefix + tail, parse_json=parse_json)
+
+
 def _lint(args: dict[str, Any]) -> tuple[str, str | None]:
     path = args.get("path", ".")
-    return _run_tool(["ruff", "check", "--output-format=json", path], parse_json=True)
+    return _run_resolved("ruff", ["check", "--output-format=json", path],
+                         module="ruff", allow_uvx=True, parse_json=True)
 
 
 def _typecheck(args: dict[str, Any]) -> tuple[str, str | None]:
     path = args.get("path", ".")
-    return _run_tool(["mypy", "--no-color-output", "--no-error-summary", path])
+    return _run_resolved("mypy", ["--no-color-output", "--no-error-summary", path],
+                         module="mypy", allow_uvx=True)
 
 
 def _security_scan(args: dict[str, Any]) -> tuple[str, str | None]:
     path = args.get("path", ".")
-    return _run_tool(["bandit", "-r", "-f", "json", path], parse_json=True)
+    return _run_resolved("bandit", ["-r", "-f", "json", path],
+                         module="bandit", allow_uvx=True, parse_json=True)
 
 
 def _deps_audit(args: dict[str, Any]) -> tuple[str, str | None]:
-    return _run_tool(["pip-audit", "--format=json"], parse_json=True)
+    return _run_resolved("pip-audit", ["--format=json"],
+                         module="pip_audit", allow_uvx=True, parse_json=True)
 
 
 def _lint_js(args: dict[str, Any]) -> tuple[str, str | None]:
     path = args.get("path", ".")
-    return _run_tool(["npx", "eslint", "--format=json", path], parse_json=True)
+    return _run_resolved("npx", ["eslint", "--format=json", path], parse_json=True)
 
 
 def _typecheck_ts(args: dict[str, Any]) -> tuple[str, str | None]:
-    return _run_tool(["npx", "tsc", "--noEmit", "--pretty", "false"])
+    return _run_resolved("npx", ["tsc", "--noEmit", "--pretty", "false"])
 
 
 def _lint_rust(args: dict[str, Any]) -> tuple[str, str | None]:
-    return _run_tool(["cargo", "clippy", "--message-format=json"], parse_json=True)
+    return _run_resolved("cargo", ["clippy", "--message-format=json"], parse_json=True)
 
 
 def _vet_go(args: dict[str, Any]) -> tuple[str, str | None]:
-    return _run_tool(["go", "vet", "./..."])
+    return _run_resolved("go", ["vet", "./..."])
 
 
 _ANALYZERS: dict[str, dict[str, Any]] = {

@@ -21,6 +21,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# The static-analysis toolchain the `lint`/`typecheck`/`security_scan`/`deps_audit`
+# tools shell out to. Install (`pip install -e '.[analyzers]'`) so a fresh box
+# isn't missing them — the M1 iteration-2 run had no ruff and silently skipped
+# linting. The tools also resolve these via `python -m`/`uvx` when present.
+analyzers = ["ruff>=0.4", "mypy>=1.8", "bandit>=1.7", "pip-audit>=2.7"]
 # Required to run the vendored BFCL multi_turn evaluator (MathAPI uses mpmath).
 # Do NOT add bfcl_eval here — it pins tree_sitter==0.21.3 and breaks symbols.py
 # (the multi_turn eval is vendored under benchmarks/bfcl/multi_turn/ instead).
