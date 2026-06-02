@@ -350,6 +350,25 @@ READ_ONLY_CHAT_HINT = (
 )
 
 
+TERSE_HINT = (
+    "Respond tersely: report only what changed and the result. Skip preamble, "
+    "skip restating the request or the plan, and don't re-summarize file contents "
+    "you just wrote or re-run checks that already passed. This applies to YOUR "
+    "prose ONLY — never abbreviate tool inputs or outputs, never shorten error "
+    "messages or stack traces, and never skip a read, a test, or a safety "
+    "confirmation the task needs in order to save words."
+)
+
+# Read-only planning preamble (/plan): the model drafts a plan instead of editing.
+PLAN_HINT = (
+    "Planning mode: produce a concise, actionable implementation PLAN for the "
+    "request — do NOT write or edit code yet. Read/search as needed to ground it. "
+    "Structure the plan as: Context (why), Steps (ordered), Files to change, and "
+    "Verification (how to test). Keep it tight and skimmable; this plan may be "
+    "saved to a file and/or handed to the autonomous runner to execute."
+)
+
+
 def get(prompt_id: str) -> PromptVariant:
     """Look up a PromptVariant by id. Raises KeyError with a list of
     available ids if the lookup misses — surfaces typos quickly during

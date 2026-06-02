@@ -146,11 +146,23 @@ override with `LUXE_HOME`):
 `/help` lists them all. Beyond the slot/model/context controls (`/model`, `/use`,
 `/ctx`, `/write`, `/bash`, `/sys`, `/memory`, `/resume`, `/clear`):
 
+**Output verbosity** is three independent toggles, not a single dial:
+
 | Command | What it does |
 |---|---|
-| `/verbose [diff\|full\|off]` | Expand the one-line tool summaries: `diff` shows `edit_file` as a unified diff, `write_file` headers, and full tool result/error bodies (capped); `full` dumps entire file contents. Also renders the working-state ledger each turn. Bare `/verbose` toggles off↔diff. |
-| `/reasoning` | Stream the model's thinking live (dim) between tool calls. Independent of `/verbose`. Responsiveness tracks the backend's streaming cadence. |
-| `/goal <objective>` · `/goal stop` | Autonomous runner: issues round 1 = objective, later rounds = `continue work`, until the objective is reached (consecutive no-op rounds; `LUXE_GOAL_DONE` is advisory), a round budget (20) is hit, the agent gets stuck (repeated tool fingerprint, no edits), or 3 consecutive crashes. Each round prints `[goal round N/M]`. Needs `/write`. Ctrl-C or `/goal stop` halts it. |
+| (default) | One terse line per tool call: `→ tool(arg) ✓ <bytes>`. |
+| `/verbose [diff\|full\|off]` | Expand tool I/O: `diff` shows `edit_file` as a highlighted unified diff, `write_file` headers, and tool result/error bodies (capped); `full` syntax-highlights whole file contents. Also renders the working-state ledger each turn. Bare `/verbose` toggles off↔diff. |
+| `/reasoning` | Stream the model's thinking live (dim) between tool calls. Independent of `/verbose`; responsiveness tracks the backend's streaming cadence. |
+| `/debug` | Convenience: turns on `/verbose full` + `/reasoning` together ("show me everything"); toggles both back off. |
+| `/terse` | Toggle terse *model* output (default **ON**). Injects a "report only deltas" instruction to cut wordy prose and save tokens; never abbreviates tool output or errors. |
+
+The `LUXE_*` env flags + `[token-progress]` logging in `agents/loop.py` are a
+separate lower-level debug layer (see that module).
+
+| Command | What it does |
+|---|---|
+| `/goal <objective>` · `/goal stop` | Autonomous runner: round 1 = objective, later rounds = `continue work`, until the objective is reached, the round budget (20) is hit, the agent is stuck, or 3 consecutive crashes. Completion is **ledger-aware**: a settled round (no edits) is only DONE when the ledger corroborates (completed non-empty, in_progress cleared) for 2 rounds; settled rounds that record no new completed work trip an honest **"stuck — needs a human"** exit. Each round prints `[goal round N/M]`. Needs `/write`; Ctrl-C or `/goal stop` halts it. |
+| `/plan <objective>` | Draft an implementation plan **read-only** (no edits), then choose: **s**ave to a file (never clobbers an existing `plan.md`), **e**xecute it (hands off to the `/goal` runner with the plan as provenance context), **b**oth, or **d**iscard. |
 
 **Working-state ledger.** Across `continue work` / `/goal` rounds, luxe keeps a
 compact per-session ledger (`~/.luxe/sessions/<id>/ledger.json`) of
@@ -168,6 +180,13 @@ their binary via PATH → `python -m` → `uvx` (no auto-install). When a tool i
 genuinely unavailable they return a structured `{"status":"skipped",…}` result
 rather than an error, so a missing linter is never misread as "passed". Install
 the toolchain with `pip install -e '.[analyzers]'`.
+
+**Theme.** The chat UI (tool lines, status bar, ledger, banner, prompt arrows)
+draws its colors from theme *roles* resolved in `chat/theme.py`, which follow your
+active `yet-another-statusline` theme (`CLAUDE_STATUSLINE_THEME` →
+`~/.claude/statusline-theme`) and otherwise fall back to ANSI-named colors that
+track your terminal/iTerm profile — so luxe matches your terminal instead of a
+fixed palette.
 
 ## Production model
 

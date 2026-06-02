@@ -16,35 +16,39 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.markup import escape as _escape
+from rich.padding import Padding
+from rich.syntax import Syntax
+from rich.text import Text
 
+from luxe.chat import theme as theme_mod
 from luxe.tools.base import ToolCall
 
-# Shared 6-color palette for the rainbow banner and the prompt arrows — left
-# warm, right cool. Ported from the retired luxe_cli REPL so the chat front-end
-# keeps the same playful, per-render color shift.
-PROMPT_ARROW_PALETTE = [
-    "#ff5c5c",  # red
-    "#ffa040",  # orange
-    "#ffdd33",  # yellow
-    "#66d9ff",  # light blue
-    "#66e066",  # green
-    "#c38bff",  # violet
-]
+# Shared 6-color palette for the rainbow banner and the prompt arrows. Switched
+# from fixed hex (which ignored the user's theme) to ANSI color *names* (B4) so
+# every color renders in the terminal/iTerm ANSI profile and tracks the active
+# theme. Two spellings: Rich tags for markup, prompt_toolkit tokens for the ptk
+# arrow prompt.
+PROMPT_ARROW_PALETTE = ["red", "yellow", "green", "cyan", "blue", "magenta"]
+ARROW_PALETTE_PTK = ["ansired", "ansiyellow", "ansigreen",
+                     "ansicyan", "ansiblue", "ansimagenta"]
 
 
-def pick_no_adjacent_repeats(n: int, *, rng: random.Random | None = None) -> list[str]:
-    """Pick `n` colors from the palette with no two neighbors equal.
-
-    Shared between the rainbow banner and the prompt arrows so the whole REPL
-    reads consistently. `rng` is injectable for deterministic tests.
+def pick_no_adjacent_repeats(
+    n: int, *, rng: random.Random | None = None, palette: list[str] | None = None,
+) -> list[str]:
+    """Pick `n` colors from `palette` (default: the Rich arrow palette) with no
+    two neighbors equal. Shared between the rainbow banner and the prompt arrows.
+    `rng` is injectable for deterministic tests; `palette` lets the ptk reader
+    pass its own `ansi*` tokens.
     """
+    pal = palette or PROMPT_ARROW_PALETTE
     chooser = (rng or random).choice
     picks: list[str] = []
     for _ in range(n):
-        pool = [c for c in PROMPT_ARROW_PALETTE if not picks or c != picks[-1]]
+        pool = [c for c in pal if not picks or c != picks[-1]]
         picks.append(chooser(pool))
     return picks
 
@@ -106,16 +110,18 @@ def _human_bytes(n: int) -> str:
 
 
 def format_tool_call(tc: ToolCall) -> str:
-    """One-line Rich-markup summary of a dispatched tool call."""
-    head = f"[cyan]→[/] {tc.name}([dim]{summarize_args(tc.arguments)}[/])"
+    """One-line Rich-markup summary of a dispatched tool call. Colors come from
+    theme roles (B4) so they track the user's terminal/YASL theme."""
+    accent = theme_mod.rich("accent") or "cyan"
+    head = f"[{accent}]→[/] {tc.name}([dim]{summarize_args(tc.arguments)}[/])"
     if tc.error:
-        tail = f"  [red]✗ {tc.error[:80]}[/]"
+        tail = f"  [{theme_mod.rich('error') or 'red'}]✗ {tc.error[:80]}[/]"
     elif tc.duplicate:
-        tail = "  [yellow]⟳ duplicate[/]"
+        tail = f"  [{theme_mod.rich('warn') or 'yellow'}]⟳ duplicate[/]"
     elif tc.cached:
         tail = "  [dim]⟳ cached[/]"
     else:
-        tail = f"  [green]✓[/] [dim]{_human_bytes(tc.bytes_out)}[/]"
+        tail = f"  [{theme_mod.rich('success') or 'green'}]✓[/] [dim]{_human_bytes(tc.bytes_out)}[/]"
     return head + tail
 
 
@@ -151,14 +157,17 @@ def _unified_diff(path: str, old: str, new: str, cap: int) -> str:
         (old or "").splitlines(), (new or "").splitlines(),
         fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
     )
+    add = theme_mod.rich("diff_add") or "green"
+    rem = theme_mod.rich("diff_del") or "red"
+    hunk = theme_mod.rich("diff_hunk") or "cyan"
     out: list[str] = []
     for ln in diff:
         if ln.startswith("+") and not ln.startswith("+++"):
-            out.append(f"    [green]{_escape(ln)}[/]")
+            out.append(f"    [{add}]{_escape(ln)}[/]")
         elif ln.startswith("-") and not ln.startswith("---"):
-            out.append(f"    [red]{_escape(ln)}[/]")
+            out.append(f"    [{rem}]{_escape(ln)}[/]")
         elif ln.startswith("@@"):
-            out.append(f"    [cyan]{_escape(ln)}[/]")
+            out.append(f"    [{hunk}]{_escape(ln)}[/]")
         else:
             out.append(f"    [dim]{_escape(ln)}[/]")
     text = "\n".join(out)
@@ -167,46 +176,133 @@ def _unified_diff(path: str, old: str, new: str, cap: int) -> str:
     return text or "    [dim](no textual change)[/]"
 
 
-def format_tool_call_verbose(tc: ToolCall, level: str) -> str:
-    """Multi-line view of a dispatched tool call for /verbose (B2).
+# File extension → pygments lexer for syntax-highlighted code blocks (B3).
+_LEXER_BY_EXT = {
+    ".py": "python", ".pyi": "python", ".js": "javascript", ".jsx": "jsx",
+    ".ts": "typescript", ".tsx": "tsx", ".json": "json", ".toml": "toml",
+    ".yaml": "yaml", ".yml": "yaml", ".md": "markdown", ".sh": "bash",
+    ".bash": "bash", ".zsh": "bash", ".rs": "rust", ".go": "go", ".rb": "ruby",
+    ".java": "java", ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp",
+    ".html": "html", ".css": "css", ".sql": "sql", ".toml1": "toml",
+}
 
-    `level` is "diff" (args summarized, edits shown as a unified diff, bodies
-    capped) or "full" (whole file contents / full result bodies). Reuses the
-    same `on_tool_event` seam — ToolCall already carries full arguments+result.
+
+def _lexer_for(path: str) -> str:
+    import os
+    return _LEXER_BY_EXT.get(os.path.splitext(path)[1].lower(), "text")
+
+
+def _code_block(code: str, lexer: str, cap: int):
+    """Syntax-highlighted, left-padded code block. `ansi_dark` maps to ANSI
+    colors so it tracks the terminal profile (B4 spirit); bg stays the terminal
+    default so it doesn't fight the user's theme."""
+    code = code if len(code) <= cap else code[:cap] + "\n… (truncated)"
+    syn = Syntax(code, lexer, theme="ansi_dark", background_color="default",
+                 word_wrap=False)
+    return Padding(syn, (0, 0, 0, 2))
+
+
+def _diff_block(path: str, old: str, new: str, cap: int):
+    """Unified diff rendered with the `diff` lexer — added/removed lines are
+    highlighted (green/red), hunks cyan — and left-padded."""
+    diff = "\n".join(difflib.unified_diff(
+        (old or "").splitlines(), (new or "").splitlines(),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""))
+    if not diff.strip():
+        return Padding(Text("(no textual change)", style="dim"), (0, 0, 0, 2))
+    if len(diff) > cap:
+        diff = diff[:cap] + "\n… (diff truncated; /verbose full)"
+    syn = Syntax(diff, "diff", theme="ansi_dark", background_color="default",
+                 word_wrap=False)
+    return Padding(syn, (0, 0, 0, 2))
+
+
+def _capped_text(body: str, cap: int) -> Text:
+    body = body or ""
+    truncated = len(body) > cap
+    shown = body[:cap]
+    t = Text(shown, style="dim")
+    if truncated:
+        remaining = body[cap:].count("\n") + 1
+        t.append(f"\n… +{remaining} more line(s) (/verbose full)", style="dim")
+    return t
+
+
+def format_tool_call_verbose(tc: ToolCall, level: str):
+    """Rich renderable for a dispatched tool call under /verbose (B3).
+
+    `level` is "diff" (edits as a highlighted unified diff, file writes as a
+    header, bodies capped) or "full" (whole file contents, syntax-highlighted).
+    Returns a rich Group; wrapped in crash-safety so a malformed diff/lexer can't
+    break the turn — it falls back to plain styled text.
     """
-    cap = _VERBOSE_CAP.get(level, _VERBOSE_CAP["diff"])
-    head = format_tool_call(tc)
-    lines = [head, f"    [dim]wall {tc.wall_s * 1000:.0f}ms[/]"]
-    args = tc.arguments or {}
+    try:
+        return _verbose_group(tc, level)
+    except Exception:
+        return _verbose_fallback(tc, level)
 
-    if tc.name == "edit_file":
+
+def _verbose_group(tc: ToolCall, level: str):
+    cap = _VERBOSE_CAP.get(level, _VERBOSE_CAP["diff"])
+    args = tc.arguments or {}
+    # Head: the one-liner with wall-time folded in (no separate line).
+    head = Text.from_markup(format_tool_call(tc)
+                            + f"  [dim]{tc.wall_s * 1000:.0f}ms[/]")
+    items: list = [head]
+
+    if tc.name == "edit_file" and not tc.error:
         path = str(args.get("path", "?"))
-        lines.append(f"    [dim]edit[/] {_escape(path)}")
-        lines.append(_unified_diff(path, str(args.get("old_string", "")),
-                                   str(args.get("new_string", "")), cap))
-    elif tc.name == "write_file":
+        items.append(_diff_block(path, str(args.get("old_string", "")),
+                                 str(args.get("new_string", "")), cap))
+    elif tc.name == "write_file" and not tc.error:
         path = str(args.get("path", "?"))
         content = str(args.get("content", ""))
         nlines = content.count("\n") + 1 if content else 0
-        lines.append(f"    [dim]write[/] {_escape(path)} [dim]({nlines} lines)[/]")
-        if level == "full":
-            lines.append(_capped_block(content, cap))
+        items.append(Text.from_markup(
+            f"    [dim]write {_escape(path)} ({nlines} lines)[/]"))
+        if level == "full" and content:
+            items.append(_code_block(content, _lexer_for(path), cap))
     else:
-        # Other tools: show the full argument set, capped.
         for k, v in args.items():
             sval = str(v)
             if "\n" in sval or len(sval) > 80:
-                lines.append(f"    [dim]{_escape(k)}=[/]")
-                lines.append(_capped_block(sval, cap))
+                items.append(Text.from_markup(f"    [dim]{_escape(k)}:[/]"))
+                items.append(_capped_text(sval, cap))
             else:
-                lines.append(f"    [dim]{_escape(k)}={_escape(sval)}[/]")
+                items.append(Text.from_markup(
+                    f"    [dim]{_escape(k)}={_escape(sval)}[/]"))
 
-    # Result / error body (every tool).
     if tc.error:
-        lines.append("    [red]error:[/]")
+        items.append(Text.from_markup(f"    [{theme_mod.rich('error') or 'red'}]error[/]"))
+        items.append(_capped_text(tc.error, cap))
+    elif tc.result and tc.name != "write_file":
+        items.append(Text.from_markup("    [dim]result[/]"))
+        items.append(_capped_text(tc.result, cap))
+    return Group(*items)
+
+
+def _verbose_fallback(tc: ToolCall, level: str) -> str:
+    """Plain-text fallback (also the crash-safe path): no Syntax, just styled
+    markup with basic +/- diff colors."""
+    cap = _VERBOSE_CAP.get(level, _VERBOSE_CAP["diff"])
+    lines = [format_tool_call(tc) + f"  [dim]{tc.wall_s * 1000:.0f}ms[/]"]
+    args = tc.arguments or {}
+    if tc.name == "edit_file" and not tc.error:
+        lines.append(_unified_diff(str(args.get("path", "?")),
+                                   str(args.get("old_string", "")),
+                                   str(args.get("new_string", "")), cap))
+    elif tc.name == "write_file" and not tc.error:
+        content = str(args.get("content", ""))
+        nlines = content.count("\n") + 1 if content else 0
+        lines.append(f"    [dim]write {_escape(str(args.get('path', '?')))} "
+                     f"({nlines} lines)[/]")
+        if level == "full":
+            lines.append(_capped_block(content, cap))
+    if tc.error:
+        lines.append("    [red]error[/]")
         lines.append(_capped_block(tc.error, cap))
-    elif tc.result and tc.name not in {"write_file"}:
-        lines.append("    [dim]result:[/]")
+    elif tc.result and tc.name != "write_file":
+        lines.append("    [dim]result[/]")
         lines.append(_capped_block(tc.result, cap))
     return "\n".join(lines)
 
@@ -256,7 +352,8 @@ def render_footer(
     started_at: float | None = None,
     ended_at: float | None = None,
 ) -> None:
-    mode = "[yellow]write[/]" if write_enabled else "[green]read-only[/]"
+    mode = (f"[{theme_mod.rich('warn') or 'yellow'}]write[/]" if write_enabled
+            else f"[{theme_mod.rich('success') or 'green'}]read-only[/]")
     bits = [
         f"slot: {slot}",
         f"model: {model}",

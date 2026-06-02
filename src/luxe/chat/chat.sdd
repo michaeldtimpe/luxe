@@ -51,12 +51,33 @@ never touches this module.
   region. Both default off → unchanged one-line summaries
 - `/goal <objective>` is an autonomous supervisor in the REPL loop: round 1 sends
   the objective, later rounds send `continue work`, each printing `[goal round
-  N/M]`. Termination is robust-over-clever — consecutive no-op rounds (zero tool
-  calls AND zero edits) are authoritative; the `LUXE_GOAL_DONE` sentinel is
-  advisory (honored only alongside a no-op round); plus a round budget. Crash
-  resilience retries on CONSECUTIVE failures (reset on any clean round) and a
-  tool-fingerprint stuck-loop guard pauses pathological repeats. Requires write
-  mode; Ctrl-C or `/goal stop` halts it
+  N/M]`. Termination is LEDGER-AWARE (iteration-3): a "settled" round
+  (files_changed==0; re-running tests no longer blocks completion) is DONE only
+  when the ledger corroborates (`completed` non-empty AND `in_progress` cleared,
+  with the model either signaling `LUXE_GOAL_DONE` or going tool-idle) for 2
+  consecutive rounds — the sentinel alone is advisory/noisy. Settled rounds that
+  add NO new `completed` items accrue toward an honest "stuck — needs a human"
+  exit (≥3), keyed on new completed entries so rewriting the same `in_progress`
+  can't dodge it. `ledger.prune` clears stale bootstrap items each round. Crash
+  resilience retries on CONSECUTIVE failures; a tool-fingerprint guard is a faster
+  stuck trip; a ≤32K window prints a low-context advisory. Requires write mode;
+  Ctrl-C or `/goal stop` halts it
+- `/plan <objective>` drafts a plan in a forced READ-ONLY turn (PLAN_HINT, reusing
+  make_read_only_role) then prompts save / execute / both / discard. Save never
+  clobbers an existing `plan.md` (writes `.luxe/plans/<id>-<n>.md`); execute seeds
+  the `/goal` runner and injects the drafted plan as a `<plan>` provenance block
+  so the agent keeps following it
+- `/terse` (default ON) injects the registry `TERSE_HINT` `<response_style>` block
+  to cut model prose ("report only deltas") — carved out so it never abbreviates
+  tool output, errors, or skips needed reads/confirmations. `/debug` is a
+  convenience that flips `/verbose full` + `/reasoning` together. `/verbose` now
+  renders code via rich `Syntax` and edits as highlighted diffs, with a crash-safe
+  plain-text fallback
+- The chat palette tracks the user's theme: tool lines, status bar, ledger,
+  banner, and prompt arrows resolve colors from `theme.role_styles()` roles
+  (`accent`/`success`/`error`/`warn`/`slot`/`diff_*`/…) instead of hardcoded hex —
+  ANSI-named fallbacks track the terminal profile, and the `slot` segment no
+  longer hardcodes magenta
 - Static analyzers (`tools/analysis.py`) resolve via PATH → `python -m <module>`
   → `uvx` (NO auto-install — agent venvs may be frozen) and degrade to a
   SUCCESSFUL machine-readable `{"status":"skipped",…}` when unavailable, so a

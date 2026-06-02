@@ -134,6 +134,34 @@ def _as_list(value) -> list[str]:
     return [str(value)]
 
 
+# Generic "bootstrap" items the model logs once and never clears (the
+# iteration-3 32K run left "Planning project structure…" in_progress forever).
+# Once any real work is completed, these are pruned so they can't block the
+# goal-runner's "in_progress empty" completion corroboration (B1).
+_BOOTSTRAP_HINTS = ("plan", "scaffold", "setup", "project structure",
+                    "dependencies", "structure and depend")
+
+
+def _prune_in_progress(in_progress: list[str], completed: list[str]) -> list[str]:
+    """Drop in_progress items that are already done (fuzzy-match a completed
+    entry) or are generic bootstrap chatter once any work is completed."""
+    comp_lower = [c.lower() for c in completed]
+    have_progress = bool(completed)
+    out: list[str] = []
+    for item in in_progress:
+        low = item.lower().strip()
+        if not low:
+            continue
+        # already completed (either direction substring match)
+        if any(low == c or low in c or c in low for c in comp_lower):
+            continue
+        # generic bootstrap, now that real work exists
+        if have_progress and any(h in low for h in _BOOTSTRAP_HINTS):
+            continue
+        out.append(item)
+    return out
+
+
 def apply_update(session_id: str, delta: dict) -> str:
     """Model-driven channel: merge a partial update into the ledger.
 
@@ -151,16 +179,26 @@ def apply_update(session_id: str, delta: dict) -> str:
     led.decided = _dedup_cap(led.decided + _as_list(delta.get("decided")))
     led.blocked = _dedup_cap(led.blocked + _as_list(delta.get("blocked")))
 
-    # in_progress: add new, then drop anything that just got completed.
-    completed_set = {c.lower() for c in led.completed}
     merged_ip = _dedup_cap(led.in_progress + _as_list(delta.get("in_progress")))
-    led.in_progress = [x for x in merged_ip if x.lower() not in completed_set]
+    led.in_progress = _prune_in_progress(merged_ip, led.completed)
 
     save(session_id, led)
     counts = (f"goal={'set' if led.goal else 'unset'} "
               f"decided={len(led.decided)} completed={len(led.completed)} "
               f"in_progress={len(led.in_progress)} blocked={len(led.blocked)}")
     return f"Ledger updated. {counts}"
+
+
+def prune(session_id: str) -> Ledger:
+    """Defensively prune stale in_progress items and persist. The goal runner
+    calls this each round so a stale bootstrap item can't survive even when the
+    model never calls update_ledger itself. Returns the pruned ledger."""
+    led = load(session_id)
+    pruned = _prune_in_progress(led.in_progress, led.completed)
+    if pruned != led.in_progress:
+        led.in_progress = pruned
+        save(session_id, led)
+    return led
 
 
 # ---------------------------------------------------------------- render ----
@@ -198,18 +236,21 @@ def render(ledger: Ledger, *, char_budget: int = _RENDER_CHAR_BUDGET) -> str:
 
 
 def render_rich(ledger: Ledger) -> str:
-    """Rich-markup view for verbose mode (B2)."""
+    """Rich-markup view for verbose mode (B2). Colors via theme roles (B4)."""
     if ledger.is_empty():
         return "[dim]· ledger empty[/]"
+    from luxe.chat import theme as theme_mod
     out: list[str] = ["[bold]· progress ledger[/]"]
     if ledger.goal:
-        out.append(f"  [cyan]goal[/] {ledger.goal}")
-    for title, items, style in (
-        ("decided", ledger.decided, "magenta"),
-        ("completed", ledger.completed, "green"),
-        ("in_progress", ledger.in_progress, "yellow"),
-        ("blocked", ledger.blocked, "red"),
+        out.append(f"  [{theme_mod.rich('accent') or 'cyan'}]goal[/] {ledger.goal}")
+    for title, items, role in (
+        ("decided", ledger.decided, "accent"),
+        ("completed", ledger.completed, "success"),
+        ("in_progress", ledger.in_progress, "warn"),
+        ("blocked", ledger.blocked, "error"),
     ):
+        style = theme_mod.rich(role) or {"accent": "cyan", "success": "green",
+                                         "warn": "yellow", "error": "red"}[role]
         for it in items:
             out.append(f"  [{style}]{title}[/] {it}")
     if ledger.files:
