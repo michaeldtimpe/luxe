@@ -46,7 +46,10 @@ _HELP = """[bold]luxe chat commands[/]
   [cyan]/bash[/]                      toggle unrestricted shell (default: allowlisted)
   [cyan]/verbose[/] [diff|full|off]   show full tool I/O (diffs, file contents, results)
   [cyan]/reasoning[/]                 toggle live streaming of the model's thinking
+  [cyan]/debug[/]                     toggle "show everything" (verbose full + reasoning)
+  [cyan]/terse[/]                     toggle terse model output (default ON; saves tokens)
   [cyan]/goal[/] <objective> | stop   autonomously run rounds until the objective is met
+  [cyan]/plan[/] <objective>          draft a plan, then choose: save / execute / both
   [cyan]/sys[/] [add <rule>|list|clear]  manage session-scoped system constraints
   [cyan]/memory[/] list|add|promote|forget|edit
   [cyan]/compare[/] <task>            run two configs side-by-side
@@ -74,7 +77,10 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/bash": _bash_mode,
         "/verbose": _verbose,
         "/reasoning": _reasoning,
+        "/debug": _debug,
+        "/terse": _terse,
         "/goal": _goal,
+        "/plan": _plan,
         "/sys": _sys,
         "/memory": _memory,
         "/compare": _compare,
@@ -231,6 +237,47 @@ def _reasoning(args, ctx: CommandContext) -> CommandResult:
                           "responsiveness tracks the backend's streaming cadence)[/]")
     else:
         ctx.console.print("reasoning: [green]OFF[/] [dim](hidden)[/]")
+    return CommandResult(handled=True)
+
+
+def _debug(args, ctx: CommandContext) -> CommandResult:
+    """Convenience (B6): one switch for "show everything" = verbose full +
+    reasoning. Toggles both on together, or both off."""
+    s = ctx.session
+    fully_on = s.verbose_level == "full" and s.show_reasoning
+    if fully_on:
+        s.verbose_level = "off"
+        s.show_reasoning = False
+        ctx.console.print("debug: [green]OFF[/] [dim](verbose + reasoning off)[/]")
+    else:
+        s.verbose_level = "full"
+        s.show_reasoning = True
+        ctx.console.print("debug: [red]ON[/] [dim](verbose full + reasoning — "
+                          "full tool I/O, file contents, and live thinking)[/]")
+    return CommandResult(handled=True)
+
+
+def _terse(args, ctx: CommandContext) -> CommandResult:
+    """Toggle terse model output (B2). Default ON; cuts wordy prose to save tokens."""
+    ctx.session.terse = not ctx.session.terse
+    if ctx.session.terse:
+        ctx.console.print("terse: [green]ON[/] [dim](report only deltas; tool output "
+                          "and errors are untouched — /terse to disable)[/]")
+    else:
+        ctx.console.print("terse: [yellow]OFF[/] [dim](full prose)[/]")
+    return CommandResult(handled=True)
+
+
+def _plan(args, ctx: CommandContext) -> CommandResult:
+    """Plan mode (B5): /plan <objective> drafts a plan read-only, then the REPL
+    asks whether to save it, execute it, or both."""
+    objective = " ".join(args).strip()
+    if not objective:
+        ctx.console.print("[yellow]Usage: /plan <objective>[/]")
+        return CommandResult(handled=True)
+    ctx.session.plan_pending = objective
+    ctx.console.print(f"[green]✓[/] planning [dim](read-only draft; you'll choose "
+                      f"save / execute / both next)[/]\n  [dim]{objective}[/]")
     return CommandResult(handled=True)
 
 
