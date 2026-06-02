@@ -1,6 +1,16 @@
 # luxe — session resume document
 
-## ⇒ SESSION HANDOFF (2026-06-01) — Interactive `luxe chat` overhaul SHIPPED (REPL + compare + memory + opt-in model slots); commit `280675a`, pushed; deployed to m5 + neo
+## ⇒ SESSION HANDOFF (2026-06-01) — CLI robustness & task-type auto-detection improvements SHIPPED (gated preflight checks, expanded programming verbs); commit local
+
+**TL;DR for a cold start.** Fixed CLI instability on read-only tasks and improved task-type auto-detection:
+1. **Gated Preflight**: Gated git and auth preflight checks (`assert_gh_auth()`, `assert_clean_tree()`, and `plan_branch_name()`) in `src/luxe/pr.py` to write tasks only. Read-only tasks successfully pass preflight without raising auth or dirty-tree errors, enabling offline/local reviews on dirty repositories.
+2. **Robust Keyword Inference**: Expanded task-type auto-detection in `src/luxe/cli.py` (`_infer_task_type`) with common programming verbs (like `refactor`, `rewrite`, `optimize`, `patch`, `resolve`, `configure`, and `comment`) to map them correctly to write tasks instead of falling back to read-only `review` tasks.
+3. **Graceful Console Output**: Updated `cli.py` to display `(none)` if the planned branch name is empty (default for read-only tasks).
+4. **Validation**: Added 3 unit tests in `tests/test_pr_flow.py` for task type auto-detection and gated preflight behaviour. Full test suite is completely passing (1259 passed, 6 skipped, 2 warnings in 30.49s).
+
+---
+
+## ⇒ PREVIOUS SESSION HANDOFF (2026-06-01) — Interactive `luxe chat` overhaul SHIPPED (REPL + compare + memory + opt-in model slots); commit `280675a`, pushed; deployed to m5 + neo
 
 **TL;DR for a cold start.** First user-facing interface work in a long time.
 **Additive** Claude-CLI-style overhaul; the existing one-shot `luxe maintain`,

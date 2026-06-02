@@ -221,7 +221,8 @@ def maintain(
     console.print(f"Repo: {repo_path}")
     console.print(f"Goal: {goal}")
     console.print(f"Task: {detected_task}")
-    console.print(f"Branch: [dim]{prep.branch_name}[/]  Base: [dim]{prep.base_branch}@{prep.base_sha[:8]}[/]")
+    branch_display = prep.branch_name or "(none)"
+    console.print(f"Branch: [dim]{branch_display}[/]  Base: [dim]{prep.base_branch}@{prep.base_sha[:8]}[/]")
     if prep.test_command:
         console.print(f"Tests: [dim]{prep.test_command}[/]")
     else:
@@ -898,13 +899,27 @@ def _default_config() -> str:
 
 def _infer_task_type(goal: str) -> str:
     g = goal.lower()
-    if any(k in g for k in ("implement", "add ", "build", "create", "introduce")):
+    if any(k in g for k in (
+        "implement", "add ", "build", "create", "introduce", "refactor", "rewrite",
+        "optimize", "change", "modify", "delete", "remove", "support", "improve",
+        "tweak", "adjust", "polish", "re-implement", "update", "migrate", "port",
+        "enable", "disable", "clean", "restructure"
+    )):
         return "implement"
-    if any(k in g for k in ("fix", "bug", "broken", "regression")):
+    if any(k in g for k in (
+        "fix", "bug", "broken", "regression", "patch", "resolve", "correct",
+        "mend", "handle"
+    )):
         return "bugfix"
-    if any(k in g for k in ("document", "docs", "readme", "docstring")):
+    if any(k in g for k in (
+        "document", "docs", "readme", "docstring", "comment", "documentation",
+        "typehint", "typing", "types"
+    )):
         return "document"
-    if any(k in g for k in ("update deps", "upgrade", "ci", "config")):
+    if any(k in g for k in (
+        "update deps", "upgrade", "ci", "config", "dep", "dependency", "docker",
+        "github action", "workflow"
+    )):
         return "manage"
     if any(k in g for k in ("summarize", "summary", "explain", "describe")):
         return "summarize"

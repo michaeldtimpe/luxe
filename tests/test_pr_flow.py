@@ -373,3 +373,103 @@ def test_assert_gh_auth_succeeds_on_retry(monkeypatch):
                         lambda cmd, cwd, env=None, timeout=None: next(seq))
     pr_mod.assert_gh_auth()
     assert pr_mod._GH_AUTH_LAST_OK_AT is not None
+
+
+# --- gated preflight tests for read-only tasks ------------------------------
+
+def test_preflight_readonly_skips_auth_and_dirty_checks(git_repo: Path, monkeypatch):
+    """Read-only tasks (review, summarize) must successfully pass preflight
+    even if gh CLI auth is completely broken and the Git tree is dirty, since
+    no branch will be planned or created."""
+    # Force gh auth to raise an error
+    def _auth_error():
+        raise GhAuthError("No auth")
+    monkeypatch.setattr(pr_mod, "assert_gh_auth", _auth_error)
+    
+    # Make Git tree dirty
+    (git_repo / "dirty_file.txt").write_text("dirty content")
+    assert is_dirty(git_repo)
+
+    # Run preflight for read-only tasks
+    for ro_task in ("review", "summarize"):
+        prep = pr_mod.preflight(
+            git_repo,
+            task_type=ro_task,
+            goal="explain the architecture",
+            allow_dirty=False,
+            cfg=_cfg(),
+        )
+        assert prep.branch_name == ""
+        assert prep.base_branch == "main"
+        assert prep.base_sha != ""
+
+
+def test_preflight_write_enforces_auth_and_dirty_checks(git_repo: Path, monkeypatch):
+    """Write tasks (implement, bugfix, etc.) must still strictly enforce gh auth
+    checks and clean tree checks during preflight."""
+    # 1. Test auth enforcement
+    def _auth_error():
+        raise GhAuthError("No auth")
+    monkeypatch.setattr(pr_mod, "assert_gh_auth", _auth_error)
+    
+    with pytest.raises(GhAuthError):
+        pr_mod.preflight(
+            git_repo,
+            task_type="implement",
+            goal="add feature",
+            allow_dirty=True,
+            confirm_callback=lambda: True,
+            cfg=_cfg(),
+        )
+
+    # Reset auth so it passes
+    monkeypatch.setattr(pr_mod, "assert_gh_auth", lambda: None)
+
+    # 2. Test dirty tree enforcement
+    (git_repo / "dirty_file.txt").write_text("dirty content")
+    with pytest.raises(DirtyTreeError):
+        pr_mod.preflight(
+            git_repo,
+            task_type="implement",
+            goal="add feature",
+            allow_dirty=False,
+            cfg=_cfg(),
+        )
+
+
+# --- task inference keywords tests ------------------------------------------
+
+def test_inferred_task_type_expanded_keywords():
+    from luxe.cli import _infer_task_type
+    
+    # Newly added implement keywords
+    assert _infer_task_type("refactor the pagination logic") == "implement"
+    assert _infer_task_type("rewrite the core engine") == "implement"
+    assert _infer_task_type("optimize sql queries") == "implement"
+    assert _infer_task_type("clean up codebase style") == "implement"
+    assert _infer_task_type("restructure src/ directory") == "implement"
+    
+    # Newly added bugfix keywords
+    assert _infer_task_type("patch the memory leak") == "bugfix"
+    assert _infer_task_type("resolve race condition") == "bugfix"
+    assert _infer_task_type("correct typo in variable name") == "bugfix"
+    assert _infer_task_type("handle empty input gracefully") == "bugfix"
+    
+    # Newly added document keywords
+    assert _infer_task_type("comment all functions in main.py") == "document"
+    assert _infer_task_type("inline typehints to the adapter") == "document"
+    assert _infer_task_type("write documentation for developers") == "document"
+    
+    # Newly added manage keywords
+    assert _infer_task_type("upgrade dependencies") == "manage"
+    assert _infer_task_type("configure docker setup") == "manage"
+    assert _infer_task_type("configure github action workflow") == "manage"
+    
+    # Summarize keywords
+    assert _infer_task_type("summarize the architecture") == "summarize"
+    assert _infer_task_type("describe how X works") == "summarize"
+    
+    # Fallback to review
+    assert _infer_task_type("audit the security setup") == "review"
+    assert _infer_task_type("investigate latency spikes") == "review"
+
