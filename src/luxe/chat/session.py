@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from luxe.agents.prompts import READ_ONLY_CHAT_HINT
+from luxe.agents.prompts import READ_ONLY_CHAT_HINT, TERSE_HINT
 from luxe.chat.summarize import SUMMARIZER_VERSION, fold_history
 from luxe.memory import project as project_mem
 
@@ -77,6 +77,11 @@ class ChatSession:
     # -- observability (B2): tool-IO depth + reasoning stream are independent --
     verbose_level: str = "off"   # off | diff | full — set by /verbose
     show_reasoning: bool = False  # set by /reasoning; streams model prose live
+    terse: bool = True           # set by /terse; injects TERSE_HINT to cut prose
+
+    # -- /plan mode (B5) ------------------------------------------------------
+    plan_pending: str | None = None  # objective awaiting a planning turn
+    plan_text: str = ""              # last drafted plan (run provenance)
 
     # -- goal auto-runner (B4) ------------------------------------------------
     goal: str = ""               # objective for the autonomous runner
@@ -133,6 +138,14 @@ class ChatSession:
         # memory/history precedence-wise — it's high-signal, low-token recall.
         if ledger_block:
             parts.insert(0, ledger_block)
+        # Plan provenance (B5): while a /plan-seeded goal executes, the drafted
+        # plan rides along so the agent keeps following what it committed to.
+        if self.plan_text and self.goal_active:
+            parts.insert(0, f"<plan>\n{self.plan_text.strip()}\n</plan>")
+        # Terse output style (B2) — default on; cuts wordy prose. Behavioral, so
+        # it rides above memory/history but below the user's explicit constraints.
+        if self.terse:
+            parts.insert(0, f"<response_style>\n{TERSE_HINT}\n</response_style>")
         # System constraints sit above project memory and history — the user's
         # explicit rules should override anything the model infers from context.
         if self.system_constraints:

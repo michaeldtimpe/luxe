@@ -21,6 +21,7 @@ from rich.status import Status
 from luxe.agents.single import run_single
 from luxe.chat import commands as cmd
 from luxe.chat.render import (
+    ARROW_PALETTE_PTK,
     CancelToken,
     ChatCancelled,
     arrow_prompt_markup,
@@ -45,6 +46,7 @@ from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
 from luxe.memory import project as project_mem
 from luxe.memory import session as session_store
+from luxe.state import ledger as ledger_mod
 
 @dataclass
 class TurnOutcome:
@@ -116,8 +118,9 @@ def _default_reader(
         pt = PromptSession(history=InMemoryHistory(), style=toolbar_style)
 
         def read() -> str:
-            # Fresh colors each turn → the arrows shift per render.
-            colors = pick_no_adjacent_repeats(3)
+            # Fresh colors each turn → the arrows shift per render. ptk needs its
+            # own ansi* tokens (B4) so the arrows track the terminal palette.
+            colors = pick_no_adjacent_repeats(3, palette=ARROW_PALETTE_PTK)
             message = FormattedText(
                 [("", "luxe ")]
                 + [(f"bold fg:{c}", "›") for c in colors]
@@ -199,6 +202,12 @@ def run_chat_repl(
 
     try:
         while True:
+            # /plan (B5): draft a plan, then maybe execute — runs before the goal
+            # check because choosing "execute" sets goal_active for the next pass.
+            if session.plan_pending:
+                _run_plan(session, slots, cfg, languages, console, cancel,
+                          infer, status)
+                continue
             # Goal auto-runner (B4): while a goal is active, the supervisor drives
             # rounds itself instead of blocking on the prompt. Returns when the
             # goal completes, pauses, or is interrupted — then we fall back to the
@@ -242,6 +251,7 @@ def _run_turn(
     cancel: CancelToken,
     infer: Callable[[str], str],
     status: StatusState | None = None,
+    plan_mode: bool = False,
 ) -> TurnOutcome:
     from luxe.mcp.server import make_read_only_role
     from luxe.state import ledger as ledger_mod
@@ -251,14 +261,16 @@ def _run_turn(
     session.pinned_slot = None
 
     model = slots.model_for(slot)
-    dev_bash = session.write_enabled and session.unrestricted_bash
+    dev_bash = session.write_enabled and session.unrestricted_bash and not plan_mode
     bash_note = " · [red]bash:unrestricted[/]" if dev_bash else ""
     console.print(f"[dim]slot: {slot} · model: {model}{bash_note}[/]")
 
     backend = slots.backend_for(slot)
     slot_cfg = cfg.slot_config(slot)
     base_role = cfg.role(slot_cfg.role)
-    role_cfg = base_role if session.write_enabled else make_read_only_role(base_role)
+    # /plan (B5) forces a read-only drafting turn regardless of write mode.
+    write_on = session.write_enabled and not plan_mode
+    role_cfg = base_role if write_on else make_read_only_role(base_role)
 
     # Chat bash (chat.sdd), swapped for THIS run only via run_single's extra-tool
     # seam — benchmark/maintain never pass these, so their bash is untouched.
@@ -270,7 +282,7 @@ def _run_turn(
     _led_def, _led_fn = make_update_ledger_tool(session.session_id)
     extra_tool_defs = [_led_def]
     extra_tool_fns = {"update_ledger": _led_fn}
-    if session.write_enabled:
+    if write_on:
         from luxe.tools.shell import (
             make_bash_fn,
             restricted_bash_def,
@@ -474,18 +486,20 @@ def _run_turn(
     )
 
 
-# -- goal auto-runner (B4) --------------------------------------------------
+# -- goal auto-runner (B1/B4) -----------------------------------------------
 
-_GOAL_NOOP_ROUNDS = 2      # consecutive no-op rounds → objective reached
-_GOAL_STUCK_ROUNDS = 3     # identical fingerprint, no edits → pathological loop
-_GOAL_MAX_CRASHES = 3      # consecutive crashes → pause for a human
+_GOAL_DONE_ROUNDS = 2       # consecutive corroborated settled rounds → done
+_GOAL_STUCK_SETTLED = 3     # settled rounds with no NEW completed items → stuck
+_GOAL_STUCK_FP_ROUNDS = 3   # identical tool fingerprint, no edits → faster trip
+_GOAL_MAX_CRASHES = 3       # consecutive crashes → pause for a human
+_GOAL_LOW_CTX = 32768       # ≤ this is below the practical minimum for builds
 _GOAL_SENTINEL = "LUXE_GOAL_DONE"
 
 _GOAL_SUFFIX = (
-    "\n\n(Autonomous goal mode. Maintain your working state with the "
-    "update_ledger tool as you decide things and finish work. When the objective "
-    "is FULLY complete and verified, end your reply with a line containing only "
-    f"{_GOAL_SENTINEL}.)"
+    "\n\n(Autonomous goal mode. Keep your working state current with the "
+    "update_ledger tool: record finished work in `completed` and clear those "
+    "items from `in_progress` as you go. When the objective is FULLY complete and "
+    f"verified, end your reply with a line containing only {_GOAL_SENTINEL}.)"
 )
 
 
@@ -501,17 +515,34 @@ def _run_goal_loop(
 ) -> None:
     """Supervisor: auto-issue rounds until the objective is reached, the budget
     is hit, the agent gets stuck, or too many crashes pile up. Survives a crashed
-    round (the turn is already persisted; the ledger + history rehydrate state)."""
-    noop_streak = 0
+    round (the turn is already persisted; the ledger + history rehydrate state).
+
+    Completion is LEDGER-AWARE (B1): the iteration-3 data showed `LUXE_GOAL_DONE`
+    is self-reported and noisy (a failed 32K run emitted it 20× with an empty
+    ledger), while completed-item richness cleanly separated success from failure.
+    So a "settled" round (no file edits — re-running tests no longer blocks
+    completion) is only treated as DONE when the ledger corroborates (completed
+    non-empty AND in_progress cleared), for 2 consecutive rounds. Settled rounds
+    that record NO new completed work accrue toward an honest STUCK exit instead.
+    """
+    done_streak = 0           # consecutive corroborated settled rounds
+    settled_no_progress = 0   # consecutive settled rounds with no NEW completed
     recent_fps: list[frozenset] = []
+    prev_completed = len(ledger_mod.load(session.session_id).completed)
+
     console.print(
         f"[bold cyan]· goal started[/] [dim]{_escape(session.goal)}[/]\n"
         f"[dim]  up to {session.goal_max_rounds} rounds · Ctrl-C or /goal stop to halt[/]")
+    eff_ctx = session.num_ctx_override or slots.role_for("chat").num_ctx
+    if eff_ctx and eff_ctx <= _GOAL_LOW_CTX:
+        console.print(
+            f"[yellow]· note: {eff_ctx // 1024}K context is below the practical "
+            f"minimum for build tasks — `/ctx large` reduces stuck/incomplete rounds.[/]")
 
     while session.goal_active:
         if session.goal_round >= session.goal_max_rounds:
             console.print(f"[yellow]· goal budget reached "
-                          f"({session.goal_max_rounds} rounds) — pausing.[/]")
+                          f"({session.goal_max_rounds} rounds) — pausing for a human.[/]")
             session.goal_active = False
             break
 
@@ -546,34 +577,141 @@ def _run_goal_loop(
             session.goal_active = False
             break
 
-        # Stuck-loop guard: same non-empty fingerprint repeating with no edits.
+        # Read the (pruned) ledger to judge progress this round.
+        led = ledger_mod.prune(session.session_id)
+        ncomp = len(led.completed)
+        new_completed = ncomp > prev_completed
+        prev_completed = ncomp
+        settled = outcome.files_changed == 0
+        sentinel = _GOAL_SENTINEL in (outcome.final_text or "")
+
+        # Fast trip: identical non-empty tool fingerprint repeating with no edits.
         if outcome.fingerprint:
             recent_fps.append(outcome.fingerprint)
-            recent_fps[:] = recent_fps[-_GOAL_STUCK_ROUNDS:]
-            if (len(recent_fps) == _GOAL_STUCK_ROUNDS
-                    and len(set(recent_fps)) == 1
-                    and outcome.files_changed == 0):
+            recent_fps[:] = recent_fps[-_GOAL_STUCK_FP_ROUNDS:]
+            if (len(recent_fps) == _GOAL_STUCK_FP_ROUNDS
+                    and len(set(recent_fps)) == 1 and settled):
                 console.print(
                     f"[yellow]· goal appears stuck — same {len(outcome.fingerprint)} "
-                    f"call(s) for {_GOAL_STUCK_ROUNDS} rounds with no edits. Pausing.[/]")
+                    f"call(s) for {_GOAL_STUCK_FP_ROUNDS} rounds, no edits. "
+                    f"Pausing for a human.[/]")
                 session.goal_active = False
                 break
         else:
             recent_fps.clear()
 
-        # Completion: no-op rounds are authoritative; the sentinel is advisory and
-        # only honored when it coincides with a no-op round.
-        no_op = outcome.tool_calls == 0 and outcome.files_changed == 0
-        noop_streak = noop_streak + 1 if no_op else 0
-        sentinel = _GOAL_SENTINEL in (outcome.final_text or "")
-        if noop_streak >= _GOAL_NOOP_ROUNDS or (sentinel and no_op):
-            why = "model signaled done" if (sentinel and no_op) else \
-                  f"{noop_streak} consecutive no-op rounds"
-            console.print(f"[green]· goal complete ({why}) after {rnd} round(s).[/]")
+        # Honest STUCK exit: settled rounds that record no NEW completed work.
+        # Keys on new completed entries (not any ledger write) so a model
+        # rewriting the same in_progress item can't dodge the guard.
+        settled_no_progress = settled_no_progress + 1 if (settled and not new_completed) else 0
+        if settled_no_progress >= _GOAL_STUCK_SETTLED:
+            console.print(
+                f"[yellow]· goal STUCK — {_GOAL_STUCK_SETTLED} settled rounds with no "
+                f"new completed work (completed={ncomp}). Pausing for a human; "
+                f"the objective is likely NOT done.[/]")
+            session.goal_active = False
+            break
+
+        # Completion (ledger-corroborated): settled + real completed work + no
+        # open in_progress, AND the model either signaled done or went tool-idle.
+        corroborated = (settled and ncomp > 0 and not led.in_progress
+                        and (sentinel or outcome.tool_calls == 0))
+        done_streak = done_streak + 1 if corroborated else 0
+        if done_streak >= _GOAL_DONE_ROUNDS:
+            why = "signaled done" if sentinel else "idle, ledger settled"
+            console.print(f"[green]· goal complete ({why}; completed={ncomp}) "
+                          f"after {rnd} round(s).[/]")
             session.goal_active = False
             break
 
     session.goal_round = 0  # ready for a fresh /goal
+
+
+# -- /plan mode (B5) --------------------------------------------------------
+
+
+def _write_plan_file(session: ChatSession, plan_text: str):
+    """Write the drafted plan, never clobbering an existing plan.md."""
+    from pathlib import Path
+
+    base = Path(session.repo_path or ".")
+    target = base / "plan.md"
+    if target.exists():
+        plans_dir = base / ".luxe" / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        sid = (session.session_id or "plan")[:8]
+        target = plans_dir / f"plan-{sid}-{len(session.turns)}.md"
+    target.write_text(plan_text)
+    return target
+
+
+def _run_plan(
+    session: ChatSession,
+    slots: SlotManager,
+    cfg: PipelineConfig,
+    languages: frozenset,
+    console: Console,
+    cancel: CancelToken,
+    infer: Callable[[str], str],
+    status: StatusState | None,
+) -> None:
+    """Draft a plan read-only, then ask: save / execute / both / discard (B5)."""
+    from pathlib import Path
+
+    from luxe.agents.prompts import PLAN_HINT
+
+    objective = (session.plan_pending or "").strip()
+    session.plan_pending = None
+    if not objective:
+        return
+
+    console.print(f"[bold cyan]· planning[/] [dim]{_escape(objective)}[/]")
+    message = f"{objective}\n\n{PLAN_HINT}"
+    try:
+        outcome = _run_turn(message, session, slots, cfg, languages,
+                            console, cancel, infer, status, plan_mode=True)
+    except (ChatCancelled, KeyboardInterrupt):
+        console.print("[yellow]· planning interrupted.[/]")
+        return
+
+    plan_text = (outcome.final_text or "").strip()
+    if not plan_text:
+        console.print("[yellow]· no plan was produced.[/]")
+        return
+    session.plan_text = plan_text
+
+    # Interactive choice. plan.md-exists changes only the save destination/label.
+    exists = (Path(session.repo_path or ".") / "plan.md").exists()
+    save_label = ("save to alternate path (existing plan.md found)" if exists
+                  else "save to plan.md")
+    console.print(f"\n[bold]Plan ready.[/]  [cyan]s[/]={save_label} · "
+                  f"[cyan]e[/]xecute · [cyan]b[/]oth · [cyan]d[/]iscard")
+    try:
+        from rich.prompt import Prompt
+        choice = Prompt.ask("choose", choices=["s", "e", "b", "d"], default="s").lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("[yellow]· plan discarded.[/]")
+        return
+
+    if choice in ("s", "b"):
+        path = _write_plan_file(session, plan_text)
+        console.print(f"[green]✓[/] plan written to [cyan]{path}[/]")
+
+    if choice in ("e", "b"):
+        if not session.write_enabled:
+            session.write_enabled = True
+            console.print("[yellow]· enabling write mode to execute the plan "
+                          "(/write to toggle).[/]")
+        # Seed the runner: ledger goal + the plan rides in extra_context as
+        # provenance so the agent keeps following what it just drafted.
+        ledger_mod.apply_update(session.session_id,
+                                {"goal": objective, "decided": ["Plan drafted via /plan"]})
+        session.goal = objective
+        session.goal_round = 0
+        session.consecutive_crashes = 0
+        session.goal_active = True  # main loop picks this up next iteration
+    elif choice == "d":
+        console.print("[dim]· plan discarded.[/]")
 
 
 # -- hooks (resume now; compare wired in the compare phase) -----------------

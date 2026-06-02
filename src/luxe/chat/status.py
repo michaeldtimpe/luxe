@@ -259,11 +259,12 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     default-fg values)."""
     segs: list[Segment] = []
 
-    # home-relative path (blue; elastic: ellipsised before any segment drops)
+    # home-relative path (theme `pwd` role; elastic: ellipsised before drops)
     if repo:
         home = os.path.expanduser("~")
         shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
-        segs.append(Segment([_S(shown, _CYAN)], priority=2, path=True))
+        segs.append(Segment([_S(shown, theme_mod.styles_for("pwd"))],
+                            priority=2, path=True))
 
     # git (theme-coloured) — slots in after path when inside a repo
     git_seg = _git_segment(repo)
@@ -297,18 +298,22 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     now = time.strftime("%H:%M", time.localtime())
     segs.append(Segment([_S("last ", _GREY), _S(now, _DEFAULT)], priority=7))
 
-    # write on/off · bash on/off — label default fg, state ON=green / OFF=red
+    # write on/off · bash on/off — label default fg, state ON=success / OFF=error
+    _on = theme_mod.styles_for("success")
+    _off = theme_mod.styles_for("error")
     segs.append(Segment([_S("write ", _DEFAULT),
                          _S("on" if session.write_enabled else "off",
-                            _GREEN if session.write_enabled else _RED)], priority=3))
+                            _on if session.write_enabled else _off)], priority=3))
     segs.append(Segment([_S("bash ", _DEFAULT),
                          _S("on" if session.unrestricted_bash else "off",
-                            _GREEN if session.unrestricted_bash else _RED)], priority=3))
+                            _on if session.unrestricted_bash else _off)], priority=3))
 
-    # luxe mode (slot) as its own segment in purple, then the model name (yellow)
-    segs.append(Segment([_S(state.slot, _PURPLE)], priority=2))
+    # luxe mode (slot) — theme `slot` role (calm, not the old dominant purple);
+    # then the model name in the theme `model` role.
+    segs.append(Segment([_S(state.slot, theme_mod.styles_for("slot"))], priority=2))
     model = state.model or slots.model_for("chat")
-    segs.append(Segment([_S(_short_model(model), _YELLOW)], priority=1))
+    segs.append(Segment([_S(_short_model(model), theme_mod.styles_for("model"))],
+                        priority=1))
 
     return segs
 

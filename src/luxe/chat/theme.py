@@ -38,8 +38,39 @@ _FALLBACK: dict[str, tuple[str, str]] = {
     "safe":      ("ansigreen", "green"),
     "warn":      ("ansiyellow", "yellow"),
     "alert":     ("ansired", "red"),
+    # luxe-only semantic roles (B4). Fallbacks are ANSI-named so they track the
+    # terminal/iTerm profile even without a YASL theme; `_ALIAS` below points each
+    # at a real YASL role so a custom theme drives them too. `slot` deliberately
+    # does NOT alias `model` (magenta) — that's the purple dominance we're killing.
+    "accent":    ("ansicyan", "cyan"),
+    "success":   ("ansigreen", "green"),
+    "error":     ("ansired", "red"),
+    "info":      ("ansiblue", "blue"),
+    "slot":      ("ansiblue", "blue"),
+    "muted":     ("ansibrightblack", "bright_black"),
+    "diff_add":  ("ansigreen", "green"),
+    "diff_del":  ("ansired", "red"),
+    "diff_hunk": ("ansicyan", "cyan"),
 }
 _ROLES = tuple(_FALLBACK)
+
+# Original YASL Theme attrs (the only roles queried against the user's theme).
+_YASL_ROLES = (
+    "pwd", "branch", "commit", "label", "ctx", "dirty",
+    "model", "white_brt", "safe", "warn", "alert",
+)
+
+# luxe-only roles inherit a real YASL role so a custom theme drives them. Roles
+# absent here (info, slot) keep their ANSI-named fallback by design.
+_ALIAS: dict[str, str] = {
+    "accent":    "ctx",
+    "success":   "safe",
+    "error":     "alert",
+    "muted":     "commit",
+    "diff_add":  "safe",
+    "diff_del":  "alert",
+    "diff_hunk": "ctx",
+}
 
 # ANSI 0-15 → named styles (tracked by the terminal profile, NOT fixed hex).
 _ANSI16_PTK = [
@@ -137,10 +168,18 @@ def role_styles(*, force: bool = False) -> dict[str, tuple[str, str]]:
     styles = dict(_FALLBACK)
     theme = _load_yasl_theme(resolve_theme_name())
     if theme is not None:
-        for role in _ROLES:
+        for role in _YASL_ROLES:
             val = getattr(theme, role, None)
             if isinstance(val, str) and val:
                 styles[role] = escape_to_styles(val)
+    # luxe-only roles inherit their aliased YASL role (unless the theme itself
+    # defines the luxe role, which is honored first).
+    for new_role, src in _ALIAS.items():
+        themed = getattr(theme, new_role, None) if theme is not None else None
+        if isinstance(themed, str) and themed:
+            styles[new_role] = escape_to_styles(themed)
+        elif src in styles:
+            styles[new_role] = styles[src]
     _cache = styles
     return styles
 
@@ -148,3 +187,20 @@ def role_styles(*, force: bool = False) -> dict[str, tuple[str, str]]:
 def reset_cache() -> None:
     global _cache
     _cache = None
+
+
+def styles_for(role: str) -> tuple[str, str]:
+    """(ptk_style, rich_style) for a luxe role under the active theme."""
+    return role_styles().get(role, ("", ""))
+
+
+def rich(role: str) -> str:
+    """Rich style string for a luxe role ('' = terminal default)."""
+    return styles_for(role)[1]
+
+
+def m(role: str, text: str) -> str:
+    """Wrap `text` in the role's Rich style, or return it bare when the role
+    resolves to the terminal default (avoids emitting an empty `[]` tag)."""
+    style = rich(role)
+    return f"[{style}]{text}[/]" if style else text

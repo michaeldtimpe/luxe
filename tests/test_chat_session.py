@@ -33,10 +33,21 @@ def repo(tmp_path: Path) -> Path:
 
 def test_first_turn_no_memory_write_mode_is_empty_context(repo: Path):
     # Write mode ON + first turn + no memory → legacy byte-identical empty block.
-    s = ChatSession(repo_path=str(repo), write_enabled=True)
+    # `terse` is default-on (B2) and injects a <response_style> block, so the
+    # empty-context invariant holds only with terse off.
+    s = ChatSession(repo_path=str(repo), write_enabled=True, terse=False)
     ctx, version = s.build_extra_context("what does foo do?")
     assert ctx == ""  # Goal carries the message; nothing else to disambiguate
     assert version == "trunc-v1"
+
+
+def test_terse_default_injects_response_style(repo: Path):
+    # B2: terse defaults on and injects a single high-precedence style block.
+    s = ChatSession(repo_path=str(repo), write_enabled=True)
+    assert s.terse is True
+    ctx, _ = s.build_extra_context("what does foo do?")
+    assert "<response_style>" in ctx
+    assert "<current_request>" in ctx  # echo restored once anything precedes it
 
 
 def test_read_only_injects_session_mode_hint_even_on_first_turn(repo: Path):
@@ -127,7 +138,8 @@ def test_num_ctx_override_defaults_off():
 
 def test_unpromoted_facts_do_not_leak_into_context(repo: Path):
     project_mem.add_fact(repo, "secret auto fact", confidence="auto")
-    s = ChatSession(repo_path=str(repo), write_enabled=True)  # write mode = no mode hint
+    # terse off so the only thing that could appear is the (forbidden) fact.
+    s = ChatSession(repo_path=str(repo), write_enabled=True, terse=False)
     ctx, _ = s.build_extra_context("hello")
     assert "secret auto fact" not in ctx
     assert ctx == ""  # nothing injected
