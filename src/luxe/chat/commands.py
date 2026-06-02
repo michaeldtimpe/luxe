@@ -44,6 +44,9 @@ _HELP = """[bold]luxe chat commands[/]
   [cyan]/ctx[/] [small|medium|large|xlarge]   show or set context window size
   [cyan]/write[/]                     toggle write tools (default: read-only)
   [cyan]/bash[/]                      toggle unrestricted shell (default: allowlisted)
+  [cyan]/verbose[/] [diff|full|off]   show full tool I/O (diffs, file contents, results)
+  [cyan]/reasoning[/]                 toggle live streaming of the model's thinking
+  [cyan]/goal[/] <objective> | stop   autonomously run rounds until the objective is met
   [cyan]/sys[/] [add <rule>|list|clear]  manage session-scoped system constraints
   [cyan]/memory[/] list|add|promote|forget|edit
   [cyan]/compare[/] <task>            run two configs side-by-side
@@ -69,6 +72,9 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/ctx": _ctx,
         "/write": _write,
         "/bash": _bash_mode,
+        "/verbose": _verbose,
+        "/reasoning": _reasoning,
+        "/goal": _goal,
         "/sys": _sys,
         "/memory": _memory,
         "/compare": _compare,
@@ -187,6 +193,75 @@ def _bash_mode(args, ctx: CommandContext) -> CommandResult:
     else:
         ctx.console.print("shell: [green]allowlisted[/] "
                           "[dim](safe binaries only; /bash for unrestricted dev mode)[/]")
+    return CommandResult(handled=True)
+
+
+_VERBOSE_LEVELS = ("off", "diff", "full")
+
+
+def _verbose(args, ctx: CommandContext) -> CommandResult:
+    """Tool-I/O visibility (B2): off | diff | full. Bare /verbose toggles
+    off<->diff. Independent of /reasoning."""
+    cur = ctx.session.verbose_level
+    if args:
+        lvl = args[0].lower()
+        if lvl not in _VERBOSE_LEVELS:
+            ctx.console.print(f"[yellow]Usage: /verbose [diff|full|off] "
+                              f"(current: {cur})[/]")
+            return CommandResult(handled=True)
+    else:
+        lvl = "diff" if cur == "off" else "off"
+    ctx.session.verbose_level = lvl
+    if lvl == "off":
+        ctx.console.print("verbose: [green]OFF[/] [dim](one-line tool summaries)[/]")
+    elif lvl == "diff":
+        ctx.console.print("verbose: [yellow]DIFF[/] [dim](edits as diffs, write "
+                          "headers, result bodies, ledger view)[/]")
+    else:
+        ctx.console.print("verbose: [red]FULL[/] [dim](entire file contents + full "
+                          "result bodies — can be very long)[/]")
+    return CommandResult(handled=True)
+
+
+def _reasoning(args, ctx: CommandContext) -> CommandResult:
+    """Toggle live streaming of the model's thinking (B2), independent of /verbose."""
+    ctx.session.show_reasoning = not ctx.session.show_reasoning
+    if ctx.session.show_reasoning:
+        ctx.console.print("reasoning: [yellow]ON[/] [dim](streams model prose live; "
+                          "responsiveness tracks the backend's streaming cadence)[/]")
+    else:
+        ctx.console.print("reasoning: [green]OFF[/] [dim](hidden)[/]")
+    return CommandResult(handled=True)
+
+
+def _goal(args, ctx: CommandContext) -> CommandResult:
+    """Autonomous goal runner (B4): /goal <objective> starts it; /goal stop halts."""
+    if not args:
+        s = ctx.session
+        if s.goal_active:
+            ctx.console.print(f"[bold]goal active[/] [dim](round {s.goal_round}/"
+                              f"{s.goal_max_rounds})[/]: {s.goal}")
+        else:
+            ctx.console.print("[yellow]Usage: /goal <objective>  ·  /goal stop[/]")
+        return CommandResult(handled=True)
+    if args[0].lower() == "stop":
+        if ctx.session.goal_active:
+            ctx.session.goal_active = False
+            ctx.console.print("[yellow]· goal stopped.[/]")
+        else:
+            ctx.console.print("[dim]· no active goal.[/]")
+        return CommandResult(handled=True)
+    if not ctx.session.write_enabled:
+        ctx.console.print("[yellow]· goal mode needs write tools — run /write first "
+                          "(and /bash if the task builds/tests).[/]")
+        return CommandResult(handled=True)
+    objective = " ".join(args).strip()
+    ctx.session.goal = objective
+    ctx.session.goal_active = True
+    ctx.session.goal_round = 0
+    ctx.session.consecutive_crashes = 0
+    ctx.console.print(f"[green]✓[/] goal set [dim](starts now; /goal stop or Ctrl-C "
+                      f"to halt)[/]\n  [dim]{objective}[/]")
     return CommandResult(handled=True)
 
 

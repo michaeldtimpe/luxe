@@ -74,6 +74,17 @@ class ChatSession:
     turns: list[ChatTurn] = field(default_factory=list)
     system_constraints: list[str] = field(default_factory=list)  # set by /sys; injected every turn
 
+    # -- observability (B2): tool-IO depth + reasoning stream are independent --
+    verbose_level: str = "off"   # off | diff | full — set by /verbose
+    show_reasoning: bool = False  # set by /reasoning; streams model prose live
+
+    # -- goal auto-runner (B4) ------------------------------------------------
+    goal: str = ""               # objective for the autonomous runner
+    goal_active: bool = False    # supervisor loop drives turns while True
+    goal_round: int = 0          # rounds issued so far this goal
+    goal_max_rounds: int = 20    # hard budget
+    consecutive_crashes: int = 0  # reset to 0 on any clean round
+
     # -- history --------------------------------------------------------------
 
     def history_pairs(self) -> list[tuple[str, str]]:
@@ -101,6 +112,14 @@ class ChatSession:
 
         history_text, fold_version = self.fold(budget_chars=budget_chars)
 
+        # B5 working-state fold: a compact record of decided/done/remaining so
+        # `continue work` / `/goal` rounds consult known state instead of
+        # re-reading plan.md + every source each turn. Empty on a fresh session.
+        ledger_block = ""
+        if self.session_id:
+            from luxe.state import ledger as ledger_mod
+            ledger_block = ledger_mod.render(ledger_mod.load(self.session_id))
+
         parts: list[str] = []
         # Lowest precedence: session-mode framing comes first so user/memory text
         # always reads as higher-priority. String lives in the prompt registry.
@@ -110,6 +129,10 @@ class ChatSession:
             parts.append(memory_block)
         if history_text:
             parts.append(f"<conversation_history>\n{history_text}\n</conversation_history>")
+        # Working state sits just below the user's explicit constraints but above
+        # memory/history precedence-wise — it's high-signal, low-token recall.
+        if ledger_block:
+            parts.insert(0, ledger_block)
         # System constraints sit above project memory and history — the user's
         # explicit rules should override anything the model infers from context.
         if self.system_constraints:
