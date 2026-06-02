@@ -25,8 +25,43 @@ never touches this module.
   instrumented and surfaced; keep chat-slot model resident, group code work
 - The history summarizer (`chat/summarize.py`) is NON-model, deterministic, and
   versioned (`SUMMARIZER_VERSION`); its output is persisted to `fold.jsonl`
-- Ctrl-C during a turn aborts at the next tool boundary, persists the partial
-  transcript, and returns to the prompt (no process exit)
+- Ctrl-C during a turn cancels MID-GENERATION: the SIGINT handler sets the
+  CancelToken and the streaming `on_token` callback (chat-only, `stream=True`)
+  raises `ChatCancelled` (a KeyboardInterrupt, so loop.py's `except Exception`
+  can't swallow it) at the next token — not only at tool boundaries. Persists the
+  partial transcript and returns to the prompt (no process exit). Responsiveness
+  is bounded by the backend's token-streaming cadence; an in-flight `bash`
+  subprocess finishes first. The benchmark/maintain path (`on_token=None`,
+  `stream=False`) is unaffected and keeps tool-boundary cancellation.
+- Working-state ledger (`state/ledger.py`, persisted to
+  `~/.luxe/sessions/<id>/ledger.json`): a compact
+  decided/completed/in_progress/blocked/files record injected as a high-precedence
+  `<working_state>` block by `build_extra_context` so `continue work`/`/goal`
+  rounds consult known state instead of re-reading plan.md + all sources. Two
+  feeds: deterministic (write/edit paths observed from the tool-event stream) and
+  model-driven (the always-exposed `update_ledger` tool, wired via run_single's
+  extra-tool seam). Empty ledger → byte-identical legacy context (no block)
+- `/verbose [diff|full|off]` controls tool-IO visibility and `/reasoning` toggles
+  live streaming of model prose — INDEPENDENT session flags (reasoning is often
+  low-signal; never coupled). Verbose reuses the `on_tool_event` seam
+  (`format_tool_call_verbose`): `diff` renders edit_file as a unified diff +
+  write_file headers + capped result bodies + the ledger view; `full` dumps whole
+  files. All content is Rich-escaped and bounded. Reasoning rides the same
+  streaming `on_token` seam as Ctrl-C, line-buffered so it scrolls above the Live
+  region. Both default off → unchanged one-line summaries
+- `/goal <objective>` is an autonomous supervisor in the REPL loop: round 1 sends
+  the objective, later rounds send `continue work`, each printing `[goal round
+  N/M]`. Termination is robust-over-clever — consecutive no-op rounds (zero tool
+  calls AND zero edits) are authoritative; the `LUXE_GOAL_DONE` sentinel is
+  advisory (honored only alongside a no-op round); plus a round budget. Crash
+  resilience retries on CONSECUTIVE failures (reset on any clean round) and a
+  tool-fingerprint stuck-loop guard pauses pathological repeats. Requires write
+  mode; Ctrl-C or `/goal stop` halts it
+- Static analyzers (`tools/analysis.py`) resolve via PATH → `python -m <module>`
+  → `uvx` (NO auto-install — agent venvs may be frozen) and degrade to a
+  SUCCESSFUL machine-readable `{"status":"skipped",…}` when unavailable, so a
+  missing linter is never misread as a pass. The `[analyzers]` extra pins the
+  toolchain (ruff/mypy/bandit/pip-audit)
 - Write tools default OFF (read-only, reusing the `serve`/`make_read_only_role`
   precedent); `/write` toggles; write-mode is shown in the footer every turn
 - In read-only mode a lowest-precedence `<session_mode>` block (string =

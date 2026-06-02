@@ -10,13 +10,15 @@ guards don't swallow it).
 
 from __future__ import annotations
 
+import difflib
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape as _escape
 
 from luxe.tools.base import ToolCall
 
@@ -117,13 +119,108 @@ def format_tool_call(tc: ToolCall) -> str:
     return head + tail
 
 
-def make_tool_event(console: Console, cancel: CancelToken):
+def raise_if_cancelled(cancel: CancelToken) -> None:
+    """Raise ChatCancelled if a Ctrl-C has set the token. Shared by the tool
+    boundary and the streaming token callback (B1) so cancellation lands
+    mid-generation, not only between tool calls."""
+    if cancel.requested:
+        raise ChatCancelled()
+
+
+# Generous caps so a write-heavy turn can't lock the terminal. `diff` keeps each
+# block tight; `full` is the escape hatch and still bounded to avoid a runaway.
+_VERBOSE_CAP = {"diff": 4096, "full": 200_000}
+
+
+def _capped_block(text: str, cap: int, *, indent: str = "    ") -> str:
+    """Escape Rich markup, indent, and truncate `text` to `cap` chars with a
+    `… +N more lines` footer so verbose output stays bounded."""
+    text = text or ""
+    truncated = len(text) > cap
+    shown = text[:cap]
+    lines = shown.splitlines() or [""]
+    body = "\n".join(f"{indent}[dim]{_escape(ln)}[/]" for ln in lines)
+    if truncated:
+        remaining = text[cap:].count("\n") + 1
+        body += f"\n{indent}[dim]… +{remaining} more line(s) (use /verbose full)[/]"
+    return body
+
+
+def _unified_diff(path: str, old: str, new: str, cap: int) -> str:
+    diff = difflib.unified_diff(
+        (old or "").splitlines(), (new or "").splitlines(),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
+    )
+    out: list[str] = []
+    for ln in diff:
+        if ln.startswith("+") and not ln.startswith("+++"):
+            out.append(f"    [green]{_escape(ln)}[/]")
+        elif ln.startswith("-") and not ln.startswith("---"):
+            out.append(f"    [red]{_escape(ln)}[/]")
+        elif ln.startswith("@@"):
+            out.append(f"    [cyan]{_escape(ln)}[/]")
+        else:
+            out.append(f"    [dim]{_escape(ln)}[/]")
+    text = "\n".join(out)
+    if len(text) > cap:
+        text = text[:cap] + "\n    [dim]… diff truncated (use /verbose full)[/]"
+    return text or "    [dim](no textual change)[/]"
+
+
+def format_tool_call_verbose(tc: ToolCall, level: str) -> str:
+    """Multi-line view of a dispatched tool call for /verbose (B2).
+
+    `level` is "diff" (args summarized, edits shown as a unified diff, bodies
+    capped) or "full" (whole file contents / full result bodies). Reuses the
+    same `on_tool_event` seam — ToolCall already carries full arguments+result.
+    """
+    cap = _VERBOSE_CAP.get(level, _VERBOSE_CAP["diff"])
+    head = format_tool_call(tc)
+    lines = [head, f"    [dim]wall {tc.wall_s * 1000:.0f}ms[/]"]
+    args = tc.arguments or {}
+
+    if tc.name == "edit_file":
+        path = str(args.get("path", "?"))
+        lines.append(f"    [dim]edit[/] {_escape(path)}")
+        lines.append(_unified_diff(path, str(args.get("old_string", "")),
+                                   str(args.get("new_string", "")), cap))
+    elif tc.name == "write_file":
+        path = str(args.get("path", "?"))
+        content = str(args.get("content", ""))
+        nlines = content.count("\n") + 1 if content else 0
+        lines.append(f"    [dim]write[/] {_escape(path)} [dim]({nlines} lines)[/]")
+        if level == "full":
+            lines.append(_capped_block(content, cap))
+    else:
+        # Other tools: show the full argument set, capped.
+        for k, v in args.items():
+            sval = str(v)
+            if "\n" in sval or len(sval) > 80:
+                lines.append(f"    [dim]{_escape(k)}=[/]")
+                lines.append(_capped_block(sval, cap))
+            else:
+                lines.append(f"    [dim]{_escape(k)}={_escape(sval)}[/]")
+
+    # Result / error body (every tool).
+    if tc.error:
+        lines.append("    [red]error:[/]")
+        lines.append(_capped_block(tc.error, cap))
+    elif tc.result and tc.name not in {"write_file"}:
+        lines.append("    [dim]result:[/]")
+        lines.append(_capped_block(tc.result, cap))
+    return "\n".join(lines)
+
+
+def make_tool_event(console: Console, cancel: CancelToken,
+                    verbose_level: str = "off"):
     """Build an `on_tool_event` callback that renders live + honors cancel."""
 
     def _on_event(tc: ToolCall) -> None:
-        console.print(format_tool_call(tc))
-        if cancel.requested:
-            raise ChatCancelled()
+        if verbose_level in ("diff", "full"):
+            console.print(format_tool_call_verbose(tc, verbose_level))
+        else:
+            console.print(format_tool_call(tc))
+        raise_if_cancelled(cancel)
 
     return _on_event
 

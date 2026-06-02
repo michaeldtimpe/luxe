@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import signal
 import time
+from dataclasses import dataclass, field
 from typing import Callable
 
 from rich.console import Console
 from rich.live import Live
+from rich.markup import escape as _escape
 from rich.status import Status
 
 from luxe.agents.single import run_single
@@ -23,9 +25,11 @@ from luxe.chat.render import (
     ChatCancelled,
     arrow_prompt_markup,
     format_tool_call,
+    format_tool_call_verbose,
     make_tool_event,
     pick_no_adjacent_repeats,
     rainbow_banner,
+    raise_if_cancelled,
     render_final,
     render_footer,
 )
@@ -41,6 +45,41 @@ from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
 from luxe.memory import project as project_mem
 from luxe.memory import session as session_store
+
+@dataclass
+class TurnOutcome:
+    """What the goal supervisor (B4) needs to decide the next round: how much the
+    turn actually did, plus a fingerprint of its tool calls for stuck-loop
+    detection. `crashed` is set when run_single raised before returning."""
+    tool_calls: int = 0
+    files_changed: int = 0
+    final_text: str = ""
+    interrupted: bool = False
+    crashed: bool = False
+    fingerprint: frozenset = field(default_factory=frozenset)
+
+
+class _ReasoningStreamer:
+    """Buffers streamed model tokens and flushes COMPLETE lines via a callback
+    (B2 /reasoning). Line-buffering avoids fighting the rich.Live region — each
+    finished line scrolls above it exactly like a tool-call line."""
+
+    def __init__(self, printline: Callable[[str], None]):
+        self._buf = ""
+        self._printline = printline
+
+    def feed(self, delta: str) -> None:
+        self._buf += delta
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                self._printline(line)
+
+    def flush(self) -> None:
+        if self._buf.strip():
+            self._printline(self._buf)
+        self._buf = ""
+
 
 # Map an inferred task_type onto a model slot. Cosmetic when every slot is the
 # champion; meaningful once a slot points elsewhere. `/use` overrides per turn.
@@ -160,6 +199,14 @@ def run_chat_repl(
 
     try:
         while True:
+            # Goal auto-runner (B4): while a goal is active, the supervisor drives
+            # rounds itself instead of blocking on the prompt. Returns when the
+            # goal completes, pauses, or is interrupted — then we fall back to the
+            # normal interactive prompt.
+            if session.goal_active:
+                _run_goal_loop(session, slots, cfg, languages, console, cancel,
+                               infer, status)
+                continue
             try:
                 line = reader()
             except (EOFError, KeyboardInterrupt):
@@ -195,8 +242,9 @@ def _run_turn(
     cancel: CancelToken,
     infer: Callable[[str], str],
     status: StatusState | None = None,
-) -> None:
+) -> TurnOutcome:
     from luxe.mcp.server import make_read_only_role
+    from luxe.state import ledger as ledger_mod
 
     task_type = infer(message)
     slot = session.pinned_slot or _SLOT_FOR_TASK.get(task_type, "chat")
@@ -216,8 +264,12 @@ def _run_turn(
     # seam — benchmark/maintain never pass these, so their bash is untouched.
     # Dev mode → unrestricted; plain write mode → allowlisted bash whose rejections
     # explain the flag state (/bash) instead of leaving the model to retry.
-    extra_tool_defs = None
-    extra_tool_fns = None
+    # update_ledger (B0/B5) is always exposed so the model can maintain its
+    # working state across rounds; it only mutates the per-session ledger file.
+    from luxe.state.ledger import make_update_ledger_tool
+    _led_def, _led_fn = make_update_ledger_tool(session.session_id)
+    extra_tool_defs = [_led_def]
+    extra_tool_fns = {"update_ledger": _led_fn}
     if session.write_enabled:
         from luxe.tools.shell import (
             make_bash_fn,
@@ -225,11 +277,11 @@ def _run_turn(
             unrestricted_bash_def,
         )
         if session.unrestricted_bash:
-            extra_tool_defs = [unrestricted_bash_def()]
-            extra_tool_fns = {"bash": make_bash_fn(unrestricted=True)}
+            extra_tool_defs.append(unrestricted_bash_def())
+            extra_tool_fns["bash"] = make_bash_fn(unrestricted=True)
         else:
-            extra_tool_defs = [restricted_bash_def()]
-            extra_tool_fns = {"bash": make_bash_fn(restricted_hint=True)}
+            extra_tool_defs.append(restricted_bash_def())
+            extra_tool_fns["bash"] = make_bash_fn(restricted_hint=True)
 
     # `/ctx` size override (chat-only) — clamp to the role's hard ceiling so a
     # tier request can never exceed what this box/model can hold.
@@ -263,6 +315,24 @@ def _run_turn(
     result = None
     started_at = time.time()
 
+    # Per-turn collectors feeding the ledger (B0/B5) and the goal supervisor (B4):
+    # files actually written/edited, and a fingerprint of tool calls (name + the
+    # salient arg) for stuck-loop detection.
+    changed_files: list[str] = []
+    fingerprint: set = set()
+
+    def _note_tool(tc) -> None:
+        args = getattr(tc, "arguments", {}) or {}
+        prim = (args.get("path") or args.get("query")
+                or args.get("command") or args.get("pattern"))
+        fingerprint.add((tc.name, str(prim) if prim is not None else ""))
+        if (tc.name in ("write_file", "edit_file")
+                and not getattr(tc, "error", None)
+                and not getattr(tc, "duplicate", False)):
+            p = args.get("path")
+            if p:
+                changed_files.append(str(p))
+
     def _call(on_event, on_token=None):
         return run_single(
             backend, role_cfg, goal=message, task_type=task_type,
@@ -288,15 +358,47 @@ def _run_turn(
                 session, slots, session.repo_path, live_state, started_at)
             with Live(activity, console=console, refresh_per_second=10,
                       transient=True) as live:
+                reasoner = _ReasoningStreamer(
+                    lambda ln: live.console.print(f"[dim]{_escape(ln)}[/]"))
+
                 def _on_event(tc):
-                    live.console.print(format_tool_call(tc))
+                    if session.verbose_level in ("diff", "full"):
+                        live.console.print(
+                            format_tool_call_verbose(tc, session.verbose_level))
+                    else:
+                        live.console.print(format_tool_call(tc))
                     activity.note(tc)
-                    if cancel.requested:
-                        raise ChatCancelled()
-                result = _call(_on_event, activity.on_token)
+                    _note_tool(tc)
+                    raise_if_cancelled(cancel)
+
+                def _on_token(delta):
+                    # B1: cancel lands mid-generation (cadence-bound, not instant).
+                    raise_if_cancelled(cancel)
+                    activity.on_token(delta)
+                    if session.show_reasoning:
+                        reasoner.feed(delta)
+
+                result = _call(_on_event, _on_token)
+                if session.show_reasoning:
+                    reasoner.flush()
         else:
+            reasoner = _ReasoningStreamer(
+                lambda ln: console.print(f"[dim]{_escape(ln)}[/]"))
+            base_event = make_tool_event(console, cancel, session.verbose_level)
+
+            def _on_event(tc):
+                _note_tool(tc)
+                base_event(tc)
+
+            def _on_token(delta):
+                raise_if_cancelled(cancel)
+                if session.show_reasoning:
+                    reasoner.feed(delta)
+
             with Status("[dim]generating…[/]", console=console, spinner="dots"):
-                result = _call(make_tool_event(console, cancel))
+                result = _call(_on_event, _on_token)
+            if session.show_reasoning:
+                reasoner.flush()
     except (ChatCancelled, KeyboardInterrupt):
         interrupted = True
         console.print("[yellow]· interrupted — partial turn saved[/]")
@@ -307,6 +409,11 @@ def _run_turn(
                 signal.signal(signal.SIGINT, prev_handler)
             except (ValueError, OSError):
                 pass
+
+    # Deterministic ledger channel (B0/B5): record files written/edited even on
+    # an interrupted turn — those writes already happened on disk.
+    if changed_files:
+        ledger_mod.record_files(session.session_id, changed_files)
 
     assistant_text = (result.final_text if result else "") or ""
     if not interrupted and result is not None:
@@ -342,6 +449,11 @@ def _run_turn(
                     f"`/ctx {nxt[0]}` (num_ctx {nxt[1]}) gives more headroom[/]"
                 )
 
+        # Working-state view (B2): show the ledger after the footer so the
+        # operator sees decided/done/remaining at a glance.
+        if session.verbose_level in ("diff", "full"):
+            console.print(ledger_mod.render_rich(ledger_mod.load(session.session_id)))
+
     session_store.append_turn(
         session.session_id, "assistant",
         text=assistant_text, run_id=run_id, interrupted=interrupted,
@@ -352,6 +464,116 @@ def _run_turn(
     session.add_turn(ChatTurn(
         user=message, assistant=assistant_text, slot=slot, model=model, run_id=run_id,
     ))
+
+    return TurnOutcome(
+        tool_calls=(result.tool_calls_total if result else 0),
+        files_changed=len(set(changed_files)),
+        final_text=assistant_text,
+        interrupted=interrupted,
+        fingerprint=frozenset(fingerprint),
+    )
+
+
+# -- goal auto-runner (B4) --------------------------------------------------
+
+_GOAL_NOOP_ROUNDS = 2      # consecutive no-op rounds → objective reached
+_GOAL_STUCK_ROUNDS = 3     # identical fingerprint, no edits → pathological loop
+_GOAL_MAX_CRASHES = 3      # consecutive crashes → pause for a human
+_GOAL_SENTINEL = "LUXE_GOAL_DONE"
+
+_GOAL_SUFFIX = (
+    "\n\n(Autonomous goal mode. Maintain your working state with the "
+    "update_ledger tool as you decide things and finish work. When the objective "
+    "is FULLY complete and verified, end your reply with a line containing only "
+    f"{_GOAL_SENTINEL}.)"
+)
+
+
+def _run_goal_loop(
+    session: ChatSession,
+    slots: SlotManager,
+    cfg: PipelineConfig,
+    languages: frozenset,
+    console: Console,
+    cancel: CancelToken,
+    infer: Callable[[str], str],
+    status: StatusState | None,
+) -> None:
+    """Supervisor: auto-issue rounds until the objective is reached, the budget
+    is hit, the agent gets stuck, or too many crashes pile up. Survives a crashed
+    round (the turn is already persisted; the ledger + history rehydrate state)."""
+    noop_streak = 0
+    recent_fps: list[frozenset] = []
+    console.print(
+        f"[bold cyan]· goal started[/] [dim]{_escape(session.goal)}[/]\n"
+        f"[dim]  up to {session.goal_max_rounds} rounds · Ctrl-C or /goal stop to halt[/]")
+
+    while session.goal_active:
+        if session.goal_round >= session.goal_max_rounds:
+            console.print(f"[yellow]· goal budget reached "
+                          f"({session.goal_max_rounds} rounds) — pausing.[/]")
+            session.goal_active = False
+            break
+
+        session.goal_round += 1
+        rnd = session.goal_round
+        base = session.goal if rnd == 1 else "continue work"
+        message = base + _GOAL_SUFFIX
+        console.print(f"\n[bold]· [goal round {rnd}/{session.goal_max_rounds}][/] "
+                      f"[dim]{_escape(base)}[/]")
+
+        try:
+            outcome = _run_turn(message, session, slots, cfg, languages,
+                                console, cancel, infer, status)
+        except (ChatCancelled, KeyboardInterrupt):
+            console.print("[yellow]· goal halted by interrupt.[/]")
+            session.goal_active = False
+            break
+        except Exception as e:  # crash: bounded retry on CONSECUTIVE failures
+            session.consecutive_crashes += 1
+            console.print(f"[red]· goal round crashed ({type(e).__name__}: {e}) — "
+                          f"consecutive {session.consecutive_crashes}/"
+                          f"{_GOAL_MAX_CRASHES}[/]")
+            if session.consecutive_crashes >= _GOAL_MAX_CRASHES:
+                console.print("[yellow]· too many consecutive crashes — "
+                              "pausing goal for a human.[/]")
+                session.goal_active = False
+            continue
+        session.consecutive_crashes = 0
+
+        if outcome.interrupted:
+            console.print("[yellow]· goal halted by interrupt.[/]")
+            session.goal_active = False
+            break
+
+        # Stuck-loop guard: same non-empty fingerprint repeating with no edits.
+        if outcome.fingerprint:
+            recent_fps.append(outcome.fingerprint)
+            recent_fps[:] = recent_fps[-_GOAL_STUCK_ROUNDS:]
+            if (len(recent_fps) == _GOAL_STUCK_ROUNDS
+                    and len(set(recent_fps)) == 1
+                    and outcome.files_changed == 0):
+                console.print(
+                    f"[yellow]· goal appears stuck — same {len(outcome.fingerprint)} "
+                    f"call(s) for {_GOAL_STUCK_ROUNDS} rounds with no edits. Pausing.[/]")
+                session.goal_active = False
+                break
+        else:
+            recent_fps.clear()
+
+        # Completion: no-op rounds are authoritative; the sentinel is advisory and
+        # only honored when it coincides with a no-op round.
+        no_op = outcome.tool_calls == 0 and outcome.files_changed == 0
+        noop_streak = noop_streak + 1 if no_op else 0
+        sentinel = _GOAL_SENTINEL in (outcome.final_text or "")
+        if noop_streak >= _GOAL_NOOP_ROUNDS or (sentinel and no_op):
+            why = "model signaled done" if (sentinel and no_op) else \
+                  f"{noop_streak} consecutive no-op rounds"
+            console.print(f"[green]· goal complete ({why}) after {rnd} round(s).[/]")
+            session.goal_active = False
+            break
+
+    session.goal_round = 0  # ready for a fresh /goal
 
 
 # -- hooks (resume now; compare wired in the compare phase) -----------------

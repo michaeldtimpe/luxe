@@ -141,6 +141,34 @@ override with `LUXE_HOME`):
 - The model weights never change — bare vs full is purely harness scaffolding.
 - chat starts read-only; type `/write` in the REPL to enable edits + `bash`.
 
+### Chat commands
+
+`/help` lists them all. Beyond the slot/model/context controls (`/model`, `/use`,
+`/ctx`, `/write`, `/bash`, `/sys`, `/memory`, `/resume`, `/clear`):
+
+| Command | What it does |
+|---|---|
+| `/verbose [diff\|full\|off]` | Expand the one-line tool summaries: `diff` shows `edit_file` as a unified diff, `write_file` headers, and full tool result/error bodies (capped); `full` dumps entire file contents. Also renders the working-state ledger each turn. Bare `/verbose` toggles off↔diff. |
+| `/reasoning` | Stream the model's thinking live (dim) between tool calls. Independent of `/verbose`. Responsiveness tracks the backend's streaming cadence. |
+| `/goal <objective>` · `/goal stop` | Autonomous runner: issues round 1 = objective, later rounds = `continue work`, until the objective is reached (consecutive no-op rounds; `LUXE_GOAL_DONE` is advisory), a round budget (20) is hit, the agent gets stuck (repeated tool fingerprint, no edits), or 3 consecutive crashes. Each round prints `[goal round N/M]`. Needs `/write`. Ctrl-C or `/goal stop` halts it. |
+
+**Working-state ledger.** Across `continue work` / `/goal` rounds, luxe keeps a
+compact per-session ledger (`~/.luxe/sessions/<id>/ledger.json`) of
+decided / completed / in-progress / blocked items plus files written — injected
+as a `<working_state>` block so the model trusts known state instead of
+re-reading `plan.md` + every source each round (the dominant token sink at small
+context windows). The model maintains it via the `update_ledger` tool; files
+written/edited are tracked automatically.
+
+**Interrupting.** Ctrl-C cancels mid-generation (not only at tool boundaries) and
+saves the partial turn. A long-running `bash` command finishes first.
+
+**Static analyzers** (`lint`/`typecheck`/`security_scan`/`deps_audit`) resolve
+their binary via PATH → `python -m` → `uvx` (no auto-install). When a tool is
+genuinely unavailable they return a structured `{"status":"skipped",…}` result
+rather than an error, so a missing linter is never misread as "passed". Install
+the toolchain with `pip install -e '.[analyzers]'`.
+
 ## Production model
 
 The monolith is configured in `configs/single_64gb.yaml` (see the file for
