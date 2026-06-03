@@ -272,17 +272,19 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
         segs.append(Segment(git_seg, priority=1))
 
     # ctx: `ctx N% <window-size>` (label = default fg; % used; size in the K/M
-    # context convention). Before the first turn, show the configured tier.
+    # context convention). A pending `/ctx` override (clamped to the slot ceiling)
+    # is reflected IMMEDIATELY — before the next turn — so the bar tracks the
+    # command. The % appears once a turn has measured usage (live mid-turn).
+    eff_win = state.num_ctx
+    if session.num_ctx_override:
+        try:
+            eff_win = min(session.num_ctx_override, slots.ctx_ceiling("chat"))
+        except Exception:
+            eff_win = session.num_ctx_override
     ctx_spans: list[Span] = [_S("ctx ", _DEFAULT)]
-    if state.num_ctx:
-        # window size is known from config immediately; the % appears once a
-        # turn has measured usage.
-        if state.has_turn:
-            ctx_spans.append(_S(f"{state.ctx_pressure:.0%} ", _DEFAULT))
-        ctx_spans.append(_S(_ctx_size(state.num_ctx), _GREY))
-    else:
-        tier = tier_label(session.num_ctx_override) if session.num_ctx_override else "default"
-        ctx_spans.append(_S(tier, _GREY))
+    if state.has_turn:
+        ctx_spans.append(_S(f"{state.ctx_pressure:.0%} ", _DEFAULT))
+    ctx_spans.append(_S(_ctx_size(eff_win) if eff_win else "default", _GREY))
     segs.append(Segment(ctx_spans, priority=2))
 
     # cache: resident prompt size (luxe has no cross-turn prompt cache — each turn

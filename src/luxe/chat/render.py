@@ -409,14 +409,19 @@ def _clock(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
 
-def render_footer_text(slot: str, model: str, result) -> str:
-    """Plain one-line footer for the TUI transcript (no console required)."""
+def render_footer_text(slot: str, model: str, result, *, num_ctx: int = 0) -> str:
+    """Plain one-line footer for the TUI transcript (no console required).
+    `tok: P+C` is this task's prompt+completion tokens; ctx% is that token fill of
+    the window (`of <size>` shown when num_ctx is known)."""
+    ctx = f"ctx(peak): {result.peak_context_pressure:.0%}"
+    if num_ctx:
+        ctx += f" of {num_ctx // 1024}K"
     return "· " + " · ".join([
         f"slot: {slot}", f"model: {model}", f"steps: {result.steps}",
         f"tools: {result.tool_calls_total}", f"{result.wall_s:.1f}s",
         f"{_tok_per_s(result):.0f} tok/s",
         f"tok: {result.prompt_tokens}+{result.completion_tokens}",
-        f"ctx(peak): {result.peak_context_pressure:.0%}",
+        ctx,
     ])
 
 

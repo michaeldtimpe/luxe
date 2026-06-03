@@ -120,13 +120,16 @@ def _resolve_or_clone(path, *, full_history: bool, console, reader) -> str | Non
     return str(dest.resolve())
 
 
-def _activity_callbacks(update):
+def _activity_callbacks(update, cancel=None):
     """Build (on_tool_event, on_token) that coalesce tool calls into a phased
     status string passed to `update(text)`: `analyzing… read_file (31) · grep
     (12)` while tools fire, then `writing report…` once the model starts emitting
-    prose after the last tool. Factored out so the coalescing/phasing is unit-
-    testable without a TTY (the spinner itself only runs when console.is_terminal)."""
+    prose after the last tool. When `cancel` is provided (interactive TUI), each
+    callback raises `ChatCancelled` if cancellation was requested. Factored out so
+    the coalescing/phasing is unit-testable without a TTY."""
     from collections import Counter
+
+    from luxe.chat.render import raise_if_cancelled
 
     counts: Counter = Counter()
     state = {"writing": False}
@@ -141,8 +144,12 @@ def _activity_callbacks(update):
         counts[getattr(tc, "name", "?")] += 1
         state["writing"] = False  # more tools → back to analyzing
         update(_text())
+        if cancel is not None:
+            raise_if_cancelled(cancel)
 
     def on_token(_delta):
+        if cancel is not None:
+            raise_if_cancelled(cancel)
         # First prose after at least one tool call = the report being written.
         if counts and not state["writing"]:
             state["writing"] = True
@@ -161,6 +168,7 @@ def run_git_report(
     save: bool = True,
     verbose: bool = False,
     expected_head: str | None = None,
+    cancel=None,
 ) -> tuple[str, Path | None]:
     """Run one read-only analysis pass over a repo and report the result.
 
@@ -252,16 +260,23 @@ def run_git_report(
             )
 
         # WS2: phased spinner + coalesced tool counts while the model works
-        # (terminal only; gitkit is self-contained, no chat LiveActivity).
-        if console.is_terminal:
-            with console.status("[dim]gathering context & loading model…[/]",
-                                spinner="dots") as status:
-                on_event, on_token = _activity_callbacks(
-                    lambda t: status.update(f"[dim]{t}[/]"))
+        # (terminal only; gitkit is self-contained, no chat LiveActivity). When a
+        # `cancel` token is supplied (interactive TUI), esc/Ctrl-C aborts cleanly.
+        from luxe.chat.render import ChatCancelled
+        try:
+            if console.is_terminal:
+                with console.status("[dim]gathering context & loading model…[/]",
+                                    spinner="dots") as status:
+                    on_event, on_token = _activity_callbacks(
+                        lambda t: status.update(f"[dim]{t}[/]"), cancel=cancel)
+                    result = _do_run(on_event, on_token)
+            else:
+                console.print("[dim]· gathering git history + GitHub metadata…[/]")
+                on_event, on_token = _activity_callbacks(lambda t: None, cancel=cancel)
                 result = _do_run(on_event, on_token)
-        else:
-            console.print("[dim]· gathering git history + GitHub metadata…[/]")
-            result = _do_run()
+        except (ChatCancelled, KeyboardInterrupt):
+            console.print("[yellow]· cancelled.[/]")
+            return "", None
 
         # WS1.2: slice off any leading monologue before the report's first header.
         report = extract_report((result.final_text or "").strip()) or \
