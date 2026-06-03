@@ -25,14 +25,25 @@ never touches this module.
   instrumented and surfaced; keep chat-slot model resident, group code work
 - The history summarizer (`chat/summarize.py`) is NON-model, deterministic, and
   versioned (`SUMMARIZER_VERSION`); its output is persisted to `fold.jsonl`
-- Ctrl-C during a turn cancels MID-GENERATION: the SIGINT handler sets the
-  CancelToken and the streaming `on_token` callback (chat-only, `stream=True`)
-  raises `ChatCancelled` (a KeyboardInterrupt, so loop.py's `except Exception`
-  can't swallow it) at the next token — not only at tool boundaries. Persists the
-  partial transcript and returns to the prompt (no process exit). Responsiveness
-  is bounded by the backend's token-streaming cadence; an in-flight `bash`
-  subprocess finishes first. The benchmark/maintain path (`on_token=None`,
-  `stream=False`) is unaffected and keeps tool-boundary cancellation.
+- Cancel during a turn cancels MID-GENERATION: the CancelToken is set (the line
+  REPL via a SIGINT handler; the TUI via the `escape`/`ctrl+c` key binding) and
+  the streaming `on_token` callback (chat-only, `stream=True`) raises
+  `ChatCancelled` (a KeyboardInterrupt, so loop.py's `except Exception` can't
+  swallow it) at the next token — not only at tool boundaries. Persists the
+  partial transcript and returns to the prompt (no process exit). In the TUI,
+  cancel ALSO dismisses any open `PromptScreen` modal so a blocked worker
+  unwinds. Responsiveness is bounded by the backend's token-streaming cadence; an
+  in-flight `bash` subprocess finishes first. The benchmark/maintain path
+  (`on_token=None`, `stream=False`) is unaffected and keeps tool-boundary
+  cancellation.
+- The per-turn pipeline is UI-agnostic: `prepare_turn` (slot/role/tool/ledger
+  setup + the verbatim `run_single` closure) and `finalize_turn` (persistence +
+  `TurnOutcome`) are shared by BOTH front-ends; `run_single`'s call args are
+  assembled identically so the benchmark path stays byte-identical. Interactive
+  sub-prompts (/plan choice, gitkit clone URL, compare vote) go through one
+  `reader`/`prompt_user` seam — `console.input` on the line path, a modal on the
+  TUI. `_run_plan`/`_run_goal_loop` take injectable `run_turn`/`reader` so the
+  supervisor logic is single-sourced.
 - Working-state ledger (`state/ledger.py`, persisted to
   `~/.luxe/sessions/<id>/ledger.json`): a compact
   decided/completed/in_progress/blocked/files record injected as a high-precedence
@@ -170,18 +181,34 @@ never touches this module.
   themes module for COLOURS — it is NOT the memory subsystem and injects no
   `~/.claude` content into context (the luxe.sdd/chat.sdd `~/.claude` prohibition
   is scoped to context/memory, not UI theming).
-- During a turn (when `console.is_terminal`) the REPL renders a `rich.Live` with
-  THREE stacked lines via `LiveActivity`: (1) a live preview of the text the model
-  is currently streaming (so a long generation isn't opaque), (2) the activity
-  line (spinner · elapsed · tool count · current tool), (3) the status bar. Tool
-  tail-log lines scroll above via `live.console.print`. Streaming is fed by the
-  chat-only `on_token` seam (run_single→run_agent→backend.chat stream=True);
-  `LiveActivity.on_token` buffers the current chunk (cleared on each tool
-  dispatch). The live bar seeds `num_ctx` (shows `ctx N% <size>`, % = last
-  completed turn's measured pressure — live mid-turn pressure isn't exposed).
-  Non-terminal (tests, piped) falls back to `Status` + line streaming, non-stream
-  (`on_token=None`) — deterministic loop untouched. `transient=True` clears the
-  in-turn region; the final answer + footer print below.
+- The interactive front-end is a full-screen **Textual** app (`chat/tui.py`,
+  `tui.css`). Layout (top→bottom):
+
+      ┌ RichLog#transcript ─────────── (1fr, scrollable; banner, hint, turns,
+      │                                  tool lines, final answers)
+      ├ Static#generating ──────────── (transient; spinner · elapsed · tool
+      │                                  counts · streamed preview — turn only)
+      ├ StatusBar#status ───────────── (status.fields()/fit()/to_rich_text())
+      └ Input#prompt ───────────────── (docked at the very bottom)
+
+  The blocking turn runs on a Textual thread worker (`@work(thread=True,
+  exclusive=True)` — exclusive + disabling the Input enforces ONE run_single per
+  turn). Tool events marshal to the UI thread via `call_from_thread`; tokens
+  COALESCE on the worker into a rolling buffer that a UI-thread `set_interval`
+  timer (~10 Hz) renders into `#generating` (never per-token `call_from_thread` —
+  flood/deadlock). A final frame flushes on completion. The final answer renders
+  via `build_final_renderable` into the RichLog. Cancel = key binding (see the
+  cancel Must). Front-end selection / fallback:
+
+  | condition                                  | front-end          |
+  |--------------------------------------------|--------------------|
+  | stdout is a TTY AND `textual` installed AND not `--resume` | Textual TUI |
+  | otherwise (CI, pipes, textual-absent, resume) | line REPL (`repl.py`) |
+
+  The line REPL keeps its prior behaviour: a `rich.Live` 3-line `LiveActivity`
+  (preview · activity · status) when `console.is_terminal`, else `Status` + line
+  streaming. Both feed off the chat-only `on_token` seam (`stream=True`); the
+  benchmark/maintain path (`on_token=None`, `stream=False`) is untouched.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature
