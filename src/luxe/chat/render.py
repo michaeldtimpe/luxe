@@ -114,7 +114,10 @@ def format_tool_call(tc: ToolCall) -> str:
     """One-line Rich-markup summary of a dispatched tool call. Colors come from
     theme roles (B4) so they track the user's terminal/YASL theme."""
     accent = theme_mod.rich("accent") or "cyan"
-    head = f"[{accent}]→[/] {tc.name}([dim]{summarize_args(tc.arguments)}[/])"
+    # Escape the args so a value containing `[` can't break the span. The PRINT
+    # sites pass highlight=False so rich's ReprHighlighter doesn't repaint the
+    # untagged `name(` call-pattern magenta over the theme (iter-6 color fix).
+    head = f"[{accent}]→[/] {tc.name}([dim]{_escape(summarize_args(tc.arguments))}[/])"
     if tc.error:
         tail = f"  [{theme_mod.rich('error') or 'red'}]✗ {tc.error[:80]}[/]"
     elif tc.duplicate:
@@ -316,7 +319,9 @@ def make_tool_event(console: Console, cancel: CancelToken,
         if verbose_level in ("diff", "full"):
             console.print(format_tool_call_verbose(tc, verbose_level))
         else:
-            console.print(format_tool_call(tc))
+            # highlight=False keeps markup ON but stops the ReprHighlighter from
+            # repainting the tool name magenta over the theme (iter-6).
+            console.print(format_tool_call(tc), highlight=False)
         raise_if_cancelled(cancel)
 
     return _on_event
