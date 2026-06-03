@@ -116,6 +116,7 @@ def run_single(
     cache: ToolCache | None = None,
     on_tool_event: OnToolEvent | None = None,
     on_token: Callable[[str], None] | None = None,
+    on_progress: Callable[[float], None] | None = None,
     run_id: str | None = None,
     phase: str = "main",
     extra_context: str = "",
@@ -173,6 +174,7 @@ def run_single(
         cacheable=cacheable,
         on_tool_event=on_tool_event,
         on_token=on_token,
+        on_progress=on_progress,
         run_id=run_id,
         phase=phase,
     )

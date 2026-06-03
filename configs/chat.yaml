@@ -16,11 +16,13 @@ roles:
   monolith:
     model_key: monolith
     num_ctx: 32768
-    # Hard ceiling for the interactive `/ctx` size flag (chat-only). 131072 is
-    # the BFCL-proven 128K window on a 64 GB M-series box. Lower this on a
-    # smaller-RAM machine (e.g. neo pins num_ctx: 8192 and omits this → /ctx
-    # stays capped at 8192). The benchmark/maintain path never reads it.
-    num_ctx_max: 131072
+    # Hard ceiling for the interactive `/ctx` size flag (chat-only). 262144 is
+    # the 256K `huge` tier (C4) — reachable but NOT the default (num_ctx stays
+    # 32768). 128K (xlarge) is BFCL-proven; 256K is opt-in via `/ctx huge` and
+    # should be load-tested (RAM/KV + gen latency scale with the window). Lower
+    # this on a smaller-RAM machine (e.g. neo pins num_ctx: 8192 and omits this →
+    # /ctx stays capped at 8192). The benchmark/maintain path never reads it.
+    num_ctx_max: 262144
     max_steps: 30
     max_tokens_per_turn: 8192
     temperature: 0.0

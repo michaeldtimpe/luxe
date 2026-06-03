@@ -41,7 +41,7 @@ _HELP = """[bold]luxe chat commands[/]
   [cyan]/help[/]                      show this help
   [cyan]/model[/] [slot] [model_id]   show slots, or repoint chat|plan|code
   [cyan]/use[/] <slot>                pin the next turn to chat|plan|code
-  [cyan]/ctx[/] [small|medium|large|xlarge]   show or set context window size
+  [cyan]/ctx[/] [small|medium|large|xlarge|huge]   show or set context window size
   [cyan]/write[/]                     toggle write tools (default: read-only)
   [cyan]/bash[/]                      toggle unrestricted shell (default: allowlisted)
   [cyan]/verbose[/] [diff|full|off]   show full tool I/O (diffs, file contents, results)

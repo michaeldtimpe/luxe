@@ -568,10 +568,23 @@ def maintain(
 @click.option("--dev", "dev_mode", is_flag=True, default=False,
               help="Start in dev mode: write tools + unrestricted shell ON "
                    "(equivalent to /write + /bash). Skips per-session toggling.")
+@click.option("--verbose", "startup_verbose", default=None,
+              type=click.Choice(["off", "diff", "full"]),
+              help="Set tool-output verbosity at startup (e.g. before a /goal run).")
+@click.option("--show-reasoning", "startup_show_reasoning", is_flag=True, default=False,
+              help="Stream the model's reasoning live from startup.")
+@click.option("--no-terse", "startup_no_terse", is_flag=True, default=False,
+              help="Disable terse model output (terse is ON by default).")
+@click.option("--debug", "startup_debug", is_flag=True, default=False,
+              help="Show everything: verbose full + reasoning (overrides --verbose).")
+@click.option("--theme", "theme_name", default=None,
+              help="Curated luxe color palette: auto|cool|warm|mono (default: auto).")
 def chat_cmd(
     repo: str, config_path: str | None, resume_session_id: str | None,
     chat_model: str | None, plan_model: str | None, code_model: str | None,
     keep_loaded: bool, dev_mode: bool,
+    startup_verbose: str | None, startup_show_reasoning: bool,
+    startup_no_terse: bool, startup_debug: bool, theme_name: str | None,
 ):
     """Interactive terminal agent (Claude-CLI-style). Default: champion in
     every slot, read-only tools (toggle with /write)."""
@@ -611,6 +624,11 @@ def chat_cmd(
             keep_loaded=keep_loaded,
             resume_session_id=resume_session_id,
             dev_mode=dev_mode,
+            startup_verbose=startup_verbose,
+            startup_show_reasoning=startup_show_reasoning,
+            startup_no_terse=startup_no_terse,
+            startup_debug=startup_debug,
+            theme_name=theme_name,
         )
     finally:
         search_mod.reset_index()
