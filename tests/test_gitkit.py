@@ -232,3 +232,157 @@ def test_main_registers_gitkit_commands_and_aliases(alias, canonical):
     resolved = main.get_command(None, alias)
     assert resolved is not None
     assert resolved.name == canonical
+
+
+# -- WS1 extraction net -----------------------------------------------------
+
+def test_extract_report_strips_leading_monologue():
+    from luxe.gitkit.runner import extract_report
+    raw = ("1. I looked at foo\n2. what if bar\n"
+           "# Bug & security review\n**Findings: 0**\nclean")
+    out = extract_report(raw)
+    assert out.startswith("# Bug & security review")
+    assert "I looked at foo" not in out
+
+
+def test_extract_report_keeps_headerless_text():
+    from luxe.gitkit.runner import extract_report
+    assert extract_report("just prose, no header") == "just prose, no header"
+
+
+# -- WS2 activity callbacks (coalescing + phasing, no TTY needed) -----------
+
+def test_activity_callbacks_coalesce_and_phase():
+    from luxe.gitkit.runner import _activity_callbacks
+
+    class _TC:
+        def __init__(self, name):
+            self.name = name
+
+    updates: list[str] = []
+    on_event, on_token = _activity_callbacks(updates.append)
+    on_event(_TC("read_file"))
+    on_event(_TC("read_file"))
+    on_event(_TC("grep"))
+    assert updates[-1] == "analyzing… read_file (2) · grep (1)"
+    on_token("x")
+    assert updates[-1] == "writing report…"
+    on_event(_TC("read_file"))  # later tool flips back to analyzing
+    assert updates[-1].startswith("analyzing…")
+
+
+# -- WS1.3 budget + WS5 display (stubbed run_single / Backend) --------------
+
+class _FakeResult:
+    def __init__(self, text):
+        self.final_text = text
+        self.steps = 3
+        self.tool_calls_total = 5
+        self.wall_s = 1.2
+        self.completion_tokens = 100
+
+
+@pytest.fixture
+def _gitkit_cfg():
+    from luxe.config import PipelineConfig, RoleConfig
+    return PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+    )
+
+
+def _stub_run(monkeypatch, fake_run_single):
+    """Patch Backend + run_single at their source modules (run_git_report imports
+    them at call time, so it picks up the patched attrs)."""
+    import luxe.agents.single as single_mod
+    import luxe.backend as backend_mod
+
+    class _FakeBackend:
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(backend_mod, "Backend", _FakeBackend)
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+
+
+def test_run_git_report_applies_token_headroom_without_shared_mutation(
+        git_repo, _gitkit_cfg, monkeypatch):
+    from luxe.gitkit import run_git_report
+    from luxe.gitkit.runner import GITKIT_MAX_TOKENS
+
+    captured = {}
+
+    def fake_run_single(backend, role_cfg, **kw):
+        captured["role"] = role_cfg
+        return _FakeResult("# Bug & security review\n**Findings: 0**\nclean")
+
+    _stub_run(monkeypatch, fake_run_single)
+    before = _gitkit_cfg.role("monolith").max_tokens_per_turn
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+                   console=_QuietConsole(), save=False)
+    assert captured["role"].max_tokens_per_turn == GITKIT_MAX_TOKENS
+    # the shared role object is untouched (per-run copy)
+    assert _gitkit_cfg.role("monolith").max_tokens_per_turn == before
+
+
+def test_run_git_report_strips_monologue_in_display_and_save(
+        git_repo, _gitkit_cfg, monkeypatch):
+    from luxe.gitkit import run_git_report
+
+    raw = ("1. I looked at foo\n# Bug & security review\n**Findings: 0**\nclean")
+    _stub_run(monkeypatch, lambda b, r, **k: _FakeResult(raw))
+    report, saved = run_git_report(
+        "gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+        console=_QuietConsole(), save=True)
+    assert report.startswith("# Bug & security review")
+    assert "I looked at foo" not in report
+    assert saved is not None and "I looked at foo" not in saved.read_text()
+
+
+def test_run_git_report_preview_vs_verbose(git_repo, _gitkit_cfg, monkeypatch):
+    import io
+
+    from rich.console import Console
+
+    from luxe.gitkit import run_git_report
+
+    long_report = ("# Bug & security review\n**Findings: 1**\n"
+                   + "\n".join(f"- detail line {i}" for i in range(80)))
+    _stub_run(monkeypatch, lambda b, r, **k: _FakeResult(long_report))
+
+    # default: truncated preview + saved path (wide console so the path doesn't
+    # wrap and split substrings)
+    out = io.StringIO()
+    _, saved = run_git_report(
+        "gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+        console=Console(file=out, force_terminal=False, width=200),
+        save=True, verbose=False)
+    text = out.getvalue()
+    assert "more lines" in text
+    assert "saved to" in text
+    assert saved is not None and "reports" in str(saved)
+
+    # verbose: full report, no truncation hint
+    out2 = io.StringIO()
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+                   console=Console(file=out2, force_terminal=False, width=200),
+                   save=True, verbose=True)
+    assert "more lines" not in out2.getvalue()
+
+
+def test_run_git_report_short_report_no_hint(git_repo, _gitkit_cfg, monkeypatch):
+    import io
+
+    from rich.console import Console
+
+    from luxe.gitkit import run_git_report
+
+    short = "# Repository summary & risk assessment\n**Use-risk: low** — fine"
+    _stub_run(monkeypatch, lambda b, r, **k: _FakeResult(short))
+    out = io.StringIO()
+    run_git_report("gitsummary", cfg=_gitkit_cfg, repo_path=git_repo,
+                   console=Console(file=out, force_terminal=False, width=200),
+                   save=True, verbose=False)
+    text = out.getvalue()
+    assert "more lines" not in text          # whole report fit
+    assert "saved to" in text

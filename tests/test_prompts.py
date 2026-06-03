@@ -625,16 +625,19 @@ def test_gitkit_hints_exist_and_are_directives():
     )
     for hint in (GIT_SUMMARY_HINT, GIT_REVIEW_HINT, GIT_REFACTOR_HINT):
         assert hint.strip()
-        assert "<" not in hint or "<repo_health>" in hint or "<github_metadata>" in hint
-    # All three must forbid writing — they are read-only analyses.
-    assert "do not write" in GIT_SUMMARY_HINT.lower()
-    assert "do not write" in GIT_REVIEW_HINT.lower()
-    assert "do not write" in GIT_REFACTOR_HINT.lower()
+        s = hint.lower()
+        assert "do not write" in s          # read-only
+        assert "final message" in s         # report-only discipline (WS1)
+        assert "report only" in s
 
 
-def test_git_summary_hint_has_use_risk_verdict():
+def test_git_summary_hint_shape_and_verdict():
     from luxe.agents.prompts import GIT_SUMMARY_HINT
-    assert "use-risk verdict" in GIT_SUMMARY_HINT.lower()
+    s = GIT_SUMMARY_HINT.lower()
+    assert "use-risk verdict" in s
+    # required machine-checkable header + summary line (WS1)
+    assert "# repository summary & risk assessment" in s
+    assert "**use-risk:" in s
 
 
 def test_git_review_hint_demands_grounded_findings():
@@ -642,12 +645,20 @@ def test_git_review_hint_demands_grounded_findings():
     s = GIT_REVIEW_HINT.lower()
     assert "severity" in s
     assert "line number" in s
-    assert "omit" in s  # must drop ungrounded/speculative findings
+    # confirm-or-dismiss: drop ungrounded items, never list dismissed nits
+    assert "drop it" in s and "never list" in s
+    # lint/style/type nits explicitly excluded
+    assert "lint" in s and "style" in s
+    # required header + findings summary line
+    assert "# bug & security review" in s
+    assert "**findings:" in s
 
 
 def test_git_refactor_hint_is_ordered_and_fenced_from_review():
     from luxe.agents.prompts import GIT_REFACTOR_HINT
     s = GIT_REFACTOR_HINT.lower()
     assert "ordered" in s
-    # must steer away from duplicating gitreview's bug/security remit
+    # steer away from duplicating gitreview's bug/security remit
     assert "do not" in s and ("security" in s or "correctness" in s)
+    assert "# refactor plan" in s
+    assert "**refactor steps:" in s

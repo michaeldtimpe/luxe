@@ -377,45 +377,67 @@ PLAN_HINT = (
 # Forbids prompt strings). All three are read-only, single-pass analyses; a
 # `<repo_health>` / `<github_metadata>` data block is injected via extra_context.
 
+# Shared discipline for every gitkit report. The first real-world test showed the
+# model emitting its exploration monologue AS the final message (and truncating
+# mid-thought) — a "mode" failure where it treats the last turn as more thinking.
+# This clause forces the final message to be the report ONLY; the runner also
+# slices from the first `# ` header as a deterministic safety net.
+_GITKIT_REPORT_DISCIPLINE = (
+    "Do your investigation with tools and reasoning during the run, but your "
+    "FINAL message must be the finished report ONLY — markdown, nothing else. No "
+    "exploration narrative, no numbered 'I looked at … / what if …' musings, no "
+    "chain-of-thought, no preamble or sign-off. Decide your conclusions first, "
+    "then write them once, concisely. Do not write or edit any files."
+)
+
 GIT_SUMMARY_HINT = (
-    "Produce a markdown REPOSITORY SUMMARY & RISK ASSESSMENT for this project. "
-    "Do not write or edit any files. Ground every claim in files you read (cite "
-    "paths) and in the injected <repo_health> / <github_metadata> data. Use the "
-    "deps_audit and cve_lookup tools to assess dependency exposure. Structure it:\n"
+    "Produce a REPOSITORY SUMMARY & RISK ASSESSMENT for this project. "
+    + _GITKIT_REPORT_DISCIPLINE + "\n\n"
+    "Begin the report with EXACTLY this shape (so it is skimmable at a glance):\n"
+    "  # Repository summary & risk assessment\n"
+    "  **Use-risk: low|medium|high** — <≤15-word reason>\n\n"
+    "Then these sections, grounded in files you read (cite paths) and the injected "
+    "<repo_health> / <github_metadata> data; use deps_audit / cve_lookup for "
+    "dependency exposure:\n"
     "- **Purpose** — what the project is and does.\n"
     "- **Stack & languages** — primary languages/frameworks (reflect the "
     "files/LOC/language mix in <repo_health>).\n"
-    "- **Dependencies & their risk** — key deps and any known-vulnerable ones "
-    "(deps_audit / cve_lookup).\n"
-    "- **Health & size** — activity cadence, recency, contributors, and "
-    "merged/open PR + issue + release activity, citing <repo_health> / "
-    "<github_metadata>; note when GitHub data was unavailable.\n"
-    "- **Security posture** — SECURITY.md, advisories, secrets handling, anything "
-    "the project itself flags.\n"
-    "- **Use-risk verdict: low / medium / high** — a single rating with a short "
-    "rationale tying back to the evidence above."
+    "- **Dependencies & their risk** — key deps and any known-vulnerable ones.\n"
+    "- **Health & size** — activity cadence, recency, contributors, and merged/"
+    "open PR + issue + release activity, citing <repo_health> / <github_metadata>; "
+    "note when GitHub data was unavailable.\n"
+    "- **Security posture** — SECURITY.md, advisories, secrets handling.\n"
+    "- **Use-risk verdict** — restate the rating with a short rationale."
 )
 
 GIT_REVIEW_HINT = (
     "Perform a read-only bug & security REVIEW of this codebase and report only "
-    "SERIOUS, code-grounded findings. Do not write or edit any files. Use grep, "
-    "find_symbol, and security_scan to locate and confirm issues. Every finding "
-    "MUST include: severity (Critical / High / Medium / Low), the file path, the "
-    "line number, the offending code as evidence, the impact, and a suggested "
-    "fix. OMIT any finding you cannot ground in specific code — do NOT list "
-    "speculative, generic, or 'best-practice' risks. Group findings by severity, "
-    "highest first. If you find nothing serious, say so plainly rather than "
-    "padding the report."
+    "SERIOUS, code-grounded findings. " + _GITKIT_REPORT_DISCIPLINE + "\n\n"
+    "Begin the report with EXACTLY this shape:\n"
+    "  # Bug & security review\n"
+    "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
+    "Then list findings grouped by severity, highest first. Confirm-or-dismiss "
+    "discipline: confirm each suspected issue in the actual code (use grep, "
+    "find_symbol, security_scan) or DROP it — NEVER list considered-then-dismissed "
+    "items, speculative/generic/'best-practice' risks, or lint / style / type-"
+    "annotation nits. Every finding MUST include: severity (Critical/High/Medium/"
+    "Low), file path, line number, the offending code as evidence, the impact, and "
+    "a suggested fix. If nothing serious qualifies, the summary line is "
+    "**Findings: 0** followed by one short paragraph naming what you checked."
 )
 
 GIT_REFACTOR_HINT = (
-    "Propose a read-only structural REFACTOR PLAN for this codebase. Do not write "
-    "or edit any files. Focus strictly on STRUCTURE: coupling, cohesion, module "
-    "boundaries, duplication, dead code, testability, and ownership. Do NOT "
-    "report correctness or security defects except where one materially blocks a "
-    "refactor step. Output an ORDERED plan; for each step give: what to change "
-    "(cite the files/symbols), the rationale, the risk level, and how to verify "
-    "the change is safe (tests to run / behavior to preserve)."
+    "Propose a read-only structural REFACTOR PLAN for this codebase. "
+    + _GITKIT_REPORT_DISCIPLINE + "\n\n"
+    "Begin the report with EXACTLY this shape:\n"
+    "  # Refactor plan\n"
+    "  **Refactor steps: N** — <≤15-word headline of the biggest win>\n\n"
+    "Then an ORDERED list of steps. Focus STRICTLY on structure: coupling, "
+    "cohesion, module boundaries, duplication, dead code, testability, ownership. "
+    "Do NOT report correctness or security defects except where one materially "
+    "blocks a refactor step. For each step give: what to change (cite files/"
+    "symbols), the rationale, the risk level, and how to verify it is safe (tests "
+    "to run / behavior to preserve)."
 )
 
 

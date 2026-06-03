@@ -83,6 +83,7 @@ class ChatSession:
     verbose_level: str = "off"   # off | diff | full — set by /verbose
     show_reasoning: bool = False  # set by /reasoning; streams model prose live
     terse: bool = True           # set by /terse; injects TERSE_HINT to cut prose
+    compact: bool = False        # set by /compact; tighter on-screen output ceiling
 
     # -- /plan mode (B5) ------------------------------------------------------
     plan_pending: str | None = None  # objective awaiting a planning turn

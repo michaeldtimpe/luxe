@@ -185,6 +185,7 @@ def run_chat_repl(
     startup_show_reasoning: bool = False,
     startup_no_terse: bool = False,
     startup_debug: bool = False,
+    startup_compact: bool = False,
     theme_name: str | None = None,
 ) -> None:
     from luxe.cli import _infer_task_type  # reuse the maintain heuristic
@@ -217,6 +218,8 @@ def run_chat_repl(
         session.show_reasoning = True
     if startup_no_terse:
         session.terse = False
+    if startup_compact:
+        session.compact = True
 
     # Static bottom-toolbar status bar (chat.sdd lightweight variant): refreshed
     # from `status` between turns; the reader pins it under the input line.
@@ -258,8 +261,13 @@ def run_chat_repl(
     # write/bash state — so the banner stays minimal to avoid duplicating it.
     # C3: show the build (git short-SHA[+dirty]) so a run is traceable to a commit.
     from luxe.buildinfo import behind_origin, version_string
+    # WS6: color the +dirty marker (warning, not error) so uncommitted state is
+    # visible instead of buried in the dim version string.
+    _ver = version_string()
+    _ver_markup = (_ver.replace("+dirty", "[/][yellow]+dirty[/][dim]")
+                   if "+dirty" in _ver else _ver)
     console.print(rainbow_banner("luxe chat")
-                  + f"  [dim]{version_string()} · session={meta.session_id} · /help[/]")
+                  + f"  [dim]{_ver_markup} · session={meta.session_id} · /help[/]")
     _behind = behind_origin()
     if _behind:
         console.print(f"[yellow]· {_behind} commits behind origin/main (git pull)[/]")
@@ -298,7 +306,10 @@ def run_chat_repl(
             _run_turn(line, session, slots, cfg, languages, console, cancel, infer, status)
     finally:
         if not keep_loaded:
-            slots.unload_all()
+            # WS3: show the unload is happening BEFORE the blocking call (it can
+            # take a few seconds) so quitting doesn't look like a hang.
+            with console.status("[dim]unloading models…[/]", spinner="dots"):
+                slots.unload_all()
             console.print("[dim]· models unloaded (use --keep-loaded to keep warm)[/]")
         if slots.stats.count:
             console.print(f"[dim]· session swaps: {slots.stats.count} "
@@ -509,7 +520,11 @@ def _run_turn(
 
     assistant_text = (result.final_text if result else "") or ""
     if not interrupted and result is not None:
-        render_final(console, assistant_text)
+        # WS4 output ladder: full when /verbose full (or /debug), else compact
+        # if /compact, else the default truncated preview.
+        out_mode = ("full" if session.verbose_level == "full"
+                    else "compact" if session.compact else "truncated")
+        render_final(console, assistant_text, mode=out_mode)
         render_footer(
             console,
             slot=slot,
@@ -956,6 +971,7 @@ def _make_git_analysis_hook(console, cfg, session: ChatSession):
         run_git_report(
             kind, cfg=cfg, repo_path=session.repo_path,
             console=console, save=True, expected_head=session.index_head,
+            verbose=(session.verbose_level == "full"),
         )
 
     return _git
