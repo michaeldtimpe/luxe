@@ -363,7 +363,7 @@ def render_footer(
         f"{result.wall_s:.1f}s",
         f"{_tok_per_s(result):.0f} tok/s",
         f"tok: {result.prompt_tokens}+{result.completion_tokens}",
-        f"ctx: {result.peak_context_pressure:.0%}",
+        f"ctx(peak): {result.peak_context_pressure:.0%}",
     ]
     if swap_count:
         bits.append(f"swaps: {swap_count} ({swap_seconds:.0f}s)")

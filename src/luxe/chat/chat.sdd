@@ -77,7 +77,24 @@ never touches this module.
   banner, and prompt arrows resolve colors from `theme.role_styles()` roles
   (`accent`/`success`/`error`/`warn`/`slot`/`diff_*`/…) instead of hardcoded hex —
   ANSI-named fallbacks track the terminal profile, and the `slot` segment no
-  longer hardcodes magenta
+  longer hardcodes magenta. `auto` (default) tracks the YASL/terminal theme;
+  `--theme cool|warm|mono` (C-T) selects a curated luxe palette (256/RGB) that
+  overrides terminal ANSI — needed because a standard-index YASL theme equals the
+  ANSI fallback, so auto looks unchanged
+- Goal completion is SENTINEL-required + ledger-corroborated (C1): a settled round
+  is done only when `completed` is non-empty, grew at least once this run, and the
+  reply carries `LUXE_GOAL_DONE` — for 2 consecutive rounds. It does NOT require
+  `in_progress` empty (models leave stale plan-phase headers → the iter-4 a5812
+  false-STUCK). Completion is checked before stuck and resets the stuck counter;
+  `in_progress` pruning/clearing is cosmetic provenance, never control flow. The
+  per-round decision is the pure `evaluate_goal_round()` (unit-tested)
+- Context % is one metric end-to-end (C2): `AgentResult.final_context_pressure`
+  (last per-step instantaneous, via the chat-only `on_progress` callback) drives
+  both the live and between-turn status bar, matching the `[token-progress]` line;
+  the footer shows `ctx(peak)` separately. `huge` (256K) is the new `/ctx` ceiling,
+  clamped by `num_ctx_max`; the startup banner shows the git build via
+  `buildinfo.version_string()`, and `luxe chat` gains
+  `--verbose/--show-reasoning/--no-terse/--debug/--theme` startup flags
 - Static analyzers (`tools/analysis.py`) resolve via PATH → `python -m <module>`
   → `uvx` (NO auto-install — agent venvs may be frozen) and degrade to a
   SUCCESSFUL machine-readable `{"status":"skipped",…}` when unavailable, so a

@@ -23,12 +23,16 @@ from luxe.memory import project as project_mem
 # Context-window size tiers for the `/ctx` flag (chat-only). The actual window
 # applied each turn is clamped to the role's `num_ctx_max` (config.py) so a tier
 # request can never exceed what the box/model can hold. medium = the shipped
-# default (configs/chat.yaml num_ctx). xlarge = the BFCL-proven 128K ceiling.
+# default (configs/chat.yaml num_ctx). xlarge = the BFCL-proven 128K window.
+# huge (256K, C4) is the new ceiling — reachable where the config raises
+# num_ctx_max to ≥262144; load-test before relying on it (RAM/KV + gen latency
+# scale with the window, and iter-4 128K runs sat at only 5–20% pressure).
 CTX_TIERS: dict[str, int] = {
     "small": 8192,
     "medium": 32768,
     "large": 65536,
     "xlarge": 131072,
+    "huge": 262144,
 }
 
 # Suggest bumping the window up once a turn's peak context pressure crosses this.
