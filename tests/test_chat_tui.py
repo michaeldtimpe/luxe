@@ -104,6 +104,76 @@ def test_command_dispatch(tmp_path):
     asyncio.run(scenario())
 
 
+def test_typeahead_queue(tmp_path, monkeypatch):
+    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+
+    async def scenario():
+        from textual.widgets import Input
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True  # simulate a running task
+            app.on_input_submitted(Input.Submitted(app._input, "later msg"))
+            assert "later msg" in app._queue          # queued, not run
+            app._busy = False
+            app._maybe_drain()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app._queue == []                    # drained
+            assert any(t.user == "later msg" for t in app.session.turns)
+    asyncio.run(scenario())
+
+
+def test_action_cancel_sets_token_when_busy(tmp_path):
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app.action_cancel()
+            assert app.cancel.requested is True
+    asyncio.run(scenario())
+
+
+def test_tick_folds_live_ctx_pressure(tmp_path):
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gen_started = 1.0
+            app._ctx_pressure = 0.42
+            app._tick()
+            assert abs(app.status.ctx_pressure - 0.42) < 1e-9
+            assert app.status.has_turn is True
+    asyncio.run(scenario())
+
+
+def test_null_status_updates_activity_not_transcript(tmp_path):
+    from luxe.chat.tui import LogConsole
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            st = LogConsole(app).status("gathering…")
+            with st:
+                st.update("analyzing… read_file (3)")
+                assert "read_file (3)" in (app._activity or "")
+            assert app._activity is None  # cleared on exit
+    asyncio.run(scenario())
+
+
+def test_scroll_bindings_no_error(tmp_path):
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_scroll_up()
+            app.action_scroll_down()
+            app.action_scroll_end()  # must not raise
+    asyncio.run(scenario())
+
+
 def test_tick_survives_open_modal(tmp_path):
     """Regression: the timer/refresh must not crash when a PromptScreen modal is
     on top (App.query_one would otherwise miss the base-screen #generating)."""

@@ -260,7 +260,7 @@ def run_chat_repl(
         on_resume=_make_resume_hook(console, session),
         on_compare=_make_compare_hook(console, cfg, repo_path, languages, slots),
         on_compare_review=_make_compare_review_hook(console),
-        on_git_analysis=_make_git_analysis_hook(console, cfg, session),
+        on_git_analysis=_make_git_analysis_hook(console, cfg, session, cancel),
     )
 
     if resume_session_id:
@@ -1034,7 +1034,7 @@ def _make_compare_review_hook(console):
     return _review
 
 
-def _make_git_analysis_hook(console, cfg, session: ChatSession):
+def _make_git_analysis_hook(console, cfg, session: ChatSession, cancel=None):
     """Hook for /gitsummary|/gitreview|/gitrefactor — a single read-only gitkit
     report. Targets the SESSION repo, reusing its resident indices (warns if
     HEAD moved); if the session dir isn't a git repo, the runner prompts to
@@ -1048,7 +1048,7 @@ def _make_git_analysis_hook(console, cfg, session: ChatSession):
         run_git_report(
             kind, cfg=cfg, repo_path=session.repo_path,
             console=console, save=True, expected_head=session.index_head,
-            verbose=(session.verbose_level == "full"),
+            verbose=(session.verbose_level == "full"), cancel=cancel,
         )
 
     return _git

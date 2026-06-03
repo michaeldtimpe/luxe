@@ -91,6 +91,10 @@ class ChatApp(App):
         Binding("escape", "cancel", "Cancel turn", show=True),
         Binding("ctrl+c", "cancel", "Cancel turn", show=False, priority=True),
         Binding("ctrl+q", "quit_app", "Quit", show=True),
+        # Scroll the transcript even while the input holds focus.
+        Binding("pageup", "scroll_up", "Scroll up", show=False),
+        Binding("pagedown", "scroll_down", "Scroll down", show=False),
+        Binding("end", "scroll_end", "To bottom", show=False),
     ]
 
     def __init__(self, cfg, repo_path, languages, *, session, slots, infer,
@@ -112,7 +116,12 @@ class ChatApp(App):
         self._stream = ""
         self._tool_counts: Counter = Counter()
         self._gen_started = 0.0
+        self._ctx_pressure = 0.0          # live context pressure (on_progress)
+        self._activity: str | None = None  # gitkit/compare set this for the live line
         self._timer = None
+        self._queue: list[str] = []        # type-ahead: messages submitted mid-run
+        self._session_in = 0               # session cumulative prompt tokens
+        self._session_out = 0              # session cumulative completion tokens
         self.ctx: cmd.CommandContext | None = None
         # Cached widget refs (set in on_mount). We hold references rather than
         # query_one() each tick because `App.query_one` only searches the ACTIVE
@@ -126,7 +135,7 @@ class ChatApp(App):
     # -- layout -------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield RichLog(id="transcript", wrap=True, markup=True, highlight=False,
-                      max_lines=5000, auto_scroll=True)
+                      max_lines=10000, auto_scroll=True)
         # Bottom block stacks deterministically: generating, status, then input.
         with Vertical(id="bottom"):
             yield Static("", id="generating")
@@ -194,20 +203,44 @@ class ChatApp(App):
         if not line:
             return
         if self._busy:
-            self.write("[yellow]· busy — wait for the current turn to finish "
-                       "(esc to cancel)[/]")
+            # Type-ahead: queue it and run after the current task (esc cancels the
+            # current one). One run_single per turn is preserved.
+            self._queue.append(line)
+            self.write(f"[yellow]· queued[/] [dim]{line}[/]")
             return
+        self._dispatch_line(line)
+
+    def _dispatch_line(self, line: str) -> None:
         self.write(Text(f"❯ {line}", style="bold"))
         if cmd.is_command(line):
             self._run_command(line)
         else:
             self._run_turn(line)
 
+    def _maybe_drain(self) -> None:
+        """Run the next queued message once the current task has finished."""
+        if self._busy or not self._queue:
+            return
+        self._dispatch_line(self._queue.pop(0))
+
     def on_key(self, event) -> None:
         # ctrl+d on an empty prompt quits (Claude-CLI convention).
         if event.key == "ctrl+d" and self._input is not None and not self._input.value:
             event.stop()
             self.action_quit_app()
+
+    # -- scroll actions (work while the input has focus) --------------------
+    def action_scroll_up(self) -> None:
+        if self._transcript is not None:
+            self._transcript.scroll_page_up()
+
+    def action_scroll_down(self) -> None:
+        if self._transcript is not None:
+            self._transcript.scroll_page_down()
+
+    def action_scroll_end(self) -> None:
+        if self._transcript is not None:
+            self._transcript.scroll_end()
 
     # -- actions ------------------------------------------------------------
     def action_cancel(self) -> None:
@@ -229,9 +262,10 @@ class ChatApp(App):
 
     # -- turn worker --------------------------------------------------------
     def _begin_busy(self) -> None:
+        # Input stays ENABLED (type-ahead queue) — submissions during a run are
+        # queued, not blocked.
         self._busy = True
         self._gen.display = True
-        self._input.disabled = True
         self._timer = self.set_interval(0.1, self._tick)
 
     def _reset_gen(self) -> None:
@@ -240,6 +274,8 @@ class ChatApp(App):
         self._stream = ""
         self._tool_counts = Counter()
         self._gen_started = time.time()
+        self._ctx_pressure = 0.0
+        self._activity = None
 
     def _end_busy(self) -> None:
         self._tick()  # final frame so the last ~100ms isn't clipped
@@ -248,24 +284,35 @@ class ChatApp(App):
             self._timer = None
         if self._gen is not None:
             self._gen.display = False
-        if self._input is not None:
-            self._input.disabled = False
-            self._input.focus()
         self._busy = False
         self.refresh_status()
+        # Run the next queued message (if any) on the next UI tick, after this
+        # worker has fully exited.
+        self.set_timer(0.05, self._maybe_drain)
 
     def _tick(self) -> None:
         # Skip painting while a modal (PromptScreen) is up — its widgets aren't on
         # the base screen and the spinner would be hidden anyway.
         if self._gen is None or isinstance(self.screen, PromptScreen):
             return
+        # Live context pressure (Item 2): folded in from on_progress so the status
+        # bar's ctx% ticks during the turn, not only at the end.
+        if self._ctx_pressure:
+            self.status.ctx_pressure = self._ctx_pressure
+            self.status.has_turn = True
         elapsed = time.time() - self._gen_started if self._gen_started else 0.0
         frame = _SPINNER[int(elapsed * 10) % len(_SPINNER)]
-        tools = " · ".join(f"{n} ({c})" for n, c in self._tool_counts.most_common(4))
-        head = f"{frame} {elapsed:4.1f}s" + (f" · {tools}" if tools else "")
+        if self._activity is not None:
+            # gitkit/compare drive a phased activity string (coalesced, no flood).
+            body = f"{self._activity} · {elapsed:4.1f}s · esc to interrupt"
+        else:
+            tools = " · ".join(f"{n} ({c})" for n, c in self._tool_counts.most_common(4))
+            body = (f"{elapsed:4.1f}s" + (f" · {tools}" if tools else "")
+                    + " · esc to interrupt")
         tail = self._stream[-200:].replace("\n", " ")
         try:
-            self._gen.update(Text(head, style="cyan") + Text(f"  {tail}", style="dim"))
+            self._gen.update(Text(f"{frame} {body}", style="cyan")
+                             + Text(f"  {tail}", style="dim"))
         except Exception:
             return
         self.refresh_status()
@@ -278,28 +325,33 @@ class ChatApp(App):
         self.call_from_thread(self._reset_gen)
         prep = _repl.prepare_turn(message, self.session, self.slots, self.cfg,
                                   self.languages, self.infer, plan_mode=plan_mode)
+        # Reflect the window this turn actually uses (incl. a /ctx override).
+        self.status.num_ctx = prep.role_cfg.num_ctx
         self.call_from_thread(
             self.write, Text(f"slot: {prep.slot} · model: {prep.model}", style="dim"))
 
         def _on_event(tc):
             self._tool_counts[getattr(tc, "name", "?")] += 1
             prep.note_tool(tc)
+            # Per-tool transcript lines only under /verbose (else the live counts
+            # on the activity line suffice — avoids the UI-thread write flood).
             if self.session.verbose_level in ("diff", "full"):
                 self.call_from_thread(
                     self.write, format_tool_call_verbose(tc, self.session.verbose_level))
-            else:
-                self.call_from_thread(self.write, format_tool_call(tc))
             raise_if_cancelled(self.cancel)
 
         def _on_token(delta):
             raise_if_cancelled(self.cancel)
             self._stream += delta
 
+        def _on_progress(pressure):
+            self._ctx_pressure = pressure  # rendered live by the timer
+
         started = time.time()
         interrupted = False
         result = None
         try:
-            result = prep.call(_on_event, _on_token, lambda p: None)
+            result = prep.call(_on_event, _on_token, _on_progress)
         except (ChatCancelled, KeyboardInterrupt):
             interrupted = True
         ended = time.time()
@@ -336,7 +388,12 @@ class ChatApp(App):
         mode = ("full" if self.session.verbose_level == "full"
                 else "compact" if self.session.compact else "truncated")
         log.write(build_final_renderable(outcome.final_text, mode=mode))
-        log.write(Text(render_footer_text(prep.slot, prep.model, result), style="dim"))
+        self._session_in += result.prompt_tokens
+        self._session_out += result.completion_tokens
+        footer = (render_footer_text(prep.slot, prep.model, result,
+                                     num_ctx=outcome.num_ctx)
+                  + f" · session tok: {self._session_in}+{self._session_out}")
+        log.write(Text(footer, style="dim"))
         # update persistent status from the completed turn
         s = self.status
         s.slot, s.model = prep.slot, prep.model
@@ -392,7 +449,7 @@ class ChatApp(App):
         run_git_report(kind, cfg=self.cfg, repo_path=self.session.repo_path,
                        console=LogConsole(self), reader=self._reader, save=True,
                        verbose=(self.session.verbose_level == "full"),
-                       expected_head=self.session.index_head)
+                       expected_head=self.session.index_head, cancel=self.cancel)
 
     def _compare_hook(self, task: str) -> None:
         try:
@@ -416,19 +473,33 @@ class ChatApp(App):
 
 
 class _NullStatus:
-    """Context-manager stand-in for `console.status(...)` inside the TUI; routes
-    `.update()` to the transient #generating line."""
-    def __init__(self, app: ChatApp):
+    """Stand-in for `console.status(...)` inside the TUI. Routes the status text to
+    the LIVE #generating activity line (app._activity) — NOT a transcript write —
+    so gitkit's per-tool `update()` calls don't flood the log (the freeze bug)."""
+    def __init__(self, app: ChatApp, message: str = ""):
         self._app = app
+        self._message = message
 
     def __enter__(self):
+        if self._message:
+            self._app._activity = _plain(self._message)
         return self
 
     def __exit__(self, *a):
+        self._app._activity = None
         return False
 
     def update(self, text):
-        self._app.write(Text(str(text), style="dim"))
+        self._app._activity = _plain(text)
+
+
+def _plain(text) -> str:
+    """Strip Rich markup to a plain string for the live activity line."""
+    from rich.markup import render as _render
+    try:
+        return _render(str(text)).plain
+    except Exception:
+        return str(text)
 
 
 class LogConsole:
@@ -463,7 +534,8 @@ class LogConsole:
         return self._app.prompt_user(str(prompt))
 
     def status(self, *args, **kwargs):
-        return _NullStatus(self._app)
+        msg = str(args[0]) if args else ""
+        return _NullStatus(self._app, msg)
 
     def rule(self, *args, **kwargs) -> None:
         self._app.write(Text("─" * 40, style="dim"))

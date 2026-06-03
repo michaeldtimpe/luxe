@@ -51,6 +51,22 @@ def test_render_final_modes(mode, expect_hint):
     assert ("for full" in out.getvalue()) == expect_hint
 
 
+def test_render_footer_text_shows_tokens_and_ctx_window():
+    from luxe.chat.render import render_footer_text
+
+    class _R:
+        steps = 2
+        tool_calls_total = 5
+        wall_s = 1.0
+        completion_tokens = 30
+        prompt_tokens = 120
+        peak_context_pressure = 0.1
+
+    line = render_footer_text("chat", "Champ", _R(), num_ctx=131072)
+    assert "tok: 120+30" in line
+    assert "of 128K" in line
+
+
 def test_render_final_empty():
     out = io.StringIO()
     console = Console(file=out, force_terminal=False, width=100)

@@ -120,9 +120,31 @@ def test_model_pinned_last(slots):
     assert last == "Qwen3.6-35B-A3B-6bit"  # model name alone, pinned last
 
 
-def test_ctx_tier_shown_when_overridden(slots):
-    out = _flat(fields(ChatSession(num_ctx_override=131072), slots, "", StatusState()))
-    assert "xlarge" in out
+def test_ctx_override_reflected_immediately(monkeypatch):
+    # A /ctx override is shown as the effective window size right away (before any
+    # turn), clamped to the slot's ceiling.
+    from luxe.chat import slots as slots_module
+    from luxe.config import PipelineConfig, RoleConfig
+
+    class FakeBackend:
+        def __init__(self, base_url="", model=""):
+            self.model = model
+
+        def unload_all_loaded(self, *, except_for=None):
+            return {}
+
+    monkeypatch.setattr(slots_module, "Backend", FakeBackend)
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith", num_ctx=32768,
+                                      num_ctx_max=262144)},
+    )
+    sm = slots_module.SlotManager(cfg)
+    out = _flat(fields(ChatSession(num_ctx_override=131072), sm, "", StatusState()))
+    assert "128K" in out                      # override reflected as size
+    # clamped to the ceiling when it exceeds it
+    out2 = _flat(fields(ChatSession(num_ctx_override=999999), sm, "", StatusState()))
+    assert "256K" in out2
 
 
 def test_rate_not_in_status_bar(slots):

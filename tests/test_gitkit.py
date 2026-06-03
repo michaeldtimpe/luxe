@@ -370,6 +370,24 @@ def test_run_git_report_preview_vs_verbose(git_repo, _gitkit_cfg, monkeypatch):
     assert "more lines" not in out2.getvalue()
 
 
+def test_run_git_report_cancellation(git_repo, _gitkit_cfg, monkeypatch):
+    from luxe.chat.render import CancelToken
+    from luxe.gitkit import run_git_report
+
+    cancel = CancelToken()
+    cancel.requested = True
+
+    def fake_run_single(backend, role_cfg, *, on_token=None, **kw):
+        if on_token:
+            on_token("x")   # triggers raise_if_cancelled in the gitkit callback
+        return _FakeResult("# Bug & security review\n**Findings: 0**")
+
+    _stub_run(monkeypatch, fake_run_single)
+    report, saved = run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+                                   console=_QuietConsole(), save=True, cancel=cancel)
+    assert report == "" and saved is None   # cancelled cleanly, nothing saved
+
+
 def test_run_git_report_short_report_no_hint(git_repo, _gitkit_cfg, monkeypatch):
     import io
 
