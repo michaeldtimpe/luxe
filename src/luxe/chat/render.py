@@ -409,6 +409,17 @@ def _clock(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
 
+def render_footer_text(slot: str, model: str, result) -> str:
+    """Plain one-line footer for the TUI transcript (no console required)."""
+    return "· " + " · ".join([
+        f"slot: {slot}", f"model: {model}", f"steps: {result.steps}",
+        f"tools: {result.tool_calls_total}", f"{result.wall_s:.1f}s",
+        f"{_tok_per_s(result):.0f} tok/s",
+        f"tok: {result.prompt_tokens}+{result.completion_tokens}",
+        f"ctx(peak): {result.peak_context_pressure:.0%}",
+    ])
+
+
 def render_footer(
     console: Console,
     *,

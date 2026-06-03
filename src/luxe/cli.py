@@ -659,20 +659,45 @@ def chat_cmd(
         console.print(f"[red]✗ {e}[/]")
         sys.exit(3)
 
+    # Front-end selection: the full-screen Textual TUI when stdout is a real
+    # terminal AND textual is installed AND not resuming (resume lives in the line
+    # REPL); otherwise the line REPL (CI / pipes / textual-absent). chat.sdd.
+    run_app = None
+    if sys.stdout.isatty() and not resume_session_id:
+        try:
+            from luxe.chat.tui import run_chat_app as run_app
+        except Exception:
+            run_app = None
+            console.print("[dim]· textual not installed — using the line REPL "
+                          "(pip install 'luxe[chat]' for the full-screen UI)[/]")
+
     try:
-        run_chat_repl(
-            cfg, repo_path, languages,
-            console=console,
-            keep_loaded=keep_loaded,
-            resume_session_id=resume_session_id,
-            dev_mode=dev_mode,
-            startup_verbose=startup_verbose,
-            startup_show_reasoning=startup_show_reasoning,
-            startup_no_terse=startup_no_terse,
-            startup_debug=startup_debug,
-            startup_compact=startup_compact,
-            theme_name=theme_name,
-        )
+        if run_app is not None:
+            run_app(
+                cfg, repo_path, languages,
+                keep_loaded=keep_loaded,
+                dev_mode=dev_mode,
+                startup_verbose=startup_verbose,
+                startup_show_reasoning=startup_show_reasoning,
+                startup_no_terse=startup_no_terse,
+                startup_debug=startup_debug,
+                startup_compact=startup_compact,
+                theme_name=theme_name,
+            )
+        else:
+            run_chat_repl(
+                cfg, repo_path, languages,
+                console=console,
+                keep_loaded=keep_loaded,
+                resume_session_id=resume_session_id,
+                dev_mode=dev_mode,
+                startup_verbose=startup_verbose,
+                startup_show_reasoning=startup_show_reasoning,
+                startup_no_terse=startup_no_terse,
+                startup_debug=startup_debug,
+                startup_compact=startup_compact,
+                theme_name=theme_name,
+            )
     finally:
         search_mod.reset_index()
         symbols_mod.reset_index()

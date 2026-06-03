@@ -758,6 +758,7 @@ def _run_goal_loop(
     cancel: CancelToken,
     infer: Callable[[str], str],
     status: StatusState | None,
+    run_turn: Callable | None = None,
 ) -> None:
     """Supervisor: auto-issue rounds until the objective is reached, the budget
     is hit, the agent gets stuck, or too many crashes pile up. Survives a crashed
@@ -771,6 +772,7 @@ def _run_goal_loop(
     non-empty AND in_progress cleared), for 2 consecutive rounds. Settled rounds
     that record NO new completed work accrue toward an honest STUCK exit instead.
     """
+    run_turn = run_turn or _run_turn  # front-end's turn renderer (line / TUI)
     done_streak = 0           # consecutive corroborated settled rounds
     settled_no_progress = 0   # consecutive settled rounds with no NEW completed
     completed_ever_grew = False
@@ -805,8 +807,8 @@ def _run_goal_loop(
                       f"[dim]{_escape(base)}[/]")
 
         try:
-            outcome = _run_turn(message, session, slots, cfg, languages,
-                                console, cancel, infer, status)
+            outcome = run_turn(message, session, slots, cfg, languages,
+                               console, cancel, infer, status)
         except (ChatCancelled, KeyboardInterrupt):
             console.print("[yellow]· goal halted by interrupt.[/]")
             session.goal_active = False
@@ -922,12 +924,18 @@ def _run_plan(
     cancel: CancelToken,
     infer: Callable[[str], str],
     status: StatusState | None,
+    run_turn: Callable | None = None,
+    reader: Callable[[str], str] | None = None,
 ) -> None:
-    """Draft a plan read-only, then ask: save / execute / both / discard (B5)."""
+    """Draft a plan read-only, then ask: save / execute / both / discard (B5).
+
+    `run_turn`/`reader` are injected by the TUI (renders into the RichLog; asks
+    via a modal); both default to the line-REPL behaviour."""
     from pathlib import Path
 
     from luxe.agents.prompts import PLAN_HINT
 
+    run_turn = run_turn or _run_turn
     objective = (session.plan_pending or "").strip()
     session.plan_pending = None
     if not objective:
@@ -936,8 +944,8 @@ def _run_plan(
     console.print(f"[bold cyan]· planning[/] [dim]{_escape(objective)}[/]")
     message = f"{objective}\n\n{PLAN_HINT}"
     try:
-        outcome = _run_turn(message, session, slots, cfg, languages,
-                            console, cancel, infer, status, plan_mode=True)
+        outcome = run_turn(message, session, slots, cfg, languages,
+                           console, cancel, infer, status, plan_mode=True)
     except (ChatCancelled, KeyboardInterrupt):
         console.print("[yellow]· planning interrupted.[/]")
         return
@@ -955,8 +963,13 @@ def _run_plan(
     console.print(f"\n[bold]Plan ready.[/]  [cyan]s[/]={save_label} · "
                   f"[cyan]e[/]xecute · [cyan]b[/]oth · [cyan]d[/]iscard")
     try:
-        from rich.prompt import Prompt
-        choice = Prompt.ask("choose", choices=["s", "e", "b", "d"], default="s").lower()
+        if reader is not None:
+            raw = (reader("choose [s/e/b/d]: ") or "s").strip().lower()
+            choice = raw[:1] if raw[:1] in ("s", "e", "b", "d") else "s"
+        else:
+            from rich.prompt import Prompt
+            choice = Prompt.ask("choose", choices=["s", "e", "b", "d"],
+                                default="s").lower()
     except (EOFError, KeyboardInterrupt):
         console.print("[yellow]· plan discarded.[/]")
         return

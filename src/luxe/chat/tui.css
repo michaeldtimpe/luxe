@@ -1,0 +1,49 @@
+/* luxe chat TUI layout (chat.sdd): scrollable transcript on top, status bar +
+   input docked at the bottom. The #generating line is transient (shown only
+   during a turn). */
+
+#transcript {
+    height: 1fr;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#bottom {
+    dock: bottom;
+    height: auto;
+}
+
+#generating {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#status {
+    height: 1;
+    padding: 0 1;
+}
+
+#prompt {
+    border: none;
+    height: 3;
+    padding: 0 1;
+}
+
+#prompt:disabled {
+    opacity: 0.5;
+}
+
+PromptScreen {
+    align: center middle;
+}
+
+PromptScreen > #prompt_q {
+    width: 60%;
+    padding: 1 2 0 2;
+}
+
+PromptScreen > #prompt_input {
+    width: 60%;
+    margin: 0 2 1 2;
+}
