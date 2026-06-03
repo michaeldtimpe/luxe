@@ -1,0 +1,49 @@
+# gitkit
+
+Read-only repo-analysis toolkit — point luxe at an existing git repo and get a
+packaged markdown report. Three kinds: `gitsummary` (project / deps / health /
+use-risk verdict), `gitreview` (serious bug & security findings), `gitrefactor`
+(ordered structural refactor plan). Additive front-end; reuses `run_single`,
+the read-only tool surface, and the prompt registry's existing overlays.
+
+Exposed two ways: `luxe gitsummary|gitreview|gitrefactor <repo>` (+ aliases
+git-summary/gsum, git-review/grev, git-refactor/gref) over an arbitrary local
+path or git URL; and `/gitsummary|/gitreview|/gitrefactor` in `luxe chat` over
+the session's pinned repo.
+
+## Must
+- Be READ-ONLY: run through `make_read_only_role` (mcp/server.py); never write or
+  edit the target repo. No `/write` required.
+- Be SINGLE-PASS: exactly ONE `run_single` call per report. No autonomous repair
+  loop, no follow-up agent runs, no goal-runner — a deterministic cost envelope.
+  (Do not "optimize" this into a mini-maintain workflow.)
+- Inject git-health + GitHub metadata ONLY as data via `run_single`'s
+  `extra_context`, tagged `<repo_health>` / `<github_metadata>`. The block is
+  pure data and must carry no instruction-like text.
+- Gather GitHub data out-of-band through the `gh` CLI in `health.py`, never by
+  adding `gh` to the shared bash allowlist (tools/shell.py `_ALLOWLIST` is the
+  benchmark tool surface). All `gh` calls go through one helper that degrades
+  gracefully (gh missing / unauthenticated / non-GitHub remote / timeout / empty
+  repo) to a single-line placeholder; the report still renders from local git.
+- Map each kind to an EXISTING task_type/overlay (gitsummary→summarize,
+  gitreview→review, gitrefactor→review). The per-kind directive rides in the
+  `goal` via a `*_HINT` constant from `agents/prompts.py` — no new task types,
+  no prompt-registry churn.
+- Save reports to `~/.luxe/reports/<repo_hash>/<kind>-<ts>-<rand>.md` (always
+  `mkdir(parents=True, exist_ok=True)`; `repo_hash` from memory/project.py).
+- CLI targets an arbitrary repo; REPL analyzes ONLY `session.repo_path` (reusing
+  the session's resident indices) and warns if HEAD moved since indices built.
+
+## Must not
+- Write/edit the target repo, or require write mode.
+- Add tools to the shared bash allowlist, or mutate `run_single`/`run_agent`
+  signatures.
+- Read `~/.claude/` or the repo-root `CLAUDE.md`.
+- Run more than one agent pass per report (no repair/iteration loop).
+
+## Owns
+- src/luxe/gitkit/**
+
+## Forbids
+- Prompt/directive strings here — they live in `agents/prompts.py`
+  (`GIT_SUMMARY_HINT` / `GIT_REVIEW_HINT` / `GIT_REFACTOR_HINT`).

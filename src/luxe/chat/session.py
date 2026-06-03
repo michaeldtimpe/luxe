@@ -70,6 +70,7 @@ class ChatSession:
     repo_path: str = ""
     session_id: str = ""
     project_hash: str = ""
+    index_head: str = ""  # repo HEAD when BM25/symbol indices were built (staleness check)
     languages: frozenset = field(default_factory=frozenset)
     write_enabled: bool = False
     unrestricted_bash: bool = False  # set by /bash; only effective in write mode

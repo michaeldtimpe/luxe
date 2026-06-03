@@ -613,3 +613,41 @@ def test_reflect_system_prompt_is_critique_only():
     assert "functional" in s
     # explicitly excludes style/idiom from what counts as a problem
     assert "style" in s
+
+
+def test_gitkit_hints_exist_and_are_directives():
+    """The three gitkit directives live here (single source of truth) and read
+    as markdown directives, never XML/registry variants."""
+    from luxe.agents.prompts import (
+        GIT_REFACTOR_HINT,
+        GIT_REVIEW_HINT,
+        GIT_SUMMARY_HINT,
+    )
+    for hint in (GIT_SUMMARY_HINT, GIT_REVIEW_HINT, GIT_REFACTOR_HINT):
+        assert hint.strip()
+        assert "<" not in hint or "<repo_health>" in hint or "<github_metadata>" in hint
+    # All three must forbid writing — they are read-only analyses.
+    assert "do not write" in GIT_SUMMARY_HINT.lower()
+    assert "do not write" in GIT_REVIEW_HINT.lower()
+    assert "do not write" in GIT_REFACTOR_HINT.lower()
+
+
+def test_git_summary_hint_has_use_risk_verdict():
+    from luxe.agents.prompts import GIT_SUMMARY_HINT
+    assert "use-risk verdict" in GIT_SUMMARY_HINT.lower()
+
+
+def test_git_review_hint_demands_grounded_findings():
+    from luxe.agents.prompts import GIT_REVIEW_HINT
+    s = GIT_REVIEW_HINT.lower()
+    assert "severity" in s
+    assert "line number" in s
+    assert "omit" in s  # must drop ungrounded/speculative findings
+
+
+def test_git_refactor_hint_is_ordered_and_fenced_from_review():
+    from luxe.agents.prompts import GIT_REFACTOR_HINT
+    s = GIT_REFACTOR_HINT.lower()
+    assert "ordered" in s
+    # must steer away from duplicating gitreview's bug/security remit
+    assert "do not" in s and ("security" in s or "correctness" in s)

@@ -371,6 +371,54 @@ PLAN_HINT = (
 )
 
 
+# -- gitkit read-only repo-analysis directives (src/luxe/gitkit) ------------
+# These ride in the per-report `goal` (like PLAN_HINT) — single-source-of-truth
+# rule keeps the strings here, never inlined in the gitkit module (gitkit.sdd
+# Forbids prompt strings). All three are read-only, single-pass analyses; a
+# `<repo_health>` / `<github_metadata>` data block is injected via extra_context.
+
+GIT_SUMMARY_HINT = (
+    "Produce a markdown REPOSITORY SUMMARY & RISK ASSESSMENT for this project. "
+    "Do not write or edit any files. Ground every claim in files you read (cite "
+    "paths) and in the injected <repo_health> / <github_metadata> data. Use the "
+    "deps_audit and cve_lookup tools to assess dependency exposure. Structure it:\n"
+    "- **Purpose** — what the project is and does.\n"
+    "- **Stack & languages** — primary languages/frameworks (reflect the "
+    "files/LOC/language mix in <repo_health>).\n"
+    "- **Dependencies & their risk** — key deps and any known-vulnerable ones "
+    "(deps_audit / cve_lookup).\n"
+    "- **Health & size** — activity cadence, recency, contributors, and "
+    "merged/open PR + issue + release activity, citing <repo_health> / "
+    "<github_metadata>; note when GitHub data was unavailable.\n"
+    "- **Security posture** — SECURITY.md, advisories, secrets handling, anything "
+    "the project itself flags.\n"
+    "- **Use-risk verdict: low / medium / high** — a single rating with a short "
+    "rationale tying back to the evidence above."
+)
+
+GIT_REVIEW_HINT = (
+    "Perform a read-only bug & security REVIEW of this codebase and report only "
+    "SERIOUS, code-grounded findings. Do not write or edit any files. Use grep, "
+    "find_symbol, and security_scan to locate and confirm issues. Every finding "
+    "MUST include: severity (Critical / High / Medium / Low), the file path, the "
+    "line number, the offending code as evidence, the impact, and a suggested "
+    "fix. OMIT any finding you cannot ground in specific code — do NOT list "
+    "speculative, generic, or 'best-practice' risks. Group findings by severity, "
+    "highest first. If you find nothing serious, say so plainly rather than "
+    "padding the report."
+)
+
+GIT_REFACTOR_HINT = (
+    "Propose a read-only structural REFACTOR PLAN for this codebase. Do not write "
+    "or edit any files. Focus strictly on STRUCTURE: coupling, cohesion, module "
+    "boundaries, duplication, dead code, testability, and ownership. Do NOT "
+    "report correctness or security defects except where one materially blocks a "
+    "refactor step. Output an ORDERED plan; for each step give: what to change "
+    "(cite the files/symbols), the rationale, the risk level, and how to verify "
+    "the change is safe (tests to run / behavior to preserve)."
+)
+
+
 def get(prompt_id: str) -> PromptVariant:
     """Look up a PromptVariant by id. Raises KeyError with a list of
     available ids if the lookup misses — surfaces typos quickly during
