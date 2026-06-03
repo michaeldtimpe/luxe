@@ -367,25 +367,35 @@ def truncate_for_display(text: str, *, max_lines: int | None,
     return "\n".join(kept), hidden
 
 
-def render_final(console: Console, text: str, *, mode: str = "truncated") -> None:
-    """Render the model's final output. mode: full | truncated (default) |
-    compact. Non-full modes cap long output and append a '/verbose for full' hint."""
+def build_final_renderable(text: str, *, mode: str = "truncated"):
+    """Build the Rich renderable for the model's final output. mode: full |
+    truncated (default) | compact. Non-full modes cap long output and append a
+    '/verbose for full' hint. Returned so any front-end (line console.print OR a
+    Textual RichLog) renders identically. Empty text → a dim placeholder."""
+    from rich.console import Group
+    from rich.text import Text
+
     text = (text or "").strip()
     if not text:
-        console.print("[dim](no response text)[/]")
-        return
+        return Text("(no response text)", style="dim")
     # D3: collapse runs of 2+ blank lines to a single blank line so the model's
     # spread-out "thinking" doesn't stack with rich Markdown's paragraph spacing.
     text = _RE_BLANK_RUN.sub("\n\n", text)
     if mode == "full":
-        console.print(Markdown(text))
-        return
+        return Markdown(text)
     max_lines = _COMPACT_LINES if mode == "compact" else _TRUNCATE_LINES
     shown, hidden = truncate_for_display(text, max_lines=max_lines,
                                          max_chars=_TRUNCATE_CHARS)
-    console.print(Markdown(shown))
-    if hidden:
-        console.print(f"[dim]… +{hidden} lines — /verbose for full[/]")
+    if not hidden:
+        return Markdown(shown)
+    return Group(Markdown(shown),
+                 Text(f"… +{hidden} lines — /verbose for full", style="dim"))
+
+
+def render_final(console: Console, text: str, *, mode: str = "truncated") -> None:
+    """Print the model's final output (line front-end). Thin wrapper over
+    `build_final_renderable`."""
+    console.print(build_final_renderable(text, mode=mode))
 
 
 def _tok_per_s(result) -> float:
