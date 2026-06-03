@@ -132,26 +132,23 @@ _SLOT_FOR_TASK = {
 def _default_reader(
     console: Console,
     *,
-    toolbar_fn: Callable[[], object] | None = None,
     status_markup_fn: Callable[[], str] | None = None,
 ) -> Callable[[], str]:
-    """Return a line reader — prompt_toolkit (with a static bottom-toolbar status
-    bar) if available, else input() with the status printed above the prompt."""
+    """Return a line reader. prompt_toolkit if available, else input(). In both
+    cases the status line is printed inline just above the prompt so it scrolls
+    with the conversation (Claude-CLI style) instead of being pinned to the
+    terminal bottom as a floating bar."""
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.formatted_text import FormattedText
         from prompt_toolkit.history import InMemoryHistory
-        from prompt_toolkit.styles import Style
 
-        # Drop prompt_toolkit's default grey/reversed bottom-toolbar bar so the
-        # status bar sits on the terminal background (user: "match the terminal").
-        toolbar_style = Style.from_dict({
-            "bottom-toolbar": "noreverse bg:default fg:default",
-            "bottom-toolbar.text": "noreverse bg:default",
-        })
-        pt = PromptSession(history=InMemoryHistory(), style=toolbar_style)
+        pt = PromptSession(history=InMemoryHistory())
 
         def read() -> str:
+            # Status line scrolls with history (not a pinned bottom_toolbar).
+            if status_markup_fn is not None:
+                console.print(status_markup_fn())
             # Fresh colors each turn → the arrows shift per render. ptk needs its
             # own ansi* tokens (B4) so the arrows track the terminal palette.
             colors = pick_no_adjacent_repeats(3, palette=ARROW_PALETTE_PTK)
@@ -160,7 +157,7 @@ def _default_reader(
                 + [(f"bold fg:{c}", "›") for c in colors]
                 + [("", " ")]
             )
-            return pt.prompt(message, bottom_toolbar=toolbar_fn)
+            return pt.prompt(message)
 
         return read
     except Exception:  # prompt_toolkit not installed → degrade gracefully
@@ -228,7 +225,6 @@ def run_chat_repl(
     status = StatusState(opened_at=time.time(), num_ctx=slots.role_for("chat").num_ctx)
     reader = reader or _default_reader(
         console,
-        toolbar_fn=lambda: status_mod.toolbar(session, slots, repo_path, status),
         status_markup_fn=lambda: status_mod.status_markup(session, slots, repo_path, status),
     )
     meta = session_store.new_session(

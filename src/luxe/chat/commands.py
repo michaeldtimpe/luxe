@@ -38,30 +38,32 @@ class CommandContext:
     on_git_analysis: Callable[[str], None] | None = None  # kind -> run gitkit report
 
 
-_HELP = """[bold]luxe chat commands[/]
-  [cyan]/help[/]                      show this help
-  [cyan]/model[/] [slot] [model_id]   show slots, or repoint chat|plan|code
-  [cyan]/use[/] <slot>                pin the next turn to chat|plan|code
-  [cyan]/ctx[/] [small|medium|large|xlarge|huge]   show or set context window size
-  [cyan]/write[/]                     toggle write tools (default: read-only)
-  [cyan]/bash[/]                      toggle unrestricted shell (default: allowlisted)
-  [cyan]/verbose[/] [diff|full|off]   show full tool I/O (diffs, file contents, results)
-  [cyan]/reasoning[/]                 toggle live streaming of the model's thinking
-  [cyan]/debug[/]                     toggle "show everything" (verbose full + reasoning)
-  [cyan]/terse[/]                     toggle terse model output (default ON; saves tokens)
-  [cyan]/goal[/] <objective> | stop   autonomously run rounds until the objective is met
-  [cyan]/plan[/] <objective>          draft a plan, then choose: save / execute / both
-  [cyan]/sys[/] [add <rule>|list|clear]  manage session-scoped system constraints
-  [cyan]/memory[/] list|add|promote|forget|edit
-  [cyan]/gitsummary[/]                summarize this repo: deps, health, use-risk verdict
-  [cyan]/gitreview[/]                 review this repo for serious bugs + security issues
-  [cyan]/gitrefactor[/]               propose a structural refactor plan for this repo
-  [cyan]/compare[/] <task>            run two configs side-by-side
-  [cyan]/compare review[/] [id]       replay a stored comparison
-  [cyan]/resume[/] [id]               resume a prior session (or list them)
-  [cyan]/clear[/]                     start a fresh conversation
-  [cyan]/quit[/]                      exit (Ctrl-D also works)
-"""
+# (command, args, description) — rendered into an auto-aligned table by _help()
+# so every description starts at the same column regardless of command width.
+_HELP_ROWS: list[tuple[str, str, str]] = [
+    ("/help", "", "show this help"),
+    ("/model", "[slot] [model_id]", "show slots, or repoint chat|plan|code"),
+    ("/use", "<slot>", "pin the next turn to chat|plan|code"),
+    ("/ctx", "[small|medium|large|xlarge|huge]", "show or set context window size"),
+    ("/write", "", "toggle write tools (default: read-only)"),
+    ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
+    ("/verbose", "[diff|full|off]", "show full tool I/O (diffs, file contents, results)"),
+    ("/reasoning", "", "toggle live streaming of the model's thinking"),
+    ("/debug", "", 'toggle "show everything" (verbose full + reasoning)'),
+    ("/terse", "", "toggle terse model output (default ON; saves tokens)"),
+    ("/goal", "<objective> | stop", "autonomously run rounds until the objective is met"),
+    ("/plan", "<objective>", "draft a plan, then choose: save / execute / both"),
+    ("/sys", "[add <rule>|list|clear]", "manage session-scoped system constraints"),
+    ("/memory", "list|add|promote|forget|edit", "manage project memory"),
+    ("/gitsummary", "", "summarize this repo: deps, health, use-risk verdict"),
+    ("/gitreview", "", "review this repo for serious bugs + security issues"),
+    ("/gitrefactor", "", "propose a structural refactor plan for this repo"),
+    ("/compare", "<task>", "run two configs side-by-side"),
+    ("/compare review", "[id]", "replay a stored comparison"),
+    ("/resume", "[id]", "resume a prior session (or list them)"),
+    ("/clear", "", "start a fresh conversation"),
+    ("/quit", "", "exit (Ctrl-D also works)"),
+]
 
 
 def is_command(line: str) -> bool:
@@ -105,7 +107,21 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
 
 
 def _help(args, ctx: CommandContext) -> CommandResult:
-    ctx.console.print(_HELP)
+    from rich.markup import escape
+    from rich.table import Table
+
+    ctx.console.print("[bold]luxe chat commands[/]")
+    # box=None + a sized command column → descriptions line up in one column.
+    table = Table(box=None, show_header=False, pad_edge=False, padding=(0, 2, 0, 0))
+    table.add_column("command", no_wrap=True)
+    table.add_column("description", overflow="fold")
+    for name, cmd_args, desc in _HELP_ROWS:
+        sig = f"[cyan]{name}[/]"
+        if cmd_args:
+            # escape literal []-placeholders so Rich doesn't eat them as markup
+            sig += f" [dim]{escape(cmd_args)}[/]"
+        table.add_row(sig, escape(desc))
+    ctx.console.print(table)
     return CommandResult(handled=True)
 
 
