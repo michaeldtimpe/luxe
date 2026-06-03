@@ -114,6 +114,14 @@ class ChatApp(App):
         self._gen_started = 0.0
         self._timer = None
         self.ctx: cmd.CommandContext | None = None
+        # Cached widget refs (set in on_mount). We hold references rather than
+        # query_one() each tick because `App.query_one` only searches the ACTIVE
+        # screen — once a PromptScreen modal is pushed the base-screen widgets are
+        # no longer found, which would crash the timer. A held ref stays valid.
+        self._gen: Static | None = None
+        self._status_bar: StatusBar | None = None
+        self._transcript: RichLog | None = None
+        self._input: Input | None = None
 
     # -- layout -------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -126,16 +134,24 @@ class ChatApp(App):
             yield Input(id="prompt", placeholder="message luxe — /help for commands")
 
     def on_mount(self) -> None:
-        from luxe.buildinfo import build_status_hint, version_string
+        from luxe.buildinfo import build_status_hint, version_parts
 
         log = self._log()
-        ver = version_string().replace("+dirty", "[/][yellow]+dirty[/][dim]")
-        log.write(rainbow_banner("luxe chat")
-                  + f"  [dim]{ver} · session={self.session.session_id} · /help[/]")
+        sha, dirty = version_parts()
+        state = "[yellow](dirty)[/]" if dirty else "[dim green](clean)[/]"
+        log.write(rainbow_banner("luxe")
+                  + f"  [dim]· version {sha}[/] {state} "
+                  + f"[dim]· session {self.session.session_id} · /help[/]")
         hint = build_status_hint()
         if hint:
             log.write(f"[yellow][hint][/] [dim]{hint}[/]")
-        self.query_one("#generating", Static).display = False
+        # Cache long-lived widget refs (see __init__): used directly so the timer
+        # and writes survive a modal screen being on top.
+        self._gen = self.query_one("#generating", Static)
+        self._status_bar = self.query_one("#status", StatusBar)
+        self._transcript = self.query_one("#transcript", RichLog)
+        self._input = self.query_one("#prompt", Input)
+        self._gen.display = False
         self.ctx = cmd.CommandContext(
             console=LogConsole(self),
             session=self.session,
@@ -144,25 +160,28 @@ class ChatApp(App):
             on_compare=self._compare_hook,
             on_compare_review=self._compare_review_hook,
         )
-        self.query_one("#prompt", Input).focus()
+        self._input.focus()
 
     # -- helpers ------------------------------------------------------------
     def _log(self) -> RichLog:
-        return self.query_one("#transcript", RichLog)
+        # cached after on_mount; fall back to a query before then.
+        return self._transcript or self.query_one("#transcript", RichLog)
 
     def write(self, renderable) -> None:
         """Thread-safe write into the transcript (callable from any thread)."""
+        log = self._log()
         if threading.current_thread() is threading.main_thread():
-            self._log().write(renderable)
+            log.write(renderable)
         else:
-            self.call_from_thread(self._log().write, renderable)
+            self.call_from_thread(log.write, renderable)
 
     def is_worker_thread(self) -> bool:
         return self._worker_thread is threading.current_thread()
 
     def refresh_status(self) -> None:
         try:
-            self.query_one("#status", StatusBar).refresh()
+            if self._status_bar is not None:
+                self._status_bar.refresh()
         except Exception:
             pass
 
@@ -186,7 +205,7 @@ class ChatApp(App):
 
     def on_key(self, event) -> None:
         # ctrl+d on an empty prompt quits (Claude-CLI convention).
-        if event.key == "ctrl+d" and not self.query_one("#prompt", Input).value:
+        if event.key == "ctrl+d" and self._input is not None and not self._input.value:
             event.stop()
             self.action_quit_app()
 
@@ -211,8 +230,8 @@ class ChatApp(App):
     # -- turn worker --------------------------------------------------------
     def _begin_busy(self) -> None:
         self._busy = True
-        self.query_one("#generating", Static).display = True
-        self.query_one("#prompt", Input).disabled = True
+        self._gen.display = True
+        self._input.disabled = True
         self._timer = self.set_interval(0.1, self._tick)
 
     def _reset_gen(self) -> None:
@@ -227,21 +246,28 @@ class ChatApp(App):
         if self._timer is not None:
             self._timer.stop()
             self._timer = None
-        self.query_one("#generating", Static).display = False
-        inp = self.query_one("#prompt", Input)
-        inp.disabled = False
-        inp.focus()
+        if self._gen is not None:
+            self._gen.display = False
+        if self._input is not None:
+            self._input.disabled = False
+            self._input.focus()
         self._busy = False
         self.refresh_status()
 
     def _tick(self) -> None:
+        # Skip painting while a modal (PromptScreen) is up — its widgets aren't on
+        # the base screen and the spinner would be hidden anyway.
+        if self._gen is None or isinstance(self.screen, PromptScreen):
+            return
         elapsed = time.time() - self._gen_started if self._gen_started else 0.0
         frame = _SPINNER[int(elapsed * 10) % len(_SPINNER)]
         tools = " · ".join(f"{n} ({c})" for n, c in self._tool_counts.most_common(4))
         head = f"{frame} {elapsed:4.1f}s" + (f" · {tools}" if tools else "")
         tail = self._stream[-200:].replace("\n", " ")
-        self.query_one("#generating", Static).update(
-            Text(head, style="cyan") + Text(f"  {tail}", style="dim"))
+        try:
+            self._gen.update(Text(head, style="cyan") + Text(f"  {tail}", style="dim"))
+        except Exception:
+            return
         self.refresh_status()
 
     def _execute_turn_blocking(self, message: str, *, plan_mode: bool = False):

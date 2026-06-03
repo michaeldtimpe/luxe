@@ -269,14 +269,14 @@ def run_chat_repl(
     # The status bar (under the prompt) already shows repo path, slot/model, and
     # write/bash state — so the banner stays minimal to avoid duplicating it.
     # C3: show the build (git short-SHA[+dirty]) so a run is traceable to a commit.
-    from luxe.buildinfo import build_status_hint, version_string
-    # WS6: color the +dirty marker (warning, not error) so uncommitted state is
-    # visible instead of buried in the dim version string.
-    _ver = version_string()
-    _ver_markup = (_ver.replace("+dirty", "[/][yellow]+dirty[/][dim]")
-                   if "+dirty" in _ver else _ver)
-    console.print(rainbow_banner("luxe chat")
-                  + f"  [dim]{_ver_markup} · session={meta.session_id} · /help[/]")
+    from luxe.buildinfo import build_status_hint, version_parts
+    # Banner: app name (no mode — that's in the status bar) · version + clean/dirty
+    # state · session · /help. Shared format with the TUI (chat.sdd).
+    _sha, _dirty = version_parts()
+    _state = "[yellow](dirty)[/]" if _dirty else "[dim green](clean)[/]"
+    console.print(rainbow_banner("luxe")
+                  + f"  [dim]· version {_sha}[/] {_state} "
+                  + f"[dim]· session {meta.session_id} · /help[/]")
     # Actionable-only build hint (behind→pull, ahead→push, dirty→commit); silent
     # when clean & current.
     _hint = build_status_hint()

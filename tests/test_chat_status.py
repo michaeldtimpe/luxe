@@ -48,6 +48,20 @@ def test_mode_on_when_enabled(slots):
     assert "write on" in out and "bash on" in out
 
 
+def test_session_mode_chip_omitted_when_default(slots):
+    out = _flat(fields(ChatSession(), slots, "", StatusState()))
+    assert "mode " not in out
+
+
+def test_session_mode_chip_shows_active_flags(slots):
+    s = ChatSession(verbose_level="diff", compact=True, show_reasoning=True,
+                    terse=False)
+    out = _flat(fields(s, slots, "", StatusState()))
+    assert "mode " in out
+    for bit in ("verbose:diff", "reason", "compact", "terse:off"):
+        assert bit in out
+
+
 def test_segment_order_matches_spec(slots):
     # path · ctx · cache · start · last · write · bash · slot · model
     st = StatusState(slot="chat", model="Champ-9000", ctx_pressure=0.1,

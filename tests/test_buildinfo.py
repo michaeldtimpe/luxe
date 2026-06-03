@@ -44,6 +44,21 @@ def test_build_status_hint(monkeypatch, mapping, expected):
     assert buildinfo.build_status_hint() == expected
 
 
+@pytest.mark.parametrize("mapping,expected", [
+    ({("rev-parse", "--short", "HEAD"): "abc1234", _DIRTY: " M x"}, ("abc1234", True)),
+    ({("rev-parse", "--short", "HEAD"): "abc1234", _DIRTY: ""}, ("abc1234", False)),
+])
+def test_version_parts(monkeypatch, mapping, expected):
+    monkeypatch.setattr(buildinfo, "_git", _fake_git(mapping))
+    assert buildinfo.version_parts() == expected
+
+
+def test_version_parts_no_git_falls_back(monkeypatch):
+    monkeypatch.setattr(buildinfo, "_git", lambda *a: None)
+    sha, dirty = buildinfo.version_parts()
+    assert dirty is False and sha  # static __version__, not dirty
+
+
 def test_build_status_hint_no_upstream_does_not_query_ahead(monkeypatch):
     # When @{upstream} is absent we must NOT run the ahead count (it would error).
     calls = []

@@ -79,6 +79,14 @@ class SlotManager:
     def resident(self) -> str:
         return self._resident
 
+    def available_models(self) -> list[str]:
+        """oMLX-loadable model ids (GET /v1/models), guarded — returns [] if the
+        server is unreachable so `/model` never crashes when oMLX is down."""
+        try:
+            return self.backend.list_models()
+        except Exception:
+            return []
+
     # -- swap orchestration -------------------------------------------------
 
     def backend_for(self, slot: str) -> Backend:
