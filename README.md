@@ -93,6 +93,9 @@ luxe maintain <repo> "<goal>" [--task review|implement|bugfix|document|summarize
                               [--spec-yaml <path>] [--save-report]
 luxe chat   [--repo <path>] [--config <path>]   # interactive Claude-CLI-style agent
             [--chat-model/--plan-model/--code-model <id>] [--resume <id>]
+luxe gitsummary  <repo> [--no-save]             # project / deps / health / use-risk verdict
+luxe gitreview   <repo> [--no-save]             # serious bugs + security findings (read-only)
+luxe gitrefactor <repo> [--no-save]             # ordered structural refactor plan (read-only)
 luxe pr     <run-id> [--push-only]              # resume a partially-completed PR cycle
 luxe runs   list | luxe runs gc                 # housekeeping
 luxe unload [--except <model-id>]               # free oMLX RAM (auto-runs after maintain)
@@ -112,6 +115,33 @@ luxe maintain ~/code/my-app "review the auth module for security bugs" --task re
 # Resume just the PR cycle (commit / push / create / watch_ci) after auth expired
 luxe pr <run-id>
 ```
+
+### GitKit — read-only repo analysis
+
+Point luxe at any existing repo (a local path or a git URL it clones) and get a
+packaged markdown report. All three are **read-only** and **single-pass** (one
+agent run, no edits, no PR), and each prints to the terminal and saves to
+`~/.luxe/reports/<repo-hash>/<kind>-<ts>-<rand>.md`.
+
+| Command | Aliases | What it produces |
+|---|---|---|
+| `luxe gitsummary`  | `git-summary`, `gsum` | purpose, stack, dependencies & their risk, size/health (commit cadence, contributors, PR/issue/release activity), security posture, **use-risk verdict** (low/med/high) |
+| `luxe gitreview`   | `git-review`, `grev`  | serious bugs & security concerns, each with severity + `file:line` evidence (ungrounded/speculative findings are omitted) |
+| `luxe gitrefactor` | `git-refactor`, `gref`| an ordered structural refactor plan (coupling, cohesion, boundaries, duplication, dead code, testability) |
+
+```bash
+luxe gsum  ~/code/my-app                       # summarize a local repo
+luxe grev  https://github.com/acme/widget      # clone + review a remote repo
+luxe gref  . --no-save                          # refactor plan for the cwd, print only
+```
+
+The same three are available inside `luxe chat` as `/gitsummary`, `/gitreview`,
+`/gitrefactor` (analyzing the session's repo). **GitHub data** (merged/open PRs,
+issues, releases, stars) is gathered via the `gh` CLI when it's installed and
+authenticated against a GitHub remote; otherwise the report degrades gracefully
+to local-git signals and notes that `gh` was unavailable. `gh` is invoked
+out-of-band — it is never added to the agent's bash allowlist, so the benchmark
+tool surface stays byte-identical.
 
 ### Interactive chat tiers
 

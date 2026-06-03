@@ -28,9 +28,21 @@ def memory_root() -> Path:
     return Path.home() / ".luxe" / "memory"
 
 
-def project_hash(repo_root: str | Path) -> str:
+def repo_hash(repo_root: str | Path, *, length: int = 16) -> str:
+    """Stable per-repo identifier: a hex slice of sha256(absolute repo path).
+
+    The single source of truth for hashing a repo to a directory name. `length`
+    16 is the default (reports, gitkit); the memory subsystem keeps 12 via
+    `project_hash` for backwards-compatible store layout.
+    """
     abs_path = str(Path(repo_root).resolve())
-    return hashlib.sha256(abs_path.encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(abs_path.encode("utf-8")).hexdigest()[:length]
+
+
+def project_hash(repo_root: str | Path) -> str:
+    """12-char repo hash for the auto-memory store dir (kept stable for existing
+    `~/.luxe/memory/<hash>/` layouts). Delegates to `repo_hash`."""
+    return repo_hash(repo_root, length=12)
 
 
 def project_store_dir(repo_root: str | Path) -> Path:

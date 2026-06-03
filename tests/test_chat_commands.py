@@ -207,3 +207,32 @@ def test_resume_hook_invoked(ctx):
     ctx.on_resume = lambda sid: seen.append(sid)
     cmd.dispatch("/resume xyz", ctx)
     assert seen == ["xyz"]
+
+
+@pytest.mark.parametrize("alias,kind", [
+    ("/gitsummary", "gitsummary"),
+    ("/git-summary", "gitsummary"),
+    ("/gsum", "gitsummary"),
+    ("/gitreview", "gitreview"),
+    ("/git-review", "gitreview"),
+    ("/grev", "gitreview"),
+    ("/gitrefactor", "gitrefactor"),
+    ("/git-refactor", "gitrefactor"),
+    ("/gref", "gitrefactor"),
+])
+def test_git_analysis_aliases_dispatch(ctx, alias, kind):
+    seen = []
+    ctx.on_git_analysis = lambda k: seen.append(k)
+    res = cmd.dispatch(alias, ctx)
+    assert res.handled and not res.exit
+    assert seen == [kind]
+
+
+def test_git_analysis_no_repo_points_at_cli(ctx):
+    ctx.session.repo_path = ""
+    seen = []
+    ctx.on_git_analysis = lambda k: seen.append(k)
+    cmd.dispatch("/gitreview", ctx)
+    assert seen == []  # hook NOT called when no repo is bound
+    out = _text(ctx)
+    assert "luxe gitreview" in out

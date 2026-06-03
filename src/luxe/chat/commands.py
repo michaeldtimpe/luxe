@@ -35,6 +35,7 @@ class CommandContext:
     on_compare: Callable[[str], None] | None = None
     on_compare_review: Callable[[str], None] | None = None
     on_resume: Callable[[str], None] | None = None
+    on_git_analysis: Callable[[str], None] | None = None  # kind -> run gitkit report
 
 
 _HELP = """[bold]luxe chat commands[/]
@@ -52,6 +53,9 @@ _HELP = """[bold]luxe chat commands[/]
   [cyan]/plan[/] <objective>          draft a plan, then choose: save / execute / both
   [cyan]/sys[/] [add <rule>|list|clear]  manage session-scoped system constraints
   [cyan]/memory[/] list|add|promote|forget|edit
+  [cyan]/gitsummary[/]                summarize this repo: deps, health, use-risk verdict
+  [cyan]/gitreview[/]                 review this repo for serious bugs + security issues
+  [cyan]/gitrefactor[/]               propose a structural refactor plan for this repo
   [cyan]/compare[/] <task>            run two configs side-by-side
   [cyan]/compare review[/] [id]       replay a stored comparison
   [cyan]/resume[/] [id]               resume a prior session (or list them)
@@ -83,6 +87,9 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/plan": _plan,
         "/sys": _sys,
         "/memory": _memory,
+        "/gitsummary": _gitsummary, "/git-summary": _gitsummary, "/gsum": _gitsummary,
+        "/gitreview": _gitreview, "/git-review": _gitreview, "/grev": _gitreview,
+        "/gitrefactor": _gitrefactor, "/git-refactor": _gitrefactor, "/gref": _gitrefactor,
         "/compare": _compare,
         "/resume": _resume,
         "/clear": _clear,
@@ -427,6 +434,33 @@ def _compare(args, ctx: CommandContext) -> CommandResult:
     else:
         ctx.on_compare(task)
     return CommandResult(handled=True)
+
+
+def _git_analysis(kind: str, ctx: CommandContext) -> CommandResult:
+    """Run a read-only gitkit report on the SESSION repo (CLI targets other
+    repos). Delegates to the injected hook so the heavy run_single call lives in
+    the REPL, not here."""
+    if not ctx.session.repo_path:
+        ctx.console.print("[yellow]No repo bound to this session. Use the CLI "
+                          f"(`luxe {kind} <path-or-url>`) to analyze another repo.[/]")
+        return CommandResult(handled=True)
+    if ctx.on_git_analysis is None:
+        ctx.console.print("[yellow]git analysis unavailable.[/]")
+        return CommandResult(handled=True)
+    ctx.on_git_analysis(kind)
+    return CommandResult(handled=True)
+
+
+def _gitsummary(args, ctx: CommandContext) -> CommandResult:
+    return _git_analysis("gitsummary", ctx)
+
+
+def _gitreview(args, ctx: CommandContext) -> CommandResult:
+    return _git_analysis("gitreview", ctx)
+
+
+def _gitrefactor(args, ctx: CommandContext) -> CommandResult:
+    return _git_analysis("gitrefactor", ctx)
 
 
 def _resume(args, ctx: CommandContext) -> CommandResult:

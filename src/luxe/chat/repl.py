@@ -238,6 +238,12 @@ def run_chat_repl(
     )
     session.session_id = meta.session_id
 
+    # Record the HEAD the resident BM25/symbol indices (built in chat_cmd just
+    # before this) reflect, so /git* can warn if the repo moves mid-session.
+    if repo_path:
+        from luxe.gitkit.health import current_head
+        session.index_head = current_head(repo_path)
+
     cancel = CancelToken()
     ctx = cmd.CommandContext(
         console=console,
@@ -246,6 +252,7 @@ def run_chat_repl(
         on_resume=_make_resume_hook(console, session),
         on_compare=_make_compare_hook(console, cfg, repo_path, languages, slots),
         on_compare_review=_make_compare_review_hook(console),
+        on_git_analysis=_make_git_analysis_hook(console, cfg, languages, session),
     )
 
     if resume_session_id:
@@ -937,3 +944,21 @@ def _make_compare_review_hook(console):
         review_compare(compare_id, console=console)
 
     return _review
+
+
+def _make_git_analysis_hook(console, cfg, languages, session: ChatSession):
+    """Hook for /gitsummary|/gitreview|/gitrefactor — a single read-only gitkit
+    report over the SESSION repo, reusing its resident indices (warns if HEAD
+    moved since they were built)."""
+    def _git(kind: str) -> None:
+        try:
+            from luxe.gitkit import run_git_report
+        except Exception:
+            console.print("[yellow]gitkit module unavailable.[/]")
+            return
+        run_git_report(
+            kind, cfg=cfg, repo_path=session.repo_path, languages=languages,
+            console=console, save=True, expected_head=session.index_head,
+        )
+
+    return _git

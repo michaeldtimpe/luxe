@@ -19,8 +19,13 @@ from luxe.config import load_config
 console = Console()
 
 
-def _resolve_repo(repo: str) -> str:
-    """Resolve a repo argument to a local path. Clones if it's a URL."""
+def _resolve_repo(repo: str, *, full_history: bool = False) -> str:
+    """Resolve a repo argument to a local path. Clones if it's a URL.
+
+    `full_history=True` clones with `--filter=blob:none` (full commit history,
+    lazy blobs) so commit-cadence/health analysis is meaningful; the default
+    `--depth=1` shallow clone is fine for code-only analysis.
+    """
     p = Path(repo).expanduser().resolve()
     if p.is_dir():
         return str(p)
@@ -28,8 +33,9 @@ def _resolve_repo(repo: str) -> str:
     if repo.startswith(("http://", "https://", "git@")):
         clone_dir = Path(tempfile.mkdtemp(prefix="luxe_"))
         console.print(f"[dim]Cloning {repo} → {clone_dir}[/]")
+        clone_args = (["--filter=blob:none"] if full_history else ["--depth=1"])
         result = subprocess.run(
-            ["git", "clone", "--depth=1", repo, str(clone_dir)],
+            ["git", "clone", *clone_args, repo, str(clone_dir)],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
@@ -41,7 +47,33 @@ def _resolve_repo(repo: str) -> str:
     sys.exit(1)
 
 
-@click.group()
+class AliasedGroup(click.Group):
+    """A click Group that resolves alias names to canonical command names.
+
+    Centralizes alias logic (vs. registering duplicate command objects):
+    overrides both `get_command` (lookup-time canonicalization) and
+    `resolve_command` (so `--help`/usage shows the canonical name)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._aliases: dict[str, str] = {}
+
+    def get_command(self, ctx, cmd_name):
+        return super().get_command(ctx, self._aliases.get(cmd_name, cmd_name))
+
+    def resolve_command(self, ctx, args):
+        if args and args[0] in self._aliases:
+            args = [self._aliases[args[0]], *args[1:]]
+        return super().resolve_command(ctx, args)
+
+
+def apply_aliases(group: AliasedGroup, alias_map: dict[str, str]) -> AliasedGroup:
+    """Register `alias -> canonical` command-name mappings on an AliasedGroup."""
+    group._aliases.update(alias_map)
+    return group
+
+
+@click.group(cls=AliasedGroup)
 def main():
     """luxe — MLX-only repo maintainer."""
     pass
@@ -732,6 +764,77 @@ def compare_review_cmd(compare_id):
     """Replay a stored comparison and tally its votes (no arg: list them)."""
     from luxe.compare import store
     store.review(compare_id, console=console)
+
+
+def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
+                    keep_loaded: bool, save: bool) -> None:
+    """Shared body for the gitsummary/gitreview/gitrefactor CLI commands:
+    resolve repo → load config → set repo_root + build indices → one read-only
+    report pass → unload (unless --keep-loaded)."""
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+    from luxe.gitkit import run_git_report
+    from luxe.tools.fs import set_repo_root
+
+    # gitsummary needs commit history for health → full clone for URLs.
+    repo_path = _resolve_repo(repo, full_history=(kind == "gitsummary"))
+    cfg = load_config(config_path or _default_chat_config())
+    set_repo_root(repo_path)
+
+    console.print("[dim]· Building BM25 + symbol indices…[/]")
+    search_mod.set_index(search_mod.build_bm25_index(repo_path))
+    symbols_mod.set_index(symbols_mod.build_symbol_index(repo_path))
+    languages = _detect_languages_for_repo(repo_path)
+
+    try:
+        run_git_report(kind, cfg=cfg, repo_path=repo_path,
+                       languages=languages, console=console, save=save)
+    finally:
+        search_mod.reset_index()
+        symbols_mod.reset_index()
+        if not keep_loaded:
+            from luxe.backend import Backend
+            try:
+                Backend(model="(unload-probe)").unload_all_loaded()
+            except Exception:
+                pass
+
+
+@main.command(name="gitsummary")
+@click.argument("repo", required=False, default=".")
+@click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
+@click.option("--keep-loaded", is_flag=True, default=False)
+@click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
+def gitsummary_cmd(repo, config_path, keep_loaded, no_save):
+    """Summarize a repo: purpose, deps, health, and a use-risk verdict."""
+    _run_gitkit_cmd("gitsummary", repo, config_path, keep_loaded, not no_save)
+
+
+@main.command(name="gitreview")
+@click.argument("repo", required=False, default=".")
+@click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
+@click.option("--keep-loaded", is_flag=True, default=False)
+@click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
+def gitreview_cmd(repo, config_path, keep_loaded, no_save):
+    """Review a repo for serious bugs and security concerns (read-only)."""
+    _run_gitkit_cmd("gitreview", repo, config_path, keep_loaded, not no_save)
+
+
+@main.command(name="gitrefactor")
+@click.argument("repo", required=False, default=".")
+@click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
+@click.option("--keep-loaded", is_flag=True, default=False)
+@click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
+def gitrefactor_cmd(repo, config_path, keep_loaded, no_save):
+    """Propose an ordered structural refactor plan for a repo (read-only)."""
+    _run_gitkit_cmd("gitrefactor", repo, config_path, keep_loaded, not no_save)
+
+
+apply_aliases(main, {
+    "git-summary": "gitsummary", "gsum": "gitsummary",
+    "git-review": "gitreview", "grev": "gitreview",
+    "git-refactor": "gitrefactor", "gref": "gitrefactor",
+})
 
 
 @main.command(name="unload")
