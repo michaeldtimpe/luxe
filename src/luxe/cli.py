@@ -768,30 +768,24 @@ def compare_review_cmd(compare_id):
 
 def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                     keep_loaded: bool, save: bool) -> None:
-    """Shared body for the gitsummary/gitreview/gitrefactor CLI commands:
-    resolve repo → load config → set repo_root + build indices → one read-only
-    report pass → unload (unless --keep-loaded)."""
-    from luxe import search as search_mod
-    from luxe import symbols as symbols_mod
+    """Shared body for the gitsummary/gitreview/gitrefactor CLI commands. The
+    runner owns target resolution (incl. cloning a URL when the path is not a
+    git repo), index building, and repo_root; here we only clone an explicit URL
+    arg up front, load the config, and unload models afterward."""
     from luxe.gitkit import run_git_report
-    from luxe.tools.fs import set_repo_root
 
-    # gitsummary needs commit history for health → full clone for URLs.
-    repo_path = _resolve_repo(repo, full_history=(kind == "gitsummary"))
+    # An explicit URL arg clones immediately (no prompt). A local path is passed
+    # through; the runner prompts to clone if it isn't a git working tree.
+    if repo.startswith(("http://", "https://", "git@", "ssh://")):
+        repo_path = _resolve_repo(repo, full_history=(kind == "gitsummary"))
+    else:
+        repo_path = str(Path(repo).expanduser().resolve())
     cfg = load_config(config_path or _default_chat_config())
-    set_repo_root(repo_path)
-
-    console.print("[dim]· Building BM25 + symbol indices…[/]")
-    search_mod.set_index(search_mod.build_bm25_index(repo_path))
-    symbols_mod.set_index(symbols_mod.build_symbol_index(repo_path))
-    languages = _detect_languages_for_repo(repo_path)
 
     try:
         run_git_report(kind, cfg=cfg, repo_path=repo_path,
-                       languages=languages, console=console, save=save)
+                       console=console, save=save)
     finally:
-        search_mod.reset_index()
-        symbols_mod.reset_index()
         if not keep_loaded:
             from luxe.backend import Backend
             try:

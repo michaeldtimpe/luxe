@@ -73,6 +73,15 @@ def current_head(repo_path: str | Path) -> str:
     return out if ok else ""
 
 
+def is_git_repo(path: str | Path) -> bool:
+    """True iff `path` is an existing directory inside a git working tree."""
+    p = Path(path)
+    if not p.is_dir():
+        return False
+    ok, out = _run_git(["rev-parse", "--is-inside-work-tree"], p)
+    return ok and out.strip() == "true"
+
+
 def _size_lines(repo_path: str | Path) -> list[str]:
     """Repo size signals (files / LOC / language mix) via build_repo_summary."""
     try:
