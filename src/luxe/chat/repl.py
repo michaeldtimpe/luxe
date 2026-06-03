@@ -405,7 +405,9 @@ def _run_turn(
                         live.console.print(
                             format_tool_call_verbose(tc, session.verbose_level))
                     else:
-                        live.console.print(format_tool_call(tc))
+                        # highlight=False: keep markup, stop the ReprHighlighter
+                        # repainting the tool name magenta over the theme (iter-6).
+                        live.console.print(format_tool_call(tc), highlight=False)
                     activity.note(tc)
                     _note_tool(tc)
                     raise_if_cancelled(cancel)
