@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import difflib
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -321,11 +322,17 @@ def make_tool_event(console: Console, cancel: CancelToken,
     return _on_event
 
 
+_RE_BLANK_RUN = re.compile(r"\n[ \t]*\n(?:[ \t]*\n)+")
+
+
 def render_final(console: Console, text: str) -> None:
     text = (text or "").strip()
     if not text:
         console.print("[dim](no response text)[/]")
         return
+    # D3: collapse runs of 2+ blank lines to a single blank line so the model's
+    # spread-out "thinking" doesn't stack with rich Markdown's paragraph spacing.
+    text = _RE_BLANK_RUN.sub("\n\n", text)
     console.print(Markdown(text))
 
 

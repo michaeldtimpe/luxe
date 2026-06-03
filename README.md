@@ -149,10 +149,17 @@ override with `LUXE_HOME`):
 **Startup flags** (so autonomous `/goal` users don't have to type REPL commands
 first): `luxe chat --verbose diff|full`, `--show-reasoning`, `--no-terse`,
 `--debug` (= verbose full + reasoning), and `--theme auto|cool|warm|mono` (curated
-palettes — `auto` tracks your terminal/YASL theme; the others give luxe its own
-look regardless of terminal ANSI slots). The banner shows the build's git
-short-SHA so a run is traceable to a commit. `/ctx huge` reaches a 256K window
-where the box's `num_ctx_max` allows it (default window stays 32K).
+palettes). The shipped **default palette is `cool`**, resolved `--theme` flag →
+`LUXE_THEME` env → `cool`; set `LUXE_THEME=auto` (or `--theme auto`) to track your
+terminal/YASL theme instead. The banner shows the build's git short-SHA so a run
+is traceable to a commit. `/ctx huge` reaches a 256K window where the box's
+`num_ctx_max` allows it (default window stays 32K).
+
+**Git & MCP:** native read-only `git_diff/log/show` tools are always available; for
+richer git, add the commented git MCP server in `configs/mcp.yaml` (it's auto-
+namespaced `mcp__git__<tool>`). luxe has no large-repo *chunking* yet — it relies
+on BM25 search + the symbol index + tiered context compaction; repo-splitting for
+big refactors is future work (`docs/g1-context-lifecycle-design.md`).
 
 **Output verbosity** is three independent toggles, not a single dial:
 

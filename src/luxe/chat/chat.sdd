@@ -51,16 +51,22 @@ never touches this module.
   region. Both default off → unchanged one-line summaries
 - `/goal <objective>` is an autonomous supervisor in the REPL loop: round 1 sends
   the objective, later rounds send `continue work`, each printing `[goal round
-  N/M]`. Termination is LEDGER-AWARE (iteration-3): a "settled" round
-  (files_changed==0; re-running tests no longer blocks completion) is DONE only
-  when the ledger corroborates (`completed` non-empty AND `in_progress` cleared,
-  with the model either signaling `LUXE_GOAL_DONE` or going tool-idle) for 2
-  consecutive rounds — the sentinel alone is advisory/noisy. Settled rounds that
-  add NO new `completed` items accrue toward an honest "stuck — needs a human"
-  exit (≥3), keyed on new completed entries so rewriting the same `in_progress`
-  can't dodge it. `ledger.prune` clears stale bootstrap items each round. Crash
-  resilience retries on CONSECUTIVE failures; a tool-fingerprint guard is a faster
-  stuck trip; a ≤32K window prints a low-context advisory. Requires write mode;
+  N/M]`. Termination keys on OBSERVABLE state (iteration-5, C1/D1/D6): a "settled"
+  round (files_changed==0) is DONE when it shows GREEN tests (parsed from tool
+  output by `parse_test_result` — passed>0, zero failed/errors) OR carries
+  `LUXE_GOAL_DONE` + a grown ledger `completed`, for 2 consecutive rounds. The
+  green-tests path completes a finished run even if the model never logged
+  `completed` or signaled (the iter-5 run-2/3 false-STUCK); the sentinel path alone
+  never suffices (keeps the 32K false-done shut). It does NOT require `in_progress`
+  empty. STUCK has two guards: idle (settled rounds, no new completed, ≥3) and
+  THRASH (rounds that ran tests without reducing failures and added no completed,
+  ≥3 — catches the edit→test→same-failures loop; no-test rounds don't count, so
+  staged work isn't punished). Completion is checked first and resets both. The
+  STUCK message reports observable state (files built + last test result), never
+  "completed=0 … likely NOT done". Crash resilience retries on CONSECUTIVE failures;
+  a tool-fingerprint guard is a faster stuck trip; a ≤32K window prints a
+  low-context advisory. The pure `evaluate_goal_round()` + `parse_test_result()`
+  are unit-tested. Requires write mode;
   Ctrl-C or `/goal stop` halts it
 - `/plan <objective>` drafts a plan in a forced READ-ONLY turn (PLAN_HINT, reusing
   make_read_only_role) then prompts save / execute / both / discard. Save never

@@ -27,6 +27,13 @@ client:
   #   timeout_s: 30
   #   enabled_for: [maintain]
   #   max_calls_per_session: 50
+  # - name: git                       # richer git than the native git_diff/log/show
+  #   transport: stdio                 # tools are auto-namespaced mcp__git__<tool>
+  #   command: uvx
+  #   args: ["mcp-server-git", "--repository", "."]
+  #   timeout_s: 30
+  #   enabled_for: [chat, maintain, review]
+  #   max_calls_per_session: 50
 
   circuit_breaker:
     consecutive_failures: 3

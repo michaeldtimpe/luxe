@@ -1,90 +1,139 @@
-"""Unit tests for the goal-runner per-round decision (C1).
+"""Unit tests for the goal-runner decision + test-output parser (C1/D1/D6).
 
-`evaluate_goal_round` is a pure function so the completion/stuck logic — and
-especially the completion-beats-STUCK ordering that the iter-4 `a5812` false-STUCK
-exposed — can be verified without spinning a model.
+`evaluate_goal_round` and `parse_test_result` are pure, so completion/stuck —
+including the iter-5 observable-completion fix and the thrash detector — can be
+verified without spinning a model.
 """
 
-from luxe.chat.repl import evaluate_goal_round
+from luxe.chat.repl import evaluate_goal_round, parse_test_result
 
 
 def _run(rounds):
-    """Drive a sequence of round inputs through the helper, threading state.
-    Each round is a dict with keys: settled, sentinel, completed_count,
-    new_completed. Returns the final verdict (or the verdict that broke early)."""
-    done_streak = 0
-    settled_no_progress = 0
-    grew = False
+    """Thread a sequence of round inputs through the decision helper. Each round
+    is a dict: settled, sentinel, completed_count, new_completed, test_result.
+    Returns the verdict that broke early (or the last 'continue')."""
+    st = dict(done_streak=0, settled_no_progress=0, completed_ever_grew=False,
+              thrash_count=0, best_failures=None, best_total=None)
     verdict = "continue"
     for r in rounds:
         d = evaluate_goal_round(
             settled=r["settled"], sentinel=r["sentinel"],
             completed_count=r["completed_count"], new_completed=r["new_completed"],
-            done_streak=done_streak, settled_no_progress=settled_no_progress,
-            completed_ever_grew=grew)
-        done_streak = d.done_streak
-        settled_no_progress = d.settled_no_progress
-        grew = d.completed_ever_grew
+            test_result=r.get("test_result"), **st)
+        st = dict(done_streak=d.done_streak, settled_no_progress=d.settled_no_progress,
+                  completed_ever_grew=d.completed_ever_grew, thrash_count=d.thrash_count,
+                  best_failures=d.best_failures, best_total=d.best_total)
         verdict = d.verdict
         if verdict in ("done", "stuck"):
-            break
+            return verdict
     return verdict
 
 
-def test_a5812_replay_completes_not_stuck():
-    # Work done (completed grew to 5), then 2 settled+sentinel rounds. A lingering
-    # in_progress item is irrelevant — the helper never consults it.
+# --- parse_test_result -----------------------------------------------------
+
+def test_parse_pytest_summaries():
+    assert parse_test_result("pytest", "72 passed, 4 failed in 2.1s", False) == (72, 4, 0)
+    assert parse_test_result("pytest", "76 passed in 1.2s", False) == (76, 0, 0)
+    assert parse_test_result("pytest", "1 passed, 1 error", False) == (1, 0, 1)
+    # singular/plural + ordering tolerance
+    assert parse_test_result("pytest", "4 failures, 1 passed", False) == (1, 4, 0)
+
+
+def test_parse_crash_records_error():
+    # test command crashed before a summary → errors=1 (non-progress, not ignored)
+    assert parse_test_result("python -m pytest tests/", "Traceback ...\nSyntaxError",
+                             True) == (0, 0, 1)
+
+
+def test_parse_non_test_output_is_none():
+    assert parse_test_result("ls -la", "a.py b.py", False) is None
+    assert parse_test_result("", "wrote 500 bytes", False) is None
+
+
+# --- completion paths ------------------------------------------------------
+
+def test_green_tests_complete_without_sentinel_or_ledger():
+    # The iter-5 run-2/3 fix: finished run, model never logged completed/sentinel,
+    # but tests are green → completes via the observable path.
     verdict = _run([
-        {"settled": False, "sentinel": False, "completed_count": 5, "new_completed": True},
-        {"settled": True, "sentinel": True, "completed_count": 5, "new_completed": False},
-        {"settled": True, "sentinel": True, "completed_count": 5, "new_completed": False},
+        {"settled": False, "sentinel": False, "completed_count": 0,
+         "new_completed": False, "test_result": (70, 6, 0)},  # building, failing
+        {"settled": True, "sentinel": False, "completed_count": 0,
+         "new_completed": False, "test_result": (76, 0, 0)},  # green
+        {"settled": True, "sentinel": False, "completed_count": 0,
+         "new_completed": False, "test_result": (76, 0, 0)},  # green again -> done
     ])
     assert verdict == "done"
 
 
-def test_genuine_stuck_when_no_completed_work():
-    # 32K-style failure: settled rounds, no sentinel, completed never grows.
-    verdict = _run([
-        {"settled": True, "sentinel": False, "completed_count": 0, "new_completed": False},
-        {"settled": True, "sentinel": False, "completed_count": 0, "new_completed": False},
-        {"settled": True, "sentinel": False, "completed_count": 0, "new_completed": False},
-    ])
-    assert verdict == "stuck"
-
-
-def test_completion_beats_stuck_race():
-    # done_streak==1 and settled_no_progress==2 already; the next round is
-    # settled + sentinel + completed → must COMPLETE, not STUCK.
+def test_zero_test_project_does_not_auto_complete_via_green():
+    # passed==0 must NOT count as green (a project with no tests).
     d = evaluate_goal_round(
-        settled=True, sentinel=True, completed_count=4, new_completed=False,
-        done_streak=1, settled_no_progress=2, completed_ever_grew=True)
-    assert d.verdict == "done"
-
-
-def test_sentinel_required_idle_does_not_complete():
-    # Settled + completed work + grew, but NO sentinel (idle path dropped): must
-    # not certify done; with no new completed it accrues toward stuck instead.
-    verdict = _run([
-        {"settled": False, "sentinel": False, "completed_count": 3, "new_completed": True},
-        {"settled": True, "sentinel": False, "completed_count": 3, "new_completed": False},
-        {"settled": True, "sentinel": False, "completed_count": 3, "new_completed": False},
-        {"settled": True, "sentinel": False, "completed_count": 3, "new_completed": False},
-    ])
-    assert verdict == "stuck"
-
-
-def test_prepopulated_ledger_does_not_auto_complete():
-    # completed_count>0 from the start but never grows → completed_ever_grew stays
-    # False → never corroborates even with the sentinel.
-    d = evaluate_goal_round(
-        settled=True, sentinel=True, completed_count=9, new_completed=False,
-        done_streak=1, settled_no_progress=0, completed_ever_grew=False)
+        settled=True, sentinel=False, completed_count=0, new_completed=False,
+        test_result=(0, 0, 0), done_streak=1, settled_no_progress=0,
+        completed_ever_grew=False, thrash_count=0, best_failures=None, best_total=None)
     assert d.verdict != "done"
 
 
-def test_corroborated_round_resets_stuck_counter():
+def test_sentinel_path_still_completes():
+    verdict = _run([
+        {"settled": False, "sentinel": False, "completed_count": 5,
+         "new_completed": True, "test_result": None},
+        {"settled": True, "sentinel": True, "completed_count": 5,
+         "new_completed": False, "test_result": None},
+        {"settled": True, "sentinel": True, "completed_count": 5,
+         "new_completed": False, "test_result": None},
+    ])
+    assert verdict == "done"
+
+
+# --- stuck guards ----------------------------------------------------------
+
+def test_thrash_trips_on_flat_failures():
+    # edit→test→same 4 failures, repeated, no new completed → thrash stuck.
+    rounds = [{"settled": False, "sentinel": False, "completed_count": 0,
+               "new_completed": False, "test_result": (72, 4, 0)} for _ in range(4)]
+    assert _run(rounds) == "stuck"
+
+
+def test_decreasing_failures_does_not_trip_thrash():
+    verdict = _run([
+        {"settled": False, "sentinel": False, "completed_count": 0,
+         "new_completed": False, "test_result": (70, 6, 0)},
+        {"settled": False, "sentinel": False, "completed_count": 0,
+         "new_completed": False, "test_result": (72, 4, 0)},
+        {"settled": False, "sentinel": False, "completed_count": 0,
+         "new_completed": False, "test_result": (74, 2, 0)},
+        {"settled": False, "sentinel": False, "completed_count": 0,
+         "new_completed": False, "test_result": (75, 1, 0)},
+    ])
+    assert verdict == "continue"  # improving every round → never stuck
+
+
+def test_no_test_work_rounds_do_not_trip_thrash():
+    # Staged work (refactor/migrate) with no test run must not be punished.
+    rounds = [{"settled": False, "sentinel": False, "completed_count": 0,
+               "new_completed": False, "test_result": None} for _ in range(5)]
+    assert _run(rounds) == "continue"
+
+
+def test_idle_stuck_when_no_completed_and_no_tests():
+    rounds = [{"settled": True, "sentinel": False, "completed_count": 0,
+               "new_completed": False, "test_result": None} for _ in range(3)]
+    assert _run(rounds) == "stuck"
+
+
+def test_completion_beats_stuck_race():
+    # done_streak==1, settled_no_progress==2, next round green/settled → DONE.
     d = evaluate_goal_round(
-        settled=True, sentinel=True, completed_count=2, new_completed=True,
-        done_streak=0, settled_no_progress=2, completed_ever_grew=False)
-    assert d.settled_no_progress == 0
-    assert d.verdict == "continue"  # only 1 corroborated round so far
+        settled=True, sentinel=False, completed_count=0, new_completed=False,
+        test_result=(76, 0, 0), done_streak=1, settled_no_progress=2,
+        completed_ever_grew=False, thrash_count=2, best_failures=4, best_total=76)
+    assert d.verdict == "done"
+
+
+def test_broken_build_no_sentinel_eventually_stuck():
+    # Persistent errors, no green, no sentinel/completed → stuck (thrash), honest.
+    rounds = [{"settled": False, "sentinel": False, "completed_count": 0,
+               "new_completed": False, "test_result": (0, 0, 1)} for _ in range(4)]
+    assert _run(rounds) == "stuck"

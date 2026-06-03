@@ -592,6 +592,11 @@ def chat_cmd(
     from luxe.locks import LockHeld, acquire_repo_lock
     from luxe.tools.fs import set_repo_root
 
+    # Theme precedence (D2): --theme flag → LUXE_THEME env → shipped default 'cool'.
+    # The curated palette thus applies without a flag; `--theme auto` (or
+    # LUXE_THEME=auto) restores terminal/YASL tracking.
+    theme_name = theme_name or os.environ.get("LUXE_THEME") or "cool"
+
     repo_path = _resolve_repo(repo)
     cfg = load_config(config_path or _default_chat_config())
 

@@ -1,5 +1,10 @@
 omlx_base_url: "http://127.0.0.1:8000"
 
+# Chat color palette (D2): the shipped default is the curated 'cool' palette,
+# resolved as `--theme` flag → LUXE_THEME env → 'cool'. Set `LUXE_THEME=auto` (or
+# `--theme auto`) to track your terminal/YASL theme instead; 'warm'/'mono' are the
+# other curated options. (Default lives in cli.py:chat_cmd, not a parsed key here.)
+
 profile:
   name: "Interactive chat (64 GB)"
   description: "luxe chat REPL — champion drives every slot by default."
