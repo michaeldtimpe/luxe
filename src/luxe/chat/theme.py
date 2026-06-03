@@ -155,31 +155,95 @@ def _load_yasl_theme(name: str):
                 pass
 
 
+# Curated luxe palettes (C-T). Each value is a hex used for BOTH prompt_toolkit
+# and Rich (both accept `#rrggbb`). Only the visually-salient roles are set;
+# anything omitted inherits the ANSI fallback. These exist because the default
+# "auto" mode tracks the terminal's ANSI slots — which, on a standard-index YASL
+# theme (e.g. llmtop), equal luxe's fallback, so nothing changes. A curated
+# palette bypasses ANSI to give luxe its own look regardless of terminal profile.
+def _hexmap(d: dict[str, str]) -> dict[str, tuple[str, str]]:
+    return {role: (h, h) for role, h in d.items()}
+
+
+_PALETTES: dict[str, dict[str, tuple[str, str]]] = {
+    # cool: teal / mint / slate — calm, low-saturation.
+    "cool": _hexmap({
+        "accent": "#5fd7d7", "pwd": "#5fd7d7", "ctx": "#5fd7d7", "diff_hunk": "#5fafd7",
+        "success": "#87d7af", "safe": "#87d7af", "branch": "#87d7af", "diff_add": "#87d7af",
+        "error": "#ff8787", "alert": "#ff8787", "diff_del": "#ff8787", "dirty": "#ff8787",
+        "warn": "#ffd787", "info": "#5f87d7", "slot": "#8787d7", "model": "#5fafd7",
+        "muted": "#767676", "commit": "#767676", "label": "#767676",
+    }),
+    # warm: amber / coral / sand.
+    "warm": _hexmap({
+        "accent": "#ffaf5f", "pwd": "#ffaf5f", "ctx": "#ffaf5f", "diff_hunk": "#d7af5f",
+        "success": "#afd75f", "safe": "#afd75f", "branch": "#afd75f", "diff_add": "#afd75f",
+        "error": "#ff5f5f", "alert": "#ff5f5f", "diff_del": "#ff8787", "dirty": "#ff8787",
+        "warn": "#ffd75f", "info": "#d7af87", "slot": "#d78787", "model": "#ffaf87",
+        "muted": "#8a8a8a", "commit": "#8a8a8a", "label": "#8a8a8a",
+    }),
+    # mono: high-contrast greys with a single cyan accent.
+    "mono": _hexmap({
+        "accent": "#00d7ff", "pwd": "#00d7ff", "ctx": "#00d7ff", "diff_hunk": "#00d7ff",
+        "success": "#d0d0d0", "safe": "#d0d0d0", "branch": "#d0d0d0", "diff_add": "#87d787",
+        "error": "#ff5f5f", "alert": "#ff5f5f", "diff_del": "#ff5f5f", "dirty": "#ff5f5f",
+        "warn": "#d7d700", "info": "#afafaf", "slot": "#afafaf", "model": "#ffffff",
+        "muted": "#767676", "commit": "#767676", "label": "#767676",
+    }),
+}
+
+_active_palette: str | None = None  # set by set_palette(); None = "auto"
+
+
+def set_palette(name: str | None) -> None:
+    """Select a curated luxe palette by name ('auto'/'' = track terminal theme).
+    Unknown names degrade to auto. Clears the resolved-style cache."""
+    global _active_palette
+    n = (name or "").strip().lower()
+    _active_palette = None if n in ("", "auto") else n
+    reset_cache()
+
+
+def list_palettes() -> list[str]:
+    return ["auto", *_PALETTES]
+
+
 _cache: dict[str, tuple[str, str]] | None = None
 
 
 def role_styles(*, force: bool = False) -> dict[str, tuple[str, str]]:
     """luxe role -> (ptk_style, rich_style) for the ACTIVE theme. Cached (theme
-    doesn't change mid-session); `force=True` re-reads. Falls back per-missing-role
-    and wholesale when the YASL theme can't be loaded."""
+    doesn't change mid-session); `force=True` re-reads. A curated palette (C-T)
+    overrides; otherwise tracks the YASL/terminal theme with per-role fallback."""
     global _cache
     if _cache is not None and not force:
         return _cache
     styles = dict(_FALLBACK)
+    # luxe-only roles inherit their aliased base role first (so even a curated
+    # palette that omits a role still gets a sensible value).
+    for new_role, src in _ALIAS.items():
+        if src in styles:
+            styles[new_role] = styles[src]
+
+    palette = _PALETTES.get(_active_palette) if _active_palette else None
+    if palette is not None:
+        styles.update(palette)  # curated colors win; no YASL/ANSI tracking
+        _cache = styles
+        return styles
+
+    # auto: track the user's YASL theme (falling back to ANSI-named roles).
     theme = _load_yasl_theme(resolve_theme_name())
     if theme is not None:
         for role in _YASL_ROLES:
             val = getattr(theme, role, None)
             if isinstance(val, str) and val:
                 styles[role] = escape_to_styles(val)
-    # luxe-only roles inherit their aliased YASL role (unless the theme itself
-    # defines the luxe role, which is honored first).
-    for new_role, src in _ALIAS.items():
-        themed = getattr(theme, new_role, None) if theme is not None else None
-        if isinstance(themed, str) and themed:
-            styles[new_role] = escape_to_styles(themed)
-        elif src in styles:
-            styles[new_role] = styles[src]
+        for new_role, src in _ALIAS.items():
+            themed = getattr(theme, new_role, None)
+            if isinstance(themed, str) and themed:
+                styles[new_role] = escape_to_styles(themed)
+            elif src in styles:
+                styles[new_role] = styles[src]
     _cache = styles
     return styles
 

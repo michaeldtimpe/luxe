@@ -134,12 +134,14 @@ def _as_list(value) -> list[str]:
     return [str(value)]
 
 
-# Generic "bootstrap" items the model logs once and never clears (the
-# iteration-3 32K run left "Planning project structure…" in_progress forever).
-# Once any real work is completed, these are pruned so they can't block the
-# goal-runner's "in_progress empty" completion corroboration (B1).
+# Generic "bootstrap" / plan-phase items the model logs once and never clears
+# (iter-3 left "Planning project structure…"; iter-4's a5812 left
+# "Phase 1: Core Git Wrappers and Models"). Once any real work is completed these
+# are pruned so the saved ledger reads clean. NOTE: as of iter-4 this is COSMETIC
+# only — goal completion no longer depends on in_progress being empty (C1).
 _BOOTSTRAP_HINTS = ("plan", "scaffold", "setup", "project structure",
-                    "dependencies", "structure and depend")
+                    "dependencies", "structure and depend",
+                    "phase", "core git", "core wrappers", "implement the")
 
 
 def _prune_in_progress(in_progress: list[str], completed: list[str]) -> list[str]:
@@ -197,6 +199,16 @@ def prune(session_id: str) -> Ledger:
     pruned = _prune_in_progress(led.in_progress, led.completed)
     if pruned != led.in_progress:
         led.in_progress = pruned
+        save(session_id, led)
+    return led
+
+
+def clear_in_progress(session_id: str) -> Ledger:
+    """Empty in_progress (called when the goal completes) so the saved ledger
+    reads clean as run provenance. Returns the updated ledger."""
+    led = load(session_id)
+    if led.in_progress:
+        led.in_progress = []
         save(session_id, led)
     return led
 

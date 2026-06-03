@@ -150,10 +150,20 @@ def run_chat_repl(
     reader: Callable[[], str] | None = None,
     infer_task_type: Callable[[str], str] | None = None,
     dev_mode: bool = False,
+    startup_verbose: str | None = None,
+    startup_show_reasoning: bool = False,
+    startup_no_terse: bool = False,
+    startup_debug: bool = False,
+    theme_name: str | None = None,
 ) -> None:
     from luxe.cli import _infer_task_type  # reuse the maintain heuristic
 
     infer = infer_task_type or _infer_task_type
+
+    # C-T: select a curated luxe palette (auto = track terminal/YASL theme).
+    if theme_name:
+        from luxe.chat import theme as theme_mod
+        theme_mod.set_palette(theme_name)
 
     slots = SlotManager(cfg, on_status=lambda m: console.print(f"[dim]· {m}[/]"))
     session = ChatSession(
@@ -164,6 +174,18 @@ def run_chat_repl(
     if dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True
+
+    # C3 startup verbosity flags (set before the loop so /goal users get them
+    # without typing REPL commands first). --debug = verbose full + reasoning.
+    if startup_debug:
+        session.verbose_level = "full"
+        session.show_reasoning = True
+    elif startup_verbose:
+        session.verbose_level = startup_verbose
+    if startup_show_reasoning:
+        session.show_reasoning = True
+    if startup_no_terse:
+        session.terse = False
 
     # Static bottom-toolbar status bar (chat.sdd lightweight variant): refreshed
     # from `status` between turns; the reader pins it under the input line.
@@ -197,8 +219,13 @@ def run_chat_repl(
 
     # The status bar (under the prompt) already shows repo path, slot/model, and
     # write/bash state — so the banner stays minimal to avoid duplicating it.
+    # C3: show the build (git short-SHA[+dirty]) so a run is traceable to a commit.
+    from luxe.buildinfo import behind_origin, version_string
     console.print(rainbow_banner("luxe chat")
-                  + f"  [dim]session={meta.session_id} · /help for commands[/]")
+                  + f"  [dim]{version_string()} · session={meta.session_id} · /help[/]")
+    _behind = behind_origin()
+    if _behind:
+        console.print(f"[yellow]· {_behind} commits behind origin/main (git pull)[/]")
 
     try:
         while True:
@@ -345,12 +372,12 @@ def _run_turn(
             if p:
                 changed_files.append(str(p))
 
-    def _call(on_event, on_token=None):
+    def _call(on_event, on_token=None, on_progress=None):
         return run_single(
             backend, role_cfg, goal=message, task_type=task_type,
             languages=languages, extra_tool_defs=extra_tool_defs,
             extra_tool_fns=extra_tool_fns, on_tool_event=on_event,
-            on_token=on_token, run_id=run_id, phase="chat",
+            on_token=on_token, on_progress=on_progress, run_id=run_id, phase="chat",
             extra_context=extra_context,
         )
 
@@ -390,7 +417,13 @@ def _run_turn(
                     if session.show_reasoning:
                         reasoner.feed(delta)
 
-                result = _call(_on_event, _on_token)
+                def _on_progress(pressure):
+                    # C2: live ctx% during the turn — same instantaneous metric
+                    # the [token-progress] line prints, so they agree.
+                    live_state.ctx_pressure = pressure
+                    live_state.has_turn = True
+
+                result = _call(_on_event, _on_token, _on_progress)
                 if session.show_reasoning:
                     reasoner.flush()
         else:
@@ -447,7 +480,9 @@ def _run_turn(
             status.wall_s = result.wall_s
             status.tok_per_s = (result.completion_tokens / result.wall_s
                                 if result.wall_s > 0 else 0.0)
-            status.ctx_pressure = result.peak_context_pressure
+            # C2: bar shows the final instantaneous pressure (matches the last
+            # [token-progress] line); peak lives in the footer.
+            status.ctx_pressure = result.final_context_pressure
             status.num_ctx = role_cfg.num_ctx
             status.prompt_tokens = result.prompt_tokens
             status.steps = result.steps
@@ -486,7 +521,7 @@ def _run_turn(
     )
 
 
-# -- goal auto-runner (B1/B4) -----------------------------------------------
+# -- goal auto-runner (B1/B4, C1) -------------------------------------------
 
 _GOAL_DONE_ROUNDS = 2       # consecutive corroborated settled rounds → done
 _GOAL_STUCK_SETTLED = 3     # settled rounds with no NEW completed items → stuck
@@ -497,10 +532,49 @@ _GOAL_SENTINEL = "LUXE_GOAL_DONE"
 
 _GOAL_SUFFIX = (
     "\n\n(Autonomous goal mode. Keep your working state current with the "
-    "update_ledger tool: record finished work in `completed` and clear those "
-    "items from `in_progress` as you go. When the objective is FULLY complete and "
-    f"verified, end your reply with a line containing only {_GOAL_SENTINEL}.)"
+    "update_ledger tool: record finished work in `completed` as you go. When the "
+    "objective is FULLY complete and verified, reply with ONLY a line containing "
+    f"{_GOAL_SENTINEL} — no re-summary of work already done.)"
 )
+
+
+@dataclass
+class GoalDecision:
+    """Result of evaluating one goal round (pure, unit-testable)."""
+    verdict: str  # "continue" | "done" | "stuck"
+    done_streak: int
+    settled_no_progress: int
+    completed_ever_grew: bool
+
+
+def evaluate_goal_round(
+    *, settled: bool, sentinel: bool, completed_count: int, new_completed: bool,
+    done_streak: int, settled_no_progress: int, completed_ever_grew: bool,
+    done_rounds: int = _GOAL_DONE_ROUNDS, stuck_settled: int = _GOAL_STUCK_SETTLED,
+) -> GoalDecision:
+    """Pure per-round decision for the goal supervisor (C1). Completion is
+    LEDGER-corroborated and SENTINEL-required — observable completed work plus an
+    explicit LUXE_GOAL_DONE, never plan-bookkeeping state. Completion is checked
+    BEFORE stuck, and a corroborated round RESETS the stuck counter, so a
+    finished-but-lingering run completes instead of false-STUCK (the a5812 bug).
+    """
+    completed_ever_grew = completed_ever_grew or new_completed
+    # Corroborated-done: settled round + real completed work + explicit sentinel,
+    # and completed grew at least once this run (guards a pre-populated ledger).
+    corroborated = settled and completed_count > 0 and sentinel and completed_ever_grew
+    if corroborated:
+        done_streak += 1
+        settled_no_progress = 0  # a sentinel+completed round is progress, not stuck
+        verdict = "done" if done_streak >= done_rounds else "continue"
+        return GoalDecision(verdict, done_streak, settled_no_progress, completed_ever_grew)
+    # Not corroborated → can't be done this round.
+    done_streak = 0
+    # Honest STUCK: settled rounds that record no NEW completed work (and, by the
+    # branch above, carry no usable sentinel). Genuine 32K-style failures (completed
+    # never grows) land here; finished runs took the corroborated branch.
+    settled_no_progress = settled_no_progress + 1 if (settled and not new_completed) else 0
+    verdict = "stuck" if settled_no_progress >= stuck_settled else "continue"
+    return GoalDecision(verdict, done_streak, settled_no_progress, completed_ever_grew)
 
 
 def _run_goal_loop(
@@ -527,6 +601,7 @@ def _run_goal_loop(
     """
     done_streak = 0           # consecutive corroborated settled rounds
     settled_no_progress = 0   # consecutive settled rounds with no NEW completed
+    completed_ever_grew = False
     recent_fps: list[frozenset] = []
     prev_completed = len(ledger_mod.load(session.session_id).completed)
 
@@ -585,6 +660,24 @@ def _run_goal_loop(
         settled = outcome.files_changed == 0
         sentinel = _GOAL_SENTINEL in (outcome.final_text or "")
 
+        # Ledger-aware decision (completion evaluated BEFORE stuck; a corroborated
+        # round resets the stuck counter — see evaluate_goal_round / the a5812 bug).
+        decision = evaluate_goal_round(
+            settled=settled, sentinel=sentinel, completed_count=ncomp,
+            new_completed=new_completed, done_streak=done_streak,
+            settled_no_progress=settled_no_progress,
+            completed_ever_grew=completed_ever_grew)
+        done_streak = decision.done_streak
+        settled_no_progress = decision.settled_no_progress
+        completed_ever_grew = decision.completed_ever_grew
+
+        if decision.verdict == "done":
+            ledger_mod.clear_in_progress(session.session_id)  # cosmetic provenance
+            console.print(f"[green]· goal complete (signaled done; completed={ncomp}) "
+                          f"after {rnd} round(s).[/]")
+            session.goal_active = False
+            break
+
         # Fast trip: identical non-empty tool fingerprint repeating with no edits.
         if outcome.fingerprint:
             recent_fps.append(outcome.fingerprint)
@@ -600,27 +693,11 @@ def _run_goal_loop(
         else:
             recent_fps.clear()
 
-        # Honest STUCK exit: settled rounds that record no NEW completed work.
-        # Keys on new completed entries (not any ledger write) so a model
-        # rewriting the same in_progress item can't dodge the guard.
-        settled_no_progress = settled_no_progress + 1 if (settled and not new_completed) else 0
-        if settled_no_progress >= _GOAL_STUCK_SETTLED:
+        if decision.verdict == "stuck":
             console.print(
                 f"[yellow]· goal STUCK — {_GOAL_STUCK_SETTLED} settled rounds with no "
                 f"new completed work (completed={ncomp}). Pausing for a human; "
                 f"the objective is likely NOT done.[/]")
-            session.goal_active = False
-            break
-
-        # Completion (ledger-corroborated): settled + real completed work + no
-        # open in_progress, AND the model either signaled done or went tool-idle.
-        corroborated = (settled and ncomp > 0 and not led.in_progress
-                        and (sentinel or outcome.tool_calls == 0))
-        done_streak = done_streak + 1 if corroborated else 0
-        if done_streak >= _GOAL_DONE_ROUNDS:
-            why = "signaled done" if sentinel else "idle, ledger settled"
-            console.print(f"[green]· goal complete ({why}; completed={ncomp}) "
-                          f"after {rnd} round(s).[/]")
             session.goal_active = False
             break
 

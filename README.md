@@ -146,6 +146,14 @@ override with `LUXE_HOME`):
 `/help` lists them all. Beyond the slot/model/context controls (`/model`, `/use`,
 `/ctx`, `/write`, `/bash`, `/sys`, `/memory`, `/resume`, `/clear`):
 
+**Startup flags** (so autonomous `/goal` users don't have to type REPL commands
+first): `luxe chat --verbose diff|full`, `--show-reasoning`, `--no-terse`,
+`--debug` (= verbose full + reasoning), and `--theme auto|cool|warm|mono` (curated
+palettes — `auto` tracks your terminal/YASL theme; the others give luxe its own
+look regardless of terminal ANSI slots). The banner shows the build's git
+short-SHA so a run is traceable to a commit. `/ctx huge` reaches a 256K window
+where the box's `num_ctx_max` allows it (default window stays 32K).
+
 **Output verbosity** is three independent toggles, not a single dial:
 
 | Command | What it does |

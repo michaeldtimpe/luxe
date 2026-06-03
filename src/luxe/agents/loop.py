@@ -61,6 +61,7 @@ class AgentResult:
     completion_tokens: int = 0
     wall_s: float = 0.0
     peak_context_pressure: float = 0.0
+    final_context_pressure: float = 0.0  # last per-step pressure (matches token-progress)
 
 
 OnToolEvent = Callable[[ToolCall], None]
@@ -554,6 +555,7 @@ def run_agent(
     spec: Spec | None = None,
     early_bail_message: str | None = None,
     on_token: Callable[[str], None] | None = None,
+    on_progress: Callable[[float], None] | None = None,
 ) -> AgentResult:
     """Run the agent loop: chat → tool calls → dispatch → repeat.
 
@@ -811,6 +813,9 @@ def run_agent(
 
         pressure = context_pressure(messages, role_cfg.num_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
+        result.final_context_pressure = pressure  # instantaneous; matches token-progress
+        if on_progress is not None:
+            on_progress(pressure)  # chat-only live ctx% (one source of truth, C2)
 
         # v1.10 — compute convergence score ONCE per step at the top of the
         # iteration. Used by both early_bail and action_density_gate
