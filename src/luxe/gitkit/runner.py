@@ -226,7 +226,7 @@ def run_git_report(
                     f"({expected_head} → {cur}); search results may be stale.[/]")
         if not reuse:
             set_repo_root(target)
-            console.print("[dim]· Building BM25 + symbol indices…[/]")
+            console.print("[dim]· Indexing repository for search…[/]")
             search_mod.set_index(search_mod.build_bm25_index(target))
             symbols_mod.set_index(symbols_mod.build_symbol_index(target))
             swapped = True

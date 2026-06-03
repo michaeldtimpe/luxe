@@ -643,12 +643,12 @@ def chat_cmd(
 
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
-    console.print("[dim]· Building BM25 + symbol indices (model loads on first turn)…[/]")
+    console.print("[dim]· Indexing repository for search (model loads on first turn)…[/]")
     bm25 = search_mod.build_bm25_index(repo_path)
     sym_idx = symbols_mod.build_symbol_index(repo_path)
     search_mod.set_index(bm25)
     symbols_mod.set_index(sym_idx)
-    console.print(f"[dim]  indexed {len(bm25.paths)} files · "
+    console.print(f"[dim]  scanned {len(bm25.paths)} files · "
                   f"{len(sym_idx.symbols)} symbols[/]")
     languages = _detect_languages_for_repo(repo_path)
 

@@ -46,3 +46,31 @@ def behind_origin(ref: str = "origin/main") -> int:
         return int(n) if n else 0
     except ValueError:
         return 0
+
+
+def _count(rev_range: str) -> int:
+    n = _git("rev-list", "--count", rev_range)
+    try:
+        return int(n) if n else 0
+    except ValueError:
+        return 0
+
+
+def build_status_hint() -> str | None:
+    """A single most-actionable line about the luxe SOURCE checkout, or None when
+    clean & current. Local refs only — no network (honors the no-`origin/<branch>`
+    -fetch rule). Priority: behind > unpushed > dirty.
+
+    The no-upstream case is guarded: `@{upstream}` errors when the branch has no
+    tracking ref, and `_git` degrades that to None → count 0 → skipped.
+    """
+    behind = behind_origin()
+    if behind:
+        return f"{behind} behind origin/main — git pull"
+    if _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"):
+        ahead = _count("@{upstream}..HEAD")
+        if ahead:
+            return f"{ahead} ahead — git push"
+    if _git("status", "--porcelain"):
+        return "uncommitted changes"
+    return None
