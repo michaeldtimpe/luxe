@@ -351,12 +351,14 @@ READ_ONLY_CHAT_HINT = (
 
 
 TERSE_HINT = (
-    "Respond tersely: report only what changed and the result. Skip preamble, "
-    "skip restating the request or the plan, and don't re-summarize file contents "
-    "you just wrote or re-run checks that already passed. This applies to YOUR "
-    "prose ONLY — never abbreviate tool inputs or outputs, never shorten error "
-    "messages or stack traces, and never skip a read, a test, or a safety "
-    "confirmation the task needs in order to save words."
+    "Respond tersely: report only what changed and the result, in as few words as "
+    "possible. No preamble, no restating the request or the plan, no end-of-turn "
+    "recap or 'Final report' — when work is done, say so in one line. Don't "
+    "re-summarize file contents you just wrote or re-run checks that already "
+    "passed. Prefer recording status with the update_ledger tool over writing it "
+    "as prose. This applies to YOUR prose ONLY — never abbreviate tool inputs or "
+    "outputs, never shorten error messages or stack traces, and never skip a read, "
+    "a test, or a safety confirmation the task needs in order to save words."
 )
 
 # Read-only planning preamble (/plan): the model drafts a plan instead of editing.
