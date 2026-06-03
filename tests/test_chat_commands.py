@@ -105,6 +105,27 @@ def test_model_list_and_override(ctx):
     assert ctx.slots.model_for("code") == "Coder-Model"
 
 
+def test_model_numbered_picker(ctx, monkeypatch):
+    monkeypatch.setattr(ctx.slots, "available_models", lambda: ["M-a", "M-b", "M-c"])
+    cmd.dispatch("/model", ctx)
+    out = _text(ctx)
+    assert "available models" in out and "M-a" in out
+    cmd.dispatch("/model chat 2", ctx)            # pick the 2nd available model
+    assert ctx.slots.model_for("chat") == "M-b"
+
+
+def test_model_picker_out_of_range(ctx, monkeypatch):
+    monkeypatch.setattr(ctx.slots, "available_models", lambda: ["M-a"])
+    cmd.dispatch("/model chat 9", ctx)
+    assert "1" in _text(ctx) and ctx.slots.model_for("chat") != "M-a"
+
+
+def test_model_omlx_unreachable_hint(ctx, monkeypatch):
+    monkeypatch.setattr(ctx.slots, "available_models", lambda: [])
+    cmd.dispatch("/model", ctx)
+    assert "oMLX unreachable" in _text(ctx)
+
+
 def test_clear_resets_turns(ctx):
     from luxe.chat.session import ChatTurn
     ctx.session.add_turn(ChatTurn(user="hi", assistant="yo"))

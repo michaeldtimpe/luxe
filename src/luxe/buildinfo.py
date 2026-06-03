@@ -29,12 +29,18 @@ def _git(*args: str) -> str | None:
         return None
 
 
-def version_string() -> str:
-    """`<short-sha>[+dirty]`, falling back to the static __version__."""
+def version_parts() -> tuple[str, bool]:
+    """`(<short-sha-or-__version__>, dirty?)`. Local git only; degrades to
+    `(__version__, False)`. The single source for both front-ends' banners."""
     sha = _git("rev-parse", "--short", "HEAD")
     if not sha:
-        return __version__
-    dirty = _git("status", "--porcelain")
+        return __version__, False
+    return sha, bool(_git("status", "--porcelain"))
+
+
+def version_string() -> str:
+    """`<short-sha>[+dirty]`, falling back to the static __version__."""
+    sha, dirty = version_parts()
     return f"{sha}+dirty" if dirty else sha
 
 

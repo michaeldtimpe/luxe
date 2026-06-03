@@ -104,6 +104,26 @@ def test_command_dispatch(tmp_path):
     asyncio.run(scenario())
 
 
+def test_tick_survives_open_modal(tmp_path):
+    """Regression: the timer/refresh must not crash when a PromptScreen modal is
+    on top (App.query_one would otherwise miss the base-screen #generating)."""
+    from luxe.chat.tui import PromptScreen
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._begin_busy()
+            app.push_screen(PromptScreen("clone url?"))
+            await pilot.pause()
+            app._tick()            # must not raise (modal active)
+            app.refresh_status()   # must not raise
+            app.screen.dismiss("")
+            await pilot.pause()
+            app._end_busy()
+    asyncio.run(scenario())
+
+
 def test_prompt_user_requires_worker_thread(tmp_path):
     async def scenario():
         app = _make_app(tmp_path)

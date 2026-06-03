@@ -128,11 +128,34 @@ def _help(args, ctx: CommandContext) -> CommandResult:
 
 
 def _model(args, ctx: CommandContext) -> CommandResult:
+    """Show/repoint the chat|plan|code model slots.
+
+    `/model`                list slots + a numbered list of available oMLX models
+    `/model <slot>`         show that slot's model
+    `/model <slot> <n>`     point the slot at the n-th available model
+    `/model <slot> <id>`    point the slot at an explicit model id
+    """
     if not args:
-        ctx.console.print("[bold]Slots[/] (resident: "
-                          f"[cyan]{ctx.slots.resident}[/])")
-        for slot, model in ctx.slots.slot_models().items():
-            ctx.console.print(f"  {slot:5s} → {model}")
+        slot_models = ctx.slots.slot_models()
+        ctx.console.print(f"[bold]Model slots[/] [dim](resident in RAM: "
+                          f"[cyan]{ctx.slots.resident}[/])[/]")
+        for slot, model in slot_models.items():
+            ctx.console.print(f"  [cyan]{slot:5s}[/] → {model}")
+        avail = ctx.slots.available_models()
+        if avail:
+            in_use = set(slot_models.values())
+            ctx.console.print("[dim]available models — `/model <slot> <n>`:[/]")
+            for i, m in enumerate(avail, 1):
+                marks = []
+                if m == ctx.slots.resident:
+                    marks.append("resident")
+                if m in in_use:
+                    marks.append("in use")
+                tag = f"  [dim]({', '.join(marks)})[/]" if marks else ""
+                ctx.console.print(f"  [cyan]{i:2d}[/] {m}{tag}")
+        else:
+            ctx.console.print("[dim](oMLX unreachable — `/model <slot> <id>` "
+                              "still works)[/]")
         return CommandResult(handled=True)
     slot = args[0]
     if slot not in _SLOTS:
@@ -141,7 +164,21 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     if len(args) < 2:
         ctx.console.print(f"  {slot} → {ctx.slots.model_for(slot)}")
         return CommandResult(handled=True)
-    model_id = args[1]
+    sel = args[1]
+    # Numeric selection indexes into the available-model list (1-based).
+    if sel.isdigit():
+        avail = ctx.slots.available_models()
+        idx = int(sel)
+        if not avail:
+            ctx.console.print("[yellow]No available-model list (oMLX unreachable) "
+                              "— pass an explicit id: /model <slot> <id>.[/]")
+            return CommandResult(handled=True)
+        if not (1 <= idx <= len(avail)):
+            ctx.console.print(f"[yellow]Pick 1–{len(avail)} (see /model).[/]")
+            return CommandResult(handled=True)
+        model_id = avail[idx - 1]
+    else:
+        model_id = sel
     ctx.slots.set_override(slot, model_id)
     ctx.console.print(f"[green]✓[/] slot [cyan]{slot}[/] → {model_id} "
                       f"[dim](swaps on next {slot} turn)[/]")

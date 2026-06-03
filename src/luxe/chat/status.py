@@ -308,6 +308,23 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
                          _S("on" if session.unrestricted_bash else "off",
                             _on if session.unrestricted_bash else _off)], priority=3))
 
+    # session mode chip — non-default observability flags (verbose / reasoning /
+    # compact / terse-off), in the same vein as write/bash. Omitted when all
+    # default so the bar stays clean. (write/bash have their own chips above.)
+    mode_bits: list[str] = []
+    if getattr(session, "verbose_level", "off") not in ("", "off"):
+        mode_bits.append(f"verbose:{session.verbose_level}")
+    if getattr(session, "show_reasoning", False):
+        mode_bits.append("reason")
+    if getattr(session, "compact", False):
+        mode_bits.append("compact")
+    if not getattr(session, "terse", True):
+        mode_bits.append("terse:off")
+    if mode_bits:
+        segs.append(Segment([_S("mode ", _DEFAULT),
+                             _S(" ".join(mode_bits), theme_mod.styles_for("info"))],
+                            priority=4))
+
     # luxe mode (slot) — theme `slot` role (calm, not the old dominant purple);
     # then the model name in the theme `model` role.
     segs.append(Segment([_S(state.slot, theme_mod.styles_for("slot"))], priority=2))
