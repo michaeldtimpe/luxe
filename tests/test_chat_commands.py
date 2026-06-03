@@ -228,6 +228,20 @@ def test_git_analysis_aliases_dispatch(ctx, alias, kind):
     assert seen == [kind]
 
 
+def test_compact_toggles_session_flag(ctx):
+    assert ctx.session.compact is False
+    res = cmd.dispatch("/compact", ctx)
+    assert res.handled and ctx.session.compact is True
+    assert "compact" in _text(ctx).lower()
+    cmd.dispatch("/compact", ctx)
+    assert ctx.session.compact is False
+
+
+def test_compact_listed_in_help(ctx):
+    cmd.dispatch("/help", ctx)
+    assert "/compact" in _text(ctx)
+
+
 def test_git_analysis_no_repo_points_at_cli(ctx):
     ctx.session.repo_path = ""
     seen = []

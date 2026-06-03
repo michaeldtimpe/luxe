@@ -10,10 +10,31 @@ session is left untouched after a `/gitsummary` over a freshly-cloned repo).
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 from luxe.agents import prompts
+
+# Per-run generation ceiling for the FINAL report (safety margin, not the fix —
+# WS1's prompt discipline keeps reports well under this). The first test hit the
+# chat role's 8192 cap and truncated mid-report. Applied via a per-run
+# model_copy in run_git_report; never mutates the shared role / chat.yaml.
+GITKIT_MAX_TOKENS = 16384
+
+# On-screen preview cap (full report is always saved + available via --verbose).
+_PREVIEW_LINES = 30
+
+_H1_RE = re.compile(r"^#\s", re.MULTILINE)
+
+
+def extract_report(text: str) -> str:
+    """Slice the report from its first level-1 (`# `) header onward, dropping any
+    leading monologue the model emits before the report (WS1 safety net for the
+    "treats the final turn as more reasoning" failure mode). If no header is
+    found, return the text unchanged (never drop content)."""
+    m = _H1_RE.search(text or "")
+    return text[m.start():] if m else text
 
 # kind -> (task_type overlay reused, goal ask, directive HINT). No new task
 # types: each maps onto an existing overlay; the per-kind directive rides in the
@@ -99,6 +120,37 @@ def _resolve_or_clone(path, *, full_history: bool, console, reader) -> str | Non
     return str(dest.resolve())
 
 
+def _activity_callbacks(update):
+    """Build (on_tool_event, on_token) that coalesce tool calls into a phased
+    status string passed to `update(text)`: `analyzing… read_file (31) · grep
+    (12)` while tools fire, then `writing report…` once the model starts emitting
+    prose after the last tool. Factored out so the coalescing/phasing is unit-
+    testable without a TTY (the spinner itself only runs when console.is_terminal)."""
+    from collections import Counter
+
+    counts: Counter = Counter()
+    state = {"writing": False}
+
+    def _text() -> str:
+        if not counts:
+            return "analyzing…"
+        top = " · ".join(f"{n} ({c})" for n, c in counts.most_common(4))
+        return f"analyzing… {top}"
+
+    def on_event(tc):
+        counts[getattr(tc, "name", "?")] += 1
+        state["writing"] = False  # more tools → back to analyzing
+        update(_text())
+
+    def on_token(_delta):
+        # First prose after at least one tool call = the report being written.
+        if counts and not state["writing"]:
+            state["writing"] = True
+            update("writing report…")
+
+    return on_event, on_token
+
+
 def run_git_report(
     kind: str,
     *,
@@ -107,6 +159,7 @@ def run_git_report(
     console,
     reader=None,
     save: bool = True,
+    verbose: bool = False,
     expected_head: str | None = None,
 ) -> tuple[str, Path | None]:
     """Run one read-only analysis pass over a repo and report the result.
@@ -119,16 +172,17 @@ def run_git_report(
         console: Rich console for output.
         reader: prompt callable (defaults to `console.input`) — injectable for
             tests / non-interactive callers.
-        save: when True, persist the markdown report under ~/.luxe/reports/.
+        save: when True, persist the FULL markdown report under ~/.luxe/reports/.
+        verbose: print the full report on screen; otherwise a truncated preview.
         expected_head: if set AND the resident indices already cover the target,
             warn when the repo's HEAD has moved (indices may be stale).
 
     Returns:
         (report_text, saved_path | None); ("", None) if the user cancels.
 
-    Side effects: one `run_single` call (read-only role); BM25/symbol indices
-    and repo_root are swapped to the target and restored afterward; an optional
-    report file write; an optional clone.
+    Side effects: one `run_single` call (read-only role, with a per-run token
+    headroom copy); BM25/symbol indices and repo_root are swapped to the target
+    and restored afterward; an optional report file write; an optional clone.
     """
     from rich.markdown import Markdown
 
@@ -136,6 +190,7 @@ def run_git_report(
     from luxe import symbols as symbols_mod
     from luxe.agents.single import run_single
     from luxe.backend import Backend
+    from luxe.chat.render import truncate_for_display
     from luxe.cli import _detect_languages_for_repo
     from luxe.gitkit import health, store
     from luxe.mcp.server import make_read_only_role
@@ -179,35 +234,63 @@ def run_git_report(
         languages = _detect_languages_for_repo(target)
         model = cfg.model_for_slot("chat")
         console.print(f"[dim]· {_TITLES[kind]} — model: {model} (read-only)[/]")
-        console.print("[dim]· gathering git history + GitHub metadata…[/]")
-        extra_context = health.gather_context(target)
 
         backend = Backend(base_url=cfg.omlx_base_url, model=model)
-        role_cfg = make_read_only_role(cfg.role("monolith"))
+        # WS1.3: per-run token headroom so the final report can't truncate
+        # mid-thought. A copy — never mutates the shared role / chat.yaml.
+        role_cfg = make_read_only_role(cfg.role("monolith")).model_copy(
+            update={"max_tokens_per_turn": GITKIT_MAX_TOKENS})
         goal = f"{ask}\n\n{hint}"
 
-        result = run_single(
-            backend, role_cfg,
-            goal=goal, task_type=task_type, languages=languages,
-            extra_context=extra_context, phase="chat", run_id=f"gitkit-{kind}",
-        )
-        text = (result.final_text or "").strip() or "(no report produced)"
+        def _do_run(on_event=None, on_token=None):
+            extra_context = health.gather_context(target)
+            return run_single(
+                backend, role_cfg, goal=goal, task_type=task_type,
+                languages=languages, extra_context=extra_context,
+                on_tool_event=on_event, on_token=on_token,
+                phase="chat", run_id=f"gitkit-{kind}",
+            )
 
-        console.print()
-        console.print(Markdown(text))
-        console.print(
-            f"\n[dim]· {result.steps} steps · {result.tool_calls_total} tool calls "
-            f"· {result.wall_s:.1f}s · {result.completion_tokens} out-tok[/]")
+        # WS2: phased spinner + coalesced tool counts while the model works
+        # (terminal only; gitkit is self-contained, no chat LiveActivity).
+        if console.is_terminal:
+            with console.status("[dim]gathering context & loading model…[/]",
+                                spinner="dots") as status:
+                on_event, on_token = _activity_callbacks(
+                    lambda t: status.update(f"[dim]{t}[/]"))
+                result = _do_run(on_event, on_token)
+        else:
+            console.print("[dim]· gathering git history + GitHub metadata…[/]")
+            result = _do_run()
 
+        # WS1.2: slice off any leading monologue before the report's first header.
+        report = extract_report((result.final_text or "").strip()) or \
+            "(no report produced)"
+
+        # Full report is always saved; on screen show a preview unless verbose.
         saved: Path | None = None
         if save:
             saved = store.save_report(
-                target, kind, text,
+                target, kind, report,
                 meta={"model": model, "head": health.current_head(target),
                       "repo": target},
             )
-            console.print(f"[green]✓[/] report saved to [cyan]{saved}[/]")
-        return text, saved
+
+        console.print()
+        if verbose:
+            console.print(Markdown(report))
+        else:
+            shown, hidden = truncate_for_display(report, max_lines=_PREVIEW_LINES)
+            console.print(Markdown(shown))
+            if hidden:
+                console.print(f"[dim]… +{hidden} more lines — full report below[/]")
+        console.print(
+            f"\n[dim]· {result.steps} steps · {result.tool_calls_total} tool calls "
+            f"· {result.wall_s:.1f}s · {result.completion_tokens} out-tok[/]")
+        if saved:
+            tail = "" if verbose else " — re-run with --verbose / -v for the full report"
+            console.print(f"[green]✓[/] report saved to [cyan]{saved}[/]{tail}")
+        return report, saved
     finally:
         if swapped:
             if prev_root is not None:

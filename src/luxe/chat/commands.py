@@ -51,6 +51,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/reasoning", "", "toggle live streaming of the model's thinking"),
     ("/debug", "", 'toggle "show everything" (verbose full + reasoning)'),
     ("/terse", "", "toggle terse model output (default ON; saves tokens)"),
+    ("/compact", "", "toggle compact display (tighter on-screen output ceiling)"),
     ("/goal", "<objective> | stop", "autonomously run rounds until the objective is met"),
     ("/plan", "<objective>", "draft a plan, then choose: save / execute / both"),
     ("/sys", "[add <rule>|list|clear]", "manage session-scoped system constraints"),
@@ -85,6 +86,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/reasoning": _reasoning,
         "/debug": _debug,
         "/terse": _terse,
+        "/compact": _compact_mode,
         "/goal": _goal,
         "/plan": _plan,
         "/sys": _sys,
@@ -288,6 +290,18 @@ def _terse(args, ctx: CommandContext) -> CommandResult:
                           "and errors are untouched — /terse to disable)[/]")
     else:
         ctx.console.print("terse: [yellow]OFF[/] [dim](full prose)[/]")
+    return CommandResult(handled=True)
+
+
+def _compact_mode(args, ctx: CommandContext) -> CommandResult:
+    """Toggle compact display (WS4): tightens the on-screen output ceiling for the
+    model's final answer. Independent of /verbose (full) and /terse (model prose)."""
+    ctx.session.compact = not ctx.session.compact
+    if ctx.session.compact:
+        ctx.console.print("compact: [yellow]ON[/] [dim](tighter on-screen output "
+                          "ceiling; /verbose full or /debug for everything)[/]")
+    else:
+        ctx.console.print("compact: [green]OFF[/] [dim](default truncated output)[/]")
     return CommandResult(handled=True)
 
 

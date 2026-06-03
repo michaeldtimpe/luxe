@@ -329,8 +329,47 @@ def make_tool_event(console: Console, cancel: CancelToken,
 
 _RE_BLANK_RUN = re.compile(r"\n[ \t]*\n(?:[ \t]*\n)+")
 
+# Output-verbosity caps (WS4). truncated = default (large enough that normal
+# answers aren't cut); compact = the tighter `/compact` ceiling; full = no cap.
+_TRUNCATE_LINES = 50
+_COMPACT_LINES = 12
+_TRUNCATE_CHARS = 4000
 
-def render_final(console: Console, text: str) -> None:
+
+def truncate_for_display(text: str, *, max_lines: int | None,
+                         max_chars: int | None = None) -> tuple[str, int]:
+    """Truncate `text` for on-screen display, returning (shown, hidden_lines).
+
+    Markdown-safe: truncates on raw text lines (before Markdown is evaluated),
+    and if the kept slice leaves a code fence (```) open, appends a closing
+    fence so the rest of the terminal output isn't swallowed. Returns (text, 0)
+    unchanged when it already fits within both caps. Single shared primitive —
+    used by `render_final` (chat) and the gitkit report preview.
+    """
+    text = text or ""
+    lines = text.split("\n")
+    cut = len(lines)
+    if max_lines is not None and len(lines) > max_lines:
+        cut = max_lines
+    if max_chars is not None:
+        total = 0
+        for i, ln in enumerate(lines):
+            total += len(ln) + 1
+            if total > max_chars:
+                cut = min(cut, i)
+                break
+    if cut >= len(lines):
+        return text, 0
+    kept = lines[:cut]
+    hidden = len(lines) - cut
+    if sum(1 for ln in kept if ln.lstrip().startswith("```")) % 2 == 1:
+        kept.append("```")  # close a dangling code fence
+    return "\n".join(kept), hidden
+
+
+def render_final(console: Console, text: str, *, mode: str = "truncated") -> None:
+    """Render the model's final output. mode: full | truncated (default) |
+    compact. Non-full modes cap long output and append a '/verbose for full' hint."""
     text = (text or "").strip()
     if not text:
         console.print("[dim](no response text)[/]")
@@ -338,7 +377,15 @@ def render_final(console: Console, text: str) -> None:
     # D3: collapse runs of 2+ blank lines to a single blank line so the model's
     # spread-out "thinking" doesn't stack with rich Markdown's paragraph spacing.
     text = _RE_BLANK_RUN.sub("\n\n", text)
-    console.print(Markdown(text))
+    if mode == "full":
+        console.print(Markdown(text))
+        return
+    max_lines = _COMPACT_LINES if mode == "compact" else _TRUNCATE_LINES
+    shown, hidden = truncate_for_display(text, max_lines=max_lines,
+                                         max_chars=_TRUNCATE_CHARS)
+    console.print(Markdown(shown))
+    if hidden:
+        console.print(f"[dim]… +{hidden} lines — /verbose for full[/]")
 
 
 def _tok_per_s(result) -> float:

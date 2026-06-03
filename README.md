@@ -120,8 +120,10 @@ luxe pr <run-id>
 
 Point luxe at any existing repo (a local path or a git URL it clones) and get a
 packaged markdown report. All three are **read-only** and **single-pass** (one
-agent run, no edits, no PR), and each prints to the terminal and saves to
-`~/.luxe/reports/<repo-hash>/<kind>-<ts>-<rand>.md`.
+agent run, no edits, no PR). The **full report is always saved** to
+`~/.luxe/reports/<repo-hash>/<kind>-<ts>-<rand>.md`; on screen you get a short
+preview + the saved path (pass `--verbose`/`-v`, or `/verbose full` in chat, to
+print the whole report). A live spinner shows progress while the model works.
 
 | Command | Aliases | What it produces |
 |---|---|---|
@@ -132,8 +134,10 @@ agent run, no edits, no PR), and each prints to the terminal and saves to
 ```bash
 luxe gsum  ~/code/my-app                       # summarize a local repo
 luxe grev  https://github.com/acme/widget      # clone + review a remote repo
-luxe gref  . --no-save                          # refactor plan for the cwd, print only
+luxe gref  . --verbose                          # refactor plan for the cwd, full report on screen
 ```
+
+Run from a non-git directory and it asks for a URL and clones a local copy first.
 
 The same three are available inside `luxe chat` as `/gitsummary`, `/gitreview`,
 `/gitrefactor` (analyzing the session's repo). **GitHub data** (merged/open PRs,
@@ -195,8 +199,9 @@ big refactors is future work (`docs/g1-context-lifecycle-design.md`).
 
 | Command | What it does |
 |---|---|
-| (default) | One terse line per tool call: `→ tool(arg) ✓ <bytes>`. |
-| `/verbose [diff\|full\|off]` | Expand tool I/O: `diff` shows `edit_file` as a highlighted unified diff, `write_file` headers, and tool result/error bodies (capped); `full` syntax-highlights whole file contents. Also renders the working-state ledger each turn. Bare `/verbose` toggles off↔diff. |
+| (default) | One terse line per tool call: `→ tool(arg) ✓ <bytes>`; the final answer is **truncated to a preview** with a `… +N lines — /verbose for full` hint. |
+| `/compact` | Tighter on-screen ceiling for the final answer (also `luxe chat --compact`). Independent of `/verbose`/`/terse`. |
+| `/verbose [diff\|full\|off]` | Expand tool I/O: `diff` shows `edit_file` as a highlighted unified diff, `write_file` headers, and tool result/error bodies (capped); `full` syntax-highlights whole file contents AND prints the final answer untruncated. Also renders the working-state ledger each turn. Bare `/verbose` toggles off↔diff. |
 | `/reasoning` | Stream the model's thinking live (dim) between tool calls. Independent of `/verbose`; responsiveness tracks the backend's streaming cadence. |
 | `/debug` | Convenience: turns on `/verbose full` + `/reasoning` together ("show me everything"); toggles both back off. |
 | `/terse` | Toggle terse *model* output (default **ON**). Injects a "report only deltas" instruction to cut wordy prose and save tokens; never abbreviates tool output or errors. |

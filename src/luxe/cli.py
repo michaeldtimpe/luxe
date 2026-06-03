@@ -609,6 +609,8 @@ def maintain(
               help="Disable terse model output (terse is ON by default).")
 @click.option("--debug", "startup_debug", is_flag=True, default=False,
               help="Show everything: verbose full + reasoning (overrides --verbose).")
+@click.option("--compact", "startup_compact", is_flag=True, default=False,
+              help="Compact display: tighter on-screen output ceiling.")
 @click.option("--theme", "theme_name", default=None,
               help="Curated luxe color palette: auto|cool|warm|mono (default: auto).")
 def chat_cmd(
@@ -616,7 +618,8 @@ def chat_cmd(
     chat_model: str | None, plan_model: str | None, code_model: str | None,
     keep_loaded: bool, dev_mode: bool,
     startup_verbose: str | None, startup_show_reasoning: bool,
-    startup_no_terse: bool, startup_debug: bool, theme_name: str | None,
+    startup_no_terse: bool, startup_debug: bool, startup_compact: bool,
+    theme_name: str | None,
 ):
     """Interactive terminal agent (Claude-CLI-style). Default: champion in
     every slot, read-only tools (toggle with /write)."""
@@ -640,11 +643,13 @@ def chat_cmd(
 
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
-    console.print("[dim]· Building BM25 + symbol indices…[/]")
+    console.print("[dim]· Building BM25 + symbol indices (model loads on first turn)…[/]")
     bm25 = search_mod.build_bm25_index(repo_path)
     sym_idx = symbols_mod.build_symbol_index(repo_path)
     search_mod.set_index(bm25)
     symbols_mod.set_index(sym_idx)
+    console.print(f"[dim]  indexed {len(bm25.paths)} files · "
+                  f"{len(sym_idx.symbols)} symbols[/]")
     languages = _detect_languages_for_repo(repo_path)
 
     try:
@@ -665,6 +670,7 @@ def chat_cmd(
             startup_show_reasoning=startup_show_reasoning,
             startup_no_terse=startup_no_terse,
             startup_debug=startup_debug,
+            startup_compact=startup_compact,
             theme_name=theme_name,
         )
     finally:
@@ -767,7 +773,7 @@ def compare_review_cmd(compare_id):
 
 
 def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
-                    keep_loaded: bool, save: bool) -> None:
+                    keep_loaded: bool, save: bool, verbose: bool = False) -> None:
     """Shared body for the gitsummary/gitreview/gitrefactor CLI commands. The
     runner owns target resolution (incl. cloning a URL when the path is not a
     git repo), index building, and repo_root; here we only clone an explicit URL
@@ -784,7 +790,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
 
     try:
         run_git_report(kind, cfg=cfg, repo_path=repo_path,
-                       console=console, save=save)
+                       console=console, save=save, verbose=verbose)
     finally:
         if not keep_loaded:
             from luxe.backend import Backend
@@ -799,9 +805,11 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
 @click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
 @click.option("--keep-loaded", is_flag=True, default=False)
 @click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
-def gitsummary_cmd(repo, config_path, keep_loaded, no_save):
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Print the full report on screen (default: a preview + saved path)")
+def gitsummary_cmd(repo, config_path, keep_loaded, no_save, verbose):
     """Summarize a repo: purpose, deps, health, and a use-risk verdict."""
-    _run_gitkit_cmd("gitsummary", repo, config_path, keep_loaded, not no_save)
+    _run_gitkit_cmd("gitsummary", repo, config_path, keep_loaded, not no_save, verbose)
 
 
 @main.command(name="gitreview")
@@ -809,9 +817,11 @@ def gitsummary_cmd(repo, config_path, keep_loaded, no_save):
 @click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
 @click.option("--keep-loaded", is_flag=True, default=False)
 @click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
-def gitreview_cmd(repo, config_path, keep_loaded, no_save):
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Print the full report on screen (default: a preview + saved path)")
+def gitreview_cmd(repo, config_path, keep_loaded, no_save, verbose):
     """Review a repo for serious bugs and security concerns (read-only)."""
-    _run_gitkit_cmd("gitreview", repo, config_path, keep_loaded, not no_save)
+    _run_gitkit_cmd("gitreview", repo, config_path, keep_loaded, not no_save, verbose)
 
 
 @main.command(name="gitrefactor")
@@ -819,9 +829,11 @@ def gitreview_cmd(repo, config_path, keep_loaded, no_save):
 @click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
 @click.option("--keep-loaded", is_flag=True, default=False)
 @click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
-def gitrefactor_cmd(repo, config_path, keep_loaded, no_save):
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Print the full report on screen (default: a preview + saved path)")
+def gitrefactor_cmd(repo, config_path, keep_loaded, no_save, verbose):
     """Propose an ordered structural refactor plan for a repo (read-only)."""
-    _run_gitkit_cmd("gitrefactor", repo, config_path, keep_loaded, not no_save)
+    _run_gitkit_cmd("gitrefactor", repo, config_path, keep_loaded, not no_save, verbose)
 
 
 apply_aliases(main, {
