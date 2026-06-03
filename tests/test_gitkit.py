@@ -16,6 +16,14 @@ import pytest
 from luxe.gitkit import health, store
 
 
+def _QuietConsole():
+    """A Rich console that discards output (for exercising helpers quietly)."""
+    import io
+
+    from rich.console import Console
+    return Console(file=io.StringIO(), force_terminal=False, width=100)
+
+
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
@@ -149,6 +157,68 @@ def test_aliased_group_resolves_aliases():
     assert group.get_command(None, "r").name == "realcmd"
     assert group.get_command(None, "realcmd").name == "realcmd"
     assert group.get_command(None, "nope") is None
+
+
+def test_is_git_repo_detects_working_tree(git_repo: Path, tmp_path: Path):
+    assert health.is_git_repo(git_repo) is True
+    plain = tmp_path / "not_a_repo"
+    plain.mkdir()
+    assert health.is_git_repo(plain) is False
+    assert health.is_git_repo(tmp_path / "missing") is False
+
+
+def test_resolve_or_clone_passthrough_for_git_repo(git_repo: Path):
+    from luxe.gitkit import runner
+
+    def _no_reader(_prompt):
+        raise AssertionError("reader must not be called for a real git repo")
+
+    out = runner._resolve_or_clone(
+        git_repo, full_history=False, console=_QuietConsole(), reader=_no_reader)
+    assert out == str(git_repo.resolve())
+
+
+def test_resolve_or_clone_blank_url_cancels(tmp_path: Path):
+    from luxe.gitkit import runner
+
+    plain = tmp_path / "downloads"
+    plain.mkdir()
+    out = runner._resolve_or_clone(
+        plain, full_history=False, console=_QuietConsole(), reader=lambda _p: "")
+    assert out is None
+
+
+def test_resolve_or_clone_clones_into_local_path(tmp_path: Path, monkeypatch):
+    from luxe.gitkit import runner
+
+    plain = tmp_path / "downloads"
+    plain.mkdir()
+    answers = iter(["https://github.com/acme/widget.git", "y"])
+
+    def _reader(_prompt):
+        return next(answers)
+
+    cloned = {}
+
+    def _fake_clone(url, dest, *, full_history, console):
+        Path(dest).mkdir(parents=True)
+        cloned["url"], cloned["dest"] = url, dest
+        return True
+
+    monkeypatch.setattr(runner, "_clone", _fake_clone)
+    out = runner._resolve_or_clone(
+        plain, full_history=True, console=_QuietConsole(), reader=_reader)
+    # Clones into <dir>/<repo name>, and that path is returned.
+    assert out == str((plain / "widget").resolve())
+    assert cloned["url"] == "https://github.com/acme/widget.git"
+
+
+def test_derive_dest_dedupes(tmp_path: Path):
+    from luxe.gitkit import runner
+
+    (tmp_path / "widget").mkdir()
+    dest = runner._derive_dest(tmp_path, "https://github.com/acme/widget.git")
+    assert dest == tmp_path / "widget-2"
 
 
 @pytest.mark.parametrize("alias,canonical", [
