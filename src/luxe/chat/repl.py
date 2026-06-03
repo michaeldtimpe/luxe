@@ -64,6 +64,15 @@ class TurnOutcome:
     fingerprint: frozenset = field(default_factory=frozenset)
     # (passed, failed, errors) from the latest test run this turn, or None.
     test_result: tuple[int, int, int] | None = None
+    # Rendering inputs, populated by the UI-agnostic core so any front-end (line
+    # REPL or Textual TUI) can render the footer/status from one source.
+    result: object | None = None          # AgentResult | None
+    slot: str = ""
+    model: str = ""
+    num_ctx: int = 0
+    ctx_ceiling: int = 0
+    started_at: float = 0.0
+    ended_at: float = 0.0
 
 
 # Pytest-style summary parsing (C1). Tolerant: each count matched independently,
@@ -316,20 +325,33 @@ def run_chat_repl(
                           f"({slots.stats.seconds:.0f}s total)[/]")
 
 
-def _run_turn(
-    message: str,
-    session: ChatSession,
-    slots: SlotManager,
-    cfg: PipelineConfig,
-    languages: frozenset,
-    console: Console,
-    cancel: CancelToken,
-    infer: Callable[[str], str],
-    status: StatusState | None = None,
-    plan_mode: bool = False,
-) -> TurnOutcome:
+@dataclass
+class TurnPrep:
+    """UI-agnostic per-turn state shared by the line REPL and the Textual TUI.
+    `call(on_event, on_token, on_progress)` is the verbatim `run_single` closure
+    (so both front-ends assemble the request identically); `note_tool` updates
+    the collectors a front-end's tool callback must invoke."""
+    call: Callable
+    note_tool: Callable
+    slot: str
+    model: str
+    dev_bash: bool
+    role_cfg: object
+    run_id: str
+    ctx_ceiling: int
+    changed_files: list
+    fingerprint: set
+    test_result: list
+
+
+def prepare_turn(message, session, slots, cfg, languages, infer,
+                 *, plan_mode: bool = False) -> TurnPrep:
+    """UI-agnostic turn setup: slot routing, role/tool/ledger wiring, `/ctx`
+    clamp, `extra_context`, user-turn persistence, and the `run_single` closure.
+    Shared by both front-ends; the benchmark path is untouched (these tools/args
+    are chat-only). Rendering is the caller's job (see `TurnPrep`)."""
     from luxe.mcp.server import make_read_only_role
-    from luxe.state import ledger as ledger_mod
+    from luxe.state.ledger import make_update_ledger_tool
 
     task_type = infer(message)
     slot = session.pinned_slot or _SLOT_FOR_TASK.get(task_type, "chat")
@@ -337,8 +359,6 @@ def _run_turn(
 
     model = slots.model_for(slot)
     dev_bash = session.write_enabled and session.unrestricted_bash and not plan_mode
-    bash_note = " · [red]bash:unrestricted[/]" if dev_bash else ""
-    console.print(f"[dim]slot: {slot} · model: {model}{bash_note}[/]")
 
     backend = slots.backend_for(slot)
     slot_cfg = cfg.slot_config(slot)
@@ -349,11 +369,8 @@ def _run_turn(
 
     # Chat bash (chat.sdd), swapped for THIS run only via run_single's extra-tool
     # seam — benchmark/maintain never pass these, so their bash is untouched.
-    # Dev mode → unrestricted; plain write mode → allowlisted bash whose rejections
-    # explain the flag state (/bash) instead of leaving the model to retry.
     # update_ledger (B0/B5) is always exposed so the model can maintain its
     # working state across rounds; it only mutates the per-session ledger file.
-    from luxe.state.ledger import make_update_ledger_tool
     _led_def, _led_fn = make_update_ledger_tool(session.session_id)
     extra_tool_defs = [_led_def]
     extra_tool_fns = {"update_ledger": _led_fn}
@@ -385,22 +402,6 @@ def _run_turn(
     session_store.append_turn(session.session_id, "user", text=message, slot=slot)
     if extra_context:
         session_store.append_fold(session.session_id, turn_idx, fold_version, extra_context)
-
-    cancel.reset()
-    prev_handler = None
-    try:
-        prev_handler = signal.getsignal(signal.SIGINT)
-
-        def _on_sigint(signum, frame):
-            cancel.requested = True
-
-        signal.signal(signal.SIGINT, _on_sigint)
-    except (ValueError, OSError):
-        prev_handler = None  # not in main thread (e.g. tests)
-
-    interrupted = False
-    result = None
-    started_at = time.time()
 
     # Per-turn collectors feeding the ledger (B0/B5) and the goal supervisor (B4):
     # files actually written/edited, and a fingerprint of tool calls (name + the
@@ -437,13 +438,93 @@ def _run_turn(
             extra_context=extra_context,
         )
 
+    return TurnPrep(
+        call=_call, note_tool=_note_tool, slot=slot, model=model,
+        dev_bash=dev_bash, role_cfg=role_cfg, run_id=run_id,
+        ctx_ceiling=ctx_ceiling, changed_files=changed_files,
+        fingerprint=fingerprint, test_result=test_result,
+    )
+
+
+def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
+                  message: str, started_at: float, ended_at: float) -> TurnOutcome:
+    """UI-agnostic post-turn bookkeeping: record changed files, persist the
+    assistant turn, update in-memory history, and build the `TurnOutcome` (incl.
+    rendering inputs) the front-end renders from. Files are recorded even on an
+    interrupted turn — those writes already happened on disk."""
+    if prep.changed_files:
+        ledger_mod.record_files(session.session_id, prep.changed_files)
+
+    assistant_text = (result.final_text if result else "") or ""
+    session_store.append_turn(
+        session.session_id, "assistant",
+        text=assistant_text, run_id=prep.run_id, interrupted=interrupted,
+        steps=(result.steps if result else 0),
+        tool_calls=(result.tool_calls_total if result else 0),
+    )
+    session_store.touch(session.session_id)
+    session.add_turn(ChatTurn(
+        user=message, assistant=assistant_text, slot=prep.slot,
+        model=prep.model, run_id=prep.run_id,
+    ))
+    return TurnOutcome(
+        tool_calls=(result.tool_calls_total if result else 0),
+        files_changed=len(set(prep.changed_files)),
+        final_text=assistant_text,
+        interrupted=interrupted,
+        fingerprint=frozenset(prep.fingerprint),
+        test_result=prep.test_result[0],
+        result=result,
+        slot=prep.slot,
+        model=prep.model,
+        num_ctx=prep.role_cfg.num_ctx,
+        ctx_ceiling=prep.ctx_ceiling,
+        started_at=started_at,
+        ended_at=ended_at,
+    )
+
+
+def _run_turn(
+    message: str,
+    session: ChatSession,
+    slots: SlotManager,
+    cfg: PipelineConfig,
+    languages: frozenset,
+    console: Console,
+    cancel: CancelToken,
+    infer: Callable[[str], str],
+    status: StatusState | None = None,
+    plan_mode: bool = False,
+) -> TurnOutcome:
+    prep = prepare_turn(message, session, slots, cfg, languages, infer,
+                        plan_mode=plan_mode)
+    role_cfg = prep.role_cfg
+    bash_note = " · [red]bash:unrestricted[/]" if prep.dev_bash else ""
+    console.print(f"[dim]slot: {prep.slot} · model: {prep.model}{bash_note}[/]")
+
+    cancel.reset()
+    prev_handler = None
+    try:
+        prev_handler = signal.getsignal(signal.SIGINT)
+
+        def _on_sigint(signum, frame):
+            cancel.requested = True
+
+        signal.signal(signal.SIGINT, _on_sigint)
+    except (ValueError, OSError):
+        prev_handler = None  # not in main thread (e.g. tests)
+
+    interrupted = False
+    result = None
+    started_at = time.time()
+
     try:
         if console.is_terminal:
             # Live layout (chat.sdd): tool lines scroll above a status bar that
             # ticks live during the turn (spinner/elapsed/tool count). transient
             # clears the bar when the turn ends; the footer then prints below.
             live_state = StatusState(
-                slot=slot, model=model,
+                slot=prep.slot, model=prep.model,
                 opened_at=(status.opened_at if status else 0.0),
                 num_ctx=role_cfg.num_ctx,  # show ctx size during the turn
                 ctx_pressure=(status.ctx_pressure if status else 0.0),
@@ -465,7 +546,7 @@ def _run_turn(
                         # repainting the tool name magenta over the theme (iter-6).
                         live.console.print(format_tool_call(tc), highlight=False)
                     activity.note(tc)
-                    _note_tool(tc)
+                    prep.note_tool(tc)
                     raise_if_cancelled(cancel)
 
                 def _on_token(delta):
@@ -481,7 +562,7 @@ def _run_turn(
                     live_state.ctx_pressure = pressure
                     live_state.has_turn = True
 
-                result = _call(_on_event, _on_token, _on_progress)
+                result = prep.call(_on_event, _on_token, _on_progress)
                 if session.show_reasoning:
                     reasoner.flush()
         else:
@@ -490,7 +571,7 @@ def _run_turn(
             base_event = make_tool_event(console, cancel, session.verbose_level)
 
             def _on_event(tc):
-                _note_tool(tc)
+                prep.note_tool(tc)
                 base_event(tc)
 
             def _on_token(delta):
@@ -499,7 +580,7 @@ def _run_turn(
                     reasoner.feed(delta)
 
             with Status("[dim]generating…[/]", console=console, spinner="dots"):
-                result = _call(_on_event, _on_token)
+                result = prep.call(_on_event, _on_token)
             if session.show_reasoning:
                 reasoner.flush()
     except (ChatCancelled, KeyboardInterrupt):
@@ -513,22 +594,21 @@ def _run_turn(
             except (ValueError, OSError):
                 pass
 
-    # Deterministic ledger channel (B0/B5): record files written/edited even on
-    # an interrupted turn — those writes already happened on disk.
-    if changed_files:
-        ledger_mod.record_files(session.session_id, changed_files)
+    # UI-agnostic bookkeeping (records changed files even on interrupt, persists
+    # the assistant turn, builds the outcome the renderer reads from).
+    outcome = finalize_turn(session, prep, result, interrupted=interrupted,
+                            message=message, started_at=started_at, ended_at=ended_at)
 
-    assistant_text = (result.final_text if result else "") or ""
     if not interrupted and result is not None:
         # WS4 output ladder: full when /verbose full (or /debug), else compact
         # if /compact, else the default truncated preview.
         out_mode = ("full" if session.verbose_level == "full"
                     else "compact" if session.compact else "truncated")
-        render_final(console, assistant_text, mode=out_mode)
+        render_final(console, outcome.final_text, mode=out_mode)
         render_footer(
             console,
-            slot=slot,
-            model=model,
+            slot=prep.slot,
+            model=prep.model,
             write_enabled=session.write_enabled,
             result=result,
             swap_count=slots.stats.count,
@@ -537,8 +617,8 @@ def _run_turn(
             ended_at=ended_at,
         )
         if status is not None:
-            status.slot = slot
-            status.model = model
+            status.slot = prep.slot
+            status.model = prep.model
             status.wall_s = result.wall_s
             status.tok_per_s = (result.completion_tokens / result.wall_s
                                 if result.wall_s > 0 else 0.0)
@@ -551,7 +631,7 @@ def _run_turn(
             status.has_turn = True
         # Auto-suggest a larger window (never resizes silently — chat.sdd).
         if result.peak_context_pressure >= CTX_SUGGEST_PRESSURE:
-            nxt = next_tier_up(role_cfg.num_ctx, ctx_ceiling)
+            nxt = next_tier_up(role_cfg.num_ctx, prep.ctx_ceiling)
             if nxt:
                 console.print(
                     f"[dim]· context pressure {result.peak_context_pressure:.0%} — "
@@ -563,25 +643,7 @@ def _run_turn(
         if session.verbose_level in ("diff", "full"):
             console.print(ledger_mod.render_rich(ledger_mod.load(session.session_id)))
 
-    session_store.append_turn(
-        session.session_id, "assistant",
-        text=assistant_text, run_id=run_id, interrupted=interrupted,
-        steps=(result.steps if result else 0),
-        tool_calls=(result.tool_calls_total if result else 0),
-    )
-    session_store.touch(session.session_id)
-    session.add_turn(ChatTurn(
-        user=message, assistant=assistant_text, slot=slot, model=model, run_id=run_id,
-    ))
-
-    return TurnOutcome(
-        tool_calls=(result.tool_calls_total if result else 0),
-        files_changed=len(set(changed_files)),
-        final_text=assistant_text,
-        interrupted=interrupted,
-        fingerprint=frozenset(fingerprint),
-        test_result=test_result[0],
-    )
+    return outcome
 
 
 # -- goal auto-runner (B1/B4, C1) -------------------------------------------
