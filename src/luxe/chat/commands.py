@@ -35,7 +35,7 @@ class CommandContext:
     on_compare: Callable[[str], None] | None = None
     on_compare_review: Callable[[str], None] | None = None
     on_resume: Callable[[str], None] | None = None
-    on_git_analysis: Callable[[str], None] | None = None  # kind -> run gitkit report
+    on_git_analysis: Callable[[str, "bool | None"], None] | None = None  # (kind, deep) -> run gitkit report
 
 
 # (command, args, description) — rendered into an auto-aligned table by _help()
@@ -503,10 +503,26 @@ def _compare(args, ctx: CommandContext) -> CommandResult:
     return CommandResult(handled=True)
 
 
-def _git_analysis(kind: str, ctx: CommandContext) -> CommandResult:
+def _parse_deep(args) -> bool | None:
+    """Map a `/gitreview deep|shallow` arg to deep override (None = auto). Accepts
+    the dispatcher's token list or a raw string."""
+    if isinstance(args, str):
+        tokens = args.lower().split()
+    else:
+        tokens = [str(a).lower() for a in (args or [])]
+    if "deep" in tokens:
+        return True
+    if "shallow" in tokens or "no-deep" in tokens:
+        return False
+    return None
+
+
+def _git_analysis(kind: str, ctx: CommandContext,
+                  deep: bool | None = None) -> CommandResult:
     """Run a read-only gitkit report on the SESSION repo (CLI targets other
     repos). Delegates to the injected hook so the heavy run_single call lives in
-    the REPL, not here."""
+    the REPL, not here. `deep` (None=auto, True=deep, False=single-pass) forces
+    the staged deep-mode dispatch."""
     if not ctx.session.repo_path:
         ctx.console.print("[yellow]No repo bound to this session. Use the CLI "
                           f"(`luxe {kind} <path-or-url>`) to analyze another repo.[/]")
@@ -514,20 +530,20 @@ def _git_analysis(kind: str, ctx: CommandContext) -> CommandResult:
     if ctx.on_git_analysis is None:
         ctx.console.print("[yellow]git analysis unavailable.[/]")
         return CommandResult(handled=True)
-    ctx.on_git_analysis(kind)
+    ctx.on_git_analysis(kind, deep)
     return CommandResult(handled=True)
 
 
 def _gitsummary(args, ctx: CommandContext) -> CommandResult:
-    return _git_analysis("gitsummary", ctx)
+    return _git_analysis("gitsummary", ctx, _parse_deep(args))
 
 
 def _gitreview(args, ctx: CommandContext) -> CommandResult:
-    return _git_analysis("gitreview", ctx)
+    return _git_analysis("gitreview", ctx, _parse_deep(args))
 
 
 def _gitrefactor(args, ctx: CommandContext) -> CommandResult:
-    return _git_analysis("gitrefactor", ctx)
+    return _git_analysis("gitrefactor", ctx, _parse_deep(args))
 
 
 def _resume(args, ctx: CommandContext) -> CommandResult:

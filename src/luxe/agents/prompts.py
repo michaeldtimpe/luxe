@@ -441,6 +441,150 @@ GIT_REFACTOR_HINT = (
 )
 
 
+# --- gitkit DEEP MODE (staged map-reduce for large repos) ------------------
+# Deep mode runs multiple sequential read-only run_single passes (survey →
+# per-chunk → synthesis) orchestrated by gitkit/deep.py. These hints are the
+# single source for that orchestration's directives (gitkit.sdd Forbids inline
+# prompts). Each pass is still ONE mono call; the front-end does the staging.
+
+# Stage 0 — kind-agnostic survey: build an architectural hypothesis that frames
+# every downstream chunk. Output is free-form markdown notes (NOT the final
+# report), so no fixed header is required here.
+GIT_SURVEY_HINT = (
+    "You are SURVEYING a repository to build an ARCHITECTURAL HYPOTHESIS that "
+    "will frame a staged, file-by-file deep analysis to follow. Read the framing "
+    "files listed below (entrypoints, routing, CI, container/deploy, auth & "
+    "config) plus anything they point to, and use the injected <repo_health> / "
+    "<github_metadata> data. Do NOT attempt a full bug/refactor pass now and do "
+    "NOT read every file — form the map.\n\n"
+    "Output ONLY concise markdown survey notes (no preamble, no final-report "
+    "headers) covering: what the project IS and does; its architecture and the "
+    "main modules/layers; entrypoints and request/data flow; the key domain "
+    "entities; cross-cutting concerns (authn/authz, input/webhook validation, "
+    "secrets, persistence, external calls); and where the highest RISK or "
+    "refactor surface likely sits. Be specific and cite file paths. Keep it "
+    "tight — this is a map, not a report."
+)
+
+# Stage 2 — per-chunk analysis. Per-kind goal; STRUCTURED, COMPACT JSON output
+# (compactness is load-bearing — verbose notes recreate the overflow at the
+# reduce stage). Severity is PROVISIONAL here; the synthesis re-rates globally.
+_DEEP_CHUNK_JSON_SHAPE = (
+    "Output ONLY a single fenced ```json code block (no prose before or after) "
+    "with this exact shape:\n"
+    "```json\n"
+    "{\n"
+    '  "modules": [{"name": "", "dir": "", "role": ""}],\n'
+    '  "entities": [{"name": "", "defined_in": "file path", "kind": ""}],\n'
+    '  "cross_cutting": ["authn", "webhook-validation", "..."],\n'
+    '  "findings": [{"title": "", "root_cause": "", "severity": "", '
+    '"evidence": ["file:line"], "impact": "", "fix": ""}]\n'
+    "}\n"
+    "```\n"
+    "Keep every string short (a phrase, not a paragraph). Cap evidence at the "
+    "3 most telling `file:line` locations per finding. Omit empty arrays' items "
+    "rather than padding. Report ONLY what THESE files justify — do not "
+    "speculate about code you did not read."
+)
+
+GIT_REVIEW_CHUNK_HINT = (
+    "Analyze ONLY the listed files for SERIOUS, code-grounded BUGS and SECURITY "
+    "issues. Confirm each in the actual code (grep / find_symbol / read_file) or "
+    "DROP it — no speculative, generic, 'best-practice', lint, or style nits. "
+    "`severity` is one of Critical/High/Medium/Low and is PROVISIONAL (the final "
+    "synthesis re-rates it with whole-repo context). `root_cause` names the "
+    "underlying defect (the synthesis merges findings that share a root cause). "
+    "If these files contain nothing serious, return an empty `findings` array. "
+    + _DEEP_CHUNK_JSON_SHAPE
+)
+
+GIT_SUMMARY_CHUNK_HINT = (
+    "Describe ONLY the listed files/modules: what each does and how it fits the "
+    "architecture. Put module descriptions in `findings` with `title` = the "
+    "module/area, `impact` = its responsibility, `severity` = \"info\", and "
+    "`root_cause`/`fix` left empty. Capture domain entities and cross-cutting "
+    "concerns you see. Do not hunt for bugs. " + _DEEP_CHUNK_JSON_SHAPE
+)
+
+GIT_REFACTOR_CHUNK_HINT = (
+    "Identify ONLY STRUCTURAL issues in the listed files — coupling, cohesion, "
+    "module boundaries, duplication, dead code, testability, ownership. Put each "
+    "in `findings` with `title` = the issue, `root_cause` = the structural cause, "
+    "`severity` = priority (High/Medium/Low), `evidence` = file:line, `impact` = "
+    "why it hurts, `fix` = the structural change. Do NOT report correctness or "
+    "security defects unless one materially blocks a refactor. "
+    + _DEEP_CHUNK_JSON_SHAPE
+)
+
+# Stage 3 — holistic synthesis over the AGGREGATE notes (NOT raw files). Emits
+# the consolidated report in the required gitkit shape; re-rates severity
+# globally and merges same-root-cause findings.
+_DEEP_SYNTH_COMMON = (
+    "You are SYNTHESIZING a final report from STRUCTURED NOTES gathered over a "
+    "staged, chunk-by-chunk pass of a repository (provided below as the survey "
+    "map + per-chunk findings/entities/modules). Work ONLY from these notes — do "
+    "not re-read the repo. " + _GITKIT_REPORT_DISCIPLINE + "\n\n"
+    "Two consolidation rules are mandatory:\n"
+    "1. MERGE DUPLICATES — findings that describe the SAME root cause become ONE "
+    "consolidated finding that lists all its evidence locations (never count the "
+    "same issue twice across chunks).\n"
+    "2. RE-RATE SEVERITY GLOBALLY — the per-chunk severities are PROVISIONAL; "
+    "promote or demote each using whole-repo context (e.g. an internal admin-only "
+    "endpoint behind a VPN drops from Critical to Medium).\n"
+)
+
+GIT_REVIEW_SYNTH_HINT = (
+    _DEEP_SYNTH_COMMON + "\n"
+    "Begin the report with EXACTLY this shape:\n"
+    "  # Bug & security review\n"
+    "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
+    "Then findings grouped by (re-rated) severity, highest first. Every finding "
+    "MUST include: severity, file path, line number, the offending code as "
+    "evidence, the impact, and a suggested fix. If nothing serious survives "
+    "consolidation, the line is **Findings: 0** followed by one short paragraph "
+    "naming what was checked."
+)
+
+GIT_SUMMARY_SYNTH_HINT = (
+    _DEEP_SYNTH_COMMON + "\n"
+    "Begin the report with EXACTLY this shape:\n"
+    "  # Repository summary & risk assessment\n"
+    "  **Use-risk: low|medium|high** — <≤15-word reason>\n\n"
+    "Then these sections, grounded in the notes (cite paths): **Purpose**, "
+    "**Stack & languages**, **Dependencies & their risk**, **Health & size** "
+    "(cite <repo_health>/<github_metadata>), **Security posture**, and a final "
+    "**Use-risk verdict** restating the rating with a short rationale."
+)
+
+GIT_REFACTOR_SYNTH_HINT = (
+    _DEEP_SYNTH_COMMON + "\n"
+    "Begin the report with EXACTLY this shape:\n"
+    "  # Refactor plan\n"
+    "  **Refactor steps: N** — <≤15-word headline of the biggest win>\n\n"
+    "Then an ORDERED list of steps (highest-leverage first). For each: what to "
+    "change (cite files/symbols), the rationale, the risk level, and how to "
+    "verify it is safe (tests to run / behavior to preserve). Focus STRICTLY on "
+    "structure."
+)
+
+
+# Stage 3 fallback — when the aggregate notes overflow one window, findings are
+# consolidated in batches FIRST (this hint), then the survivors go to the normal
+# synthesis. Emits the same JSON findings shape, not the final report.
+GIT_DEEP_REDUCE_HINT = (
+    "You are consolidating a BATCH of raw findings gathered chunk-by-chunk from a "
+    "repository. Work ONLY from the findings provided below. MERGE findings that "
+    "share a root cause into one (union their evidence locations, keep the "
+    "strongest), drop exact duplicates, and keep each finding's most telling "
+    "evidence (cap 3 `file:line`). Do not invent new findings. Output ONLY a "
+    "single fenced ```json code block of this shape:\n"
+    "```json\n"
+    '{"findings": [{"title": "", "root_cause": "", "severity": "", '
+    '"evidence": ["file:line"], "impact": "", "fix": ""}]}\n'
+    "```"
+)
+
+
 def get(prompt_id: str) -> PromptVariant:
     """Look up a PromptVariant by id. Raises KeyError with a list of
     available ids if the lookup misses — surfaces typos quickly during

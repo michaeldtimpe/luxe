@@ -444,12 +444,13 @@ class ChatApp(App):
         return self.call_from_thread(self.push_screen_wait, PromptScreen(question, default))
 
     # -- feature hooks (run on the worker; reader/console route to the TUI) --
-    def _git_hook(self, kind: str) -> None:
+    def _git_hook(self, kind: str, deep: bool | None = None) -> None:
         from luxe.gitkit import run_git_report
         run_git_report(kind, cfg=self.cfg, repo_path=self.session.repo_path,
                        console=LogConsole(self), reader=self._reader, save=True,
                        verbose=(self.session.verbose_level == "full"),
-                       expected_head=self.session.index_head, cancel=self.cancel)
+                       expected_head=self.session.index_head, cancel=self.cancel,
+                       deep=deep)
 
     def _compare_hook(self, task: str) -> None:
         try:

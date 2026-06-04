@@ -28,12 +28,23 @@ _PREVIEW_LINES = 30
 _H1_RE = re.compile(r"^#\s", re.MULTILINE)
 
 
-def extract_report(text: str) -> str:
-    """Slice the report from its first level-1 (`# `) header onward, dropping any
-    leading monologue the model emits before the report (WS1 safety net for the
-    "treats the final turn as more reasoning" failure mode). If no header is
-    found, return the text unchanged (never drop content)."""
-    m = _H1_RE.search(text or "")
+def extract_report(text: str, kind: str | None = None) -> str:
+    """Slice the report from its header onward, dropping any leading monologue the
+    model emits before it (WS1 safety net for the "treats the final turn as more
+    reasoning" failure mode).
+
+    When `kind` is given, key on that kind's REQUIRED title (`_TITLES[kind]`) so a
+    stray `#` heading inside the monologue can't be mistaken for the report start;
+    fall back to the first `# ` header, then to the unchanged text (never drop
+    content)."""
+    text = text or ""
+    if kind and kind in _TITLES:
+        title_re = re.compile(
+            rf"^#\s+{re.escape(_TITLES[kind])}\s*$", re.MULTILINE | re.IGNORECASE)
+        m = title_re.search(text)
+        if m:
+            return text[m.start():]
+    m = _H1_RE.search(text)
     return text[m.start():] if m else text
 
 # kind -> (task_type overlay reused, goal ask, directive HINT). No new task
@@ -169,8 +180,16 @@ def run_git_report(
     verbose: bool = False,
     expected_head: str | None = None,
     cancel=None,
+    deep: bool | None = None,
+    max_chunks: int | None = None,
+    rebuild_map: bool = False,
 ) -> tuple[str, Path | None]:
-    """Run one read-only analysis pass over a repo and report the result.
+    """Run a read-only analysis over a repo and report the result.
+
+    Small/medium repos take the single-pass path (one `run_single`, unchanged).
+    Large repos (estimated token footprint over the deep threshold, or `deep=True`)
+    take the staged DEEP path (`deep.run_deep_report`): survey → chunk → per-chunk
+    notes → synthesis, with a persistent per-repo `map/` cache.
 
     Args:
         kind: gitsummary | gitreview | gitrefactor.
@@ -184,13 +203,16 @@ def run_git_report(
         verbose: print the full report on screen; otherwise a truncated preview.
         expected_head: if set AND the resident indices already cover the target,
             warn when the repo's HEAD has moved (indices may be stale).
+        deep: None = auto-select by footprint; True/False force deep / single-pass.
+        max_chunks: deep-mode safety valve — cap chunks analyzed (loud skip log).
+        rebuild_map: deep-mode — ignore the cached `map/` and re-survey/re-chunk.
 
     Returns:
         (report_text, saved_path | None); ("", None) if the user cancels.
 
-    Side effects: one `run_single` call (read-only role, with a per-run token
+    Side effects: one or more `run_single` calls (read-only role, per-run token
     headroom copy); BM25/symbol indices and repo_root are swapped to the target
-    and restored afterward; an optional report file write; an optional clone.
+    and restored afterward; report + (deep) map/notes file writes; optional clone.
     """
     from rich.markdown import Markdown
 
@@ -250,6 +272,23 @@ def run_git_report(
             update={"max_tokens_per_turn": GITKIT_MAX_TOKENS})
         goal = f"{ask}\n\n{hint}"
 
+        # Single-pass (default for small/medium) vs staged deep mode (large repos
+        # or --deep). The footprint decision reuses the just-built symbol index.
+        from luxe.gitkit import deep as deep_mod
+        from luxe.repo_index import build_repo_summary
+        sym_index = symbols_mod._index
+        summary = build_repo_summary(
+            target, symbol_coverage=getattr(sym_index, "coverage", None))
+        if deep_mod.should_use_deep(summary, role_cfg, override=deep):
+            return deep_mod.run_deep_report(
+                kind, target=target, task_type=task_type, backend=backend,
+                role_cfg=role_cfg, languages=languages, console=console,
+                reader=reader, summary=summary, symbol_index=sym_index,
+                health_block=health.gather_context(target), save=save,
+                verbose=verbose, cancel=cancel, max_chunks=max_chunks,
+                rebuild_map=rebuild_map,
+            )
+
         def _do_run(on_event=None, on_token=None):
             extra_context = health.gather_context(target)
             return run_single(
@@ -278,8 +317,8 @@ def run_git_report(
             console.print("[yellow]· cancelled.[/]")
             return "", None
 
-        # WS1.2: slice off any leading monologue before the report's first header.
-        report = extract_report((result.final_text or "").strip()) or \
+        # WS1.2: slice off any leading monologue before the report's required title.
+        report = extract_report((result.final_text or "").strip(), kind) or \
             "(no report produced)"
 
         # Full report is always saved; on screen show a preview unless verbose.

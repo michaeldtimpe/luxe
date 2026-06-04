@@ -243,10 +243,20 @@ def test_resume_hook_invoked(ctx):
 ])
 def test_git_analysis_aliases_dispatch(ctx, alias, kind):
     seen = []
-    ctx.on_git_analysis = lambda k: seen.append(k)
+    ctx.on_git_analysis = lambda k, deep=None: seen.append((k, deep))
     res = cmd.dispatch(alias, ctx)
     assert res.handled and not res.exit
-    assert seen == [kind]
+    assert seen == [(kind, None)]   # no arg → auto (deep=None)
+
+
+@pytest.mark.parametrize("arg,expected", [
+    ("deep", True), ("shallow", False), ("no-deep", False), ("", None),
+])
+def test_git_analysis_deep_arg(ctx, arg, expected):
+    seen = []
+    ctx.on_git_analysis = lambda k, deep=None: seen.append((k, deep))
+    cmd.dispatch(f"/gitreview {arg}".strip(), ctx)
+    assert seen == [("gitreview", expected)]
 
 
 def test_compact_toggles_session_flag(ctx):
@@ -266,7 +276,7 @@ def test_compact_listed_in_help(ctx):
 def test_git_analysis_no_repo_points_at_cli(ctx):
     ctx.session.repo_path = ""
     seen = []
-    ctx.on_git_analysis = lambda k: seen.append(k)
+    ctx.on_git_analysis = lambda k, deep=None: seen.append(k)
     cmd.dispatch("/gitreview", ctx)
     assert seen == []  # hook NOT called when no repo is bound
     out = _text(ctx)
