@@ -158,6 +158,36 @@ def test_parse_chunk_notes_garbage_returns_none():
     assert deep.parse_chunk_notes("") is None
 
 
+def test_parse_chunk_notes_prose_wrapped_block_is_recovered():
+    # the champion's real shape: big prose analysis, then a fenced json block,
+    # then a trailing prose summary (mirrors aurora chunk-10).
+    text = ("After reading all files I assess the following.\n\n"
+            "## Analysis\nlots of prose here...\n\n"
+            "```json\n{\"modules\": [], \"entities\": [], \"cross_cutting\": [], "
+            "\"findings\": [{\"title\": \"x\", \"severity\": \"High\"}]}\n```\n\n"
+            "**Final Report:** none.")
+    parsed = deep.parse_chunk_notes(text)
+    assert parsed and parsed["findings"][0]["title"] == "x"
+
+
+def test_parse_chunk_notes_prefers_block_with_findings():
+    text = ('```json\n{"modules": [{"name": "a"}]}\n```\n'
+            '```json\n{"findings": [{"title": "real", "severity": "High"}]}\n```')
+    parsed = deep.parse_chunk_notes(text)
+    assert parsed["findings"][0]["title"] == "real"
+
+
+def test_parse_chunk_notes_truncated_before_json_returns_none():
+    # prose that hit the token cap before emitting any JSON (aurora chunk-01)
+    text = ("CRITICAL BUG: signature bypass in webhook.py line 106...\n"
+            "let me also check the next file def keeper_bills_add(provider")
+    assert deep.parse_chunk_notes(text) is None
+
+
+def test_empty_digest_has_unparsed_chunks():
+    assert deep.empty_digest()["unparsed_chunks"] == []
+
+
 # --- digest merge / compaction ---------------------------------------------
 
 def _digest_with(findings):
@@ -429,3 +459,33 @@ def test_deep_synthesis_receives_aggregated_digest(big_repo, _gitkit_cfg, monkey
                    console=_QuietConsole(), save=True, deep=True)
     assert "<chunk_findings>" in seen["synth_ctx"]
     assert "rc" in seen["synth_ctx"]      # aggregated finding reached synthesis
+
+
+def test_deep_unparsed_chunk_is_flagged_not_dropped(big_repo, _gitkit_cfg, monkeypatch):
+    """A chunk that emits prose-only (no JSON — truncated/empty) must surface in
+    unparsed_chunks and reach synthesis, never be silently dropped."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    seen = {}
+
+    def fake_run_single(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        stage = _stage_of(run_id)
+        if stage == "survey":
+            return _FakeResult("survey notes")
+        if stage == "synthesis":
+            seen["synth_ctx"] = extra_context
+            return _FakeResult("# Bug & security review\n**Findings: 0**\nx")
+        # every chunk returns prose with NO json block (the truncation failure mode)
+        return _FakeResult("CRITICAL BUG: signature bypass... def foo(bar")
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert "unparsed_chunks" in seen["synth_ctx"]
+    # the digest persisted to disk records the flagged chunks
+    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
+    xref = json.loads((work[0] / "xref.json").read_text())
+    assert len(xref["unparsed_chunks"]) >= 2
