@@ -743,32 +743,35 @@ def run_deep_report(
             if work_dir is not None:
                 (work_dir / f"chunk-{c.index + 1:02d}.md").write_text(
                     text or "(no output)")
-            note_md = None
+            note_src = None
             if parsed:
                 update_digest(digest, parsed, c.index)
                 if estimate_tokens(json.dumps(digest)) > ceiling:
                     digest = compact_digest(digest, ceiling_tokens=ceiling, log=_emit)
             elif _has_report_header(text, kind):
-                # Rare: the model concluded with the required header itself — slice
-                # off any leading monologue and keep the conclusion.
-                note_md = extract_report(text, kind)
-                _emit(f"chunk {c.index + 1}: used self-reported findings")
+                # The model concluded with the required header itself — slice off
+                # any leading monologue and keep the conclusion.
+                note_src = extract_report(text, kind)
             elif text:
                 # The common champion case: the final message is a long file-by-file
-                # analysis that runs out of tokens before any structured conclusion.
-                # The findings ARE in that prose — recover them with a focused
-                # EXTRACT pass that only REFORMATS the analysis into the report
-                # shape (no tools, no re-analysis). This is the load-bearing fix:
-                # the model will not lead with its conclusion, so we transform it.
-                _emit(f"chunk {c.index + 1}: extracting findings from analysis…")
-                note_md = _extract_chunk_report(
-                    text, kind, pass_fn=_pass, role=chunk_role)
-            if note_md and _has_report_header(note_md, kind):
-                digest["markdown_notes"].append(
-                    {"chunk": c.index, "label": c.label, "md": note_md})
-            elif not parsed:
-                # Empty output or the extract pass also failed — never silently drop
-                # a chunk; record it so synthesis can flag the coverage gap.
+                # analysis that never reaches a structured conclusion. The findings
+                # ARE in that prose; _clean_note recovers them (transcription pass →
+                # heuristic). This is load-bearing: the model won't self-package.
+                note_src = text
+            if note_src is not None:
+                # Always store a CLEAN note (as-is if already clean, else a
+                # transcription pass, else heuristic finding lines) so the final
+                # report can be assembled without any rambly text.
+                clean = _clean_note(note_src, kind, pass_fn=_pass, role=chunk_role)
+                if clean:
+                    digest["markdown_notes"].append(
+                        {"chunk": c.index, "label": c.label, "md": clean})
+                    _emit(f"chunk {c.index + 1}: findings recorded")
+                else:
+                    note_src = None  # nothing salvageable → fall through to unparsed
+            if note_src is None and not parsed:
+                # Empty/unsalvageable output — never silently drop a chunk; record
+                # it so the report can flag the coverage gap.
                 label = f"chunk {c.index + 1} ({c.label}): {', '.join(c.files[:4])}" \
                     + (" …" if len(c.files) > 4 else "")
                 digest["unparsed_chunks"].append(label)
@@ -807,16 +810,22 @@ def run_deep_report(
 
     synth_text = (getattr(res, "final_text", "") or "").strip()
     report = extract_report(synth_text, kind)
-    # The champion narrates its consolidation into the report; if the synthesis
-    # output is bloated with reasoning, run a strict transcription pass to produce
-    # a clean report (the findings are already decided — this only reformats).
-    if _looks_rambly(report or synth_text):
-        _emit("synthesis verbose — formatting a clean report")
-        cleaned = _format_final_report(synth_text, kind, pass_fn=_pass,
-                                       role=synth_role)
-        if cleaned:
+    # Use the LLM synthesis ONLY if it came back clean. The champion narrates its
+    # consolidation into the report, so when it doesn't: try a strict transcription
+    # pass, and if THAT is still rambly, assemble the report DETERMINISTICALLY from
+    # the (already-cleaned) per-chunk notes — Python packaging never rambles, so a
+    # clean, complete report is guaranteed.
+    if not report or _looks_rambly(report):
+        cleaned = (_format_final_report(synth_text, kind, pass_fn=_pass,
+                                        role=synth_role)
+                   if _looks_rambly(synth_text) else report)
+        if cleaned and not _looks_rambly(cleaned):
+            _emit("synthesis verbose — formatted a clean report")
             report = cleaned
-    report = report or "(no report produced)"
+        else:
+            _emit("synthesis unclean — assembling report deterministically")
+            report = _render_report(digest, kind)
+    report = report or _render_report(digest, kind) or "(no report produced)"
 
     saved: Path | None = None
     if save:
@@ -873,25 +882,101 @@ def _format_final_report(draft: str, kind: str, *, pass_fn, role) -> str | None:
     return sliced if _has_report_header(sliced, kind) else None
 
 
-def _extract_chunk_report(analysis: str, kind: str, *, pass_fn, role) -> str | None:
-    """Reformat a chunk's rambly analysis prose into the report shape via a focused
-    pass that does NOT use tools or re-analyze — it just consolidates the findings
-    the analysis already contains. Returns the sliced report (from the required
-    header) or None if even this pass produced no header. This is how the deep
-    engine copes with a champion that won't lead with its conclusion."""
-    from luxe.gitkit.runner import extract_report
-    ctx = ("<chunk_findings>\nRaw analysis of part of the repository (your own "
-           "earlier notes — may be truncated). Consolidate the CONFIRMED, serious "
-           "findings it contains; ignore inconclusive musing:\n"
-           f"{analysis}\n</chunk_findings>")
-    goal = ("Format the confirmed findings from the analysis below into the report "
-            "shape. Do NOT use tools and do NOT re-read the repository — only "
-            "consolidate what the analysis already establishes.\n\n"
-            + _SYNTH_HINTS[kind])
-    res = pass_fn(goal, ctx, "extract", role=role)
-    text = (getattr(res, "final_text", "") or "").strip()
-    sliced = extract_report(text, kind)
-    return sliced if _has_report_header(sliced, kind) else None
+def _render_report(digest: dict, kind: str) -> str:
+    """Assemble a clean final report DETERMINISTICALLY from the (already-cleaned)
+    per-chunk notes + any JSON findings + coverage gaps. This is the guaranteed
+    non-rambly path when the LLM synthesis won't behave — Python never rambles."""
+    from luxe.gitkit.runner import _TITLES
+    title = _TITLES.get(kind, "Report")
+    notes = digest.get("markdown_notes", [])
+    pf = digest.get("provisional_findings", [])
+    unparsed = digest.get("unparsed_chunks", [])
+
+    sections: list[str] = []
+    for n in notes:
+        body = _strip_report_header(n.get("md", ""))
+        if body:
+            sections.append(
+                f"## Area: {n.get('label', '?')} (chunk {n.get('chunk', 0) + 1})"
+                f"\n\n{body}")
+    if pf:
+        lines = []
+        for f in pf:
+            ev = (f.get("evidence") or ["?"])[0]
+            lines.append(f"- **{f.get('severity', '?')}** `{ev}` — "
+                         f"{f.get('title', '')}. {f.get('impact', '')} "
+                         f"Fix: {f.get('fix', '')}".rstrip())
+        sections.append("## Additional findings\n\n" + "\n".join(lines))
+
+    if kind == "gitreview":
+        n = len(pf) + sum(len(_heuristic_findings(s)) for s in sections)
+        header = f"# {title}\n**Findings: {n} (consolidated across chunks)**"
+    elif kind == "gitsummary":
+        header = f"# {title}\n**Use-risk: see per-area assessments below**"
+    else:
+        header = f"# {title}\n**Refactor steps: see per-area plans below**"
+
+    out = [header, *sections]
+    if unparsed:
+        out.append("## Coverage gaps\n\nThese areas could not be analyzed "
+                   "(verbose or empty model output) and may still contain issues:\n"
+                   + "\n".join(f"- {u}" for u in unparsed))
+    if not sections and not unparsed:
+        out.append("No findings were recorded.")
+    return "\n\n".join(out)
+
+
+# Heuristic finding patterns for the deterministic-render fallback (review).
+_SEV_LINE_RE = re.compile(
+    r"(critical|high|medium|low)\b.*?(`[^`]+`|\b[\w./-]+\.[a-z]{1,4}:\d+)",
+    re.IGNORECASE)
+
+
+def _strip_report_header(md: str) -> str:
+    """Drop a note's own `# <title>` + `**Findings: …**`/`**Use-risk…**` lines so
+    the body can be re-grouped under a single final header."""
+    lines = (md or "").splitlines()
+    out, skipping = [], True
+    for ln in lines:
+        if skipping and (ln.strip() == "" or ln.startswith("# ")
+                         or ln.strip().startswith("**Findings:")
+                         or ln.strip().startswith("**Use-risk")
+                         or ln.strip().startswith("**Refactor steps")):
+            continue
+        skipping = False
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
+def _heuristic_findings(text: str) -> list[str]:
+    """Last-resort: pull finding-shaped lines (a severity word + a `path`/file:line)
+    out of rambly prose, deduped, so a clean report can still be rendered."""
+    seen, out = set(), []
+    for ln in (text or "").splitlines():
+        ln = ln.strip(" -*#\t")
+        if len(ln) < 8 or ln.lower() in seen:
+            continue
+        if _SEV_LINE_RE.search(ln):
+            seen.add(ln.lower())
+            out.append(ln)
+    return out[:40]
+
+
+def _clean_note(md: str, kind: str, *, pass_fn, role) -> str | None:
+    """Return a non-rambly version of a per-chunk note: as-is when already clean,
+    else a transcription pass, else a heuristic finding list. None if nothing
+    salvageable."""
+    if not md:
+        return None
+    if not _looks_rambly(md):
+        return md
+    cleaned = _format_final_report(md, kind, pass_fn=pass_fn, role=role)
+    if cleaned and not _looks_rambly(cleaned):
+        return cleaned
+    bullets = _heuristic_findings(md)
+    if bullets:
+        return "\n".join(f"- {b}" for b in bullets)
+    return None
 
 
 def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None) -> dict:
