@@ -805,8 +805,18 @@ def run_deep_report(
         console.print("[yellow]· cancelled.[/]")
         return "", None
 
-    report = extract_report((getattr(res, "final_text", "") or "").strip(), kind) \
-        or "(no report produced)"
+    synth_text = (getattr(res, "final_text", "") or "").strip()
+    report = extract_report(synth_text, kind)
+    # The champion narrates its consolidation into the report; if the synthesis
+    # output is bloated with reasoning, run a strict transcription pass to produce
+    # a clean report (the findings are already decided — this only reformats).
+    if _looks_rambly(report or synth_text):
+        _emit("synthesis verbose — formatting a clean report")
+        cleaned = _format_final_report(synth_text, kind, pass_fn=_pass,
+                                       role=synth_role)
+        if cleaned:
+            report = cleaned
+    report = report or "(no report produced)"
 
     saved: Path | None = None
     if save:
@@ -829,6 +839,38 @@ def run_deep_report(
         if work_dir is not None:
             console.print(f"[dim]· survey/chunk notes: {work_dir}[/]")
     return report, saved
+
+
+_RAMBLE_MARKERS = (
+    "let me", "i need to", "i should", "wait,", "okay,", "ok,", "chain-of-thought",
+    "i'll ", "let's ", "first, i", "now i", "hmm", "actually,", "working notes",
+    "re-rating", "consolidation:", "i realize", "to summarize my",
+)
+
+
+def _looks_rambly(report: str) -> bool:
+    """Heuristic: did a report pass narrate its reasoning instead of emitting a
+    clean report? Long output or first-person reasoning markers in the body."""
+    if not report:
+        return False
+    if len(report.splitlines()) > 200:
+        return True
+    low = report.lower()
+    return sum(low.count(m) for m in _RAMBLE_MARKERS) >= 3
+
+
+def _format_final_report(draft: str, kind: str, *, pass_fn, role) -> str | None:
+    """Strict transcription pass: reproduce a clean report from a rambly synthesis
+    draft (copy findings verbatim, drop the narration). Returns the sliced clean
+    report, or None if it still has no header."""
+    from luxe.gitkit.runner import extract_report
+    ctx = f"<report_draft>\n{draft}\n</report_draft>"
+    goal = ("Produce the clean final report from the draft below.\n\n"
+            + prompts.GIT_DEEP_FORMAT_HINT)
+    res = pass_fn(goal, ctx, "format", role=role)
+    text = (getattr(res, "final_text", "") or "").strip()
+    sliced = extract_report(text, kind)
+    return sliced if _has_report_header(sliced, kind) else None
 
 
 def _extract_chunk_report(analysis: str, kind: str, *, pass_fn, role) -> str | None:
