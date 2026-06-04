@@ -89,11 +89,12 @@ def test_should_use_deep_gate_keys_on_base_num_ctx_not_max():
     assert deep.should_use_deep(s, _FakeRole(num_ctx=65536)) is False  # fits one pass
 
 
-def test_deep_window_expands_and_caps():
-    # chunk passes run at the expanded, capped window (never below base num_ctx).
+def test_deep_window_defaults_to_base_ctx():
+    # chunk passes run at the BASE num_ctx by default (small focused chunks the
+    # model can conclude), NOT the expanded num_ctx_max.
     assert deep.deep_window(_FakeRole(num_ctx=8192, num_ctx_max=0)) == 8192
-    assert deep.deep_window(_FakeRole(num_ctx=32768, num_ctx_max=262144)) == deep._DEEP_WINDOW_CAP
-    assert deep.deep_window(_FakeRole(num_ctx=32768, num_ctx_max=65536)) == 65536
+    assert deep.deep_window(_FakeRole(num_ctx=32768, num_ctx_max=262144)) == 32768
+    assert deep.deep_window(_FakeRole(num_ctx=32768, num_ctx_max=65536)) == 32768
 
 
 # --- chunker (deterministic / budget / ordering / degrade) ------------------
@@ -394,6 +395,46 @@ def test_deep_map_cache_reused_on_second_run(big_repo, _gitkit_cfg, monkeypatch)
     run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True, rebuild_map=True)
     assert len([c for c in calls if "survey" in c]) == 1
+
+
+def test_deep_recovers_markdown_findings_when_no_json(big_repo, _gitkit_cfg, monkeypatch):
+    """The champion often rambles then concludes with the required markdown header
+    instead of emitting JSON — those findings must be recovered (sliced), not
+    dropped, and reach synthesis."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    seen = {}
+
+    def fake_run_single(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        stage = _stage_of(run_id)
+        if stage == "survey":
+            return _FakeResult("survey notes")
+        if stage == "synthesis":
+            seen["synth_ctx"] = extra_context
+            return _FakeResult("# Bug & security review\n**Findings: 1**\nx")
+        # chunk: monologue, THEN the required header + a real finding (no JSON)
+        return _FakeResult(
+            "Let me analyze these files step by step...\n"
+            "I looked at the webhook handler and the config loader.\n\n"
+            "# Bug & security review\n**Findings: 1 (1 high)**\n\n"
+            "## High — signature bypass\n`webhook.py:106` returns True when key "
+            "unset.\nImpact: unauthenticated webhooks. Fix: fail closed.")
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
+    xref = json.loads((work[0] / "xref.json").read_text())
+    assert len(xref["markdown_notes"]) >= 2          # recovered, not dropped
+    assert xref["unparsed_chunks"] == []
+    # the monologue was sliced off; the finding reached synthesis
+    note = xref["markdown_notes"][0]["md"]
+    assert note.startswith("# Bug & security review")
+    assert "step by step" not in note
+    assert "signature bypass" in seen["synth_ctx"]
 
 
 def test_deep_max_chunks_caps_and_logs(big_repo, _gitkit_cfg, monkeypatch):

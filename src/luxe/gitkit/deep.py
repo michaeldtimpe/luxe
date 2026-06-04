@@ -61,10 +61,14 @@ _DEEP_TRIGGER_FRAC = 0.55
 _DIGEST_CEILING_FRAC = 0.15
 # Synthesize-in-two-levels when the aggregate notes exceed this fraction.
 _SYNTH_REDUCE_FRAC = 0.80
-# Cap for the expanded deep-pass window (a 35B model at a huge KV is slow/heavy;
-# this bounds the per-pass window even when num_ctx_max is larger). The deep
-# passes run at min(num_ctx_max, this), never below the role's base num_ctx.
-_DEEP_WINDOW_CAP = 131072
+# Deep passes deliberately run at the BASE num_ctx, NOT the expanded num_ctx_max.
+# The first aurora run expanded to 131072 and it backfired: chunks became huge
+# (30-47 files, 600k-1.4M prompt tokens), passes were slow, and the model
+# rambled without ever concluding (truncating before its findings). Smaller
+# base-window chunks keep each pass focused enough that the model concludes —
+# the "eaten in stages" intent. This multiple lets a capable box opt into a
+# modestly larger deep window than base without returning to the 131k failure.
+_DEEP_WINDOW_BASE_MULT = 1
 # Ask for confirmation (interactive only) once a deep run needs this many chunks.
 _LARGE_CONFIRM_CHUNKS = 8
 # Per-pass wall estimate (rough). Calibrated from the first aurora run: 13 passes
@@ -152,7 +156,7 @@ class Chunk:
 
 def empty_digest() -> dict:
     return {"modules": [], "entities": [], "cross_cutting": [],
-            "provisional_findings": [], "unparsed_chunks": []}
+            "provisional_findings": [], "markdown_notes": [], "unparsed_chunks": []}
 
 
 # --- effective window / footprint -------------------------------------------
@@ -164,12 +168,14 @@ def base_ctx(role_cfg) -> int:
 
 
 def deep_window(role_cfg) -> int:
-    """The (expanded, capped) window the deep CHUNK passes run at. The role copy's
-    num_ctx is raised to this so the request window matches the chunk sizing;
-    capped so a 35B model's KV stays tractable. Never below the base num_ctx."""
+    """The window the deep CHUNK passes run at. Defaults to the BASE num_ctx (a
+    deliberate choice — see _DEEP_WINDOW_BASE_MULT): small, focused chunks that
+    the model can actually conclude, rather than the huge-but-unconcludable
+    chunks an expanded window produced. Clamped to num_ctx_max when a >1
+    multiple opts into a larger deep window."""
     base = base_ctx(role_cfg)
     ceiling = getattr(role_cfg, "num_ctx_max", 0) or base
-    return min(max(base, ceiling), _DEEP_WINDOW_CAP)
+    return min(base * _DEEP_WINDOW_BASE_MULT, ceiling) if ceiling >= base else base
 
 
 def estimate_repo_tokens(summary) -> int:
@@ -351,6 +357,17 @@ def parse_chunk_notes(text: str) -> dict | None:
     return best
 
 
+def _has_report_header(text: str, kind: str) -> bool:
+    """True if the chunk output concluded with the kind's required markdown report
+    header (so its findings can be recovered by slicing even without JSON)."""
+    from luxe.gitkit.runner import _TITLES
+    title = _TITLES.get(kind, "")
+    if not title or not text:
+        return False
+    return re.search(rf"^#\s+{re.escape(title)}\s*$", text,
+                     re.MULTILINE | re.IGNORECASE) is not None
+
+
 def _finding_key(f: dict) -> str:
     """Dedup key: prefer root_cause, fall back to title; normalized."""
     base = (f.get("root_cause") or f.get("title") or "").strip().lower()
@@ -426,6 +443,7 @@ def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
         "entities": list(digest.get("entities", [])),
         "cross_cutting": list(digest.get("cross_cutting", [])),
         "provisional_findings": [merged[k] for k in order],
+        "markdown_notes": list(digest.get("markdown_notes", [])),
         "unparsed_chunks": list(digest.get("unparsed_chunks", [])),
     }
 
@@ -547,9 +565,19 @@ def _digest_block(digest: dict) -> str:
 
 
 def _notes_block(digest: dict) -> str:
-    return ("<chunk_findings>\nAggregated structured notes from every chunk "
-            "(consolidate THESE; do not re-read the repo):\n"
-            f"{json.dumps(digest, indent=1)}\n</chunk_findings>")
+    """Synthesis input: the structured digest as JSON + any recovered markdown
+    chunk notes rendered readably (the champion often emits markdown, not JSON)."""
+    md_notes = digest.get("markdown_notes", [])
+    structured = {k: v for k, v in digest.items() if k != "markdown_notes"}
+    parts = ["<chunk_findings>\nAggregated notes from every chunk (consolidate "
+             "THESE; do not re-read the repo).\n\nStructured findings:\n"
+             f"{json.dumps(structured, indent=1)}"]
+    if md_notes:
+        parts.append("\n\nAdditional per-chunk findings (markdown):\n" + "\n\n".join(
+            f"### chunk {n.get('chunk', '?')} ({n.get('label', '')})\n{n.get('md', '')}"
+            for n in md_notes))
+    parts.append("\n</chunk_findings>")
+    return "".join(parts)
 
 
 # --- per-kind directive maps (strings stay in agents/prompts.py) ------------
@@ -604,17 +632,19 @@ def run_deep_report(
     if run_single_fn is None:
         from luxe.agents.single import run_single as run_single_fn
 
-    # Deep passes run at the expanded (capped) window; raise the role copy's
-    # num_ctx so the actual request window matches the chunk sizing (loop.py
-    # sends role.num_ctx), and give a bit more generation headroom than the
-    # single-pass report cap (the synthesis report + JSON notes need room). A
-    # copy — never mutates the shared role / chat.yaml.
+    # Two windows, deliberately different (a copy — never mutates the shared role):
+    #  - CHUNK passes run at the BASE window (deep_window) so chunks are small
+    #    enough that the model concludes instead of rambling past the token cap.
+    #  - The SYNTHESIS pass runs at the EXPANDED window (num_ctx_max) since it is a
+    #    single pass that must hold ALL the aggregated notes at once.
+    # Both get extra generation headroom over the single-pass report cap.
+    _hdrm = max(getattr(role_cfg, "max_tokens_per_turn", 0), _DEEP_MAX_TOKENS)
     eff_ctx = deep_window(role_cfg)
-    role_cfg = role_cfg.model_copy(update={
-        "num_ctx": eff_ctx,
-        "max_tokens_per_turn": max(
-            getattr(role_cfg, "max_tokens_per_turn", 0), _DEEP_MAX_TOKENS),
-    })
+    synth_ctx_win = getattr(role_cfg, "num_ctx_max", 0) or eff_ctx
+    chunk_role = role_cfg.model_copy(
+        update={"num_ctx": eff_ctx, "max_tokens_per_turn": _hdrm})
+    synth_role = role_cfg.model_copy(
+        update={"num_ctx": synth_ctx_win, "max_tokens_per_turn": _hdrm})
     content_budget = max(1, int(eff_ctx * _CONTENT_BUDGET_FRAC))
     ceiling = int(eff_ctx * _DIGEST_CEILING_FRAC)
     head = health.current_head(target)
@@ -624,19 +654,20 @@ def run_deep_report(
         # strip it. Use a plain "deep ·" prefix instead.
         console.print(f"[dim]· deep · {text}[/]")
 
-    def _pass(goal: str, extra_context: str, label: str):
+    def _pass(goal: str, extra_context: str, label: str, role=None):
+        role = role or chunk_role
         if console.is_terminal:
             with console.status(f"[dim]deep · {label}…[/]", spinner="dots") as st:
                 on_e, on_t = _activity_callbacks(
                     lambda t: st.update(f"[dim]deep · {label} · {t}[/]"), cancel=cancel)
                 return run_single_fn(
-                    backend, role_cfg, goal=goal, task_type=task_type,
+                    backend, role, goal=goal, task_type=task_type,
                     languages=languages, extra_context=extra_context,
                     on_tool_event=on_e, on_token=on_t,
                     phase="chat", run_id=f"gitkit-deep-{kind}-{label}")
         on_e, on_t = _activity_callbacks(lambda t: None, cancel=cancel)
         return run_single_fn(
-            backend, role_cfg, goal=goal, task_type=task_type,
+            backend, role, goal=goal, task_type=task_type,
             languages=languages, extra_context=extra_context,
             on_tool_event=on_e, on_token=on_t,
             phase="chat", run_id=f"gitkit-deep-{kind}-{label}")
@@ -689,6 +720,7 @@ def run_deep_report(
 
     work_dir = _new_work_dir(target, kind) if save else None
     digest = empty_digest()
+    from luxe.gitkit.runner import extract_report
 
     # --- Stage 2: per-chunk analysis ----------------------------------------
     chunk_hint = _CHUNK_HINTS[kind]
@@ -712,13 +744,23 @@ def run_deep_report(
                 update_digest(digest, parsed, c.index)
                 if estimate_tokens(json.dumps(digest)) > ceiling:
                     digest = compact_digest(digest, ceiling_tokens=ceiling, log=_emit)
+            elif _has_report_header(text, kind):
+                # The champion often rambles instead of emitting JSON, but still
+                # concludes with the required markdown report header — recover that
+                # by slicing the conclusion (drops the monologue). Better a real
+                # markdown finding than a lost chunk.
+                digest["markdown_notes"].append({
+                    "chunk": c.index, "label": c.label,
+                    "md": extract_report(text, kind)})
+                _emit(f"chunk {c.index + 1}: recovered markdown findings "
+                      f"(no JSON emitted)")
             else:
-                # No parseable JSON (empty or truncated-before-JSON output) — never
-                # silently drop a chunk; record it so synthesis can flag the gap.
+                # Empty or truncated-before-any-conclusion — never silently drop a
+                # chunk; record it so synthesis can flag the coverage gap.
                 label = f"chunk {c.index + 1} ({c.label}): {', '.join(c.files[:4])}" \
                     + (" …" if len(c.files) > 4 else "")
                 digest["unparsed_chunks"].append(label)
-                _emit(f"chunk {c.index + 1} produced no parseable findings "
+                _emit(f"chunk {c.index + 1} produced no usable findings "
                       f"(empty/truncated) — flagged as unanalyzed")
             if work_dir is not None:
                 (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
@@ -734,23 +776,23 @@ def run_deep_report(
     # Final dedupe/merge before synthesis (also re-runs the merge globally).
     digest = compact_digest(digest, ceiling_tokens=0)
 
-    # --- Stage 3: synthesis (proactive 2-level reduce on overflow) ----------
+    # --- Stage 3: synthesis at the EXPANDED window (one pass over all notes) -
     notes_tokens = estimate_tokens(json.dumps(digest))
-    if notes_tokens > _SYNTH_REDUCE_FRAC * eff_ctx:
+    if notes_tokens > _SYNTH_REDUCE_FRAC * synth_ctx_win:
         _emit(f"aggregate notes large ({notes_tokens} tok) — 2-level reduce")
-        digest = _reduce_findings(digest, eff_ctx=eff_ctx, pass_fn=_pass, log=_emit)
+        digest = _reduce_findings(digest, eff_ctx=synth_ctx_win, pass_fn=_pass,
+                                  log=_emit)
 
     synth_ctx = (f"{health_block}\n\n<survey_notes>\n{survey_notes}\n</survey_notes>"
                  f"\n\n{_notes_block(digest)}")
     synth_goal = ("Write the final consolidated report for the repository in the "
                   "current working directory.\n\n" + _SYNTH_HINTS[kind])
     try:
-        res = _pass(synth_goal, synth_ctx, "synthesis")
+        res = _pass(synth_goal, synth_ctx, "synthesis", role=synth_role)
     except (ChatCancelled, KeyboardInterrupt):
         console.print("[yellow]· cancelled.[/]")
         return "", None
 
-    from luxe.gitkit.runner import extract_report
     report = extract_report((getattr(res, "final_text", "") or "").strip(), kind) \
         or "(no report produced)"
 

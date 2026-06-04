@@ -466,59 +466,53 @@ GIT_SURVEY_HINT = (
     "tight — this is a map, not a report."
 )
 
-# Stage 2 — per-chunk analysis. Per-kind goal; STRUCTURED, COMPACT JSON output
-# (compactness is load-bearing — verbose notes recreate the overflow at the
-# reduce stage). Severity is PROVISIONAL here; the synthesis re-rates globally.
-_DEEP_CHUNK_JSON_SHAPE = (
-    "CRITICAL OUTPUT CONTRACT — your FINAL message must be ONE fenced ```json "
-    "block and NOTHING ELSE: no analysis narrative, no reasoning, no step-by-step, "
-    "no re-printing of file contents, no text before or after the block. Do ALL "
-    "your reading and reasoning silently via tools DURING the run; decide your "
-    "conclusions, then write the JSON ONCE as the entire final message, starting "
-    "at the very first character. A message that contains prose will be discarded.\n"
-    "Shape:\n"
-    "```json\n"
-    "{\n"
-    '  "modules": [{"name": "", "dir": "", "role": ""}],\n'
-    '  "entities": [{"name": "", "defined_in": "file path", "kind": ""}],\n'
-    '  "cross_cutting": ["authn", "webhook-validation", "..."],\n'
-    '  "findings": [{"title": "", "root_cause": "", "severity": "", '
-    '"evidence": ["file:line"], "impact": "", "fix": ""}]\n'
-    "}\n"
-    "```\n"
-    "Keep every string to ONE short phrase (never a paragraph). Cap `modules` and "
-    "`entities` at the ~5 most relevant each — the `findings` array is what matters "
-    "most. Cap `evidence` at the 3 most telling `file:line` per finding. Report "
-    "ONLY what THESE files justify — do not speculate about code you did not read."
-)
-
+# Stage 2 — per-chunk analysis. Per-kind goal in the SAME markdown report shape
+# the single-pass uses (the champion reliably produces and concludes this; an
+# earlier JSON-only contract made it ramble past the token cap without ever
+# emitting structure). Severity is PROVISIONAL — the synthesis re-rates globally.
+# The runner slices from the required header, so any leading monologue is dropped;
+# keep findings COMPACT so the aggregate fits the synthesis window.
 GIT_REVIEW_CHUNK_HINT = (
-    "Analyze ONLY the listed files for SERIOUS, code-grounded BUGS and SECURITY "
-    "issues. Confirm each in the actual code (grep / find_symbol / read_file) or "
-    "DROP it — no speculative, generic, 'best-practice', lint, or style nits. "
-    "`severity` is one of Critical/High/Medium/Low and is PROVISIONAL (the final "
-    "synthesis re-rates it with whole-repo context). `root_cause` names the "
-    "underlying defect (the synthesis merges findings that share a root cause). "
-    "If these files contain nothing serious, return an empty `findings` array. "
-    + _DEEP_CHUNK_JSON_SHAPE
+    "Perform a read-only bug & security REVIEW of ONLY the files listed below and "
+    "report only SERIOUS, code-grounded findings. " + _GITKIT_REPORT_DISCIPLINE
+    + "\n\nBegin the report with EXACTLY this shape:\n"
+    "  # Bug & security review\n"
+    "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
+    "Then findings grouped by severity, highest first. Severities are PROVISIONAL "
+    "— a later whole-repo synthesis re-rates them. Confirm-or-dismiss discipline: "
+    "confirm each suspected issue in the actual code (grep, find_symbol, "
+    "security_scan) or DROP it — NEVER list considered-then-dismissed items, "
+    "speculative/generic/'best-practice' risks, or lint/style/type nits. Every "
+    "finding MUST be ONE tight entry: severity, file path, line number, the "
+    "offending code as evidence, the impact, and a suggested fix — a few lines "
+    "each, not an essay. If nothing serious qualifies in THESE files, the line is "
+    "**Findings: 0** followed by one short sentence naming what you checked."
 )
 
 GIT_SUMMARY_CHUNK_HINT = (
-    "Describe ONLY the listed files/modules: what each does and how it fits the "
-    "architecture. Put module descriptions in `findings` with `title` = the "
-    "module/area, `impact` = its responsibility, `severity` = \"info\", and "
-    "`root_cause`/`fix` left empty. Capture domain entities and cross-cutting "
-    "concerns you see. Do not hunt for bugs. " + _DEEP_CHUNK_JSON_SHAPE
+    "Summarize ONLY the files listed below: what each module does and how it fits "
+    "the architecture. " + _GITKIT_REPORT_DISCIPLINE
+    + "\n\nBegin the report with EXACTLY this shape:\n"
+    "  # Repository summary & risk assessment\n"
+    "  **Use-risk: low|medium|high** — <≤15-word reason for THESE files>\n\n"
+    "Then a tight bulleted description of each module/area here (purpose, key "
+    "entities, external calls, any security-relevant handling), citing file "
+    "paths. Do not hunt for bugs. Keep it compact — this feeds a whole-repo "
+    "synthesis."
 )
 
 GIT_REFACTOR_CHUNK_HINT = (
-    "Identify ONLY STRUCTURAL issues in the listed files — coupling, cohesion, "
-    "module boundaries, duplication, dead code, testability, ownership. Put each "
-    "in `findings` with `title` = the issue, `root_cause` = the structural cause, "
-    "`severity` = priority (High/Medium/Low), `evidence` = file:line, `impact` = "
-    "why it hurts, `fix` = the structural change. Do NOT report correctness or "
-    "security defects unless one materially blocks a refactor. "
-    + _DEEP_CHUNK_JSON_SHAPE
+    "Identify ONLY STRUCTURAL issues in the files listed below — coupling, "
+    "cohesion, module boundaries, duplication, dead code, testability, ownership. "
+    + _GITKIT_REPORT_DISCIPLINE
+    + "\n\nBegin the report with EXACTLY this shape:\n"
+    "  # Refactor plan\n"
+    "  **Refactor steps: N** — <≤15-word headline of the biggest win here>\n\n"
+    "Then an ordered list of structural steps for THESE files: what to change "
+    "(cite files/symbols), the rationale, the risk level, and how to verify. "
+    "Priorities are PROVISIONAL — a later synthesis re-orders globally. Do NOT "
+    "report correctness or security defects unless one materially blocks a "
+    "refactor. Keep each step tight."
 )
 
 # Stage 3 — holistic synthesis over the AGGREGATE notes (NOT raw files). Emits
