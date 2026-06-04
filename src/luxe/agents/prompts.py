@@ -470,8 +470,13 @@ GIT_SURVEY_HINT = (
 # (compactness is load-bearing — verbose notes recreate the overflow at the
 # reduce stage). Severity is PROVISIONAL here; the synthesis re-rates globally.
 _DEEP_CHUNK_JSON_SHAPE = (
-    "Output ONLY a single fenced ```json code block (no prose before or after) "
-    "with this exact shape:\n"
+    "CRITICAL OUTPUT CONTRACT — your FINAL message must be ONE fenced ```json "
+    "block and NOTHING ELSE: no analysis narrative, no reasoning, no step-by-step, "
+    "no re-printing of file contents, no text before or after the block. Do ALL "
+    "your reading and reasoning silently via tools DURING the run; decide your "
+    "conclusions, then write the JSON ONCE as the entire final message, starting "
+    "at the very first character. A message that contains prose will be discarded.\n"
+    "Shape:\n"
     "```json\n"
     "{\n"
     '  "modules": [{"name": "", "dir": "", "role": ""}],\n'
@@ -481,10 +486,10 @@ _DEEP_CHUNK_JSON_SHAPE = (
     '"evidence": ["file:line"], "impact": "", "fix": ""}]\n'
     "}\n"
     "```\n"
-    "Keep every string short (a phrase, not a paragraph). Cap evidence at the "
-    "3 most telling `file:line` locations per finding. Omit empty arrays' items "
-    "rather than padding. Report ONLY what THESE files justify — do not "
-    "speculate about code you did not read."
+    "Keep every string to ONE short phrase (never a paragraph). Cap `modules` and "
+    "`entities` at the ~5 most relevant each — the `findings` array is what matters "
+    "most. Cap `evidence` at the 3 most telling `file:line` per finding. Report "
+    "ONLY what THESE files justify — do not speculate about code you did not read."
 )
 
 GIT_REVIEW_CHUNK_HINT = (
@@ -531,6 +536,10 @@ _DEEP_SYNTH_COMMON = (
     "2. RE-RATE SEVERITY GLOBALLY — the per-chunk severities are PROVISIONAL; "
     "promote or demote each using whole-repo context (e.g. an internal admin-only "
     "endpoint behind a VPN drops from Critical to Medium).\n"
+    "3. BE HONEST ABOUT COVERAGE — if the notes include a non-empty "
+    "`unparsed_chunks` list, those areas could NOT be analyzed (truncated/empty "
+    "output); state this explicitly in the report (e.g. a short 'Not analyzed' "
+    "note listing them) rather than implying the repo is clean.\n"
 )
 
 GIT_REVIEW_SYNTH_HINT = (

@@ -67,11 +67,15 @@ _SYNTH_REDUCE_FRAC = 0.80
 _DEEP_WINDOW_CAP = 131072
 # Ask for confirmation (interactive only) once a deep run needs this many chunks.
 _LARGE_CONFIRM_CHUNKS = 8
-# Rough per-pass wall estimate until calibrated; clearly labeled to the user.
-_SECONDS_PER_CHUNK = 45
+# Per-pass wall estimate (rough). Calibrated from the first aurora run: 13 passes
+# at a 131072 window took ~64 min ≈ 300s/pass on the M5 Max champion.
+_SECONDS_PER_CHUNK = 300
 # Cap on symbols listed per chunk + entities/findings kept after compaction.
 _MAX_CHUNK_SYMBOLS = 60
 _MAX_EVIDENCE_PER_FINDING = 6
+# Generation headroom for deep passes (> the single-pass GITKIT_MAX_TOKENS so the
+# synthesis report + per-chunk JSON have room; prose is suppressed by the hints).
+_DEEP_MAX_TOKENS = 24576
 
 # Rough chars→tokens for cheap per-file sizing without reading every file.
 _CHARS_PER_TOKEN = 4
@@ -148,7 +152,7 @@ class Chunk:
 
 def empty_digest() -> dict:
     return {"modules": [], "entities": [], "cross_cutting": [],
-            "provisional_findings": []}
+            "provisional_findings": [], "unparsed_chunks": []}
 
 
 # --- effective window / footprint -------------------------------------------
@@ -314,26 +318,37 @@ def framing_files(target: str | Path, *, limit: int = 40) -> list[str]:
 # --- chunk-output parsing + digest maintenance ------------------------------
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_DEEP_KEYS = ("findings", "modules", "entities", "cross_cutting")
 
 
 def parse_chunk_notes(text: str) -> dict | None:
-    """Parse a chunk pass's JSON output leniently: a fenced ```json block first,
-    else the first balanced `{...}`. Returns the dict or None on failure."""
+    """Parse a chunk pass's JSON output leniently and robustly. The champion
+    often wraps the JSON in prose (or emits more than one block), so we collect
+    every candidate — all fenced ```json blocks plus the outer `{...}` span — try
+    to parse each, and return the best dict (one carrying a recognized deep key,
+    preferring the one with the most findings). Returns None if nothing parses."""
     if not text:
         return None
-    m = _JSON_FENCE_RE.search(text)
-    candidate = m.group(1) if m else None
-    if candidate is None:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end <= start:
-            return None
-        candidate = text[start:end + 1]
-    try:
-        obj = json.loads(candidate)
-    except (ValueError, TypeError):
-        return None
-    return obj if isinstance(obj, dict) else None
+    candidates: list[str] = [m.group(1) for m in _JSON_FENCE_RE.finditer(text)]
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start:end + 1])
+
+    best: dict | None = None
+    best_score = -1
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if not any(k in obj for k in _DEEP_KEYS):
+            continue
+        score = len(obj.get("findings") or []) * 100 + len(obj)
+        if score > best_score:
+            best, best_score = obj, score
+    return best
 
 
 def _finding_key(f: dict) -> str:
@@ -411,6 +426,7 @@ def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
         "entities": list(digest.get("entities", [])),
         "cross_cutting": list(digest.get("cross_cutting", [])),
         "provisional_findings": [merged[k] for k in order],
+        "unparsed_chunks": list(digest.get("unparsed_chunks", [])),
     }
 
     if ceiling_tokens and estimate_tokens(json.dumps(out)) > ceiling_tokens:
@@ -590,22 +606,29 @@ def run_deep_report(
 
     # Deep passes run at the expanded (capped) window; raise the role copy's
     # num_ctx so the actual request window matches the chunk sizing (loop.py
-    # sends role.num_ctx). A copy — never mutates the shared role / chat.yaml.
+    # sends role.num_ctx), and give a bit more generation headroom than the
+    # single-pass report cap (the synthesis report + JSON notes need room). A
+    # copy — never mutates the shared role / chat.yaml.
     eff_ctx = deep_window(role_cfg)
-    if eff_ctx != getattr(role_cfg, "num_ctx", eff_ctx):
-        role_cfg = role_cfg.model_copy(update={"num_ctx": eff_ctx})
+    role_cfg = role_cfg.model_copy(update={
+        "num_ctx": eff_ctx,
+        "max_tokens_per_turn": max(
+            getattr(role_cfg, "max_tokens_per_turn", 0), _DEEP_MAX_TOKENS),
+    })
     content_budget = max(1, int(eff_ctx * _CONTENT_BUDGET_FRAC))
     ceiling = int(eff_ctx * _DIGEST_CEILING_FRAC)
     head = health.current_head(target)
 
     def _emit(text: str) -> None:
-        console.print(f"[dim]· [deep] {text}[/]")
+        # NB: avoid a literal "[deep]" — Rich would parse it as a markup tag and
+        # strip it. Use a plain "deep ·" prefix instead.
+        console.print(f"[dim]· deep · {text}[/]")
 
     def _pass(goal: str, extra_context: str, label: str):
         if console.is_terminal:
-            with console.status(f"[dim][deep] {label}…[/]", spinner="dots") as st:
+            with console.status(f"[dim]deep · {label}…[/]", spinner="dots") as st:
                 on_e, on_t = _activity_callbacks(
-                    lambda t: st.update(f"[dim][deep] {label} · {t}[/]"), cancel=cancel)
+                    lambda t: st.update(f"[dim]deep · {label} · {t}[/]"), cancel=cancel)
                 return run_single_fn(
                     backend, role_cfg, goal=goal, task_type=task_type,
                     languages=languages, extra_context=extra_context,
@@ -689,6 +712,14 @@ def run_deep_report(
                 update_digest(digest, parsed, c.index)
                 if estimate_tokens(json.dumps(digest)) > ceiling:
                     digest = compact_digest(digest, ceiling_tokens=ceiling, log=_emit)
+            else:
+                # No parseable JSON (empty or truncated-before-JSON output) — never
+                # silently drop a chunk; record it so synthesis can flag the gap.
+                label = f"chunk {c.index + 1} ({c.label}): {', '.join(c.files[:4])}" \
+                    + (" …" if len(c.files) > 4 else "")
+                digest["unparsed_chunks"].append(label)
+                _emit(f"chunk {c.index + 1} produced no parseable findings "
+                      f"(empty/truncated) — flagged as unanalyzed")
             if work_dir is not None:
                 (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
     except (ChatCancelled, KeyboardInterrupt):
