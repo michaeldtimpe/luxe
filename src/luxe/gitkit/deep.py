@@ -61,6 +61,10 @@ _DEEP_TRIGGER_FRAC = 0.55
 _DIGEST_CEILING_FRAC = 0.15
 # Synthesize-in-two-levels when the aggregate notes exceed this fraction.
 _SYNTH_REDUCE_FRAC = 0.80
+# Cap for the expanded deep-pass window (a 35B model at a huge KV is slow/heavy;
+# this bounds the per-pass window even when num_ctx_max is larger). The deep
+# passes run at min(num_ctx_max, this), never below the role's base num_ctx.
+_DEEP_WINDOW_CAP = 131072
 # Ask for confirmation (interactive only) once a deep run needs this many chunks.
 _LARGE_CONFIRM_CHUNKS = 8
 # Rough per-pass wall estimate until calibrated; clearly labeled to the user.
@@ -149,10 +153,19 @@ def empty_digest() -> dict:
 
 # --- effective window / footprint -------------------------------------------
 
-def effective_ctx(role_cfg) -> int:
-    """The window deep mode sizes against: the role's expansion ceiling when set,
-    else its base num_ctx. (Benchmark/maintain never reach here.)"""
-    return getattr(role_cfg, "num_ctx_max", 0) or getattr(role_cfg, "num_ctx", 8192)
+def base_ctx(role_cfg) -> int:
+    """The window a SINGLE pass actually runs at (loop.py sends role.num_ctx). The
+    deep TRIGGER keys on this — does the repo fit one single-pass window?"""
+    return getattr(role_cfg, "num_ctx", 8192)
+
+
+def deep_window(role_cfg) -> int:
+    """The (expanded, capped) window the deep CHUNK passes run at. The role copy's
+    num_ctx is raised to this so the request window matches the chunk sizing;
+    capped so a 35B model's KV stays tractable. Never below the base num_ctx."""
+    base = base_ctx(role_cfg)
+    ceiling = getattr(role_cfg, "num_ctx_max", 0) or base
+    return min(max(base, ceiling), _DEEP_WINDOW_CAP)
 
 
 def estimate_repo_tokens(summary) -> int:
@@ -165,14 +178,15 @@ def estimate_repo_tokens(summary) -> int:
 def should_use_deep(summary, role_cfg, *, override: bool | None = None) -> bool:
     """Decide single-pass vs deep. `override` (from --deep/--no-deep) wins.
     Otherwise: deep when the estimated repo token footprint crosses
-    `_DEEP_TRIGGER_FRAC` of the effective window. File/symbol counts are NOT in
-    the gate — token footprint is the predictive signal."""
+    `_DEEP_TRIGGER_FRAC` of the SINGLE-PASS window (`base_ctx`) — i.e. the repo
+    won't fit one single-pass run. File/symbol counts are NOT in the gate; token
+    footprint is the predictive signal (file count failed at 66 on flying-fair)."""
     if override is not None:
         return override
-    eff = effective_ctx(role_cfg)
-    if eff <= 0:
+    base = base_ctx(role_cfg)
+    if base <= 0:
         return False
-    return estimate_repo_tokens(summary) >= _DEEP_TRIGGER_FRAC * eff
+    return estimate_repo_tokens(summary) >= _DEEP_TRIGGER_FRAC * base
 
 
 # --- file enumeration + chunking --------------------------------------------
@@ -574,7 +588,12 @@ def run_deep_report(
     if run_single_fn is None:
         from luxe.agents.single import run_single as run_single_fn
 
-    eff_ctx = effective_ctx(role_cfg)
+    # Deep passes run at the expanded (capped) window; raise the role copy's
+    # num_ctx so the actual request window matches the chunk sizing (loop.py
+    # sends role.num_ctx). A copy — never mutates the shared role / chat.yaml.
+    eff_ctx = deep_window(role_cfg)
+    if eff_ctx != getattr(role_cfg, "num_ctx", eff_ctx):
+        role_cfg = role_cfg.model_copy(update={"num_ctx": eff_ctx})
     content_budget = max(1, int(eff_ctx * _CONTENT_BUDGET_FRAC))
     ceiling = int(eff_ctx * _DIGEST_CEILING_FRAC)
     head = health.current_head(target)
