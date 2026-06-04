@@ -29,7 +29,8 @@ decoder loop. Structural fixes (tool-level intervention) are out of scope here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, List, Optional
+from pydantic import BaseModel
 
 
 RequirementKind = Literal[
@@ -274,3 +275,17 @@ def format_spec_for_task_prompt(spec: "Spec") -> str:
 # Note: format_unsatisfied_for_reprompt lives in spec_validator.py because
 # it operates on a ValidationResult (defined there). Keeping it co-located
 # with the type avoids forward-reference clutter and circular imports.
+
+
+class TaskPhase(BaseModel):
+    phase_id: int
+    title: str
+    description: str
+    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    validation_command: Optional[str] = None  # e.g., "pytest tests/test_git.py"
+
+
+class ProjectSpecExtension(BaseModel):
+    phases: List[TaskPhase]
+    current_phase_index: int = 0
+

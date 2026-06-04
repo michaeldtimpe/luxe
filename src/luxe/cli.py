@@ -140,12 +140,15 @@ def _should_reprompt_for_under_engagement(task_type: str, additions: int) -> boo
                    "the reprompt gate uses per-requirement spec validation "
                    "instead of the diff-size heuristic. Without this flag, "
                    "the v1.3 reprompt behavior is preserved.")
+@click.option("--rich-compact", is_flag=True,
+              help="Enable rich semantic LLM context compaction")
 def maintain(
     repo: str, goal: str, task_type: str | None,
     config_path: str | None,
     allow_dirty: bool, skip_confirm: bool, watch_ci: bool,
     output_dir: str, save_report: bool, keep_loaded: bool,
     spec_yaml_path: str | None,
+    rich_compact: bool,
 ):
     """Run a luxe maintain pipeline against a repository.
 
@@ -159,6 +162,10 @@ def maintain(
     from luxe import pr as pr_mod
     from luxe.run_state import RunSpec, append_event, init_run_dir, run_dir
     from luxe.tools.fs import set_repo_root
+
+    if rich_compact:
+        import os
+        os.environ["LUXE_RICH_COMPACT"] = "1"
 
     repo_path = _resolve_repo(repo)
     detected_task = task_type or _infer_task_type(goal)
@@ -568,16 +575,22 @@ def maintain(
 @click.option("--dev", "dev_mode", is_flag=True, default=False,
               help="Start in dev mode: write tools + unrestricted shell ON "
                    "(equivalent to /write + /bash). Skips per-session toggling.")
+@click.option("--rich-compact", is_flag=True,
+              help="Enable rich semantic LLM context compaction")
 def chat_cmd(
     repo: str, config_path: str | None, resume_session_id: str | None,
     chat_model: str | None, plan_model: str | None, code_model: str | None,
-    keep_loaded: bool, dev_mode: bool,
+    keep_loaded: bool, dev_mode: bool, rich_compact: bool,
 ):
     """Interactive terminal agent (Claude-CLI-style). Default: champion in
     every slot, read-only tools (toggle with /write)."""
     from luxe.chat import run_chat_repl
     from luxe.locks import LockHeld, acquire_repo_lock
     from luxe.tools.fs import set_repo_root
+
+    if rich_compact:
+        import os
+        os.environ["LUXE_RICH_COMPACT"] = "1"
 
     repo_path = _resolve_repo(repo)
     cfg = load_config(config_path or _default_chat_config())
