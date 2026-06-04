@@ -11,8 +11,55 @@ Plan: ~/.claude/plans/starry-hopping-phoenix.md
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass
+class PinnedContext:
+    goal: str = ""
+    active_phase: str = ""
+    completed_steps: list[str] = field(default_factory=list)
+    known_findings: list[str] = field(default_factory=list)
+    current_blocker: str | None = None
+    next_action: str = ""
+    verified_findings: list[str] = field(default_factory=list)
+
+    def add_finding(self, finding: str) -> None:
+        if finding in self.known_findings:
+            self.known_findings.remove(finding)
+        self.known_findings.append(finding)
+        if len(self.known_findings) > 50:
+            self.known_findings.pop(0)
+
+    def to_markdown(self) -> str:
+        lines = [
+            "### AGENT STATE (Pinned Context)",
+            f"- **Goal**: {self.goal}",
+            f"- **Active Phase**: {self.active_phase}",
+        ]
+        if self.next_action:
+            lines.append(f"- **Next Action**: {self.next_action}")
+        if self.current_blocker:
+            lines.append(f"- **Current Blocker**: {self.current_blocker}")
+        if self.completed_steps:
+            lines.append("- **Completed Steps**:")
+            for step in self.completed_steps:
+                lines.append(f"  - {step}")
+        if self.known_findings:
+            lines.append("- **Known Findings**:")
+            for finding in self.known_findings:
+                lines.append(f"  - {finding}")
+        if self.verified_findings:
+            lines.append("- **Verified Findings**:")
+            for finding in self.verified_findings:
+                lines.append(f"  - {finding}")
+        return "\n".join(lines)
+
+
+def _is_pinned_context(msg: dict[str, Any]) -> bool:
+    return bool(msg.get("_luxe_pinned_context")) or msg.get("name") == "pinned_context"
+
 
 
 def estimate_tokens(text: str) -> int:
@@ -202,6 +249,7 @@ class TieredCompact:
         self,
         messages: list[dict[str, Any]],
         ctx_limit: int,
+        backend: Any = None,
     ) -> CompactionResult:
         """Apply tiered compaction. Returns the (possibly unchanged) messages + telemetry."""
         tokens_before = estimate_messages_tokens(messages)
@@ -226,6 +274,64 @@ class TieredCompact:
             )
 
         eligible_end = self._find_eligible_end(messages, self.keep_recent)
+
+        # Opt-in Rich Semantic Compaction
+        import os
+        if os.environ.get("LUXE_RICH_COMPACT") == "1" and backend is not None:
+            eligible_messages = messages[2:eligible_end]
+            text_to_summarize = []
+            for msg in eligible_messages:
+                if _is_pinned_context(msg) or _is_nudge(msg):
+                    continue
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if isinstance(content, str) and content.strip():
+                    text_to_summarize.append(f"{role.upper()}: {content}")
+                elif isinstance(content, list):
+                    text_to_summarize.append(f"{role.upper()}: {str(content)}")
+
+            if text_to_summarize:
+                summary_prompt = [
+                    {
+                        "role": "system",
+                        "content": "You are a highly efficient assistant. Summarize the following agent conversation history and tool outputs extremely concisely. Focus only on key findings, changes made, and files analyzed. Avoid wordy explanations."
+                    },
+                    {
+                        "role": "user",
+                        "content": "\n".join(text_to_summarize)
+                    }
+                ]
+
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(backend.chat, summary_prompt, max_tokens=300, temperature=0.2)
+                    try:
+                        resp = future.result(timeout=8.0)
+                        summary_text = resp.text
+
+                        # Construct compacted list
+                        compacted_eligible = []
+                        compacted_eligible.append({
+                            "role": "system",
+                            "content": f"[Conversation history prior to this point summarized for context: {summary_text}]",
+                            "_luxe_pinned_context": True
+                        })
+                        for msg in eligible_messages:
+                            if _is_pinned_context(msg) or _is_nudge(msg):
+                                compacted_eligible.append(msg)
+
+                        result = messages[0:2] + compacted_eligible + messages[eligible_end:]
+                        tokens_after = estimate_messages_tokens(result)
+                        return CompactionResult(
+                            messages=result,
+                            phase_reached=3,
+                            tokens_before=tokens_before,
+                            tokens_after=tokens_after,
+                            tool_results_dropped=len(eligible_messages),
+                        )
+                    except concurrent.futures.TimeoutError:
+                        # Timeout breached, fall back to Phase 3
+                        pass
 
         result, dropped = self._phase1(messages, eligible_end)
         tokens_after = estimate_messages_tokens(result)
@@ -269,6 +375,9 @@ class TieredCompact:
         dropped = 0
         for i, msg in enumerate(messages):
             if 2 <= i < eligible_end:
+                if _is_pinned_context(msg):
+                    result.append(msg)
+                    continue
                 if _is_nudge(msg):
                     continue
                 if _is_tool_result(msg):
@@ -295,6 +404,9 @@ class TieredCompact:
         dropped = 0
         for i, msg in enumerate(messages):
             if 2 <= i < eligible_end:
+                if _is_pinned_context(msg):
+                    result.append(msg)
+                    continue
                 if _is_nudge(msg):
                     continue
                 if _is_tool_result(msg):
@@ -313,6 +425,9 @@ class TieredCompact:
         dropped = 0
         for i, msg in enumerate(messages):
             if 2 <= i < eligible_end:
+                if _is_pinned_context(msg):
+                    result.append(msg)
+                    continue
                 if _is_nudge(msg):
                     continue
                 if _is_tool_result(msg):

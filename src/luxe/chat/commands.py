@@ -37,21 +37,7 @@ class CommandContext:
     on_resume: Callable[[str], None] | None = None
 
 
-_HELP = """[bold]luxe chat commands[/]
-  [cyan]/help[/]                      show this help
-  [cyan]/model[/] [slot] [model_id]   show slots, or repoint chat|plan|code
-  [cyan]/use[/] <slot>                pin the next turn to chat|plan|code
-  [cyan]/ctx[/] [small|medium|large|xlarge]   show or set context window size
-  [cyan]/write[/]                     toggle write tools (default: read-only)
-  [cyan]/bash[/]                      toggle unrestricted shell (default: allowlisted)
-  [cyan]/sys[/] [add <rule>|list|clear]  manage session-scoped system constraints
-  [cyan]/memory[/] list|add|promote|forget|edit
-  [cyan]/compare[/] <task>            run two configs side-by-side
-  [cyan]/compare review[/] [id]       replay a stored comparison
-  [cyan]/resume[/] [id]               resume a prior session (or list them)
-  [cyan]/clear[/]                     start a fresh conversation
-  [cyan]/quit[/]                      exit (Ctrl-D also works)
-"""
+# Help helper is now dynamically generated via Table in _help()
 
 
 def is_command(line: str) -> bool:
@@ -86,7 +72,30 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
 
 
 def _help(args, ctx: CommandContext) -> CommandResult:
-    ctx.console.print(_HELP)
+    from rich.table import Table
+    ctx.console.print("[bold]luxe chat commands[/]")
+    table = Table(show_header=False, box=None, padding=(0, 2), show_edge=False)
+    table.add_column("Command", style="cyan", justify="left")
+    table.add_column("Description", justify="right")
+    
+    commands = [
+        ("/help", "show this help"),
+        ("/model [slot] [model_id]", "show slots, or repoint chat|plan|code"),
+        ("/use <slot>", "pin the next turn to chat|plan|code"),
+        ("/ctx [small|medium|large|xlarge]", "show or set context window size"),
+        ("/write", "toggle write tools (default: read-only)"),
+        ("/bash", "toggle unrestricted shell (default: allowlisted)"),
+        ("/sys [add <rule>|list|clear]", "manage session-scoped system constraints"),
+        ("/memory list|add|promote|forget|edit", "list|add|promote|forget|edit"),
+        ("/compare <task>", "run two configs side-by-side"),
+        ("/compare review [id]", "replay a stored comparison"),
+        ("/resume [id]", "resume a prior session (or list them)"),
+        ("/clear", "start a fresh conversation"),
+        ("/quit", "exit (Ctrl-D also works)"),
+    ]
+    for cmd_str, desc in commands:
+        table.add_row(f"  {cmd_str}", desc)
+    ctx.console.print(table)
     return CommandResult(handled=True)
 
 
@@ -316,8 +325,25 @@ def _resume(args, ctx: CommandContext) -> CommandResult:
 
 
 def _clear(args, ctx: CommandContext) -> CommandResult:
+    from luxe.memory import session as session_store
+    from luxe.state import LuxeState, write_state
     ctx.session.turns.clear()
     ctx.session.pinned_slot = None
+    ctx.session.num_ctx_override = None
+
+    # Reset durable luxe state file
+    try:
+        write_state(ctx.session.repo_path, LuxeState())
+    except Exception:
+        pass
+    
+    # Regenerate a fresh session ID on disk so logs don't collide/mix
+    meta = session_store.new_session(
+        repo_path=ctx.session.repo_path,
+        project_hash=ctx.session.project_hash,
+        slot_models=ctx.slots.slot_models(),
+    )
+    ctx.session.session_id = meta.session_id
     ctx.console.print("[dim]· conversation cleared[/]")
     return CommandResult(handled=True)
 

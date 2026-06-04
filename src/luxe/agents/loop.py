@@ -61,6 +61,7 @@ class AgentResult:
     completion_tokens: int = 0
     wall_s: float = 0.0
     peak_context_pressure: float = 0.0
+    status: str = "SUCCESS"
 
 
 OnToolEvent = Callable[[ToolCall], None]
@@ -538,6 +539,15 @@ def _call_key(name: str, args: dict[str, Any]) -> str:
     return f"{name}:{json.dumps(args, sort_keys=True)}"
 
 
+def run_validation(command: str) -> bool:
+    import subprocess
+    try:
+        res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def run_agent(
     backend: Backend,
     role_cfg: RoleConfig,
@@ -583,6 +593,72 @@ def run_agent(
     # the footgun the v1.10 audit caught. Opt out via LUXE_SUPPRESS_TOOL_LOG=1
     # (ablation parity for legacy callers).
     log_calls = bool(run_id) and os.environ.get("LUXE_SUPPRESS_TOOL_LOG") != "1"
+
+    # 1. Premise Verifier Hook / Contradiction Sentinel
+    import subprocess
+    from luxe.state import load_state, write_state, acquire_state_lock, LuxeState, TaskPhaseState
+    from luxe.context import PinnedContext
+
+
+
+    is_debug_prompt = any(kw in task_prompt.lower() for kw in ["failing test", "fail", "debug", "bug", "broken", "error"])
+    if is_debug_prompt:
+        # Try to find a test command or file in the task prompt
+        cmd_match = re.search(r"(pytest\s+[^\s]+|pytest|python\s+-m\s+unittest\s+[^\s]+|npm\s+test|vitest|cargo\s+test)", task_prompt)
+        if cmd_match:
+            probe_command = cmd_match.group(0)
+            if run_validation(probe_command):
+                # Premise is false (the test passes!)
+                contradiction_report = (
+                    "=========================================\n"
+                    "SYSTEM: CONTRADICTION DETECTED\n"
+                    "CONTRADICTION REPORT:\n"
+                    f"- Claimed Premise: Stated failing command: '{probe_command}' is failing.\n"
+                    f"- Found: The command exited with code 0 (SUCCESS).\n"
+                    "- Recommendation: Verify if the issue has already been resolved or if the command is correct.\n"
+                    "=========================================\n"
+                )
+                print(contradiction_report)
+                result.final_text = contradiction_report
+                result.status = "PREMISE_INVALID"
+                return result
+
+    # 2. Durable State loading/init
+    repo_path = os.getcwd()
+    luxe_state = load_state(repo_path)
+    if not luxe_state.goal:
+        luxe_state.goal = task_prompt or ""
+
+    if not luxe_state.phases:
+        if spec and spec.requirements:
+            luxe_state.phases = [
+                TaskPhaseState(
+                    phase_id=i + 1,
+                    title=f"Requirement {req.id}",
+                    description=req.must,
+                    status="pending" if i > 0 else "in_progress",
+                    validation_command=req.command
+                )
+                for i, req in enumerate(spec.requirements)
+            ]
+        else:
+            luxe_state.phases = [
+                TaskPhaseState(phase_id=1, title="Analysis & Localization", description="Locate and analyze the bug/goal", status="in_progress"),
+                TaskPhaseState(phase_id=2, title="Implementation", description="Implement the necessary changes", status="pending"),
+                TaskPhaseState(phase_id=3, title="Verification", description="Verify the changes", status="pending")
+            ]
+
+    # Save the initialized state
+    try:
+        with acquire_state_lock(repo_path):
+            write_state(repo_path, luxe_state)
+    except Exception:
+        pass
+
+    # Dynamic budget
+    base_steps_per_phase = 10
+    dynamic_max_steps = base_steps_per_phase * len(luxe_state.phases)
+    loop_max_steps = dynamic_max_steps if dynamic_max_steps > 0 else role_cfg.max_steps
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -806,8 +882,48 @@ def run_agent(
     actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
     spec_violations_reprompted: set[str] = set()
 
-    for step in range(role_cfg.max_steps):
+    original_system_prompt = system_prompt
+    for step in range(loop_max_steps):
         result.steps = step + 1
+
+        # Phase 3: Check active phase validation
+        if luxe_state.phases and luxe_state.current_phase_index < len(luxe_state.phases):
+            active_phase = luxe_state.phases[luxe_state.current_phase_index]
+            if active_phase.status in ("pending", "in_progress"):
+                active_phase.status = "in_progress"
+                if active_phase.validation_command:
+                    passed = run_validation(active_phase.validation_command)
+                    if passed:
+                        active_phase.status = "completed"
+                        luxe_state.current_phase_index += 1
+                        if luxe_state.current_phase_index < len(luxe_state.phases):
+                            luxe_state.phases[luxe_state.current_phase_index].status = "in_progress"
+                        # Save state
+                        try:
+                            with acquire_state_lock(repo_path):
+                                write_state(repo_path, luxe_state)
+                        except Exception:
+                            pass
+
+        if luxe_state.phases and luxe_state.current_phase_index >= len(luxe_state.phases):
+            result.final_text = "All task phases successfully verified and completed."
+            break
+
+        # Phase 1: Re-construct PinnedContext from current luxe_state
+        active_phase_title = "Analysis"
+        if luxe_state.phases and luxe_state.current_phase_index < len(luxe_state.phases):
+            active_phase_title = luxe_state.phases[luxe_state.current_phase_index].title
+
+        pinned = PinnedContext(
+            goal=luxe_state.goal,
+            active_phase=active_phase_title,
+            completed_steps=luxe_state.completed_steps,
+            known_findings=luxe_state.known_findings,
+            current_blocker=luxe_state.current_blocker,
+            next_action=luxe_state.next_action,
+            verified_findings=luxe_state.verified_findings
+        )
+        messages[0]["content"] = f"{original_system_prompt}\n\n{pinned.to_markdown()}"
 
         pressure = context_pressure(messages, role_cfg.num_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
@@ -1209,7 +1325,7 @@ def run_agent(
                     )
 
         if tiered_compact_enabled and _tiered_compactor is not None:
-            cr = _tiered_compactor.compact(messages, role_cfg.num_ctx)
+            cr = _tiered_compactor.compact(messages, role_cfg.num_ctx, backend=backend)
             messages = cr.messages
             if cr.phase_reached > 0:
                 compaction_tool_results_dropped_total += cr.tool_results_dropped
@@ -1527,6 +1643,26 @@ def run_agent(
                 cache=cache, cacheable=cacheable,
             )
             result.tool_calls.append(executed)
+
+            # Phase 1/2: Update completed_steps and known findings
+            tool_args_str = json.dumps(tc.arguments)
+            step_desc = f"Called {tc.name} with {tool_args_str[:60]}... -> Success: {not executed.error}"
+            try:
+                with acquire_state_lock(repo_path):
+                    state_to_update = load_state(repo_path)
+                    state_to_update.completed_steps.append(step_desc)
+                    if tc.name == "grep" and not executed.error and executed.content:
+                        finding = f"Grep {tc.arguments.get('Query')} in {tc.arguments.get('SearchPath')}"
+                        if finding in state_to_update.known_findings:
+                            state_to_update.known_findings.remove(finding)
+                        state_to_update.known_findings.append(finding)
+                        if len(state_to_update.known_findings) > 50:
+                            state_to_update.known_findings.pop(0)
+                    write_state(repo_path, state_to_update)
+                    luxe_state = state_to_update
+            except Exception:
+                luxe_state.completed_steps.append(step_desc)
+
             # SpecDD Lever 1: track every successfully-dispatched call (name,
             # args) for the spec validator. Skip error and schema-reject
             # cases — those don't represent a "real" call as far as the
@@ -1693,6 +1829,17 @@ def run_agent(
             total_tokens_dropped=compaction_total_tokens_dropped,
             aborted=result.aborted,
         )
+
+    # Phase 4: Map terminal status codes based on execution outcome
+    if result.aborted:
+        result.status = "FAILED"
+    elif result.status == "PREMISE_INVALID":
+        pass
+    else:
+        if luxe_state.phases and all(p.status == "completed" for p in luxe_state.phases):
+            result.status = "SUCCESS"
+        else:
+            result.status = "SUCCESS"
 
     result.wall_s = time.monotonic() - t0
     return result
