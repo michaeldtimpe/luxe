@@ -81,12 +81,19 @@ def test_should_use_deep_override_forces_both_directions():
     assert deep.should_use_deep(small, role, override=True) is True    # --deep
 
 
-def test_should_use_deep_uses_num_ctx_max_when_set():
-    # footprint = 1000 * 10 = 10_000 tokens. Fits inside an expanded 131072 window
-    # (single-pass) but not the base 8192 (deep).
-    s = _FakeSummary(1000)
-    assert deep.should_use_deep(s, _FakeRole(num_ctx=8192, num_ctx_max=131072)) is False
-    assert deep.should_use_deep(s, _FakeRole(num_ctx=8192)) is True
+def test_should_use_deep_gate_keys_on_base_num_ctx_not_max():
+    # The gate asks "does the repo fit ONE single-pass window?" — single-pass runs
+    # at base num_ctx, so num_ctx_max must NOT relax the trigger.
+    s = _FakeSummary(1000)   # 10_000 tokens
+    assert deep.should_use_deep(s, _FakeRole(num_ctx=8192, num_ctx_max=131072)) is True
+    assert deep.should_use_deep(s, _FakeRole(num_ctx=65536)) is False  # fits one pass
+
+
+def test_deep_window_expands_and_caps():
+    # chunk passes run at the expanded, capped window (never below base num_ctx).
+    assert deep.deep_window(_FakeRole(num_ctx=8192, num_ctx_max=0)) == 8192
+    assert deep.deep_window(_FakeRole(num_ctx=32768, num_ctx_max=262144)) == deep._DEEP_WINDOW_CAP
+    assert deep.deep_window(_FakeRole(num_ctx=32768, num_ctx_max=65536)) == 65536
 
 
 # --- chunker (deterministic / budget / ordering / degrade) ------------------
