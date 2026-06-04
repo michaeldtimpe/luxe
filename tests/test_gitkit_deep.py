@@ -189,6 +189,25 @@ def test_empty_digest_has_unparsed_chunks():
     assert deep.empty_digest()["unparsed_chunks"] == []
 
 
+def test_render_report_assembles_clean_report_from_notes():
+    d = deep.empty_digest()
+    d["markdown_notes"] = [
+        {"chunk": 0, "label": "auth", "md": "# Bug & security review\n"
+         "**Findings: 1 (1 critical)**\n\n## Critical — bypass\n`a.py:10` high."},
+        {"chunk": 1, "label": "api", "md": "# Bug & security review\n"
+         "**Findings: 1 (1 high)**\n\n## High — dos\n`b.py:20` medium."},
+    ]
+    d["unparsed_chunks"] = ["chunk 3 (x): c.py"]
+    out = deep._render_report(d, "gitreview")
+    assert out.startswith("# Bug & security review")
+    assert "## Area: auth (chunk 1)" in out and "## Area: api (chunk 2)" in out
+    assert "## Coverage gaps" in out and "c.py" in out
+    assert not deep._looks_rambly(out)          # deterministic = never rambly
+    # the per-note headers were stripped, body kept
+    assert out.count("# Bug & security review") == 1
+    assert "bypass" in out and "dos" in out
+
+
 def test_looks_rambly_detects_reasoning_and_length():
     clean = ("# Bug & security review\n**Findings: 1 (1 high)**\n\n"
              "## High — bypass\n`x.py:1` evidence. Impact. Fix.")
@@ -449,17 +468,17 @@ def test_deep_recovers_markdown_findings_when_no_json(big_repo, _gitkit_cfg, mon
     assert "signature bypass" in seen["synth_ctx"]
 
 
-def test_deep_extract_pass_recovers_findings_from_rambly_analysis(
+def test_deep_format_pass_recovers_findings_from_rambly_analysis(
         big_repo, _gitkit_cfg, monkeypatch):
-    """The champion's real failure: the chunk analysis is headerless rambly prose
-    (truncated before any conclusion). A focused EXTRACT pass must reformat it into
-    the report shape so the findings are recovered, not lost."""
+    """The champion's real failure: a chunk's analysis is rambly headerless prose.
+    _clean_note must run a transcription (format) pass to recover a clean note, so
+    the findings are kept, not lost."""
     import luxe.agents.single as single_mod
     from luxe.gitkit import run_git_report, store
 
     monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
     _stub_backend(monkeypatch)
-    seen = {"extract_ctx": []}
+    seen = {"format_ctx": []}
 
     def fake_run_single(backend, role_cfg, *, run_id="", extra_context="", **kw):
         if "survey" in run_id:
@@ -467,27 +486,28 @@ def test_deep_extract_pass_recovers_findings_from_rambly_analysis(
         if "synthesis" in run_id:
             seen["synth_ctx"] = extra_context
             return _FakeResult("# Bug & security review\n**Findings: 1**\nx")
-        if "extract" in run_id:
-            # the focused reformat pass: gets the analysis, emits the report
-            seen["extract_ctx"].append(extra_context)
+        if "format" in run_id:
+            # the transcription pass: gets the rambly analysis, emits a clean report
+            seen["format_ctx"].append(extra_context)
             return _FakeResult(
                 "# Bug & security review\n**Findings: 1 (1 high)**\n\n"
                 "## High — signature bypass\n`webhook.py:106` returns True when "
                 "key unset.")
-        # chunk analysis: headerless rambly prose, truncated before conclusion
+        # chunk analysis: rambly headerless prose (≥3 reasoning markers → rambly)
         return _FakeResult(
-            "## 1. webhook.py\nLooking at line 106, verify_signature returns True "
-            "when the key is unset — a bypass. Let me check the next file def foo(")
+            "## 1. webhook.py\nLet me look at line 106. Wait, verify_signature "
+            "returns True when the key is unset. Actually, I need to check the "
+            "next file. Let me also re-rate this. Hmm, def foo(")
 
     monkeypatch.setattr(single_mod, "run_single", fake_run_single)
     run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
 
-    # the extract pass received the rambly analysis as input
-    assert seen["extract_ctx"] and "signature" in seen["extract_ctx"][0].lower()
+    # the transcription pass received the rambly analysis as input
+    assert seen["format_ctx"] and "signature" in seen["format_ctx"][0].lower()
     work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
     xref = json.loads((work[0] / "xref.json").read_text())
-    assert len(xref["markdown_notes"]) >= 2          # recovered via extract
+    assert len(xref["markdown_notes"]) >= 2          # recovered via format pass
     assert xref["unparsed_chunks"] == []             # nothing lost
     assert "signature bypass" in seen["synth_ctx"]   # reached synthesis
 
@@ -594,8 +614,8 @@ def test_deep_synthesis_receives_aggregated_digest(big_repo, _gitkit_cfg, monkey
     assert "rc" in seen["synth_ctx"]      # aggregated finding reached synthesis
 
 
-def test_deep_unparsed_chunk_is_flagged_not_dropped(big_repo, _gitkit_cfg, monkeypatch):
-    """A chunk that emits prose-only (no JSON — truncated/empty) must surface in
+def test_deep_empty_chunk_is_flagged_not_dropped(big_repo, _gitkit_cfg, monkeypatch):
+    """A chunk that emits nothing usable (empty output) must surface in
     unparsed_chunks and reach synthesis, never be silently dropped."""
     import luxe.agents.single as single_mod
     from luxe.gitkit import run_git_report, store
@@ -611,8 +631,7 @@ def test_deep_unparsed_chunk_is_flagged_not_dropped(big_repo, _gitkit_cfg, monke
         if stage == "synthesis":
             seen["synth_ctx"] = extra_context
             return _FakeResult("# Bug & security review\n**Findings: 0**\nx")
-        # every chunk returns prose with NO json block (the truncation failure mode)
-        return _FakeResult("CRITICAL BUG: signature bypass... def foo(bar")
+        return _FakeResult("")   # empty chunk output → nothing to recover
 
     monkeypatch.setattr(single_mod, "run_single", fake_run_single)
     run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
