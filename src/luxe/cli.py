@@ -798,11 +798,16 @@ def compare_review_cmd(compare_id):
 
 
 def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
-                    keep_loaded: bool, save: bool, verbose: bool = False) -> None:
+                    keep_loaded: bool, save: bool, verbose: bool = False,
+                    deep: bool | None = None, max_chunks: int | None = None,
+                    rebuild_map: bool = False) -> None:
     """Shared body for the gitsummary/gitreview/gitrefactor CLI commands. The
     runner owns target resolution (incl. cloning a URL when the path is not a
     git repo), index building, and repo_root; here we only clone an explicit URL
-    arg up front, load the config, and unload models afterward."""
+    arg up front, load the config, and unload models afterward.
+
+    `deep` (None=auto by footprint, True/False force), `max_chunks`, and
+    `rebuild_map` pass straight through to the runner's deep-mode dispatch."""
     from luxe.gitkit import run_git_report
 
     # An explicit URL arg clones immediately (no prompt). A local path is passed
@@ -815,7 +820,8 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
 
     try:
         run_git_report(kind, cfg=cfg, repo_path=repo_path,
-                       console=console, save=save, verbose=verbose)
+                       console=console, save=save, verbose=verbose,
+                       deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
     finally:
         if not keep_loaded:
             from luxe.backend import Backend
@@ -825,40 +831,50 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                 pass
 
 
+def _gitkit_options(f):
+    """Shared options for the three gitkit commands (incl. deep-mode flags)."""
+    f = click.argument("repo", required=False, default=".")(f)
+    f = click.option("--config", "config_path", default=None,
+                     help="Config YAML (default: chat.yaml)")(f)
+    f = click.option("--keep-loaded", is_flag=True, default=False)(f)
+    f = click.option("--no-save", is_flag=True, default=False,
+                     help="Print only; don't save the report")(f)
+    f = click.option("--verbose", "-v", is_flag=True, default=False,
+                     help="Print the full report on screen (default: preview + saved path)")(f)
+    f = click.option("--deep/--no-deep", "deep", default=None,
+                     help="Force staged deep mode on/off (default: auto by repo size)")(f)
+    f = click.option("--max-chunks", "max_chunks", type=int, default=None,
+                     help="Deep mode: cap chunks analyzed (default: unlimited)")(f)
+    f = click.option("--rebuild-map", is_flag=True, default=False,
+                     help="Deep mode: ignore the cached per-repo map and re-survey")(f)
+    return f
+
+
 @main.command(name="gitsummary")
-@click.argument("repo", required=False, default=".")
-@click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
-@click.option("--keep-loaded", is_flag=True, default=False)
-@click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
-@click.option("--verbose", "-v", is_flag=True, default=False,
-              help="Print the full report on screen (default: a preview + saved path)")
-def gitsummary_cmd(repo, config_path, keep_loaded, no_save, verbose):
+@_gitkit_options
+def gitsummary_cmd(repo, config_path, keep_loaded, no_save, verbose,
+                   deep, max_chunks, rebuild_map):
     """Summarize a repo: purpose, deps, health, and a use-risk verdict."""
-    _run_gitkit_cmd("gitsummary", repo, config_path, keep_loaded, not no_save, verbose)
+    _run_gitkit_cmd("gitsummary", repo, config_path, keep_loaded, not no_save,
+                    verbose, deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
 
 
 @main.command(name="gitreview")
-@click.argument("repo", required=False, default=".")
-@click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
-@click.option("--keep-loaded", is_flag=True, default=False)
-@click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
-@click.option("--verbose", "-v", is_flag=True, default=False,
-              help="Print the full report on screen (default: a preview + saved path)")
-def gitreview_cmd(repo, config_path, keep_loaded, no_save, verbose):
+@_gitkit_options
+def gitreview_cmd(repo, config_path, keep_loaded, no_save, verbose,
+                  deep, max_chunks, rebuild_map):
     """Review a repo for serious bugs and security concerns (read-only)."""
-    _run_gitkit_cmd("gitreview", repo, config_path, keep_loaded, not no_save, verbose)
+    _run_gitkit_cmd("gitreview", repo, config_path, keep_loaded, not no_save,
+                    verbose, deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
 
 
 @main.command(name="gitrefactor")
-@click.argument("repo", required=False, default=".")
-@click.option("--config", "config_path", default=None, help="Config YAML (default: chat.yaml)")
-@click.option("--keep-loaded", is_flag=True, default=False)
-@click.option("--no-save", is_flag=True, default=False, help="Print only; don't save the report")
-@click.option("--verbose", "-v", is_flag=True, default=False,
-              help="Print the full report on screen (default: a preview + saved path)")
-def gitrefactor_cmd(repo, config_path, keep_loaded, no_save, verbose):
+@_gitkit_options
+def gitrefactor_cmd(repo, config_path, keep_loaded, no_save, verbose,
+                    deep, max_chunks, rebuild_map):
     """Propose an ordered structural refactor plan for a repo (read-only)."""
-    _run_gitkit_cmd("gitrefactor", repo, config_path, keep_loaded, not no_save, verbose)
+    _run_gitkit_cmd("gitrefactor", repo, config_path, keep_loaded, not no_save,
+                    verbose, deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
 
 
 apply_aliases(main, {

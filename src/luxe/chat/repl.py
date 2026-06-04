@@ -1039,7 +1039,7 @@ def _make_git_analysis_hook(console, cfg, session: ChatSession, cancel=None):
     report. Targets the SESSION repo, reusing its resident indices (warns if
     HEAD moved); if the session dir isn't a git repo, the runner prompts to
     clone a URL into a local copy and analyzes that, restoring session state."""
-    def _git(kind: str) -> None:
+    def _git(kind: str, deep: bool | None = None) -> None:
         try:
             from luxe.gitkit import run_git_report
         except Exception:
@@ -1048,7 +1048,7 @@ def _make_git_analysis_hook(console, cfg, session: ChatSession, cancel=None):
         run_git_report(
             kind, cfg=cfg, repo_path=session.repo_path,
             console=console, save=True, expected_head=session.index_head,
-            verbose=(session.verbose_level == "full"), cancel=cancel,
+            verbose=(session.verbose_level == "full"), cancel=cancel, deep=deep,
         )
 
     return _git
