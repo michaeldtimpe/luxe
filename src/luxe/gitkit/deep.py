@@ -77,8 +77,11 @@ _SECONDS_PER_CHUNK = 300
 # Cap on symbols listed per chunk + entities/findings kept after compaction.
 _MAX_CHUNK_SYMBOLS = 60
 _MAX_EVIDENCE_PER_FINDING = 6
-# Generation headroom for deep passes (> the single-pass GITKIT_MAX_TOKENS so the
-# synthesis report + per-chunk JSON have room; prose is suppressed by the hints).
+# Generation headroom. The champion writes its whole analysis as prose in the
+# final message, so a chunk pass fills whatever cap it is given; _CHUNK_MAX_TOKENS
+# bounds that ramble (the extract pass recovers findings from it). _DEEP_MAX_TOKENS
+# gives the synthesis report room beyond the single-pass GITKIT_MAX_TOKENS.
+_CHUNK_MAX_TOKENS = 16384
 _DEEP_MAX_TOKENS = 24576
 
 # Rough chars→tokens for cheap per-file sizing without reading every file.
@@ -632,19 +635,19 @@ def run_deep_report(
     if run_single_fn is None:
         from luxe.agents.single import run_single as run_single_fn
 
-    # Two windows, deliberately different (a copy — never mutates the shared role):
+    # Three windows/caps, deliberately different (copies — never mutate the
+    # shared role):
     #  - CHUNK passes run at the BASE window (deep_window) so chunks are small
-    #    enough that the model concludes instead of rambling past the token cap.
+    #    enough to cover all their files before the model truncates its analysis.
     #  - The SYNTHESIS pass runs at the EXPANDED window (num_ctx_max) since it is a
-    #    single pass that must hold ALL the aggregated notes at once.
-    # Both get extra generation headroom over the single-pass report cap.
-    _hdrm = max(getattr(role_cfg, "max_tokens_per_turn", 0), _DEEP_MAX_TOKENS)
+    #    single pass that must hold ALL the aggregated notes at once, with extra
+    #    generation headroom for the consolidated report.
     eff_ctx = deep_window(role_cfg)
     synth_ctx_win = getattr(role_cfg, "num_ctx_max", 0) or eff_ctx
     chunk_role = role_cfg.model_copy(
-        update={"num_ctx": eff_ctx, "max_tokens_per_turn": _hdrm})
+        update={"num_ctx": eff_ctx, "max_tokens_per_turn": _CHUNK_MAX_TOKENS})
     synth_role = role_cfg.model_copy(
-        update={"num_ctx": synth_ctx_win, "max_tokens_per_turn": _hdrm})
+        update={"num_ctx": synth_ctx_win, "max_tokens_per_turn": _DEEP_MAX_TOKENS})
     content_budget = max(1, int(eff_ctx * _CONTENT_BUDGET_FRAC))
     ceiling = int(eff_ctx * _DIGEST_CEILING_FRAC)
     head = health.current_head(target)
@@ -740,23 +743,32 @@ def run_deep_report(
             if work_dir is not None:
                 (work_dir / f"chunk-{c.index + 1:02d}.md").write_text(
                     text or "(no output)")
+            note_md = None
             if parsed:
                 update_digest(digest, parsed, c.index)
                 if estimate_tokens(json.dumps(digest)) > ceiling:
                     digest = compact_digest(digest, ceiling_tokens=ceiling, log=_emit)
             elif _has_report_header(text, kind):
-                # The champion often rambles instead of emitting JSON, but still
-                # concludes with the required markdown report header — recover that
-                # by slicing the conclusion (drops the monologue). Better a real
-                # markdown finding than a lost chunk.
-                digest["markdown_notes"].append({
-                    "chunk": c.index, "label": c.label,
-                    "md": extract_report(text, kind)})
-                _emit(f"chunk {c.index + 1}: recovered markdown findings "
-                      f"(no JSON emitted)")
-            else:
-                # Empty or truncated-before-any-conclusion — never silently drop a
-                # chunk; record it so synthesis can flag the coverage gap.
+                # Rare: the model concluded with the required header itself — slice
+                # off any leading monologue and keep the conclusion.
+                note_md = extract_report(text, kind)
+                _emit(f"chunk {c.index + 1}: used self-reported findings")
+            elif text:
+                # The common champion case: the final message is a long file-by-file
+                # analysis that runs out of tokens before any structured conclusion.
+                # The findings ARE in that prose — recover them with a focused
+                # EXTRACT pass that only REFORMATS the analysis into the report
+                # shape (no tools, no re-analysis). This is the load-bearing fix:
+                # the model will not lead with its conclusion, so we transform it.
+                _emit(f"chunk {c.index + 1}: extracting findings from analysis…")
+                note_md = _extract_chunk_report(
+                    text, kind, pass_fn=_pass, role=chunk_role)
+            if note_md and _has_report_header(note_md, kind):
+                digest["markdown_notes"].append(
+                    {"chunk": c.index, "label": c.label, "md": note_md})
+            elif not parsed:
+                # Empty output or the extract pass also failed — never silently drop
+                # a chunk; record it so synthesis can flag the coverage gap.
                 label = f"chunk {c.index + 1} ({c.label}): {', '.join(c.files[:4])}" \
                     + (" …" if len(c.files) > 4 else "")
                 digest["unparsed_chunks"].append(label)
@@ -817,6 +829,27 @@ def run_deep_report(
         if work_dir is not None:
             console.print(f"[dim]· survey/chunk notes: {work_dir}[/]")
     return report, saved
+
+
+def _extract_chunk_report(analysis: str, kind: str, *, pass_fn, role) -> str | None:
+    """Reformat a chunk's rambly analysis prose into the report shape via a focused
+    pass that does NOT use tools or re-analyze — it just consolidates the findings
+    the analysis already contains. Returns the sliced report (from the required
+    header) or None if even this pass produced no header. This is how the deep
+    engine copes with a champion that won't lead with its conclusion."""
+    from luxe.gitkit.runner import extract_report
+    ctx = ("<chunk_findings>\nRaw analysis of part of the repository (your own "
+           "earlier notes — may be truncated). Consolidate the CONFIRMED, serious "
+           "findings it contains; ignore inconclusive musing:\n"
+           f"{analysis}\n</chunk_findings>")
+    goal = ("Format the confirmed findings from the analysis below into the report "
+            "shape. Do NOT use tools and do NOT re-read the repository — only "
+            "consolidate what the analysis already establishes.\n\n"
+            + _SYNTH_HINTS[kind])
+    res = pass_fn(goal, ctx, "extract", role=role)
+    text = (getattr(res, "final_text", "") or "").strip()
+    sliced = extract_report(text, kind)
+    return sliced if _has_report_header(sliced, kind) else None
 
 
 def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None) -> dict:

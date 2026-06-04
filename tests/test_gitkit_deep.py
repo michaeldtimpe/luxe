@@ -437,6 +437,49 @@ def test_deep_recovers_markdown_findings_when_no_json(big_repo, _gitkit_cfg, mon
     assert "signature bypass" in seen["synth_ctx"]
 
 
+def test_deep_extract_pass_recovers_findings_from_rambly_analysis(
+        big_repo, _gitkit_cfg, monkeypatch):
+    """The champion's real failure: the chunk analysis is headerless rambly prose
+    (truncated before any conclusion). A focused EXTRACT pass must reformat it into
+    the report shape so the findings are recovered, not lost."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    seen = {"extract_ctx": []}
+
+    def fake_run_single(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        if "survey" in run_id:
+            return _FakeResult("survey notes")
+        if "synthesis" in run_id:
+            seen["synth_ctx"] = extra_context
+            return _FakeResult("# Bug & security review\n**Findings: 1**\nx")
+        if "extract" in run_id:
+            # the focused reformat pass: gets the analysis, emits the report
+            seen["extract_ctx"].append(extra_context)
+            return _FakeResult(
+                "# Bug & security review\n**Findings: 1 (1 high)**\n\n"
+                "## High — signature bypass\n`webhook.py:106` returns True when "
+                "key unset.")
+        # chunk analysis: headerless rambly prose, truncated before conclusion
+        return _FakeResult(
+            "## 1. webhook.py\nLooking at line 106, verify_signature returns True "
+            "when the key is unset — a bypass. Let me check the next file def foo(")
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+
+    # the extract pass received the rambly analysis as input
+    assert seen["extract_ctx"] and "signature" in seen["extract_ctx"][0].lower()
+    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
+    xref = json.loads((work[0] / "xref.json").read_text())
+    assert len(xref["markdown_notes"]) >= 2          # recovered via extract
+    assert xref["unparsed_chunks"] == []             # nothing lost
+    assert "signature bypass" in seen["synth_ctx"]   # reached synthesis
+
+
 def test_deep_max_chunks_caps_and_logs(big_repo, _gitkit_cfg, monkeypatch):
     import luxe.agents.single as single_mod
     from luxe.gitkit import run_git_report
