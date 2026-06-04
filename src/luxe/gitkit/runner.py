@@ -324,10 +324,12 @@ def run_git_report(
         # Full report is always saved; on screen show a preview unless verbose.
         saved: Path | None = None
         if save:
+            _wall = round(result.wall_s, 3)
             saved = store.save_report(
                 target, kind, report,
                 meta={"model": model, "head": health.current_head(target),
-                      "repo": target},
+                      "repo": target, "total_wall_s": _wall,
+                      "avg_pass_s": _wall, "n_passes": 1},
             )
 
         console.print()

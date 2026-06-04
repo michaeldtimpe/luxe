@@ -48,6 +48,13 @@ def save_report(repo_path: str | Path, kind: str, text: str,
         "model": meta.get("model", ""),
         "head": meta.get("head", ""),
     }
+    # Optional pass-through keys (deep-mode marker + timing telemetry). Allowlisted
+    # rather than splatting `meta` so the frontmatter schema stays explicit and
+    # callers can't accidentally pollute it. `mode`/`chunks` were passed by deep
+    # mode but silently dropped before this; they now land in the header too.
+    for k in ("mode", "chunks", "total_wall_s", "n_passes", "avg_pass_s"):
+        if k in meta:
+            header[k] = meta[k]
     front = "\n".join(f"{k}: {v}" for k, v in header.items())
     path.write_text(f"---\n{front}\n---\n\n{text.rstrip()}\n")
     return path

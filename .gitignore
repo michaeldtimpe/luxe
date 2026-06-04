@@ -65,3 +65,6 @@ benchmarks/small_models_*.json
 # benchmarks/<bench>/subsets/v*_*.json are tracked, raw dataset dumps
 # are not.
 benchmarks/swebench/subsets/raw/
+
+# gitreview sweep output (telemetry CSVs + per-repo logs) — generated, local-only
+scripts/out/

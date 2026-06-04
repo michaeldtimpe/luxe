@@ -133,6 +133,33 @@ def test_save_report_writes_frontmatter_and_path(tmp_path: Path):
     assert "reports" in str(path)
 
 
+def test_save_report_passes_through_timing_keys(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    path = store.save_report(
+        repo, "gitreview", "# Report\n\nbody",
+        meta={"model": "Champ", "head": "abc123", "mode": "deep", "chunks": 7,
+              "total_wall_s": 1.5, "n_passes": 9, "avg_pass_s": 0.167})
+    text = path.read_text()
+    # Allowlisted timing/mode keys land in the frontmatter…
+    assert "mode: deep" in text
+    assert "chunks: 7" in text
+    assert "total_wall_s: 1.5" in text
+    assert "n_passes: 9" in text
+    assert "avg_pass_s: 0.167" in text
+
+
+def test_save_report_omits_absent_optional_keys(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    path = store.save_report(repo, "gitreview", "# Report",
+                             meta={"model": "Champ", "head": "abc123"})
+    text = path.read_text()
+    # …but a single-pass run with no timing meta keeps the old 5-key header.
+    for absent in ("mode:", "chunks:", "total_wall_s:", "n_passes:", "avg_pass_s:"):
+        assert absent not in text
+
+
 def test_save_report_two_calls_do_not_clash(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -428,6 +428,51 @@ def test_deep_map_cache_reused_on_second_run(big_repo, _gitkit_cfg, monkeypatch)
     assert len([c for c in calls if "survey" in c]) == 1
 
 
+# --- per-pass timing telemetry (B1-B4) --------------------------------------
+
+def test_deep_writes_timing_sidecar(big_repo, _gitkit_cfg, monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)  # force ≥2 chunks
+    _stub_backend(monkeypatch)
+    monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
+
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+
+    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))[0]
+    blob = json.loads((work / "timing.json").read_text())
+    # survey + ≥2 chunks + synthesis
+    assert blob["n_passes"] >= 4
+    assert blob["total_wall_s"] > 0
+    labels = {p["label"] for p in blob["passes"]}
+    assert "survey" in labels and "synthesis" in labels
+    every = blob["passes"]
+    assert all("window" in p and "started_at" in p for p in every)
+    # chunk passes carry their footprint (call-site enrichment)
+    chunk_rows = [p for p in every if p["label"].startswith("chunk-")]
+    assert chunk_rows and any(p["n_files"] > 0 and p["loc"] > 0 for p in chunk_rows)
+
+
+def test_deep_frontmatter_carries_timing(big_repo, _gitkit_cfg, monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
+
+    _, saved = run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                              console=_QuietConsole(), save=True, deep=True)
+    text = saved.read_text()
+    assert "mode: deep" in text
+    assert "chunks:" in text
+    assert "total_wall_s:" in text
+    assert "n_passes:" in text
+    assert "avg_pass_s:" in text
+
+
 def test_deep_recovers_markdown_findings_when_no_json(big_repo, _gitkit_cfg, monkeypatch):
     """The champion often rambles then concludes with the required markdown header
     instead of emitting JSON — those findings must be recovered (sliced), not
@@ -641,3 +686,157 @@ def test_deep_empty_chunk_is_flagged_not_dropped(big_repo, _gitkit_cfg, monkeypa
     work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
     xref = json.loads((work[0] / "xref.json").read_text())
     assert len(xref["unparsed_chunks"]) >= 2
+
+
+# --- map breadcrumb + health classification (A1-A4) -------------------------
+
+def _seed_map(target: Path, *, head="abc123") -> Path:
+    """Write a complete, FRESH map for `target` and return its map/ dir."""
+    chunks = [deep.Chunk(index=0, files=["a.py"], label="a", est_tokens=10, loc=5)]
+    deep.save_map(target, head=head, survey_notes="notes", chunks=chunks,
+                  content_budget=4096, framing=[], summary_render="map")
+    return deep._map_dir(target)
+
+
+def test_save_map_writes_breadcrumb(tmp_path):
+    target = tmp_path / "repo"
+    d = _seed_map(target, head="deadbeef")
+    bc = json.loads((d / "mapped.json").read_text())
+    assert bc["version"] == 1
+    assert bc["head"] == "deadbeef"
+    assert bc["n_chunks"] == 1
+    assert bc["content_budget"] == 4096
+    assert isinstance(bc["mapped_at"], int) and bc["mapped_at"] > 0
+
+
+def test_map_status_fresh_after_save(tmp_path):
+    target = tmp_path / "repo"
+    _seed_map(target, head="h1")
+    assert deep.map_status(target, head="h1").state is deep.MapState.FRESH
+
+
+def test_map_status_missing_when_no_breadcrumb(tmp_path):
+    target = tmp_path / "repo"
+    assert deep.map_status(target, head="h1").state is deep.MapState.MISSING
+
+
+def test_map_status_stale_on_head_move(tmp_path):
+    target = tmp_path / "repo"
+    _seed_map(target, head="old")
+    st = deep.map_status(target, head="new")
+    assert st.state is deep.MapState.STALE
+    assert st.head == "old"
+
+
+def test_map_status_partial_when_survey_notes_deleted(tmp_path):
+    target = tmp_path / "repo"
+    d = _seed_map(target, head="h1")
+    (d / "survey_notes.md").unlink()
+    st = deep.map_status(target, head="h1")
+    assert st.state is deep.MapState.PARTIAL
+    assert "survey_notes.md" in st.missing
+    # breadcrumb metadata is still surfaced for the warning
+    assert st.head == "h1" and st.n_chunks == 1
+
+
+def test_map_status_partial_when_chunks_json_corrupt(tmp_path):
+    target = tmp_path / "repo"
+    d = _seed_map(target, head="h1")
+    (d / "chunks.json").write_text("{ this is not valid json")
+    st = deep.map_status(target, head="h1")
+    assert st.state is deep.MapState.PARTIAL
+    assert any("chunks.json" in m for m in st.missing)
+
+
+def test_map_status_partial_when_breadcrumb_corrupt(tmp_path):
+    target = tmp_path / "repo"
+    d = _seed_map(target, head="h1")
+    (d / "mapped.json").write_text("not json at all")
+    st = deep.map_status(target, head="h1")
+    # a corrupt breadcrumb is evidence a map existed → PARTIAL, not MISSING
+    assert st.state is deep.MapState.PARTIAL
+
+
+def test_load_map_returns_none_when_partial(tmp_path):
+    target = tmp_path / "repo"
+    d = _seed_map(target, head="h1")
+    (d / "survey_notes.md").unlink()
+    assert deep.load_map(target, head="h1") is None  # contract preserved
+
+
+def test_load_map_returns_dict_when_fresh(tmp_path):
+    target = tmp_path / "repo"
+    _seed_map(target, head="h1")
+    m = deep.load_map(target, head="h1")
+    assert m is not None and m["survey_notes"].strip() == "notes"
+    assert [c.files for c in m["chunks"]] == [["a.py"]]
+
+
+# --- partial-map handling through the orchestrator (A5) ----------------------
+
+def _InteractiveConsole():
+    return Console(file=io.StringIO(), force_terminal=True, width=120)
+
+
+def test_deep_partial_map_batch_rebuilds_and_logs(big_repo, _gitkit_cfg, monkeypatch):
+    """Non-interactive (no TTY): a damaged map must be announced + rebuilt, never
+    silently treated as 'never mapped'."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
+
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert len([c for c in calls if "survey" in c]) == 1
+    # damage the map (delete a heavy file), then re-run on the SAME head
+    (store.reports_dir(big_repo) / "map" / "survey_notes.md").unlink()
+    calls.clear()
+    out = io.StringIO()
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=Console(file=out, force_terminal=False, width=120),
+                   save=True, deep=True)
+    assert len([c for c in calls if "survey" in c]) == 1     # rebuilt, not reused
+    assert "partial" in out.getvalue().lower()               # announced
+
+
+def test_deep_partial_map_interactive_cancel(big_repo, _gitkit_cfg, monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
+
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    (store.reports_dir(big_repo) / "map" / "survey_notes.md").unlink()
+    calls.clear()
+    report, saved = run_git_report(
+        "gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+        console=_InteractiveConsole(), reader=lambda _p: "n", save=True, deep=True)
+    assert (report, saved) == ("", None)                     # cancelled
+    assert not [c for c in calls if "survey" in c]            # no re-survey
+
+
+def test_deep_partial_map_interactive_rebuild(big_repo, _gitkit_cfg, monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
+
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    (store.reports_dir(big_repo) / "map" / "survey_notes.md").unlink()
+    calls.clear()
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_InteractiveConsole(), reader=lambda _p: "y",
+                   save=True, deep=True)
+    assert len([c for c in calls if "survey" in c]) == 1      # rebuilt on Y
