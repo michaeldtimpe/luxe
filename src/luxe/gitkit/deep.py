@@ -36,6 +36,7 @@ import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from pathlib import Path
 
 from luxe.agents import prompts
@@ -160,6 +161,37 @@ class Chunk:
 def empty_digest() -> dict:
     return {"modules": [], "entities": [], "cross_cutting": [],
             "provisional_findings": [], "markdown_notes": [], "unparsed_chunks": []}
+
+
+# --- map cache health -------------------------------------------------------
+
+class MapState(str, Enum):
+    """Health of a per-repo cached map. The whole point of the breadcrumb is to
+    separate the two questions the old `load_map` conflated:
+    *was this repo ever mapped?* vs *is the map currently usable?*"""
+    FRESH = "FRESH"       # full valid cache, HEAD matches → reuse silently
+    MISSING = "MISSING"   # never mapped (no breadcrumb) → re-survey, no warning
+    STALE = "STALE"       # breadcrumb present, HEAD moved → re-survey
+    PARTIAL = "PARTIAL"   # breadcrumb present + HEAD matches, but heavy files
+                          # missing/corrupt → "damaged", surface it (don't silently
+                          # equate with "never mapped")
+
+
+@dataclass
+class MapStatus:
+    state: MapState
+    head: str = ""              # breadcrumb's recorded HEAD (for STALE/PARTIAL)
+    n_chunks: int = 0
+    content_budget: int = 0
+    mapped_at: int = 0          # int(time.time()) from the breadcrumb
+    missing: list[str] = field(default_factory=list)   # heavy files gone/corrupt
+
+
+class CacheDecision(Enum):
+    """Outcome of the partial-map prompt — an explicit sentinel (readable months
+    later, unlike a naked object())."""
+    REBUILD = "REBUILD"
+    CANCEL = "CANCEL"
 
 
 # --- effective window / footprint -------------------------------------------
@@ -491,6 +523,30 @@ def estimate_run(n_chunks: int) -> DeepEstimate:
     )
 
 
+@dataclass
+class PassTiming:
+    """One per-pass wall-clock record. Captured at the `_pass` choke point so every
+    stage (survey / chunk-N / synthesis / format / reduce-N) is measured uniformly.
+    This is the raw calibration dataset behind a future window/size-aware estimator
+    that would replace the flat `_SECONDS_PER_CHUNK` constant. `started_at` (epoch
+    seconds) preserves the timeline so later analysis can spot overnight pauses /
+    machine sleep / model reloads. Chunk-only fields are enriched at the call site."""
+    label: str
+    kind: str
+    wall_s: float
+    completion_tokens: int
+    steps: int
+    tool_calls_total: int
+    window: int
+    started_at: int = 0
+    est_tokens: int = 0     # chunk passes only
+    loc: int = 0            # chunk passes only
+    n_files: int = 0        # chunk passes only
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 # --- map cache (per-repo, HEAD-keyed) ---------------------------------------
 
 def _map_dir(target: str | Path):
@@ -498,27 +554,84 @@ def _map_dir(target: str | Path):
     return store.reports_dir(target) / "map"
 
 
+def _age_str(mapped_at: int) -> str:
+    """Human age of a breadcrumb timestamp ('3h', '2d', '5m', 'just now')."""
+    if not mapped_at:
+        return "unknown time"
+    secs = max(0, int(time.time()) - int(mapped_at))
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= n:
+            return f"{secs // n}{unit}"
+    return "just now"
+
+
+def map_status(target: str | Path, *, head: str) -> MapStatus:
+    """Classify the cached map's health (FRESH / MISSING / STALE / PARTIAL).
+
+    Keyed on the durable `mapped.json` breadcrumb so a missing/corrupt HEAVY file
+    (survey_notes.md / chunks.json) is recognized as a DAMAGED map rather than
+    silently treated as "never mapped" (which would re-survey with no warning).
+    Pre-breadcrumb caches (no `mapped.json`) classify as MISSING → a harmless
+    re-survey on the first run after upgrade."""
+    d = _map_dir(target)
+    bc = d / "mapped.json"
+    if not bc.is_file():
+        return MapStatus(MapState.MISSING)
+    try:
+        meta = json.loads(bc.read_text())
+    except (ValueError, OSError):
+        # A corrupt breadcrumb is still EVIDENCE a map existed → "damaged".
+        return MapStatus(MapState.PARTIAL, missing=["mapped.json (corrupt)"])
+
+    b_head = str(meta.get("head", "") or "")
+    n_chunks = int(meta.get("n_chunks", 0) or 0)
+    budget = int(meta.get("content_budget", 0) or 0)
+    mapped_at = int(meta.get("mapped_at", 0) or 0)
+    common = dict(head=b_head, n_chunks=n_chunks,
+                  content_budget=budget, mapped_at=mapped_at)
+
+    if head and b_head != head:
+        return MapStatus(MapState.STALE, **common)
+
+    missing: list[str] = []
+    head_f, chunks_f, notes_f = d / "head", d / "chunks.json", d / "survey_notes.md"
+    if not notes_f.is_file() or not notes_f.read_text().strip():
+        missing.append("survey_notes.md")
+    if not chunks_f.is_file():
+        missing.append("chunks.json")
+    else:
+        try:
+            json.loads(chunks_f.read_text())
+        except (ValueError, OSError):
+            missing.append("chunks.json (corrupt)")
+    if not head_f.is_file():
+        missing.append("head")
+    elif head and head_f.read_text().strip() != head:
+        missing.append("head (content mismatch)")
+
+    if missing:
+        return MapStatus(MapState.PARTIAL, missing=missing, **common)
+    return MapStatus(MapState.FRESH, **common)
+
+
 def load_map(target: str | Path, *, head: str, rebuild: bool = False) -> dict | None:
-    """Return the cached survey+chunks for `target` if present and still valid
-    (HEAD matches, not forced to rebuild); else None."""
-    if rebuild:
+    """Return the cached survey+chunks for `target` iff the map is FRESH (delegates
+    to `map_status` — single source of truth for "valid cache"); else None. The
+    return shape (survey_notes / chunks / content_budget / framing) is unchanged."""
+    if rebuild or map_status(target, head=head).state is not MapState.FRESH:
         return None
     d = _map_dir(target)
-    head_f, chunks_f, notes_f = d / "head", d / "chunks.json", d / "survey_notes.md"
-    if not (head_f.is_file() and chunks_f.is_file() and notes_f.is_file()):
-        return None
-    if head and head_f.read_text().strip() != head:
-        return None
-    try:
+    chunks_f, notes_f = d / "chunks.json", d / "survey_notes.md"
+    try:  # defensive: absorb a TOCTOU delete between the status check and the read
         chunks_blob = json.loads(chunks_f.read_text())
+        return {
+            "survey_notes": notes_f.read_text(),
+            "chunks": [Chunk.from_dict(c) for c in chunks_blob.get("chunks", [])],
+            "content_budget": int(chunks_blob.get("content_budget", 0)),
+            "framing": chunks_blob.get("framing", []),
+        }
     except (ValueError, OSError):
         return None
-    return {
-        "survey_notes": notes_f.read_text(),
-        "chunks": [Chunk.from_dict(c) for c in chunks_blob.get("chunks", [])],
-        "content_budget": int(chunks_blob.get("content_budget", 0)),
-        "framing": chunks_blob.get("framing", []),
-    }
 
 
 def save_map(target: str | Path, *, head: str, survey_notes: str,
@@ -534,6 +647,12 @@ def save_map(target: str | Path, *, head: str, survey_notes: str,
     (d / "chunks.json").write_text(json.dumps(
         {"content_budget": content_budget, "framing": framing,
          "chunks": [c.to_dict() for c in chunks]}, indent=2))
+    # Durable breadcrumb (tiny — survives deletion of the heavy files). `version`
+    # is forward infra for the future differential-review schema.
+    (d / "mapped.json").write_text(json.dumps(
+        {"version": 1, "head": head or "", "n_chunks": len(chunks),
+         "content_budget": content_budget, "mapped_at": int(time.time())},
+        indent=2))
     return d
 
 
@@ -651,6 +770,8 @@ def run_deep_report(
     content_budget = max(1, int(eff_ctx * _CONTENT_BUDGET_FRAC))
     ceiling = int(eff_ctx * _DIGEST_CEILING_FRAC)
     head = health.current_head(target)
+    # Per-pass wall-clock telemetry, accumulated across every `_pass` call (B1/B2).
+    timings: list[PassTiming] = []
 
     def _emit(text: str) -> None:
         # NB: avoid a literal "[deep]" — Rich would parse it as a markup tag and
@@ -659,24 +780,57 @@ def run_deep_report(
 
     def _pass(goal: str, extra_context: str, label: str, role=None):
         role = role or chunk_role
+        start = int(time.time())
         if console.is_terminal:
             with console.status(f"[dim]deep · {label}…[/]", spinner="dots") as st:
                 on_e, on_t = _activity_callbacks(
                     lambda t: st.update(f"[dim]deep · {label} · {t}[/]"), cancel=cancel)
-                return run_single_fn(
+                res = run_single_fn(
                     backend, role, goal=goal, task_type=task_type,
                     languages=languages, extra_context=extra_context,
                     on_tool_event=on_e, on_token=on_t,
                     phase="chat", run_id=f"gitkit-deep-{kind}-{label}")
-        on_e, on_t = _activity_callbacks(lambda t: None, cancel=cancel)
-        return run_single_fn(
-            backend, role, goal=goal, task_type=task_type,
-            languages=languages, extra_context=extra_context,
-            on_tool_event=on_e, on_token=on_t,
-            phase="chat", run_id=f"gitkit-deep-{kind}-{label}")
+        else:
+            on_e, on_t = _activity_callbacks(lambda t: None, cancel=cancel)
+            res = run_single_fn(
+                backend, role, goal=goal, task_type=task_type,
+                languages=languages, extra_context=extra_context,
+                on_tool_event=on_e, on_token=on_t,
+                phase="chat", run_id=f"gitkit-deep-{kind}-{label}")
+        # Read only public result fields (getattr-guarded — stubs + backends that
+        # populate steps/tool_calls_total differently both stay safe).
+        timings.append(PassTiming(
+            label=label, kind=kind,
+            wall_s=round(float(getattr(res, "wall_s", 0.0) or 0.0), 3),
+            completion_tokens=int(getattr(res, "completion_tokens", 0) or 0),
+            steps=int(getattr(res, "steps", 0) or 0),
+            tool_calls_total=int(getattr(res, "tool_calls_total", 0) or 0),
+            window=int(getattr(role, "num_ctx", 0) or 0),
+            started_at=start))
+        return res
+
+    def _handle_partial_map(status: MapStatus) -> CacheDecision:
+        """A damaged map (heavy file missing/corrupt) is ANNOUNCED, never silently
+        equated with 'never mapped'. Interactive → ask rebuild/cancel; batch (no
+        TTY) → log loudly and rebuild (never block)."""
+        miss = ", ".join(status.missing) or "?"
+        prior = (f"HEAD {status.head[:8] or '?'}, {status.n_chunks} chunks, "
+                 f"mapped {_age_str(status.mapped_at)} ago")
+        if console.is_terminal:
+            _emit(f"map partial — prior map ({prior}); missing/corrupt: {miss}")
+            ans = reader("  map partial — [Y] rebuild, [n] cancel: ").strip().lower()
+            return CacheDecision.CANCEL if ans in ("n", "no") else CacheDecision.REBUILD
+        _emit(f"map partial ({miss}) — rebuilding (re-surveying)")
+        return CacheDecision.REBUILD
 
     # --- Stages 0+1: survey + chunk plan (cached per repo, HEAD-keyed) -------
-    cached = load_map(target, head=head, rebuild=rebuild_map)
+    status = map_status(target, head=head)
+    cached = None if rebuild_map else load_map(target, head=head)
+    if not rebuild_map and status.state is MapState.PARTIAL:
+        if _handle_partial_map(status) is CacheDecision.CANCEL:
+            console.print("[yellow]· cancelled.[/]")
+            return "", None
+        # else fall through to re-survey (cached stays None)
     if cached:
         _emit(f"reusing cached repo map (HEAD {head or '?'})")
         survey_notes = cached["survey_notes"]
@@ -738,6 +892,13 @@ def run_deep_report(
             goal = (f"Analyze chunk {c.index + 1} of {len(chunks)} of this "
                     f"repository.\n\n{chunk_hint}")
             res = _pass(goal, extra, f"chunk-{c.index + 1}")
+            # Enrich the just-recorded chunk timing with its footprint — defensively
+            # (a mid-pass throw would have raised before appending, so guard the
+            # index + label match rather than blindly indexing timings[-1]).
+            if timings and timings[-1].label == f"chunk-{c.index + 1}":
+                timings[-1].est_tokens = c.est_tokens
+                timings[-1].loc = c.loc
+                timings[-1].n_files = len(c.files)
             text = (getattr(res, "final_text", "") or "").strip()
             parsed = parse_chunk_notes(text)
             if work_dir is not None:
@@ -827,12 +988,27 @@ def run_deep_report(
             report = _render_report(digest, kind)
     report = report or _render_report(digest, kind) or "(no report produced)"
 
+    # --- timing telemetry: raw per-pass records + cheap aggregates (B3/B4) ----
+    total_wall_s = round(sum(t.wall_s for t in timings), 3)
+    n_passes = len(timings)
+    avg_pass_s = round(total_wall_s / n_passes, 3) if n_passes else 0.0
+    if work_dir is not None:
+        # The `passes` list is the raw, append-only record (ages best); the
+        # aggregates are convenience derivations of it.
+        (work_dir / "timing.json").write_text(json.dumps({
+            "kind": kind, "head": head, "n_passes": n_passes,
+            "total_wall_s": total_wall_s, "avg_pass_s": avg_pass_s,
+            "passes": [t.to_dict() for t in timings],
+        }, indent=2))
+
     saved: Path | None = None
     if save:
         saved = store.save_report(
             target, kind, report,
             meta={"model": backend.model, "head": head, "repo": target,
-                  "mode": "deep", "chunks": len(chunks)})
+                  "mode": "deep", "chunks": len(chunks),
+                  "total_wall_s": total_wall_s, "n_passes": n_passes,
+                  "avg_pass_s": avg_pass_s})
 
     console.print()
     if verbose:
