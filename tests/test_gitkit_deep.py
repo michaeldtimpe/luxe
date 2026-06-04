@@ -189,6 +189,18 @@ def test_empty_digest_has_unparsed_chunks():
     assert deep.empty_digest()["unparsed_chunks"] == []
 
 
+def test_looks_rambly_detects_reasoning_and_length():
+    clean = ("# Bug & security review\n**Findings: 1 (1 high)**\n\n"
+             "## High — bypass\n`x.py:1` evidence. Impact. Fix.")
+    rambly = ("# Bug & security review\n**Findings: 1**\n...\n"
+              "Let me re-rate this. Wait, I need to consolidate. "
+              "Actually, I should check the next finding.")
+    assert deep._looks_rambly(clean) is False
+    assert deep._looks_rambly(rambly) is True
+    assert deep._looks_rambly("# Bug & security review\n" + "\n".join(
+        f"line {i}" for i in range(250))) is True   # too long
+
+
 # --- digest merge / compaction ---------------------------------------------
 
 def _digest_with(findings):
@@ -478,6 +490,43 @@ def test_deep_extract_pass_recovers_findings_from_rambly_analysis(
     assert len(xref["markdown_notes"]) >= 2          # recovered via extract
     assert xref["unparsed_chunks"] == []             # nothing lost
     assert "signature bypass" in seen["synth_ctx"]   # reached synthesis
+
+
+def test_deep_format_pass_cleans_rambly_synthesis(big_repo, _gitkit_cfg, monkeypatch):
+    """When the synthesis narrates its reasoning into the report, a strict format
+    pass reproduces a clean report (the saved report must be the clean one)."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    clean = ("# Bug & security review\n**Findings: 1 (1 critical)**\n\n"
+             "## Critical — signature bypass\n`webhook.py:106` returns True.")
+
+    def fake_run_single(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        if "survey" in run_id:
+            return _FakeResult("survey notes")
+        if "format" in run_id:
+            seen_draft.append(extra_context)
+            return _FakeResult(clean)
+        if "synthesis" in run_id:
+            # rambly synthesis: header then a wall of reasoning
+            return _FakeResult(
+                "# Bug & security review\n**Findings: 1**\n...\n"
+                "Let me re-rate. Wait, I need to consolidate these. Actually, I "
+                "should ignore the chain-of-thought. " + "\n".join(
+                    f"reasoning line {i}" for i in range(250)))
+        return _FakeResult('```json\n{"findings": [{"title": "b", '
+                           '"severity": "Critical"}]}\n```')
+
+    seen_draft: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    report, saved = run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                                   console=_QuietConsole(), save=True, deep=True)
+    assert seen_draft                                    # format pass ran
+    assert report.startswith("# Bug & security review")
+    assert "re-rate" not in report and "reasoning line" not in report
+    assert "signature bypass" in report                 # clean findings kept
 
 
 def test_deep_max_chunks_caps_and_logs(big_repo, _gitkit_cfg, monkeypatch):

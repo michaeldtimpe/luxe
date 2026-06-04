@@ -571,6 +571,20 @@ GIT_REFACTOR_SYNTH_HINT = (
 )
 
 
+# Stage 3 cleanup — the champion narrates its consolidation reasoning into the
+# report. This pass is pure TRANSCRIPTION (the lowest-judgment task, so the least
+# rambly): reproduce the already-decided report cleanly, copying findings verbatim.
+GIT_DEEP_FORMAT_HINT = (
+    "Below is a consolidated report draft mixed with the author's working notes "
+    "and reasoning. Reproduce it as a CLEAN final report and nothing else. COPY "
+    "the concrete findings/sections verbatim (keep every severity, file:line, "
+    "evidence, impact, and fix exactly as written); DROP all working notes, "
+    "narration, 'let me…', 're-rating', 'consolidation', and any text that is not "
+    "part of the finished report. Do NOT use tools, do NOT re-analyze, do NOT add "
+    "new findings or commentary. Output ONLY the report, beginning at its required "
+    "header."
+)
+
 # Stage 3 fallback — when the aggregate notes overflow one window, findings are
 # consolidated in batches FIRST (this hint), then the survivors go to the normal
 # synthesis. Emits the same JSON findings shape, not the final report.
