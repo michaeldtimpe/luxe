@@ -1,5 +1,40 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-06-03) — gitkit + chat Textual TUI SHIPPED; gitreview large-repo failure diagnosed → deep-mode plan APPROVED (code not yet written)
+
+**TL;DR for a cold start.** Two front-end features shipped since the chat overhaul,
+plus a planned next step:
+
+1. **gitkit SHIPPED** — read-only repo-analysis commands `gitsummary` /
+   `gitreview` / `gitrefactor` (aliases `gsum`/`grev`/`gref`). One read-only
+   `run_single` pass per report → saved to `~/.luxe/reports/<repo_hash>/`. Package
+   `src/luxe/gitkit/` (`runner.py`, `store.py`, `health.py`, `gitkit.sdd`);
+   prompts are `GIT_*_HINT` in `agents/prompts.py`. CLI targets any repo (clones a
+   URL if needed); REPL/`/gitreview` analyzes only `session.repo_path`. **PR #9**
+   is the gitkit branch.
+2. **chat Textual TUI SHIPPED** on `feat/chat-tui` (commit `3ffa742` + preds) —
+   full-screen Textual app is now the **default** chat UI; the line REPL is the
+   **fallback** (non-TTY / textual-absent). Live ctx%/tokens, `/ctx` freshness,
+   cancel-all + type-ahead, scrollback, status-mode chip, `/model` picker.
+   `feat/chat-tui` is stacked/unpushed.
+3. **NEXT: gitkit deep mode (plan approved, code NOT written).** Single-pass
+   gitkit can't scale — `aurora` (466 files) / `flying-fair` (66) hit a repetition
+   loop, blew the 16K report budget, truncated, and never emitted the required
+   `# <title>` + `**Findings: N**` (packaging failure, not detection). Approved
+   fix: front-end-orchestrated **map-reduce** (survey → chunk → per-chunk
+   structured notes + cross-ref digest → synthesis over NOTES not raw files).
+   Footprint-triggered (not file count); unbounded-but-confirm-on-large with a
+   calibrated estimate; **persistent per-repo `map/` cache** (survey/chunk once,
+   reuse across kinds/HEAD). New `src/luxe/gitkit/deep.py`; fix
+   `runner.extract_report` to key on the required title. Handoff doc:
+   `~/Downloads/gitkit-deep-mode-plan.md`; plan
+   `~/.claude/plans/enumerated-squishing-hopcroft.md`.
+
+**Gotcha:** `uv sync` can prune transitive `mpmath` that BFCL's `test_miss_func_49`
+needs — reinstall if it goes red. `uv.lock` is untracked.
+
+---
+
 ## ⇒ SESSION HANDOFF (2026-06-01) — CLI robustness & task-type auto-detection improvements SHIPPED (gated preflight checks, expanded programming verbs); commit local
 
 **TL;DR for a cold start.** Fixed CLI instability on read-only tasks and improved task-type auto-detection:
