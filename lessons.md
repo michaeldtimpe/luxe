@@ -30,6 +30,62 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-06-03] gitkit single-pass can't scale to large repos — packaging, not detection, is the failure
+
+**What happened**: Dogfooding `gitreview`/`gitsummary`/`gitrefactor` on real repos
+broke at scale. `flying-fair` (66 files) and `aurora` (466 files) produced
+1388/1802-line outputs that entered a **repetition loop**, blew the 16K-token
+report budget (`GITKIT_MAX_TOKENS`), **truncated mid-sentence**, and never emitted
+the required `# <title>` + `**Findings: N**` structure. Notably the model *did*
+surface real, grounded issues during the run (e.g. aurora's Harbor-webhook
+non-constant-time HMAC compare) — it just couldn't package them.
+
+**Root cause**: gitkit does exactly ONE `run_single` pass over the whole repo
+(`gitkit.sdd` single-pass Must; `runner.run_git_report`). A single free-form pass
+has no mechanism to (a) fit a large repo into one context window, (b) progressively
+accumulate and *compress* understanding, or (c) terminate cleanly — so it
+oscillates into repetition and runs out of budget mid-report. The defect is
+**packaging / context-management at scale, not detection**. A second non-obvious
+trap: file count alone is **not** a predictor of failure — flying-fair failed at
+just 66 files, so the real signal is estimated *token footprint*, not file count.
+
+**Fix / takeaway**: Approved a front-end-orchestrated **map-reduce "deep mode"**
+(plan only this session; code in a fresh one): survey → plan/chunk → per-chunk
+*structured* notes (+ a structured cross-reference digest) → holistic synthesis
+that consumes the **aggregated notes, NOT raw files** (that single decision is what
+prevents re-entering the repetition loop, because structured notes fit one window).
+This is front-end orchestration of mono `run_single` passes (the `compare`
+precedent), NOT the retired in-agent swarm/phased modes — the path-based `Forbids`
+in `luxe.sdd` don't apply, and no tool-side code counts `run_single` calls. General
+principle: **when an LLM "fails" on a big input, separate detection from packaging
+before adding model capability — the model often already found the answer; the
+architecture gave it nowhere to put it.** Compactness of intermediate
+representations is a first-class design goal: verbose chunk notes would just
+recreate the overflow one level up at the reduce stage.
+
+**Affected files**: Plan/handoff only — `~/Downloads/gitkit-deep-mode-plan.md`,
+`~/.claude/plans/enumerated-squishing-hopcroft.md`. Future code: new
+`src/luxe/gitkit/deep.py`, `runner.py` (`extract_report` fix to key on the required
+title), `agents/prompts.py`, `cli.py`, `chat/`, `gitkit.sdd` rewrite.
+
+### [2026-06-03] `uv sync` prunes transitive mpmath that a BFCL tool-class test needs
+
+**What happened**: After a `uv sync`, BFCL's `test_miss_func_49` went red because
+the transitive dependency `mpmath` (pulled in by a tool-class the BFCL fixture
+exercises) had been pruned from the environment.
+
+**Root cause**: `uv.lock` is **untracked** in this repo, so `uv sync` resolves
+against `pyproject.toml` and can drop transitive deps that no direct requirement
+pins — `mpmath` is one of them. The test depends on it being importable.
+
+**Fix / takeaway**: Reinstall `mpmath` if `test_miss_func_49` (or the BFCL
+tool-class suite) fails after an environment change. Until `uv.lock` is tracked or
+`mpmath` is pinned as a direct dep, treat transitive-dependency drift as expected
+after `uv sync`.
+
+**Affected files**: Environment only (`pyproject.toml` / untracked `uv.lock`); no
+source change.
+
 ### [2026-05-27] llmtop missed BFCL despite matching the process — model detector required a `/` in `--model`
 
 **What happened**: Kicked off the 6bit baseline (BFCL full / maintain_suite / swebench smoke3) in the background as PID 71035 (bash wrapper → PID 71038 `python -m benchmarks.bfcl.run --model Qwen3.6-35B-A3B-6bit …`). `llmtop` showed Python in the matching-processes pane but **no entry under Active Models**, so a glance at the dashboard read like "nothing's running."

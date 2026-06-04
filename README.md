@@ -149,6 +149,11 @@ tool surface stays byte-identical.
 
 ### Interactive chat tiers
 
+> **Front-end:** `luxe chat` is a full-screen **Textual TUI** by default (live
+> ctx%/tokens, scrollback, `/model` picker, cancel-all + type-ahead). The older
+> line-based REPL is the automatic **fallback** for non-TTY environments or when
+> Textual isn't installed; the commands and behavior below apply to both.
+
 `luxe chat` is the same champion (`Qwen3.6-35B-A3B-6bit`) wrapped in the
 agentic loop. How much luxe *harness* sits on top of the model is a spectrum
 controlled by the `LUXE_*` substrate flags (`src/luxe/agents/loop.py`) and the
