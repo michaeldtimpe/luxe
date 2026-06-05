@@ -410,6 +410,20 @@ GIT_SUMMARY_HINT = (
     "- **Use-risk verdict** — restate the rating with a short rationale."
 )
 
+# Folded into the review/refactor reports (gitsummary is no longer a deep kind):
+# a compact orientation section the audit/plan reports gain for free from the
+# survey + health data they already gather.
+_SUMMARY_SECTION = (
+    "\n\nImmediately AFTER the title + count line (and BEFORE the findings/steps), "
+    "include a brief `## Repository summary & risk` section — at most ~6 lines, "
+    "grounded in the files you read and the injected <repo_health>/<github_metadata>: "
+    "a one-line **Use-risk: low|medium|high** verdict with a ≤15-word reason, then "
+    "**Purpose**, **Stack & languages** (reflect the <repo_health> LOC/language mix), "
+    "**Dependencies & risk** (flag known-vulnerable deps), and **Health & size** "
+    "(activity/recency/contributors, citing <repo_health>/<github_metadata>; note when "
+    "GitHub data was unavailable). Keep it tight — orientation, not the main body."
+)
+
 GIT_REVIEW_HINT = (
     "Perform a read-only bug & security REVIEW of this codebase and report only "
     "SERIOUS, code-grounded findings. " + _GITKIT_REPORT_DISCIPLINE + "\n\n"
@@ -424,6 +438,18 @@ GIT_REVIEW_HINT = (
     "Low), file path, line number, the offending code as evidence, the impact, and "
     "a suggested fix. If nothing serious qualifies, the summary line is "
     "**Findings: 0** followed by one short paragraph naming what you checked."
+    + _SUMMARY_SECTION
+)
+
+# Appended to both refactor hints. When a `<prior_findings>` block (the findings
+# of a same-commit gitreview) is injected, the refactor must not undo those fixes
+# nor re-litigate the bugs — it uses them to PRIORITIZE structural work.
+_PRIOR_FINDINGS_CLAUSE = (
+    "\n\nIf a `<prior_findings>` block is present, it lists bugs/security issues a "
+    "prior review already found in THIS commit. Treat them as known: do NOT re-report "
+    "them as refactor steps, and ensure NO step would undo or obscure one of those "
+    "fixes. You MAY reference them (by file:line) to justify prioritizing a refactor "
+    "that makes the risky area safer or easier to fix."
 )
 
 GIT_REFACTOR_HINT = (
@@ -438,6 +464,8 @@ GIT_REFACTOR_HINT = (
     "blocks a refactor step. For each step give: what to change (cite files/"
     "symbols), the rationale, the risk level, and how to verify it is safe (tests "
     "to run / behavior to preserve)."
+    + _SUMMARY_SECTION
+    + _PRIOR_FINDINGS_CLAUSE
 )
 
 
@@ -489,18 +517,6 @@ GIT_REVIEW_CHUNK_HINT = (
     "**Findings: 0** followed by one short sentence naming what you checked."
 )
 
-GIT_SUMMARY_CHUNK_HINT = (
-    "Summarize ONLY the files listed below: what each module does and how it fits "
-    "the architecture. " + _GITKIT_REPORT_DISCIPLINE
-    + "\n\nBegin the report with EXACTLY this shape:\n"
-    "  # Repository summary & risk assessment\n"
-    "  **Use-risk: low|medium|high** — <≤15-word reason for THESE files>\n\n"
-    "Then a tight bulleted description of each module/area here (purpose, key "
-    "entities, external calls, any security-relevant handling), citing file "
-    "paths. Do not hunt for bugs. Keep it compact — this feeds a whole-repo "
-    "synthesis."
-)
-
 GIT_REFACTOR_CHUNK_HINT = (
     "Identify ONLY STRUCTURAL issues in the files listed below — coupling, "
     "cohesion, module boundaries, duplication, dead code, testability, ownership. "
@@ -546,17 +562,7 @@ GIT_REVIEW_SYNTH_HINT = (
     "evidence, the impact, and a suggested fix. If nothing serious survives "
     "consolidation, the line is **Findings: 0** followed by one short paragraph "
     "naming what was checked."
-)
-
-GIT_SUMMARY_SYNTH_HINT = (
-    _DEEP_SYNTH_COMMON + "\n"
-    "Begin the report with EXACTLY this shape:\n"
-    "  # Repository summary & risk assessment\n"
-    "  **Use-risk: low|medium|high** — <≤15-word reason>\n\n"
-    "Then these sections, grounded in the notes (cite paths): **Purpose**, "
-    "**Stack & languages**, **Dependencies & their risk**, **Health & size** "
-    "(cite <repo_health>/<github_metadata>), **Security posture**, and a final "
-    "**Use-risk verdict** restating the rating with a short rationale."
+    + _SUMMARY_SECTION
 )
 
 GIT_REFACTOR_SYNTH_HINT = (
@@ -568,6 +574,8 @@ GIT_REFACTOR_SYNTH_HINT = (
     "change (cite files/symbols), the rationale, the risk level, and how to "
     "verify it is safe (tests to run / behavior to preserve). Focus STRICTLY on "
     "structure."
+    + _SUMMARY_SECTION
+    + _PRIOR_FINDINGS_CLAUSE
 )
 
 

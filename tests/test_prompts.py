@@ -640,6 +640,27 @@ def test_git_summary_hint_shape_and_verdict():
     assert "**use-risk:" in s
 
 
+def test_summary_section_folded_into_review_and_refactor():
+    """The repository summary is folded into review/refactor (single + deep) so
+    gitsummary needn't be its own deep kind."""
+    from luxe.agents import prompts
+    for hint in (prompts.GIT_REVIEW_HINT, prompts.GIT_REFACTOR_HINT,
+                 prompts.GIT_REVIEW_SYNTH_HINT, prompts.GIT_REFACTOR_SYNTH_HINT):
+        assert "## Repository summary & risk" in hint
+        assert "Use-risk" in hint
+    # the duplicated DEEP gitsummary stack is gone
+    assert not hasattr(prompts, "GIT_SUMMARY_CHUNK_HINT")
+    assert not hasattr(prompts, "GIT_SUMMARY_SYNTH_HINT")
+
+
+def test_prior_findings_clause_only_on_refactor():
+    from luxe.agents import prompts
+    for hint in (prompts.GIT_REFACTOR_HINT, prompts.GIT_REFACTOR_SYNTH_HINT):
+        assert "<prior_findings>" in hint
+    # review must NOT carry the refactor-only clause
+    assert "<prior_findings>" not in prompts.GIT_REVIEW_HINT
+
+
 def test_git_review_hint_demands_grounded_findings():
     from luxe.agents.prompts import GIT_REVIEW_HINT
     s = GIT_REVIEW_HINT.lower()

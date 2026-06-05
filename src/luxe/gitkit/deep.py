@@ -48,7 +48,7 @@ from luxe.repo_index import (
     build_repo_summary,
 )
 
-# --- tuning constants (calibrate `_SECONDS_PER_CHUNK` from real runs) --------
+# --- tuning constants (per-stage wall fit from the 46-repo sweep) ------------
 
 # Fraction of the effective context window reserved for file *content* the agent
 # reads per chunk (leaves headroom for the prompt + injected map/digest + the
@@ -72,9 +72,15 @@ _SYNTH_REDUCE_FRAC = 0.80
 _DEEP_WINDOW_BASE_MULT = 1
 # Ask for confirmation (interactive only) once a deep run needs this many chunks.
 _LARGE_CONFIRM_CHUNKS = 8
-# Per-pass wall estimate (rough). Calibrated from the first aurora run: 13 passes
-# at a 131072 window took ~64 min ≈ 300s/pass on the M5 Max champion.
-_SECONDS_PER_CHUNK = 300
+# Per-STAGE wall estimates (seconds), fit from the 46-repo sweep, 2026-06
+# (n=292 chunk / 30 survey / 30 synthesis passes on the M5 Max champion). The old
+# flat `_SECONDS_PER_CHUNK = 300 × (n+2)` over-estimated EVERY deep repo by ~48%.
+# Crucially chunk wall does NOT scale with LOC (correlation r=0.07) — a chunk pass
+# is a roughly fixed ~210s + amortized ~0.6 format-recovery pass/chunk (~25s) ≈ 235s.
+# Survey ~70s, synthesis ~70s. This per-stage model lands within ~9% of actuals.
+_SURVEY_S = 70
+_CHUNK_S = 235
+_SYNTH_S = 70
 # Cap on symbols listed per chunk + entities/findings kept after compaction.
 _MAX_CHUNK_SYMBOLS = 60
 _MAX_EVIDENCE_PER_FINDING = 6
@@ -513,9 +519,17 @@ class DeepEstimate:
                 f"~{self.minutes} min (rough)")
 
 
-def estimate_run(n_chunks: int) -> DeepEstimate:
-    passes = n_chunks + 2  # survey + synthesis
-    secs = passes * _SECONDS_PER_CHUNK
+def estimate_run(n_chunks: int, *, survey_cached: bool = False) -> DeepEstimate:
+    """Wall estimate from the per-stage constants. `survey_cached=True` (a FRESH map
+    is reused → the survey pass is skipped) drops the survey term. Guards
+    `n_chunks <= 0` against a deceptive survey+synth-only floor when there is no
+    work to do."""
+    n_chunks = max(0, n_chunks)
+    passes = n_chunks + (1 if not survey_cached else 0) + 1  # survey? + chunks + synth
+    if n_chunks == 0:
+        secs = _SYNTH_S  # nothing to chunk → a single light pass, no false floor
+    else:
+        secs = (0 if survey_cached else _SURVEY_S) + n_chunks * _CHUNK_S + _SYNTH_S
     return DeepEstimate(
         chunks=n_chunks, passes=passes, seconds=secs,
         minutes=max(1, round(secs / 60)),
@@ -702,15 +716,20 @@ def _notes_block(digest: dict) -> str:
     return "".join(parts)
 
 
+def _prior_findings_block(prior: str) -> str:
+    """Pure-data block carrying a prior same-commit gitreview's findings (the
+    directive lives in GIT_REFACTOR_*_HINT)."""
+    return f"<prior_findings>\n{prior.strip()}\n</prior_findings>"
+
+
 # --- per-kind directive maps (strings stay in agents/prompts.py) ------------
 
+# gitsummary is single-pass-only (no deep map-reduce) — only review/refactor chunk.
 _CHUNK_HINTS = {
-    "gitsummary": prompts.GIT_SUMMARY_CHUNK_HINT,
     "gitreview": prompts.GIT_REVIEW_CHUNK_HINT,
     "gitrefactor": prompts.GIT_REFACTOR_CHUNK_HINT,
 }
 _SYNTH_HINTS = {
-    "gitsummary": prompts.GIT_SUMMARY_SYNTH_HINT,
     "gitreview": prompts.GIT_REVIEW_SYNTH_HINT,
     "gitrefactor": prompts.GIT_REFACTOR_SYNTH_HINT,
 }
@@ -736,6 +755,8 @@ def run_deep_report(
     cancel=None,
     max_chunks: int | None = None,
     rebuild_map: bool = False,
+    prior_report: str = "",
+    mirror: bool = True,
     run_single_fn=None,
 ) -> tuple[str, Path | None]:
     """Run the staged deep analysis. Returns (report_text, saved_path | None);
@@ -865,7 +886,9 @@ def run_deep_report(
               f"{len(chunks) + len(dropped)} chunks; SKIPPING {len(dropped)} "
               f"(areas: {', '.join(dropped_dirs)})")
 
-    est = estimate_run(len(chunks))
+    # The survey pass has already completed by here (reused from the map cache OR
+    # freshly run above), so the estimate covers the REMAINING chunk + synth work.
+    est = estimate_run(len(chunks), survey_cached=True)
     _emit(f"plan: {est.line()}")
 
     # Confirmation gate — large repos only, interactive only.
@@ -961,6 +984,8 @@ def run_deep_report(
 
     synth_ctx = (f"{health_block}\n\n<survey_notes>\n{survey_notes}\n</survey_notes>"
                  f"\n\n{_notes_block(digest)}")
+    if prior_report:
+        synth_ctx += f"\n\n{_prior_findings_block(prior_report)}"
     synth_goal = ("Write the final consolidated report for the repository in the "
                   "current working directory.\n\n" + _SYNTH_HINTS[kind])
     try:
@@ -1009,6 +1034,8 @@ def run_deep_report(
                   "mode": "deep", "chunks": len(chunks),
                   "total_wall_s": total_wall_s, "n_passes": n_passes,
                   "avg_pass_s": avg_pass_s})
+        if mirror and store.mirror_to_repo(target, kind, report, head):
+            _emit("mirrored map + report to <repo>/.luxe/gitkit/")
 
     console.print()
     if verbose:
@@ -1087,9 +1114,7 @@ def _render_report(digest: dict, kind: str) -> str:
     if kind == "gitreview":
         n = len(pf) + sum(len(_heuristic_findings(s)) for s in sections)
         header = f"# {title}\n**Findings: {n} (consolidated across chunks)**"
-    elif kind == "gitsummary":
-        header = f"# {title}\n**Use-risk: see per-area assessments below**"
-    else:
+    else:  # gitrefactor (gitsummary is single-pass-only — never reaches deep render)
         header = f"# {title}\n**Refactor steps: see per-area plans below**"
 
     out = [header, *sections]

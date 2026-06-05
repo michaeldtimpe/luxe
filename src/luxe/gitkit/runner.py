@@ -183,6 +183,7 @@ def run_git_report(
     deep: bool | None = None,
     max_chunks: int | None = None,
     rebuild_map: bool = False,
+    mirror: bool = True,
 ) -> tuple[str, Path | None]:
     """Run a read-only analysis over a repo and report the result.
 
@@ -279,18 +280,38 @@ def run_git_report(
         sym_index = symbols_mod._index
         summary = build_repo_summary(
             target, symbol_coverage=getattr(sym_index, "coverage", None))
-        if deep_mod.should_use_deep(summary, role_cfg, override=deep):
+        # gitrefactor consumes a prior same-commit gitreview's FINDINGS (not the
+        # whole report — extract_findings keeps the payload small) so refactor steps
+        # don't undo security fixes. Consume-if-present; empty when no review exists.
+        prior_findings = ""
+        if kind == "gitrefactor":
+            prior_md = store.latest_report_for(
+                target, "gitreview", health.current_head(target))
+            prior_findings = store.extract_findings(prior_md or "")
+            if prior_findings:
+                console.print("[dim]· using prior gitreview findings to inform the "
+                              "refactor plan[/]")
+
+        # gitsummary is single-pass-only: a framing-file overview never needs the
+        # file-by-file deep map-reduce. review/refactor still auto-select by size.
+        use_deep = (kind != "gitsummary"
+                    and deep_mod.should_use_deep(summary, role_cfg, override=deep))
+        if use_deep:
             return deep_mod.run_deep_report(
                 kind, target=target, task_type=task_type, backend=backend,
                 role_cfg=role_cfg, languages=languages, console=console,
                 reader=reader, summary=summary, symbol_index=sym_index,
                 health_block=health.gather_context(target), save=save,
                 verbose=verbose, cancel=cancel, max_chunks=max_chunks,
-                rebuild_map=rebuild_map,
+                rebuild_map=rebuild_map, prior_report=prior_findings,
+                mirror=mirror,
             )
 
         def _do_run(on_event=None, on_token=None):
             extra_context = health.gather_context(target)
+            if prior_findings:
+                extra_context += (f"\n\n<prior_findings>\n{prior_findings}\n"
+                                  "</prior_findings>")
             return run_single(
                 backend, role_cfg, goal=goal, task_type=task_type,
                 languages=languages, extra_context=extra_context,
@@ -325,12 +346,14 @@ def run_git_report(
         saved: Path | None = None
         if save:
             _wall = round(result.wall_s, 3)
+            _head = health.current_head(target)
             saved = store.save_report(
                 target, kind, report,
-                meta={"model": model, "head": health.current_head(target),
-                      "repo": target, "total_wall_s": _wall,
-                      "avg_pass_s": _wall, "n_passes": 1},
+                meta={"model": model, "head": _head, "repo": target,
+                      "total_wall_s": _wall, "avg_pass_s": _wall, "n_passes": 1},
             )
+            if mirror and store.mirror_to_repo(target, kind, report, _head):
+                console.print("[dim]· mirrored report to <repo>/.luxe/gitkit/[/]")
 
         console.print()
         if verbose:

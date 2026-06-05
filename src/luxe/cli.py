@@ -800,7 +800,7 @@ def compare_review_cmd(compare_id):
 def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                     keep_loaded: bool, save: bool, verbose: bool = False,
                     deep: bool | None = None, max_chunks: int | None = None,
-                    rebuild_map: bool = False) -> None:
+                    rebuild_map: bool = False, mirror: bool = True) -> None:
     """Shared body for the gitsummary/gitreview/gitrefactor CLI commands. The
     runner owns target resolution (incl. cloning a URL when the path is not a
     git repo), index building, and repo_root; here we only clone an explicit URL
@@ -821,7 +821,8 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
     try:
         run_git_report(kind, cfg=cfg, repo_path=repo_path,
                        console=console, save=save, verbose=verbose,
-                       deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
+                       deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map,
+                       mirror=mirror)
     finally:
         if not keep_loaded:
             from luxe.backend import Backend
@@ -847,34 +848,39 @@ def _gitkit_options(f):
                      help="Deep mode: cap chunks analyzed (default: unlimited)")(f)
     f = click.option("--rebuild-map", is_flag=True, default=False,
                      help="Deep mode: ignore the cached per-repo map and re-survey")(f)
+    f = click.option("--no-mirror", is_flag=True, default=False,
+                     help="Don't write the committable <repo>/.luxe/gitkit/ mirror")(f)
     return f
 
 
 @main.command(name="gitsummary")
 @_gitkit_options
 def gitsummary_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                   deep, max_chunks, rebuild_map):
+                   deep, max_chunks, rebuild_map, no_mirror):
     """Summarize a repo: purpose, deps, health, and a use-risk verdict."""
     _run_gitkit_cmd("gitsummary", repo, config_path, keep_loaded, not no_save,
-                    verbose, deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
+                    verbose, deep=deep, max_chunks=max_chunks,
+                    rebuild_map=rebuild_map, mirror=not no_mirror)
 
 
 @main.command(name="gitreview")
 @_gitkit_options
 def gitreview_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                  deep, max_chunks, rebuild_map):
+                  deep, max_chunks, rebuild_map, no_mirror):
     """Review a repo for serious bugs and security concerns (read-only)."""
     _run_gitkit_cmd("gitreview", repo, config_path, keep_loaded, not no_save,
-                    verbose, deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
+                    verbose, deep=deep, max_chunks=max_chunks,
+                    rebuild_map=rebuild_map, mirror=not no_mirror)
 
 
 @main.command(name="gitrefactor")
 @_gitkit_options
 def gitrefactor_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                    deep, max_chunks, rebuild_map):
+                    deep, max_chunks, rebuild_map, no_mirror):
     """Propose an ordered structural refactor plan for a repo (read-only)."""
     _run_gitkit_cmd("gitrefactor", repo, config_path, keep_loaded, not no_save,
-                    verbose, deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map)
+                    verbose, deep=deep, max_chunks=max_chunks,
+                    rebuild_map=rebuild_map, mirror=not no_mirror)
 
 
 apply_aliases(main, {
