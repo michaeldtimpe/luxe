@@ -275,6 +275,26 @@ def test_estimate_run_counts_passes_and_flags_large():
     assert deep.estimate_run(3).large is False
 
 
+def test_estimate_run_per_stage_arithmetic():
+    # survey + 4 chunks + synth = 70 + 4*235 + 70 = 1080s
+    e = deep.estimate_run(4)
+    assert e.seconds == deep._SURVEY_S + 4 * deep._CHUNK_S + deep._SYNTH_S == 1080
+    assert e.passes == 6
+
+
+def test_estimate_run_survey_cached_drops_survey_term():
+    full = deep.estimate_run(4)
+    cached = deep.estimate_run(4, survey_cached=True)
+    assert cached.seconds == full.seconds - deep._SURVEY_S
+    assert cached.passes == full.passes - 1
+
+
+def test_estimate_run_zero_chunks_no_false_floor():
+    e = deep.estimate_run(0)
+    assert e.seconds == deep._SYNTH_S      # not survey+synth; no deceptive floor
+    assert e.chunks == 0
+
+
 # --- extract_report keys on the required title ------------------------------
 
 def test_extract_report_keys_on_required_title_over_stray_heading():
@@ -840,3 +860,36 @@ def test_deep_partial_map_interactive_rebuild(big_repo, _gitkit_cfg, monkeypatch
                    console=_InteractiveConsole(), reader=lambda _p: "y",
                    save=True, deep=True)
     assert len([c for c in calls if "survey" in c]) == 1      # rebuilt on Y
+
+
+# --- Part 5: deep run mirrors map + report into <repo>/.luxe/gitkit/ ---------
+
+def test_deep_run_mirrors_map_and_report(big_repo, _gitkit_cfg, monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
+
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    mirror = big_repo / ".luxe" / "gitkit"
+    assert (mirror / "survey_notes.md").is_file()
+    assert (mirror / "chunks.json").is_file()
+    assert (mirror / "mapped.json").is_file()
+    assert (mirror / "README.md").is_file()
+    assert list((mirror / "reports").glob("gitreview-*.md"))
+
+
+def test_deep_run_no_mirror_skips_repo_write(big_repo, _gitkit_cfg, monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
+
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True, mirror=False)
+    assert not (big_repo / ".luxe" / "gitkit").exists()

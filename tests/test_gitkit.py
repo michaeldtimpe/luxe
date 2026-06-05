@@ -431,3 +431,113 @@ def test_run_git_report_short_report_no_hint(git_repo, _gitkit_cfg, monkeypatch)
     text = out.getvalue()
     assert "more lines" not in text          # whole report fit
     assert "saved to" in text
+
+
+# --- Part 3: gitrefactor consumes prior gitreview findings ------------------
+
+def test_extract_findings_keeps_only_severity_sections():
+    from luxe.gitkit import store
+    report = (
+        "# Bug & security review\n**Findings: 2**\n\n"
+        "## Repository summary & risk\nUse-risk: low — small tool.\n\n"
+        "## Area: src (chunk 1)\nChecked 3 files.\n\n"
+        "## High\n\n**File:** `auth.py`\n**Impact:** token bypass\n\n"
+        "## Low\n\n**File:** `util.py`\n**Impact:** nit\n\n"
+        "## Files checked with no findings\n- config.py\n")
+    out = store.extract_findings(report)
+    assert "## High" in out and "auth.py" in out
+    assert "## Low" in out
+    assert "Repository summary" not in out       # summary dropped
+    assert "## Area:" not in out                 # area notes dropped
+    assert "Files checked" not in out
+
+
+def test_extract_findings_empty_when_no_sections():
+    from luxe.gitkit import store
+    assert store.extract_findings("# Bug & security review\n**Findings: 0**\nclean") == ""
+
+
+def test_latest_report_for_matches_head(git_repo, _gitkit_cfg):
+    from luxe.gitkit import store
+    head = health.current_head(git_repo)
+    store.save_report(git_repo, "gitreview", "# Bug & security review\n## High\nx",
+                      meta={"head": head, "repo": str(git_repo)})
+    body = store.latest_report_for(git_repo, "gitreview", head)
+    assert body is not None and "## High" in body
+    # non-matching head → None
+    assert store.latest_report_for(git_repo, "gitreview", "deadbeef") is None
+
+
+def test_gitrefactor_injects_prior_findings(git_repo, _gitkit_cfg, monkeypatch):
+    from luxe.gitkit import run_git_report, store
+    head = health.current_head(git_repo)
+    store.save_report(
+        git_repo, "gitreview",
+        "# Bug & security review\n**Findings: 1**\n\n## High\n\n"
+        "**File:** `main.py`\n**Impact:** boom\n",
+        meta={"head": head, "repo": str(git_repo)})
+
+    captured = {}
+
+    def fake_run_single(backend, role_cfg, **kw):
+        captured["extra"] = kw.get("extra_context", "")
+        return _FakeResult("# Refactor plan\n**Refactor steps: 0**\nnone")
+
+    _stub_run(monkeypatch, fake_run_single)
+    run_git_report("gitrefactor", cfg=_gitkit_cfg, repo_path=git_repo,
+                   console=_QuietConsole(), save=False)
+    assert "<prior_findings>" in captured["extra"]
+    assert "## High" in captured["extra"] and "main.py" in captured["extra"]
+
+
+def test_gitrefactor_no_block_without_prior_review(git_repo, _gitkit_cfg, monkeypatch):
+    from luxe.gitkit import run_git_report
+
+    captured = {}
+
+    def fake_run_single(backend, role_cfg, **kw):
+        captured["extra"] = kw.get("extra_context", "")
+        return _FakeResult("# Refactor plan\n**Refactor steps: 0**\nnone")
+
+    _stub_run(monkeypatch, fake_run_single)
+    run_git_report("gitrefactor", cfg=_gitkit_cfg, repo_path=git_repo,
+                   console=_QuietConsole(), save=False)
+    assert "<prior_findings>" not in captured["extra"]
+
+
+# --- Part 5: committable .luxe/gitkit/ mirror -------------------------------
+
+def test_mirror_to_repo_writes_report_and_readme(git_repo):
+    from luxe.gitkit import store
+    dest = store.mirror_to_repo(git_repo, "gitreview", "# Bug & security review\nx",
+                                "abc123")
+    assert dest == git_repo / ".luxe" / "gitkit"
+    assert (dest / "reports" / "gitreview-abc123.md").is_file()
+    assert (dest / "README.md").is_file()
+    assert "Safe to delete" in (dest / "README.md").read_text()
+
+
+def test_single_pass_run_mirrors_by_default(git_repo, _gitkit_cfg, monkeypatch):
+    from luxe.gitkit import run_git_report
+
+    def fake_run_single(backend, role_cfg, **kw):
+        return _FakeResult("# Bug & security review\n**Findings: 0**\nclean")
+
+    _stub_run(monkeypatch, fake_run_single)
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+                   console=_QuietConsole(), save=True)
+    mirror = git_repo / ".luxe" / "gitkit"
+    assert (mirror / "README.md").is_file()
+    assert list((mirror / "reports").glob("gitreview-*.md"))
+
+
+def test_no_mirror_writes_nothing_into_repo(git_repo, _gitkit_cfg, monkeypatch):
+    from luxe.gitkit import run_git_report
+
+    def fake_run_single(backend, role_cfg, **kw):
+        return _FakeResult("# Bug & security review\n**Findings: 0**\nclean")
+
+    _stub_run(monkeypatch, fake_run_single)
+    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+                   console=_QuietConsole(), save=True, mirror=False)
+    assert not (git_repo / ".luxe" / "gitkit").exists()
