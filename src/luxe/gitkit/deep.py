@@ -166,7 +166,8 @@ class Chunk:
 
 def empty_digest() -> dict:
     return {"modules": [], "entities": [], "cross_cutting": [],
-            "provisional_findings": [], "markdown_notes": [], "unparsed_chunks": []}
+            "provisional_findings": [], "markdown_notes": [], "unparsed_chunks": [],
+            "steps": []}
 
 
 # --- map cache health -------------------------------------------------------
@@ -365,7 +366,7 @@ def framing_files(target: str | Path, *, limit: int = 40) -> list[str]:
 # --- chunk-output parsing + digest maintenance ------------------------------
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_DEEP_KEYS = ("findings", "modules", "entities", "cross_cutting")
+_DEEP_KEYS = ("findings", "modules", "entities", "cross_cutting", "steps")
 
 
 def parse_chunk_notes(text: str) -> dict | None:
@@ -452,6 +453,20 @@ def update_digest(digest: dict, parsed: dict, chunk_index: int) -> dict:
         rec["chunk"] = chunk_index
         rec.setdefault("evidence", [])
         digest["provisional_findings"].append(rec)
+    # gitplan: accumulate apply-ready steps (deduped by op + files + title). Empty
+    # for gitreview/gitrefactor, so their digests stay byte-identical.
+    seen = {(str(s.get("change", {}).get("op", "")),
+             tuple(s.get("target_files", []) or []),
+             str(s.get("title", "")).strip().lower()) for s in digest["steps"]}
+    for s in parsed.get("steps") or []:
+        if not isinstance(s, dict):
+            continue
+        key = (str(s.get("change", {}).get("op", "")),
+               tuple(s.get("target_files", []) or []),
+               str(s.get("title", "")).strip().lower())
+        if key not in seen:
+            seen.add(key)
+            digest["steps"].append(s)
     return digest
 
 
@@ -486,6 +501,7 @@ def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
         "provisional_findings": [merged[k] for k in order],
         "markdown_notes": list(digest.get("markdown_notes", [])),
         "unparsed_chunks": list(digest.get("unparsed_chunks", [])),
+        "steps": list(digest.get("steps", [])),
     }
 
     if ceiling_tokens and estimate_tokens(json.dumps(out)) > ceiling_tokens:
@@ -724,14 +740,19 @@ def _prior_findings_block(prior: str) -> str:
 
 # --- per-kind directive maps (strings stay in agents/prompts.py) ------------
 
-# gitsummary is single-pass-only (no deep map-reduce) — only review/refactor chunk.
+# gitsummary + gitplan are single-pass-only (no deep map-reduce): a framing overview
+# and a holistic cross-file change plan respectively. The gitplan chunk/synth hints
+# + the `steps` digest bucket are kept for a future deep-gitplan iteration but are
+# not reached today (runner routes gitplan single-pass).
 _CHUNK_HINTS = {
     "gitreview": prompts.GIT_REVIEW_CHUNK_HINT,
     "gitrefactor": prompts.GIT_REFACTOR_CHUNK_HINT,
+    "gitplan": prompts.GIT_PLAN_CHUNK_HINT,
 }
 _SYNTH_HINTS = {
     "gitreview": prompts.GIT_REVIEW_SYNTH_HINT,
     "gitrefactor": prompts.GIT_REFACTOR_SYNTH_HINT,
+    "gitplan": prompts.GIT_PLAN_SYNTH_HINT,
 }
 
 
@@ -995,23 +1016,31 @@ def run_deep_report(
         return "", None
 
     synth_text = (getattr(res, "final_text", "") or "").strip()
-    report = extract_report(synth_text, kind)
-    # Use the LLM synthesis ONLY if it came back clean. The champion narrates its
-    # consolidation into the report, so when it doesn't: try a strict transcription
-    # pass, and if THAT is still rambly, assemble the report DETERMINISTICALLY from
-    # the (already-cleaned) per-chunk notes — Python packaging never rambles, so a
-    # clean, complete report is guaranteed.
-    if not report or _looks_rambly(report):
-        cleaned = (_format_final_report(synth_text, kind, pass_fn=_pass,
-                                        role=synth_role)
-                   if _looks_rambly(synth_text) else report)
-        if cleaned and not _looks_rambly(cleaned):
-            _emit("synthesis verbose — formatted a clean report")
-            report = cleaned
-        else:
-            _emit("synthesis unclean — assembling report deterministically")
-            report = _render_report(digest, kind)
-    report = report or _render_report(digest, kind) or "(no report produced)"
+    if kind == "gitplan":
+        # gitplan emits a structured JSON plan, not a markdown report: parse it (or
+        # fall back to the aggregated digest steps) → save plan.json → render the
+        # human-readable markdown deterministically.
+        from luxe.gitkit import plan as plan_mod
+        report, _ = plan_mod.finalize_and_save(
+            target, head, synth_text, fallback_steps=digest.get("steps"))
+    else:
+        report = extract_report(synth_text, kind)
+        # Use the LLM synthesis ONLY if it came back clean. The champion narrates its
+        # consolidation into the report, so when it doesn't: try a strict transcription
+        # pass, and if THAT is still rambly, assemble the report DETERMINISTICALLY from
+        # the (already-cleaned) per-chunk notes — Python packaging never rambles, so a
+        # clean, complete report is guaranteed.
+        if not report or _looks_rambly(report):
+            cleaned = (_format_final_report(synth_text, kind, pass_fn=_pass,
+                                            role=synth_role)
+                       if _looks_rambly(synth_text) else report)
+            if cleaned and not _looks_rambly(cleaned):
+                _emit("synthesis verbose — formatted a clean report")
+                report = cleaned
+            else:
+                _emit("synthesis unclean — assembling report deterministically")
+                report = _render_report(digest, kind)
+        report = report or _render_report(digest, kind) or "(no report produced)"
 
     # --- timing telemetry: raw per-pass records + cheap aggregates (B3/B4) ----
     total_wall_s = round(sum(t.wall_s for t in timings), 3)

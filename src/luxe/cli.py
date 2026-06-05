@@ -92,41 +92,7 @@ _WRITE_TASKS = {"implement", "bugfix", "document", "manage"}
 _REPROMPT_DOC_ADDITIONS_THRESHOLD = 10
 
 
-def _diff_against_base(repo_path: str, base_sha: str) -> tuple[int, int, str]:
-    """Return (additions, deletions, diff_text) of working tree vs base_sha.
-
-    Mark untracked files as intent-to-add (`git add -N`) before diffing.
-    Without this, `git diff <base_sha>` only shows changes to tracked
-    files — newly created files (e.g., write_file('CONFIG.md', ...))
-    are invisible until staged. Intent-to-add adds an index entry without
-    staging content, which is enough for diff to surface the new file
-    as a +N/-0 change. The PR cycle's later `git add . && git commit`
-    still works correctly.
-    """
-    subprocess.run(
-        ["git", "add", "-N", "."],
-        cwd=repo_path, capture_output=True, text=True,
-    )
-    additions = deletions = 0
-    stat = subprocess.run(
-        ["git", "diff", "--numstat", base_sha, "--"],
-        cwd=repo_path, capture_output=True, text=True,
-    )
-    if stat.returncode == 0:
-        for line in stat.stdout.strip().splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                try:
-                    additions += int(parts[0])
-                    deletions += int(parts[1])
-                except ValueError:
-                    pass
-    patch = subprocess.run(
-        ["git", "diff", base_sha, "--"],
-        cwd=repo_path, capture_output=True, text=True,
-    )
-    diff_text = patch.stdout if patch.returncode == 0 else ""
-    return additions, deletions, diff_text
+from luxe.pr import diff_against_base as _diff_against_base  # moved to pr.py (shared)
 
 
 def _should_reprompt_for_under_engagement(task_type: str, additions: int) -> bool:
@@ -832,6 +798,30 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                 pass
 
 
+def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
+                      *, deep: bool | None = None, rebuild_map: bool = False) -> None:
+    """Body for `gitplan --apply` / `gitapply`: execute a saved plan against a local
+    repo. Apply NEVER clones — it only runs on a real checkout the user controls."""
+    from luxe.gitkit import apply as apply_mod
+
+    if repo.startswith(("http://", "https://", "git@", "ssh://")):
+        console.print("[red]gitapply does not clone — point it at a local repo path.[/]")
+        raise SystemExit(2)
+    repo_path = str(Path(repo).expanduser().resolve())
+    cfg = load_config(config_path or _default_chat_config())
+    try:
+        rc = apply_mod.run_apply(repo_path=repo_path, cfg=cfg, console=console,
+                                 deep=deep, rebuild_map=rebuild_map)
+    finally:
+        if not keep_loaded:
+            from luxe.backend import Backend
+            try:
+                Backend(model="(unload-probe)").unload_all_loaded()
+            except Exception:
+                pass
+    raise SystemExit(rc)
+
+
 def _gitkit_options(f):
     """Shared options for the three gitkit commands (incl. deep-mode flags)."""
     f = click.argument("repo", required=False, default=".")(f)
@@ -883,10 +873,42 @@ def gitrefactor_cmd(repo, config_path, keep_loaded, no_save, verbose,
                     rebuild_map=rebuild_map, mirror=not no_mirror)
 
 
+@main.command(name="gitplan")
+@_gitkit_options
+@click.option("--apply", "do_apply", is_flag=True, default=False,
+              help="Execute the plan: branch, apply each step in WRITE mode, "
+                   "diff+test+confirm. Interactive-only; never touches main.")
+def gitplan_cmd(repo, config_path, keep_loaded, no_save, verbose,
+                deep, max_chunks, rebuild_map, no_mirror, do_apply):
+    """Produce an apply-ready structural change plan (read-only); --apply executes it."""
+    if do_apply:
+        _run_gitapply_cmd(repo, config_path, keep_loaded, deep=deep,
+                          rebuild_map=rebuild_map)
+    else:
+        _run_gitkit_cmd("gitplan", repo, config_path, keep_loaded, not no_save,
+                        verbose, deep=deep, max_chunks=max_chunks,
+                        rebuild_map=rebuild_map, mirror=not no_mirror)
+
+
+@main.command(name="gitapply")
+@click.argument("repo", required=False, default=".")
+@click.option("--config", "config_path", default=None,
+              help="Config YAML (default: chat.yaml)")
+@click.option("--keep-loaded", is_flag=True, default=False)
+@click.option("--deep/--no-deep", "deep", default=None,
+              help="If no saved plan exists, force deep/single when generating one")
+@click.option("--rebuild-map", is_flag=True, default=False)
+def gitapply_cmd(repo, config_path, keep_loaded, deep, rebuild_map):
+    """Execute a saved gitplan: branch, apply each step in WRITE mode, diff+test+confirm."""
+    _run_gitapply_cmd(repo, config_path, keep_loaded, deep=deep,
+                      rebuild_map=rebuild_map)
+
+
 apply_aliases(main, {
     "git-summary": "gitsummary", "gsum": "gitsummary",
     "git-review": "gitreview", "grev": "gitreview",
     "git-refactor": "gitrefactor", "gref": "gitrefactor",
+    "git-plan": "gitplan", "gplan": "gitplan",
 })
 
 
