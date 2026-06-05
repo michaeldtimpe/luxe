@@ -579,6 +579,92 @@ GIT_REFACTOR_SYNTH_HINT = (
 )
 
 
+# --- gitplan: an APPLY-READY, STRUCTURED change plan (gitrefactor's executable
+# sibling). Unlike the markdown report kinds, gitplan emits a single fenced JSON
+# plan (the GIT_DEEP_REDUCE_HINT precedent) that Python parses + renders + later
+# executes. The JSON discipline REPLACES the markdown-report discipline.
+_GITPLAN_JSON_SHAPE = (
+    '{"schema": "gitplan/v1", "summary": "<=15-word headline", "steps": ['
+    '{"id": "S1", "title": "", "target_files": ["path"], '
+    '"change": {"op": "extract|move|rename|inline|split|delete", '
+    '"symbols": [""], "detail": "concrete edit, specific enough to apply"}, '
+    '"rationale": "", "risk": "low|med|high", '
+    '"verify": "<shell test command, or behavior to preserve>", '
+    '"depends_on": ["S0"]}]}'
+)
+_GITPLAN_JSON_DISCIPLINE = (
+    "Investigate with tools during the run, but your FINAL message must be ONE "
+    "fenced ```json code block and NOTHING else — no prose, no narrative, no "
+    "chain-of-thought, no markdown report. Do not write or edit any files (this is "
+    "analysis only). Decide the plan first, then emit it once."
+)
+_GITPLAN_STEP_RULES = (
+    "Each step must be CONCRETE and APPLY-READY: name the exact target files and "
+    "symbols and describe the precise edit (not a vague aspiration). `op` is one of "
+    "extract/move/rename/inline/split/delete. `verify` is a real shell command to "
+    "run after the step (e.g. the test suite) or a behavior to preserve. "
+    "`depends_on` lists the ids of steps that must land first. Keep STRICTLY to "
+    "structure (coupling, cohesion, boundaries, duplication, dead code, "
+    "testability) — do not bundle in correctness or security fixes."
+)
+
+GIT_PLAN_HINT = (
+    "Produce an APPLY-READY structural CHANGE PLAN for this codebase — an ordered "
+    "set of concrete refactor steps that could be executed to improve its "
+    "structure. " + _GITPLAN_JSON_DISCIPLINE + "\n\n" + _GITPLAN_STEP_RULES
+    + "\n\nOutput ONLY a single fenced ```json block of this shape:\n```json\n"
+    + _GITPLAN_JSON_SHAPE + "\n```"
+    + _PRIOR_FINDINGS_CLAUSE
+)
+
+GIT_PLAN_CHUNK_HINT = (
+    "Identify APPLY-READY structural change steps for ONLY the files listed below. "
+    + _GITPLAN_JSON_DISCIPLINE + "\n\n" + _GITPLAN_STEP_RULES
+    + " Ids are PROVISIONAL — a later synthesis re-orders and assigns global ids "
+    "and cross-file depends_on.\n\nOutput ONLY a single fenced ```json block:\n"
+    '```json\n{"steps": [{"id": "", "title": "", "target_files": ["path"], '
+    '"change": {"op": "", "symbols": [""], "detail": ""}, "rationale": "", '
+    '"risk": "low|med|high", "verify": "", "depends_on": []}]}\n```'
+)
+
+GIT_PLAN_SYNTH_HINT = (
+    "You are CONSOLIDATING per-chunk structural change steps (provided below as the "
+    "survey map + aggregated steps) into ONE ordered, apply-ready change plan. Work "
+    "ONLY from these notes — do not re-read the repo. Merge overlapping/duplicate "
+    "steps, assign final sequential ids, compute cross-file `depends_on`, and order "
+    "highest-leverage and prerequisite steps first. " + _GITPLAN_JSON_DISCIPLINE
+    + "\n\n" + _GITPLAN_STEP_RULES
+    + "\n\nOutput ONLY a single fenced ```json block of this shape:\n```json\n"
+    + _GITPLAN_JSON_SHAPE + "\n```"
+    + _PRIOR_FINDINGS_CLAUSE
+)
+
+# Recovery pass: the champion reliably writes a refactor plan as prose/markdown but
+# rarely emits clean JSON in an agentic final message. This low-judgment
+# TRANSCRIPTION turns its own draft into the structured plan (it converts far better
+# than it emits JSON from scratch); parse_plan is lenient on the result.
+GIT_PLAN_EXTRACT_HINT = (
+    "Below (in <plan_draft>) is a refactor plan written as prose/markdown. Convert "
+    "it FAITHFULLY into the gitplan/v1 JSON — one step per proposed change, copying "
+    "the target files, op (extract/move/rename/inline/split/delete), symbols, "
+    "detail, rationale, risk, and verify as written. Do NOT invent, merge, or drop "
+    "steps; do NOT use tools or re-analyze. Output ONLY a single fenced ```json "
+    "block of this shape, nothing else:\n```json\n" + _GITPLAN_JSON_SHAPE + "\n```"
+)
+
+# Used by the gated executor (gitplan --apply): apply EXACTLY ONE plan step.
+GIT_APPLY_STEP_HINT = (
+    "You are EXECUTING exactly ONE step of a pre-approved refactor plan (provided "
+    "below as a `<step>` block, with the full `<plan>` and `<survey>` for context). "
+    "Make the MINIMAL edit that accomplishes ONLY this step, touching ONLY the "
+    "step's target files. Do NOT do other steps, do NOT fix unrelated issues, do "
+    "NOT reformat untouched code. Preserve behavior. Use your edit tools "
+    "(write_file/edit_file) to make the change, then end with ONE short sentence "
+    "stating what you changed. If the step cannot be applied safely, make NO edit "
+    "and say why."
+)
+
+
 # Stage 3 cleanup — the champion narrates its consolidation reasoning into the
 # report. This pass is pure TRANSCRIPTION (the lowest-judgment task, so the least
 # rambly): reproduce the already-decided report cleanly, copying findings verbatim.

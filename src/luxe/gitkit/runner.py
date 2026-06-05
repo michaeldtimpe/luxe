@@ -68,13 +68,25 @@ KINDS: dict[str, tuple[str, str, str]] = {
         "structural refactor plan.",
         prompts.GIT_REFACTOR_HINT,
     ),
+    "gitplan": (
+        "review",
+        "Analyze the codebase in the current working directory and produce an "
+        "APPLY-READY, ordered structural change plan.",
+        prompts.GIT_PLAN_HINT,
+    ),
 }
 
 _TITLES = {
     "gitsummary": "Repository summary & risk assessment",
     "gitreview": "Bug & security review",
     "gitrefactor": "Refactor plan",
+    "gitplan": "Refactor change plan",
 }
+
+# Kinds that consume a prior same-commit gitreview's findings as context.
+_PRIOR_FINDINGS_KINDS = ("gitrefactor", "gitplan")
+# Kinds that emit a structured apply-ready plan (parsed + saved as plan.json).
+_PLAN_KINDS = ("gitplan",)
 
 
 def _looks_like_url(s: str) -> bool:
@@ -284,7 +296,7 @@ def run_git_report(
         # whole report — extract_findings keeps the payload small) so refactor steps
         # don't undo security fixes. Consume-if-present; empty when no review exists.
         prior_findings = ""
-        if kind == "gitrefactor":
+        if kind in _PRIOR_FINDINGS_KINDS:
             prior_md = store.latest_report_for(
                 target, "gitreview", health.current_head(target))
             prior_findings = store.extract_findings(prior_md or "")
@@ -292,9 +304,10 @@ def run_git_report(
                 console.print("[dim]· using prior gitreview findings to inform the "
                               "refactor plan[/]")
 
-        # gitsummary is single-pass-only: a framing-file overview never needs the
-        # file-by-file deep map-reduce. review/refactor still auto-select by size.
-        use_deep = (kind != "gitsummary"
+        # gitsummary (framing overview) and gitplan (a HOLISTIC, cross-file change
+        # plan — chunking would fragment it) are single-pass-only; they never enter
+        # the file-by-file deep map-reduce. review/refactor still auto-select by size.
+        use_deep = (kind not in ("gitsummary", "gitplan")
                     and deep_mod.should_use_deep(summary, role_cfg, override=deep))
         if use_deep:
             return deep_mod.run_deep_report(
@@ -338,15 +351,35 @@ def run_git_report(
             console.print("[yellow]· cancelled.[/]")
             return "", None
 
-        # WS1.2: slice off any leading monologue before the report's required title.
-        report = extract_report((result.final_text or "").strip(), kind) or \
-            "(no report produced)"
+        _head = health.current_head(target)
+        if kind in _PLAN_KINDS:
+            # gitplan emits a structured plan. The champion rarely emits clean JSON
+            # agentically, so on a parse miss we run a low-judgment transcription pass
+            # (its own prose draft → JSON), then render the markdown deterministically.
+            from luxe.gitkit import plan as plan_mod
+
+            def _extract_plan_json(draft: str) -> str:
+                r = run_single(
+                    backend, role_cfg,
+                    goal="Convert the refactor plan draft into the required JSON.\n\n"
+                         + prompts.GIT_PLAN_EXTRACT_HINT,
+                    task_type=task_type, languages=languages,
+                    extra_context=f"<plan_draft>\n{draft}\n</plan_draft>",
+                    phase="chat", run_id="gitkit-gitplan-extract")
+                return (getattr(r, "final_text", "") or "")
+
+            report, _ = plan_mod.finalize_and_save(
+                target, _head, (result.final_text or "").strip(),
+                extract_fn=_extract_plan_json, title=_TITLES[kind])
+        else:
+            # WS1.2: slice off any leading monologue before the report's required title.
+            report = extract_report((result.final_text or "").strip(), kind) or \
+                "(no report produced)"
 
         # Full report is always saved; on screen show a preview unless verbose.
         saved: Path | None = None
         if save:
             _wall = round(result.wall_s, 3)
-            _head = health.current_head(target)
             saved = store.save_report(
                 target, kind, report,
                 meta={"model": model, "head": _head, "repo": target,

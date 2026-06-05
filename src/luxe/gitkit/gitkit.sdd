@@ -41,8 +41,27 @@ in the front-end. Survey map + chunk plan persist per repo under
   > `README.md` marker), default-on, `--no-mirror` to skip — `store.mirror_to_repo`,
   > plain Python, NEVER via an agent tool, touching ONLY the `.luxe/gitkit/`
   > sidecar (never source). Mirrors the `.luxe/memory.md` precedent. Best-effort:
-  > a filesystem error is swallowed, never aborting the analysis. This is the
-  > ONLY write into the working tree; the agent-read-only invariant is unchanged.
+  > a filesystem error is swallowed, never aborting the analysis.
+- The `gitplan` ANALYSIS is read-only like every other kind (runs through
+  `make_read_only_role`; emits a structured `plan-<head>.json` + the markdown report,
+  both under `~/.luxe/reports/` + mirrored; never edits source).
+  > [!IMPORTANT]
+  > `gitplan --apply` / `luxe gitapply` is the SOLE SANCTIONED AGENT-WRITE PATH in
+  > gitkit (`gitkit/apply.py`). It runs the agent in WRITE mode (the FULL role, NOT
+  > `make_read_only_role`) under SIX mandatory invariants, every one enforced:
+  > 1. INTERACTIVE-ONLY — requires a TTY; no TTY ⇒ abort. Applying unattended is
+  >    forbidden; the sweep NEVER applies.
+  > 2. CLEAN-TREE-ONLY — aborts if the working tree is dirty (no `--allow-dirty`).
+  > 3. NON-DEFAULT-BRANCH — never main/master/the detected default branch; always a
+  >    dedicated `gitplan/<head>-<rand>` branch (created up front).
+  > 4. PER-STEP GATING — one MONO `run_single` per ordered step; after each, capture
+  >    the diff, run the step's `verify`, SHOW both, and require an interactive
+  >    keep|discard. `keep` commits on the branch; `discard` reverts only that step.
+  >    `depends_on` is honored (a dependent is skipped if its prerequisite wasn't kept).
+  > 5. NEVER pushes, NEVER merges, NEVER commits to the default branch, NEVER touches
+  >    files outside the working tree.
+  > 6. Orchestration is front-end Python (the deep.py/compare precedent): multiple
+  >    mono passes, each ONE call, NO in-agent repair loop / goal-runner / retry.
 - Pick the path by repo size: small/medium repos → SINGLE-PASS (exactly one
   `run_single`, unchanged); large repos (estimated token footprint over the deep
   threshold, or `--deep`/`/gitreview deep`) → the staged deep mode above. The
@@ -62,9 +81,9 @@ in the front-end. Survey map + chunk plan persist per repo under
   gracefully (gh missing / unauthenticated / non-GitHub remote / timeout / empty
   repo) to a single-line placeholder; the report still renders from local git.
 - Map each kind to an EXISTING task_type/overlay (gitsummary→summarize,
-  gitreview→review, gitrefactor→review). The per-kind directive rides in the
-  `goal` via a `*_HINT` constant from `agents/prompts.py` — no new task types,
-  no prompt-registry churn.
+  gitreview/gitrefactor/gitplan→review; the apply step→implement). The per-kind
+  directive rides in the `goal` via a `*_HINT` constant from `agents/prompts.py` —
+  no new task types, no prompt-registry churn.
 - Save reports to `~/.luxe/reports/<repo_hash>/<kind>-<ts>-<rand>.md` (always
   `mkdir(parents=True, exist_ok=True)`; `repo_hash` from memory/project.py). Deep
   mode additionally persists `map/` (HEAD-keyed survey + chunk plan) and
@@ -78,21 +97,27 @@ in the front-end. Survey map + chunk plan persist per repo under
   (cli/chat → runner → deep); `single.py`/`loop.py`/benchmarks never reach it.
 
 ## Must not
-- Write/edit the target repo, or require write mode.
+- Write/edit the target repo, or require write mode — EXCEPT the `gitplan --apply`
+  path, which is write-enabled under its six invariants above. Every other path (all
+  kinds, incl. `gitplan` WITHOUT `--apply`) stays agent-read-only.
 - Add tools to the shared bash allowlist, or mutate `run_single`/`run_agent`
-  signatures (deep mode calls `run_single` with its existing public params only).
+  signatures (deep mode + the apply executor call `run_single` with its existing
+  public params only).
 - Read `~/.claude/` or the repo-root `CLAUDE.md`.
-- Run an in-AGENT repair/iteration loop or goal-runner in EITHER path. (Deep mode
-  orchestrates multiple mono passes from the front-end; that is allowed and is not
-  a per-agent loop. Do not "optimize" a single pass into a mini-maintain workflow.)
+- Run an in-AGENT repair/iteration loop or goal-runner in ANY path. (Deep mode AND
+  the apply executor orchestrate multiple mono passes from the front-end; that is
+  allowed and is not a per-agent loop. Do not "optimize" a single pass into a
+  mini-maintain workflow, and the apply executor must NOT retry a step's pass.)
 - Silently cap coverage: a `--max-chunks` truncation must `log` what was dropped.
 
 ## Owns
-- src/luxe/gitkit/**
+- src/luxe/gitkit/** (incl. `plan.py` — plan JSON parse/normalize/render/save —
+  and `apply.py` — the gated executor)
 
 ## Forbids
 - Prompt/directive strings here — they live in `agents/prompts.py`
-  (single-pass: `GIT_SUMMARY_HINT` / `GIT_REVIEW_HINT` / `GIT_REFACTOR_HINT`;
-  deep: `GIT_SURVEY_HINT`, `GIT_*_CHUNK_HINT`, `GIT_*_SYNTH_HINT`,
-  `GIT_DEEP_REDUCE_HINT`). deep.py holds only orchestration + deterministic data
-  shaping (chunker, digest, parsing, map cache).
+  (single-pass: `GIT_SUMMARY_HINT` / `GIT_REVIEW_HINT` / `GIT_REFACTOR_HINT` /
+  `GIT_PLAN_HINT`; deep: `GIT_SURVEY_HINT`, `GIT_*_CHUNK_HINT`, `GIT_*_SYNTH_HINT`,
+  `GIT_DEEP_REDUCE_HINT`; apply: `GIT_APPLY_STEP_HINT`). `plan.py`/`apply.py` hold
+  only orchestration + deterministic data shaping (parse/normalize/render, git ops,
+  the keep/discard gate).

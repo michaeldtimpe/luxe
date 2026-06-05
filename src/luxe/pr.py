@@ -347,6 +347,31 @@ def head_sha(repo_path: str | Path) -> str:
     return r.stdout.strip() if r.ok else ""
 
 
+def diff_against_base(repo_path: str | Path, base_sha: str) -> tuple[int, int, str]:
+    """Return (additions, deletions, diff_text) of the working tree vs `base_sha`.
+
+    Marks untracked files as intent-to-add (`git add -N`) first so newly created
+    files surface in the diff (without this, `git diff <sha>` shows only tracked
+    changes). Shared by the PR cycle (cli.maintain) and gitplan's executor."""
+    subprocess.run(["git", "add", "-N", "."], cwd=str(repo_path),
+                   capture_output=True, text=True)
+    additions = deletions = 0
+    stat = subprocess.run(["git", "diff", "--numstat", base_sha, "--"],
+                          cwd=str(repo_path), capture_output=True, text=True)
+    if stat.returncode == 0:
+        for line in stat.stdout.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                try:
+                    additions += int(parts[0])
+                    deletions += int(parts[1])
+                except ValueError:
+                    pass
+    patch = subprocess.run(["git", "diff", base_sha, "--"], cwd=str(repo_path),
+                           capture_output=True, text=True)
+    return additions, deletions, (patch.stdout if patch.returncode == 0 else "")
+
+
 # --- test detection --------------------------------------------------------
 
 def detect_test_command(repo_path: str | Path, cfg: PRConfig) -> str:

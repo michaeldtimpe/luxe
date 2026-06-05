@@ -123,6 +123,13 @@ def mirror_to_repo(repo_path: str | Path, kind: str, report_text: str,
         reports.mkdir(exist_ok=True)
         (reports / f"{kind}-{head or 'nohead'}.md").write_text(
             report_text.rstrip() + "\n")
+        # gitplan: also mirror the machine-readable plan so the apply-ready artifact
+        # travels with the repo (only gitplan writes plan-<head>.json).
+        plan_json = reports_dir(repo_path) / f"plan-{head or 'nohead'}.json"
+        if plan_json.is_file():
+            plans = dest / "plans"
+            plans.mkdir(exist_ok=True)
+            shutil.copy2(plan_json, plans / plan_json.name)
         (dest / "README.md").write_text(_MIRROR_README)
         return dest
     except OSError:

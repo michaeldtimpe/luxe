@@ -59,6 +59,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/gitsummary", "", "summarize this repo: deps, health, use-risk verdict"),
     ("/gitreview", "", "review this repo for serious bugs + security issues"),
     ("/gitrefactor", "", "propose a structural refactor plan for this repo"),
+    ("/gitplan", "", "produce an apply-ready structural change plan for this repo"),
     ("/compare", "<task>", "run two configs side-by-side"),
     ("/compare review", "[id]", "replay a stored comparison"),
     ("/resume", "[id]", "resume a prior session (or list them)"),
@@ -94,6 +95,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/gitsummary": _gitsummary, "/git-summary": _gitsummary, "/gsum": _gitsummary,
         "/gitreview": _gitreview, "/git-review": _gitreview, "/grev": _gitreview,
         "/gitrefactor": _gitrefactor, "/git-refactor": _gitrefactor, "/gref": _gitrefactor,
+        "/gitplan": _gitplan, "/git-plan": _gitplan, "/gplan": _gitplan,
         "/compare": _compare,
         "/resume": _resume,
         "/clear": _clear,
@@ -544,6 +546,10 @@ def _gitreview(args, ctx: CommandContext) -> CommandResult:
 
 def _gitrefactor(args, ctx: CommandContext) -> CommandResult:
     return _git_analysis("gitrefactor", ctx, _parse_deep(args))
+
+
+def _gitplan(args, ctx: CommandContext) -> CommandResult:
+    return _git_analysis("gitplan", ctx, _parse_deep(args))
 
 
 def _resume(args, ctx: CommandContext) -> CommandResult:
