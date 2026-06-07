@@ -262,8 +262,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--owner", default="michaeldtimpe")
-    ap.add_argument("--kind", default="gitreview",
-                    choices=["gitreview", "gitsummary", "gitrefactor", "gitplan"])
+    ap.add_argument("--kind", default="gitaudit",
+                    choices=["gitaudit", "gitchange"])
     ap.add_argument("--only", default="", help="comma-separated repo names to include")
     ap.add_argument("--skip", default="", help="comma-separated repo names to exclude")
     ap.add_argument("--dry-run", action="store_true",
