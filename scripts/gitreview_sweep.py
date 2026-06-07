@@ -268,6 +268,9 @@ def main() -> None:
     ap.add_argument("--skip", default="", help="comma-separated repo names to exclude")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the resolved plan and exit (no clones, no runs)")
+    ap.add_argument("--force", action="store_true",
+                    help="re-run even if a report already exists for the HEAD "
+                         "(use after an engine change, e.g. deep-gitplan)")
     args = ap.parse_args()
 
     only = {s for s in args.only.split(",") if s}
@@ -298,7 +301,8 @@ def main() -> None:
         head = current_head(path) if path.exists() else "?"
         tag = f"[{i}/{len(repos)}] {name} ({repo.get('diskUsage', 0)} KB) [{how}] HEAD {head}"
 
-        if path.exists() and head and already_done(path, args.kind, head):
+        if (not args.force and path.exists() and head
+                and already_done(path, args.kind, head)):
             print(f"  SKIP {tag} — report exists for this HEAD")
             skipped += 1
             continue

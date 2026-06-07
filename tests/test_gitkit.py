@@ -249,10 +249,13 @@ def test_derive_dest_dedupes(tmp_path: Path):
 
 
 @pytest.mark.parametrize("alias,canonical", [
-    ("gsum", "gitsummary"), ("git-summary", "gitsummary"),
-    ("grev", "gitreview"), ("git-review", "gitreview"),
-    ("gref", "gitrefactor"), ("git-refactor", "gitrefactor"),
-    ("gitsummary", "gitsummary"),
+    ("gaudit", "gitaudit"), ("git-audit", "gitaudit"),
+    ("gchange", "gitchange"), ("git-change", "gitchange"),
+    # deprecated names resolve to the two merged commands
+    ("gsum", "gitaudit"), ("gitsummary", "gitaudit"),
+    ("grev", "gitaudit"), ("gitreview", "gitaudit"),
+    ("gref", "gitaudit"), ("gitrefactor", "gitaudit"),
+    ("gplan", "gitchange"), ("gitplan", "gitchange"),
 ])
 def test_main_registers_gitkit_commands_and_aliases(alias, canonical):
     from luxe.cli import main
@@ -266,9 +269,9 @@ def test_main_registers_gitkit_commands_and_aliases(alias, canonical):
 def test_extract_report_strips_leading_monologue():
     from luxe.gitkit.runner import extract_report
     raw = ("1. I looked at foo\n2. what if bar\n"
-           "# Bug & security review\n**Findings: 0**\nclean")
+           "# Repository audit\n**Findings: 0**\nclean")
     out = extract_report(raw)
-    assert out.startswith("# Bug & security review")
+    assert out.startswith("# Repository audit")
     assert "I looked at foo" not in out
 
 
@@ -341,11 +344,11 @@ def test_run_git_report_applies_token_headroom_without_shared_mutation(
 
     def fake_run_single(backend, role_cfg, **kw):
         captured["role"] = role_cfg
-        return _FakeResult("# Bug & security review\n**Findings: 0**\nclean")
+        return _FakeResult("# Repository audit\n**Findings: 0**\nclean")
 
     _stub_run(monkeypatch, fake_run_single)
     before = _gitkit_cfg.role("monolith").max_tokens_per_turn
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
                    console=_QuietConsole(), save=False)
     assert captured["role"].max_tokens_per_turn == GITKIT_MAX_TOKENS
     # the shared role object is untouched (per-run copy)
@@ -356,12 +359,12 @@ def test_run_git_report_strips_monologue_in_display_and_save(
         git_repo, _gitkit_cfg, monkeypatch):
     from luxe.gitkit import run_git_report
 
-    raw = ("1. I looked at foo\n# Bug & security review\n**Findings: 0**\nclean")
+    raw = ("1. I looked at foo\n# Repository audit\n**Findings: 0**\nclean")
     _stub_run(monkeypatch, lambda b, r, **k: _FakeResult(raw))
     report, saved = run_git_report(
-        "gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+        "gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
         console=_QuietConsole(), save=True)
-    assert report.startswith("# Bug & security review")
+    assert report.startswith("# Repository audit")
     assert "I looked at foo" not in report
     assert saved is not None and "I looked at foo" not in saved.read_text()
 
@@ -373,7 +376,7 @@ def test_run_git_report_preview_vs_verbose(git_repo, _gitkit_cfg, monkeypatch):
 
     from luxe.gitkit import run_git_report
 
-    long_report = ("# Bug & security review\n**Findings: 1**\n"
+    long_report = ("# Repository audit\n**Findings: 1**\n"
                    + "\n".join(f"- detail line {i}" for i in range(80)))
     _stub_run(monkeypatch, lambda b, r, **k: _FakeResult(long_report))
 
@@ -381,7 +384,7 @@ def test_run_git_report_preview_vs_verbose(git_repo, _gitkit_cfg, monkeypatch):
     # wrap and split substrings)
     out = io.StringIO()
     _, saved = run_git_report(
-        "gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+        "gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
         console=Console(file=out, force_terminal=False, width=200),
         save=True, verbose=False)
     text = out.getvalue()
@@ -391,7 +394,7 @@ def test_run_git_report_preview_vs_verbose(git_repo, _gitkit_cfg, monkeypatch):
 
     # verbose: full report, no truncation hint
     out2 = io.StringIO()
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
                    console=Console(file=out2, force_terminal=False, width=200),
                    save=True, verbose=True)
     assert "more lines" not in out2.getvalue()
@@ -407,10 +410,10 @@ def test_run_git_report_cancellation(git_repo, _gitkit_cfg, monkeypatch):
     def fake_run_single(backend, role_cfg, *, on_token=None, **kw):
         if on_token:
             on_token("x")   # triggers raise_if_cancelled in the gitkit callback
-        return _FakeResult("# Bug & security review\n**Findings: 0**")
+        return _FakeResult("# Repository audit\n**Findings: 0**")
 
     _stub_run(monkeypatch, fake_run_single)
-    report, saved = run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+    report, saved = run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
                                    console=_QuietConsole(), save=True, cancel=cancel)
     assert report == "" and saved is None   # cancelled cleanly, nothing saved
 
@@ -425,7 +428,7 @@ def test_run_git_report_short_report_no_hint(git_repo, _gitkit_cfg, monkeypatch)
     short = "# Repository summary & risk assessment\n**Use-risk: low** — fine"
     _stub_run(monkeypatch, lambda b, r, **k: _FakeResult(short))
     out = io.StringIO()
-    run_git_report("gitsummary", cfg=_gitkit_cfg, repo_path=git_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
                    console=Console(file=out, force_terminal=False, width=200),
                    save=True, verbose=False)
     text = out.getvalue()
@@ -433,12 +436,17 @@ def test_run_git_report_short_report_no_hint(git_repo, _gitkit_cfg, monkeypatch)
     assert "saved to" in text
 
 
-# --- Part 3: gitrefactor consumes prior gitreview findings ------------------
+# --- Part 3: gitchange consumes prior gitaudit findings ---------------------
+
+_MIN_PLAN_JSON = ('```json\n{"steps":[{"id":"S1","title":"t","target_files":["a.py"],'
+                  '"change":{"op":"extract","symbols":[],"detail":"d"},"rationale":"r",'
+                  '"risk":"low","verify":"pytest","depends_on":[]}]}\n```')
+
 
 def test_extract_findings_keeps_only_severity_sections():
     from luxe.gitkit import store
     report = (
-        "# Bug & security review\n**Findings: 2**\n\n"
+        "# Repository audit\n**Findings: 2**\n\n"
         "## Repository summary & risk\nUse-risk: low — small tool.\n\n"
         "## Area: src (chunk 1)\nChecked 3 files.\n\n"
         "## High\n\n**File:** `auth.py`\n**Impact:** token bypass\n\n"
@@ -454,13 +462,13 @@ def test_extract_findings_keeps_only_severity_sections():
 
 def test_extract_findings_empty_when_no_sections():
     from luxe.gitkit import store
-    assert store.extract_findings("# Bug & security review\n**Findings: 0**\nclean") == ""
+    assert store.extract_findings("# Repository audit\n**Findings: 0**\nclean") == ""
 
 
 def test_latest_report_for_matches_head(git_repo, _gitkit_cfg):
     from luxe.gitkit import store
     head = health.current_head(git_repo)
-    store.save_report(git_repo, "gitreview", "# Bug & security review\n## High\nx",
+    store.save_report(git_repo, "gitreview", "# Repository audit\n## High\nx",
                       meta={"head": head, "repo": str(git_repo)})
     body = store.latest_report_for(git_repo, "gitreview", head)
     assert body is not None and "## High" in body
@@ -468,39 +476,40 @@ def test_latest_report_for_matches_head(git_repo, _gitkit_cfg):
     assert store.latest_report_for(git_repo, "gitreview", "deadbeef") is None
 
 
-def test_gitrefactor_injects_prior_findings(git_repo, _gitkit_cfg, monkeypatch):
+def test_gitchange_injects_prior_findings(git_repo, _gitkit_cfg, monkeypatch):
     from luxe.gitkit import run_git_report, store
     head = health.current_head(git_repo)
     store.save_report(
-        git_repo, "gitreview",
-        "# Bug & security review\n**Findings: 1**\n\n## High\n\n"
+        git_repo, "gitaudit",
+        "# Repository audit\n**Findings: 1**\n\n## High\n\n"
         "**File:** `main.py`\n**Impact:** boom\n",
         meta={"head": head, "repo": str(git_repo)})
 
     captured = {}
 
     def fake_run_single(backend, role_cfg, **kw):
+        # JSON plan → no transcription pass, so the main call's context is captured
         captured["extra"] = kw.get("extra_context", "")
-        return _FakeResult("# Refactor plan\n**Refactor steps: 0**\nnone")
+        return _FakeResult(_MIN_PLAN_JSON)
 
     _stub_run(monkeypatch, fake_run_single)
-    run_git_report("gitrefactor", cfg=_gitkit_cfg, repo_path=git_repo,
+    run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=git_repo,
                    console=_QuietConsole(), save=False)
     assert "<prior_findings>" in captured["extra"]
     assert "## High" in captured["extra"] and "main.py" in captured["extra"]
 
 
-def test_gitrefactor_no_block_without_prior_review(git_repo, _gitkit_cfg, monkeypatch):
+def test_gitchange_no_block_without_prior_audit(git_repo, _gitkit_cfg, monkeypatch):
     from luxe.gitkit import run_git_report
 
     captured = {}
 
     def fake_run_single(backend, role_cfg, **kw):
         captured["extra"] = kw.get("extra_context", "")
-        return _FakeResult("# Refactor plan\n**Refactor steps: 0**\nnone")
+        return _FakeResult(_MIN_PLAN_JSON)
 
     _stub_run(monkeypatch, fake_run_single)
-    run_git_report("gitrefactor", cfg=_gitkit_cfg, repo_path=git_repo,
+    run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=git_repo,
                    console=_QuietConsole(), save=False)
     assert "<prior_findings>" not in captured["extra"]
 
@@ -509,7 +518,7 @@ def test_gitrefactor_no_block_without_prior_review(git_repo, _gitkit_cfg, monkey
 
 def test_mirror_to_repo_writes_report_and_readme(git_repo):
     from luxe.gitkit import store
-    dest = store.mirror_to_repo(git_repo, "gitreview", "# Bug & security review\nx",
+    dest = store.mirror_to_repo(git_repo, "gitreview", "# Repository audit\nx",
                                 "abc123")
     assert dest == git_repo / ".luxe" / "gitkit"
     assert (dest / "reports" / "gitreview-abc123.md").is_file()
@@ -521,23 +530,23 @@ def test_single_pass_run_mirrors_by_default(git_repo, _gitkit_cfg, monkeypatch):
     from luxe.gitkit import run_git_report
 
     def fake_run_single(backend, role_cfg, **kw):
-        return _FakeResult("# Bug & security review\n**Findings: 0**\nclean")
+        return _FakeResult("# Repository audit\n**Findings: 0**\nclean")
 
     _stub_run(monkeypatch, fake_run_single)
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
                    console=_QuietConsole(), save=True)
     mirror = git_repo / ".luxe" / "gitkit"
     assert (mirror / "README.md").is_file()
-    assert list((mirror / "reports").glob("gitreview-*.md"))
+    assert list((mirror / "reports").glob("gitaudit-*.md"))
 
 
 def test_no_mirror_writes_nothing_into_repo(git_repo, _gitkit_cfg, monkeypatch):
     from luxe.gitkit import run_git_report
 
     def fake_run_single(backend, role_cfg, **kw):
-        return _FakeResult("# Bug & security review\n**Findings: 0**\nclean")
+        return _FakeResult("# Repository audit\n**Findings: 0**\nclean")
 
     _stub_run(monkeypatch, fake_run_single)
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=git_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=git_repo,
                    console=_QuietConsole(), save=True, mirror=False)
     assert not (git_repo / ".luxe" / "gitkit").exists()

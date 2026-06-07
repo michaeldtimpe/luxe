@@ -1035,7 +1035,7 @@ def _make_compare_review_hook(console):
 
 
 def _make_git_analysis_hook(console, cfg, session: ChatSession, cancel=None):
-    """Hook for /gitsummary|/gitreview|/gitrefactor — a single read-only gitkit
+    """Hook for /gitaudit (and /gitchange) — a read-only gitkit
     report. Targets the SESSION repo, reusing its resident indices (warns if
     HEAD moved); if the session dir isn't a git repo, the runner prompts to
     clone a URL into a local copy and analyzes that, restoring session state."""

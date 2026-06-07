@@ -231,15 +231,19 @@ def test_resume_hook_invoked(ctx):
 
 
 @pytest.mark.parametrize("alias,kind", [
-    ("/gitsummary", "gitsummary"),
-    ("/git-summary", "gitsummary"),
-    ("/gsum", "gitsummary"),
-    ("/gitreview", "gitreview"),
-    ("/git-review", "gitreview"),
-    ("/grev", "gitreview"),
-    ("/gitrefactor", "gitrefactor"),
-    ("/git-refactor", "gitrefactor"),
-    ("/gref", "gitrefactor"),
+    ("/gitaudit", "gitaudit"),
+    ("/git-audit", "gitaudit"),
+    ("/gaudit", "gitaudit"),
+    ("/gitchange", "gitchange"),
+    ("/git-change", "gitchange"),
+    ("/gchange", "gitchange"),
+    # deprecated back-compat aliases → the two merged commands
+    ("/gitsummary", "gitaudit"),
+    ("/gitreview", "gitaudit"),
+    ("/grev", "gitaudit"),
+    ("/gitrefactor", "gitaudit"),
+    ("/gitplan", "gitchange"),
+    ("/gplan", "gitchange"),
 ])
 def test_git_analysis_aliases_dispatch(ctx, alias, kind):
     seen = []
@@ -255,8 +259,8 @@ def test_git_analysis_aliases_dispatch(ctx, alias, kind):
 def test_git_analysis_deep_arg(ctx, arg, expected):
     seen = []
     ctx.on_git_analysis = lambda k, deep=None: seen.append((k, deep))
-    cmd.dispatch(f"/gitreview {arg}".strip(), ctx)
-    assert seen == [("gitreview", expected)]
+    cmd.dispatch(f"/gitaudit {arg}".strip(), ctx)
+    assert seen == [("gitaudit", expected)]
 
 
 def test_compact_toggles_session_flag(ctx):
@@ -277,7 +281,7 @@ def test_git_analysis_no_repo_points_at_cli(ctx):
     ctx.session.repo_path = ""
     seen = []
     ctx.on_git_analysis = lambda k, deep=None: seen.append(k)
-    cmd.dispatch("/gitreview", ctx)
+    cmd.dispatch("/gitaudit", ctx)
     assert seen == []  # hook NOT called when no repo is bound
     out = _text(ctx)
-    assert "luxe gitreview" in out
+    assert "luxe gitaudit" in out

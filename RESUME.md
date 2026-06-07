@@ -1,5 +1,39 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-06-07) — DEEP GITPLAN built+validated, then gitkit collapsed to TWO tools (gitaudit + gitchange)
+
+**TL;DR.** Two things shipped on `feat/chat-tui` this session:
+
+1. **Deep-mode for the change-plan kind.** Single-pass change plans EMPTIED on
+   large repos. The infra mostly pre-existed in `deep.py`; the gaps were the
+   runner routing + a JSON-only chunk contract that made the champion ramble past
+   the cap without concluding (first luxe smoke: 3/4 chunks empty). Fix: retune
+   the chunk hint to CONCISE MARKDOWN + a Python transcription pass (prose→steps
+   JSON) — the same lesson as the review/refactor deep chunks. **Validated on a
+   full sweep of all 13 prior-empty repos (`ran=13 skipped=0 failed=0`, ~16h):**
+   12/13 went 0 → a populated apply-ready plan (aurora 217, luxe 87, whetstone 60,
+   deluxe 42, neo-llm-bench 34, stockton 30, nothing-ever-happens 29, …); only
+   `the-game` stays empty (genuinely minimal). See memory `project_deep_gitplan`.
+
+2. **gitkit collapsed from 4 commands to 2** (per user). `gitaudit` = ONE
+   read-only report combining orientation + bugs/security + structural advice
+   (absorbs the old gitsummary/gitreview/gitrefactor). `gitchange` = the
+   apply-ready structured plan + the gated `--apply` executor (was `gitplan`).
+   Old names are HIDDEN back-compat aliases (gitsummary/gitreview/gitrefactor →
+   gitaudit; gitplan → gitchange). Prompts renamed GIT_AUDIT_*/GIT_CHANGE_*; the
+   internal plan SCHEMA string stays `gitplan/v1` (renaming would break saved
+   plans + the executor). Live-smoked: `gitaudit` on the-game emits a clean
+   `# Repository audit` with summary + 6 findings + structural section. Branch
+   prefix is now `gitchange/<head>-<rand>`. Suite **1452 passed** (4 pre-existing
+   mlx errors). `scripts/gitreview_sweep.py` gained `--force`.
+
+> CAVEAT: `gitchange` is a byte-behavior rename of the validated gitplan engine
+> (the 13-repo sweep still holds). `gitaudit`'s COMBINED report is new behavior
+> built on the validated review deep-packaging path but NOT itself bench-validated
+> — worth a sweep before relying on it for large repos.
+
+---
+
 ## ⇒ SESSION HANDOFF (2026-06-03) — gitkit + chat Textual TUI SHIPPED; gitreview large-repo failure diagnosed → deep-mode plan APPROVED (code not yet written)
 
 **TL;DR for a cold start.** Two front-end features shipped since the chat overhaul,

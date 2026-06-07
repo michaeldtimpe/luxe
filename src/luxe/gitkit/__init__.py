@@ -1,4 +1,6 @@
-"""gitkit — read-only repo-analysis toolkit (gitsummary / gitreview / gitrefactor).
+"""gitkit — repo-analysis toolkit. Two commands: `gitaudit` (read-only: orientation
++ bugs/security + structural advice) and `gitchange` (apply-ready change plan +
+gated `--apply` executor).
 
 Walk `gitkit.sdd` before editing anything here.
 """

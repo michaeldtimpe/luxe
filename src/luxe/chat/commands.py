@@ -56,10 +56,8 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/plan", "<objective>", "draft a plan, then choose: save / execute / both"),
     ("/sys", "[add <rule>|list|clear]", "manage session-scoped system constraints"),
     ("/memory", "list|add|promote|forget|edit", "manage project memory"),
-    ("/gitsummary", "", "summarize this repo: deps, health, use-risk verdict"),
-    ("/gitreview", "", "review this repo for serious bugs + security issues"),
-    ("/gitrefactor", "", "propose a structural refactor plan for this repo"),
-    ("/gitplan", "", "produce an apply-ready structural change plan for this repo"),
+    ("/gitaudit", "", "audit this repo: orientation + bugs/security + structural advice"),
+    ("/gitchange", "", "produce an apply-ready structural change plan for this repo"),
     ("/compare", "<task>", "run two configs side-by-side"),
     ("/compare review", "[id]", "replay a stored comparison"),
     ("/resume", "[id]", "resume a prior session (or list them)"),
@@ -92,10 +90,13 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/plan": _plan,
         "/sys": _sys,
         "/memory": _memory,
-        "/gitsummary": _gitsummary, "/git-summary": _gitsummary, "/gsum": _gitsummary,
-        "/gitreview": _gitreview, "/git-review": _gitreview, "/grev": _gitreview,
-        "/gitrefactor": _gitrefactor, "/git-refactor": _gitrefactor, "/gref": _gitrefactor,
-        "/gitplan": _gitplan, "/git-plan": _gitplan, "/gplan": _gitplan,
+        "/gitaudit": _gitaudit, "/git-audit": _gitaudit, "/gaudit": _gitaudit,
+        "/gitchange": _gitchange, "/git-change": _gitchange, "/gchange": _gitchange,
+        # back-compat aliases → the two merged commands
+        "/gitsummary": _gitaudit, "/gsum": _gitaudit,
+        "/gitreview": _gitaudit, "/grev": _gitaudit,
+        "/gitrefactor": _gitaudit, "/gref": _gitaudit,
+        "/gitplan": _gitchange, "/gplan": _gitchange,
         "/compare": _compare,
         "/resume": _resume,
         "/clear": _clear,
@@ -506,7 +507,7 @@ def _compare(args, ctx: CommandContext) -> CommandResult:
 
 
 def _parse_deep(args) -> bool | None:
-    """Map a `/gitreview deep|shallow` arg to deep override (None = auto). Accepts
+    """Map a `/gitaudit deep|shallow` arg to deep override (None = auto). Accepts
     the dispatcher's token list or a raw string."""
     if isinstance(args, str):
         tokens = args.lower().split()
@@ -536,20 +537,12 @@ def _git_analysis(kind: str, ctx: CommandContext,
     return CommandResult(handled=True)
 
 
-def _gitsummary(args, ctx: CommandContext) -> CommandResult:
-    return _git_analysis("gitsummary", ctx, _parse_deep(args))
+def _gitaudit(args, ctx: CommandContext) -> CommandResult:
+    return _git_analysis("gitaudit", ctx, _parse_deep(args))
 
 
-def _gitreview(args, ctx: CommandContext) -> CommandResult:
-    return _git_analysis("gitreview", ctx, _parse_deep(args))
-
-
-def _gitrefactor(args, ctx: CommandContext) -> CommandResult:
-    return _git_analysis("gitrefactor", ctx, _parse_deep(args))
-
-
-def _gitplan(args, ctx: CommandContext) -> CommandResult:
-    return _git_analysis("gitplan", ctx, _parse_deep(args))
+def _gitchange(args, ctx: CommandContext) -> CommandResult:
+    return _git_analysis("gitchange", ctx, _parse_deep(args))
 
 
 def _resume(args, ctx: CommandContext) -> CommandResult:

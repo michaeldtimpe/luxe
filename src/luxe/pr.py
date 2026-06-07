@@ -352,7 +352,7 @@ def diff_against_base(repo_path: str | Path, base_sha: str) -> tuple[int, int, s
 
     Marks untracked files as intent-to-add (`git add -N`) first so newly created
     files surface in the diff (without this, `git diff <sha>` shows only tracked
-    changes). Shared by the PR cycle (cli.maintain) and gitplan's executor."""
+    changes). Shared by the PR cycle (cli.maintain) and gitchange's executor."""
     subprocess.run(["git", "add", "-N", "."], cwd=str(repo_path),
                    capture_output=True, text=True)
     additions = deletions = 0

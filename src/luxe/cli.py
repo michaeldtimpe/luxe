@@ -767,10 +767,10 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                     keep_loaded: bool, save: bool, verbose: bool = False,
                     deep: bool | None = None, max_chunks: int | None = None,
                     rebuild_map: bool = False, mirror: bool = True) -> None:
-    """Shared body for the gitsummary/gitreview/gitrefactor CLI commands. The
-    runner owns target resolution (incl. cloning a URL when the path is not a
-    git repo), index building, and repo_root; here we only clone an explicit URL
-    arg up front, load the config, and unload models afterward.
+    """Shared body for the gitaudit/gitchange CLI commands. The runner owns target
+    resolution (incl. cloning a URL when the path is not a git repo), index
+    building, and repo_root; here we only clone an explicit URL arg up front,
+    load the config, and unload models afterward.
 
     `deep` (None=auto by footprint, True/False force), `max_chunks`, and
     `rebuild_map` pass straight through to the runner's deep-mode dispatch."""
@@ -779,7 +779,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
     # An explicit URL arg clones immediately (no prompt). A local path is passed
     # through; the runner prompts to clone if it isn't a git working tree.
     if repo.startswith(("http://", "https://", "git@", "ssh://")):
-        repo_path = _resolve_repo(repo, full_history=(kind == "gitsummary"))
+        repo_path = _resolve_repo(repo, full_history=(kind == "gitaudit"))
     else:
         repo_path = str(Path(repo).expanduser().resolve())
     cfg = load_config(config_path or _default_chat_config())
@@ -800,7 +800,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
 
 def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
                       *, deep: bool | None = None, rebuild_map: bool = False) -> None:
-    """Body for `gitplan --apply` / `gitapply`: execute a saved plan against a local
+    """Body for `gitchange --apply` / `gitapply`: execute a saved plan against a local
     repo. Apply NEVER clones — it only runs on a real checkout the user controls."""
     from luxe.gitkit import apply as apply_mod
 
@@ -823,7 +823,7 @@ def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
 
 
 def _gitkit_options(f):
-    """Shared options for the three gitkit commands (incl. deep-mode flags)."""
+    """Shared options for the two gitkit commands (incl. deep-mode flags)."""
     f = click.argument("repo", required=False, default=".")(f)
     f = click.option("--config", "config_path", default=None,
                      help="Config YAML (default: chat.yaml)")(f)
@@ -843,49 +843,29 @@ def _gitkit_options(f):
     return f
 
 
-@main.command(name="gitsummary")
+@main.command(name="gitaudit")
 @_gitkit_options
-def gitsummary_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                   deep, max_chunks, rebuild_map, no_mirror):
-    """Summarize a repo: purpose, deps, health, and a use-risk verdict."""
-    _run_gitkit_cmd("gitsummary", repo, config_path, keep_loaded, not no_save,
+def gitaudit_cmd(repo, config_path, keep_loaded, no_save, verbose,
+                 deep, max_chunks, rebuild_map, no_mirror):
+    """Audit a repo (read-only): orientation + bugs/security + structural advice."""
+    _run_gitkit_cmd("gitaudit", repo, config_path, keep_loaded, not no_save,
                     verbose, deep=deep, max_chunks=max_chunks,
                     rebuild_map=rebuild_map, mirror=not no_mirror)
 
 
-@main.command(name="gitreview")
-@_gitkit_options
-def gitreview_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                  deep, max_chunks, rebuild_map, no_mirror):
-    """Review a repo for serious bugs and security concerns (read-only)."""
-    _run_gitkit_cmd("gitreview", repo, config_path, keep_loaded, not no_save,
-                    verbose, deep=deep, max_chunks=max_chunks,
-                    rebuild_map=rebuild_map, mirror=not no_mirror)
-
-
-@main.command(name="gitrefactor")
-@_gitkit_options
-def gitrefactor_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                    deep, max_chunks, rebuild_map, no_mirror):
-    """Propose an ordered structural refactor plan for a repo (read-only)."""
-    _run_gitkit_cmd("gitrefactor", repo, config_path, keep_loaded, not no_save,
-                    verbose, deep=deep, max_chunks=max_chunks,
-                    rebuild_map=rebuild_map, mirror=not no_mirror)
-
-
-@main.command(name="gitplan")
+@main.command(name="gitchange")
 @_gitkit_options
 @click.option("--apply", "do_apply", is_flag=True, default=False,
               help="Execute the plan: branch, apply each step in WRITE mode, "
                    "diff+test+confirm. Interactive-only; never touches main.")
-def gitplan_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                deep, max_chunks, rebuild_map, no_mirror, do_apply):
+def gitchange_cmd(repo, config_path, keep_loaded, no_save, verbose,
+                  deep, max_chunks, rebuild_map, no_mirror, do_apply):
     """Produce an apply-ready structural change plan (read-only); --apply executes it."""
     if do_apply:
         _run_gitapply_cmd(repo, config_path, keep_loaded, deep=deep,
                           rebuild_map=rebuild_map)
     else:
-        _run_gitkit_cmd("gitplan", repo, config_path, keep_loaded, not no_save,
+        _run_gitkit_cmd("gitchange", repo, config_path, keep_loaded, not no_save,
                         verbose, deep=deep, max_chunks=max_chunks,
                         rebuild_map=rebuild_map, mirror=not no_mirror)
 
@@ -899,16 +879,20 @@ def gitplan_cmd(repo, config_path, keep_loaded, no_save, verbose,
               help="If no saved plan exists, force deep/single when generating one")
 @click.option("--rebuild-map", is_flag=True, default=False)
 def gitapply_cmd(repo, config_path, keep_loaded, deep, rebuild_map):
-    """Execute a saved gitplan: branch, apply each step in WRITE mode, diff+test+confirm."""
+    """Execute a saved gitchange plan: branch, apply each step, diff+test+confirm."""
     _run_gitapply_cmd(repo, config_path, keep_loaded, deep=deep,
                       rebuild_map=rebuild_map)
 
 
+# Back-compat aliases. The old four commands are now two: gitsummary/gitreview/
+# gitrefactor → gitaudit (combined read-only analysis); gitplan → gitchange.
 apply_aliases(main, {
-    "git-summary": "gitsummary", "gsum": "gitsummary",
-    "git-review": "gitreview", "grev": "gitreview",
-    "git-refactor": "gitrefactor", "gref": "gitrefactor",
-    "git-plan": "gitplan", "gplan": "gitplan",
+    "git-audit": "gitaudit", "gaudit": "gitaudit",
+    "gitsummary": "gitaudit", "git-summary": "gitaudit", "gsum": "gitaudit",
+    "gitreview": "gitaudit", "git-review": "gitaudit", "grev": "gitaudit",
+    "gitrefactor": "gitaudit", "git-refactor": "gitaudit", "gref": "gitaudit",
+    "git-change": "gitchange", "gchange": "gitchange",
+    "gitplan": "gitchange", "git-plan": "gitchange", "gplan": "gitchange",
 })
 
 
