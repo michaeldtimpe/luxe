@@ -453,8 +453,8 @@ def update_digest(digest: dict, parsed: dict, chunk_index: int) -> dict:
         rec["chunk"] = chunk_index
         rec.setdefault("evidence", [])
         digest["provisional_findings"].append(rec)
-    # gitplan: accumulate apply-ready steps (deduped by op + files + title). Empty
-    # for gitreview/gitrefactor, so their digests stay byte-identical.
+    # gitchange: accumulate apply-ready steps (deduped by op + files + title). Empty
+    # for gitaudit, so its digest stays byte-identical.
     seen = {(str(s.get("change", {}).get("op", "")),
              tuple(s.get("target_files", []) or []),
              str(s.get("title", "")).strip().lower()) for s in digest["steps"]}
@@ -518,6 +518,22 @@ def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
             log(f"digest over budget — dropped {dropped} low-severity "
                 f"provisional finding(s) to stay in window")
     return out
+
+
+# --- gitchange: prose → steps JSON transcription ----------------------------
+
+def _plan_extract_pass(text: str, *, pass_fn, role) -> str:
+    """Run the gitchange transcription recovery pass: convert a prose/markdown change
+    plan draft into the required gitplan/v1 JSON (directive GIT_CHANGE_EXTRACT_HINT).
+    The champion converts its own draft far better than it emits JSON from scratch,
+    so this rescues a chunk/synthesis pass that rambled instead of emitting steps.
+    Returns the raw pass text (the caller parses it leniently). `pass_fn`/`role` are
+    the run_deep_report `_pass` choke point so the recovery is timed like any stage."""
+    ctx = f"<plan_draft>\n{text}\n</plan_draft>"
+    goal = ("Convert the change plan draft into the required JSON.\n\n"
+            + prompts.GIT_CHANGE_EXTRACT_HINT)
+    res = pass_fn(goal, ctx, "plan-extract", role=role)
+    return getattr(res, "final_text", "") or ""
 
 
 # --- estimate ---------------------------------------------------------------
@@ -733,26 +749,26 @@ def _notes_block(digest: dict) -> str:
 
 
 def _prior_findings_block(prior: str) -> str:
-    """Pure-data block carrying a prior same-commit gitreview's findings (the
-    directive lives in GIT_REFACTOR_*_HINT)."""
+    """Pure-data block carrying a prior same-commit gitaudit's findings (the
+    directive lives in GIT_CHANGE_*_HINT)."""
     return f"<prior_findings>\n{prior.strip()}\n</prior_findings>"
 
 
 # --- per-kind directive maps (strings stay in agents/prompts.py) ------------
 
-# gitsummary + gitplan are single-pass-only (no deep map-reduce): a framing overview
-# and a holistic cross-file change plan respectively. The gitplan chunk/synth hints
-# + the `steps` digest bucket are kept for a future deep-gitplan iteration but are
-# not reached today (runner routes gitplan single-pass).
+# Two kinds. gitaudit emits a markdown audit report per chunk (bugs/security +
+# structural improvements) recovered/packaged like the old review path; gitchange
+# emits per-chunk steps (markdown, recovered to JSON) that accumulate in the `steps`
+# digest bucket and are consolidated into one ordered plan at synthesis. Both
+# auto-route to deep on large repos; the chunk loop has a gitchange-specific
+# step-recovery branch (a prose chunk → steps via the extract hint).
 _CHUNK_HINTS = {
-    "gitreview": prompts.GIT_REVIEW_CHUNK_HINT,
-    "gitrefactor": prompts.GIT_REFACTOR_CHUNK_HINT,
-    "gitplan": prompts.GIT_PLAN_CHUNK_HINT,
+    "gitaudit": prompts.GIT_AUDIT_CHUNK_HINT,
+    "gitchange": prompts.GIT_CHANGE_CHUNK_HINT,
 }
 _SYNTH_HINTS = {
-    "gitreview": prompts.GIT_REVIEW_SYNTH_HINT,
-    "gitrefactor": prompts.GIT_REFACTOR_SYNTH_HINT,
-    "gitplan": prompts.GIT_PLAN_SYNTH_HINT,
+    "gitaudit": prompts.GIT_AUDIT_SYNTH_HINT,
+    "gitchange": prompts.GIT_CHANGE_SYNTH_HINT,
 }
 
 
@@ -948,6 +964,42 @@ def run_deep_report(
             if work_dir is not None:
                 (work_dir / f"chunk-{c.index + 1:02d}.md").write_text(
                     text or "(no output)")
+
+            if kind == "gitchange":
+                # gitchange chunks emit a CONCISE MARKDOWN step list (a JSON-only chunk
+                # contract makes the champion ramble past the cap without concluding
+                # — confirmed on luxe). Recover gitplan/v1 steps via the transcription
+                # pass; a chunk that already emitted JSON steps is used directly. Three
+                # outcomes: steps recorded / analyzed-but-no-steps / unanalyzed (a
+                # genuine coverage gap — never silently dropped).
+                steps_obj = parsed if (parsed and parsed.get("steps")) else None
+                analyzed = parsed is not None      # chunk emitted parseable JSON
+                if steps_obj is None and text and not parsed:
+                    recovered = parse_chunk_notes(
+                        _plan_extract_pass(text, pass_fn=_pass, role=chunk_role))
+                    if recovered is not None:       # transcription produced valid JSON
+                        analyzed = True
+                        if recovered.get("steps"):
+                            steps_obj = recovered
+                if steps_obj and steps_obj.get("steps"):
+                    update_digest(digest, steps_obj, c.index)
+                    if estimate_tokens(json.dumps(digest)) > ceiling:
+                        digest = compact_digest(digest, ceiling_tokens=ceiling,
+                                                log=_emit)
+                    _emit(f"chunk {c.index + 1}: {len(steps_obj['steps'])} "
+                          "step(s) recorded")
+                elif analyzed:
+                    _emit(f"chunk {c.index + 1}: no structural steps in these files")
+                else:
+                    label = f"chunk {c.index + 1} ({c.label}): " \
+                        + ", ".join(c.files[:4]) + (" …" if len(c.files) > 4 else "")
+                    digest["unparsed_chunks"].append(label)
+                    _emit(f"chunk {c.index + 1} produced no usable steps "
+                          "(empty/truncated) — flagged as unanalyzed")
+                if work_dir is not None:
+                    (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
+                continue
+
             note_src = None
             if parsed:
                 update_digest(digest, parsed, c.index)
@@ -1016,13 +1068,21 @@ def run_deep_report(
         return "", None
 
     synth_text = (getattr(res, "final_text", "") or "").strip()
-    if kind == "gitplan":
-        # gitplan emits a structured JSON plan, not a markdown report: parse it (or
-        # fall back to the aggregated digest steps) → save plan.json → render the
-        # human-readable markdown deterministically.
+    if kind == "gitchange":
+        # gitchange emits a structured JSON plan, not a markdown report. Robustness
+        # ladder: parse the synthesis JSON → on a prose synthesis, a transcription
+        # recovery pass (its own draft → JSON) → finally the aggregated per-chunk
+        # digest steps (Python packaging never rambles, so a valid plan is always
+        # produced). Then save plan.json + render the markdown deterministically.
         from luxe.gitkit import plan as plan_mod
+        from luxe.gitkit.runner import _TITLES
+
+        def _extract_plan_json(draft: str) -> str:
+            return _plan_extract_pass(draft, pass_fn=_pass, role=synth_role)
+
         report, _ = plan_mod.finalize_and_save(
-            target, head, synth_text, fallback_steps=digest.get("steps"))
+            target, head, synth_text, extract_fn=_extract_plan_json,
+            fallback_steps=digest.get("steps"), title=_TITLES["gitchange"])
     else:
         report = extract_report(synth_text, kind)
         # Use the LLM synthesis ONLY if it came back clean. The champion narrates its
@@ -1140,11 +1200,9 @@ def _render_report(digest: dict, kind: str) -> str:
                          f"Fix: {f.get('fix', '')}".rstrip())
         sections.append("## Additional findings\n\n" + "\n".join(lines))
 
-    if kind == "gitreview":
-        n = len(pf) + sum(len(_heuristic_findings(s)) for s in sections)
-        header = f"# {title}\n**Findings: {n} (consolidated across chunks)**"
-    else:  # gitrefactor (gitsummary is single-pass-only — never reaches deep render)
-        header = f"# {title}\n**Refactor steps: see per-area plans below**"
+    # Only gitaudit reaches deterministic render (gitchange returns via plan_mod).
+    n = len(pf) + sum(len(_heuristic_findings(s)) for s in sections)
+    header = f"# {title}\n**Findings: {n} (consolidated across chunks)**"
 
     out = [header, *sections]
     if unparsed:

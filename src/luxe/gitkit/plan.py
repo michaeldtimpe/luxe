@@ -132,7 +132,7 @@ def order_steps(plan: dict) -> list[dict]:
     return ordered
 
 
-def render_markdown(plan: dict, title: str = "Refactor change plan") -> str:
+def render_markdown(plan: dict, title: str = "Change plan") -> str:
     """Deterministic human-readable report from the structured plan (mirrors
     deep._render_report — Python never rambles)."""
     steps = plan.get("steps", [])
@@ -174,7 +174,7 @@ def save_plan_json(repo_path: str | Path, plan: dict) -> Path:
 def finalize_and_save(repo_path: str | Path, head: str, raw_text: str, *,
                       fallback_steps: list | None = None,
                       extract_fn=None,
-                      title: str = "Refactor change plan") -> tuple[str, dict]:
+                      title: str = "Change plan") -> tuple[str, dict]:
     """Parse the model's plan JSON, normalize it, persist `plan-<head>.json`, and
     return (markdown_report, plan).
 

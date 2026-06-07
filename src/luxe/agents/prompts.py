@@ -390,31 +390,11 @@ _GITKIT_REPORT_DISCIPLINE = (
     "then write them once, concisely. Do not write or edit any files."
 )
 
-GIT_SUMMARY_HINT = (
-    "Produce a REPOSITORY SUMMARY & RISK ASSESSMENT for this project. "
-    + _GITKIT_REPORT_DISCIPLINE + "\n\n"
-    "Begin the report with EXACTLY this shape (so it is skimmable at a glance):\n"
-    "  # Repository summary & risk assessment\n"
-    "  **Use-risk: low|medium|high** — <≤15-word reason>\n\n"
-    "Then these sections, grounded in files you read (cite paths) and the injected "
-    "<repo_health> / <github_metadata> data; use deps_audit / cve_lookup for "
-    "dependency exposure:\n"
-    "- **Purpose** — what the project is and does.\n"
-    "- **Stack & languages** — primary languages/frameworks (reflect the "
-    "files/LOC/language mix in <repo_health>).\n"
-    "- **Dependencies & their risk** — key deps and any known-vulnerable ones.\n"
-    "- **Health & size** — activity cadence, recency, contributors, and merged/"
-    "open PR + issue + release activity, citing <repo_health> / <github_metadata>; "
-    "note when GitHub data was unavailable.\n"
-    "- **Security posture** — SECURITY.md, advisories, secrets handling.\n"
-    "- **Use-risk verdict** — restate the rating with a short rationale."
-)
-
-# Folded into the review/refactor reports (gitsummary is no longer a deep kind):
-# a compact orientation section the audit/plan reports gain for free from the
-# survey + health data they already gather.
+# Folded into the audit report: a compact orientation section the audit gains for
+# free from the survey + health data it already gathers (the old standalone
+# gitsummary is absorbed into gitaudit).
 _SUMMARY_SECTION = (
-    "\n\nImmediately AFTER the title + count line (and BEFORE the findings/steps), "
+    "\n\nImmediately AFTER the title + count line (and BEFORE the findings), "
     "include a brief `## Repository summary & risk` section — at most ~6 lines, "
     "grounded in the files you read and the injected <repo_health>/<github_metadata>: "
     "a one-line **Use-risk: low|medium|high** verdict with a ≤15-word reason, then "
@@ -424,48 +404,41 @@ _SUMMARY_SECTION = (
     "GitHub data was unavailable). Keep it tight — orientation, not the main body."
 )
 
-GIT_REVIEW_HINT = (
-    "Perform a read-only bug & security REVIEW of this codebase and report only "
-    "SERIOUS, code-grounded findings. " + _GITKIT_REPORT_DISCIPLINE + "\n\n"
+# gitaudit = the single read-only analysis tool: orientation + bugs/security +
+# structural improvements in ONE report (absorbs the former gitsummary/gitreview/
+# gitrefactor). gitchange is its executable sibling (apply-ready structured plan).
+GIT_AUDIT_HINT = (
+    "Perform a read-only AUDIT of this codebase: orient yourself, find SERIOUS "
+    "bugs & security issues, AND identify the highest-leverage structural "
+    "improvements — all in ONE report. " + _GITKIT_REPORT_DISCIPLINE + "\n\n"
     "Begin the report with EXACTLY this shape:\n"
-    "  # Bug & security review\n"
+    "  # Repository audit\n"
     "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
-    "Then list findings grouped by severity, highest first. Confirm-or-dismiss "
-    "discipline: confirm each suspected issue in the actual code (use grep, "
+    "(N counts the bug/security findings.) Then TWO sections:\n"
+    "## Bugs & security — findings grouped by severity, highest first. Confirm-or-"
+    "dismiss discipline: confirm each suspected issue in the actual code (grep, "
     "find_symbol, security_scan) or DROP it — NEVER list considered-then-dismissed "
-    "items, speculative/generic/'best-practice' risks, or lint / style / type-"
-    "annotation nits. Every finding MUST include: severity (Critical/High/Medium/"
-    "Low), file path, line number, the offending code as evidence, the impact, and "
-    "a suggested fix. If nothing serious qualifies, the summary line is "
-    "**Findings: 0** followed by one short paragraph naming what you checked."
+    "items, speculative/generic/'best-practice' risks, or lint / style / type nits. "
+    "Every finding MUST include: severity, file path, line number, the offending "
+    "code as evidence, the impact, and a suggested fix. If nothing serious "
+    "qualifies, write **Findings: 0** and one short sentence naming what you checked.\n"
+    "## Structural improvements — an ORDERED list of the highest-leverage structural "
+    "changes (coupling, cohesion, module boundaries, duplication, dead code, "
+    "testability). For each: what to change (cite files/symbols), the rationale, the "
+    "risk, and how to verify. This is ADVICE; the apply-ready executable plan is "
+    "`gitchange`."
     + _SUMMARY_SECTION
 )
 
-# Appended to both refactor hints. When a `<prior_findings>` block (the findings
-# of a same-commit gitreview) is injected, the refactor must not undo those fixes
-# nor re-litigate the bugs — it uses them to PRIORITIZE structural work.
+# Appended to the change-plan hints. When a `<prior_findings>` block (the findings
+# of a same-commit gitaudit) is injected, the plan must not undo those fixes nor
+# re-litigate the bugs — it uses them to PRIORITIZE structural work.
 _PRIOR_FINDINGS_CLAUSE = (
     "\n\nIf a `<prior_findings>` block is present, it lists bugs/security issues a "
-    "prior review already found in THIS commit. Treat them as known: do NOT re-report "
-    "them as refactor steps, and ensure NO step would undo or obscure one of those "
-    "fixes. You MAY reference them (by file:line) to justify prioritizing a refactor "
+    "prior audit already found in THIS commit. Treat them as known: do NOT re-report "
+    "them as change steps, and ensure NO step would undo or obscure one of those "
+    "fixes. You MAY reference them (by file:line) to justify prioritizing a change "
     "that makes the risky area safer or easier to fix."
-)
-
-GIT_REFACTOR_HINT = (
-    "Propose a read-only structural REFACTOR PLAN for this codebase. "
-    + _GITKIT_REPORT_DISCIPLINE + "\n\n"
-    "Begin the report with EXACTLY this shape:\n"
-    "  # Refactor plan\n"
-    "  **Refactor steps: N** — <≤15-word headline of the biggest win>\n\n"
-    "Then an ORDERED list of steps. Focus STRICTLY on structure: coupling, "
-    "cohesion, module boundaries, duplication, dead code, testability, ownership. "
-    "Do NOT report correctness or security defects except where one materially "
-    "blocks a refactor step. For each step give: what to change (cite files/"
-    "symbols), the rationale, the risk level, and how to verify it is safe (tests "
-    "to run / behavior to preserve)."
-    + _SUMMARY_SECTION
-    + _PRIOR_FINDINGS_CLAUSE
 )
 
 
@@ -500,35 +473,26 @@ GIT_SURVEY_HINT = (
 # emitting structure). Severity is PROVISIONAL — the synthesis re-rates globally.
 # The runner slices from the required header, so any leading monologue is dropped;
 # keep findings COMPACT so the aggregate fits the synthesis window.
-GIT_REVIEW_CHUNK_HINT = (
-    "Perform a read-only bug & security REVIEW of ONLY the files listed below and "
-    "report only SERIOUS, code-grounded findings. " + _GITKIT_REPORT_DISCIPLINE
-    + "\n\nBegin the report with EXACTLY this shape:\n"
-    "  # Bug & security review\n"
-    "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
-    "Then findings grouped by severity, highest first. Severities are PROVISIONAL "
-    "— a later whole-repo synthesis re-rates them. Confirm-or-dismiss discipline: "
-    "confirm each suspected issue in the actual code (grep, find_symbol, "
-    "security_scan) or DROP it — NEVER list considered-then-dismissed items, "
-    "speculative/generic/'best-practice' risks, or lint/style/type nits. Every "
-    "finding MUST be ONE tight entry: severity, file path, line number, the "
-    "offending code as evidence, the impact, and a suggested fix — a few lines "
-    "each, not an essay. If nothing serious qualifies in THESE files, the line is "
-    "**Findings: 0** followed by one short sentence naming what you checked."
-)
-
-GIT_REFACTOR_CHUNK_HINT = (
-    "Identify ONLY STRUCTURAL issues in the files listed below — coupling, "
-    "cohesion, module boundaries, duplication, dead code, testability, ownership. "
+GIT_AUDIT_CHUNK_HINT = (
+    "Audit ONLY the files listed below: report SERIOUS, code-grounded bugs/security "
+    "issues AND high-leverage STRUCTURAL improvements for these files. "
     + _GITKIT_REPORT_DISCIPLINE
     + "\n\nBegin the report with EXACTLY this shape:\n"
-    "  # Refactor plan\n"
-    "  **Refactor steps: N** — <≤15-word headline of the biggest win here>\n\n"
-    "Then an ordered list of structural steps for THESE files: what to change "
+    "  # Repository audit\n"
+    "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
+    "(N counts the bug/security findings.) Then TWO sections:\n"
+    "## Bugs & security — findings grouped by severity, highest first. Severities "
+    "are PROVISIONAL — a later whole-repo synthesis re-rates them. Confirm-or-"
+    "dismiss discipline: confirm each suspected issue in the actual code (grep, "
+    "find_symbol, security_scan) or DROP it — NEVER list considered-then-dismissed "
+    "items, speculative/generic/'best-practice' risks, or lint/style/type nits. "
+    "Every finding MUST be ONE tight entry: severity, file path, line number, the "
+    "offending code as evidence, the impact, and a suggested fix.\n"
+    "## Structural improvements — an ordered list for THESE files: what to change "
     "(cite files/symbols), the rationale, the risk level, and how to verify. "
-    "Priorities are PROVISIONAL — a later synthesis re-orders globally. Do NOT "
-    "report correctness or security defects unless one materially blocks a "
-    "refactor. Keep each step tight."
+    "Priorities are PROVISIONAL — a later synthesis re-orders globally.\n"
+    "If nothing qualifies in THESE files, write **Findings: 0** and one short "
+    "sentence naming what you checked."
 )
 
 # Stage 3 — holistic synthesis over the AGGREGATE notes (NOT raw files). Emits
@@ -552,35 +516,25 @@ _DEEP_SYNTH_COMMON = (
     "note listing them) rather than implying the repo is clean.\n"
 )
 
-GIT_REVIEW_SYNTH_HINT = (
+GIT_AUDIT_SYNTH_HINT = (
     _DEEP_SYNTH_COMMON + "\n"
     "Begin the report with EXACTLY this shape:\n"
-    "  # Bug & security review\n"
+    "  # Repository audit\n"
     "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
-    "Then findings grouped by (re-rated) severity, highest first. Every finding "
-    "MUST include: severity, file path, line number, the offending code as "
-    "evidence, the impact, and a suggested fix. If nothing serious survives "
-    "consolidation, the line is **Findings: 0** followed by one short paragraph "
-    "naming what was checked."
+    "(N counts the bug/security findings.) Then TWO sections:\n"
+    "## Bugs & security — findings grouped by (re-rated) severity, highest first. "
+    "Every finding MUST include: severity, file path, line number, the offending "
+    "code as evidence, the impact, and a suggested fix. If nothing serious survives "
+    "consolidation, write **Findings: 0**.\n"
+    "## Structural improvements — an ORDERED, deduped list of the highest-leverage "
+    "structural changes. For each: what to change (cite files/symbols), the "
+    "rationale, the risk level, and how to verify."
     + _SUMMARY_SECTION
 )
 
-GIT_REFACTOR_SYNTH_HINT = (
-    _DEEP_SYNTH_COMMON + "\n"
-    "Begin the report with EXACTLY this shape:\n"
-    "  # Refactor plan\n"
-    "  **Refactor steps: N** — <≤15-word headline of the biggest win>\n\n"
-    "Then an ORDERED list of steps (highest-leverage first). For each: what to "
-    "change (cite files/symbols), the rationale, the risk level, and how to "
-    "verify it is safe (tests to run / behavior to preserve). Focus STRICTLY on "
-    "structure."
-    + _SUMMARY_SECTION
-    + _PRIOR_FINDINGS_CLAUSE
-)
 
-
-# --- gitplan: an APPLY-READY, STRUCTURED change plan (gitrefactor's executable
-# sibling). Unlike the markdown report kinds, gitplan emits a single fenced JSON
+# --- gitchange: an APPLY-READY, STRUCTURED change plan (the executable sibling
+# of gitaudit). Unlike the markdown audit report, gitchange emits a single fenced JSON
 # plan (the GIT_DEEP_REDUCE_HINT precedent) that Python parses + renders + later
 # executes. The JSON discipline REPLACES the markdown-report discipline.
 _GITPLAN_JSON_SHAPE = (
@@ -608,7 +562,7 @@ _GITPLAN_STEP_RULES = (
     "testability) — do not bundle in correctness or security fixes."
 )
 
-GIT_PLAN_HINT = (
+GIT_CHANGE_HINT = (
     "Produce an APPLY-READY structural CHANGE PLAN for this codebase — an ordered "
     "set of concrete refactor steps that could be executed to improve its "
     "structure. " + _GITPLAN_JSON_DISCIPLINE + "\n\n" + _GITPLAN_STEP_RULES
@@ -617,17 +571,36 @@ GIT_PLAN_HINT = (
     + _PRIOR_FINDINGS_CLAUSE
 )
 
-GIT_PLAN_CHUNK_HINT = (
-    "Identify APPLY-READY structural change steps for ONLY the files listed below. "
-    + _GITPLAN_JSON_DISCIPLINE + "\n\n" + _GITPLAN_STEP_RULES
-    + " Ids are PROVISIONAL — a later synthesis re-orders and assigns global ids "
-    "and cross-file depends_on.\n\nOutput ONLY a single fenced ```json block:\n"
-    '```json\n{"steps": [{"id": "", "title": "", "target_files": ["path"], '
-    '"change": {"op": "", "symbols": [""], "detail": ""}, "rationale": "", '
-    '"risk": "low|med|high", "verify": "", "depends_on": []}]}\n```'
+# Stage 2 — per-chunk plan steps. Deliberately MARKDOWN, not JSON: the champion
+# reliably concludes a concise markdown list within its token budget, but a JSON-only
+# chunk contract makes it ramble past the cap without ever emitting structure (the
+# same failure that moved GIT_REVIEW/REFACTOR chunks to markdown; confirmed on luxe
+# 2026-06-06: 3/4 JSON-only chunks produced no usable steps). Python recovers the
+# structure: deep.py runs the GIT_CHANGE_EXTRACT transcription pass on each chunk's
+# markdown to get gitplan/v1 steps, which accumulate for the synthesis + as a fallback.
+GIT_CHANGE_CHUNK_HINT = (
+    "Identify APPLY-READY structural change steps for ONLY the files listed below "
+    "(coupling, cohesion, module boundaries, duplication, dead code, testability). "
+    "Keep STRICTLY to structure — do NOT bundle in correctness or security fixes. "
+    + _GITKIT_REPORT_DISCIPLINE
+    + "\n\nWrite a CONCISE markdown list (NOT JSON) and conclude within your token "
+    "budget. Begin with EXACTLY this shape:\n"
+    "  # Change plan\n"
+    "  **Steps: N**\n\n"
+    "Then a numbered list; for EACH step give these labelled lines, tightly:\n"
+    "  - **Title:** <short imperative>\n"
+    "  - **Files:** <target paths among THESE files>\n"
+    "  - **Change:** <extract|move|rename|inline|split|delete> — <symbols> — "
+    "<the concrete, apply-ready edit>\n"
+    "  - **Rationale:** <why>\n"
+    "  - **Risk:** <low|med|high>\n"
+    "  - **Verify:** <shell test command, or behavior to preserve>\n\n"
+    "Ids/ordering are assigned later by a synthesis pass — do not number across "
+    "chunks. If no structural step is warranted in THESE files, write "
+    "`**Steps: 0**` and one short sentence naming what you checked."
 )
 
-GIT_PLAN_SYNTH_HINT = (
+GIT_CHANGE_SYNTH_HINT = (
     "You are CONSOLIDATING per-chunk structural change steps (provided below as the "
     "survey map + aggregated steps) into ONE ordered, apply-ready change plan. Work "
     "ONLY from these notes — do not re-read the repo. Merge overlapping/duplicate "
@@ -643,7 +616,7 @@ GIT_PLAN_SYNTH_HINT = (
 # rarely emits clean JSON in an agentic final message. This low-judgment
 # TRANSCRIPTION turns its own draft into the structured plan (it converts far better
 # than it emits JSON from scratch); parse_plan is lenient on the result.
-GIT_PLAN_EXTRACT_HINT = (
+GIT_CHANGE_EXTRACT_HINT = (
     "Below (in <plan_draft>) is a refactor plan written as prose/markdown. Convert "
     "it FAITHFULLY into the gitplan/v1 JSON — one step per proposed change, copying "
     "the target files, op (extract/move/rename/inline/split/delete), symbols, "
@@ -652,7 +625,7 @@ GIT_PLAN_EXTRACT_HINT = (
     "block of this shape, nothing else:\n```json\n" + _GITPLAN_JSON_SHAPE + "\n```"
 )
 
-# Used by the gated executor (gitplan --apply): apply EXACTLY ONE plan step.
+# Used by the gated executor (gitchange --apply): apply EXACTLY ONE plan step.
 GIT_APPLY_STEP_HINT = (
     "You are EXECUTING exactly ONE step of a pre-approved refactor plan (provided "
     "below as a `<step>` block, with the full `<plan>` and `<survey>` for context). "

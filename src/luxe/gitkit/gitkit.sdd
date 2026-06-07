@@ -1,25 +1,30 @@
 # gitkit
 
-Read-only repo-analysis toolkit — point luxe at an existing git repo and get a
-packaged markdown report. Three kinds: `gitsummary` (project / deps / health /
-use-risk verdict — SINGLE-PASS only), `gitreview` (serious bug & security
-findings), `gitrefactor` (ordered structural refactor plan). Additive front-end;
-reuses `run_single`, the read-only tool surface, and the prompt registry's
-existing overlays.
+Repo-analysis toolkit — point luxe at an existing git repo and get a packaged
+report. TWO kinds:
+- `gitaudit` — READ-ONLY combined analysis in one markdown report: orientation
+  (project / deps / health / use-risk), serious bug & security findings, AND
+  high-leverage structural improvements. Absorbs the former gitsummary / gitreview
+  / gitrefactor (now hidden back-compat aliases → gitaudit).
+- `gitchange` — the APPLY-READY, STRUCTURED sibling: an ordered `gitplan/v1` JSON
+  change plan that the gated `--apply` executor can act on (was `gitplan`).
+
+Additive front-end; reuses `run_single`, the read-only tool surface, and the
+prompt registry's existing overlays.
 
 > [!IMPORTANT]
-> The repository summary is FOLDED IN: `gitreview`/`gitrefactor` reports begin
-> (after their title + count line) with a `## Repository summary & risk` section,
-> derived from the shared survey + health data they already gather. `gitsummary`
-> remains a thin, SINGLE-PASS command for that orientation alone — it never runs
-> the deep map-reduce (no `GIT_SUMMARY_CHUNK_HINT`/`GIT_SUMMARY_SYNTH_HINT`).
-> `gitrefactor` additionally consumes a prior same-commit `gitreview`'s findings
-> (injected as a `<prior_findings>` data block) so its steps don't undo fixes.
+> The repository summary is FOLDED IN: the `gitaudit` report begins (after its
+> title + count line) with a `## Repository summary & risk` section, derived from
+> the shared survey + health data it already gathers — there is no separate
+> summary command. `gitchange` additionally consumes a prior same-commit
+> `gitaudit`'s findings (injected as a `<prior_findings>` data block) so its steps
+> don't undo fixes. The internal plan SCHEMA string stays `gitplan/v1` (renaming
+> it would break already-saved plans + the executor).
 
-Exposed two ways: `luxe gitsummary|gitreview|gitrefactor <repo>` (+ aliases
-git-summary/gsum, git-review/grev, git-refactor/gref) over an arbitrary local
-path or git URL; and `/gitsummary|/gitreview|/gitrefactor` in `luxe chat` over
-the session's pinned repo.
+Exposed two ways: `luxe gitaudit|gitchange <repo>` (+ aliases git-audit/gaudit,
+git-change/gchange, and the deprecated gitsummary/gitreview/gitrefactor→gitaudit,
+gitplan→gitchange) over an arbitrary local path or git URL; and
+`/gitaudit|/gitchange` in `luxe chat` over the session's pinned repo.
 
 For large repos a STAGED DEEP MODE (gitkit/deep.py) replaces the single pass: the
 runner orchestrates multiple sequential read-only `run_single` passes (survey →
@@ -42,18 +47,18 @@ in the front-end. Survey map + chunk plan persist per repo under
   > plain Python, NEVER via an agent tool, touching ONLY the `.luxe/gitkit/`
   > sidecar (never source). Mirrors the `.luxe/memory.md` precedent. Best-effort:
   > a filesystem error is swallowed, never aborting the analysis.
-- The `gitplan` ANALYSIS is read-only like every other kind (runs through
+- The `gitchange` ANALYSIS is read-only like `gitaudit` (runs through
   `make_read_only_role`; emits a structured `plan-<head>.json` + the markdown report,
   both under `~/.luxe/reports/` + mirrored; never edits source).
   > [!IMPORTANT]
-  > `gitplan --apply` / `luxe gitapply` is the SOLE SANCTIONED AGENT-WRITE PATH in
+  > `gitchange --apply` / `luxe gitapply` is the SOLE SANCTIONED AGENT-WRITE PATH in
   > gitkit (`gitkit/apply.py`). It runs the agent in WRITE mode (the FULL role, NOT
   > `make_read_only_role`) under SIX mandatory invariants, every one enforced:
   > 1. INTERACTIVE-ONLY — requires a TTY; no TTY ⇒ abort. Applying unattended is
   >    forbidden; the sweep NEVER applies.
   > 2. CLEAN-TREE-ONLY — aborts if the working tree is dirty (no `--allow-dirty`).
   > 3. NON-DEFAULT-BRANCH — never main/master/the detected default branch; always a
-  >    dedicated `gitplan/<head>-<rand>` branch (created up front).
+  >    dedicated `gitchange/<head>-<rand>` branch (created up front).
   > 4. PER-STEP GATING — one MONO `run_single` per ordered step; after each, capture
   >    the diff, run the step's `verify`, SHOW both, and require an interactive
   >    keep|discard. `keep` commits on the branch; `discard` reverts only that step.
@@ -63,12 +68,12 @@ in the front-end. Survey map + chunk plan persist per repo under
   > 6. Orchestration is front-end Python (the deep.py/compare precedent): multiple
   >    mono passes, each ONE call, NO in-agent repair loop / goal-runner / retry.
 - Pick the path by repo size: small/medium repos → SINGLE-PASS (exactly one
-  `run_single`, unchanged); large repos (estimated token footprint over the deep
-  threshold, or `--deep`/`/gitreview deep`) → the staged deep mode above. The
-  decision is `deep.should_use_deep` (footprint-primary; file/symbol counts are
-  NOT the gate). `--no-deep`/`shallow` forces single-pass. `gitsummary` is ALWAYS
-  single-pass (it never enters deep mode regardless of size). Neither path runs an
-  in-agent repair/iteration loop or a goal-runner.
+  `run_single`); large repos (estimated token footprint over the deep threshold,
+  or `--deep`/`/gitaudit deep`) → the staged deep mode above. The decision is
+  `deep.should_use_deep` (footprint-primary; file/symbol counts are NOT the gate).
+  `--no-deep`/`shallow` forces single-pass. BOTH kinds auto-select (the 46-repo
+  sweep proved single-pass EMPTIES on large repos). Neither path runs an in-agent
+  repair/iteration loop or a goal-runner.
 - Inject git-health + GitHub metadata, the repo map, survey notes, the chunk file
   list, and the cross-reference digest ONLY as data via `run_single`'s
   `extra_context`, tagged (`<repo_health>` / `<github_metadata>` / `<repo_map>` /
@@ -80,10 +85,9 @@ in the front-end. Survey map + chunk plan persist per repo under
   benchmark tool surface). All `gh` calls go through one helper that degrades
   gracefully (gh missing / unauthenticated / non-GitHub remote / timeout / empty
   repo) to a single-line placeholder; the report still renders from local git.
-- Map each kind to an EXISTING task_type/overlay (gitsummary→summarize,
-  gitreview/gitrefactor/gitplan→review; the apply step→implement). The per-kind
-  directive rides in the `goal` via a `*_HINT` constant from `agents/prompts.py` —
-  no new task types, no prompt-registry churn.
+- Map each kind to an EXISTING task_type/overlay (gitaudit/gitchange→review; the
+  apply step→implement). The per-kind directive rides in the `goal` via a `*_HINT`
+  constant from `agents/prompts.py` — no new task types, no prompt-registry churn.
 - Save reports to `~/.luxe/reports/<repo_hash>/<kind>-<ts>-<rand>.md` (always
   `mkdir(parents=True, exist_ok=True)`; `repo_hash` from memory/project.py). Deep
   mode additionally persists `map/` (HEAD-keyed survey + chunk plan) and
@@ -97,9 +101,9 @@ in the front-end. Survey map + chunk plan persist per repo under
   (cli/chat → runner → deep); `single.py`/`loop.py`/benchmarks never reach it.
 
 ## Must not
-- Write/edit the target repo, or require write mode — EXCEPT the `gitplan --apply`
-  path, which is write-enabled under its six invariants above. Every other path (all
-  kinds, incl. `gitplan` WITHOUT `--apply`) stays agent-read-only.
+- Write/edit the target repo, or require write mode — EXCEPT the `gitchange --apply`
+  path, which is write-enabled under its six invariants above. Every other path
+  (`gitaudit`, and `gitchange` WITHOUT `--apply`) stays agent-read-only.
 - Add tools to the shared bash allowlist, or mutate `run_single`/`run_agent`
   signatures (deep mode + the apply executor call `run_single` with its existing
   public params only).
@@ -116,8 +120,9 @@ in the front-end. Survey map + chunk plan persist per repo under
 
 ## Forbids
 - Prompt/directive strings here — they live in `agents/prompts.py`
-  (single-pass: `GIT_SUMMARY_HINT` / `GIT_REVIEW_HINT` / `GIT_REFACTOR_HINT` /
-  `GIT_PLAN_HINT`; deep: `GIT_SURVEY_HINT`, `GIT_*_CHUNK_HINT`, `GIT_*_SYNTH_HINT`,
+  (single-pass: `GIT_AUDIT_HINT` / `GIT_CHANGE_HINT`; deep: `GIT_SURVEY_HINT`,
+  `GIT_AUDIT_CHUNK_HINT` / `GIT_CHANGE_CHUNK_HINT`, `GIT_AUDIT_SYNTH_HINT` /
+  `GIT_CHANGE_SYNTH_HINT`, `GIT_CHANGE_EXTRACT_HINT`, `GIT_DEEP_FORMAT_HINT`,
   `GIT_DEEP_REDUCE_HINT`; apply: `GIT_APPLY_STEP_HINT`). `plan.py`/`apply.py` hold
   only orchestration + deterministic data shaping (parse/normalize/render, git ops,
   the keep/discard gate).

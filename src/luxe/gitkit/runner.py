@@ -51,42 +51,30 @@ def extract_report(text: str, kind: str | None = None) -> str:
 # types: each maps onto an existing overlay; the per-kind directive rides in the
 # goal (gitkit.sdd / agents.sdd single-source rule).
 KINDS: dict[str, tuple[str, str, str]] = {
-    "gitsummary": (
-        "summarize",
-        "Summarize and assess the repository in the current working directory.",
-        prompts.GIT_SUMMARY_HINT,
-    ),
-    "gitreview": (
+    "gitaudit": (
         "review",
-        "Review the codebase in the current working directory for serious bugs "
-        "and security issues.",
-        prompts.GIT_REVIEW_HINT,
+        "Audit the codebase in the current working directory: orient, find serious "
+        "bugs & security issues, and identify the highest-leverage structural "
+        "improvements — in one report.",
+        prompts.GIT_AUDIT_HINT,
     ),
-    "gitrefactor": (
-        "review",
-        "Analyze the codebase in the current working directory and propose a "
-        "structural refactor plan.",
-        prompts.GIT_REFACTOR_HINT,
-    ),
-    "gitplan": (
+    "gitchange": (
         "review",
         "Analyze the codebase in the current working directory and produce an "
         "APPLY-READY, ordered structural change plan.",
-        prompts.GIT_PLAN_HINT,
+        prompts.GIT_CHANGE_HINT,
     ),
 }
 
 _TITLES = {
-    "gitsummary": "Repository summary & risk assessment",
-    "gitreview": "Bug & security review",
-    "gitrefactor": "Refactor plan",
-    "gitplan": "Refactor change plan",
+    "gitaudit": "Repository audit",
+    "gitchange": "Change plan",
 }
 
-# Kinds that consume a prior same-commit gitreview's findings as context.
-_PRIOR_FINDINGS_KINDS = ("gitrefactor", "gitplan")
+# Kinds that consume a prior same-commit gitaudit's findings as context.
+_PRIOR_FINDINGS_KINDS = ("gitchange",)
 # Kinds that emit a structured apply-ready plan (parsed + saved as plan.json).
-_PLAN_KINDS = ("gitplan",)
+_PLAN_KINDS = ("gitchange",)
 
 
 def _looks_like_url(s: str) -> bool:
@@ -205,7 +193,7 @@ def run_git_report(
     notes → synthesis, with a persistent per-repo `map/` cache.
 
     Args:
-        kind: gitsummary | gitreview | gitrefactor.
+        kind: gitaudit | gitchange.
         cfg: loaded PipelineConfig (provides oMLX URL, model, role).
         repo_path: target path; if it is not a git working tree, the user is
             prompted to clone a URL into a local copy.
@@ -245,7 +233,7 @@ def run_git_report(
     reader = reader or console.input
 
     target = _resolve_or_clone(
-        repo_path, full_history=(kind == "gitsummary"),
+        repo_path, full_history=(kind == "gitaudit"),
         console=console, reader=reader)
     if target is None:
         console.print("[yellow]· cancelled.[/]")
@@ -298,17 +286,19 @@ def run_git_report(
         prior_findings = ""
         if kind in _PRIOR_FINDINGS_KINDS:
             prior_md = store.latest_report_for(
-                target, "gitreview", health.current_head(target))
+                target, "gitaudit", health.current_head(target))
             prior_findings = store.extract_findings(prior_md or "")
             if prior_findings:
-                console.print("[dim]· using prior gitreview findings to inform the "
-                              "refactor plan[/]")
+                console.print("[dim]· using prior gitaudit findings to inform the "
+                              "change plan[/]")
 
-        # gitsummary (framing overview) and gitplan (a HOLISTIC, cross-file change
-        # plan — chunking would fragment it) are single-pass-only; they never enter
-        # the file-by-file deep map-reduce. review/refactor still auto-select by size.
-        use_deep = (kind not in ("gitsummary", "gitplan")
-                    and deep_mod.should_use_deep(summary, role_cfg, override=deep))
+        # Both kinds auto-select single-pass vs deep by footprint: small/medium repos
+        # stay single-pass (one window holds the whole analysis), large repos take the
+        # staged deep map-reduce (the 46-repo sweep proved single-pass EMPTIES on large
+        # repos — the model explores and under-concludes; deep's synthesis stage
+        # re-consolidates per-chunk notes into one report/plan). `--deep/--no-deep`
+        # overrides; `--max-chunks` caps. Neither path runs an in-agent repair loop.
+        use_deep = deep_mod.should_use_deep(summary, role_cfg, override=deep)
         if use_deep:
             return deep_mod.run_deep_report(
                 kind, target=target, task_type=task_type, backend=backend,
@@ -353,7 +343,7 @@ def run_git_report(
 
         _head = health.current_head(target)
         if kind in _PLAN_KINDS:
-            # gitplan emits a structured plan. The champion rarely emits clean JSON
+            # gitchange emits a structured plan. The champion rarely emits clean JSON
             # agentically, so on a parse miss we run a low-judgment transcription pass
             # (its own prose draft → JSON), then render the markdown deterministically.
             from luxe.gitkit import plan as plan_mod
@@ -361,11 +351,11 @@ def run_git_report(
             def _extract_plan_json(draft: str) -> str:
                 r = run_single(
                     backend, role_cfg,
-                    goal="Convert the refactor plan draft into the required JSON.\n\n"
-                         + prompts.GIT_PLAN_EXTRACT_HINT,
+                    goal="Convert the change plan draft into the required JSON.\n\n"
+                         + prompts.GIT_CHANGE_EXTRACT_HINT,
                     task_type=task_type, languages=languages,
                     extra_context=f"<plan_draft>\n{draft}\n</plan_draft>",
-                    phase="chat", run_id="gitkit-gitplan-extract")
+                    phase="chat", run_id="gitkit-gitchange-extract")
                 return (getattr(r, "final_text", "") or "")
 
             report, _ = plan_mod.finalize_and_save(

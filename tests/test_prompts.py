@@ -616,70 +616,59 @@ def test_reflect_system_prompt_is_critique_only():
 
 
 def test_gitkit_hints_exist_and_are_directives():
-    """The three gitkit directives live here (single source of truth) and read
-    as markdown directives, never XML/registry variants."""
-    from luxe.agents.prompts import (
-        GIT_REFACTOR_HINT,
-        GIT_REVIEW_HINT,
-        GIT_SUMMARY_HINT,
-    )
-    for hint in (GIT_SUMMARY_HINT, GIT_REVIEW_HINT, GIT_REFACTOR_HINT):
-        assert hint.strip()
-        s = hint.lower()
-        assert "do not write" in s          # read-only
-        assert "final message" in s         # report-only discipline (WS1)
-        assert "report only" in s
-
-
-def test_git_summary_hint_shape_and_verdict():
-    from luxe.agents.prompts import GIT_SUMMARY_HINT
-    s = GIT_SUMMARY_HINT.lower()
-    assert "use-risk verdict" in s
-    # required machine-checkable header + summary line (WS1)
-    assert "# repository summary & risk assessment" in s
-    assert "**use-risk:" in s
-
-
-def test_summary_section_folded_into_review_and_refactor():
-    """The repository summary is folded into review/refactor (single + deep) so
-    gitsummary needn't be its own deep kind."""
+    """The two gitkit directives live here (single source of truth) and read as
+    markdown directives, never XML/registry variants. The old four (summary/review/
+    refactor/plan) are gone — collapsed into gitaudit + gitchange."""
     from luxe.agents import prompts
-    for hint in (prompts.GIT_REVIEW_HINT, prompts.GIT_REFACTOR_HINT,
-                 prompts.GIT_REVIEW_SYNTH_HINT, prompts.GIT_REFACTOR_SYNTH_HINT):
-        assert "## Repository summary & risk" in hint
-        assert "Use-risk" in hint
-    # the duplicated DEEP gitsummary stack is gone
-    assert not hasattr(prompts, "GIT_SUMMARY_CHUNK_HINT")
-    assert not hasattr(prompts, "GIT_SUMMARY_SYNTH_HINT")
+    assert prompts.GIT_AUDIT_HINT.strip() and prompts.GIT_CHANGE_HINT.strip()
+    s = prompts.GIT_AUDIT_HINT.lower()
+    assert "do not write" in s          # read-only
+    assert "final message" in s         # report-only discipline (WS1)
+    for old in ("GIT_SUMMARY_HINT", "GIT_REVIEW_HINT", "GIT_REFACTOR_HINT",
+                "GIT_PLAN_HINT", "GIT_REVIEW_CHUNK_HINT", "GIT_REFACTOR_SYNTH_HINT"):
+        assert not hasattr(prompts, old), f"stale prompt {old}"
 
 
-def test_prior_findings_clause_only_on_refactor():
-    from luxe.agents import prompts
-    for hint in (prompts.GIT_REFACTOR_HINT, prompts.GIT_REFACTOR_SYNTH_HINT):
-        assert "<prior_findings>" in hint
-    # review must NOT carry the refactor-only clause
-    assert "<prior_findings>" not in prompts.GIT_REVIEW_HINT
-
-
-def test_git_review_hint_demands_grounded_findings():
-    from luxe.agents.prompts import GIT_REVIEW_HINT
-    s = GIT_REVIEW_HINT.lower()
-    assert "severity" in s
-    assert "line number" in s
-    # confirm-or-dismiss: drop ungrounded items, never list dismissed nits
-    assert "drop it" in s and "never list" in s
-    # lint/style/type nits explicitly excluded
-    assert "lint" in s and "style" in s
-    # required header + findings summary line
-    assert "# bug & security review" in s
+def test_git_audit_hint_combines_orientation_bugs_and_structure():
+    """gitaudit = orientation + bugs/security + structural advice in ONE report."""
+    from luxe.agents.prompts import GIT_AUDIT_HINT
+    s = GIT_AUDIT_HINT.lower()
+    assert "# repository audit" in s
     assert "**findings:" in s
+    # bug/security remit (grounded, confirm-or-dismiss)
+    assert "severity" in s and "line number" in s
+    assert "drop it" in s and "lint" in s
+    # structural remit folded in
+    assert "structural improvements" in s
+    # orientation/summary folded in
+    assert "## repository summary & risk" in s and "use-risk" in s
+    # points at the executable sibling
+    assert "gitchange" in s
 
 
-def test_git_refactor_hint_is_ordered_and_fenced_from_review():
-    from luxe.agents.prompts import GIT_REFACTOR_HINT
-    s = GIT_REFACTOR_HINT.lower()
-    assert "ordered" in s
-    # steer away from duplicating gitreview's bug/security remit
-    assert "do not" in s and ("security" in s or "correctness" in s)
-    assert "# refactor plan" in s
-    assert "**refactor steps:" in s
+def test_git_audit_deep_hints_carry_both_sections_and_summary():
+    from luxe.agents import prompts
+    for hint in (prompts.GIT_AUDIT_CHUNK_HINT, prompts.GIT_AUDIT_SYNTH_HINT):
+        s = hint.lower()
+        assert "bugs & security" in s and "structural improvements" in s
+        assert "# repository audit" in s
+    assert "## Repository summary & risk" in prompts.GIT_AUDIT_SYNTH_HINT
+
+
+def test_prior_findings_clause_only_on_gitchange():
+    from luxe.agents import prompts
+    for hint in (prompts.GIT_CHANGE_HINT, prompts.GIT_CHANGE_SYNTH_HINT):
+        assert "<prior_findings>" in hint
+    # the audit (read-only analysis) must NOT carry the change-plan-only clause
+    assert "<prior_findings>" not in prompts.GIT_AUDIT_HINT
+
+
+def test_git_change_hints_emit_v1_schema_and_markdown_chunks():
+    """gitchange single/synth emit the gitplan/v1 JSON; the CHUNK hint is markdown
+    (the JSON-only ramble fix), recovered to JSON by the extract pass."""
+    from luxe.agents import prompts
+    assert "gitplan/v1" in prompts.GIT_CHANGE_HINT       # schema string preserved
+    assert "gitplan/v1" in prompts.GIT_CHANGE_SYNTH_HINT
+    c = prompts.GIT_CHANGE_CHUNK_HINT.lower()
+    assert "# change plan" in c and "not json" in c      # markdown, not JSON
+    assert "gitplan/v1" in prompts.GIT_CHANGE_EXTRACT_HINT

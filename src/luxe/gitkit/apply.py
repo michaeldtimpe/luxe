@@ -1,4 +1,4 @@
-"""gitplan --apply / gitapply — the gated executor (gitkit's SOLE write path).
+"""gitchange --apply / gitapply — the gated executor (gitkit's SOLE write path).
 
 Orchestrates N MONO `run_single` calls from Python (the deep.py/compare precedent —
 NOT an in-agent repair loop / goal-runner): one per ordered plan step, each in WRITE
@@ -8,7 +8,7 @@ keep|discard. The SIX mandatory invariants (gitkit.sdd):
      applies).
   2. CLEAN-TREE-ONLY — aborts on a dirty working tree.
   3. NON-DEFAULT-BRANCH — never main/master/default; always a dedicated
-     `gitplan/<head>-<rand>` branch.
+     `gitchange/<head>-<rand>` branch.
   4. PER-STEP GATING — show the diff + run the step's verify, then keep (commit on
      the branch) or discard (revert just that step); `depends_on` is respected.
   5. NEVER push, NEVER merge, NEVER commit to the default branch.
@@ -75,7 +75,7 @@ def _run_verify(cmd: str, repo: Path, timeout: int) -> tuple[bool | None, str]:
 
 def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = None,
               rebuild_map: bool = False, run_single_fn=None) -> int:
-    """Execute a saved gitplan against a LOCAL repo under the six invariants.
+    """Execute a saved gitchange against a LOCAL repo under the six invariants.
     Returns a process exit code (0 ok, non-zero on abort)."""
     from luxe.gitkit import health, plan as plan_mod, store
     from luxe import pr
@@ -88,7 +88,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
         return 2
     # (2) interactive-only.
     if not _is_tty(console):
-        console.print("[red]· gitplan --apply is interactive-only; refusing to apply "
+        console.print("[red]· gitchange --apply is interactive-only; refusing to apply "
                       "unattended.[/]")
         return 2
     # (3) clean tree.
@@ -103,7 +103,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
     if orig_branch in ("main", "master") or orig_branch == default:
         console.print(f"[dim]· on default branch '{orig_branch}' — switching to a "
                       "dedicated branch.[/]")
-    branch = f"gitplan/{(head or 'nohead')[:8]}-{uuid.uuid4().hex[:4]}"
+    branch = f"gitchange/{(head or 'nohead')[:8]}-{uuid.uuid4().hex[:4]}"
     if _git(repo, "checkout", "-b", branch).returncode != 0:
         console.print(f"[red]· could not create branch {branch}.[/]")
         return 2
@@ -115,7 +115,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
     if plan is None:
         console.print("[dim]· no saved plan for this HEAD — generating one (read-only)…[/]")
         from luxe.gitkit import run_git_report
-        run_git_report("gitplan", cfg=cfg, repo_path=str(repo), console=console,
+        run_git_report("gitchange", cfg=cfg, repo_path=str(repo), console=console,
                        reader=reader, save=True, deep=deep, rebuild_map=rebuild_map)
         plan = plan_mod.latest_plan_for(repo, head)
     if not plan or not plan.get("steps"):
@@ -173,7 +173,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                      + prompts.GIT_APPLY_STEP_HINT,
                 task_type="implement", languages=languages,
                 extra_context=_step_block(step, plan, survey),
-                run_id=f"gitplan-apply-{step['id']}", phase="main")
+                run_id=f"gitchange-apply-{step['id']}", phase="main")
             _adds, _dels, diff = pr.diff_against_base(repo, branch_head)
             if not diff.strip():
                 console.print("[yellow]· no changes produced — skipping.[/]")
@@ -195,7 +195,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
             keep = ans in ("k", "keep", "y", "yes") or (ans == "" and default_keep)
             if keep:
                 _git(repo, "add", "-A")
-                _git(repo, "commit", "-m", f"gitplan {step['id']}: {step['title']}")
+                _git(repo, "commit", "-m", f"gitchange {step['id']}: {step['title']}")
                 branch_head = pr.head_sha(repo)
                 kept.append(step["id"])
                 console.print(f"[green]· kept {step['id']} (committed on {branch})[/]")

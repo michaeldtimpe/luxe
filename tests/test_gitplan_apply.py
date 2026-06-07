@@ -1,4 +1,4 @@
-"""Tests for the gated gitplan executor (apply.py) — the safety invariants.
+"""Tests for the gated gitchange executor (apply.py) — the safety invariants.
 
 Stubs run_single (the agent's edit) and drives the per-step keep/discard gate. The
 focus is the SIX invariants: interactive-only, clean-tree-only, dedicated non-default
@@ -102,7 +102,7 @@ def test_apply_refused_without_tty(repo_on_main, _cfg, monkeypatch):
                          run_single_fn=fake)
     assert rc == 2
     assert not calls                                   # no agent run, no writes
-    assert "gitplan/" not in _out(repo_on_main, "branch", "--list", "gitplan/*")
+    assert "gitchange/" not in _out(repo_on_main, "branch", "--list", "gitchange/*")
 
 
 def test_apply_aborts_on_dirty_tree(repo_on_main, _cfg, monkeypatch):
@@ -124,12 +124,12 @@ def test_apply_keeps_on_dedicated_branch_never_main(repo_on_main, _cfg, monkeypa
     rc = apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg,
                          console=_TTYConsole(), reader=lambda _p: "keep",
                          run_single_fn=fake)
-    assert rc == 0 and calls == ["gitplan-apply-S1"]
+    assert rc == 0 and calls == ["gitchange-apply-S1"]
     cur = _out(repo_on_main, "rev-parse", "--abbrev-ref", "HEAD")
-    assert cur.startswith("gitplan/")                  # on a dedicated branch
-    # the kept commit is on the gitplan branch, NOT on main
+    assert cur.startswith("gitchange/")                  # on a dedicated branch
+    # the kept commit is on the gitchange branch, NOT on main
     assert _out(repo_on_main, "rev-list", "--count", "main") == main_commits_before
-    assert "gitplan S1: tweak f" in _out(repo_on_main, "log", "-1", "--pretty=%s")
+    assert "gitchange S1: tweak f" in _out(repo_on_main, "log", "-1", "--pretty=%s")
     assert "return 2" in (repo_on_main / "main.py").read_text()
 
 
@@ -157,7 +157,7 @@ def test_apply_depends_on_skips_dependent_on_discard(repo_on_main, _cfg, monkeyp
     apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg, console=_TTYConsole(),
                     reader=lambda _p: "discard", run_single_fn=fake)
     # S1 ran and was discarded; S2 was skipped (its dep wasn't kept) → never invoked
-    assert calls == ["gitplan-apply-S1"]
+    assert calls == ["gitchange-apply-S1"]
 
 
 def test_apply_never_pushes_or_merges(repo_on_main, _cfg, monkeypatch):

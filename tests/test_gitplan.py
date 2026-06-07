@@ -1,7 +1,7 @@
-"""Tests for gitplan — the apply-ready structured change-plan kind (read-only).
+"""Tests for gitchange — the apply-ready structured change-plan kind (read-only).
 
 Covers the deterministic plan.py (parse/normalize/order/render/save) and the
-gitplan single-pass + deep orchestration with a STUBBED run_single.
+gitchange single-pass + deep orchestration with a STUBBED run_single.
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def test_order_steps_topological_and_cycle():
 def test_render_markdown_shape():
     p = plan.normalize_plan(plan.parse_plan(_PLAN_JSON), head="h")
     md = plan.render_markdown(p)
-    assert md.startswith("# Refactor change plan")
+    assert md.startswith("# Change plan")
     assert "**Steps: 2**" in md
     assert "## S1: Extract client factory" in md
     assert "**Verify:** pytest -q" in md
@@ -154,14 +154,14 @@ def _stub_run(monkeypatch, fn):
     monkeypatch.setattr(single_mod, "run_single", fn)
 
 
-def test_gitplan_single_pass_saves_plan_and_renders(small_repo, _gitkit_cfg, monkeypatch):
+def test_gitchange_single_pass_saves_plan_and_renders(small_repo, _gitkit_cfg, monkeypatch):
     from luxe.gitkit import run_git_report, store
     from luxe.memory.project import repo_hash
 
     _stub_run(monkeypatch, lambda *a, **k: _FakeResult(_PLAN_JSON))
-    report, saved = run_git_report("gitplan", cfg=_gitkit_cfg, repo_path=small_repo,
+    report, saved = run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=small_repo,
                                    console=_QuietConsole(), save=True, deep=False)
-    assert report.startswith("# Refactor change plan")
+    assert report.startswith("# Change plan")
     assert "## S1: Extract client factory" in report
     # plan.json persisted (canonical) + mirrored into the repo
     rdir = Path.home() / ".luxe" / "reports" / repo_hash(small_repo)
@@ -169,8 +169,11 @@ def test_gitplan_single_pass_saves_plan_and_renders(small_repo, _gitkit_cfg, mon
     assert list((small_repo / ".luxe" / "gitkit" / "plans").glob("plan-*.json"))
 
 
-def test_gitplan_is_single_pass_even_with_deep(small_repo, _gitkit_cfg, monkeypatch):
-    """gitplan never enters the deep map-reduce (a refactor plan is holistic)."""
+def test_gitchange_small_repo_auto_stays_single_pass(small_repo, _gitkit_cfg,
+                                                   monkeypatch):
+    """A small repo (footprint under the deep trigger) takes the single-pass path —
+    one analysis pass, no survey/chunk/synthesis (a holistic plan is best in one
+    window when it fits)."""
     import luxe.agents.single as single_mod
     from luxe.gitkit import run_git_report
 
@@ -181,14 +184,13 @@ def test_gitplan_is_single_pass_even_with_deep(small_repo, _gitkit_cfg, monkeypa
         return _FakeResult(_PLAN_JSON)
 
     _stub_run(monkeypatch, fake)
-    run_git_report("gitplan", cfg=_gitkit_cfg, repo_path=small_repo,
-                   console=_QuietConsole(), save=True, deep=True)  # deep forced…
-    # …but no survey/chunk/synthesis passes ran — exactly one analysis pass.
+    run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=small_repo,
+                   console=_QuietConsole(), save=True, deep=None)  # auto by footprint
+    assert calls == ["gitkit-gitchange"]
     assert not any("deep" in c for c in calls)
-    assert calls == ["gitkit-gitplan"]
 
 
-def test_gitplan_recovers_via_extraction_pass(small_repo, _gitkit_cfg, monkeypatch):
+def test_gitchange_recovers_via_extraction_pass(small_repo, _gitkit_cfg, monkeypatch):
     """When the analysis emits prose (no JSON), a transcription pass recovers it."""
     import luxe.agents.single as single_mod
     from luxe.gitkit import run_git_report
@@ -203,10 +205,124 @@ def test_gitplan_recovers_via_extraction_pass(small_repo, _gitkit_cfg, monkeypat
         return _FakeResult("Here is a prose plan: 1. extract the client. No JSON.")
 
     _stub_run(monkeypatch, fake)
-    report, _ = run_git_report("gitplan", cfg=_gitkit_cfg, repo_path=small_repo,
+    report, _ = run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=small_repo,
                                console=_QuietConsole(), save=True, deep=False)
-    assert "gitkit-gitplan-extract" in calls                 # recovery fired
+    assert "gitkit-gitchange-extract" in calls                 # recovery fired
     assert "## S1: Extract client factory" in report         # steps recovered
     rdir = Path.home() / ".luxe" / "reports" / repo_hash(small_repo)
     pj = json.loads(next(rdir.glob("plan-*.json")).read_text())
     assert len(pj["steps"]) == 2
+
+
+# --- deep gitchange (large-repo map-reduce) -----------------------------------
+
+@pytest.fixture
+def multi_repo(tmp_path: Path) -> Path:
+    """A multi-file repo so the chunker (with a tiny content budget) produces ≥2
+    chunks — the large-repo path that single-pass gitchange emptied on."""
+    repo = tmp_path / "mrepo"
+    (repo / "api").mkdir(parents=True)
+    (repo / "core").mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@e.com")
+    _git(repo, "config", "user.name", "T")
+    for d, n in (("api", 3), ("core", 3)):
+        for i in range(n):
+            (repo / d / f"m{i}.py").write_text(f"def f{i}():\n    return {i}\n" * 5)
+    (repo / "main.py").write_text("def main():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    return repo
+
+
+# one apply-ready step per chunk (distinct titles → all survive synthesis dedup)
+def _chunk_steps_json(tag: str) -> str:
+    return ('```json\n{"steps":[{"id":"c1","title":"extract ' + tag + '",'
+            '"target_files":["' + tag + '/m0.py"],'
+            '"change":{"op":"extract","symbols":["f0"],"detail":"pull out helper"},'
+            '"rationale":"dup","risk":"low","verify":"pytest -q","depends_on":[]}]}\n```')
+
+
+def _gitchange_deep_stub(calls, *, chunk_text=None, synth_text=None,
+                       extract_text=None):
+    """run_single stub for a deep gitchange run, keyed on the pass run_id."""
+    def fake(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        calls.append(run_id)
+        if "survey" in run_id:
+            return _FakeResult("Survey: a small python application.")
+        if "plan-extract" in run_id:
+            return _FakeResult(extract_text if extract_text is not None else _PLAN_JSON)
+        if "synthesis" in run_id:
+            return _FakeResult(synth_text if synth_text is not None else _PLAN_JSON)
+        # chunk pass → its own area's step (the chunk_files listing names the dir)
+        if chunk_text is not None:
+            return _FakeResult(chunk_text)
+        tag = "core" if "- core/" in extra_context else "api"
+        return _FakeResult(_chunk_steps_json(tag))
+    return fake
+
+
+def test_gitchange_enters_deep_when_forced(multi_repo, _gitkit_cfg, monkeypatch):
+    """Forced deep (or large footprint) routes gitchange through the staged map-reduce:
+    survey → chunks → synthesis, and a structured plan is saved + mirrored."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)  # force ≥2 chunks
+    calls: list[str] = []
+    _stub_run(monkeypatch, lambda *a, **k: None)              # install fake Backend
+    monkeypatch.setattr(single_mod, "run_single", _gitchange_deep_stub(calls))
+
+    report, saved = run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=multi_repo,
+                                   console=_QuietConsole(), save=True, deep=True)
+    assert len([c for c in calls if "survey" in c]) == 1
+    assert len([c for c in calls if "synthesis" in c]) == 1
+    assert len([c for c in calls if "chunk" in c]) >= 2
+    assert "gitkit-gitchange" not in calls                      # NOT the single-pass id
+    assert report.startswith("# Change plan")
+
+    # canonical plan.json + repo mirror both written
+    rdir = store.reports_dir(multi_repo)
+    assert list(rdir.glob("plan-*.json"))
+    assert list((multi_repo / ".luxe" / "gitkit" / "plans").glob("plan-*.json"))
+
+
+def test_gitchange_deep_recovers_prose_chunk(multi_repo, _gitkit_cfg, monkeypatch):
+    """A chunk that rambles instead of emitting JSON gets its steps recovered by a
+    chunk-level plan-extract pass (not lost to the report-shaped path)."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    calls: list[str] = []
+    _stub_run(monkeypatch, lambda *a, **k: None)
+    # every chunk emits prose → recovery must fire to produce any steps
+    monkeypatch.setattr(single_mod, "run_single", _gitchange_deep_stub(
+        calls, chunk_text="Prose only: extract the helper. No JSON block."))
+
+    run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=multi_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert any("plan-extract" in c for c in calls)            # chunk recovery fired
+    pj = json.loads(next(store.reports_dir(multi_repo).glob("plan-*.json")).read_text())
+    assert len(pj["steps"]) >= 1                              # steps survived
+
+
+def test_gitchange_deep_synthesis_falls_back_to_digest_steps(multi_repo, _gitkit_cfg,
+                                                           monkeypatch):
+    """When BOTH the synthesis and its transcription recovery ramble, the plan is
+    assembled deterministically from the aggregated per-chunk digest steps."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    calls: list[str] = []
+    _stub_run(monkeypatch, lambda *a, **k: None)
+    # chunks emit clean JSON steps; synthesis + its extract both ramble (no JSON)
+    monkeypatch.setattr(single_mod, "run_single", _gitchange_deep_stub(
+        calls, synth_text="No JSON, just musing about the plan.",
+        extract_text="Still no JSON here."))
+
+    run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=multi_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    pj = json.loads(next(store.reports_dir(multi_repo).glob("plan-*.json")).read_text())
+    assert len(pj["steps"]) >= 2                              # api + core chunk steps

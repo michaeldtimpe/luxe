@@ -192,31 +192,31 @@ def test_empty_digest_has_unparsed_chunks():
 def test_render_report_assembles_clean_report_from_notes():
     d = deep.empty_digest()
     d["markdown_notes"] = [
-        {"chunk": 0, "label": "auth", "md": "# Bug & security review\n"
+        {"chunk": 0, "label": "auth", "md": "# Repository audit\n"
          "**Findings: 1 (1 critical)**\n\n## Critical — bypass\n`a.py:10` high."},
-        {"chunk": 1, "label": "api", "md": "# Bug & security review\n"
+        {"chunk": 1, "label": "api", "md": "# Repository audit\n"
          "**Findings: 1 (1 high)**\n\n## High — dos\n`b.py:20` medium."},
     ]
     d["unparsed_chunks"] = ["chunk 3 (x): c.py"]
-    out = deep._render_report(d, "gitreview")
-    assert out.startswith("# Bug & security review")
+    out = deep._render_report(d, "gitaudit")
+    assert out.startswith("# Repository audit")
     assert "## Area: auth (chunk 1)" in out and "## Area: api (chunk 2)" in out
     assert "## Coverage gaps" in out and "c.py" in out
     assert not deep._looks_rambly(out)          # deterministic = never rambly
     # the per-note headers were stripped, body kept
-    assert out.count("# Bug & security review") == 1
+    assert out.count("# Repository audit") == 1
     assert "bypass" in out and "dos" in out
 
 
 def test_looks_rambly_detects_reasoning_and_length():
-    clean = ("# Bug & security review\n**Findings: 1 (1 high)**\n\n"
+    clean = ("# Repository audit\n**Findings: 1 (1 high)**\n\n"
              "## High — bypass\n`x.py:1` evidence. Impact. Fix.")
-    rambly = ("# Bug & security review\n**Findings: 1**\n...\n"
+    rambly = ("# Repository audit\n**Findings: 1**\n...\n"
               "Let me re-rate this. Wait, I need to consolidate. "
               "Actually, I should check the next finding.")
     assert deep._looks_rambly(clean) is False
     assert deep._looks_rambly(rambly) is True
-    assert deep._looks_rambly("# Bug & security review\n" + "\n".join(
+    assert deep._looks_rambly("# Repository audit\n" + "\n".join(
         f"line {i}" for i in range(250))) is True   # too long
 
 
@@ -300,9 +300,9 @@ def test_estimate_run_zero_chunks_no_false_floor():
 def test_extract_report_keys_on_required_title_over_stray_heading():
     from luxe.gitkit.runner import extract_report
     raw = ("# Notes to self\nsome musing\n"
-           "# Bug & security review\n**Findings: 0**\nclean")
-    out = extract_report(raw, "gitreview")
-    assert out.startswith("# Bug & security review")
+           "# Repository audit\n**Findings: 0**\nclean")
+    out = extract_report(raw, "gitaudit")
+    assert out.startswith("# Repository audit")
     assert "Notes to self" not in out
 
 
@@ -385,7 +385,7 @@ def _deep_stub(calls: list[str]):
         if stage == "survey":
             return _FakeResult("Survey notes: it is a python app.")
         if stage == "synthesis":
-            return _FakeResult("# Bug & security review\n**Findings: 0**\nclean")
+            return _FakeResult("# Repository audit\n**Findings: 0**\nclean")
         # a chunk pass → structured JSON
         return _FakeResult('```json\n{"modules": [], "entities": [], '
                            '"cross_cutting": [], "findings": []}\n```')
@@ -402,7 +402,7 @@ def test_deep_orchestration_counts_passes_and_writes_artifacts(
     calls: list[str] = []
     monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
 
-    report, saved = run_git_report("gitreview", cfg=_gitkit_cfg,
+    report, saved = run_git_report("gitaudit", cfg=_gitkit_cfg,
                                    repo_path=big_repo, console=_QuietConsole(),
                                    save=True, deep=True)
     surveys = [c for c in calls if "survey" in c]
@@ -410,13 +410,13 @@ def test_deep_orchestration_counts_passes_and_writes_artifacts(
     chunks = [c for c in calls if c.startswith("chunk")]
     assert len(surveys) == 1 and len(synths) == 1
     assert len(chunks) >= 2                       # repo split into ≥2 chunks
-    assert report.startswith("# Bug & security review")
+    assert report.startswith("# Repository audit")
 
     # map cache + work dir persisted
     rdir = store.reports_dir(big_repo)
     assert (rdir / "map" / "chunks.json").is_file()
     assert (rdir / "map" / "survey_notes.md").is_file()
-    work = list(rdir.glob("gitreview-*.work"))
+    work = list(rdir.glob("gitaudit-*.work"))
     assert work and (work[0] / "xref.json").is_file()
     assert list(work[0].glob("chunk-*.md"))
 
@@ -430,12 +430,12 @@ def test_deep_map_cache_reused_on_second_run(big_repo, _gitkit_cfg, monkeypatch)
     calls: list[str] = []
     monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
 
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     first_surveys = len([c for c in calls if "survey" in c])
     calls.clear()
     # second run, same HEAD → reuse map (no survey pass), but chunks still analyzed
-    run_git_report("gitrefactor", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     assert first_surveys == 1
     assert len([c for c in calls if "survey" in c]) == 0      # reused
@@ -443,7 +443,7 @@ def test_deep_map_cache_reused_on_second_run(big_repo, _gitkit_cfg, monkeypatch)
 
     # --rebuild-map forces a re-survey
     calls.clear()
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True, rebuild_map=True)
     assert len([c for c in calls if "survey" in c]) == 1
 
@@ -458,10 +458,10 @@ def test_deep_writes_timing_sidecar(big_repo, _gitkit_cfg, monkeypatch):
     _stub_backend(monkeypatch)
     monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
 
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
 
-    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))[0]
+    work = list(store.reports_dir(big_repo).glob("gitaudit-*.work"))[0]
     blob = json.loads((work / "timing.json").read_text())
     # survey + ≥2 chunks + synthesis
     assert blob["n_passes"] >= 4
@@ -483,7 +483,7 @@ def test_deep_frontmatter_carries_timing(big_repo, _gitkit_cfg, monkeypatch):
     _stub_backend(monkeypatch)
     monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
 
-    _, saved = run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    _, saved = run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                               console=_QuietConsole(), save=True, deep=True)
     text = saved.read_text()
     assert "mode: deep" in text
@@ -510,25 +510,25 @@ def test_deep_recovers_markdown_findings_when_no_json(big_repo, _gitkit_cfg, mon
             return _FakeResult("survey notes")
         if stage == "synthesis":
             seen["synth_ctx"] = extra_context
-            return _FakeResult("# Bug & security review\n**Findings: 1**\nx")
+            return _FakeResult("# Repository audit\n**Findings: 1**\nx")
         # chunk: monologue, THEN the required header + a real finding (no JSON)
         return _FakeResult(
             "Let me analyze these files step by step...\n"
             "I looked at the webhook handler and the config loader.\n\n"
-            "# Bug & security review\n**Findings: 1 (1 high)**\n\n"
+            "# Repository audit\n**Findings: 1 (1 high)**\n\n"
             "## High — signature bypass\n`webhook.py:106` returns True when key "
             "unset.\nImpact: unauthenticated webhooks. Fix: fail closed.")
 
     monkeypatch.setattr(single_mod, "run_single", fake_run_single)
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
-    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
+    work = list(store.reports_dir(big_repo).glob("gitaudit-*.work"))
     xref = json.loads((work[0] / "xref.json").read_text())
     assert len(xref["markdown_notes"]) >= 2          # recovered, not dropped
     assert xref["unparsed_chunks"] == []
     # the monologue was sliced off; the finding reached synthesis
     note = xref["markdown_notes"][0]["md"]
-    assert note.startswith("# Bug & security review")
+    assert note.startswith("# Repository audit")
     assert "step by step" not in note
     assert "signature bypass" in seen["synth_ctx"]
 
@@ -550,12 +550,12 @@ def test_deep_format_pass_recovers_findings_from_rambly_analysis(
             return _FakeResult("survey notes")
         if "synthesis" in run_id:
             seen["synth_ctx"] = extra_context
-            return _FakeResult("# Bug & security review\n**Findings: 1**\nx")
+            return _FakeResult("# Repository audit\n**Findings: 1**\nx")
         if "format" in run_id:
             # the transcription pass: gets the rambly analysis, emits a clean report
             seen["format_ctx"].append(extra_context)
             return _FakeResult(
-                "# Bug & security review\n**Findings: 1 (1 high)**\n\n"
+                "# Repository audit\n**Findings: 1 (1 high)**\n\n"
                 "## High — signature bypass\n`webhook.py:106` returns True when "
                 "key unset.")
         # chunk analysis: rambly headerless prose (≥3 reasoning markers → rambly)
@@ -565,12 +565,12 @@ def test_deep_format_pass_recovers_findings_from_rambly_analysis(
             "next file. Let me also re-rate this. Hmm, def foo(")
 
     monkeypatch.setattr(single_mod, "run_single", fake_run_single)
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
 
     # the transcription pass received the rambly analysis as input
     assert seen["format_ctx"] and "signature" in seen["format_ctx"][0].lower()
-    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
+    work = list(store.reports_dir(big_repo).glob("gitaudit-*.work"))
     xref = json.loads((work[0] / "xref.json").read_text())
     assert len(xref["markdown_notes"]) >= 2          # recovered via format pass
     assert xref["unparsed_chunks"] == []             # nothing lost
@@ -585,7 +585,7 @@ def test_deep_format_pass_cleans_rambly_synthesis(big_repo, _gitkit_cfg, monkeyp
 
     monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
     _stub_backend(monkeypatch)
-    clean = ("# Bug & security review\n**Findings: 1 (1 critical)**\n\n"
+    clean = ("# Repository audit\n**Findings: 1 (1 critical)**\n\n"
              "## Critical — signature bypass\n`webhook.py:106` returns True.")
 
     def fake_run_single(backend, role_cfg, *, run_id="", extra_context="", **kw):
@@ -597,7 +597,7 @@ def test_deep_format_pass_cleans_rambly_synthesis(big_repo, _gitkit_cfg, monkeyp
         if "synthesis" in run_id:
             # rambly synthesis: header then a wall of reasoning
             return _FakeResult(
-                "# Bug & security review\n**Findings: 1**\n...\n"
+                "# Repository audit\n**Findings: 1**\n...\n"
                 "Let me re-rate. Wait, I need to consolidate these. Actually, I "
                 "should ignore the chain-of-thought. " + "\n".join(
                     f"reasoning line {i}" for i in range(250)))
@@ -606,10 +606,10 @@ def test_deep_format_pass_cleans_rambly_synthesis(big_repo, _gitkit_cfg, monkeyp
 
     seen_draft: list[str] = []
     monkeypatch.setattr(single_mod, "run_single", fake_run_single)
-    report, saved = run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    report, saved = run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                                    console=_QuietConsole(), save=True, deep=True)
     assert seen_draft                                    # format pass ran
-    assert report.startswith("# Bug & security review")
+    assert report.startswith("# Repository audit")
     assert "re-rate" not in report and "reasoning line" not in report
     assert "signature bypass" in report                 # clean findings kept
 
@@ -624,7 +624,7 @@ def test_deep_max_chunks_caps_and_logs(big_repo, _gitkit_cfg, monkeypatch):
     monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
 
     out = io.StringIO()
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=Console(file=out, force_terminal=False, width=200),
                    save=True, deep=True, max_chunks=1)
     assert len([c for c in calls if c.startswith("chunk")]) == 1
@@ -643,12 +643,12 @@ def test_deep_cancel_between_chunks_saves_partial(big_repo, _gitkit_cfg, monkeyp
 
     cancel = CancelToken()
     cancel.requested = True   # the per-chunk loop raises before chunk 1
-    report, saved = run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    report, saved = run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                                    console=_QuietConsole(), save=True, deep=True,
                                    cancel=cancel)
     assert report == "" and saved is None
     # partial notes (xref.json) were written before exit
-    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
+    work = list(store.reports_dir(big_repo).glob("gitaudit-*.work"))
     assert work and (work[0] / "xref.json").is_file()
 
 
@@ -666,14 +666,14 @@ def test_deep_synthesis_receives_aggregated_digest(big_repo, _gitkit_cfg, monkey
             return _FakeResult("survey notes")
         if "synthesis" in stage:
             seen["synth_ctx"] = extra_context
-            return _FakeResult("# Bug & security review\n**Findings: 1**\nx")
+            return _FakeResult("# Repository audit\n**Findings: 1**\nx")
         # chunk → emit one finding so the digest is non-empty
         return _FakeResult('```json\n{"findings": [{"title": "bug", '
                            '"root_cause": "rc", "severity": "High", '
                            '"evidence": ["a.py:1"]}]}\n```')
 
     monkeypatch.setattr(single_mod, "run_single", fake_run_single)
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     assert "<chunk_findings>" in seen["synth_ctx"]
     assert "rc" in seen["synth_ctx"]      # aggregated finding reached synthesis
@@ -695,15 +695,15 @@ def test_deep_empty_chunk_is_flagged_not_dropped(big_repo, _gitkit_cfg, monkeypa
             return _FakeResult("survey notes")
         if stage == "synthesis":
             seen["synth_ctx"] = extra_context
-            return _FakeResult("# Bug & security review\n**Findings: 0**\nx")
+            return _FakeResult("# Repository audit\n**Findings: 0**\nx")
         return _FakeResult("")   # empty chunk output → nothing to recover
 
     monkeypatch.setattr(single_mod, "run_single", fake_run_single)
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     assert "unparsed_chunks" in seen["synth_ctx"]
     # the digest persisted to disk records the flagged chunks
-    work = list(store.reports_dir(big_repo).glob("gitreview-*.work"))
+    work = list(store.reports_dir(big_repo).glob("gitaudit-*.work"))
     xref = json.loads((work[0] / "xref.json").read_text())
     assert len(xref["unparsed_chunks"]) >= 2
 
@@ -809,14 +809,14 @@ def test_deep_partial_map_batch_rebuilds_and_logs(big_repo, _gitkit_cfg, monkeyp
     calls: list[str] = []
     monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
 
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     assert len([c for c in calls if "survey" in c]) == 1
     # damage the map (delete a heavy file), then re-run on the SAME head
     (store.reports_dir(big_repo) / "map" / "survey_notes.md").unlink()
     calls.clear()
     out = io.StringIO()
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=Console(file=out, force_terminal=False, width=120),
                    save=True, deep=True)
     assert len([c for c in calls if "survey" in c]) == 1     # rebuilt, not reused
@@ -832,12 +832,12 @@ def test_deep_partial_map_interactive_cancel(big_repo, _gitkit_cfg, monkeypatch)
     calls: list[str] = []
     monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
 
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     (store.reports_dir(big_repo) / "map" / "survey_notes.md").unlink()
     calls.clear()
     report, saved = run_git_report(
-        "gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+        "gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
         console=_InteractiveConsole(), reader=lambda _p: "n", save=True, deep=True)
     assert (report, saved) == ("", None)                     # cancelled
     assert not [c for c in calls if "survey" in c]            # no re-survey
@@ -852,11 +852,11 @@ def test_deep_partial_map_interactive_rebuild(big_repo, _gitkit_cfg, monkeypatch
     calls: list[str] = []
     monkeypatch.setattr(single_mod, "run_single", _deep_stub(calls))
 
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     (store.reports_dir(big_repo) / "map" / "survey_notes.md").unlink()
     calls.clear()
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_InteractiveConsole(), reader=lambda _p: "y",
                    save=True, deep=True)
     assert len([c for c in calls if "survey" in c]) == 1      # rebuilt on Y
@@ -872,14 +872,14 @@ def test_deep_run_mirrors_map_and_report(big_repo, _gitkit_cfg, monkeypatch):
     _stub_backend(monkeypatch)
     monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
 
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     mirror = big_repo / ".luxe" / "gitkit"
     assert (mirror / "survey_notes.md").is_file()
     assert (mirror / "chunks.json").is_file()
     assert (mirror / "mapped.json").is_file()
     assert (mirror / "README.md").is_file()
-    assert list((mirror / "reports").glob("gitreview-*.md"))
+    assert list((mirror / "reports").glob("gitaudit-*.md"))
 
 
 def test_deep_run_no_mirror_skips_repo_write(big_repo, _gitkit_cfg, monkeypatch):
@@ -890,6 +890,6 @@ def test_deep_run_no_mirror_skips_repo_write(big_repo, _gitkit_cfg, monkeypatch)
     _stub_backend(monkeypatch)
     monkeypatch.setattr(single_mod, "run_single", _deep_stub([]))
 
-    run_git_report("gitreview", cfg=_gitkit_cfg, repo_path=big_repo,
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True, mirror=False)
     assert not (big_repo / ".luxe" / "gitkit").exists()
