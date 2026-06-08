@@ -1218,6 +1218,22 @@ def _render_report(digest: dict, kind: str) -> str:
 _SEV_LINE_RE = re.compile(
     r"(critical|high|medium|low)\b.*?(`[^`]+`|\b[\w./-]+\.[a-z]{1,4}:\d+)",
     re.IGNORECASE)
+# Additional finding shapes the champion actually emits when it rambles past the
+# report header (offline-recovery analysis 2026-06-08, scripts/recover_offline.py):
+# numbered BOLD list items carrying a file/line/code ref, and canonical report
+# bullets. Keyed on the FINDING shape (numbered+bold, or a labelled bullet) so plain
+# exploration narrative ("Let me look at cli.py:29") is not swept in. This lifted
+# heuristic salvage on captured unparsed dumps from ~2% to ~64% at zero model cost.
+_NUM_BOLD_RE = re.compile(r"^\s*\d+[.)]\s+\*\*")
+_REPORT_BULLET_RE = re.compile(
+    r"\*\*\s*(file|issue|bug|severity|line|impact|fix|problem|risk|location)\b", re.I)
+_FILE_LINE_RE = re.compile(
+    r"\b[\w./-]+\.(py|rs|js|ts|tsx|go|sh|ya?ml|toml|c|cpp|h)\b(?:[:\s]+(?:line\s+)?\d+)",
+    re.I)
+_BOLD_FILE_RE = re.compile(
+    r"\*\*[^*]*?(?:\.(py|rs|js|ts|go|sh|ya?ml)\b|line\s+\d+)[^*]*?\*\*", re.I)
+# Lines the model explicitly marks as NON-findings — drop them to keep the salvage clean.
+_NON_FINDING_RE = re.compile(r"\b(not a bug|no issue|no code|nothing here|n/?a)\b", re.I)
 
 
 def _strip_report_header(md: str) -> str:
@@ -1236,18 +1252,35 @@ def _strip_report_header(md: str) -> str:
     return "\n".join(out).strip()
 
 
-def _heuristic_findings(text: str) -> list[str]:
-    """Last-resort: pull finding-shaped lines (a severity word + a `path`/file:line)
-    out of rambly prose, deduped, so a clean report can still be rendered."""
-    seen, out = set(), []
+def _heuristic_findings(text: str, *, cap: int = 60) -> list[str]:
+    """Last-resort: pull finding-shaped lines out of rambly prose, deduped, so a
+    clean report can still be rendered. Matches the shapes the champion emits when
+    it never reaches the report header — a severity word + `path`/file:line, OR a
+    numbered BOLD item with a file/line/code ref, OR a canonical report bullet
+    (**File:**/**Impact:**/…). Keeps markdown markers (matches the raw line) so the
+    bold/numbered shapes survive; drops explicit non-findings."""
+    seen: set[str] = set()
+    out: list[str] = []
     for ln in (text or "").splitlines():
-        ln = ln.strip(" -*#\t")
-        if len(ln) < 8 or ln.lower() in seen:
+        s = ln.strip()
+        if len(s) < 12 or _NON_FINDING_RE.search(s):
             continue
-        if _SEV_LINE_RE.search(ln):
-            seen.add(ln.lower())
-            out.append(ln)
-    return out[:40]
+        is_finding = (
+            _SEV_LINE_RE.search(s)
+            or (_NUM_BOLD_RE.search(s)
+                and (_FILE_LINE_RE.search(s) or _BOLD_FILE_RE.search(s) or "`" in s))
+            or _REPORT_BULLET_RE.search(s)
+        )
+        if not is_finding:
+            continue
+        key = re.sub(r"\s+", " ", s.lower())[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s[:200])
+        if len(out) >= cap:
+            break
+    return out
 
 
 def _clean_note(md: str, kind: str, *, pass_fn, role) -> str | None:
