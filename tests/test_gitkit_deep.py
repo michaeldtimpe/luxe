@@ -220,6 +220,33 @@ def test_looks_rambly_detects_reasoning_and_length():
         f"line {i}" for i in range(250))) is True   # too long
 
 
+def test_heuristic_findings_salvages_numbered_bold_and_drops_nonfindings():
+    """Offline-recovery upgrade: the champion emits findings as numbered BOLD items
+    with a file/line/code ref when it never reaches the report header. The heuristic
+    must salvage those (the old severity-word-only regex missed them) and skip lines
+    explicitly marked as non-findings + plain exploration narrative."""
+    ramble = (
+        "Let me analyze this file carefully. Let me look at cli.py:29 more.\n"
+        "1. **cli.py line 29-38**: `git clone --depth=1` without verifying the URL scheme\n"
+        "2. **Line 1288**: `tempfile.mkdtemp(...)` — temp dir only cleaned up if flag set\n"
+        "3. **`_check_regex_present` (line 609)**: off-by-one in the match counter\n"
+        "4. **util.py line 12**: `import yaml as _yaml` — Not a bug.\n"
+        "Now let me check the next file to be thorough.\n")
+    out = deep._heuristic_findings(ramble)
+    joined = " ".join(out)
+    assert len(out) == 3                              # 3 real findings recovered
+    assert "git clone" in joined and "tempfile" in joined and "off-by-one" in joined
+    assert "Not a bug" not in joined                  # explicit non-finding dropped
+    assert "Let me analyze" not in joined             # exploration narrative skipped
+    # the OLD severity-word-only regex would have salvaged none of these
+    assert all(not _re_sev(o) for o in out)
+
+
+def _re_sev(line: str) -> bool:
+    import re
+    return bool(re.search(r"\b(critical|high|medium|low)\b", line, re.I))
+
+
 # --- digest merge / compaction ---------------------------------------------
 
 def _digest_with(findings):
