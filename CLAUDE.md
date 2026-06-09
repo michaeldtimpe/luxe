@@ -103,6 +103,36 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
   path untouched. Do NOT pass `on_token` from the benchmark/maintain path.
 - New work here walks `src/luxe/{chat,compare,memory}/<dir>.sdd` first.
 
+## gitkit — repo-analysis (`luxe gitaudit` / `luxe gitchange`)
+
+Read-only repo analysis + an apply-ready change planner. Package `src/luxe/gitkit/`;
+walk `gitkit.sdd` first. TWO commands (collapsed from the original four 2026-06-07;
+old names `gitsummary`/`gitreview`/`gitrefactor`→`gitaudit`, `gitplan`→`gitchange`
+are hidden back-compat aliases):
+
+- **`gitaudit`** — ONE read-only report: orientation + bugs/security + structural
+  advice. Also `/gitaudit` in `luxe chat`.
+- **`gitchange`** — apply-ready structured `gitplan/v1` JSON plan (schema string
+  stays `gitplan/v1` — do NOT rename) + the gated `gitchange --apply` / `luxe
+  gitapply` executor (gitkit's SOLE sanctioned agent-write path, six invariants in
+  `apply.py`/`gitkit.sdd`).
+
+Both auto-route by repo footprint: small → SINGLE-PASS; large → the staged DEEP
+map-reduce (`deep.py`: survey → per-chunk → synthesis, per-repo HEAD-keyed `map/`
+cache). Prompts are `GIT_AUDIT_*`/`GIT_CHANGE_*` + deep `GIT_SURVEY/*_CHUNK/*_SYNTH/
+DEEP_FORMAT/DEEP_REDUCE` in `agents/prompts.py` (gitkit.sdd Forbids inline prompts).
+
+**Load-bearing design finding** (validated by sweeps + a chunk-conclude A/B,
+2026-06; memories `project_deep_gitplan`, `project_gitaudit_conclude_experiment`):
+the champion will NOT self-package — on large chunks it rambles 55–71k chars and
+never emits the report header. So **separate detection from packaging**: chunk
+prompts request a concise MARKDOWN list (a JSON-only chunk contract makes it ramble
+worse), and Python recovers/packages the findings deterministically
+(`deep._heuristic_findings` matches the numbered-bold finding lines it emits;
+`_render_report` assembles). Prevention prompts ("emit header first" / "stop
+exploring") were REFUTED — do not try to prompt-discipline conclusion; improve the
+deterministic recovery instead.
+
 ## Architecture: SpecDD Lever 2 `.sdd` chain
 
 Every directory of consequence has a `<dir>/<dir>.sdd` contract listing
