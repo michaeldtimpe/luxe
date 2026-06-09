@@ -1,5 +1,35 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-06-09) — gitaudit chunk conclude-discipline: RECOVERY shipped, PREVENTION refuted
+
+**TL;DR.** Chased the gitaudit medium-repo gaps (deluxe 42% / neo-llm-bench 45%
+unparsed chunks). Root cause: the champion RAMBLES 55–71k chars and never emits the
+`# Repository audit` header (NOT chunk size — unparsed chunks aren't bigger).
+
+1. **RECOVERY shipped (commit `362a2e8`).** Broadened `deep._heuristic_findings`
+   to match the numbered-bold finding lines the champion actually emits ("1.
+   **cli.py line 29-38**: …"); the old severity-word-only regex caught ~2%. Offline
+   analysis (`scripts/recover_offline.py`) over 56 captured dumps → **~64% free
+   salvage**, halved the gaps (luxe 12→3, aurora 6→1, whetstone 10→4), zero model
+   cost, zero suppression (only runs on already-failed rambly chunks). Suite 1453.
+
+2. **PREVENTION refuted** (chunk-conclude A/B; `scripts/chunk_conclude_ab.py` +
+   `analyze_ccab.py`; replay over FRESH cached maps, deluxe+neo-llm-bench = 41
+   chunks, R=3, per-chunk McNemar + find_ratio guardrail). A0: concl 27% / lost
+   20%. **A1 header-first** REFUTED (concl→20%, p=0.508 — emitting the header first
+   doesn't stop the ramble). **A2 commit-now** REFUTED on the conclude gate (concl
+   unchanged, p=1.000; lost 20%→7% but via salvage overlap + a 0.91× findings cost
+   = mild suppression). Stopped after A2 per the agreed rule (A3=A1+A2 and A4
+   token-knob are confirmatory; saved ~18h). **No prompt arm ships.**
+
+**Lesson:** can't reliably PROMPT this champion to conclude — RECOVER its prose in
+Python (reinforces the deep-mode "separate detection from packaging" principle).
+gitaudit's combined report already scales (big repos 13–22% gap) and the recovery
+heuristic handles the residual. Memory: `project_gitaudit_conclude_experiment`.
+A2 noted as a deferred lost-rate lever only if it ever outweighs the ~9% findings cost.
+
+---
+
 ## ⇒ SESSION HANDOFF (2026-06-07) — DEEP GITPLAN built+validated, then gitkit collapsed to TWO tools (gitaudit + gitchange)
 
 **TL;DR.** Two things shipped on `feat/chat-tui` this session:
