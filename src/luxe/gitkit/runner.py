@@ -203,6 +203,7 @@ def run_git_report(
     base: str | None = None,
     pr: int | None = None,
     min_severity: str | None = None,
+    no_incremental: bool = False,
 ) -> tuple[str, Path | None]:
     """Run a read-only analysis over a repo and report the result.
 
@@ -431,6 +432,7 @@ def run_git_report(
                     verbose=verbose, cancel=cancel, max_chunks=max_chunks,
                     rebuild_map=rebuild_map, prior_report=prior_findings,
                     mirror=mirror, min_severity=min_severity,
+                    no_incremental=no_incremental,
                 )
 
         def _do_run(on_event=None, on_token=None):

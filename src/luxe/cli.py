@@ -768,7 +768,8 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                     deep: bool | None = None, max_chunks: int | None = None,
                     rebuild_map: bool = False, mirror: bool = True,
                     base: str | None = None, pr: int | None = None,
-                    min_severity: str | None = None) -> None:
+                    min_severity: str | None = None,
+                    no_incremental: bool = False) -> None:
     """Shared body for the gitaudit/gitchange CLI commands. The runner owns target
     resolution (incl. cloning a URL when the path is not a git repo), index
     building, and repo_root; here we only clone an explicit URL arg up front,
@@ -791,7 +792,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                        console=console, save=save, verbose=verbose,
                        deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map,
                        mirror=mirror, base=base, pr=pr,
-                       min_severity=min_severity)
+                       min_severity=min_severity, no_incremental=no_incremental)
     finally:
         if not keep_loaded:
             from luxe.backend import Backend
@@ -841,6 +842,9 @@ def _gitkit_options(f):
                      help="Deep mode: cap chunks analyzed (default: unlimited)")(f)
     f = click.option("--rebuild-map", is_flag=True, default=False,
                      help="Deep mode: ignore the cached per-repo map and re-survey")(f)
+    f = click.option("--no-incremental", is_flag=True, default=False,
+                     help="Deep mode: don't reuse cached per-chunk notes "
+                          "(re-analyze every chunk even when unchanged)")(f)
     f = click.option("--no-mirror", is_flag=True, default=False,
                      help="Don't write the committable <repo>/.luxe/gitkit/ mirror")(f)
     return f
@@ -860,8 +864,8 @@ def _gitkit_options(f):
               help="Display-side filter: hide findings below this severity "
                    "(the saved report is always complete).")
 def gitaudit_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                 deep, max_chunks, rebuild_map, no_mirror, base, pr,
-                 min_severity):
+                 deep, max_chunks, rebuild_map, no_incremental, no_mirror,
+                 base, pr, min_severity):
     """Audit a repo (read-only): orientation + bugs/security + structural advice."""
     if base is not None and pr is not None:
         console.print("[red]--base and --pr are mutually exclusive.[/]")
@@ -869,7 +873,8 @@ def gitaudit_cmd(repo, config_path, keep_loaded, no_save, verbose,
     _run_gitkit_cmd("gitaudit", repo, config_path, keep_loaded, not no_save,
                     verbose, deep=deep, max_chunks=max_chunks,
                     rebuild_map=rebuild_map, mirror=not no_mirror,
-                    base=base, pr=pr, min_severity=min_severity)
+                    base=base, pr=pr, min_severity=min_severity,
+                    no_incremental=no_incremental)
 
 
 @main.command(name="gitchange")
@@ -878,7 +883,8 @@ def gitaudit_cmd(repo, config_path, keep_loaded, no_save, verbose,
               help="Execute the plan: branch, apply each step in WRITE mode, "
                    "diff+test+confirm. Interactive-only; never touches main.")
 def gitchange_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                  deep, max_chunks, rebuild_map, no_mirror, do_apply):
+                  deep, max_chunks, rebuild_map, no_incremental, no_mirror,
+                  do_apply):
     """Produce an apply-ready structural change plan (read-only); --apply executes it."""
     if do_apply:
         _run_gitapply_cmd(repo, config_path, keep_loaded, deep=deep,
@@ -886,7 +892,8 @@ def gitchange_cmd(repo, config_path, keep_loaded, no_save, verbose,
     else:
         _run_gitkit_cmd("gitchange", repo, config_path, keep_loaded, not no_save,
                         verbose, deep=deep, max_chunks=max_chunks,
-                        rebuild_map=rebuild_map, mirror=not no_mirror)
+                        rebuild_map=rebuild_map, mirror=not no_mirror,
+                        no_incremental=no_incremental)
 
 
 @main.command(name="gitapply")
