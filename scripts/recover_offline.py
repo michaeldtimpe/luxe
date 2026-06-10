@@ -137,6 +137,9 @@ def main() -> None:
                     print("      •", s[:110])
                 samples_left -= 1
 
+    if not rows:
+        print("no unparsed-chunk dumps found in the gap corpus — nothing to write")
+        return
     with OUT.open("w", newline="") as fh:
         wri = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         wri.writeheader()
