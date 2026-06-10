@@ -1,0 +1,20 @@
+# C12 adaptive-policy smoke (2026-06-10, feat/gitkit-cycle).
+#
+# A/B: LUXE_ADAPTIVE_POLICY=1 vs baseline on 5 fixtures (2 implement,
+# 2 document, 1 manage). The env var is NOT a Variant field — the A/B is
+# two sequential invocations of this single-cell file with different
+# parent env + output subdirs (run.py copies os.environ into the
+# fixture subprocess). Driver: scripts/run_c12_adaptive_smoke.sh
+#
+# Gates (direction-finding only; promotion needs 3-rep per
+# feedback_ship_floor_needs_multirep_when_at_strictness):
+#   - no PASS->FAIL flips vs the baseline arm
+#   - record intervention count + type distribution from adaptive_state
+#     events in ~/.luxe/runs/*/events.jsonl; a zero-intervention run is
+#     a silent "does nothing" pass and must be reported as such.
+#
+# Invariants walked: agents.sdd § "Stage 3 / v1.11 adaptive-policy
+# invariants" (bias-not-lock, slew-rate, disable-equivalence).
+
+variants:
+  - {model_label: adaptive-smoke, model_id: Qwen3.6-35B-A3B-6bit}

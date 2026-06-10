@@ -45,7 +45,6 @@ from luxe.repo_index import (
     _DEFAULT_EXCLUDES,
     _count_lines,
     _detect_language,
-    build_repo_summary,
 )
 
 # --- tuning constants (per-stage wall fit from the 46-repo sweep) ------------
@@ -150,6 +149,7 @@ class Chunk:
     est_tokens: int = 0
     loc: int = 0
     symbols: list[str] = field(default_factory=list)    # symbols defined here
+    oversized: list[str] = field(default_factory=list)  # files > content budget
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -161,6 +161,8 @@ class Chunk:
             dirs=list(d.get("dirs", [])), label=d.get("label", ""),
             est_tokens=int(d.get("est_tokens", 0)), loc=int(d.get("loc", 0)),
             symbols=list(d.get("symbols", [])),
+            # back-compat: cached chunks.json predating the field still loads
+            oversized=list(d.get("oversized", [])),
         )
 
 
@@ -258,10 +260,11 @@ def _file_priority(rel: str, recent: set[str]) -> int:
 
 
 def enumerate_files(target: str | Path, summary, *,
-                    excludes: set[str] | None = None) -> list[FileRec]:
+                    excludes: set[str] | None = None, log=None) -> list[FileRec]:
     """Walk `target` for recognized source files with cheap token estimates and a
     priority bucket (entry/security → recent → normal). Deterministic order is
-    applied by `build_chunks`."""
+    applied by `build_chunks`. `log` (optional callable) surfaces skipped
+    unreadable files — a silently skipped file is a silent coverage gap."""
     root = Path(target).resolve()
     excludes = excludes if excludes is not None else _DEFAULT_EXCLUDES
     recent = _norm_recent(summary)
@@ -276,7 +279,9 @@ def enumerate_files(target: str | Path, summary, *,
                 continue
             try:
                 size = p.stat().st_size
-            except OSError:
+            except OSError as e:
+                if log:
+                    log(f"skipping unreadable file {p}: {e}")
                 continue
             rel = str(p.relative_to(root)).replace(os.sep, "/")
             top = rel.split("/", 1)[0] if "/" in rel else "."
@@ -331,6 +336,7 @@ def build_chunks(files: list[FileRec], *, content_budget: int,
             dirs=sorted(dir_counts), label=label,
             est_tokens=sum(f.tokens for f in cur), loc=sum(f.loc for f in cur),
             symbols=_symbols_for(fileset, symbol_index),
+            oversized=[f.rel for f in cur if f.tokens > budget],
         ))
         cur, cur_tok = [], 0
 
@@ -595,6 +601,14 @@ class PassTiming:
 
 # --- map cache (per-repo, HEAD-keyed) ---------------------------------------
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Same-directory tmp + os.replace: a crash mid-write never leaves a torn
+    file — readers see the old content or the new content, nothing between."""
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def _map_dir(target: str | Path):
     from luxe.gitkit import store
     return store.reports_dir(target) / "map"
@@ -685,17 +699,20 @@ def save_map(target: str | Path, *, head: str, survey_notes: str,
              framing: list[str], summary_render: str) -> Path:
     d = _map_dir(target)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "head").write_text((head or "") + "\n")
-    (d / "survey_notes.md").write_text(survey_notes.rstrip() + "\n")
-    (d / "survey.json").write_text(json.dumps(
+    # Atomic per-file writes, breadcrumb LAST: a crash anywhere before the
+    # mapped.json replace leaves the OLD breadcrumb pointing at the OLD heavy
+    # files (a consistent FRESH/STALE map), never a half-new state.
+    _atomic_write_text(d / "head", (head or "") + "\n")
+    _atomic_write_text(d / "survey_notes.md", survey_notes.rstrip() + "\n")
+    _atomic_write_text(d / "survey.json", json.dumps(
         {"head": head, "summary_render": summary_render, "framing": framing},
         indent=2))
-    (d / "chunks.json").write_text(json.dumps(
+    _atomic_write_text(d / "chunks.json", json.dumps(
         {"content_budget": content_budget, "framing": framing,
          "chunks": [c.to_dict() for c in chunks]}, indent=2))
     # Durable breadcrumb (tiny — survives deletion of the heavy files). `version`
     # is forward infra for the future differential-review schema.
-    (d / "mapped.json").write_text(json.dumps(
+    _atomic_write_text(d / "mapped.json", json.dumps(
         {"version": 1, "head": head or "", "n_chunks": len(chunks),
          "content_budget": content_budget, "mapped_at": int(time.time())},
         indent=2))
@@ -720,10 +737,15 @@ def _framing_block(framing: list[str]) -> str:
 def _chunk_block(chunk: Chunk, total: int) -> str:
     files = "\n".join(f"- {p}" for p in chunk.files) or "(none)"
     syms = ", ".join(chunk.symbols) if chunk.symbols else "(none indexed)"
+    over = ""
+    if chunk.oversized:
+        over = ("\n\nOversized files (larger than the content budget — they "
+                "truncate when read whole; read them in sections):\n"
+                + "\n".join(f"- {p}" for p in chunk.oversized))
     return (f"<chunk_files>\nChunk {chunk.index + 1}/{total} — focus area "
             f"`{chunk.label}` ({len(chunk.files)} files, ~{chunk.loc} LOC). "
             f"Analyze ONLY these files (read them with your tools):\n{files}\n\n"
-            f"Symbols defined in these files: {syms}\n</chunk_files>")
+            f"Symbols defined in these files: {syms}{over}\n</chunk_files>")
 
 
 def _digest_block(digest: dict) -> str:
@@ -907,7 +929,7 @@ def run_deep_report(
             return "", None
         survey_notes = (getattr(res, "final_text", "") or "").strip() \
             or "(survey produced no notes)"
-        files = enumerate_files(target, summary)
+        files = enumerate_files(target, summary, log=_emit)
         chunks = build_chunks(files, content_budget=content_budget,
                               symbol_index=symbol_index)
         save_map(target, head=head, survey_notes=survey_notes, chunks=chunks,
@@ -1019,7 +1041,8 @@ def run_deep_report(
                 # Always store a CLEAN note (as-is if already clean, else a
                 # transcription pass, else heuristic finding lines) so the final
                 # report can be assembled without any rambly text.
-                clean = _clean_note(note_src, kind, pass_fn=_pass, role=chunk_role)
+                clean = _clean_note(note_src, kind, pass_fn=_pass, role=chunk_role,
+                                    log=_emit)
                 if clean:
                     digest["markdown_notes"].append(
                         {"chunk": c.index, "label": c.label, "md": clean})
@@ -1234,6 +1257,21 @@ _BOLD_FILE_RE = re.compile(
     r"\*\*[^*]*?(?:\.(py|rs|js|ts|go|sh|ya?ml)\b|line\s+\d+)[^*]*?\*\*", re.I)
 # Lines the model explicitly marks as NON-findings — drop them to keep the salvage clean.
 _NON_FINDING_RE = re.compile(r"\b(not a bug|no issue|no code|nothing here|n/?a)\b", re.I)
+# A4 (2026-06-10) — broadened salvage shapes, derived from the 9-repo gap corpus
+# (scripts/recover_offline.py dumps): numbered NON-bold items carrying a file/line
+# ref; bold/bracket/`Severity:` severity-LEAD lines whose file ref may trail within
+# the next 2 lines; `###`/`####` finding headings carrying a severity word or file
+# ref. Still keyed on FINDING shape so exploration narrative is not swept in.
+_NUM_PLAIN_RE = re.compile(r"^\s*\d+[.)]\s+\S")
+_SEV_LEAD_RE = re.compile(
+    r"^(?:\*\*\s*(?:critical|high|medium|low)\b[^*]*\*\*"
+    r"|\[\s*(?:critical|high|medium|low)\s*\]"
+    r"|severity\s*[:=]\s*(?:critical|high|medium|low)\b)",
+    re.IGNORECASE)
+_SEV_WORD_RE = re.compile(r"\b(critical|high|medium|low)\b", re.IGNORECASE)
+_FINDING_HEADING_RE = re.compile(r"^#{3,4}\s+\S")
+_FILE_REF_RE = re.compile(
+    r"\b[\w./-]+\.(py|rs|js|ts|tsx|go|sh|ya?ml|toml|c|cpp|h)\b", re.IGNORECASE)
 
 
 def _strip_report_header(md: str) -> str:
@@ -1257,45 +1295,74 @@ def _heuristic_findings(text: str, *, cap: int = 60) -> list[str]:
     clean report can still be rendered. Matches the shapes the champion emits when
     it never reaches the report header — a severity word + `path`/file:line, OR a
     numbered BOLD item with a file/line/code ref, OR a canonical report bullet
-    (**File:**/**Impact:**/…). Keeps markdown markers (matches the raw line) so the
-    bold/numbered shapes survive; drops explicit non-findings."""
+    (**File:**/**Impact:**/…), OR (A4) a numbered non-bold item with a file:line
+    ref, a severity-lead line (file ref within 2 lines), or a ###/#### finding
+    heading. Keeps markdown markers (matches the raw line) so the bold/numbered
+    shapes survive; drops explicit non-findings."""
     seen: set[str] = set()
     out: list[str] = []
-    for ln in (text or "").splitlines():
+    lines = (text or "").splitlines()
+    for i, ln in enumerate(lines):
         s = ln.strip()
         if len(s) < 12 or _NON_FINDING_RE.search(s):
             continue
-        is_finding = (
-            _SEV_LINE_RE.search(s)
-            or (_NUM_BOLD_RE.search(s)
-                and (_FILE_LINE_RE.search(s) or _BOLD_FILE_RE.search(s) or "`" in s))
-            or _REPORT_BULLET_RE.search(s)
-        )
-        if not is_finding:
+        emit: str | None = None
+        if (_SEV_LINE_RE.search(s)
+                or (_NUM_BOLD_RE.search(s)
+                    and (_FILE_LINE_RE.search(s) or _BOLD_FILE_RE.search(s)
+                         or "`" in s))
+                or _REPORT_BULLET_RE.search(s)):
+            emit = s
+        elif _NUM_PLAIN_RE.match(s) and _FILE_LINE_RE.search(s):
+            # numbered non-bold item with an explicit file:line ref
+            emit = s
+        elif (_FINDING_HEADING_RE.match(s) and _SEV_WORD_RE.search(s)
+              and (_FILE_REF_RE.search(s) or "`" in s or any(c.isdigit() for c in s))):
+            # ###/#### finding heading: severity word PLUS substance (file ref /
+            # code / number). A file ref alone is the per-file EXPLORATION
+            # heading shape ("### app/api/auth.py") — corpus-verified FP class.
+            emit = s
+        elif _SEV_LEAD_RE.match(s):
+            # severity-lead line; the file ref may trail within the next 2 lines
+            if _FILE_LINE_RE.search(s) or _FILE_REF_RE.search(s):
+                emit = s
+            else:
+                for la in lines[i + 1:i + 3]:
+                    if _FILE_LINE_RE.search(la) or _FILE_REF_RE.search(la):
+                        emit = f"{s} — {la.strip()}"
+                        break
+        if not emit:
             continue
-        key = re.sub(r"\s+", " ", s.lower())[:120]
+        # dedup key ignores list numbering ("1." vs "2." re-numberings of the
+        # same finding) and trailing-tail variants (first 100 chars).
+        key = re.sub(r"^\d+[.)]\s+", "", emit.lower())
+        key = re.sub(r"\s+", " ", key)[:100]
         if key in seen:
             continue
         seen.add(key)
-        out.append(s[:200])
+        out.append(emit[:200])
         if len(out) >= cap:
             break
     return out
 
 
-def _clean_note(md: str, kind: str, *, pass_fn, role) -> str | None:
+def _clean_note(md: str, kind: str, *, pass_fn, role, log=None) -> str | None:
     """Return a non-rambly version of a per-chunk note: as-is when already clean,
     else a transcription pass, else a heuristic finding list. None if nothing
-    salvageable."""
+    salvageable. `log` surfaces WHICH recovery rung packaged the note."""
     if not md:
         return None
     if not _looks_rambly(md):
         return md
     cleaned = _format_final_report(md, kind, pass_fn=pass_fn, role=role)
     if cleaned and not _looks_rambly(cleaned):
+        if log:
+            log("rambly note → transcription pass recovered")
         return cleaned
     bullets = _heuristic_findings(md)
     if bullets:
+        if log:
+            log(f"rambly note → heuristic salvage ({len(bullets)} lines)")
         return "\n".join(f"- {b}" for b in bullets)
     return None
 

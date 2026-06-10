@@ -105,7 +105,9 @@ def main() -> None:
             print(f"  {name}: (no local clone) — skip")
             continue
         rd = store.reports_dir(str(p))
-        works = sorted(glob.glob(str(rd / "gitaudit-*.work")), key=os.path.getmtime)
+        works = [w for w in sorted(glob.glob(str(rd / "gitaudit-*.work")),
+                                   key=os.path.getmtime)
+                 if (Path(w) / "xref.json").is_file()]  # skip interrupted runs
         if not works:
             continue
         w = Path(works[-1])
