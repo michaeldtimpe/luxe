@@ -111,7 +111,12 @@ old names `gitsummary`/`gitreview`/`gitrefactor`→`gitaudit`, `gitplan`→`gitc
 are hidden back-compat aliases):
 
 - **`gitaudit`** — ONE read-only report: orientation + bugs/security + structural
-  advice. Also `/gitaudit` in `luxe chat`.
+  advice. Also `/gitaudit` in `luxe chat`. `--base <ref>` / `--pr <N>` switch to a
+  DIFF AUDIT (internal kind `gitaudit-diff`, "Diff audit" report: change-scoped,
+  no survey, never writes `map/`; tags are `likely-introduced` vs `pre-existing
+  (touched code)` with the hunk-overlap prior + caveat rendered in Python — see
+  `diffscope.py`). `--min-severity` filters the DISPLAY only (saved report always
+  complete; honesty line counts what was hidden).
 - **`gitchange`** — apply-ready structured `gitplan/v1` JSON plan (schema string
   stays `gitplan/v1` — do NOT rename) + the gated `gitchange --apply` / `luxe
   gitapply` executor (gitkit's SOLE sanctioned agent-write path, six invariants in
@@ -119,7 +124,11 @@ are hidden back-compat aliases):
 
 Both auto-route by repo footprint: small → SINGLE-PASS; large → the staged DEEP
 map-reduce (`deep.py`: survey → per-chunk → synthesis, per-repo HEAD-keyed `map/`
-cache). Prompts are `GIT_AUDIT_*`/`GIT_CHANGE_*` + deep `GIT_SURVEY/*_CHUNK/*_SYNTH/
+cache). Deep re-runs are INCREMENTAL by default (2026-06-10): the v2 breadcrumb
+carries blob shas + per-chunk notes cache under `map/notes/<kind>/`; only dirty
+chunks re-run (sha-validated; synthesis always re-runs; loud logging;
+`--no-incremental` / `--rebuild-map` escape hatches; anti-drift compaction
+triggers force a full rebuild — contract in `gitkit.sdd`). Prompts are `GIT_AUDIT_*`/`GIT_CHANGE_*` + deep `GIT_SURVEY/*_CHUNK/*_SYNTH/
 DEEP_FORMAT/DEEP_REDUCE` in `agents/prompts.py` (gitkit.sdd Forbids inline prompts).
 
 **Load-bearing design finding** (validated by sweeps + a chunk-conclude A/B,
