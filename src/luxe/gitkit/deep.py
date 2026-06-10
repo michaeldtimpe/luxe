@@ -1702,7 +1702,8 @@ _BOLD_FILE_RE = re.compile(
     r"\*\*[^*]*?(?:\.(py|rs|js|ts|go|sh|ya?ml)\b|line\s+\d+)[^*]*?\*\*", re.I)
 # Lines the model explicitly marks as NON-findings — drop them to keep the salvage clean.
 _NON_FINDING_RE = re.compile(
-    r"\b(not a bug|no issue|no code|nothing here|n/?a|this is correct)\b", re.I)
+    r"\b(not a bug|no issue|no code|nothing here|n/?a|this is correct"
+    r"|let me (check|verify|look|see))\b", re.I)
 # A4 (2026-06-10) — broadened salvage shapes, derived from the 9-repo gap corpus
 # (scripts/recover_offline.py dumps): numbered NON-bold items carrying a file/line
 # ref; bold/bracket/`Severity:` severity-LEAD lines whose file ref may trail within
