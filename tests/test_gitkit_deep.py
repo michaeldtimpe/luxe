@@ -1058,22 +1058,30 @@ def test_clean_note_logs_which_recovery_rung(monkeypatch):
     rambly = ("Let me look at this. I need to check more. Wait, actually I "
               "should re-read.\n1. **a.py line 3**: `x` shadowed and reused\n")
 
+    # rung 0: already-clean input → md_clean, no recovery pass
+    clean_in, src0 = deep._clean_note("# Repository audit\n- finding",
+                                      "gitaudit",
+                                      pass_fn=lambda *a, **k: None, role=None)
+    assert src0 == "md_clean" and clean_in.startswith("# Repository audit")
+
     # rung 1: transcription pass returns a clean headered report
     logs: list[str] = []
     clean_report = ("# Repository audit\n**Findings: 1**\n\n"
                     "- **high** `a.py:3` — shadowed variable")
-    out = deep._clean_note(rambly, "gitaudit",
-                           pass_fn=lambda g, c, l, role=None: _FakeResult(clean_report),
-                           role=None, log=logs.append)
+    out, src = deep._clean_note(rambly, "gitaudit",
+                                pass_fn=lambda g, c, l, role=None: _FakeResult(clean_report),
+                                role=None, log=logs.append)
     assert out is not None and out.startswith("# Repository audit")
+    assert src == "md_transcribed"
     assert any("transcription pass recovered" in m for m in logs)
 
     # rung 2: transcription stays rambly → heuristic salvage, with line count
     logs2: list[str] = []
-    out2 = deep._clean_note(rambly, "gitaudit",
-                            pass_fn=lambda g, c, l, role=None: _FakeResult(rambly),
-                            role=None, log=logs2.append)
+    out2, src2 = deep._clean_note(rambly, "gitaudit",
+                                  pass_fn=lambda g, c, l, role=None: _FakeResult(rambly),
+                                  role=None, log=logs2.append)
     assert out2 is not None and "a.py" in out2
+    assert src2 == "heuristic"
     assert any("heuristic salvage (1 lines)" in m for m in logs2)
 
 
@@ -1094,3 +1102,154 @@ def test_extract_report_zero_overlap_falls_back_to_first_h1():
     raw = "prelude prose\n# Something else entirely\nbody"
     out = extract_report(raw, "gitaudit")
     assert out.startswith("# Something else entirely")   # never drop content
+
+
+# --- Phase 3: provenance / evidence-overlap dedup / confidence / ordering ----
+
+def test_update_digest_stamps_provenance():
+    d = deep.empty_digest()
+    deep.update_digest(d, {"findings": [{"title": "t", "evidence": ["a.py:1"]}]}, 3)
+    f = d["provisional_findings"][0]
+    assert f["source"] == "json" and f["chunks"] == [3] and f["chunk"] == 3
+
+
+def test_compact_digest_evidence_overlap_merges_different_wording():
+    """Same bug, different words, shared file:line evidence → ONE finding with
+    union evidence + chunks and the best provenance source."""
+    d = deep.empty_digest()
+    deep.update_digest(d, {"findings": [
+        {"title": "race in save path", "root_cause": "torn write",
+         "severity": "medium", "evidence": ["deep.py:712"]}]}, 0)
+    deep.update_digest(d, {"findings": [
+        {"title": "non-atomic cache write", "root_cause": "interleaved writers",
+         "severity": "High", "evidence": ["deep.py line 712", "deep.py:99"]}]}, 2)
+    out = deep.compact_digest(d)
+    assert len(out["provisional_findings"]) == 1
+    f = out["provisional_findings"][0]
+    assert f["severity"] == "High"                       # max severity
+    assert f["chunks"] == [0, 2]                         # union contributors
+    assert len(f["evidence"]) >= 2
+
+
+def test_compact_digest_no_overlap_stays_separate():
+    d = deep.empty_digest()
+    deep.update_digest(d, {"findings": [
+        {"title": "bug one", "root_cause": "x", "evidence": ["a.py:1"]}]}, 0)
+    deep.update_digest(d, {"findings": [
+        {"title": "bug two", "root_cause": "y", "evidence": ["b.py:9"]}]}, 1)
+    assert len(deep.compact_digest(d)["provisional_findings"]) == 2
+
+
+def test_confidence_evidence_beats_frequency():
+    """The repeated-hallucination guard: a finding repeated by 3 chunks with NO
+    parseable evidence must score BELOW one strong single-evidence finding."""
+    hallucinated = {"title": "vague worry", "source": "json",
+                    "chunks": [0, 1, 2], "evidence": ["somewhere in the app"]}
+    strong_single = {"title": "real bug", "source": "json",
+                     "chunks": [1], "evidence": ["auth.py:42"]}
+    h_score, h_label = deep.confidence_of(hallucinated)
+    s_score, s_label = deep.confidence_of(strong_single)
+    assert s_score > h_score
+    assert s_label == "high" and h_label == "low"        # 0.7 vs 0.3
+
+
+def test_confidence_arithmetic_and_heuristic_cap():
+    # two distinct locations + clean source + 2 chunks = 0.5+0.2+0.2+0.1 = 1.0
+    full = {"source": "md_clean", "chunks": [0, 1],
+            "evidence": ["a.py:1", "b.py:2"]}
+    assert deep.confidence_of(full) == (1.0, "high")
+    # heuristic source caps the LABEL at low regardless of evidence
+    heur = {"source": "heuristic", "chunks": [0, 1],
+            "evidence": ["a.py:1", "b.py:2"]}
+    score, label = deep.confidence_of(heur)
+    assert label == "low" and score >= 0.7               # score kept, label capped
+    # duplicate evidence wording is ONE location ("a.py:1" == "a.py line 1")
+    dup = {"source": "json", "chunks": [0],
+           "evidence": ["a.py:1", "a.py line 1"]}
+    assert deep.confidence_of(dup)[0] == 0.7
+
+
+def test_render_report_orders_by_severity_then_confidence_and_shows_it():
+    d = deep.empty_digest()
+    deep.update_digest(d, {"findings": [
+        {"title": "weak high", "severity": "high", "evidence": ["no ref here"]},
+        {"title": "strong high", "severity": "high", "evidence": ["a.py:1"]},
+        {"title": "strong critical", "severity": "critical",
+         "evidence": ["c.py:3"]},
+    ]}, 0)
+    d = deep.compact_digest(d)
+    report = deep._render_report(d, "gitaudit")
+    i_crit = report.index("strong critical")
+    i_strong = report.index("strong high")
+    i_weak = report.index("weak high")
+    assert i_crit < i_strong < i_weak
+    assert "*(confidence: high)*" in report and "*(confidence: low)*" in report
+
+
+def test_render_report_annotates_heuristic_notes():
+    d = deep.empty_digest()
+    d["markdown_notes"].append({"chunk": 0, "label": "core",
+                                "md": "- salvaged line `x.py:1`",
+                                "source": "heuristic"})
+    report = deep._render_report(d, "gitaudit")
+    assert "heuristic salvage" in report and "confidence: low" in report
+    # clean notes carry no annotation
+    d2 = deep.empty_digest()
+    d2["markdown_notes"].append({"chunk": 0, "label": "core",
+                                 "md": "- clean line", "source": "md_clean"})
+    assert "heuristic salvage" not in deep._render_report(d2, "gitaudit")
+
+
+def test_filter_min_severity_sections_and_bullets():
+    from luxe.gitkit.store import filter_min_severity
+    report = ("# Repository audit\n**Findings: 4**\n\n"
+              "## Critical\n- **critical** `a.py:1` — takeover\n\n"
+              "## Medium\n- **medium** `b.py:2` — leak\n- **medium** `c.py:3` — race\n\n"
+              "## Structural improvements\n"
+              "- **low** `d.py:4` — tidy\n- refactor note without severity\n")
+    out, dropped = filter_min_severity(report, "high")
+    assert "takeover" in out
+    assert "leak" not in out and "race" not in out       # section dropped
+    assert "tidy" not in out                             # inline bullet dropped
+    assert "refactor note without severity" in out       # untagged lines kept
+    assert dropped == 3
+    # low threshold = show everything, zero dropped
+    assert filter_min_severity(report, "low") == (report, 0)
+
+
+def test_xref_json_carries_confidence_and_sources(big_repo, _gitkit_cfg,
+                                                  monkeypatch):
+    """Orchestration: the per-run xref.json digest carries provenance + the
+    deterministic confidence after the final compaction."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report, store
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+
+    def fake_run_single(backend, role_cfg, *, run_id="", **kw):
+        if "survey" in run_id:
+            return _FakeResult("Survey notes.")
+        if "synthesis" in run_id:
+            return _FakeResult("# Repository audit\n**Findings: 1**\nok")
+        return _FakeResult('```json\n{"findings": [{"title": "bug", '
+                           '"severity": "high", "evidence": ["auth/m0.py:1"]}]}\n```')
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    work = sorted(store.reports_dir(big_repo).glob("gitaudit-*.work"))[-1]
+    xref = json.loads((work / "xref.json").read_text())
+    pf = xref["provisional_findings"]
+    assert pf and all("source" in f and "chunks" in f for f in pf)
+
+
+def test_heuristic_findings_vetoes_this_is_correct_lines():
+    """Corpus-verified (re-render hand-compare 2026-06-10): the champion walks
+    files emitting numbered '… — This is correct.' non-findings; veto them."""
+    ramble = ("1. **`_check_auth` function** - The code checks the token. "
+              "This is correct.\n"
+              "2. **`_poll` mutates the list during iteration** - `bot.py:55` "
+              "skips entries\n")
+    out = deep._heuristic_findings(ramble)
+    assert len(out) == 1 and "mutates" in out[0]

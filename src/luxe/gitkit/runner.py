@@ -202,6 +202,7 @@ def run_git_report(
     mirror: bool = True,
     base: str | None = None,
     pr: int | None = None,
+    min_severity: str | None = None,
 ) -> tuple[str, Path | None]:
     """Run a read-only analysis over a repo and report the result.
 
@@ -405,7 +406,8 @@ def run_git_report(
                     max_chunks=max_chunks, mirror=mirror,
                     chunks_override=chunks, chunk_extra_blocks=chunk_blocks,
                     survey_notes_override=survey_inject,
-                    postprocess=diff_post, extra_meta=extra_meta)
+                    postprocess=diff_post, extra_meta=extra_meta,
+                    min_severity=min_severity)
             # single-pass diff: the capped full diff + the changed-file list in
             # the existing <chunk_files> shape ride along as pure data.
             one = deep_mod.build_chunks(recs, content_budget=10 ** 9,
@@ -428,7 +430,7 @@ def run_git_report(
                     health_block=health.gather_context(target), save=save,
                     verbose=verbose, cancel=cancel, max_chunks=max_chunks,
                     rebuild_map=rebuild_map, prior_report=prior_findings,
-                    mirror=mirror,
+                    mirror=mirror, min_severity=min_severity,
                 )
 
         def _do_run(on_event=None, on_token=None):
@@ -505,13 +507,23 @@ def run_git_report(
                 console.print("[dim]· mirrored report to <repo>/.luxe/gitkit/[/]")
 
         console.print()
+        display_src, n_filtered = report, 0
+        if min_severity:
+            # DISPLAY-side only — the saved report above is always unfiltered.
+            display_src, n_filtered = store.filter_min_severity(report,
+                                                                min_severity)
         if verbose:
-            console.print(Markdown(report))
+            console.print(Markdown(display_src))
         else:
-            shown, hidden = truncate_for_display(report, max_lines=_PREVIEW_LINES)
+            shown, hidden = truncate_for_display(display_src,
+                                                 max_lines=_PREVIEW_LINES)
             console.print(Markdown(shown))
             if hidden:
                 console.print(f"[dim]… +{hidden} more lines — full report below[/]")
+        if n_filtered:
+            where = saved if saved else "(not saved — run without --no-save)"
+            console.print(f"[dim]Filtered: {n_filtered} findings below "
+                          f"{min_severity} — full report at {where}[/]")
         console.print(
             f"\n[dim]· {result.steps} steps · {result.tool_calls_total} tool calls "
             f"· {result.wall_s:.1f}s · {result.completion_tokens} out-tok[/]")
