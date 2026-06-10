@@ -114,8 +114,25 @@ in the front-end. Survey map + chunk plan persist per repo under
   mode additionally persists `map/` (HEAD-keyed survey + chunk plan) and
   `<kind>-<ts>-<rand>.work/` (per-chunk notes + `xref.json`) under the same dir.
 - Deep mode reuses the cached `map/` when HEAD matches (skip survey + chunk
-  rebuild); invalidate on HEAD move or `--rebuild-map`. Map is kind-agnostic
-  (survey + chunking shared); only per-chunk + synthesis are per-kind.
+  rebuild). Map is kind-agnostic (survey + chunking shared); only per-chunk +
+  synthesis are per-kind. INCREMENTAL RE-AUDIT (default-on; `--rebuild-map`
+  forces full, `--no-incremental` disables note reuse): the v2 `mapped.json`
+  breadcrumb carries `{rel: blob_sha}` from `git ls-tree -r HEAD` (SHAs, never
+  timestamps) + the original-partition baseline; per-chunk contributions cache
+  under `map/notes/<kind>/chunk-<idx>.json` (atomic writes; doubles as
+  crash-resume). On HEAD move: FULL REBUILD when a framing file changed, >20%
+  of mapped files churned, version<2, or an anti-drift compaction trigger
+  fires (cumulative delta chunks > 4, delta content > 15% of the mapped corpus
+  tokens, or chunk count grown > 25% over the original partition — the fired
+  trigger is logged); else keep survey + partition, prune deleted files
+  (chunk → dirty), append delta chunks for new files. Cached contributions are
+  chunk INPUTS only — the digest is rebuilt from scratch every run (cached
+  then fresh contributions folded in chunk order through the same
+  update_digest/markdown_notes paths) and SYNTHESIS ALWAYS RE-RUNS; a cached
+  note is reused only when every file's blob sha matches the CURRENT tree
+  (belt-and-braces), so a stale finding cannot survive its source file's
+  change by construction. Reuse is always announced loudly (`incremental:
+  reusing K/N …`) — never silently skipped work.
 - CLI targets an arbitrary repo; REPL analyzes ONLY `session.repo_path` (reusing
   the session's resident indices) and warns if HEAD moved since indices built.
 - Keep the benchmark/maintain path byte-identical: deep mode is front-end only

@@ -515,18 +515,30 @@ def test_deep_map_cache_reused_on_second_run(big_repo, _gitkit_cfg, monkeypatch)
                    console=_QuietConsole(), save=True, deep=True)
     first_surveys = len([c for c in calls if "survey" in c])
     calls.clear()
-    # second run, same HEAD → reuse map (no survey pass), but chunks still analyzed
+    # second run, same HEAD → reuse map (no survey) AND the sha-validated
+    # chunk-notes cache (no chunk passes either — crash-resume semantics);
+    # synthesis always re-runs.
     run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True)
     assert first_surveys == 1
-    assert len([c for c in calls if "survey" in c]) == 0      # reused
+    assert len([c for c in calls if "survey" in c]) == 0      # map reused
+    assert len([c for c in calls if c.startswith("chunk")]) == 0  # notes reused
+    assert len([c for c in calls if "synthesis" in c]) == 1   # always re-runs
+
+    # --no-incremental forces chunk re-analysis (map still reused)
+    calls.clear()
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
+                   console=_QuietConsole(), save=True, deep=True,
+                   no_incremental=True)
+    assert len([c for c in calls if "survey" in c]) == 0
     assert len([c for c in calls if c.startswith("chunk")]) >= 2
 
-    # --rebuild-map forces a re-survey
+    # --rebuild-map forces a re-survey AND chunk re-analysis
     calls.clear()
     run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True, rebuild_map=True)
     assert len([c for c in calls if "survey" in c]) == 1
+    assert len([c for c in calls if c.startswith("chunk")]) >= 2
 
 
 # --- per-pass timing telemetry (B1-B4) --------------------------------------
@@ -803,7 +815,8 @@ def test_save_map_writes_breadcrumb(tmp_path):
     target = tmp_path / "repo"
     d = _seed_map(target, head="deadbeef")
     bc = json.loads((d / "mapped.json").read_text())
-    assert bc["version"] == 1
+    assert bc["version"] == 2                      # incremental-capable schema
+    assert "files" in bc and "baseline" in bc      # v2 staleness currency
     assert bc["head"] == "deadbeef"
     assert bc["n_chunks"] == 1
     assert bc["content_budget"] == 4096
@@ -1253,3 +1266,349 @@ def test_heuristic_findings_vetoes_this_is_correct_lines():
               "skips entries\n")
     out = deep._heuristic_findings(ramble)
     assert len(out) == 1 and "mutates" in out[0]
+
+
+# --- Phase 4: incremental re-audit (cache v2) ---------------------------------
+
+def _shas(d: dict[str, str]) -> dict[str, str]:
+    return dict(d)
+
+
+def _mk_chunks(*file_groups):
+    out = []
+    for i, files in enumerate(file_groups):
+        out.append(deep.Chunk(index=i, files=list(files), label=f"g{i}",
+                              est_tokens=100 * len(files), loc=10 * len(files)))
+    return out
+
+
+def test_plan_incremental_one_edit_dirties_exactly_one_chunk():
+    chunks = _mk_chunks(["a.py", "b.py"], ["c.py", "d.py"])
+    old = {"a.py": "1", "b.py": "2", "c.py": "3", "d.py": "4"}
+    new = {"a.py": "1", "b.py": "2", "c.py": "3X", "d.py": "4"}
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=deep.make_baseline(chunks),
+                                 added_recs=[], content_budget=1000)
+    assert plan.mode == "incremental"
+    assert plan.dirty == {1}
+    assert [c.files for c in plan.chunks] == [["a.py", "b.py"], ["c.py", "d.py"]]
+
+
+def test_plan_incremental_deletion_prunes_and_dirties():
+    chunks = _mk_chunks(["a.py", "b.py"], ["c.py"])
+    pad = {f"pad{i}.py": "p" for i in range(10)}          # stay under churn 20%
+    old = {"a.py": "1", "b.py": "2", "c.py": "3", **pad}
+    new = {"a.py": "1", "c.py": "3", **pad}               # b.py deleted
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=deep.make_baseline(chunks),
+                                 added_recs=[], content_budget=1000)
+    assert plan.mode == "incremental"
+    assert plan.chunks[0].files == ["a.py"]               # pruned
+    assert 0 in plan.dirty and 1 not in plan.dirty
+
+
+def test_plan_incremental_added_file_appends_delta_chunk():
+    # 5 original chunks so one delta chunk stays under the 25% growth trigger
+    chunks = _mk_chunks(["a.py"], ["b.py"], ["c.py"], ["d.py"], ["e0.py"])
+    pad = {f"pad{i}.py": "p" for i in range(10)}          # stay under churn 20%
+    old = {"a.py": "1", "b.py": "2", "c.py": "3", "d.py": "4", "e0.py": "5", **pad}
+    new = {**old, "fresh.py": "9"}
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=deep.make_baseline(chunks),
+                                 added_recs=[_frec("fresh.py", tokens=50)],
+                                 content_budget=1000)
+    assert plan.mode == "incremental"
+    assert len(plan.chunks) == 6
+    delta = plan.chunks[5]
+    assert delta.index == 5 and delta.files == ["fresh.py"]
+    assert 5 in plan.dirty
+    assert plan.baseline["delta_chunks"] == 1
+    assert plan.baseline["delta_tokens"] == 50
+
+
+def test_plan_incremental_framing_change_forces_rebuild():
+    chunks = _mk_chunks(["a.py"])
+    old = {"a.py": "1", "README.md": "r1"}
+    new = {"a.py": "1", "README.md": "r2"}
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=deep.make_baseline(chunks),
+                                 added_recs=[], content_budget=1000)
+    assert plan.mode == "rebuild" and "framing" in plan.reason
+
+
+def test_plan_incremental_churn_forces_rebuild():
+    chunks = _mk_chunks(["a.py"])
+    old = {f"f{i}.py": str(i) for i in range(10)}
+    new = dict(old)
+    for i in range(3):                                    # 3 deleted of 10 > 20%
+        del new[f"f{i}.py"]
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=deep.make_baseline(chunks),
+                                 added_recs=[], content_budget=1000)
+    assert plan.mode == "rebuild" and "churn" in plan.reason
+
+
+def test_plan_incremental_compaction_triggers_each_fire():
+    chunks = _mk_chunks(["a.py"], ["b.py"], ["c.py"], ["d.py"])
+    pad = {f"pad{i}.py": "p" for i in range(20)}          # stay under churn 20%
+    old = {"a.py": "1", "b.py": "2", "c.py": "3", "d.py": "4", **pad}
+    base = deep.make_baseline(chunks)                     # 400 corpus tokens
+
+    # (1) cumulative delta chunks > 4
+    bl = dict(base, delta_chunks=4)
+    new = dict(old, **{"e.py": "5"})
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=bl, added_recs=[_frec("e.py", tokens=1)],
+                                 content_budget=1000)
+    assert plan.mode == "rebuild" and "delta chunks" in plan.reason
+
+    # (2) cumulative delta content > 15% of original corpus tokens
+    bl = dict(base, delta_tokens=50)
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=bl, added_recs=[_frec("e.py", tokens=20)],
+                                 content_budget=1000)
+    assert plan.mode == "rebuild" and "delta content" in plan.reason
+
+    # (3) chunk count grown > 25% over the original partition
+    bl = dict(base, orig_n_chunks=4)
+    added = [_frec(f"n{i}.py", tokens=1) for i in range(2)]
+    new2 = dict(old, **{f"n{i}.py": "x" for i in range(2)})
+    plan = deep.plan_incremental(old_files=old, new_files=new2, chunks=chunks,
+                                 baseline=bl, added_recs=added,
+                                 content_budget=1)        # 1 file per delta chunk
+    assert plan.mode == "rebuild" and "grew" in plan.reason
+
+    # below every threshold → incremental
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=dict(base),
+                                 added_recs=[_frec("e.py", tokens=1)],
+                                 content_budget=1000)
+    assert plan.mode == "incremental"
+
+
+def test_chunk_note_validation_rejects_sha_mismatch_and_untracked():
+    c = deep.Chunk(index=0, files=["a.py"], label="a")
+    note = {"files": ["a.py"], "file_shas": {"a.py": "s1"},
+            "contribution": {"parsed": {"findings": []}}}
+    assert deep.chunk_note_is_valid(note, c, {"a.py": "s1"}) is True
+    assert deep.chunk_note_is_valid(note, c, {"a.py": "s2"}) is False  # changed
+    assert deep.chunk_note_is_valid(note, c, {}) is False              # untracked
+    c2 = deep.Chunk(index=0, files=["a.py", "b.py"], label="a")
+    assert deep.chunk_note_is_valid(note, c2, {"a.py": "s1"}) is False  # files moved
+
+
+# --- Phase 4 orchestration: stale-leakage suite -------------------------------
+
+@pytest.fixture
+def bug_repo(tmp_path: Path) -> Path:
+    """Repo whose files carry BUG: markers the content-reading stub turns into
+    findings — leakage is detectable because findings track ACTUAL file state."""
+    repo = tmp_path / "bugrepo"
+    (repo / "auth").mkdir(parents=True)
+    (repo / "core").mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@e.com")
+    _git(repo, "config", "user.name", "T")
+    (repo / "auth" / "login.py").write_text(
+        "def login():\n    pass  # BUG: token-not-checked\n" + "x = 1\n" * 30)
+    (repo / "core" / "engine.py").write_text(
+        "def run():\n    pass  # BUG: leak-in-engine\n" + "y = 2\n" * 30)
+    (repo / "core" / "util.py").write_text("def u():\n    return 3\n" + "z = 3\n" * 30)
+    # padding keeps single-file add/delete churn under the 20% rebuild trigger
+    for i in range(8):
+        (repo / "core" / f"pad{i}.py").write_text(f"p{i} = {i}\n" + "w = 0\n" * 30)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "v1")
+    return repo
+
+
+def _content_stub(repo: Path, calls: list[str]):
+    """Chunk passes emit one JSON finding per BUG: marker in the chunk's files
+    (read from disk at call time — findings always reflect CURRENT content)."""
+    import re as _re
+
+    def fake(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        stage = _stage_of(run_id)
+        calls.append(stage)
+        if stage == "survey":
+            return _FakeResult("Survey notes: python app.")
+        if stage == "synthesis":
+            return _FakeResult("# Repository audit\n**Findings: n**\nok")
+        body = extra_context.split("<chunk_files>")[1].split("Symbols defined")[0]
+        files = [m.strip() for m in _re.findall(r"^- (.+)$", body, _re.M)]
+        findings = []
+        for rel in files:
+            p = repo / rel
+            if not p.is_file():
+                continue
+            for ln in p.read_text().splitlines():
+                if "BUG:" in ln:
+                    findings.append({"title": ln.split("BUG:")[1].strip(),
+                                     "severity": "high",
+                                     "evidence": [f"{rel}:1"]})
+        return _FakeResult("```json\n" + json.dumps({"findings": findings}) + "\n```")
+    return fake
+
+
+def _latest_xref(repo: Path) -> dict:
+    # same-second runs share the name timestamp — mtime is the real order
+    from luxe.gitkit import store
+    work = max(store.reports_dir(repo).glob("gitaudit-*.work"),
+               key=lambda p: (p / "xref.json").stat().st_mtime_ns)
+    return json.loads((work / "xref.json").read_text())
+
+
+def _finding_titles(xref: dict) -> set[str]:
+    return {f["title"] for f in xref["provisional_findings"]}
+
+
+def test_incremental_no_stale_finding_after_fix_commit(bug_repo, _gitkit_cfg,
+                                                       monkeypatch):
+    """(i) A finding sourced from a changed file's chunk must NOT reappear via
+    the cache after the fix is committed — and only that chunk re-runs."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _content_stub(bug_repo, calls))
+
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert _finding_titles(_latest_xref(bug_repo)) == {"token-not-checked",
+                                                       "leak-in-engine"}
+    n_chunks_full = len([c for c in calls if c.startswith("chunk")])
+    assert n_chunks_full >= 3
+
+    # fix the engine bug and commit
+    f = bug_repo / "core" / "engine.py"
+    f.write_text(f.read_text().replace("# BUG: leak-in-engine", "# fixed"))
+    _git(bug_repo, "add", "-A")
+    _git(bug_repo, "commit", "-q", "-m", "fix engine leak")
+
+    calls.clear()
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    titles = _finding_titles(_latest_xref(bug_repo))
+    assert "leak-in-engine" not in titles          # NO stale leakage
+    assert "token-not-checked" in titles           # surviving note still folded
+    assert len([c for c in calls if "survey" in c]) == 0       # survey kept
+    assert len([c for c in calls if c.startswith("chunk")]) == 1  # dirty only
+    assert len([c for c in calls if "synthesis" in c]) == 1    # always re-runs
+
+
+def test_incremental_multi_generation_equals_from_scratch(bug_repo, _gitkit_cfg,
+                                                          monkeypatch):
+    """(ii) Two incremental generations end with a digest equal to a full
+    from-scratch run's (surviving + fresh contributions, nothing else)."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _content_stub(bug_repo, calls))
+
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+
+    # gen 1: fix auth bug
+    f1 = bug_repo / "auth" / "login.py"
+    f1.write_text(f1.read_text().replace("# BUG: token-not-checked", "# ok"))
+    _git(bug_repo, "add", "-A")
+    _git(bug_repo, "commit", "-q", "-m", "fix auth")
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+
+    # gen 2: introduce a NEW bug in util
+    f2 = bug_repo / "core" / "util.py"
+    f2.write_text(f2.read_text() + "# BUG: util-overflow\n")
+    _git(bug_repo, "add", "-A")
+    _git(bug_repo, "commit", "-q", "-m", "introduce util bug")
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    incr_titles = _finding_titles(_latest_xref(bug_repo))
+
+    # from-scratch reference at the SAME state
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True,
+                   rebuild_map=True)
+    scratch_titles = _finding_titles(_latest_xref(bug_repo))
+    assert incr_titles == scratch_titles == {"leak-in-engine", "util-overflow"}
+
+
+def test_incremental_new_file_gets_delta_chunk_analyzed(bug_repo, _gitkit_cfg,
+                                                        monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _content_stub(bug_repo, calls))
+
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    (bug_repo / "core" / "newmod.py").write_text(
+        "def n():\n    pass  # BUG: new-module-bug\n" + "n = 4\n" * 30)
+    _git(bug_repo, "add", "-A")
+    _git(bug_repo, "commit", "-q", "-m", "add newmod")
+
+    calls.clear()
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert "new-module-bug" in _finding_titles(_latest_xref(bug_repo))
+    assert len([c for c in calls if c.startswith("chunk")]) == 1  # delta only
+    assert len([c for c in calls if "survey" in c]) == 0
+
+
+def test_incremental_framing_change_triggers_full_rebuild(bug_repo, _gitkit_cfg,
+                                                          monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _content_stub(bug_repo, calls))
+
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    (bug_repo / "README.md").write_text("# new architecture docs\n")
+    _git(bug_repo, "add", "-A")
+    _git(bug_repo, "commit", "-q", "-m", "add README (framing)")
+
+    calls.clear()
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert len([c for c in calls if "survey" in c]) == 1     # full rebuild
+
+
+def test_v1_breadcrumb_takes_full_path_not_incremental(bug_repo, _gitkit_cfg,
+                                                       monkeypatch):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _content_stub(bug_repo, calls))
+
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    # downgrade the breadcrumb to v1 (pre-incremental schema)
+    bc_path = deep._map_dir(bug_repo) / "mapped.json"
+    bc = json.loads(bc_path.read_text())
+    bc["version"] = 1
+    bc.pop("files", None)
+    bc_path.write_text(json.dumps(bc))
+
+    (bug_repo / "core" / "util.py").write_text("def u():\n    return 9\n")
+    _git(bug_repo, "add", "-A")
+    _git(bug_repo, "commit", "-q", "-m", "edit util")
+
+    calls.clear()
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert len([c for c in calls if "survey" in c]) == 1     # full path

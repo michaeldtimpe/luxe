@@ -194,6 +194,9 @@ class MapStatus:
     content_budget: int = 0
     mapped_at: int = 0          # int(time.time()) from the breadcrumb
     missing: list[str] = field(default_factory=list)   # heavy files gone/corrupt
+    version: int = 1            # breadcrumb schema (v2 = incremental-capable)
+    files: dict = field(default_factory=dict)          # v2: {rel: blob_sha}
+    baseline: dict = field(default_factory=dict)       # v2: partition baseline
 
 
 class CacheDecision(Enum):
@@ -727,7 +730,10 @@ def map_status(target: str | Path, *, head: str) -> MapStatus:
     budget = int(meta.get("content_budget", 0) or 0)
     mapped_at = int(meta.get("mapped_at", 0) or 0)
     common = dict(head=b_head, n_chunks=n_chunks,
-                  content_budget=budget, mapped_at=mapped_at)
+                  content_budget=budget, mapped_at=mapped_at,
+                  version=int(meta.get("version", 1) or 1),
+                  files=dict(meta.get("files", {}) or {}),
+                  baseline=dict(meta.get("baseline", {}) or {}))
 
     if head and b_head != head:
         return MapStatus(MapState.STALE, **common)
@@ -753,11 +759,19 @@ def map_status(target: str | Path, *, head: str) -> MapStatus:
     return MapStatus(MapState.FRESH, **common)
 
 
-def load_map(target: str | Path, *, head: str, rebuild: bool = False) -> dict | None:
+def load_map(target: str | Path, *, head: str, rebuild: bool = False,
+             allow_stale: bool = False) -> dict | None:
     """Return the cached survey+chunks for `target` iff the map is FRESH (delegates
     to `map_status` — single source of truth for "valid cache"); else None. The
-    return shape (survey_notes / chunks / content_budget / framing) is unchanged."""
-    if rebuild or map_status(target, head=head).state is not MapState.FRESH:
+    return shape (survey_notes / chunks / content_budget / framing) is unchanged.
+    `allow_stale=True` also accepts a STALE map (HEAD moved) — the incremental
+    re-audit path, which keeps the survey + partition and re-runs only dirty
+    chunks."""
+    if rebuild:
+        return None
+    state = map_status(target, head=head).state
+    ok = state is MapState.FRESH or (allow_stale and state is MapState.STALE)
+    if not ok:
         return None
     d = _map_dir(target)
     chunks_f, notes_f = d / "chunks.json", d / "survey_notes.md"
@@ -773,9 +787,39 @@ def load_map(target: str | Path, *, head: str, rebuild: bool = False) -> dict | 
         return None
 
 
+def git_file_shas(target: str | Path) -> dict[str, str]:
+    """{rel path: blob sha} for every tracked file at HEAD (`git ls-tree -r`).
+    SHAs, never timestamps — the incremental staleness currency. Untracked
+    files simply don't appear (callers treat sha-less files as always-dirty)."""
+    from luxe.gitkit.health import _run_git
+    ok, out = _run_git(
+        ["ls-tree", "-r", "--format=%(objectname) %(path)", "HEAD"], target)
+    if not ok:
+        return {}
+    shas: dict[str, str] = {}
+    for ln in out.splitlines():
+        parts = ln.split(" ", 1)
+        # the committable .luxe/ sidecar (gitkit mirror, memory.md) is luxe's
+        # OWN write — it must never count as a repo change (a committed mirror
+        # README would otherwise read as a "framing file changed" rebuild).
+        if len(parts) == 2 and not parts[1].startswith(".luxe/"):
+            shas[parts[1]] = parts[0]
+    return shas
+
+
+def make_baseline(chunks: list[Chunk]) -> dict:
+    """Partition baseline persisted in the v2 breadcrumb so the anti-drift
+    compaction triggers are computable across incremental generations."""
+    return {"orig_n_chunks": len(chunks),
+            "orig_corpus_tokens": sum(c.est_tokens for c in chunks),
+            "delta_chunks": 0, "delta_tokens": 0}
+
+
 def save_map(target: str | Path, *, head: str, survey_notes: str,
              chunks: list[Chunk], content_budget: int,
-             framing: list[str], summary_render: str) -> Path:
+             framing: list[str], summary_render: str,
+             files: dict[str, str] | None = None,
+             baseline: dict | None = None) -> Path:
     d = _map_dir(target)
     d.mkdir(parents=True, exist_ok=True)
     # Atomic per-file writes, breadcrumb LAST: a crash anywhere before the
@@ -789,13 +833,194 @@ def save_map(target: str | Path, *, head: str, survey_notes: str,
     _atomic_write_text(d / "chunks.json", json.dumps(
         {"content_budget": content_budget, "framing": framing,
          "chunks": [c.to_dict() for c in chunks]}, indent=2))
-    # Durable breadcrumb (tiny — survives deletion of the heavy files). `version`
-    # is forward infra for the future differential-review schema.
+    # Durable breadcrumb (tiny — survives deletion of the heavy files).
+    # v2: per-file blob shas + the partition baseline make the incremental
+    # re-audit's staleness rules and compaction triggers computable.
     _atomic_write_text(d / "mapped.json", json.dumps(
-        {"version": 1, "head": head or "", "n_chunks": len(chunks),
-         "content_budget": content_budget, "mapped_at": int(time.time())},
+        {"version": 2, "head": head or "", "n_chunks": len(chunks),
+         "content_budget": content_budget, "mapped_at": int(time.time()),
+         "files": files if files is not None else git_file_shas(target),
+         "baseline": baseline if baseline is not None else make_baseline(chunks)},
         indent=2))
     return d
+
+
+# --- incremental re-audit (cache v2) -----------------------------------------
+
+# Anti-drift compaction triggers: appended delta chunks degrade the partition
+# over successive incremental runs; force a full rebuild when any fires.
+_MAX_DELTA_CHUNKS = 4
+_MAX_DELTA_TOKENS_FRAC = 0.15
+_MAX_CHUNK_GROWTH_FRAC = 0.25
+# >this fraction of mapped files added+deleted+renamed → full rebuild.
+_MAX_FILE_CHURN_FRAC = 0.20
+
+
+def _notes_dir(target: str | Path, kind: str) -> Path:
+    return _map_dir(target) / "notes" / kind
+
+
+def save_chunk_note(target: str | Path, kind: str, chunk: Chunk, *,
+                    head: str, file_shas: dict[str, str],
+                    contribution: dict, wall_s: float = 0.0) -> None:
+    """Persist one chunk's digest CONTRIBUTION (inputs to a future digest fold —
+    never merged final findings) right after the chunk completes. Atomic, so it
+    doubles as crash-resume. Best-effort: an OS error never aborts the run."""
+    try:
+        d = _notes_dir(target, kind)
+        d.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(d / f"chunk-{chunk.index:02d}.json", json.dumps(
+            {"head": head, "files": list(chunk.files),
+             "file_shas": file_shas, "contribution": contribution,
+             "wall_s": wall_s}, indent=1))
+    except OSError:
+        pass
+
+
+def load_chunk_note(target: str | Path, kind: str, index: int) -> dict | None:
+    p = _notes_dir(target, kind) / f"chunk-{index:02d}.json"
+    if not p.is_file():
+        return None
+    try:
+        note = json.loads(p.read_text())
+    except (ValueError, OSError):
+        return None
+    return note if isinstance(note, dict) else None
+
+
+def chunk_note_is_valid(note: dict | None, chunk: Chunk,
+                        current_shas: dict[str, str]) -> bool:
+    """A cached contribution is reusable iff it covers EXACTLY this chunk's
+    files and every file's recorded blob sha matches the CURRENT tree
+    (belt-and-braces — never trust the breadcrumb alone). A file without a
+    current sha (untracked/missing) is always dirty."""
+    if not note or not isinstance(note.get("contribution"), dict):
+        return False
+    if list(note.get("files", [])) != list(chunk.files):
+        return False
+    shas = note.get("file_shas", {})
+    for rel in chunk.files:
+        cur = current_shas.get(rel, "")
+        if not cur or shas.get(rel, "") != cur:
+            return False
+    return True
+
+
+def fold_contribution(digest: dict, contribution: dict, chunk_index: int) -> None:
+    """Fold a cached chunk contribution into the digest EXACTLY as the live
+    chunk loop would have (same update_digest / markdown_notes / unparsed
+    paths) — the digest is always rebuilt from scratch, never merged from a
+    cached final state."""
+    parsed = contribution.get("parsed")
+    if isinstance(parsed, dict):
+        update_digest(digest, parsed, chunk_index)
+    note = contribution.get("note")
+    if isinstance(note, dict) and note.get("md"):
+        digest["markdown_notes"].append(
+            {"chunk": chunk_index, "label": note.get("label", ""),
+             "md": note["md"], "source": note.get("source", "md_clean")})
+    unparsed = contribution.get("unparsed")
+    if unparsed:
+        digest["unparsed_chunks"].append(str(unparsed))
+
+
+@dataclass
+class IncrementalPlan:
+    mode: str                   # "incremental" | "rebuild"
+    reason: str = ""            # rebuild trigger / incremental summary
+    chunks: list[Chunk] = field(default_factory=list)  # pruned + delta partition
+    dirty: set[int] = field(default_factory=set)       # indices that must re-run
+    baseline: dict = field(default_factory=dict)       # carried-forward baseline
+    n_changed: int = 0          # modified+deleted+added file count
+
+
+def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
+                     chunks: list[Chunk], baseline: dict,
+                     added_recs: list[FileRec], content_budget: int,
+                     symbol_index=None) -> IncrementalPlan:
+    """PURE incremental planner (no I/O): decide full-rebuild vs incremental
+    from the old/new blob-sha maps, and produce the updated partition.
+
+    Rebuild triggers (each logged via `reason`): a FRAMING file changed; file
+    churn (added+deleted) > 20% of mapped files; anti-drift compaction —
+    cumulative delta chunks > 4, cumulative delta content > 15% of the original
+    corpus tokens, or chunk count grown > 25% over the original partition.
+
+    Incremental: survey + partition kept; deleted files pruned from their
+    chunks (chunk → dirty); modified files mark their chunk dirty; added files
+    pack into APPENDED delta chunks (all dirty)."""
+    modified = {r for r, s in new_files.items()
+                if r in old_files and old_files[r] != s}
+    deleted = set(old_files) - set(new_files)
+    added = set(new_files) - set(old_files)
+
+    touched = modified | deleted | added
+    framing_hit = sorted(r for r in touched if _FRAMING_RE.search(r))
+    if framing_hit:
+        return IncrementalPlan("rebuild",
+                               reason=f"framing file changed ({framing_hit[0]})")
+    if old_files and (len(added) + len(deleted)) > _MAX_FILE_CHURN_FRAC * len(old_files):
+        return IncrementalPlan(
+            "rebuild", reason=f"file churn {len(added) + len(deleted)}/"
+            f"{len(old_files)} mapped files (> {_MAX_FILE_CHURN_FRAC:.0%})")
+
+    # Updated partition: prune deletions, mark dirt, append delta chunks.
+    new_chunks: list[Chunk] = []
+    dirty: set[int] = set()
+    mapped_files: set[str] = set()
+    for c in chunks:
+        keep = [f for f in c.files if f not in deleted]
+        mapped_files.update(keep)
+        nc = Chunk(index=c.index, files=keep, dirs=c.dirs, label=c.label,
+                   est_tokens=c.est_tokens, loc=c.loc, symbols=c.symbols,
+                   oversized=[f for f in c.oversized if f not in deleted])
+        new_chunks.append(nc)
+        if len(keep) != len(c.files) or any(f in modified for f in keep):
+            dirty.add(c.index)
+
+    # files added since the ORIGINAL map but unmapped (e.g. created between
+    # generations and never folded) ride with the added set via added_recs.
+    delta_recs = [r for r in added_recs if r.rel not in mapped_files]
+    delta_tokens_new = sum(r.tokens for r in delta_recs)
+    delta_chunks_new: list[Chunk] = []
+    if delta_recs:
+        delta_chunks_new = build_chunks(delta_recs, content_budget=content_budget,
+                                        symbol_index=symbol_index)
+        offset = max((c.index for c in new_chunks), default=-1) + 1
+        for dc in delta_chunks_new:
+            dc.index += offset
+            new_chunks.append(dc)
+            dirty.add(dc.index)
+
+    # Anti-drift compaction triggers — evaluated on the would-be cumulative state.
+    bl = dict(baseline or {})
+    orig_n = int(bl.get("orig_n_chunks", 0) or len(chunks))
+    orig_tok = int(bl.get("orig_corpus_tokens", 0)
+                   or sum(c.est_tokens for c in chunks))
+    cum_delta_chunks = int(bl.get("delta_chunks", 0)) + len(delta_chunks_new)
+    cum_delta_tokens = int(bl.get("delta_tokens", 0)) + delta_tokens_new
+    if cum_delta_chunks > _MAX_DELTA_CHUNKS:
+        return IncrementalPlan("rebuild",
+                               reason=f"compaction: {cum_delta_chunks} delta "
+                               f"chunks (> {_MAX_DELTA_CHUNKS})")
+    if orig_tok and cum_delta_tokens > _MAX_DELTA_TOKENS_FRAC * orig_tok:
+        return IncrementalPlan(
+            "rebuild", reason=f"compaction: delta content {cum_delta_tokens} tok "
+            f"(> {_MAX_DELTA_TOKENS_FRAC:.0%} of {orig_tok})")
+    if orig_n and len(new_chunks) > (1 + _MAX_CHUNK_GROWTH_FRAC) * orig_n:
+        return IncrementalPlan(
+            "rebuild", reason=f"compaction: partition grew to {len(new_chunks)} "
+            f"chunks (> {_MAX_CHUNK_GROWTH_FRAC:.0%} over {orig_n})")
+
+    bl.update({"orig_n_chunks": orig_n, "orig_corpus_tokens": orig_tok,
+               "delta_chunks": cum_delta_chunks,
+               "delta_tokens": cum_delta_tokens})
+    return IncrementalPlan(
+        "incremental",
+        reason=f"{len(modified)} modified, {len(deleted)} deleted, "
+               f"{len(delta_recs)} added",
+        chunks=new_chunks, dirty=dirty, baseline=bl,
+        n_changed=len(modified) + len(deleted) + len(delta_recs))
 
 
 def _new_work_dir(target: str | Path, kind: str) -> Path:
@@ -904,6 +1129,7 @@ def run_deep_report(
     postprocess=None,
     extra_meta: dict | None = None,
     min_severity: str | None = None,
+    no_incremental: bool = False,
 ) -> tuple[str, Path | None]:
     """Run the staged deep analysis. Returns (report_text, saved_path | None);
     ("", None) on cancel/decline. The caller (runner) owns target resolution,
@@ -1001,6 +1227,7 @@ def run_deep_report(
         return CacheDecision.REBUILD
 
     # --- Stages 0+1: survey + chunk plan (cached per repo, HEAD-keyed) -------
+    current_shas: dict[str, str] = {}
     if chunks_override is not None:
         # Diff mode: chunks cover the CHANGED files only. NO survey pass (diff
         # audits must be fast) and NO map/ reads or writes; a FRESH whole-repo
@@ -1022,6 +1249,41 @@ def run_deep_report(
             survey_notes = cached["survey_notes"]
             chunks = cached["chunks"]
             framing = cached["framing"]
+        elif (not rebuild_map and not no_incremental
+              and status.state is MapState.STALE
+              and status.version >= 2 and status.files):
+            # INCREMENTAL RE-AUDIT: HEAD moved but the v2 breadcrumb carries
+            # blob shas — keep the survey + partition, prune deletions, append
+            # delta chunks, and let the sha-validated notes cache decide which
+            # chunks actually re-run. plan_incremental is pure; any rebuild
+            # trigger is logged loudly (never silently skipped).
+            stale = load_map(target, head=head, allow_stale=True)
+            if stale is not None:
+                current_shas = git_file_shas(target)
+                added = set(current_shas) - set(status.files)
+                added_recs = [r for r in enumerate_files(target, summary,
+                                                         log=_emit)
+                              if r.rel in added]
+                plan = plan_incremental(
+                    old_files=status.files, new_files=current_shas,
+                    chunks=stale["chunks"], baseline=status.baseline,
+                    added_recs=added_recs, content_budget=content_budget,
+                    symbol_index=symbol_index)
+                if plan.mode == "incremental":
+                    survey_notes = stale["survey_notes"]
+                    chunks = plan.chunks
+                    framing = stale["framing"]
+                    _emit(f"incremental: HEAD {status.head[:8] or '?'} → "
+                          f"{(head or '?')[:8]} — {plan.reason}; "
+                          f"{len(plan.dirty)} chunk(s) marked dirty")
+                    save_map(target, head=head, survey_notes=survey_notes,
+                             chunks=chunks, content_budget=content_budget,
+                             framing=framing, summary_render=summary.render(),
+                             files=current_shas, baseline=plan.baseline)
+                    cached = True  # sentinel: skip the survey/save_map branch
+                else:
+                    _emit(f"incremental unavailable — {plan.reason}; "
+                          "full rebuild (re-survey)")
     if not cached:
         framing = framing_files(target)
         survey_ctx = (f"{health_block}\n\n<repo_map>\n{summary.render()}\n</repo_map>"
@@ -1051,9 +1313,30 @@ def run_deep_report(
               f"{len(chunks) + len(dropped)} chunks; SKIPPING {len(dropped)} "
               f"(areas: {', '.join(dropped_dirs)})")
 
+    # Sha-validated per-chunk notes reuse (incremental re-audit + crash-resume):
+    # a cached contribution is reused iff it covers exactly the chunk's files
+    # and every blob sha matches the CURRENT tree. Cached contributions are
+    # chunk INPUTS only — the digest is rebuilt from scratch every run and the
+    # synthesis always re-runs, so a stale finding cannot survive its source
+    # chunk's invalidation by construction.
+    contributions: dict[int, dict] = {}
+    if chunks_override is None:
+        current_shas = current_shas or git_file_shas(target)
+        if not no_incremental and not rebuild_map:
+            for c in chunks:
+                if not c.files:
+                    continue
+                note = load_chunk_note(target, kind, c.index)
+                if chunk_note_is_valid(note, c, current_shas):
+                    contributions[c.index] = note["contribution"]
+    n_eff = sum(1 for c in chunks if c.files)
+    if contributions:
+        _emit(f"incremental: reusing {len(contributions)}/{n_eff} cached chunk "
+              f"note(s) — {n_eff - len(contributions)} chunk pass(es) to run")
+
     # The survey pass has already completed by here (reused from the map cache OR
     # freshly run above), so the estimate covers the REMAINING chunk + synth work.
-    est = estimate_run(len(chunks), survey_cached=True)
+    est = estimate_run(n_eff - len(contributions), survey_cached=True)
     _emit(f"plan: {est.line()}")
 
     # Confirmation gate — large repos only, interactive only.
@@ -1074,6 +1357,20 @@ def run_deep_report(
             if not c.files:
                 continue
             raise_if_cancelled(cancel) if cancel is not None else None
+            if c.index in contributions:
+                # Clean chunk: fold the cached contribution in chunk order,
+                # exactly as the live path would have.
+                fold_contribution(digest, contributions[c.index], c.index)
+                if estimate_tokens(json.dumps(digest)) > ceiling:
+                    digest = compact_digest(digest, ceiling_tokens=ceiling,
+                                            log=_emit)
+                _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label}) — "
+                      "cached note reused")
+                if work_dir is not None:
+                    (work_dir / "xref.json").write_text(
+                        json.dumps(digest, indent=2))
+                continue
+            contribution: dict = {}
             _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label})")
             extra = (f"<survey_notes>\n{survey_notes}\n</survey_notes>\n\n"
                      f"{_digest_block(digest)}\n\n{_chunk_block(c, len(chunks))}")
@@ -1113,6 +1410,7 @@ def run_deep_report(
                             steps_obj = recovered
                 if steps_obj and steps_obj.get("steps"):
                     update_digest(digest, steps_obj, c.index)
+                    contribution["parsed"] = steps_obj
                     if estimate_tokens(json.dumps(digest)) > ceiling:
                         digest = compact_digest(digest, ceiling_tokens=ceiling,
                                                 log=_emit)
@@ -1124,8 +1422,16 @@ def run_deep_report(
                     label = f"chunk {c.index + 1} ({c.label}): " \
                         + ", ".join(c.files[:4]) + (" …" if len(c.files) > 4 else "")
                     digest["unparsed_chunks"].append(label)
+                    contribution["unparsed"] = label
                     _emit(f"chunk {c.index + 1} produced no usable steps "
                           "(empty/truncated) — flagged as unanalyzed")
+                if chunks_override is None:
+                    save_chunk_note(
+                        target, kind, c, head=head,
+                        file_shas={r: current_shas.get(r, "")
+                                   for r in c.files},
+                        contribution=contribution,
+                        wall_s=(timings[-1].wall_s if timings else 0.0))
                 if work_dir is not None:
                     (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
                 continue
@@ -1133,6 +1439,7 @@ def run_deep_report(
             note_src = None
             if parsed:
                 update_digest(digest, parsed, c.index)
+                contribution["parsed"] = parsed
                 if estimate_tokens(json.dumps(digest)) > ceiling:
                     digest = compact_digest(digest, ceiling_tokens=ceiling, log=_emit)
             elif _has_report_header(text, kind):
@@ -1155,6 +1462,8 @@ def run_deep_report(
                     digest["markdown_notes"].append(
                         {"chunk": c.index, "label": c.label, "md": clean,
                          "source": note_source})
+                    contribution["note"] = {"label": c.label, "md": clean,
+                                            "source": note_source}
                     _emit(f"chunk {c.index + 1}: findings recorded")
                 else:
                     note_src = None  # nothing salvageable → fall through to unparsed
@@ -1164,8 +1473,15 @@ def run_deep_report(
                 label = f"chunk {c.index + 1} ({c.label}): {', '.join(c.files[:4])}" \
                     + (" …" if len(c.files) > 4 else "")
                 digest["unparsed_chunks"].append(label)
+                contribution["unparsed"] = label
                 _emit(f"chunk {c.index + 1} produced no usable findings "
                       f"(empty/truncated) — flagged as unanalyzed")
+            if chunks_override is None:
+                save_chunk_note(
+                    target, kind, c, head=head,
+                    file_shas={r: current_shas.get(r, "") for r in c.files},
+                    contribution=contribution,
+                    wall_s=(timings[-1].wall_s if timings else 0.0))
             if work_dir is not None:
                 (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
     except (ChatCancelled, KeyboardInterrupt):
