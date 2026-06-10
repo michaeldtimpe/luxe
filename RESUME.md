@@ -1,5 +1,80 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-06-10) — gitkit hardening cycle: 5 phases shipped+dogfooded, tuning debt banked
+
+**Branch `feat/gitkit-cycle`** (atop the landed `feat/chat-tui`→main fast-forward;
+PR #9 auto-merged). All gitkit suites green (209 tests incl. +60 new), ruff clean.
+The full cycle brief lived in-conversation; everything below is also in commit
+messages + `gitkit.sdd`/CLAUDE.md.
+
+1. **Phase 0** — `feat/chat-tui` fast-forward-pushed to main; cycle branch cut.
+2. **Phase 1 robustness** — apply.py TOCTOU clean-tree re-checks (`.luxe/` mirror
+   exempt; no abort orphans the `gitchange/*` branch) + step-loop exception gate
+   ([c]ontinue/[a]bort, NEVER retry; kept-commits-survive-revert proven by test);
+   atomic map-cache writes (breadcrumb LAST); `_heuristic_findings` broadened
+   (numbered non-bold + severity-lead lookahead + severity headings; numbering-
+   insensitive dedup) — measured on the 109 surviving dumps: salvage 95→100%,
+   dup-rate 0.027→0.016, FP heading class eliminated by hand-inspection. Plus
+   minors (oversized-file notice, enumerate/clean-note logging, extract_report
+   header ranking).
+3. **Phase 2 diff audit** — `gitaudit --base <ref> | --pr <N>` (internal kind
+   `gitaudit-diff`; new `diffscope.py`; routing gates on CHANGED files only; no
+   survey, never writes `map/`; `likely-introduced` vs `pre-existing (touched
+   code)` with the hunk-overlap prior + caveat rendered in Python; gh failures
+   named by class). DOGFOODED on this very branch (deep, 10 chunks): real
+   findings incl. the recover_offline.py `rows[0]` crash hit live the same
+   morning; 2 fixes fed straight back (salvage "Let me check…" veto; empty-corpus
+   guard).
+4. **Phase 3 report quality** — provenance stamping (json/md_clean/
+   md_transcribed/heuristic), evidence-overlap second merge pass, DETERMINISTIC
+   evidence-weighted confidence (heuristic caps at low; repeated-hallucination
+   scores below single-strong-evidence), display-only `--min-severity` with
+   honesty line, severity+confidence render ordering.
+5. **Phase 4 incremental re-audit** (the cycle's highest-risk item) — mapped.json
+   v2 (blob shas from `ls-tree`, `.luxe/` excluded; partition baseline), pure
+   `plan_incremental` (framing/churn/compaction rebuild triggers, all logged),
+   per-chunk notes cache `map/notes/<kind>/` (atomic; crash-resume), sha-validated
+   reuse, digest ALWAYS rebuilt from scratch + synthesis always re-runs.
+   Stale-leakage test suite (content-tracking stub; fix-commit removes finding;
+   2-generation == from-scratch). DOGFOODED live on a statusline-repo clone:
+   gen-1 edit → exactly 1 dirty chunk re-ran, 3/4 notes reused; gen-2 new file →
+   1 appended delta chunk, baseline counters ticked. `--no-incremental` escape
+   hatch; CLAUDE.md + gitkit.sdd reconciled.
+   **Live-found fix:** ABORTED passes are never cached (an oMLX outage had
+   poisoned the notes cache with empty contributions — see lessons.md).
+6. **Phase 5 concurrency** — CLOSED as measured-no-win, decisively: concurrent
+   prefill-heavy requests are CONNECTION-FATAL on this oMLX build (probe +
+   isolated 2/2 repro; serial pair clean). `scripts/probe_omlx_concurrency.py`
+   banked for post-upgrade re-runs; serialization fallbacks recorded in
+   lessons.md (incremental re-audit is the wall reducer; prefix-cache probe /
+   chunk-budget retune / per-chunk max_tokens cap are next-cycle candidates).
+
+**Phase C tuning debt:**
+- **C12 adaptive smoke** (5 fixtures × 2 arms): SAFE/ENGAGED/INERT — no flips,
+  soft_anchor modulation 1.0→0.7 every adaptive run, but base interventions
+  ~never fire on maintain fixtures. NOT a promotion signal.
+  `acceptance/adaptive_smoke/SUMMARY.md`.
+- **C13 density-split** (offline, 1253 post-v1.10.2 traces): pre/post-IID
+  premise confirmed; standalone density gate fires 0/1253 (dead weight in the
+  convergence-gate era — leave untouched); actionable: rescue-path
+  `min_turns_after_bail` 2→6 (conversion latency p75=6 vs bail+2 eligibility).
+  NOT promoted — needs 5-fixture smoke + 3-rep.
+  `acceptance/c13_density_split/C13_REPORT.md`.
+- **C11 IN FLIGHT** (kicked 10:50): BFCL multi_turn_long_context @ num_ctx=49152,
+  n=200 → `acceptance/bfcl/multi_turn_long_context/m1_49k/` (M1 host — the 39%
+  @32K reference is M1; 57.5% @131K is M5). Single rep = capability-curve point;
+  65536 only if 49K still clearly context-limited.
+- **C10 repeat_penalty 1.05** queued after C11 (8 fixtures; expectations LOW).
+- **C14 early-bail mapping**: deferred-optional.
+
+**Ops note (twice in one day):** oMLX memory-state flakes — a stale memory-guard
+reading (507s with implausible `current:`) and prefill-guard creep
+(35.3/36.0GB resident → 400s on large prefills, surfacing as empty+aborted
+agent passes). Both cleared by `brew services restart omlx`. If gitkit chunks
+come back empty/aborted, check this FIRST (lessons.md 2026-06-10).
+
+---
+
 ## ⇒ SESSION HANDOFF (2026-06-09) — gitaudit chunk conclude-discipline: RECOVERY shipped, PREVENTION refuted
 
 **TL;DR.** Chased the gitaudit medium-repo gaps (deluxe 42% / neo-llm-bench 45%
