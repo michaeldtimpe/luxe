@@ -787,10 +787,12 @@ def _prior_findings_block(prior: str) -> str:
 _CHUNK_HINTS = {
     "gitaudit": prompts.GIT_AUDIT_CHUNK_HINT,
     "gitchange": prompts.GIT_CHANGE_CHUNK_HINT,
+    "gitaudit-diff": prompts.GIT_AUDIT_DIFF_CHUNK_HINT,
 }
 _SYNTH_HINTS = {
     "gitaudit": prompts.GIT_AUDIT_SYNTH_HINT,
     "gitchange": prompts.GIT_CHANGE_SYNTH_HINT,
+    "gitaudit-diff": prompts.GIT_AUDIT_DIFF_SYNTH_HINT,
 }
 
 
@@ -817,6 +819,11 @@ def run_deep_report(
     prior_report: str = "",
     mirror: bool = True,
     run_single_fn=None,
+    chunks_override: list[Chunk] | None = None,
+    chunk_extra_blocks: dict[int, str] | None = None,
+    survey_notes_override: str | None = None,
+    postprocess=None,
+    extra_meta: dict | None = None,
 ) -> tuple[str, Path | None]:
     """Run the staged deep analysis. Returns (report_text, saved_path | None);
     ("", None) on cancel/decline. The caller (runner) owns target resolution,
@@ -824,6 +831,16 @@ def run_deep_report(
 
     `run_single_fn` is injectable for tests (count passes with a stub); defaults
     to the real `run_single`.
+
+    Diff mode (`gitaudit --base/--pr`) passes `chunks_override` (chunks built
+    over the CHANGED files only) — that skips the survey pass entirely and
+    neither reads nor writes the per-repo `map/` cache (gitkit.sdd diff-mode
+    rules); `survey_notes_override` may opportunistically inject a FRESH
+    whole-repo map's survey notes. `chunk_extra_blocks` appends a per-chunk
+    pure-data block (the chunk-scoped `<change_diff>`) to that chunk's
+    extra_context. `postprocess` (report→report) runs before save —
+    deterministic tag-prior/caveat rendering. `extra_meta` merges into the
+    saved report's frontmatter (base / merge_base).
     """
     from rich.markdown import Markdown
 
@@ -904,19 +921,28 @@ def run_deep_report(
         return CacheDecision.REBUILD
 
     # --- Stages 0+1: survey + chunk plan (cached per repo, HEAD-keyed) -------
-    status = map_status(target, head=head)
-    cached = None if rebuild_map else load_map(target, head=head)
-    if not rebuild_map and status.state is MapState.PARTIAL:
-        if _handle_partial_map(status) is CacheDecision.CANCEL:
-            console.print("[yellow]· cancelled.[/]")
-            return "", None
-        # else fall through to re-survey (cached stays None)
-    if cached:
-        _emit(f"reusing cached repo map (HEAD {head or '?'})")
-        survey_notes = cached["survey_notes"]
-        chunks = cached["chunks"]
-        framing = cached["framing"]
+    if chunks_override is not None:
+        # Diff mode: chunks cover the CHANGED files only. NO survey pass (diff
+        # audits must be fast) and NO map/ reads or writes; a FRESH whole-repo
+        # map's survey notes may be injected opportunistically by the caller.
+        chunks = chunks_override
+        survey_notes = survey_notes_override or "(no survey — diff-scoped audit)"
+        framing = []
+        cached = True  # sentinel: skip the survey/save_map branch below
     else:
+        status = map_status(target, head=head)
+        cached = None if rebuild_map else load_map(target, head=head)
+        if not rebuild_map and status.state is MapState.PARTIAL:
+            if _handle_partial_map(status) is CacheDecision.CANCEL:
+                console.print("[yellow]· cancelled.[/]")
+                return "", None
+            # else fall through to re-survey (cached stays None)
+        if cached:
+            _emit(f"reusing cached repo map (HEAD {head or '?'})")
+            survey_notes = cached["survey_notes"]
+            chunks = cached["chunks"]
+            framing = cached["framing"]
+    if not cached:
         framing = framing_files(target)
         survey_ctx = (f"{health_block}\n\n<repo_map>\n{summary.render()}\n</repo_map>"
                       f"\n\n{_framing_block(framing)}")
@@ -971,6 +997,8 @@ def run_deep_report(
             _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label})")
             extra = (f"<survey_notes>\n{survey_notes}\n</survey_notes>\n\n"
                      f"{_digest_block(digest)}\n\n{_chunk_block(c, len(chunks))}")
+            if chunk_extra_blocks and c.index in chunk_extra_blocks:
+                extra += f"\n\n{chunk_extra_blocks[c.index]}"
             goal = (f"Analyze chunk {c.index + 1} of {len(chunks)} of this "
                     f"repository.\n\n{chunk_hint}")
             res = _pass(goal, extra, f"chunk-{c.index + 1}")
@@ -1125,6 +1153,9 @@ def run_deep_report(
                 report = _render_report(digest, kind)
         report = report or _render_report(digest, kind) or "(no report produced)"
 
+    if postprocess is not None:
+        report = postprocess(report)
+
     # --- timing telemetry: raw per-pass records + cheap aggregates (B3/B4) ----
     total_wall_s = round(sum(t.wall_s for t in timings), 3)
     n_passes = len(timings)
@@ -1145,7 +1176,7 @@ def run_deep_report(
             meta={"model": backend.model, "head": head, "repo": target,
                   "mode": "deep", "chunks": len(chunks),
                   "total_wall_s": total_wall_s, "n_passes": n_passes,
-                  "avg_pass_s": avg_pass_s})
+                  "avg_pass_s": avg_pass_s, **(extra_meta or {})})
         if mirror and store.mirror_to_repo(target, kind, report, head):
             _emit("mirrored map + report to <repo>/.luxe/gitkit/")
 

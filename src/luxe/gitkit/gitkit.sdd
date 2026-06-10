@@ -73,6 +73,21 @@ in the front-end. Survey map + chunk plan persist per repo under
   >    files outside the working tree.
   > 6. Orchestration is front-end Python (the deep.py/compare precedent): multiple
   >    mono passes, each ONE call, NO in-agent repair loop / goal-runner / retry.
+- DIFF AUDIT is a FLAG, not a command: `gitaudit --base <ref>` / `--pr <N>`
+  (mutually exclusive; `--pr` resolves the base via `gh`, and its failure message
+  names the ACTUAL failure class — gh missing / auth or network / PR not found —
+  before suggesting `--base`). Internally kind `gitaudit-diff` (own title
+  "Diff audit" + `GIT_AUDIT_DIFF_*` hints), mapped to the EXISTING `review`
+  task_type. Read-only like gitaudit. Routing footprint-gates on the CHANGED
+  files only (merge-base → `--name-status -M` survivors); diff runs NEVER write
+  `map/` and never generate a survey (a FRESH whole-repo map's survey notes may
+  be injected opportunistically). The chunk-scoped `<change_diff>` block
+  (`git diff -U10`, token-capped with an explicit truncation notice) joins the
+  tagged-block list. CLASSIFICATION HONESTY: finding tags are `likely-introduced`
+  vs `pre-existing (touched code)` — never bare "introduced"; the header carries
+  a fixed heuristic-classification caveat line and diffscope.py renders the
+  deterministic hunk-overlap prior (the model's tag refines, never invents) —
+  both applied in Python regardless of model output.
 - Pick the path by repo size: small/medium repos → SINGLE-PASS (exactly one
   `run_single`); large repos (estimated token footprint over the deep threshold,
   or `--deep`/`/gitaudit deep`) → the staged deep mode above. The decision is
@@ -129,6 +144,8 @@ in the front-end. Survey map + chunk plan persist per repo under
   (single-pass: `GIT_AUDIT_HINT` / `GIT_CHANGE_HINT`; deep: `GIT_SURVEY_HINT`,
   `GIT_AUDIT_CHUNK_HINT` / `GIT_CHANGE_CHUNK_HINT`, `GIT_AUDIT_SYNTH_HINT` /
   `GIT_CHANGE_SYNTH_HINT`, `GIT_CHANGE_EXTRACT_HINT`, `GIT_DEEP_FORMAT_HINT`,
-  `GIT_DEEP_REDUCE_HINT`; apply: `GIT_APPLY_STEP_HINT`). `plan.py`/`apply.py` hold
-  only orchestration + deterministic data shaping (parse/normalize/render, git ops,
-  the keep/discard gate).
+  `GIT_DEEP_REDUCE_HINT`; diff: `GIT_AUDIT_DIFF_HINT` /
+  `GIT_AUDIT_DIFF_CHUNK_HINT` / `GIT_AUDIT_DIFF_SYNTH_HINT` — markdown chunk
+  contract, never JSON-only; apply: `GIT_APPLY_STEP_HINT`). `plan.py`/`apply.py`/
+  `diffscope.py` hold only orchestration + deterministic data shaping
+  (parse/normalize/render, git ops, the keep/discard gate, hunk-overlap priors).

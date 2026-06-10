@@ -663,6 +663,29 @@ def test_prior_findings_clause_only_on_gitchange():
     assert "<prior_findings>" not in prompts.GIT_AUDIT_HINT
 
 
+def test_git_audit_diff_hints_scope_tags_and_caveat():
+    """Diff-audit hints (gitaudit --base/--pr): change-scoped, markdown contract
+    (never JSON-only — the gitkit ramble finding), honest tag vocabulary
+    (`likely-introduced` vs `pre-existing (touched code)`, never bare
+    'introduced'), fixed heuristic caveat, no orientation section."""
+    from luxe.agents import prompts
+    for hint in (prompts.GIT_AUDIT_DIFF_HINT, prompts.GIT_AUDIT_DIFF_CHUNK_HINT,
+                 prompts.GIT_AUDIT_DIFF_SYNTH_HINT):
+        s = hint.lower()
+        assert "# diff audit" in s
+        assert "likely-introduced" in s
+        assert "pre-existing (touched code)" in s
+        assert "hunk overlap, not proof" in s
+        assert "final message" in s                    # report-only discipline
+        assert "fenced ```json" not in s               # markdown, never JSON-only
+    s = prompts.GIT_AUDIT_DIFF_HINT.lower()
+    assert "<change_diff>" in s
+    assert "do not audit the whole repository" in s
+    assert "orientation" in s and "repository summary" in s.replace("-", " ")
+    # no whole-repo summary section in the diff shape
+    assert "## repository summary & risk" not in s
+
+
 def test_git_change_hints_emit_v1_schema_and_markdown_chunks():
     """gitchange single/synth emit the gitplan/v1 JSON; the CHUNK hint is markdown
     (the JSON-only ramble fix), recovered to JSON by the extract pass."""
