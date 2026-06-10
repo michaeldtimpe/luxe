@@ -138,6 +138,42 @@ def mirror_to_repo(repo_path: str | Path, kind: str, report_text: str,
 
 
 _SEV_HDR_RE = re.compile(r"^##\s*(Critical|High|Medium|Low)\b", re.IGNORECASE)
+_SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+# a finding item line: "- **high** ..." / "1. **Critical:** ..." (inline severity)
+_INLINE_SEV_RE = re.compile(
+    r"^\s*(?:[-*]|\d+[.)])\s+\*\*\s*(critical|high|medium|low)\b", re.IGNORECASE)
+_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+\S")
+
+
+def filter_min_severity(report_md: str, min_severity: str) -> tuple[str, int]:
+    """DISPLAY-side severity filter (the saved report is always the full,
+    unfiltered text — never silently cap coverage). Drops `## <Severity>`
+    sections below the threshold (counting their list items) and individual
+    `- **sev**`-shaped finding lines below it inside kept sections. Returns
+    (filtered markdown, number of findings filtered out)."""
+    thr = _SEV_ORDER.get((min_severity or "").lower(), 0)
+    if thr <= 1:                       # low = show everything
+        return report_md, 0
+    out: list[str] = []
+    dropped = 0
+    keep_section = True
+    for ln in (report_md or "").splitlines():
+        if ln.startswith("## "):
+            m = _SEV_HDR_RE.match(ln)
+            keep_section = (m is None
+                            or _SEV_ORDER.get(m.group(1).lower(), 0) >= thr)
+            if not keep_section:
+                continue
+        if not keep_section:
+            if _ITEM_RE.match(ln):
+                dropped += 1
+            continue
+        m = _INLINE_SEV_RE.match(ln)
+        if m and _SEV_ORDER.get(m.group(1).lower(), 5) < thr:
+            dropped += 1
+            continue
+        out.append(ln)
+    return "\n".join(out), dropped
 
 
 def extract_findings(report_md: str) -> str:

@@ -457,6 +457,8 @@ def update_digest(digest: dict, parsed: dict, chunk_index: int) -> dict:
             continue
         rec = dict(f)
         rec["chunk"] = chunk_index
+        rec.setdefault("chunks", [chunk_index])   # provenance: contributors
+        rec.setdefault("source", "json")          # provenance: parse rung
         rec.setdefault("evidence", [])
         digest["provisional_findings"].append(rec)
     # gitchange: accumulate apply-ready steps (deduped by op + files + title). Empty
@@ -476,12 +478,74 @@ def update_digest(digest: dict, parsed: dict, chunk_index: int) -> dict:
     return digest
 
 
+# Provenance rungs, best → worst. Used to keep the BEST source on merge and to
+# cap heuristic-salvaged findings at low confidence (provenance-honest).
+_SOURCE_RANK = {"json": 3, "md_clean": 2, "md_transcribed": 1, "heuristic": 0}
+
+
+def _evidence_keys(f: dict) -> set[str]:
+    """Normalized `file:line` tokens from a finding's evidence strings
+    ("a.py line 12" / "a.py:12" / "a.py 12" → "a.py:12")."""
+    keys: set[str] = set()
+    for ev in f.get("evidence", []) or []:
+        for m in _FILE_LINE_RE.finditer(str(ev)):
+            keys.add(re.sub(r"[:\s]+(?:line\s+)?", ":", m.group(0).lower()))
+    return keys
+
+
+def _finding_chunks(f: dict) -> list[int]:
+    chunks = list(f.get("chunks") or [])
+    if not chunks and "chunk" in f:
+        chunks = [f["chunk"]]
+    return sorted(set(chunks))
+
+
+def confidence_of(f: dict) -> tuple[float, str]:
+    """Deterministic, EVIDENCE-weighted confidence (never frequency-weighted:
+    one hallucinated issue repeated by three chunks must not outscore one real
+    issue found once with strong evidence). Weights: +0.5 ≥1 parseable
+    file:line; +0.2 ≥2 distinct evidence locations; +0.2 structured/clean
+    source (json/md_clean); +0.1 corroborated by ≥2 chunks. heuristic-salvaged
+    findings cap at low regardless. Labels: ≥0.7 high, ≥0.4 medium, else low."""
+    ev = _evidence_keys(f)
+    score = 0.0
+    if len(ev) >= 1:
+        score += 0.5
+    if len(ev) >= 2:
+        score += 0.2
+    if f.get("source") in ("json", "md_clean"):
+        score += 0.2
+    if len(_finding_chunks(f)) >= 2:
+        score += 0.1
+    label = "high" if score >= 0.7 else ("medium" if score >= 0.4 else "low")
+    if f.get("source") == "heuristic":
+        label = "low"
+    return round(score, 2), label
+
+
+def _merge_into(cur: dict, f: dict) -> None:
+    """Merge finding `f` into `cur`: union evidence + chunks, max severity,
+    best provenance source."""
+    cur["evidence"] = _merge_evidence(cur.get("evidence", []),
+                                      f.get("evidence", []))
+    cur["chunks"] = sorted(set(_finding_chunks(cur)) | set(_finding_chunks(f)))
+    if _SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0) > \
+       _SEVERITY_RANK.get(str(cur.get("severity", "")).lower(), 0):
+        cur["severity"] = f.get("severity", cur.get("severity"))
+    if _SOURCE_RANK.get(f.get("source", ""), -1) > \
+       _SOURCE_RANK.get(cur.get("source", ""), -1):
+        cur["source"] = f["source"]
+
+
 def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
                    log=None) -> dict:
-    """Dedupe + merge the digest so it stays under `ceiling_tokens`. Merges
-    same-root-cause findings (union evidence, keep highest severity); if still
-    over after dedupe, drops lowest-severity findings (logged). Returns a new
-    digest dict; never mutates the input."""
+    """Dedupe + merge the digest so it stays under `ceiling_tokens`. Two merge
+    passes: (1) same root-cause/title key; (2) EVIDENCE-OVERLAP — findings
+    sharing any normalized `file:line` evidence token merge (same bug, different
+    words). Merges union evidence + contributing chunks, keep highest severity +
+    best provenance source. If still over the ceiling, drops lowest-severity
+    findings (logged). Stamps each surviving finding's deterministic
+    `confidence`. Returns a new digest dict; never mutates the input."""
     merged: dict[str, dict] = {}
     order: list[str] = []
     for f in digest.get("provisional_findings", []):
@@ -489,22 +553,37 @@ def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
         if not k:
             k = f"_anon_{len(order)}"
         if k in merged:
-            cur = merged[k]
-            cur["evidence"] = _merge_evidence(cur.get("evidence", []),
-                                              f.get("evidence", []))
-            if _SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0) > \
-               _SEVERITY_RANK.get(str(cur.get("severity", "")).lower(), 0):
-                cur["severity"] = f.get("severity", cur.get("severity"))
+            _merge_into(merged[k], f)
         else:
             merged[k] = dict(f)
             merged[k]["evidence"] = _merge_evidence(f.get("evidence", []), [])
             order.append(k)
 
+    # Pass 2 — evidence-overlap merge (catches same-bug-different-words misses
+    # the root-cause key can't).
+    by_ev: dict[str, str] = {}          # evidence token -> canonical key
+    survivors: list[str] = []
+    for k in order:
+        f = merged[k]
+        hit = next((by_ev[t] for t in _evidence_keys(f) if t in by_ev), None)
+        if hit is not None and hit != k:
+            _merge_into(merged[hit], f)
+            for t in _evidence_keys(merged[hit]):
+                by_ev.setdefault(t, hit)
+            continue
+        survivors.append(k)
+        for t in _evidence_keys(f):
+            by_ev.setdefault(t, k)
+
+    findings = [merged[k] for k in survivors]
+    for f in findings:
+        f["confidence_score"], f["confidence"] = confidence_of(f)
+
     out = {
         "modules": list(digest.get("modules", [])),
         "entities": list(digest.get("entities", [])),
         "cross_cutting": list(digest.get("cross_cutting", [])),
-        "provisional_findings": [merged[k] for k in order],
+        "provisional_findings": findings,
         "markdown_notes": list(digest.get("markdown_notes", [])),
         "unparsed_chunks": list(digest.get("unparsed_chunks", [])),
         "steps": list(digest.get("steps", [])),
@@ -824,6 +903,7 @@ def run_deep_report(
     survey_notes_override: str | None = None,
     postprocess=None,
     extra_meta: dict | None = None,
+    min_severity: str | None = None,
 ) -> tuple[str, Path | None]:
     """Run the staged deep analysis. Returns (report_text, saved_path | None);
     ("", None) on cancel/decline. The caller (runner) owns target resolution,
@@ -1069,11 +1149,12 @@ def run_deep_report(
                 # Always store a CLEAN note (as-is if already clean, else a
                 # transcription pass, else heuristic finding lines) so the final
                 # report can be assembled without any rambly text.
-                clean = _clean_note(note_src, kind, pass_fn=_pass, role=chunk_role,
-                                    log=_emit)
+                clean, note_source = _clean_note(note_src, kind, pass_fn=_pass,
+                                                 role=chunk_role, log=_emit)
                 if clean:
                     digest["markdown_notes"].append(
-                        {"chunk": c.index, "label": c.label, "md": clean})
+                        {"chunk": c.index, "label": c.label, "md": clean,
+                         "source": note_source})
                     _emit(f"chunk {c.index + 1}: findings recorded")
                 else:
                     note_src = None  # nothing salvageable → fall through to unparsed
@@ -1181,13 +1262,21 @@ def run_deep_report(
             _emit("mirrored map + report to <repo>/.luxe/gitkit/")
 
     console.print()
+    display_src, n_filtered = report, 0
+    if min_severity:
+        # DISPLAY-side only — the saved report above is always unfiltered.
+        display_src, n_filtered = store.filter_min_severity(report, min_severity)
     if verbose:
-        console.print(Markdown(report))
+        console.print(Markdown(display_src))
     else:
-        shown, hidden = truncate_for_display(report, max_lines=30)
+        shown, hidden = truncate_for_display(display_src, max_lines=30)
         console.print(Markdown(shown))
         if hidden:
             console.print(f"[dim]… +{hidden} more lines — full report saved[/]")
+    if n_filtered:
+        where = saved if saved else "(not saved — run without --no-save)"
+        console.print(f"[dim]Filtered: {n_filtered} findings below "
+                      f"{min_severity} — full report at {where}[/]")
     if saved:
         _emit(f"deep report ({len(chunks)} chunks) saved")
         console.print(f"[green]✓[/] report saved to [cyan]{saved}[/]")
@@ -1242,16 +1331,25 @@ def _render_report(digest: dict, kind: str) -> str:
     for n in notes:
         body = _strip_report_header(n.get("md", ""))
         if body:
-            sections.append(
-                f"## Area: {n.get('label', '?')} (chunk {n.get('chunk', 0) + 1})"
-                f"\n\n{body}")
+            head = (f"## Area: {n.get('label', '?')} "
+                    f"(chunk {n.get('chunk', 0) + 1})")
+            if n.get("source") == "heuristic":
+                head += ("\n\n*(heuristic salvage from verbose model output — "
+                         "confidence: low)*")
+            sections.append(f"{head}\n\n{body}")
     if pf:
+        # severity desc, then deterministic confidence desc (evidence-weighted)
+        ranked = sorted(pf, key=lambda f: (
+            -_SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0),
+            -confidence_of(f)[0]))
         lines = []
-        for f in pf:
+        for f in ranked:
             ev = (f.get("evidence") or ["?"])[0]
+            conf = f.get("confidence") or confidence_of(f)[1]
             lines.append(f"- **{f.get('severity', '?')}** `{ev}` — "
                          f"{f.get('title', '')}. {f.get('impact', '')} "
-                         f"Fix: {f.get('fix', '')}".rstrip())
+                         f"Fix: {f.get('fix', '')}".rstrip()
+                         + f" *(confidence: {conf})*")
         sections.append("## Additional findings\n\n" + "\n".join(lines))
 
     # Only gitaudit reaches deterministic render (gitchange returns via plan_mod).
@@ -1287,7 +1385,8 @@ _FILE_LINE_RE = re.compile(
 _BOLD_FILE_RE = re.compile(
     r"\*\*[^*]*?(?:\.(py|rs|js|ts|go|sh|ya?ml)\b|line\s+\d+)[^*]*?\*\*", re.I)
 # Lines the model explicitly marks as NON-findings — drop them to keep the salvage clean.
-_NON_FINDING_RE = re.compile(r"\b(not a bug|no issue|no code|nothing here|n/?a)\b", re.I)
+_NON_FINDING_RE = re.compile(
+    r"\b(not a bug|no issue|no code|nothing here|n/?a|this is correct)\b", re.I)
 # A4 (2026-06-10) — broadened salvage shapes, derived from the 9-repo gap corpus
 # (scripts/recover_offline.py dumps): numbered NON-bold items carrying a file/line
 # ref; bold/bracket/`Severity:` severity-LEAD lines whose file ref may trail within
@@ -1377,25 +1476,27 @@ def _heuristic_findings(text: str, *, cap: int = 60) -> list[str]:
     return out
 
 
-def _clean_note(md: str, kind: str, *, pass_fn, role, log=None) -> str | None:
-    """Return a non-rambly version of a per-chunk note: as-is when already clean,
-    else a transcription pass, else a heuristic finding list. None if nothing
+def _clean_note(md: str, kind: str, *, pass_fn, role,
+                log=None) -> tuple[str | None, str]:
+    """Return (clean note, provenance source) for a per-chunk note: as-is when
+    already clean (`md_clean`), else a transcription pass (`md_transcribed`),
+    else a heuristic finding list (`heuristic`). (None, "") if nothing
     salvageable. `log` surfaces WHICH recovery rung packaged the note."""
     if not md:
-        return None
+        return None, ""
     if not _looks_rambly(md):
-        return md
+        return md, "md_clean"
     cleaned = _format_final_report(md, kind, pass_fn=pass_fn, role=role)
     if cleaned and not _looks_rambly(cleaned):
         if log:
             log("rambly note → transcription pass recovered")
-        return cleaned
+        return cleaned, "md_transcribed"
     bullets = _heuristic_findings(md)
     if bullets:
         if log:
             log(f"rambly note → heuristic salvage ({len(bullets)} lines)")
-        return "\n".join(f"- {b}" for b in bullets)
-    return None
+        return "\n".join(f"- {b}" for b in bullets), "heuristic"
+    return None, ""
 
 
 def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None) -> dict:

@@ -134,6 +134,11 @@ in the front-end. Survey map + chunk plan persist per repo under
   allowed and is not a per-agent loop. Do not "optimize" a single pass into a
   mini-maintain workflow, and the apply executor must NOT retry a step's pass.)
 - Silently cap coverage: a `--max-chunks` truncation must `log` what was dropped.
+  `--min-severity` is DISPLAY-ONLY (the saved report is always complete) and
+  prints an honesty line counting what was hidden. Finding `confidence` is
+  DETERMINISTIC and provenance-honest: evidence-weighted (never
+  frequency-weighted) Python scoring with heuristic-salvaged findings capped at
+  low — never an LLM judgment.
 
 ## Owns
 - src/luxe/gitkit/** (incl. `plan.py` — plan JSON parse/normalize/render/save —
