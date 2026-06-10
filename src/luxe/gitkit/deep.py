@@ -1425,7 +1425,9 @@ def run_deep_report(
                     contribution["unparsed"] = label
                     _emit(f"chunk {c.index + 1} produced no usable steps "
                           "(empty/truncated) — flagged as unanalyzed")
-                if chunks_override is None:
+                if chunks_override is None and not getattr(res, "aborted", False):
+                    # an ABORTED pass (backend error / loop abort) must never
+                    # poison the notes cache — re-runs retry it instead
                     save_chunk_note(
                         target, kind, c, head=head,
                         file_shas={r: current_shas.get(r, "")
@@ -1476,7 +1478,8 @@ def run_deep_report(
                 contribution["unparsed"] = label
                 _emit(f"chunk {c.index + 1} produced no usable findings "
                       f"(empty/truncated) — flagged as unanalyzed")
-            if chunks_override is None:
+            if chunks_override is None and not getattr(res, "aborted", False):
+                # aborted pass → never cached (see gitchange branch above)
                 save_chunk_note(
                     target, kind, c, head=head,
                     file_shas={r: current_shas.get(r, "") for r in c.files},

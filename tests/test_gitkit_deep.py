@@ -1612,3 +1612,36 @@ def test_v1_breadcrumb_takes_full_path_not_incremental(bug_repo, _gitkit_cfg,
     run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
                    console=_QuietConsole(), save=True, deep=True)
     assert len([c for c in calls if "survey" in c]) == 1     # full path
+
+
+def test_aborted_chunk_pass_is_never_cached(bug_repo, _gitkit_cfg, monkeypatch):
+    """Cache-poisoning guard (found live 2026-06-10: an oMLX prefill-guard
+    outage made every pass return empty+aborted, and the empty notes would
+    have been reused by sha on re-run): aborted passes must not write notes."""
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import run_git_report
+
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    _stub_backend(monkeypatch)
+
+    def aborted_stub(backend, role_cfg, *, run_id="", **kw):
+        r = _FakeResult("" if "chunk" in run_id else
+                        "# Repository audit\n**Findings: 0**\nok"
+                        if "synthesis" in run_id else "Survey notes.")
+        r.aborted = "chunk" in run_id
+        return r
+
+    monkeypatch.setattr(single_mod, "run_single", aborted_stub)
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    # no notes were cached for the aborted chunk passes…
+    assert not list(deep._notes_dir(bug_repo, "gitaudit").glob("chunk-*.json"))
+
+    # …so a healthy re-run re-analyzes every chunk (no poisoned reuse)
+    calls: list[str] = []
+    monkeypatch.setattr(single_mod, "run_single", _content_stub(bug_repo, calls))
+    run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=bug_repo,
+                   console=_QuietConsole(), save=True, deep=True)
+    assert len([c for c in calls if c.startswith("chunk")]) >= 3
+    assert _finding_titles(_latest_xref(bug_repo)) == {"token-not-checked",
+                                                       "leak-in-engine"}
