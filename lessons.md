@@ -3229,3 +3229,39 @@ toggle, render port). Suite 1223 passed, 4 mlx env-skips. Memory:
 
 **Affected files**: `src/luxe/pr.py` (gated preflight checks), `src/luxe/cli.py` (expanded keyword inference, graceful empty branch logging), `tests/test_pr_flow.py` (+3 tests). Suite 1259 passed, 6 skipped, 2 warnings in 30.49s.
 
+
+### [2026-06-10] oMLX concurrency probe — concurrent requests are CONNECTION-FATAL, wave parallelism closed
+
+**What happened**: Phase 5 of the gitkit cycle gated a wave-parallel chunk
+executor (`--workers N`) behind a throughput probe
+(`scripts/probe_omlx_concurrency.py`). Gate A (c=2 aggregate ≥ 1.3× serial)
+could not even be measured: with two concurrent chunk-shaped requests
+(~2k-token prompt, 256–512 max_tokens), oMLX kills BOTH peers mid-response
+(`httpx.RemoteProtocolError: peer closed connection without sending complete
+message body`), reproduced 2/2 in a minimal isolation test while the identical
+pair ran serially clean (11.0s + 6.5s). Tiny concurrent requests (16 tokens)
+DO succeed — the failure is prefill/generation-load-shaped, not absolute.
+
+**Root cause**: the oMLX server (single MLX execution graph) does not support
+concurrent prefill-heavy generations at this version; it closes the HTTP
+connections rather than queueing.
+
+**Fix / takeaway**:
+- **Wave-based `--workers` is closed as measured-no-win** (worse: fatal). No
+  parallel code lands in gitkit; the sequential path stays the only path.
+- **The serialization fallback strategy is the plan of record**: (1) the
+  Phase 4 incremental re-audit is the primary wall reducer (removes whole
+  chunk passes — beats any concurrency factor); (2) optional next-cycle
+  probes: oMLX prefix-cache reuse across chunk prompts (large shared prefix),
+  chunk-budget retune, per-chunk `max_tokens` cap nearer observed useful-note
+  length (recovery already tolerates truncation).
+- Probe script banked for re-running after any oMLX upgrade:
+  `scripts/probe_omlx_concurrency.py` (serial arm measured 40.3 tok/s
+  aggregate on the champion as the reference point).
+- Operational note from the same morning: a stale oMLX memory-guard reading
+  (`current: 54.91GB` cached while actual wired memory was ~3GB) blocked all
+  model loads with 507s; `brew services restart omlx` cleared it. If loads
+  507 with an implausible `current:` figure, restart the service first.
+
+**Affected files**: `scripts/probe_omlx_concurrency.py` (new, banked);
+no gitkit runtime changes (the `--workers` feature was never landed).
