@@ -180,6 +180,128 @@ def test_apply_never_pushes_or_merges(repo_on_main, _cfg, monkeypatch):
     assert "merge" not in flat
 
 
+# --- A1: dirty-tree TOCTOU re-checks ---------------------------------------
+
+def test_require_clean_exempts_gitkit_mirror(repo_on_main):
+    (repo_on_main / ".luxe" / "gitkit").mkdir(parents=True)
+    (repo_on_main / ".luxe" / "gitkit" / "survey_notes.md").write_text("m")
+    assert apply._require_clean(repo_on_main, _TTYConsole(), "now") is True
+    (repo_on_main / "stray.txt").write_text("x")
+    assert apply._require_clean(repo_on_main, _TTYConsole(), "now") is False
+
+
+def test_apply_aborts_when_tree_dirtied_during_plan_generation(
+        repo_on_main, _cfg, monkeypatch):
+    monkeypatch.setattr(apply, "_is_tty", lambda c: True)
+
+    def dirtying_report(kind, **kw):
+        (repo_on_main / "user-edited.txt").write_text("mid-generation edit")
+
+    monkeypatch.setattr("luxe.gitkit.run_git_report", dirtying_report)
+    fake, calls = _writer_stub(repo_on_main)
+    rc = apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg,
+                         console=_TTYConsole(), reader=lambda _p: "keep",
+                         run_single_fn=fake)
+    assert rc == 2 and not calls                       # no step ever ran
+    # original branch restored AND the gitchange branch no longer exists
+    assert _out(repo_on_main, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert _out(repo_on_main, "branch", "--list", "gitchange/*") == ""
+
+
+def test_apply_no_steps_does_not_orphan_branch(repo_on_main, _cfg, monkeypatch):
+    monkeypatch.setattr(apply, "_is_tty", lambda c: True)
+    monkeypatch.setattr("luxe.gitkit.run_git_report", lambda kind, **kw: None)
+    fake, calls = _writer_stub(repo_on_main)
+    rc = apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg,
+                         console=_TTYConsole(), reader=lambda _p: "keep",
+                         run_single_fn=fake)
+    assert rc == 1 and not calls
+    assert _out(repo_on_main, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert _out(repo_on_main, "branch", "--list", "gitchange/*") == ""
+
+
+# --- A2: step-loop exception gate (continue/abort, NEVER retry) -------------
+
+def _flaky_stub(repo: Path, raise_on: set[str]):
+    """run_single stub: distinct edit per step; raises (after a partial write)
+    for step ids in `raise_on`."""
+    calls: list[str] = []
+
+    def fake(backend, role, *, run_id="", **kw):
+        calls.append(run_id)
+        sid = run_id.replace("gitchange-apply-", "")
+        (repo / "main.py").write_text(f"def g():\n    return '{sid}'\n")
+        if sid in raise_on:
+            (repo / "partial.txt").write_text("junk from the failed pass")
+            raise RuntimeError("backend exploded mid-step")
+
+        class _R:
+            final_text = "done"
+        return _R()
+    return fake, calls
+
+
+def _reader(on_fail: str):
+    """keep every gated step; answer `on_fail` at the continue/abort prompt."""
+    def r(prompt: str) -> str:
+        if "[c]ontinue" in prompt:
+            return on_fail
+        return "keep"
+    return r
+
+
+def _steps(*ids: str) -> list[dict]:
+    return [{**_STEP, "id": i, "title": f"step {i}"} for i in ids]
+
+
+def test_apply_step_exception_continue_runs_next_step(
+        repo_on_main, _cfg, monkeypatch):
+    monkeypatch.setattr(apply, "_is_tty", lambda c: True)
+    _save_plan(repo_on_main, _steps("S1", "S2", "S3"))
+    fake, calls = _flaky_stub(repo_on_main, raise_on={"S2"})
+    rc = apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg,
+                         console=_TTYConsole(), reader=_reader("c"),
+                         run_single_fn=fake)
+    assert rc == 0
+    assert calls == ["gitchange-apply-S1", "gitchange-apply-S2",
+                     "gitchange-apply-S3"]            # S3 ran after the failure
+    assert "return 'S3'" in (repo_on_main / "main.py").read_text()
+    assert not (repo_on_main / "partial.txt").exists()  # failed writes reverted
+    assert _out(repo_on_main, "status", "--porcelain") == ""
+
+
+def test_apply_step_exception_default_is_abort(repo_on_main, _cfg, monkeypatch):
+    monkeypatch.setattr(apply, "_is_tty", lambda c: True)
+    _save_plan(repo_on_main, _steps("S1", "S2"))
+    fake, calls = _flaky_stub(repo_on_main, raise_on={"S1"})
+    rc = apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg,
+                         console=_TTYConsole(), reader=_reader(""),
+                         run_single_fn=fake)
+    assert rc == 0
+    assert calls == ["gitchange-apply-S1"]             # S2 never ran
+    assert not (repo_on_main / "partial.txt").exists()
+    assert _out(repo_on_main, "status", "--porcelain") == ""
+
+
+def test_apply_kept_commit_survives_later_step_failure(
+        repo_on_main, _cfg, monkeypatch):
+    """Revert-scoping: keep commits BEFORE the next pass, so the full-tree
+    revert after a step-2 failure only discards step 2's partial writes."""
+    monkeypatch.setattr(apply, "_is_tty", lambda c: True)
+    _save_plan(repo_on_main, _steps("S1", "S2"))
+    fake, calls = _flaky_stub(repo_on_main, raise_on={"S2"})
+    rc = apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg,
+                         console=_TTYConsole(), reader=_reader(""),
+                         run_single_fn=fake)
+    assert rc == 0 and calls == ["gitchange-apply-S1", "gitchange-apply-S2"]
+    # step 1's kept edit survives step 2's full-tree revert…
+    assert "return 'S1'" in (repo_on_main / "main.py").read_text()
+    # …because it was already committed on the branch
+    assert "gitchange S1" in _out(repo_on_main, "log", "-1", "--pretty=%s")
+    assert not (repo_on_main / "partial.txt").exists()
+    assert _out(repo_on_main, "status", "--porcelain") == ""
+
+
 def test_apply_aborts_on_cycle(repo_on_main, _cfg, monkeypatch):
     monkeypatch.setattr(apply, "_is_tty", lambda c: True)
     a = {"id": "A", "title": "a", "change": {"detail": "x"}, "depends_on": ["B"]}

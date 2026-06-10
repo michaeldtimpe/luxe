@@ -46,6 +46,41 @@ def _is_tty(console) -> bool:
         return False
 
 
+def _require_clean(repo: Path, console, when: str) -> bool:
+    """TOCTOU re-check of invariant 2: the tree must STILL be clean at `when`
+    (branch creation and plan generation can be minutes-to-hours after the
+    entry check). The sanctioned `.luxe/gitkit/` mirror is exempt —
+    run_git_report writes it during plan generation (gitkit.sdd's one
+    orchestrator write). Prints the offending paths on dirt."""
+    r = _git(repo, "status", "--porcelain")
+    dirt = []
+    for ln in r.stdout.splitlines():
+        if not ln.strip():
+            continue
+        # porcelain v1: "XY path" (renames: "XY old -> new"); untracked dirs
+        # collapse to "?? .luxe/", so match the path prefix, not a substring.
+        paths = ln[3:].split(" -> ")
+        if all(p.strip('"').startswith(".luxe") for p in paths if p):
+            continue
+        dirt.append(ln)
+    if not dirt:
+        return True
+    console.print(f"[red]· working tree became dirty {when} — aborting before "
+                  "any step runs.[/]")
+    for ln in dirt[:20]:
+        console.print(f"[dim]    {ln}[/]")
+    return False
+
+
+def _abort_branch(repo: Path, console, branch: str, orig_branch: str) -> None:
+    """Restore the original branch and delete the dedicated gitchange branch —
+    an orphaned `gitchange/*` branch must never survive an abort (it pollutes
+    subsequent runs)."""
+    _git(repo, "checkout", orig_branch)
+    _git(repo, "branch", "-D", branch)
+    console.print(f"[dim]· restored {orig_branch}; removed {branch}.[/]")
+
+
 def _step_block(step: dict, plan: dict, survey: str) -> str:
     """Pure-data context blocks for the apply pass (directive is GIT_APPLY_STEP_HINT)."""
     overview = {"summary": plan.get("summary", ""),
@@ -109,6 +144,9 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
         return 2
     console.print(f"[green]·[/] applying on branch [cyan]{branch}[/] "
                   f"(original: {orig_branch}) — main is never touched")
+    if not _require_clean(repo, console, "after branch creation"):
+        _abort_branch(repo, console, branch, orig_branch)
+        return 2
 
     # (5) load (or generate) the plan for the current HEAD.
     plan = plan_mod.latest_plan_for(repo, head)
@@ -118,14 +156,21 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
         run_git_report("gitchange", cfg=cfg, repo_path=str(repo), console=console,
                        reader=reader, save=True, deep=deep, rebuild_map=rebuild_map)
         plan = plan_mod.latest_plan_for(repo, head)
+    # plan generation can run for a long time — re-check invariant 2 before
+    # any step touches the tree.
+    if not _require_clean(repo, console, "during plan generation"):
+        _abort_branch(repo, console, branch, orig_branch)
+        return 2
     if not plan or not plan.get("steps"):
         console.print("[yellow]· no plan steps to apply.[/]")
+        _abort_branch(repo, console, branch, orig_branch)
         return 1
     # (6) order (abort on dependency cycle).
     try:
         steps = plan_mod.order_steps(plan)
     except ValueError as e:
         console.print(f"[red]· plan has a dependency cycle: {e}[/]")
+        _abort_branch(repo, console, branch, orig_branch)
         return 2
 
     # --- write environment (the inverse of gitkit-today: FULL role, not read-only)
@@ -153,6 +198,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
     kept: list[str] = []
     discarded: list[str] = []
     skipped: list[str] = []
+    failed: list[str] = []
     try:
         set_repo_root(str(repo))
         search_mod.set_index(search_mod.build_bm25_index(str(repo)))
@@ -166,14 +212,30 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                 continue
             console.print(f"\n[bold]· {step['id']}: {step['title']}[/]  "
                           f"(risk: {step.get('risk', '?')})")
-            # ONE mono pass — no retry / repair loop.
-            run_single_fn(
-                backend, role,
-                goal="Apply ONLY this single refactor step to the working tree.\n\n"
-                     + prompts.GIT_APPLY_STEP_HINT,
-                task_type="implement", languages=languages,
-                extra_context=_step_block(step, plan, survey),
-                run_id=f"gitchange-apply-{step['id']}", phase="main")
+            # ONE mono pass — no retry / repair loop (invariant 6: a raised
+            # pass is reverted and recorded, NEVER re-run).
+            try:
+                run_single_fn(
+                    backend, role,
+                    goal="Apply ONLY this single refactor step to the working tree.\n\n"
+                         + prompts.GIT_APPLY_STEP_HINT,
+                    task_type="implement", languages=languages,
+                    extra_context=_step_block(step, plan, survey),
+                    run_id=f"gitchange-apply-{step['id']}", phase="main")
+            except Exception as e:
+                console.print(f"[red]· step {step['id']} raised: "
+                              f"{type(e).__name__}: {e}[/]")
+                # Kept steps are already committed (keep => add -A + commit
+                # before the next pass starts), so this full-tree revert only
+                # ever discards the FAILED step's partial writes.
+                _git(repo, "checkout", "--", ".")
+                _git(repo, "clean", "-fd")
+                failed.append(step["id"])
+                ans = reader("  [c]ontinue with next step / [a]bort? [c/A]: ").strip().lower()
+                if ans in ("c", "continue"):
+                    continue
+                console.print("[yellow]· aborted — remaining steps not run.[/]")
+                break
             _adds, _dels, diff = pr.diff_against_base(repo, branch_head)
             if not diff.strip():
                 console.print("[yellow]· no changes produced — skipping.[/]")
@@ -213,7 +275,8 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
          else symbols_mod.reset_index())
 
     console.print(f"\n[bold]· done.[/] kept={len(kept)} discarded={len(discarded)} "
-                  f"skipped={len(skipped)} on branch [cyan]{branch}[/]")
+                  f"skipped={len(skipped)} failed={len(failed)} "
+                  f"on branch [cyan]{branch}[/]")
     console.print(f"[dim]  review:  git -C {repo} log {orig_branch}..{branch}[/]")
     console.print(f"[dim]  merge:   git -C {repo} checkout {orig_branch} && "
                   f"git merge {branch}   (you do this — apply never merges)[/]")

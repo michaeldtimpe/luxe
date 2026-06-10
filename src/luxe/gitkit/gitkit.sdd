@@ -63,6 +63,12 @@ in the front-end. Survey map + chunk plan persist per repo under
   >    the diff, run the step's `verify`, SHOW both, and require an interactive
   >    keep|discard. `keep` commits on the branch; `discard` reverts only that step.
   >    `depends_on` is honored (a dependent is skipped if its prerequisite wasn't kept).
+  >    A step pass that RAISES is reverted (kept steps are already committed, so the
+  >    full-tree revert only discards the failed step's writes) and gated by an
+  >    interactive [c]ontinue/[a]bort (default abort) — NEVER retried (invariant 6).
+  >    The clean-tree invariant (2) is re-checked after branch creation AND after
+  >    plan generation (TOCTOU; the sanctioned `.luxe/gitkit/` mirror is exempt), and
+  >    no abort may orphan the dedicated `gitchange/*` branch.
   > 5. NEVER pushes, NEVER merges, NEVER commits to the default branch, NEVER touches
   >    files outside the working tree.
   > 6. Orchestration is front-end Python (the deep.py/compare precedent): multiple

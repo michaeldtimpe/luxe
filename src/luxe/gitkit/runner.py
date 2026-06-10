@@ -33,17 +33,23 @@ def extract_report(text: str, kind: str | None = None) -> str:
     model emits before it (WS1 safety net for the "treats the final turn as more
     reasoning" failure mode).
 
-    When `kind` is given, key on that kind's REQUIRED title (`_TITLES[kind]`) so a
-    stray `#` heading inside the monologue can't be mistaken for the report start;
-    fall back to the first `# ` header, then to the unchanged text (never drop
-    content)."""
+    When `kind` is given, rank ALL `# ` headers by case-insensitive word overlap
+    with the kind's required title (`_TITLES[kind]`) and slice from the
+    best-scoring one (tie → earliest) — an exact title scores highest, but a
+    near-title ("# Repository audit — preliminary") still beats a monologue
+    heading. All headers scoring zero → fall back to the first `# ` header, then
+    to the unchanged text (never drop content)."""
     text = text or ""
     if kind and kind in _TITLES:
-        title_re = re.compile(
-            rf"^#\s+{re.escape(_TITLES[kind])}\s*$", re.MULTILINE | re.IGNORECASE)
-        m = title_re.search(text)
-        if m:
-            return text[m.start():]
+        want = {w.lower() for w in re.findall(r"[a-z]+", _TITLES[kind], re.I)}
+        best_pos, best_score = -1, 0
+        for m in re.finditer(r"^#\s+(.+)$", text, re.MULTILINE):
+            words = {w.lower() for w in re.findall(r"[a-z]+", m.group(1), re.I)}
+            score = len(want & words)
+            if score > best_score:        # strict > keeps the EARLIEST on ties
+                best_score, best_pos = score, m.start()
+        if best_pos != -1:
+            return text[best_pos:]
     m = _H1_RE.search(text)
     return text[m.start():] if m else text
 

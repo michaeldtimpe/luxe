@@ -247,6 +247,60 @@ def _re_sev(line: str) -> bool:
     return bool(re.search(r"\b(critical|high|medium|low)\b", line, re.I))
 
 
+def test_heuristic_findings_salvages_numbered_plain_with_file_line():
+    """A4 corpus shape: numbered NON-bold items carrying an explicit file:line ref
+    (e.g. deluxe/processor_service dumps) — the pre-A4 heuristic missed these."""
+    ramble = (
+        "Let me work through these files one by one now.\n"
+        "1. `ml/evaluate.py:44` — `torch.load` without `weights_only`.\n"
+        "2. `data-tools/collect.py:119-123` — ZipFile without path traversal validation.\n"
+        "3. A general note about style with no reference anywhere here.\n")
+    out = deep._heuristic_findings(ramble)
+    assert len(out) == 2
+    assert "torch.load" in out[0] and "ZipFile" in out[1]
+
+
+def test_heuristic_findings_severity_lead_with_lookahead_ref():
+    """A4 corpus shape: a bold/bracket severity-lead line whose file ref trails
+    within the next 2 lines — emitted as one combined line."""
+    ramble = ("**Critical:** unauthenticated admin endpoint\n"
+              "   found in app/api/admin.py:42\n"
+              "[HIGH] SQL string concatenation\n"
+              "   see db/queries.py:17\n"
+              "Severity: medium — weak comparison in token check `auth.py:9`\n")
+    out = deep._heuristic_findings(ramble)
+    assert len(out) == 3
+    assert "admin.py" in out[0]          # lookahead ref folded into the line
+    assert "queries.py" in out[1]
+    assert "auth.py" in out[2]           # same-line ref kept as-is
+
+
+def test_heuristic_findings_heading_needs_severity_plus_substance():
+    """A4 FP guard (corpus-verified): bare per-file exploration headings
+    ('### app/api/auth.py') must NOT be swept in; severity-word headings with
+    substance (file ref / code / number) are findings."""
+    ramble = ("### app/api/auth.py\n"
+              "walking through this file now, nothing concluded yet\n"
+              "### High: race condition in `deep.py:712` save path\n"
+              "the breadcrumb write can interleave with a reader\n")
+    out = deep._heuristic_findings(ramble)
+    assert len(out) == 1
+    assert "race condition" in out[0]
+    assert all("app/api/auth.py" not in o for o in out)
+
+
+def test_heuristic_findings_dedups_renumbered_repeats():
+    """A4: the champion re-emits the same finding under different list numbers /
+    tail phrasings — one survivor."""
+    ramble = (
+        "1. `datetime.utcnow()` deprecation in `processor_service.py:159` and "
+        "`processor_service.py:273` - Low severity.\n"
+        "2. `datetime.utcnow()` deprecation in `processor_service.py:159` and "
+        "`processor_service.py:273` - Low severity, forward compatibility issue.\n")
+    out = deep._heuristic_findings(ramble)
+    assert len(out) == 1
+
+
 # --- digest merge / compaction ---------------------------------------------
 
 def _digest_with(findings):
@@ -920,3 +974,123 @@ def test_deep_run_no_mirror_skips_repo_write(big_repo, _gitkit_cfg, monkeypatch)
     run_git_report("gitaudit", cfg=_gitkit_cfg, repo_path=big_repo,
                    console=_QuietConsole(), save=True, deep=True, mirror=False)
     assert not (big_repo / ".luxe" / "gitkit").exists()
+
+
+# --- A3: atomic map-cache writes ---------------------------------------------
+
+def test_atomic_write_text_replaces_and_leaves_no_tmp(tmp_path):
+    p = tmp_path / "f.json"
+    p.write_text("old")
+    deep._atomic_write_text(p, "new")
+    assert p.read_text() == "new"
+    assert list(tmp_path.glob("*.tmp.*")) == []
+
+
+def test_save_map_crash_mid_write_keeps_old_breadcrumb(tmp_path, monkeypatch):
+    """A3: a crash before the breadcrumb replace must leave the OLD mapped.json
+    intact — map_status never reports a half-new map as FRESH."""
+    import os as os_mod
+    target = tmp_path / "repo"
+    _seed_map(target, head="h1")
+    d = deep._map_dir(target)
+
+    real_replace = os_mod.replace
+
+    def flaky_replace(src, dst, *a, **kw):
+        if str(dst).endswith("chunks.json"):
+            raise OSError("disk full")
+        return real_replace(src, dst, *a, **kw)
+
+    monkeypatch.setattr(deep.os, "replace", flaky_replace)
+    with pytest.raises(OSError):
+        deep.save_map(target, head="h2", survey_notes="new notes",
+                      chunks=[deep.Chunk(index=0, files=["b.py"], label="b")],
+                      content_budget=2048, framing=[], summary_render="m")
+
+    bc = json.loads((d / "mapped.json").read_text())
+    assert bc["head"] == "h1"                       # old breadcrumb intact
+    # the torn save is never seen as FRESH for the new head…
+    assert deep.map_status(target, head="h2").state is not deep.MapState.FRESH
+    # …and the old head's map is either still FRESH or flagged damaged (PARTIAL),
+    # never silently half-new.
+    st = deep.map_status(target, head="h1")
+    assert st.state in (deep.MapState.FRESH, deep.MapState.PARTIAL)
+
+
+# --- A5: oversized files / enumerate log / clean-note log / report ranking ---
+
+def test_build_chunks_marks_oversized_and_chunk_block_notices(tmp_path):
+    files = [_frec("big.py", tokens=5000), _frec("small.py", tokens=10)]
+    chunks = deep.build_chunks(files, content_budget=100)
+    over = [c for c in chunks if c.oversized]
+    assert over and over[0].oversized == ["big.py"]
+    block = deep._chunk_block(over[0], len(chunks))
+    assert "Oversized files" in block and "big.py" in block
+    assert "read them in sections" in block
+    # back-compat: cached chunks.json predating the field still loads
+    legacy = {"index": 0, "files": ["a.py"], "label": "a"}
+    assert deep.Chunk.from_dict(legacy).oversized == []
+    # and a chunk with no oversized files carries no notice
+    small = [c for c in chunks if not c.oversized]
+    assert small and "Oversized" not in deep._chunk_block(small[0], len(chunks))
+
+
+def test_enumerate_files_logs_oserror_skips(tmp_path, monkeypatch):
+    root = tmp_path / "r"
+    root.mkdir()
+    (root / "good.py").write_text("x = 1\n")
+    (root / "bad.py").write_text("y = 2\n")
+    real_stat = Path.stat
+
+    def fake_stat(self, **kw):
+        if self.name == "bad.py":
+            raise OSError("permission denied")
+        return real_stat(self, **kw)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    logs: list[str] = []
+    recs = deep.enumerate_files(root, _FakeSummary(2), log=logs.append)
+    assert [r.rel for r in recs] == ["good.py"]
+    assert len(logs) == 1 and "bad.py" in logs[0]
+
+
+def test_clean_note_logs_which_recovery_rung(monkeypatch):
+    rambly = ("Let me look at this. I need to check more. Wait, actually I "
+              "should re-read.\n1. **a.py line 3**: `x` shadowed and reused\n")
+
+    # rung 1: transcription pass returns a clean headered report
+    logs: list[str] = []
+    clean_report = ("# Repository audit\n**Findings: 1**\n\n"
+                    "- **high** `a.py:3` — shadowed variable")
+    out = deep._clean_note(rambly, "gitaudit",
+                           pass_fn=lambda g, c, l, role=None: _FakeResult(clean_report),
+                           role=None, log=logs.append)
+    assert out is not None and out.startswith("# Repository audit")
+    assert any("transcription pass recovered" in m for m in logs)
+
+    # rung 2: transcription stays rambly → heuristic salvage, with line count
+    logs2: list[str] = []
+    out2 = deep._clean_note(rambly, "gitaudit",
+                            pass_fn=lambda g, c, l, role=None: _FakeResult(rambly),
+                            role=None, log=logs2.append)
+    assert out2 is not None and "a.py" in out2
+    assert any("heuristic salvage (1 lines)" in m for m in logs2)
+
+
+def test_extract_report_ranks_headers_by_title_overlap():
+    from luxe.gitkit.runner import extract_report
+    # a monologue H1 with PARTIAL overlap appears first; the true title wins
+    raw = ("# Audit working notes\nthinking...\n"
+           "# Repository audit\n**Findings: 0**\nclean")
+    out = extract_report(raw, "gitaudit")
+    assert out.startswith("# Repository audit")
+    # near-title (extra suffix) still beats the monologue heading
+    raw2 = ("# My notes\nstuff\n# Repository audit — preliminary\nbody")
+    assert extract_report(raw2, "gitaudit").startswith("# Repository audit — pre")
+
+
+def test_extract_report_zero_overlap_falls_back_to_first_h1():
+    from luxe.gitkit.runner import extract_report
+    raw = "prelude prose\n# Something else entirely\nbody"
+    out = extract_report(raw, "gitaudit")
+    assert out.startswith("# Something else entirely")   # never drop content
