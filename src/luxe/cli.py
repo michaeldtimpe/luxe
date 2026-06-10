@@ -766,7 +766,8 @@ def compare_review_cmd(compare_id):
 def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                     keep_loaded: bool, save: bool, verbose: bool = False,
                     deep: bool | None = None, max_chunks: int | None = None,
-                    rebuild_map: bool = False, mirror: bool = True) -> None:
+                    rebuild_map: bool = False, mirror: bool = True,
+                    base: str | None = None, pr: int | None = None) -> None:
     """Shared body for the gitaudit/gitchange CLI commands. The runner owns target
     resolution (incl. cloning a URL when the path is not a git repo), index
     building, and repo_root; here we only clone an explicit URL arg up front,
@@ -788,7 +789,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
         run_git_report(kind, cfg=cfg, repo_path=repo_path,
                        console=console, save=save, verbose=verbose,
                        deep=deep, max_chunks=max_chunks, rebuild_map=rebuild_map,
-                       mirror=mirror)
+                       mirror=mirror, base=base, pr=pr)
     finally:
         if not keep_loaded:
             from luxe.backend import Backend
@@ -845,12 +846,22 @@ def _gitkit_options(f):
 
 @main.command(name="gitaudit")
 @_gitkit_options
+@click.option("--base", "base", default=None, metavar="REF",
+              help="Diff audit: analyze ONLY the change between REF (merge-base) "
+                   "and HEAD. Mutually exclusive with --pr.")
+@click.option("--pr", "pr", type=int, default=None, metavar="N",
+              help="Diff audit of GitHub PR #N's changes (base resolved via gh). "
+                   "Mutually exclusive with --base.")
 def gitaudit_cmd(repo, config_path, keep_loaded, no_save, verbose,
-                 deep, max_chunks, rebuild_map, no_mirror):
+                 deep, max_chunks, rebuild_map, no_mirror, base, pr):
     """Audit a repo (read-only): orientation + bugs/security + structural advice."""
+    if base is not None and pr is not None:
+        console.print("[red]--base and --pr are mutually exclusive.[/]")
+        raise SystemExit(2)
     _run_gitkit_cmd("gitaudit", repo, config_path, keep_loaded, not no_save,
                     verbose, deep=deep, max_chunks=max_chunks,
-                    rebuild_map=rebuild_map, mirror=not no_mirror)
+                    rebuild_map=rebuild_map, mirror=not no_mirror,
+                    base=base, pr=pr)
 
 
 @main.command(name="gitchange")

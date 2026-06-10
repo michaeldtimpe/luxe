@@ -70,11 +70,21 @@ KINDS: dict[str, tuple[str, str, str]] = {
         "APPLY-READY, ordered structural change plan.",
         prompts.GIT_CHANGE_HINT,
     ),
+    # Internal kind only (never a CLI command): `gitaudit --base/--pr` switches
+    # to it after resolving the diff scope. Reuses the existing `review`
+    # task_type (gitkit.sdd: no new task types).
+    "gitaudit-diff": (
+        "review",
+        "Audit ONLY the change between the given base and HEAD of the "
+        "repository in the current working directory.",
+        prompts.GIT_AUDIT_DIFF_HINT,
+    ),
 }
 
 _TITLES = {
     "gitaudit": "Repository audit",
     "gitchange": "Change plan",
+    "gitaudit-diff": "Diff audit",
 }
 
 # Kinds that consume a prior same-commit gitaudit's findings as context.
@@ -190,8 +200,16 @@ def run_git_report(
     max_chunks: int | None = None,
     rebuild_map: bool = False,
     mirror: bool = True,
+    base: str | None = None,
+    pr: int | None = None,
 ) -> tuple[str, Path | None]:
     """Run a read-only analysis over a repo and report the result.
+
+    `base`/`pr` (gitaudit only, mutually exclusive) switch to the DIFF AUDIT:
+    only the change between the base ref (or the PR's base, resolved via gh)
+    and HEAD is audited, under the internal `gitaudit-diff` kind. Routing
+    still footprint-gates on the CHANGED files only; diff runs never write
+    the per-repo `map/` cache.
 
     Small/medium repos take the single-pass path (one `run_single`, unchanged).
     Large repos (estimated token footprint over the deep threshold, or `deep=True`)
@@ -235,6 +253,12 @@ def run_git_report(
 
     if kind not in KINDS:
         raise ValueError(f"unknown gitkit kind {kind!r}; expected {sorted(KINDS)}")
+    if base is not None and pr is not None:
+        console.print("[red]· --base and --pr are mutually exclusive.[/]")
+        return "", None
+    if (base is not None or pr is not None) and kind != "gitaudit":
+        console.print("[red]· --base/--pr apply to gitaudit only.[/]")
+        return "", None
     task_type, ask, hint = KINDS[kind]
     reader = reader or console.input
 
@@ -244,6 +268,15 @@ def run_git_report(
     if target is None:
         console.print("[yellow]· cancelled.[/]")
         return "", None
+
+    if pr is not None:
+        from luxe.gitkit import diffscope
+        pr_base, why = diffscope.pr_base_ref(target, pr)
+        if pr_base is None:
+            console.print(f"[red]· {why}[/]")
+            return "", None
+        console.print(f"[dim]· PR #{pr} base branch: {pr_base}[/]")
+        base = pr_base
 
     # Index/repo-root lifecycle: reuse resident indices when they already cover
     # the target (the common REPL case); otherwise build for the target and
@@ -298,26 +331,110 @@ def run_git_report(
                 console.print("[dim]· using prior gitaudit findings to inform the "
                               "change plan[/]")
 
-        # Both kinds auto-select single-pass vs deep by footprint: small/medium repos
-        # stay single-pass (one window holds the whole analysis), large repos take the
-        # staged deep map-reduce (the 46-repo sweep proved single-pass EMPTIES on large
-        # repos — the model explores and under-concludes; deep's synthesis stage
-        # re-consolidates per-chunk notes into one report/plan). `--deep/--no-deep`
-        # overrides; `--max-chunks` caps. Neither path runs an in-agent repair loop.
-        use_deep = deep_mod.should_use_deep(summary, role_cfg, override=deep)
-        if use_deep:
-            return deep_mod.run_deep_report(
-                kind, target=target, task_type=task_type, backend=backend,
-                role_cfg=role_cfg, languages=languages, console=console,
-                reader=reader, summary=summary, symbol_index=sym_index,
-                health_block=health.gather_context(target), save=save,
-                verbose=verbose, cancel=cancel, max_chunks=max_chunks,
-                rebuild_map=rebuild_map, prior_report=prior_findings,
-                mirror=mirror,
-            )
+        # --- DIFF AUDIT (`--base`/`--pr`): scope everything to the change ----
+        diff_extra = ""
+        diff_post = None
+        extra_meta: dict = {}
+        if base is not None:
+            from luxe.gitkit import diffscope
+            kind = "gitaudit-diff"
+            task_type, ask, hint = KINDS[kind]
+            goal = f"{ask}\n\n{hint}"
+            base_ref = diffscope.resolve_base_ref(target, base)
+            if base_ref is None:
+                console.print(f"[red]· cannot resolve base ref {base!r} "
+                              "(tried as-is and origin/<ref>).[/]")
+                return "", None
+            mb = diffscope.merge_base(target, base_ref)
+            if mb is None:
+                console.print(f"[red]· no merge-base between {base_ref} and HEAD.[/]")
+                return "", None
+            changed = diffscope.changed_files(target, mb)
+            if not changed:
+                console.print(f"[yellow]· no changes vs {base_ref} "
+                              f"(merge-base {mb[:8]}) — nothing to audit.[/]")
+                return "", None
+            recs = diffscope.file_recs(target, changed)
+            stats = diffscope.diff_stats(target, mb)
+            hunks = diffscope.changed_hunks(target, mb)
+            eff_ctx = deep_mod.base_ctx(role_cfg)
+            diff_cap = max(256, int(eff_ctx * diffscope.DIFF_BUDGET_FRAC))
+            full_diff_block = diffscope.change_diff_block(
+                target, mb, base_label=base_ref, max_tokens=diff_cap)
+            console.print(f"[dim]· diff scope: {base_ref} (merge-base {mb[:8]}) "
+                          f"— {stats[0]} files, +{stats[1]}/−{stats[2]}[/]")
+            extra_meta = {"base": base_ref, "merge_base": mb[:12]}
+
+            def diff_post(rep: str) -> str:
+                # deterministic prior + fixed caveat — never model-trusted
+                rep = diffscope.apply_tag_priors(rep, hunks)
+                return diffscope.ensure_header(rep, base_ref, mb, stats)
+
+            # Footprint-gate on the CHANGED files only (most personal branches
+            # land single-pass); --deep/--no-deep still override.
+            changed_tokens = sum(r.tokens for r in recs)
+            use_deep = deep if deep is not None else (
+                changed_tokens >= deep_mod._DEEP_TRIGGER_FRAC * eff_ctx)
+            if use_deep:
+                content_budget = max(1, int(deep_mod.deep_window(role_cfg)
+                                            * deep_mod._CONTENT_BUDGET_FRAC))
+                chunks = deep_mod.build_chunks(
+                    recs, content_budget=content_budget, symbol_index=sym_index)
+                chunk_blocks = {
+                    c.index: diffscope.change_diff_block(
+                        target, mb, base_label=base_ref,
+                        max_tokens=diff_cap, files=c.files)
+                    for c in chunks if c.files}
+                # Opportunistic: inject a FRESH whole-repo map's survey notes;
+                # NEVER generate one, and diff runs never write map/.
+                survey_inject = None
+                st = deep_mod.map_status(target, head=health.current_head(target))
+                if st.state is deep_mod.MapState.FRESH:
+                    sn = deep_mod._map_dir(target) / "survey_notes.md"
+                    if sn.is_file():
+                        survey_inject = sn.read_text()
+                        console.print("[dim]· injecting fresh whole-repo survey "
+                                      "notes into the diff audit[/]")
+                return deep_mod.run_deep_report(
+                    kind, target=target, task_type=task_type, backend=backend,
+                    role_cfg=role_cfg, languages=languages, console=console,
+                    reader=reader, summary=summary, symbol_index=sym_index,
+                    health_block=(health.gather_context(target)
+                                  + "\n\n" + full_diff_block),
+                    save=save, verbose=verbose, cancel=cancel,
+                    max_chunks=max_chunks, mirror=mirror,
+                    chunks_override=chunks, chunk_extra_blocks=chunk_blocks,
+                    survey_notes_override=survey_inject,
+                    postprocess=diff_post, extra_meta=extra_meta)
+            # single-pass diff: the capped full diff + the changed-file list in
+            # the existing <chunk_files> shape ride along as pure data.
+            one = deep_mod.build_chunks(recs, content_budget=10 ** 9,
+                                        symbol_index=sym_index)
+            diff_extra = f"{full_diff_block}\n\n{deep_mod._chunk_block(one[0], 1)}"
+        else:
+            # Both kinds auto-select single-pass vs deep by footprint: small/medium
+            # repos stay single-pass (one window holds the whole analysis), large
+            # repos take the staged deep map-reduce (the 46-repo sweep proved
+            # single-pass EMPTIES on large repos — the model explores and
+            # under-concludes; deep's synthesis stage re-consolidates per-chunk
+            # notes into one report/plan). `--deep/--no-deep` overrides;
+            # `--max-chunks` caps. Neither path runs an in-agent repair loop.
+            use_deep = deep_mod.should_use_deep(summary, role_cfg, override=deep)
+            if use_deep:
+                return deep_mod.run_deep_report(
+                    kind, target=target, task_type=task_type, backend=backend,
+                    role_cfg=role_cfg, languages=languages, console=console,
+                    reader=reader, summary=summary, symbol_index=sym_index,
+                    health_block=health.gather_context(target), save=save,
+                    verbose=verbose, cancel=cancel, max_chunks=max_chunks,
+                    rebuild_map=rebuild_map, prior_report=prior_findings,
+                    mirror=mirror,
+                )
 
         def _do_run(on_event=None, on_token=None):
             extra_context = health.gather_context(target)
+            if diff_extra:
+                extra_context += f"\n\n{diff_extra}"
             if prior_findings:
                 extra_context += (f"\n\n<prior_findings>\n{prior_findings}\n"
                                   "</prior_findings>")
@@ -371,6 +488,8 @@ def run_git_report(
             # WS1.2: slice off any leading monologue before the report's required title.
             report = extract_report((result.final_text or "").strip(), kind) or \
                 "(no report produced)"
+            if diff_post is not None:
+                report = diff_post(report)
 
         # Full report is always saved; on screen show a preview unless verbose.
         saved: Path | None = None
@@ -379,7 +498,8 @@ def run_git_report(
             saved = store.save_report(
                 target, kind, report,
                 meta={"model": model, "head": _head, "repo": target,
-                      "total_wall_s": _wall, "avg_pass_s": _wall, "n_passes": 1},
+                      "total_wall_s": _wall, "avg_pass_s": _wall, "n_passes": 1,
+                      **extra_meta},
             )
             if mirror and store.mirror_to_repo(target, kind, report, _head):
                 console.print("[dim]· mirrored report to <repo>/.luxe/gitkit/[/]")

@@ -54,7 +54,8 @@ def save_report(repo_path: str | Path, kind: str, text: str,
     # rather than splatting `meta` so the frontmatter schema stays explicit and
     # callers can't accidentally pollute it. `mode`/`chunks` were passed by deep
     # mode but silently dropped before this; they now land in the header too.
-    for k in ("mode", "chunks", "total_wall_s", "n_passes", "avg_pass_s"):
+    for k in ("mode", "chunks", "total_wall_s", "n_passes", "avg_pass_s",
+              "base", "merge_base"):
         if k in meta:
             header[k] = meta[k]
     front = "\n".join(f"{k}: {v}" for k, v in header.items())

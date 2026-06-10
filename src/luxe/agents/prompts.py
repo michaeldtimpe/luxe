@@ -533,6 +533,87 @@ GIT_AUDIT_SYNTH_HINT = (
 )
 
 
+# --- gitaudit DIFF MODE (`gitaudit --base <ref>` / `--pr <N>`) --------------
+# Audits ONLY the change between a base ref and HEAD. Same markdown report
+# contract as the audit hints (a JSON-only contract makes the champion ramble —
+# the load-bearing gitkit design finding). Classification honesty: tags are
+# `likely-introduced` vs `pre-existing (touched code)` — NEVER a bare
+# "introduced" — and diffscope.py renders the deterministic hunk-overlap prior
+# + the fixed caveat line regardless of what the model emits.
+_DIFF_TAG_RULES = (
+    "Tag EVERY finding with exactly one of these two tags:\n"
+    "  - **likely-introduced** — the finding's file:line falls inside a changed "
+    "hunk in <change_diff> and the issue appears to come from the change itself.\n"
+    "  - **pre-existing (touched code)** — the issue lives in code the change "
+    "touches or neighbours but predates the change, or you cannot tie it to the "
+    "change.\n"
+    "NEVER write a bare 'introduced': the classification is heuristic (hunk "
+    "overlap, not proof). When unsure, tag pre-existing (touched code)."
+)
+
+GIT_AUDIT_DIFF_HINT = (
+    "Perform a read-only DIFF AUDIT: analyze ONLY the change between the given "
+    "base and HEAD — the <change_diff> block plus the listed changed files. Find "
+    "serious bugs/security issues the change introduces or interacts with; do "
+    "NOT audit the whole repository. Read the changed files (and code they call) "
+    "with your tools when the diff alone lacks context. "
+    + _GITKIT_REPORT_DISCIPLINE + "\n\n"
+    "Begin the report with EXACTLY this shape (copy the base/merge-base/file/"
+    "line counts from the <change_diff> header):\n"
+    "  # Diff audit\n"
+    "  **Base: <ref> (merge-base <sha8>) — N files, +A/−D**\n"
+    "  *Classification is heuristic — `likely-introduced` vs `pre-existing "
+    "(touched code)` is based on hunk overlap, not proof.*\n\n"
+    "Then TWO sections:\n"
+    "## Bugs & security — findings grouped by severity, highest first; same "
+    "confirm-or-dismiss discipline as a full audit. Every finding MUST include: "
+    "severity, file path, line number, the offending code as evidence, the "
+    "impact, and a suggested fix. " + _DIFF_TAG_RULES + "\n"
+    "## Change-scoped structural notes — structural observations SCOPED TO THE "
+    "CHANGE (new coupling/duplication the change adds, a cleaner shape for the "
+    "same change). NOT a whole-repo refactor list.\n"
+    "Do NOT include a repository-summary/orientation section — this is a change "
+    "review, not an orientation report."
+)
+
+GIT_AUDIT_DIFF_CHUNK_HINT = (
+    "Audit ONLY the CHANGED files listed below, focused on the change shown in "
+    "the <change_diff> block (scoped to these files). Report serious, "
+    "code-grounded bugs/security issues the change introduces or interacts "
+    "with, plus change-scoped structural notes for THESE files. Severities are "
+    "PROVISIONAL — a later whole-change synthesis re-rates them. "
+    + _GITKIT_REPORT_DISCIPLINE + "\n\n"
+    "Begin the report with EXACTLY this shape:\n"
+    "  # Diff audit\n"
+    "  **Findings: N (C critical, H high, M medium, L low)**\n\n"
+    "Then TWO sections:\n"
+    "## Bugs & security — ONE tight entry per finding: severity, file path, "
+    "line number, the offending code as evidence, the impact, and a suggested "
+    "fix. " + _DIFF_TAG_RULES + "\n"
+    "## Change-scoped structural notes — only what the change itself adds or "
+    "worsens in THESE files.\n"
+    "If nothing qualifies in THESE files, write **Findings: 0** and one short "
+    "sentence naming what you checked."
+)
+
+GIT_AUDIT_DIFF_SYNTH_HINT = (
+    _DEEP_SYNTH_COMMON + "\n"
+    "Begin the report with EXACTLY this shape (copy the base/merge-base/file/"
+    "line counts from the <change_diff> header):\n"
+    "  # Diff audit\n"
+    "  **Base: <ref> (merge-base <sha8>) — N files, +A/−D**\n"
+    "  *Classification is heuristic — `likely-introduced` vs `pre-existing "
+    "(touched code)` is based on hunk overlap, not proof.*\n\n"
+    "Then TWO sections:\n"
+    "## Bugs & security — findings grouped by (re-rated) severity, highest "
+    "first; every finding keeps its classification tag (merged findings keep "
+    "the best-supported tag). " + _DIFF_TAG_RULES + "\n"
+    "## Change-scoped structural notes — deduped, ordered, scoped to the "
+    "change only.\n"
+    "Do NOT include a repository-summary/orientation section."
+)
+
+
 # --- gitchange: an APPLY-READY, STRUCTURED change plan (the executable sibling
 # of gitaudit). Unlike the markdown audit report, gitchange emits a single fenced JSON
 # plan (the GIT_DEEP_REDUCE_HINT precedent) that Python parses + renders + later
