@@ -60,11 +60,21 @@ messages + `gitkit.sdd`/CLAUDE.md.
   `min_turns_after_bail` 2→6 (conversion latency p75=6 vs bail+2 eligibility).
   NOT promoted — needs 5-fixture smoke + 3-rep.
   `acceptance/c13_density_split/C13_REPORT.md`.
-- **C11 IN FLIGHT** (kicked 10:50): BFCL multi_turn_long_context @ num_ctx=49152,
-  n=200 → `acceptance/bfcl/multi_turn_long_context/m1_49k/` (M1 host — the 39%
-  @32K reference is M1; 57.5% @131K is M5). Single rep = capability-curve point;
-  65536 only if 49K still clearly context-limited.
-- **C10 repeat_penalty 1.05** queued after C11 (8 fixtures; expectations LOW).
+- **C11 RESULT (2026-06-11): the cycle's capability win.** BFCL
+  multi_turn_long_context @ num_ctx=49152, n=200 = **115/200 = 57.50%** —
+  byte-equal to the M5's 57.5% @131K and +18.5pp over the 39.0% @32K floor.
+  The capability curve SATURATES by 49K: long_context was pure context
+  starvation, and the full 131K-grade capability fits the M1 64GB host. NO
+  65536 escalation needed. `acceptance/bfcl/multi_turn_long_context/m1_49k/`.
+  (Operational scar: the first attempt lost 24h to a mid-bench model unload
+  from another luxe invocation — full postmortem lessons.md 2026-06-11;
+  resume cache made recovery cheap.)
+  **Follow-up candidate:** raise the champion's default num_ctx for
+  long-context workloads 32768 → 49152 where the host allows — needs the
+  usual smoke + 3-rep before touching configs.
+- **C10 repeat_penalty 1.05** IN FLIGHT (kicked 18:25, 2 cells × 8 fixtures →
+  `acceptance/c10_repeat_penalty/`; expectations LOW; escalate to 3-rep only
+  on a fixture flip).
 - **C14 early-bail mapping**: deferred-optional.
 
 **Ops note (twice in one day):** oMLX memory-state flakes — a stale memory-guard
