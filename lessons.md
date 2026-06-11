@@ -3265,3 +3265,36 @@ connections rather than queueing.
 
 **Affected files**: `scripts/probe_omlx_concurrency.py` (new, banked);
 no gitkit runtime changes (the `--workers` feature was never landed).
+
+### [2026-06-11] Mid-bench model unload → permanent client hang (C11 lost 24h)
+
+**What happened**: C11 (BFCL long_context @ 49K, n=200) stalled at problem
+59/200 for ~24h with the process alive at 0% CPU. omlx.log showed the cause
+precisely: at 12:01 another luxe invocation's END-OF-RUN UNLOAD
+(`POST /v1/models/<id>/unload`, the default when any luxe command exits
+without `--keep-loaded`) freed the champion mid-generation. The bench's
+in-flight HTTP request then hung past every retry/timeout layer; my
+process-aliveness watcher stayed silent because alive ≠ progressing.
+
+**Root cause**: two layers — (1) the single-server discipline was violated
+from the host side (remote `luxe` sessions during a bench), and (2) the
+oMLX server holds the connection open (no error, no EOF) when its engine is
+unloaded under an active generation, defeating the client's read-timeout
+via the retry loop.
+
+**Fix / takeaway**:
+- While ANY bench is running on the host, every other luxe command must use
+  `--keep-loaded` (or simply not run) — the exit-unload is a bench killer.
+- Watchers must alarm on NO-NEW-RESULTS-within-window, never on process
+  aliveness ("silence is not success"). The C11 recovery watcher pattern:
+  grace period + `find <results> -newermt '-45 minutes'` + exit-on-fire.
+  (NB: use /usr/bin/find — the interactive shell aliases find→bfs, which
+  rejects -newermt and silently false-alarms.)
+- The bfcl runner's resume cache made recovery cheap: kill + relaunch
+  skipped all 59 completed problems instantly.
+- Candidate hardening for a future cycle: oMLX-side — fail active
+  generations with a 5xx on unload instead of holding the socket;
+  luxe-side — a wall-clock watchdog around backend.chat in long benches.
+
+**Affected files**: none (operational); `scripts/run_c11_long_context_49k.sh`
+result unaffected (n=200 completed clean after resume).

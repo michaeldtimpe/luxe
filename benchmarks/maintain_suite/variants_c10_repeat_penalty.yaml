@@ -1,0 +1,15 @@
+# C10 — repeat_penalty 1.05 vs baseline (2026-06-11, feat/gitkit-cycle).
+#
+# Variant.repeat_penalty is already plumbed (run.py → roles.monolith →
+# backend extra_body). 2 cells × 8 fixtures = 16 runs (~2-4h).
+#
+# Expectations LOW (champion failures skew termination/long-context, not
+# local repetition). Direction-finding only: escalate to a 3-rep A/B ONLY
+# if a fixture flips PASS<->FAIL between cells
+# (feedback_ship_floor_needs_multirep_when_at_strictness).
+#
+# Run: scripts/run_c10_repeat_penalty.sh
+
+variants:
+  - {model_label: c10-baseline, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: c10-rp105, model_id: Qwen3.6-35B-A3B-6bit, repeat_penalty: 1.05}
