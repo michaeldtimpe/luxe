@@ -72,9 +72,23 @@ messages + `gitkit.sdd`/CLAUDE.md.
   **Follow-up candidate:** raise the champion's default num_ctx for
   long-context workloads 32768 → 49152 where the host allows — needs the
   usual smoke + 3-rep before touching configs.
-- **C10 repeat_penalty 1.05** IN FLIGHT (kicked 18:25, 2 cells × 8 fixtures →
-  `acceptance/c10_repeat_penalty/`; expectations LOW; escalate to 3-rep only
-  on a fixture flip).
+- **C10 repeat_penalty 1.05 (2026-06-11): measured NO-OP, closed.** 2 cells ×
+  8 fixtures: 8/8 PASS both, wall 332.3s vs 334.0s, tokens within noise; the
+  only delta is one recovered context_overflow bailout in the rp105 cell. No
+  flip → no 3-rep → do NOT add repeat_penalty to the champion config.
+  `acceptance/c10_repeat_penalty/`.
+- **C14 early-bail fire-rate mapping: DEFERRED** (optional multi-overnight;
+  C13's offline analysis already answered the gate-split question it was
+  meant to inform — pick it up only if the min_turns_after_bail 2→6
+  experiment goes ahead).
+
+**CYCLE CLOSED 2026-06-11.** All five gitkit phases shipped+dogfooded; Phase C
+banked (C12 inert-safe, C13 analysis, C11 capability win, C10 no-op). Next-
+cycle candidates, in rough value order: (1) long-context num_ctx 32768→49152
+promotion experiment (C11 says the capability is there); (2) the
+min_turns_after_bail 2→6 rescue-window smoke (C13); (3) oMLX prefix-cache /
+chunk-budget / per-chunk max_tokens probes (Phase 5 fallbacks); (4) oMLX
+upgrade re-probe of concurrency (probe script banked).
 - **C14 early-bail mapping**: deferred-optional.
 
 **Ops note (twice in one day):** oMLX memory-state flakes — a stale memory-guard
