@@ -369,6 +369,20 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     write_on = session.write_enabled and not plan_mode
     role_cfg = base_role if write_on else make_read_only_role(base_role)
 
+    # The chat slot is the conversational catch-all (greetings, small talk,
+    # general Q&A). Give it a conversational persona so it answers directly
+    # instead of running the code-maintenance orientation loop (a bare "hello"
+    # used to list dirs + read the README). The focused code/plan slots keep the
+    # baseline maintenance/planning prompts. Skipped for /plan drafting and
+    # autonomous /goal rounds, which are genuine task turns even though "continue
+    # work" routes here. Prompt ids resolve in the registry (chat.sdd).
+    if slot == "chat" and not plan_mode and not session.goal_active:
+        role_cfg = role_cfg.model_copy(update={
+            "system_prompt_id": "chat_conversational",
+            "task_prompt_id": "chat_conversational",
+            "task_overlay_id": "",
+        })
+
     # Chat bash (chat.sdd), swapped for THIS run only via run_single's extra-tool
     # seam — benchmark/maintain never pass these, so their bash is untouched.
     # update_ledger (B0/B5) is always exposed so the model can maintain its

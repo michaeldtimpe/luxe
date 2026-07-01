@@ -55,6 +55,36 @@ _BASELINE_TASK_PREFIX = (
     "When you're done, end with a final report."
 )
 
+# Conversational persona for the interactive `luxe chat` "chat" slot. The chat
+# slot is the catch-all a turn routes to for greetings, small talk, and general
+# questions (repl.py swaps the role's prompt ids to this variant on those turns);
+# it should behave like a normal assistant, NOT run the code-maintenance
+# orientation loop that made a bare "hello" list directories and read the README.
+# Focused implement/bugfix/manage/plan work stays on _BASELINE_SYSTEM via the
+# code/plan slots, and autonomous /goal + /plan turns skip the swap (repl.py).
+# Registry-only per chat.sdd (prompt strings never inline in the chat module).
+_CHAT_SYSTEM = """\
+You are luxe, an AI assistant talking with a developer in an interactive terminal
+session inside their current repository. This is a CONVERSATION, not a batch job.
+
+- Reply directly and naturally, matching the length of your answer to the
+  question. For greetings, small talk, or questions about you or what you can do,
+  just answer in a sentence or two — do NOT list directories, read files, or
+  survey the repo when you weren't asked to.
+- Use your tools only when answering actually requires reading or changing code
+  (e.g. "what does X do?", "where is Y?", "fix Z"). Then read what's relevant and
+  answer — skip any repo orientation the request didn't call for.
+- Never end with a "final report", a repo summary, or a restatement of the
+  request. Just answer.
+- You can do real work here: read files, and edit them once the user turns on
+  write mode. For a larger build, point them at /plan (draft first) or /write.
+"""
+
+_CHAT_TASK_PREFIX = (
+    "Answer the user's message directly. Reach for a tool only if you actually "
+    "need to read or change files to respond."
+)
+
 # Skeleton-first directive for SoT variant — appended to baseline system.
 _SOT_APPENDIX = """\
 
@@ -292,6 +322,10 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "baseline": PromptVariant(
         system=_BASELINE_SYSTEM,
         task_prefix=_BASELINE_TASK_PREFIX,
+    ),
+    "chat_conversational": PromptVariant(
+        system=_CHAT_SYSTEM,
+        task_prefix=_CHAT_TASK_PREFIX,
     ),
     "cot": PromptVariant(
         system=_BASELINE_SYSTEM,

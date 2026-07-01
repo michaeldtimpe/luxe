@@ -92,6 +92,50 @@ def test_prepare_turn_assembles_run_single_chat_call(_ctx, monkeypatch):
     assert prep.slot == "chat" and prep.model == "Champ"
 
 
+def test_chat_slot_gets_conversational_persona(_ctx, monkeypatch):
+    """A turn routing to the chat slot (e.g. a bare greeting → review) swaps the
+    role's prompt ids to the conversational variant so it answers directly
+    instead of running the code-maintenance orientation loop."""
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
+    assert prep.slot == "chat"
+    assert prep.role_cfg.system_prompt_id == "chat_conversational"
+    assert prep.role_cfg.task_prompt_id == "chat_conversational"
+
+
+def test_code_slot_keeps_baseline_persona(_ctx, monkeypatch):
+    """Focused work (implement → code slot) is untouched by the chat swap."""
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("add a feature", session, sm, cfg, frozenset(),
+                             lambda m: "implement")
+    assert prep.slot == "code"
+    assert prep.role_cfg.system_prompt_id == "baseline"
+
+
+def test_goal_rounds_keep_working_persona_on_chat_slot(_ctx, monkeypatch):
+    """`continue work` infers to review → chat slot, but during an autonomous
+    /goal run it must stay a working turn, not flip conversational."""
+    cfg, session, sm = _ctx
+    session.goal_active = True
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("continue work", session, sm, cfg, frozenset(),
+                             lambda m: "review")
+    assert prep.slot == "chat"
+    assert prep.role_cfg.system_prompt_id == "baseline"
+
+
+def test_plan_drafting_keeps_working_persona(_ctx, monkeypatch):
+    """/plan drafting turns route through prepare_turn with plan_mode=True and
+    must not be flipped to the conversational persona."""
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("draft a plan", session, sm, cfg, frozenset(),
+                             lambda m: "review", plan_mode=True)
+    assert prep.role_cfg.system_prompt_id == "baseline"
+
+
 def test_note_tool_records_changed_files_and_fingerprint(_ctx, monkeypatch):
     cfg, session, sm = _ctx
     monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())

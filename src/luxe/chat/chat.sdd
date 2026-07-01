@@ -20,6 +20,17 @@ never touches this module.
   scoped to this front-end
 - Slot routing is visible: the render footer shows the fired slot + model every
   turn; `/use <slot>` and `/model <slot> <id>` are explicit user overrides
+- The `chat` slot (the catch-all `review` inference routes to for greetings,
+  small talk, and general Q&A) uses the CONVERSATIONAL persona: `prepare_turn`
+  swaps the role's `system_prompt_id`/`task_prompt_id` to the registry variant
+  `chat_conversational` so it answers directly instead of running the code-
+  maintenance orientation loop (a bare "hello" used to `list_dir` + read the
+  README + emit a "final report"). The focused `code`/`plan` slots keep the
+  baseline maintenance/planning prompts, and the swap is SKIPPED for `/plan`
+  drafting (`plan_mode`) and autonomous `/goal` rounds (`session.goal_active`) —
+  those are genuine task turns even when `continue work` routes to `chat`. Model
+  selection is unchanged (still champion); the string lives in the prompt
+  registry (never inline in this module)
 - Different-model slot use sequences weight swaps via
   `Backend.unload_all_loaded` + `thermal_guard`; swap count + seconds are
   instrumented and surfaced; keep chat-slot model resident, group code work

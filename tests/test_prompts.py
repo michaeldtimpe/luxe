@@ -37,6 +37,18 @@ def test_all_documented_variants_are_registered():
     assert expected <= set(PROMPT_REGISTRY)
 
 
+def test_chat_conversational_variant_is_registered_and_non_maintenance():
+    """The interactive chat slot's persona must exist and must NOT carry the
+    maintenance framing that made a bare greeting explore the repo."""
+    assert "chat_conversational" in PROMPT_REGISTRY
+    v = get("chat_conversational")
+    assert "CONVERSATION" in v.system
+    # It must not open like the code-maintenance specialist baseline.
+    assert "code maintenance specialist" not in v.system
+    # No "final report" contract — that framing produced repo audits on "hello".
+    assert "final report" not in v.task_prefix.lower()
+
+
 def test_get_raises_keyerror_with_available_list_on_miss():
     with pytest.raises(KeyError) as excinfo:
         get("does_not_exist")
