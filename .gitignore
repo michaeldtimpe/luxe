@@ -68,3 +68,4 @@ benchmarks/swebench/subsets/raw/
 
 # gitreview sweep output (telemetry CSVs + per-repo logs) — generated, local-only
 scripts/out/
+.claude/snapctx/
