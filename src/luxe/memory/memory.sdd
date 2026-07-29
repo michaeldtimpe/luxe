@@ -8,6 +8,13 @@ prompt registry and from the deterministic benchmark path.
   append-only `transcript.jsonl` + `fold.jsonl`), mirroring `run_state.py` idioms
 - `gc_sessions` default eviction: keep the most recent 50 sessions AND drop
   anything older than 30 days
+- `SessionMeta` evolves ADDITIVELY with defaulting fields only;
+  `from_dict` filters unknown keys so old metas always load (and old code
+  simply ignores new keys). 2026-07 additions: `backend_name` + `base_url`
+  (multi-backend provenance, "" = predates the feature). Assistant transcript
+  records are stamped `"backend": <name>`; readers (`resume._pair_turns`)
+  ignore unknown record kinds AND unknown record keys — the transcript is
+  append-only provenance, never a schema contract
 - Project memory has two tiers with explicit confidence:
   - repo-local `<repo>/.luxe/memory.md` — user-curated, committable, priority,
     ALWAYS injected

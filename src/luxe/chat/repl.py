@@ -244,6 +244,8 @@ def run_chat_repl(
         repo_path=repo_path,
         project_hash=session.project_hash,
         slot_models=slots.slot_models(),
+        backend_name=slots.backend_name,
+        base_url=slots.backend.base_url,
     )
     session.session_id = meta.session_id
 
@@ -355,6 +357,7 @@ class TurnPrep:
     changed_files: list
     fingerprint: set
     test_result: list
+    backend_name: str = ""  # multi-backend provenance stamped on the transcript
 
 
 def prepare_turn(message, session, slots, cfg, languages, infer,
@@ -470,6 +473,7 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         dev_bash=dev_bash, role_cfg=role_cfg, run_id=run_id,
         ctx_ceiling=ctx_ceiling, changed_files=changed_files,
         fingerprint=fingerprint, test_result=test_result,
+        backend_name=getattr(slots, "backend_name", ""),
     )
 
 
@@ -488,6 +492,7 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
         text=assistant_text, run_id=prep.run_id, interrupted=interrupted,
         steps=(result.steps if result else 0),
         tool_calls=(result.tool_calls_total if result else 0),
+        backend=prep.backend_name,
     )
     session_store.touch(session.session_id)
     session.add_turn(ChatTurn(
