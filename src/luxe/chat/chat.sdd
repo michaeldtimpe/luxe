@@ -112,6 +112,17 @@ never touches this module.
   clobbers an existing `plan.md` (writes `.luxe/plans/<id>-<n>.md`); execute seeds
   the `/goal` runner and injects the drafted plan as a `<plan>` provenance block
   so the agent keeps following it
+- `/attach <path> [...]` stages file contents for the NEXT turn, ONE-SHOT:
+  read at command time (expanduser'd; binary refused via a null-byte sniff of
+  the first 8KB; capped 48KB/file + 128KB/turn-total with an explicit
+  truncation marker), staged on `ChatSession.attachments`, injected by
+  `build_extra_context` as an `<attached_files>` block sitting JUST BELOW
+  `<system_constraints>` in the precedence ladder (the user's explicit rules
+  outrank pasted content; attachments outrank style/plan/ledger/memory/
+  history), then cleared on consumption — later turns recall it only via
+  conversation history. Each attach appends a kind="attachment" transcript
+  record (path, size, sha256, truncated, capped content); resume pairing
+  ignores unknown kinds, so old readers are unaffected
 - `/terse` (default ON) injects the registry `TERSE_HINT` `<response_style>` block
   to cut model prose ("report only deltas") — carved out so it never abbreviates
   tool output, errors, or skips needed reads/confirmations. `/debug` is a
