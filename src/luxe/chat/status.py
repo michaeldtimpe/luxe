@@ -310,6 +310,18 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
                          _S("on" if session.unrestricted_bash else "off",
                             _on if session.unrestricted_bash else _off)], priority=3))
 
+    # backend name — only when the config offers >1 endpoint (multi-backend is
+    # the exception, not the rule; single-backend bars stay untouched). Mid
+    # drop-priority: nice to see, not protected like git/ctx/model.
+    try:
+        multi = len(slots.cfg.backend_entries()) > 1
+    except Exception:
+        multi = False
+    if multi:
+        segs.append(Segment([_S("backend ", _GREY),
+                             _S(getattr(slots, "backend_name", "?"), _DEFAULT)],
+                            priority=5))
+
     # session mode chip — non-default observability flags (verbose / reasoning /
     # compact / terse-off), in the same vein as write/bash. Omitted when all
     # default so the bar stays clean. (write/bash have their own chips above.)

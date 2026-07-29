@@ -11,11 +11,12 @@ swap path is dead code and the experience is identical to single-champion.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 
-from luxe.backend import Backend
-from luxe.config import PipelineConfig
+from luxe.backend import Backend, BackendError
+from luxe.config import BackendEntry, PipelineConfig
 
 _SLOTS = ("chat", "plan", "code")
 
@@ -46,7 +47,23 @@ class SlotManager:
         # Start resident on the chat slot's model — that's the conversational
         # default and the model we keep warm.
         self._resident = self.model_for("chat")
-        self.backend = Backend(base_url=cfg.omlx_base_url, model=self._resident)
+        # Multi-backend (chat-only): build from the config's default backend
+        # entry so per-endpoint timeout/api-key settings apply from turn one.
+        # Configs without `backends:` synthesize a single "local" entry from
+        # omlx_base_url — byte-identical behaviour to the single-backend days.
+        self.backend_name = cfg.default_backend_name()
+        self.backend = self._build_backend(cfg.backend_entry(self.backend_name))
+
+    def _build_backend(self, entry: BackendEntry) -> Backend:
+        """Backend from a config entry. The API key is resolved HERE from the
+        entry's env-var name (never stored in YAML); an empty value lets
+        Backend fall back to OMLX_API_KEY."""
+        return Backend(
+            base_url=entry.base_url,
+            model=self._resident,
+            timeout_s=entry.timeout_s,
+            api_key=os.environ.get(entry.api_key_env, ""),
+        )
 
     # -- resolution ---------------------------------------------------------
 
@@ -86,6 +103,61 @@ class SlotManager:
             return self.backend.list_models()
         except Exception:
             return []
+
+    # -- backend switching (multi-backend, chat-only) ------------------------
+
+    def probe_backend(self, name: str) -> bool:
+        """Health-check a configured backend without switching to it. The
+        active backend reuses the live client; others get a throwaway."""
+        if name == self.backend_name:
+            return self.backend.health()
+        try:
+            return self._build_backend(self.cfg.backend_entry(name)).health()
+        except Exception:
+            return False
+
+    def switch_backend(self, name: str) -> list[str]:
+        """Point the session at another configured oMLX endpoint.
+
+        Builds a fresh Backend from the entry (base_url / env-resolved api_key /
+        timeout_s), health-checks it, and drops any `/model` slot overrides
+        whose model ids don't resolve on the new server (returned for the UI to
+        report). The OLD server is left untouched — no unloads there; it may be
+        the endpoint that just went down. The resident model is reset so the
+        next turn re-confirms weights on the NEW server.
+
+        Raises KeyError for an unknown name, BackendError if unreachable.
+        """
+        entry = self.cfg.backend_entry(name)
+        backend = self._build_backend(entry)
+        if not backend.health():
+            raise BackendError(
+                f"backend {name!r} unreachable at {entry.base_url}")
+        try:
+            available = set(backend.list_models())
+        except Exception:
+            available = set()
+        dropped = [s for s in _SLOTS
+                   if s in self.overrides and self.overrides[s] not in available]
+        for s in dropped:
+            del self.overrides[s]
+        self.backend = backend
+        self.backend_name = name
+        # Unknown residency on the new server: force the next backend_for() to
+        # confirm/load the target there (never unloads the old server).
+        self._resident = ""
+        return dropped
+
+    def unreachable_hint(self) -> str | None:
+        """One-line `/backend` escape hatch for a failed turn — only when the
+        config actually offers an alternative endpoint."""
+        entries = self.cfg.backend_entries()
+        if len(entries) < 2:
+            return None
+        other = next((n for n in entries if n != self.backend_name), None)
+        if other is None:
+            return None
+        return f"{self.backend_name} oMLX unreachable — try /backend {other}"
 
     # -- swap orchestration -------------------------------------------------
 

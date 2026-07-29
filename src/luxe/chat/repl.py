@@ -20,6 +20,7 @@ from rich.markup import escape as _escape
 from rich.status import Status
 
 from luxe.agents.single import run_single
+from luxe.backend import BackendError
 from luxe.chat import commands as cmd
 from luxe.chat.render import (
     ARROW_PALETTE_PTK,
@@ -314,7 +315,17 @@ def run_chat_repl(
                 if res.exit:
                     break
                 continue
-            _run_turn(line, session, slots, cfg, languages, console, cancel, infer, status)
+            try:
+                _run_turn(line, session, slots, cfg, languages, console, cancel,
+                          infer, status)
+            except BackendError as e:
+                # Interactive turns survive a dead endpoint: report it and, when
+                # the config offers another backend, point at the escape hatch
+                # (e.g. "local oMLX unreachable — try /backend m5").
+                console.print(f"[red]✗ {e}[/]")
+                hint = slots.unreachable_hint()
+                if hint:
+                    console.print(f"[yellow]· {hint}[/]")
     finally:
         if not keep_loaded:
             # WS3: show the unload is happening BEFORE the blocking call (it can

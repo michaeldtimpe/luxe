@@ -10,9 +10,11 @@ from luxe.config import ChatSlots, PipelineConfig, RoleConfig, SlotConfig
 
 
 class FakeBackend:
-    def __init__(self, base_url="", model=""):
+    def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
         self.base_url = base_url
         self.model = model
+        self.timeout_s = timeout_s
+        self.api_key = api_key
         self.unload_calls: list = []
         self.thermal_calls: list = []
 

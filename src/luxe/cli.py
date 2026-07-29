@@ -558,6 +558,9 @@ def maintain(
               help="Path to config YAML (default: configs/chat.yaml)")
 @click.option("--resume", "resume_session_id", default=None,
               help="Resume a prior chat session by id")
+@click.option("--backend", "backend_name", default=None,
+              help="Start on this configured backend (a `backends:` entry name, "
+                   "e.g. m5). Chat-only; default = the entry marked default.")
 @click.option("--chat-model", default=None, help="Override the chat-slot model")
 @click.option("--plan-model", default=None, help="Override the plan-slot model")
 @click.option("--code-model", default=None, help="Override the code-slot model")
@@ -581,6 +584,7 @@ def maintain(
               help="Curated luxe color palette: auto|cool|warm|mono (default: auto).")
 def chat_cmd(
     repo: str, config_path: str | None, resume_session_id: str | None,
+    backend_name: str | None,
     chat_model: str | None, plan_model: str | None, code_model: str | None,
     keep_loaded: bool, dev_mode: bool,
     startup_verbose: str | None, startup_show_reasoning: bool,
@@ -604,6 +608,19 @@ def chat_cmd(
     # CLI per-slot overrides become an ad-hoc model + slots block so the user
     # can point a slot at any oMLX-loadable model without editing YAML.
     _apply_slot_overrides(cfg, chat_model, plan_model, code_model)
+
+    # `--backend <name>` picks the startup endpoint by re-flagging the config's
+    # default entry (chat-only; SlotManager reads default_backend_name()).
+    if backend_name:
+        entries = cfg.backend_entries()
+        if backend_name not in entries:
+            console.print(f"[red]✗ Unknown backend {backend_name!r}. "
+                          f"Configured: {', '.join(entries)}.[/]")
+            sys.exit(2)
+        cfg.backends = {
+            k: v.model_copy(update={"default": k == backend_name})
+            for k, v in entries.items()
+        }
 
     set_repo_root(repo_path)
 
@@ -634,8 +651,9 @@ def chat_cmd(
             from luxe.chat.tui import run_chat_app as run_app
         except Exception:
             run_app = None
-            console.print("[dim]· textual not installed — using the line REPL "
-                          "(pip install 'luxe[chat]' for the full-screen UI)[/]")
+            console.print("[dim]· textual not installed — using the line REPL. "
+                          "Run `uv sync --extra chat` (repo root) to restore "
+                          "the full-screen UI.[/]")
 
     try:
         if run_app is not None:

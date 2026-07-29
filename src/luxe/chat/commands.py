@@ -43,6 +43,7 @@ class CommandContext:
 _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/help", "", "show this help"),
     ("/model", "[slot] [model_id]", "show slots, or repoint chat|plan|code"),
+    ("/backend", "[name|n]", "list configured oMLX backends, or switch to one"),
     ("/use", "<slot>", "pin the next turn to chat|plan|code"),
     ("/ctx", "[small|medium|large|xlarge|huge]", "show or set context window size"),
     ("/write", "", "toggle write tools (default: read-only)"),
@@ -77,6 +78,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
     handlers = {
         "/help": _help,
         "/model": _model,
+        "/backend": _backend,
         "/use": _use,
         "/ctx": _ctx,
         "/write": _write,
@@ -185,6 +187,59 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     ctx.slots.set_override(slot, model_id)
     ctx.console.print(f"[green]✓[/] slot [cyan]{slot}[/] → {model_id} "
                       f"[dim](swaps on next {slot} turn)[/]")
+    return CommandResult(handled=True)
+
+
+def _backend(args, ctx: CommandContext) -> CommandResult:
+    """List or switch the session's oMLX endpoint (multi-backend, chat-only).
+
+    `/backend`            list entries: name, base_url, health ✓/✗, active marker
+    `/backend <name|n>`   switch (health-checked; never touches the old server)
+    """
+    from luxe.backend import BackendError
+
+    entries = ctx.slots.cfg.backend_entries()
+    names = list(entries)
+    if not args:
+        ctx.console.print("[bold]Backends[/]")
+        for i, (name, entry) in enumerate(entries.items(), 1):
+            ok = ctx.slots.probe_backend(name)
+            health = "[green]✓[/]" if ok else "[red]✗[/]"
+            active = " [cyan]← active[/]" if name == ctx.slots.backend_name else ""
+            ctx.console.print(
+                f"  [cyan]{i}[/] {name:8s} {entry.base_url}  {health}{active}")
+        if len(names) > 1:
+            ctx.console.print("[dim]switch with /backend <name|n>[/]")
+        return CommandResult(handled=True)
+
+    sel = args[0]
+    if sel.isdigit():
+        idx = int(sel)
+        if not (1 <= idx <= len(names)):
+            ctx.console.print(f"[yellow]Pick 1–{len(names)} (see /backend).[/]")
+            return CommandResult(handled=True)
+        name = names[idx - 1]
+    else:
+        name = sel
+    if name not in entries:
+        ctx.console.print(f"[yellow]Unknown backend {name!r}. "
+                          f"Configured: {', '.join(names)}.[/]")
+        return CommandResult(handled=True)
+    if name == ctx.slots.backend_name:
+        ctx.console.print(f"[dim]· already on backend [cyan]{name}[/][/]")
+        return CommandResult(handled=True)
+    try:
+        dropped = ctx.slots.switch_backend(name)
+    except BackendError as e:
+        ctx.console.print(f"[red]✗ {e}[/] [dim](staying on "
+                          f"{ctx.slots.backend_name})[/]")
+        return CommandResult(handled=True)
+    entry = entries[name]
+    ctx.console.print(f"[green]✓[/] backend → [cyan]{name}[/] "
+                      f"[dim]({entry.base_url}; timeout {entry.timeout_s:.0f}s)[/]")
+    for slot in dropped:
+        ctx.console.print(f"[yellow]· dropped /model override on slot "
+                          f"[cyan]{slot}[/] — model not served here[/]")
     return CommandResult(handled=True)
 
 

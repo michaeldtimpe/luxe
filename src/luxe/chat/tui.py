@@ -370,10 +370,19 @@ class ChatApp(App):
 
     @work(thread=True, exclusive=True, group="turn")
     def _run_turn(self, message: str) -> None:
+        from luxe.backend import BackendError
+
         self.cancel.reset()
         self.call_from_thread(self._begin_busy)
         try:
             self._execute_turn_blocking(message)
+        except BackendError as e:
+            # Mirror the line REPL: a dead endpoint fails the turn, not the
+            # app; multi-backend configs get the /backend escape hatch.
+            self.write(f"[red]✗ {e}[/]")
+            hint = self.slots.unreachable_hint()
+            if hint:
+                self.write(f"[yellow]· {hint}[/]")
         finally:
             self.call_from_thread(self._end_busy)
 
