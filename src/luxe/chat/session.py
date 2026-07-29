@@ -78,6 +78,10 @@ class ChatSession:
     num_ctx_override: int | None = None  # set by /ctx; clamped per-turn to num_ctx_max
     turns: list[ChatTurn] = field(default_factory=list)
     system_constraints: list[str] = field(default_factory=list)  # set by /sys; injected every turn
+    # /attach staging: [{path, content, size, sha256, truncated}] read+capped by
+    # the command; injected as <attached_files> into the NEXT turn only
+    # (one-shot — build_extra_context clears it on consumption).
+    attachments: list[dict] = field(default_factory=list)
 
     # -- observability (B2): tool-IO depth + reasoning stream are independent --
     verbose_level: str = "off"   # off | diff | full — set by /verbose
@@ -157,6 +161,21 @@ class ChatSession:
         if self.system_constraints:
             numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(self.system_constraints))
             parts.insert(0, f"<system_constraints>\nYou MUST follow these constraints for every turn in this session:\n{numbered}\n</system_constraints>")
+        # /attach payload rides just BELOW <system_constraints> in the precedence
+        # ladder (the user's explicit rules still outrank pasted file content)
+        # and above everything else. ONE-SHOT: cleared here on consumption so it
+        # feeds exactly the next turn; later turns recall it via history.
+        if self.attachments:
+            file_blocks = "\n".join(
+                f'<file path="{a["path"]}">\n{a["content"]}\n</file>'
+                for a in self.attachments
+            )
+            parts.insert(
+                1 if self.system_constraints else 0,
+                "<attached_files>\nThe user attached these files for this "
+                f"turn:\n{file_blocks}\n</attached_files>",
+            )
+            self.attachments = []
         if not parts:
             # First turn, no memory, write mode on: nothing to disambiguate.
             return "", fold_version

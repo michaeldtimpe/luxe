@@ -55,6 +55,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/compact", "", "toggle compact display (tighter on-screen output ceiling)"),
     ("/goal", "<objective> | stop", "autonomously run rounds until the objective is met"),
     ("/plan", "<objective>", "draft a plan, then choose: save / execute / both"),
+    ("/attach", "<path> [...]", "attach file contents to the NEXT turn (one-shot)"),
     ("/sys", "[add <rule>|list|clear]", "manage session-scoped system constraints"),
     ("/memory", "list|add|promote|forget|edit", "manage project memory"),
     ("/gitaudit", "", "audit this repo: orientation + bugs/security + structural advice"),
@@ -90,6 +91,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/compact": _compact_mode,
         "/goal": _goal,
         "/plan": _plan,
+        "/attach": _attach,
         "/sys": _sys,
         "/memory": _memory,
         "/gitaudit": _gitaudit, "/git-audit": _gitaudit, "/gaudit": _gitaudit,
@@ -441,6 +443,91 @@ def _goal(args, ctx: CommandContext) -> CommandResult:
     ctx.session.consecutive_crashes = 0
     ctx.console.print(f"[green]✓[/] goal set [dim](starts now; /goal stop or Ctrl-C "
                       f"to halt)[/]\n  [dim]{objective}[/]")
+    return CommandResult(handled=True)
+
+
+# /attach caps (chat.sdd): per-file and per-turn-total ceilings on INJECTED
+# characters, so a stray `/attach big.log` can't blow the context window.
+ATTACH_MAX_FILE_BYTES = 48 * 1024
+ATTACH_MAX_TOTAL_BYTES = 128 * 1024
+_BINARY_SNIFF_BYTES = 8192
+
+
+def _attach(args, ctx: CommandContext) -> CommandResult:
+    """Attach file contents to the NEXT turn (one-shot).
+
+    Reads each path now (expanduser'd; binary refused via null-byte sniff;
+    48KB/file and 128KB/turn caps with an explicit truncation marker), stages
+    it on `session.attachments`, and records a kind="attachment" transcript
+    entry. `build_extra_context` injects the payload as `<attached_files>`
+    just below `<system_constraints>` and clears the staging — one shot.
+    """
+    import hashlib
+    from pathlib import Path
+
+    from luxe.memory import session as session_store
+
+    if not args:
+        n = len(ctx.session.attachments)
+        if n:
+            ctx.console.print(f"[bold]pending attachments[/] [dim]({n}, "
+                              f"injected into the next turn)[/]")
+            for a in ctx.session.attachments:
+                mark = " [yellow](truncated)[/]" if a.get("truncated") else ""
+                ctx.console.print(f"  [cyan]{a['path']}[/] "
+                                  f"[dim]{a['size']} bytes[/]{mark}")
+        else:
+            ctx.console.print("[yellow]Usage: /attach <path> [...][/]")
+        return CommandResult(handled=True)
+
+    total = sum(len(a["content"]) for a in ctx.session.attachments)
+    for raw in args:
+        p = Path(os.path.expanduser(raw))
+        if not p.is_file():
+            ctx.console.print(f"[yellow]✗ {raw}: no such file[/]")
+            continue
+        try:
+            data = p.read_bytes()
+        except OSError as e:
+            ctx.console.print(f"[yellow]✗ {raw}: {e}[/]")
+            continue
+        if b"\0" in data[:_BINARY_SNIFF_BYTES]:
+            ctx.console.print(f"[yellow]✗ {raw}: looks binary — refused[/]")
+            continue
+        text = data.decode("utf-8", errors="replace")
+        truncated = False
+        if len(text) > ATTACH_MAX_FILE_BYTES:
+            text = (text[:ATTACH_MAX_FILE_BYTES]
+                    + f"\n…[luxe: truncated — first {ATTACH_MAX_FILE_BYTES} of "
+                      f"{len(data)} bytes shown]")
+            truncated = True
+        if total + len(text) > ATTACH_MAX_TOTAL_BYTES:
+            ctx.console.print(
+                f"[yellow]✗ {raw}: skipped — {ATTACH_MAX_TOTAL_BYTES // 1024}KB "
+                f"total attachment cap reached[/]")
+            continue
+        total += len(text)
+        att = {
+            "path": str(p),
+            "content": text,
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "truncated": truncated,
+        }
+        ctx.session.attachments.append(att)
+        # Transcript provenance (resume._pair_turns ignores unknown kinds).
+        if ctx.session.session_id:
+            session_store.append_turn(
+                ctx.session.session_id, "attachment",
+                path=att["path"], size=att["size"], sha256=att["sha256"],
+                truncated=truncated, content=text,
+            )
+        mark = (f" [yellow](truncated to {ATTACH_MAX_FILE_BYTES // 1024}KB)[/]"
+                if truncated else "")
+        ctx.console.print(f"[green]✓[/] attached [cyan]{p}[/] "
+                          f"[dim]({att['size']} bytes)[/]{mark}")
+    if ctx.session.attachments:
+        ctx.console.print("[dim]· injected into the NEXT turn only (one-shot)[/]")
     return CommandResult(handled=True)
 
 
