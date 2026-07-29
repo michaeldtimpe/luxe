@@ -20,16 +20,21 @@ never touches this module.
   scoped to this front-end
 - Slot routing is visible: the render footer shows the fired slot + model every
   turn; `/use <slot>` and `/model <slot> <id>` are explicit user overrides
-- The `chat` slot (the catch-all `review` inference routes to for greetings,
-  small talk, and general Q&A) uses the CONVERSATIONAL persona: `prepare_turn`
-  swaps the role's `system_prompt_id`/`task_prompt_id` to the registry variant
-  `chat_conversational` so it answers directly instead of running the code-
-  maintenance orientation loop (a bare "hello" used to `list_dir` + read the
-  README + emit a "final report"). The focused `code`/`plan` slots keep the
-  baseline maintenance/planning prompts, and the swap is SKIPPED for `/plan`
-  drafting (`plan_mode`) and autonomous `/goal` rounds (`session.goal_active`) —
-  those are genuine task turns even when `continue work` routes to `chat`. Model
-  selection is unchanged (still champion); the string lives in the prompt
+- EVERY freeform interactive turn uses the CONVERSATIONAL persona:
+  `prepare_turn` swaps the role's `system_prompt_id`/`task_prompt_id` to the
+  registry variant `chat_conversational` (and clears the task overlay) so chat
+  answers directly instead of running the code-maintenance orientation loop (a
+  bare "hello" used to `list_dir` + read the README + emit a "final report").
+  The swap keys on turn KIND, NOT on the routed slot — slot routing comes from
+  the `_infer_task_type` keyword heuristic (built for `luxe maintain` goals),
+  and keying the persona on `slot == "chat"` was the 2026-07-29 "chats become
+  coding sessions" bug: ordinary messages containing "add"/"change"/"explain"/
+  "fix"/… routed to the code/plan slots and inherited the maintenance persona.
+  The baseline task personas apply ONLY to the explicit task modes: `/plan`
+  drafting (`plan_mode`), autonomous `/goal` rounds (`session.goal_active`),
+  and a `/use <slot>`-pinned turn. Slot routing still selects the MODEL
+  (fan-out configs unchanged); the conversational persona keeps the full tool
+  surface and does real work when asked. The string lives in the prompt
   registry (never inline in this module)
 - Backend switching is CHAT-ONLY and CONFIG-SOURCED (luxe.sdd carve-out): the
   `backends:` map (BackendEntry = base_url / api_key_env / timeout_s / default)

@@ -48,6 +48,34 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
 - **`luxe chat`** — REPL. Each turn = one `run_single` call; conversation +
   project memory inject ONLY via the new `run_single(extra_context="")` seam
   (default `""` = byte-identical). Read-only tools by default (`/write` toggles).
+  - **Chat is a CONVERSATION by default (2026-07-29 fix).** Every freeform
+    turn gets the `chat_conversational` persona (registry variant; task
+    overlay cleared); the baseline maintenance persona applies only to
+    `/plan` drafting, `/goal` rounds, and `/use <slot>`-pinned turns. Do NOT
+    re-key the persona on the routed slot — slot routing comes from the
+    `_infer_task_type` keyword heuristic and misclassifies ordinary messages
+    ("explain…", "add…", "fix…") as coding tasks; that was the "chats become
+    coding sessions" bug. Slots still pick the MODEL only.
+  - **Multi-backend (chat-only carve-out, luxe.sdd):** `configs/chat.yaml`
+    `backends:` maps names → BackendEntry(base_url, api_key_env, timeout_s,
+    default). `/backend` lists (health ✓/✗, active), `/backend <name|n>`
+    switches (health-checked; drops unresolvable `/model` overrides; never
+    unloads the OLD server), `--backend <name>` picks at startup. Keys come
+    from env vars only (m5 → OMLX_API_KEY_M5) — never YAML. Absent block ⇒ a
+    synthesized "local" entry from `omlx_base_url`; benchmark/maintain read
+    `omlx_base_url` only. m5 entry carries `timeout_s: 2400` (dense turns
+    over Tailscale) — the old hardcoded Backend timeout hack is retired.
+    SessionMeta records backend_name/base_url; assistant transcript records
+    are stamped `"backend"`.
+  - **`/attach <path> [...]`** stages file contents ONE-SHOT for the next
+    turn: 48KB/file + 128KB/turn caps, binary refused (null-byte sniff),
+    injected as `<attached_files>` just below `<system_constraints>`, cleared
+    on consumption; kind="attachment" transcript records.
+  - **TUI paste + resume:** multi-line pastes become a `[pasted N lines]`
+    chip expanded at submit (stock Textual Input kept only the first line);
+    `--resume`/`/resume` now work inside the Textual TUI (transcript replays
+    into the RichLog on mount). The `[chat]` extra installs via
+    `uv sync --extra chat` — without it chat falls back to the line REPL.
   - **Read-only default ≠ missing capability.** luxe has the full mutation
     surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips

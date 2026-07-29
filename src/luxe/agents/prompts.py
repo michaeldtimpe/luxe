@@ -55,13 +55,16 @@ _BASELINE_TASK_PREFIX = (
     "When you're done, end with a final report."
 )
 
-# Conversational persona for the interactive `luxe chat` "chat" slot. The chat
-# slot is the catch-all a turn routes to for greetings, small talk, and general
-# questions (repl.py swaps the role's prompt ids to this variant on those turns);
-# it should behave like a normal assistant, NOT run the code-maintenance
-# orientation loop that made a bare "hello" list directories and read the README.
-# Focused implement/bugfix/manage/plan work stays on _BASELINE_SYSTEM via the
-# code/plan slots, and autonomous /goal + /plan turns skip the swap (repl.py).
+# Conversational persona for EVERY freeform `luxe chat` turn (repl.py swaps the
+# role's prompt ids to this variant): chat should behave like a normal
+# assistant, NOT run the code-maintenance orientation loop that made a bare
+# "hello" list directories and read the README. 2026-07-29: the swap was
+# previously keyed on the turn routing to the "chat" slot, but slot routing
+# comes from the `_infer_task_type` keyword heuristic — ordinary messages
+# ("explain…", "change…", "fix…") landed on the code/plan slots and inherited
+# the maintenance persona (the "chats become coding sessions" bug). The swap
+# now keys on turn KIND: only /plan drafting, autonomous /goal rounds, and
+# explicit `/use <slot>` pins keep _BASELINE_SYSTEM (repl.py).
 # Registry-only per chat.sdd (prompt strings never inline in the chat module).
 _CHAT_SYSTEM = """\
 You are luxe, an AI assistant talking with a developer in an interactive terminal
