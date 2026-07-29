@@ -117,7 +117,7 @@ def test_typeahead_queue(tmp_path, monkeypatch):
             await pilot.pause()
             app._busy = True  # simulate a running task
             app.on_input_submitted(Input.Submitted(app._input, "later msg"))
-            assert "later msg" in app._queue          # queued, not run
+            assert ("later msg", "later msg") in app._queue  # queued, not run
             app._busy = False
             app._maybe_drain()
             await app.workers.wait_for_complete()
@@ -194,6 +194,126 @@ def test_tick_survives_open_modal(tmp_path):
             app.screen.dismiss("")
             await pilot.pause()
             app._end_busy()
+    asyncio.run(scenario())
+
+
+def test_paste_single_line_inserts_into_input(tmp_path):
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("one line"))
+            await pilot.pause()
+            assert app._input.value == "one line"
+            assert app._paste_chunks == []          # nothing buffered
+    asyncio.run(scenario())
+
+
+def test_paste_multiline_buffers_as_chip(tmp_path):
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("line a\nline b\nline c"))
+            await pilot.pause()
+            assert "[pasted 3 lines]" in app._input.value
+            assert app._paste_chunks == [("[pasted 3 lines]",
+                                          "line a\nline b\nline c")]
+    asyncio.run(scenario())
+
+
+def test_paste_chip_expands_at_submit(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run_single(backend, role_cfg, **kw):
+        captured["goal"] = kw.get("goal")
+        return _FakeResult()
+
+    monkeypatch.setattr(_repl, "run_single", fake_run_single)
+
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input.value = "explain this: "
+            app._input.cursor_position = len(app._input.value)
+            app._input._on_paste(events.Paste("x = 1\ny = 2"))
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert captured["goal"] == "explain this: x = 1\ny = 2"
+            assert app._paste_chunks == []          # consumed at submit
+            assert app.session.turns[-1].user == "explain this: x = 1\ny = 2"
+    asyncio.run(scenario())
+
+
+def test_paste_deleted_chip_still_appends_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._paste_chunks = [("[pasted 2 lines]", "a\nb")]
+            app._input.value = "look:"               # user erased the chip
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.session.turns[-1].user == "look:\n\na\nb"
+    asyncio.run(scenario())
+
+
+def test_resume_on_mount_replays_prior_session(tmp_path):
+    prior = session_store.new_session(repo_path="/tmp/x")
+    session_store.append_turn(prior.session_id, "user", text="old q", slot="chat")
+    session_store.append_turn(prior.session_id, "assistant", text="old a",
+                              run_id="r0")
+
+    async def scenario():
+        repo = tmp_path / "repo2"
+        repo.mkdir()
+        cfg = PipelineConfig(models={"monolith": "Champ"},
+                             roles={"monolith": RoleConfig(model_key="monolith")})
+        session = ChatSession(repo_path=str(repo))
+        meta = session_store.new_session(repo_path=str(repo))
+        session.session_id = meta.session_id
+        app = ChatApp(cfg, str(repo), frozenset(), session=session,
+                      slots=slots_mod.SlotManager(cfg),
+                      infer=lambda m: "review", keep_loaded=True,
+                      resume_session_id=prior.session_id)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert len(app.session.turns) == 1
+            assert app.session.turns[0].user == "old q"
+            assert app.session.turns[0].assistant == "old a"
+    asyncio.run(scenario())
+
+
+def test_resume_command_inside_tui(tmp_path):
+    prior = session_store.new_session(repo_path="/tmp/x")
+    session_store.append_turn(prior.session_id, "user", text="cmd q", slot="chat")
+    session_store.append_turn(prior.session_id, "assistant", text="cmd a",
+                              run_id="r0")
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.value = f"/resume {prior.session_id}"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert any(t.user == "cmd q" and t.assistant == "cmd a"
+                       for t in app.session.turns)
     asyncio.run(scenario())
 
 

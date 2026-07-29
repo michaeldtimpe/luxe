@@ -643,10 +643,11 @@ def chat_cmd(
         sys.exit(3)
 
     # Front-end selection: the full-screen Textual TUI when stdout is a real
-    # terminal AND textual is installed AND not resuming (resume lives in the line
-    # REPL); otherwise the line REPL (CI / pipes / textual-absent). chat.sdd.
+    # terminal AND textual is installed; otherwise the line REPL (CI / pipes /
+    # textual-absent). --resume rides either front-end (the TUI replays the
+    # transcript on mount). chat.sdd.
     run_app = None
-    if sys.stdout.isatty() and not resume_session_id:
+    if sys.stdout.isatty():
         try:
             from luxe.chat.tui import run_chat_app as run_app
         except Exception:
@@ -660,6 +661,7 @@ def chat_cmd(
             run_app(
                 cfg, repo_path, languages,
                 keep_loaded=keep_loaded,
+                resume_session_id=resume_session_id,
                 dev_mode=dev_mode,
                 startup_verbose=startup_verbose,
                 startup_show_reasoning=startup_show_reasoning,
