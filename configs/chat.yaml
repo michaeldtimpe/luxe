@@ -31,6 +31,10 @@ models:
   # different MLX model the oMLX server can load, e.g.:
   #   coder_30b: "Qwen3-Coder-Next-80B"
   monolith: "Qwen3.6-35B-A3B-6bit"
+  # Preferred dense coder (2026-07-29): available on m1 + m5 (+ M4 kit).
+  # Select per-session via /model; not slot-mapped by default to avoid
+  # weight-swap latency between chat and code turns.
+  dense_27b: "Qwen3.6-27B-6bit"
 
 roles:
   monolith:
