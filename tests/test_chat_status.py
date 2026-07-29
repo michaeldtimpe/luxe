@@ -20,7 +20,7 @@ def slots(monkeypatch):
     from luxe.chat import slots as slots_module
 
     class FakeBackend:
-        def __init__(self, base_url="", model=""):
+        def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
             self.model = model
 
         def unload_all_loaded(self, *, except_for=None):
@@ -127,7 +127,7 @@ def test_ctx_override_reflected_immediately(monkeypatch):
     from luxe.config import PipelineConfig, RoleConfig
 
     class FakeBackend:
-        def __init__(self, base_url="", model=""):
+        def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
             self.model = model
 
         def unload_all_loaded(self, *, except_for=None):

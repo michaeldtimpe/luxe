@@ -16,15 +16,23 @@ from luxe.memory import project as project_mem
 
 
 class FakeBackend:
-    def __init__(self, base_url="", model=""):
+    def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
         self.base_url = base_url
         self.model = model
+        self.timeout_s = timeout_s
+        self.api_key = api_key
 
     def unload_all_loaded(self, *, except_for=None):
         return {}
 
     def thermal_guard(self, target_model, **kw):
         return True
+
+    def health(self):
+        return True
+
+    def list_models(self):
+        return []
 
 
 @pytest.fixture(autouse=True)

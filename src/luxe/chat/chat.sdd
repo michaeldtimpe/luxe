@@ -31,6 +31,23 @@ never touches this module.
   those are genuine task turns even when `continue work` routes to `chat`. Model
   selection is unchanged (still champion); the string lives in the prompt
   registry (never inline in this module)
+- Backend switching is CHAT-ONLY and CONFIG-SOURCED (luxe.sdd carve-out): the
+  `backends:` map (BackendEntry = base_url / api_key_env / timeout_s / default)
+  is the sole registry of endpoints — `/backend` lists entries (name, base_url,
+  health ✓/✗, active marker) and `/backend <name|n>` switches; `--backend
+  <name>` picks the startup entry. API keys are NEVER in YAML: `api_key_env`
+  names the env var, resolved at Backend construction (empty → Backend's
+  OMLX_API_KEY fallback). `SlotManager.switch_backend` health-checks the new
+  endpoint FIRST (unreachable → BackendError, session stays put), drops `/model`
+  overrides whose ids don't resolve on the new server (reported to the user),
+  resets the resident model so the next turn re-confirms weights there, and
+  NEVER unloads models on the old server (it may be the endpoint that just went
+  down). A turn failing with BackendError keeps the REPL/TUI alive and — only
+  when >1 backend is configured — prints the `/backend` escape hatch (e.g.
+  "local oMLX unreachable — try /backend m5"). The status bar gains a `backend`
+  segment (mid drop-priority) only when >1 backend is configured; configs
+  without `backends:` synthesize a single "local" entry and behave identically
+  to the single-backend days. Benchmark/maintain read `omlx_base_url` only.
 - Different-model slot use sequences weight swaps via
   `Backend.unload_all_loaded` + `thermal_guard`; swap count + seconds are
   instrumented and surfaced; keep chat-slot model resident, group code work
