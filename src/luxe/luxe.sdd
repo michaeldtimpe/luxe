@@ -18,12 +18,19 @@ auto-memory.
   Sole sanctioned exception: `luxe chat` slots (chat/plan/code), opt-in via
   `configs/chat.yaml` `slots:`; default is champion-everywhere (no fan-out),
   scoped to the interactive front-end and never the benchmark/maintain path
+- Multi-backend endpoint selection (`backends:` map + `/backend`/`--backend`)
+  joins the slots carve-out: chat-only, config-sourced (BackendEntry =
+  base_url/api_key_env/timeout_s/default; keys resolve from env at Backend
+  construction, NEVER from YAML). When `backends:` is absent a single "local"
+  entry is synthesized from `omlx_base_url` so existing configs parse
+  identically; benchmark/maintain keep reading `omlx_base_url` only
 - All mono prompt edits go through `src/luxe/agents/prompts.py` registry
 - Pin `--work-dir ~/.luxe/bench-workspace` for bench runs (random tempdir leaks into prompts)
 - `oMLX` `idle_timeout_seconds: 1800` (null keeps models resident forever)
 - `--keep-loaded` for bench mode (post-run unload fires by default)
 
 ## Must not
+- No cloud provider backends (Anthropic/OpenAI/Gemini) — MLX/oMLX endpoints only
 - Read `origin/<branch>` in offline-cache repos (stale-ref trap; use local ref or sidecar regrade)
 - Use MoE Instruct-2507 model family (long-context fabrication, skips optional tool calls)
 - Use `--no-verify`, `--no-gpg-sign`, or other hook-skip flags

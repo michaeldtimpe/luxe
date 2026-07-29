@@ -138,6 +138,11 @@ class Backend:
         self,
         base_url: str = "http://127.0.0.1:8000",
         model: str = "",
+        # 600s suits the local box. Slow remote endpoints need more — dense
+        # 16384-tok turns over the m5 Tailscale link can run ~25 min, and a 600s
+        # read-timeout there left dead-request hangs. That case is now expressed
+        # per-endpoint via BackendEntry.timeout_s (configs/chat.yaml `backends:`
+        # m5 → 2400), NOT by raising this default.
         timeout_s: float = 600.0,
         api_key: str = "",
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,

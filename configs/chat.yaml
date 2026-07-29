@@ -1,5 +1,20 @@
 omlx_base_url: "http://127.0.0.1:8000"
 
+# Named oMLX endpoints for `luxe chat` (`/backend` to switch, `--backend` at
+# startup). CHAT-ONLY: benchmark/maintain keep reading omlx_base_url above.
+# API keys never live here — api_key_env names the env var resolved at Backend
+# construction (falls back to OMLX_API_KEY). m5's timeout_s is large because
+# dense 16384-tok turns over the Tailscale link can run ~25 min; 600s
+# read-timeouts left dead-request hangs.
+backends:
+  local:
+    base_url: "http://127.0.0.1:8000"
+    default: true
+  m5:
+    base_url: "http://m5.example.ts.net:8000"
+    api_key_env: OMLX_API_KEY_M5
+    timeout_s: 2400
+
 # Chat color palette (D2): the shipped default is the curated 'cool' palette,
 # resolved as `--theme` flag → LUXE_THEME env → 'cool'. Set `LUXE_THEME=auto` (or
 # `--theme auto`) to track your terminal/YASL theme instead; 'warm'/'mono' are the
