@@ -69,6 +69,23 @@ class PromptScreen(ModalScreen[str]):
         self.dismiss(self._default)
 
 
+class ChatInput(Input):
+    """The prompt input, paste-aware. Textual's stock Input keeps only the
+    FIRST line of a paste — silently destructive for multi-line pastes (code,
+    logs). Here: single-line pastes insert normally; multi-line pastes buffer
+    on the app and show a compact "[pasted N lines]" chip in the input, which
+    is expanded back to the full text at submit time."""
+
+    def _on_paste(self, event) -> None:
+        text = getattr(event, "text", "") or ""
+        if "\n" in text:
+            event.stop()
+            event.prevent_default()
+            self.app.buffer_paste(text)
+            return
+        super()._on_paste(event)
+
+
 class StatusBar(Static):
     """Bottom status bar — renders `status.fields()` fitted to width."""
 
@@ -98,8 +115,9 @@ class ChatApp(App):
     ]
 
     def __init__(self, cfg, repo_path, languages, *, session, slots, infer,
-                 keep_loaded=False):
+                 keep_loaded=False, resume_session_id=None):
         super().__init__()
+        self._resume_id = resume_session_id
         self.cfg = cfg
         self.repo_path = repo_path
         self.languages = languages
@@ -119,7 +137,8 @@ class ChatApp(App):
         self._ctx_pressure = 0.0          # live context pressure (on_progress)
         self._activity: str | None = None  # gitkit/compare set this for the live line
         self._timer = None
-        self._queue: list[str] = []        # type-ahead: messages submitted mid-run
+        self._queue: list[tuple[str, str]] = []  # type-ahead: (display, message) mid-run
+        self._paste_chunks: list[tuple[str, str]] = []  # (chip, full text) pending
         self._session_in = 0               # session cumulative prompt tokens
         self._session_out = 0              # session cumulative completion tokens
         self.ctx: cmd.CommandContext | None = None
@@ -140,7 +159,7 @@ class ChatApp(App):
         with Vertical(id="bottom"):
             yield Static("", id="generating")
             yield StatusBar(self)
-            yield Input(id="prompt", placeholder="message luxe — /help for commands")
+            yield ChatInput(id="prompt", placeholder="message luxe — /help for commands")
 
     def on_mount(self) -> None:
         from luxe.buildinfo import build_status_hint, version_parts
@@ -165,10 +184,16 @@ class ChatApp(App):
             console=LogConsole(self),
             session=self.session,
             slots=self.slots,
+            on_resume=self._resume_hook,
             on_git_analysis=self._git_hook,
             on_compare=self._compare_hook,
             on_compare_review=self._compare_review_hook,
         )
+        # `--resume <id>`: replay the prior transcript into the RichLog and seed
+        # the live session's turns before the first prompt (chat.sdd — resume no
+        # longer forces the line REPL).
+        if self._resume_id:
+            self._resume_hook(self._resume_id)
         self._input.focus()
 
     # -- helpers ------------------------------------------------------------
@@ -195,33 +220,61 @@ class ChatApp(App):
             pass
 
     # -- input --------------------------------------------------------------
+    def buffer_paste(self, text: str) -> None:
+        """Multi-line paste (from ChatInput): keep the full text aside and show
+        a compact chip in the input; `_expand_pastes` restores it at submit."""
+        n = len(text.splitlines())
+        chip = f"[pasted {n} lines]"
+        self._paste_chunks.append((chip, text))
+        if self._input is not None:
+            self._input.insert_text_at_cursor(chip)
+
+    def _expand_pastes(self, line: str) -> str:
+        """Replace each pending paste chip with its buffered text (in order);
+        chips the user deleted get their text appended so nothing is lost."""
+        for chip, text in self._paste_chunks:
+            if chip in line:
+                line = line.replace(chip, text, 1)
+            else:
+                line = f"{line}\n\n{text}" if line else text
+        self._paste_chunks = []
+        return line
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "prompt":
             return
         line = (event.value or "").strip()
         event.input.value = ""
-        if not line:
+        if not line and not self._paste_chunks:
+            return
+        # The transcript shows the compact chip form; the model gets the
+        # expanded text.
+        display = line
+        message = self._expand_pastes(line) if self._paste_chunks else line
+        if not message:
             return
         if self._busy:
             # Type-ahead: queue it and run after the current task (esc cancels the
             # current one). One run_single per turn is preserved.
-            self._queue.append(line)
-            self.write(f"[yellow]· queued[/] [dim]{line}[/]")
+            self._queue.append((display, message))
+            self.write(f"[yellow]· queued[/] [dim]{display}[/]")
             return
-        self._dispatch_line(line)
+        self._dispatch_line(display, message)
 
-    def _dispatch_line(self, line: str) -> None:
-        self.write(Text(f"❯ {line}", style="bold"))
-        if cmd.is_command(line):
-            self._run_command(line)
+    def _dispatch_line(self, display: str, message: str | None = None) -> None:
+        message = display if message is None else message
+        self.write(Text(f"❯ {display}", style="bold"))
+        if cmd.is_command(message):
+            self._run_command(message)
         else:
-            self._run_turn(line)
+            self._run_turn(message)
 
     def _maybe_drain(self) -> None:
         """Run the next queued message once the current task has finished."""
         if self._busy or not self._queue:
             return
-        self._dispatch_line(self._queue.pop(0))
+        display, message = self._queue.pop(0)
+        self._dispatch_line(display, message)
 
     def on_key(self, event) -> None:
         # ctrl+d on an empty prompt quits (Claude-CLI convention).
@@ -452,6 +505,19 @@ class ChatApp(App):
             "prompt_user must be called from a worker thread"
         return self.call_from_thread(self.push_screen_wait, PromptScreen(question, default))
 
+    def _resume_hook(self, session_id: str) -> None:
+        """/resume (and --resume on mount): replay a prior transcript into the
+        RichLog and extend the live session's turns. Runs on the UI thread at
+        mount and on a worker for /resume — LogConsole marshals worker writes
+        via call_from_thread."""
+        from luxe.chat import resume as resume_mod
+
+        console = LogConsole(self)
+        if not session_id:
+            resume_mod.list_resumable(console)
+            return
+        resume_mod.resume_into(session_id, self.session, console)
+
     # -- feature hooks (run on the worker; reader/console route to the TUI) --
     def _git_hook(self, kind: str, deep: bool | None = None) -> None:
         from luxe.gitkit import run_git_report
@@ -603,7 +669,8 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
     session.index_head = current_head(repo_path) if repo_path else ""
 
     app = ChatApp(cfg, repo_path, languages, session=session, slots=slots,
-                  infer=infer, keep_loaded=keep_loaded)
+                  infer=infer, keep_loaded=keep_loaded,
+                  resume_session_id=resume_session_id)
     try:
         app.run()
     finally:

@@ -241,8 +241,23 @@ never touches this module.
 
   | condition                                  | front-end          |
   |--------------------------------------------|--------------------|
-  | stdout is a TTY AND `textual` installed AND not `--resume` | Textual TUI |
-  | otherwise (CI, pipes, textual-absent, resume) | line REPL (`repl.py`) |
+  | stdout is a TTY AND `textual` installed    | Textual TUI        |
+  | otherwise (CI, pipes, textual-absent)      | line REPL (`repl.py`) |
+
+  `--resume <id>` rides EITHER front-end: the TUI takes a `resume_session_id`
+  kwarg and replays the prior transcript into the RichLog on mount
+  (`session_store.load_session` + `resume` pairing), seeding the live session's
+  turns; `/resume` inside the TUI goes through the same `on_resume` hook (worker
+  writes marshal via `call_from_thread`). The textual-absent fallback message
+  names the exact fix (`uv sync --extra chat`).
+
+  Paste handling (TUI): stock Textual Input keeps only the FIRST line of a
+  paste — silently destructive. `ChatInput` intercepts `Paste` events:
+  single-line pastes insert at the cursor as normal; multi-line pastes are
+  buffered on the app and shown as a compact `[pasted N lines]` chip in the
+  input, expanded back to the full text at submit (chip deleted by the user →
+  text appended instead, never dropped). The transcript echoes the chip form;
+  the model receives the expanded text.
 
   The line REPL keeps its prior behaviour: a `rich.Live` 3-line `LiveActivity`
   (preview · activity · status) when `console.is_terminal`, else `Status` + line
