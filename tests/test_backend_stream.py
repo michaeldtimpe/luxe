@@ -138,6 +138,27 @@ def test_stream_reconstructs_tool_calls_from_fragments():
     assert resp.finish_reason == "tool_calls"
 
 
+# --- timeout_s plumbing (multi-backend regression) --------------------------
+# The 2400s value briefly lived as a hardcoded Backend default (the m5-tunnel
+# hack); it now belongs to BackendEntry.timeout_s. Backend must keep its 600s
+# default AND honor an explicit per-endpoint override end-to-end.
+
+
+def test_backend_default_timeout_is_600():
+    b = Backend(model="test")
+    assert b.timeout_s == 600.0
+    assert b._client.timeout.read == 600.0
+    assert b._client.timeout.connect == 30.0
+
+
+def test_backend_timeout_override_plumbs_to_http_client():
+    b = Backend(model="test", timeout_s=2400.0)
+    assert b.timeout_s == 2400.0
+    assert b._client.timeout.read == 2400.0
+    # connect stays snappy even with a long read timeout
+    assert b._client.timeout.connect == 30.0
+
+
 def test_stream_request_includes_usage_options():
     captured: dict = {}
 

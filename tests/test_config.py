@@ -195,3 +195,99 @@ def test_unknown_slot_raises():
     )
     with pytest.raises(KeyError):
         cfg.model_for_slot("planner")
+
+
+# --- multi-backend `backends:` map (chat-only; synthesized when absent) ---
+
+def test_backends_absent_synthesizes_local_from_omlx_base_url(config_path: Path):
+    """Configs that predate `backends:` must parse identically: the raw field
+    stays empty, and backend_entries() synthesizes a single "local" entry
+    pointing at omlx_base_url with the stock Backend defaults."""
+    cfg = load_config(config_path)
+    assert cfg.backends == {}
+    entries = cfg.backend_entries()
+    assert list(entries) == ["local"]
+    entry = entries["local"]
+    assert entry.base_url == cfg.omlx_base_url
+    assert entry.api_key_env == "OMLX_API_KEY"
+    assert entry.timeout_s == 600.0
+    assert entry.default is False
+    assert cfg.default_backend_name() == "local"
+    assert cfg.backend_entry("local").base_url == cfg.omlx_base_url
+
+
+def test_backend_entry_defaults():
+    from luxe.config import BackendEntry
+    e = BackendEntry(base_url="http://x:8000")
+    assert e.api_key_env == "OMLX_API_KEY"
+    assert e.timeout_s == 600.0
+    assert e.default is False
+
+
+def test_backends_parse_from_yaml(tmp_path: Path):
+    overlay = tmp_path / "multi.yaml"
+    overlay.write_text(
+        "omlx_base_url: http://127.0.0.1:8000\n"
+        "backends:\n"
+        "  local: {base_url: 'http://127.0.0.1:8000', default: true}\n"
+        "  m5:\n"
+        "    base_url: 'http://m5.example.ts.net:8000'\n"
+        "    api_key_env: OMLX_API_KEY_M5\n"
+        "    timeout_s: 2400\n"
+        "models: {monolith: Champ}\n"
+        "roles:\n"
+        "  monolith: {model_key: monolith, tools: [read_file]}\n"
+        "task_types:\n"
+        "  review: {description: x, pipeline: [monolith]}\n"
+    )
+    cfg = load_config(overlay)
+    assert set(cfg.backends) == {"local", "m5"}
+    assert cfg.default_backend_name() == "local"
+    m5 = cfg.backend_entry("m5")
+    assert m5.base_url == "http://m5.example.ts.net:8000"
+    assert m5.api_key_env == "OMLX_API_KEY_M5"
+    assert m5.timeout_s == 2400.0
+    # keys are env-var NAMES only — never key material in YAML
+    assert "api_key" not in type(m5).model_fields
+
+
+def test_backend_entry_unknown_raises():
+    cfg = PipelineConfig(models={"monolith": "Champ"},
+                         roles={"monolith": RoleConfig(model_key="monolith")})
+    with pytest.raises(KeyError):
+        cfg.backend_entry("nope")
+
+
+def test_default_backend_name_falls_back_to_first_entry(tmp_path: Path):
+    """No entry flagged default → the first (insertion-order) entry wins."""
+    from luxe.config import BackendEntry
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        backends={"a": BackendEntry(base_url="http://a:8000"),
+                  "b": BackendEntry(base_url="http://b:8000")},
+    )
+    assert cfg.default_backend_name() == "a"
+
+
+def test_chat_yaml_ships_local_default_and_m5():
+    chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
+    cfg = load_config(chat_cfg)
+    assert cfg.default_backend_name() == "local"
+    assert cfg.backend_entry("local").base_url == "http://127.0.0.1:8000"
+    m5 = cfg.backend_entry("m5")
+    assert m5.base_url == "http://m5.tailca7308.ts.net:8000"
+    assert m5.api_key_env == "OMLX_API_KEY_M5"
+    assert m5.timeout_s == 2400.0
+
+
+def test_dense_m5_yaml_defaults_to_m5_backend():
+    """The dense-27B-on-m5 config folds the old hardcoded-timeout/tunnel hack
+    into the backends scheme: m5 is the default entry with the long timeout."""
+    p = Path(__file__).parent.parent / "configs" / "dense_27b_6bit_m5.yaml"
+    cfg = load_config(p)
+    assert cfg.default_backend_name() == "m5"
+    assert cfg.backend_entry("m5").timeout_s == 2400.0
+    assert cfg.backend_entry("local").base_url == "http://127.0.0.1:8000"
+    # non-chat paths keep reading omlx_base_url → also m5
+    assert cfg.omlx_base_url == cfg.backend_entry("m5").base_url

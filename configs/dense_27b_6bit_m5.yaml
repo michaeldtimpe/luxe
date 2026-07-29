@@ -1,19 +1,19 @@
-omlx_base_url: "http://127.0.0.1:8000"
+# Dense 27B served by the M5 over Tailscale. omlx_base_url points straight at
+# the m5 endpoint for any non-chat path; `luxe chat` uses the `backends:` map
+# below (m5 default here, `/backend local` to hop back). The 2400s timeout
+# replaces the old hardcoded Backend hack: dense 16384-tok turns can run
+# ~25 min, and a 600s read-timeout over the tunnel left dead-request hangs.
+# This file supersedes the earlier 127.0.0.1:8001 SSH-tunnel variant.
+omlx_base_url: "http://m5.tailca7308.ts.net:8000"
 
-# Named oMLX endpoints for `luxe chat` (`/backend` to switch, `--backend` at
-# startup). CHAT-ONLY: benchmark/maintain keep reading omlx_base_url above.
-# API keys never live here — api_key_env names the env var resolved at Backend
-# construction (falls back to OMLX_API_KEY). m5's timeout_s is large because
-# dense 16384-tok turns over the Tailscale link can run ~25 min; 600s
-# read-timeouts left dead-request hangs.
 backends:
-  local:
-    base_url: "http://127.0.0.1:8000"
-    default: true
   m5:
     base_url: "http://m5.tailca7308.ts.net:8000"
     api_key_env: OMLX_API_KEY_M5
     timeout_s: 2400
+    default: true
+  local:
+    base_url: "http://127.0.0.1:8000"
 
 # Chat color palette (D2): the shipped default is the curated 'cool' palette,
 # resolved as `--theme` flag → LUXE_THEME env → 'cool'. Set `LUXE_THEME=auto` (or
@@ -30,7 +30,7 @@ models:
   # The pinned champion. Add more entries here to point a chat slot at a
   # different MLX model the oMLX server can load, e.g.:
   #   coder_30b: "Qwen3-Coder-Next-80B"
-  monolith: "Qwen3.6-35B-A3B-6bit"
+  monolith: "Qwen3.6-27B-6bit"
 
 roles:
   monolith:

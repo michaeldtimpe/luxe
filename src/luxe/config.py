@@ -9,6 +9,24 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+class BackendEntry(BaseModel):
+    """One named oMLX endpoint for the interactive `luxe chat` front-end.
+
+    Chat-only (like `slots:`): the benchmark/maintain path keeps reading
+    `omlx_base_url` and never consults `backends:`. API keys are NEVER stored
+    in YAML — `api_key_env` names the environment variable holding the key,
+    resolved at Backend construction time (Backend falls back to OMLX_API_KEY
+    when the variable is empty/unset). `timeout_s` exists because remote
+    endpoints (e.g. m5 over Tailscale running dense 16384-tok turns, ~25 min)
+    need a far larger read timeout than the local default.
+    """
+
+    base_url: str
+    api_key_env: str = "OMLX_API_KEY"
+    timeout_s: float = 600.0
+    default: bool = False
+
+
 class RoleConfig(BaseModel):
     model_key: str
     num_ctx: int = 8192
@@ -78,6 +96,11 @@ class ProfileConfig(BaseModel):
 
 class PipelineConfig(BaseModel):
     omlx_base_url: str = "http://127.0.0.1:8000"
+    # Named oMLX endpoints for `luxe chat` (`/backend`, `--backend`). Chat-only;
+    # when absent, `backend_entries()` synthesizes {"local": omlx_base_url} so
+    # every existing config parses (and behaves) identically. The benchmark/
+    # maintain path reads omlx_base_url only.
+    backends: dict[str, BackendEntry] = Field(default_factory=dict)
     profile: ProfileConfig = Field(default_factory=ProfileConfig)
     models: dict[str, str] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
@@ -114,6 +137,32 @@ class PipelineConfig(BaseModel):
         sc = self.slot_config(slot)
         key = sc.model_key or self.role("monolith").model_key
         return self.models[key]
+
+    # -- multi-backend (chat-only) -------------------------------------------
+
+    def backend_entries(self) -> dict[str, BackendEntry]:
+        """The configured `backends:` map, or a synthesized single "local"
+        entry built from `omlx_base_url` when the block is absent — so configs
+        that predate multi-backend behave identically."""
+        if self.backends:
+            return self.backends
+        return {"local": BackendEntry(base_url=self.omlx_base_url)}
+
+    def backend_entry(self, name: str) -> BackendEntry:
+        entries = self.backend_entries()
+        if name not in entries:
+            raise KeyError(
+                f"Unknown backend: {name!r}. Available: {list(entries)}")
+        return entries[name]
+
+    def default_backend_name(self) -> str:
+        """The entry flagged `default: true`, else the first entry (insertion
+        order — synthesized configs have exactly one, "local")."""
+        entries = self.backend_entries()
+        for name, entry in entries.items():
+            if entry.default:
+                return name
+        return next(iter(entries))
 
     def task_type(self, name: str) -> TaskTypeConfig:
         if name not in self.task_types:
