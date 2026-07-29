@@ -370,7 +370,8 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     from luxe.state.ledger import make_update_ledger_tool
 
     task_type = infer(message)
-    slot = session.pinned_slot or _SLOT_FOR_TASK.get(task_type, "chat")
+    pinned = session.pinned_slot
+    slot = pinned or _SLOT_FOR_TASK.get(task_type, "chat")
     session.pinned_slot = None
 
     model = slots.model_for(slot)
@@ -383,14 +384,21 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     write_on = session.write_enabled and not plan_mode
     role_cfg = base_role if write_on else make_read_only_role(base_role)
 
-    # The chat slot is the conversational catch-all (greetings, small talk,
-    # general Q&A). Give it a conversational persona so it answers directly
-    # instead of running the code-maintenance orientation loop (a bare "hello"
-    # used to list dirs + read the README). The focused code/plan slots keep the
-    # baseline maintenance/planning prompts. Skipped for /plan drafting and
-    # autonomous /goal rounds, which are genuine task turns even though "continue
-    # work" routes here. Prompt ids resolve in the registry (chat.sdd).
-    if slot == "chat" and not plan_mode and not session.goal_active:
+    # EVERY freeform interactive turn gets the conversational persona — chat is
+    # a conversation, not a batch job. Keying this on `slot == "chat"` (the
+    # 2026-06-30 version) was the "chats become coding sessions" bug: the slot
+    # is picked by `_infer_task_type`, a keyword heuristic built for `luxe
+    # maintain` goals, so ordinary messages containing "add"/"change"/
+    # "explain"/"fix"/… routed to the code/plan slots and inherited the
+    # baseline repo-maintenance persona (+ the config's task overlay) — repo
+    # orientation loops and "final reports" for plain questions. Slot routing
+    # still picks the MODEL (fan-out configs); the persona now follows the
+    # turn KIND instead. The task personas remain for the explicit task modes:
+    # /plan drafting (plan_mode), autonomous /goal rounds (goal_active), and a
+    # user-pinned `/use <slot>` turn. The conversational prompt still does
+    # real work — it reads/edits via tools when the message calls for it.
+    # Prompt ids resolve in the registry (chat.sdd).
+    if pinned is None and not plan_mode and not session.goal_active:
         role_cfg = role_cfg.model_copy(update={
             "system_prompt_id": "chat_conversational",
             "task_prompt_id": "chat_conversational",

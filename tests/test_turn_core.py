@@ -106,9 +106,54 @@ def test_chat_slot_gets_conversational_persona(_ctx, monkeypatch):
     assert prep.role_cfg.task_prompt_id == "chat_conversational"
 
 
-def test_code_slot_keeps_baseline_persona(_ctx, monkeypatch):
-    """Focused work (implement → code slot) is untouched by the chat swap."""
+def test_freeform_codey_message_stays_conversational(_ctx, monkeypatch):
+    """Regression (2026-07-29 'chats become coding sessions'): the keyword
+    heuristic routes 'add …' to the code slot, but an unpinned freeform turn
+    must STILL get the conversational persona (and no task overlay) — the slot
+    only picks the model. Previously the persona was keyed on slot == 'chat',
+    so this message inherited the repo-maintenance persona."""
     cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("add a feature", session, sm, cfg, frozenset(),
+                             lambda m: "implement")
+    assert prep.slot == "code"     # model routing unchanged
+    assert prep.role_cfg.system_prompt_id == "chat_conversational"
+    assert prep.role_cfg.task_prompt_id == "chat_conversational"
+    assert prep.role_cfg.task_overlay_id == ""
+
+
+def test_freeform_turn_clears_config_task_overlay(_ctx, monkeypatch):
+    """chat.yaml ships task_overlay_id on the monolith role; a conversational
+    turn must not drag the manage/strict overlay along."""
+    cfg, session, sm = _ctx
+    cfg.roles["monolith"].task_overlay_id = "manage_strict_only"
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("can you explain how this repo builds?", session,
+                             sm, cfg, frozenset(), lambda m: "summarize")
+    assert prep.role_cfg.task_overlay_id == ""
+    assert prep.role_cfg.system_prompt_id == "chat_conversational"
+
+
+def test_real_inference_heuristic_no_longer_flips_persona(_ctx, monkeypatch):
+    """End-to-end with the REAL maintain heuristic (`cli._infer_task_type`):
+    casual messages full of trigger keywords stay conversational."""
+    from luxe.cli import _infer_task_type
+
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    for msg in ("explain the difference between threads and processes",
+                "I want to change my flight to Tuesday",
+                "how do I fix a flat tire?"):
+        prep = repl.prepare_turn(msg, session, sm, cfg, frozenset(),
+                                 _infer_task_type)
+        assert prep.role_cfg.system_prompt_id == "chat_conversational", msg
+
+
+def test_use_pinned_slot_keeps_baseline_persona(_ctx, monkeypatch):
+    """`/use code` is an explicit task escalation: the pinned turn keeps the
+    baseline maintenance persona."""
+    cfg, session, sm = _ctx
+    session.pinned_slot = "code"
     monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("add a feature", session, sm, cfg, frozenset(),
                              lambda m: "implement")
