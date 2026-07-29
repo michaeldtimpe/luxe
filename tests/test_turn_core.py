@@ -167,6 +167,21 @@ def test_finalize_turn_builds_outcome_and_persists(_ctx, monkeypatch):
     assert session.turns and session.turns[-1].assistant == "the answer"
 
 
+def test_finalize_turn_stamps_backend_on_assistant_record(_ctx, monkeypatch):
+    import json
+
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
+    result = prep.call(lambda tc: None, None, None)
+    repl.finalize_turn(session, prep, result, interrupted=False,
+                       message="hello", started_at=1.0, ended_at=2.0)
+    tp = session_store.session_dir(session.session_id) / "transcript.jsonl"
+    records = [json.loads(l) for l in tp.read_text().splitlines()]
+    assistant = [r for r in records if r["kind"] == "assistant"]
+    assert assistant and assistant[-1]["backend"] == "local"
+
+
 def test_line_run_turn_still_works_headless(_ctx, monkeypatch):
     """The non-terminal line path runs end-to-end through the new core."""
     cfg, session, sm = _ctx

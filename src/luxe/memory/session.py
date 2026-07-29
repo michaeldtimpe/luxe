@@ -40,6 +40,11 @@ class SessionMeta:
     # so a resumed session shows what drove it.
     slot_models: dict[str, str] = field(default_factory=dict)
     title: str = ""
+    # Multi-backend provenance (additive, 2026-07): which configured oMLX
+    # endpoint the session started on. Old metas without these load fine
+    # (from_dict filters to known fields); "" = predates multi-backend.
+    backend_name: str = ""
+    base_url: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -68,6 +73,8 @@ def new_session(
     config_path: str = "",
     slot_models: dict[str, str] | None = None,
     title: str = "",
+    backend_name: str = "",
+    base_url: str = "",
 ) -> SessionMeta:
     meta = SessionMeta(
         repo_path=repo_path,
@@ -75,6 +82,8 @@ def new_session(
         config_path=config_path,
         slot_models=dict(slot_models or {}),
         title=title,
+        backend_name=backend_name,
+        base_url=base_url,
     )
     session_dir(meta.session_id).mkdir(parents=True, exist_ok=True)
     _write_meta(meta)

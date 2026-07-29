@@ -596,7 +596,9 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
 
     meta = session_store.new_session(repo_path=repo_path,
                                      project_hash=session.project_hash,
-                                     slot_models=slots.slot_models())
+                                     slot_models=slots.slot_models(),
+                                     backend_name=slots.backend_name,
+                                     base_url=slots.backend.base_url)
     session.session_id = meta.session_id
     session.index_head = current_head(repo_path) if repo_path else ""
 
