@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from luxe.backend import Backend, BackendError
+from luxe.chat import origin as origin_mod
 from luxe.config import BackendEntry, PipelineConfig
 
 _SLOTS = ("chat", "plan", "code")
@@ -146,6 +147,12 @@ class SlotManager:
         # Unknown residency on the new server: force the next backend_for() to
         # confirm/load the target there (never unloads the old server).
         self._resident = ""
+        # Prime this endpoint's model provenance while we're off the UI thread,
+        # so the status bar's origin marker is right from the first render.
+        try:
+            origin_mod.origins_for_backend(backend)
+        except Exception:
+            pass
         return dropped
 
     def unreachable_hint(self) -> str | None:
@@ -173,8 +180,17 @@ class SlotManager:
 
     def _swap_to(self, target: str, slot: str) -> None:
         if self._on_status:
+            # Say where the incoming weights come from — a swap that streams
+            # ~30 GB off a NAS or hits a remote host should never look like a
+            # local disk read (chat/origin.py).
+            try:
+                org = origin_mod.origin_for(self.backend, target)
+                whence = f" · {org.glyph} {org.label}"
+            except Exception:
+                whence = ""
             self._on_status(
-                f"swapping weights: {self._resident} → {target} (slot: {slot})"
+                f"swapping weights: {self._resident} → {target} "
+                f"(slot: {slot}){whence}"
             )
         t0 = time.monotonic()
         # Free the doubled RAM before loading the new weights.
@@ -192,3 +208,10 @@ class SlotManager:
             self.backend.unload_all_loaded()
         except Exception:
             pass
+
+    def forget_resident(self) -> None:
+        """Drop our belief about what's in RAM, so the next turn re-confirms
+        and reloads. Call after unloading behind the manager's back (`/unload`)
+        — otherwise `backend_for` thinks the target is still resident and skips
+        the load."""
+        self._resident = ""

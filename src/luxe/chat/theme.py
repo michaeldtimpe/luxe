@@ -208,6 +208,11 @@ def list_palettes() -> list[str]:
     return ["auto", *_PALETTES]
 
 
+def active_palette() -> str:
+    """Name of the palette in force ('auto' = tracking the terminal theme)."""
+    return _active_palette or "auto"
+
+
 _cache: dict[str, tuple[str, str]] | None = None
 
 

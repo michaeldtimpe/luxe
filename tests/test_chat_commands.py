@@ -293,3 +293,256 @@ def test_git_analysis_no_repo_points_at_cli(ctx):
     assert seen == []  # hook NOT called when no repo is bound
     out = _text(ctx)
     assert "luxe gitaudit" in out
+
+
+# --- /model provenance markers ----------------------------------------------
+
+
+def test_model_list_flags_where_each_model_lives(ctx, tmp_path, monkeypatch):
+    """`/model` must say which models are on this disk and which come over the
+    network — the distinction was invisible before 2026-07-29."""
+    from luxe.chat import origin as origin_mod
+
+    origin_mod.reset_cache()
+    mount = tmp_path / "Volumes" / "nas"
+    monkeypatch.setattr(origin_mod, "network_mounts",
+                        lambda **k: [(str(mount), "smbfs", "//kappa/models")])
+    monkeypatch.setattr(ctx.slots.backend, "model_paths",
+                        lambda: {"Champ": str(tmp_path / "local" / "Champ"),
+                                 "Faraway": str(mount / "Faraway")},
+                        raising=False)
+    monkeypatch.setattr(ctx.slots, "available_models",
+                        lambda: ["Champ", "Faraway"])
+
+    cmd.dispatch("/model", ctx)
+    out = _text(ctx)
+
+    assert "⌂ local" in out          # on this disk
+    assert "☁ network" in out        # streams over SMB
+    assert "⌂ local disk" in out     # legend
+    origin_mod.reset_cache()
+
+
+# --- /pull ------------------------------------------------------------------
+
+
+class _FakeAdmin:
+    """Stands in for OmlxAdmin: records calls, never touches the network."""
+
+    started: list = []
+
+    def __init__(self, *a, **k):
+        self.base_url = k.get("base_url", "")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+    def tasks(self):
+        return []
+
+    def search(self, query, **k):
+        from luxe.modelstore import HFModel
+        return [HFModel(repo_id=f"mlx-community/{query}-4bit", downloads=7,
+                        size_bytes=1024)]
+
+    def model_info(self, repo_id):
+        return {"size": 2048}
+
+    def start_download(self, repo_id, hf_token=""):
+        from luxe.modelstore import DownloadTask
+        type(self).started.append(repo_id)
+        return DownloadTask(task_id="t1", repo_id=repo_id, status="pending",
+                            total_size=2048)
+
+    def wait_for(self, task_id, **k):
+        from luxe.modelstore import DownloadTask
+        return DownloadTask(task_id=task_id, repo_id="org/Champ",
+                            status="completed", progress=100,
+                            total_size=2048, downloaded_size=2048)
+
+
+@pytest.fixture
+def _no_network_pull(monkeypatch):
+    from luxe import modelstore as ms
+
+    _FakeAdmin.started = []
+    monkeypatch.setattr(ms, "OmlxAdmin", _FakeAdmin)
+    monkeypatch.setattr(ms, "network_mounts", lambda: [])
+    return _FakeAdmin
+
+
+def test_pull_bare_lists_local_models(ctx, _no_network_pull, monkeypatch):
+    from luxe import modelstore as ms
+
+    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: ["Champ"])
+    cmd.dispatch("/pull", ctx)
+    out = _text(ctx)
+    assert "Local models" in out and "Champ" in out
+
+
+def test_pull_search_lists_hf_hits(ctx, _no_network_pull):
+    cmd.dispatch("/pull --search Qwen", ctx)
+    assert "mlx-community/Qwen-4bit" in _text(ctx)
+
+
+def test_pull_previews_before_transferring(ctx, _no_network_pull, monkeypatch):
+    from luxe import modelstore as ms
+
+    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: [])
+    cmd.dispatch("/pull org/Champ", ctx)
+    out = _text(ctx)
+    assert "HuggingFace" in out
+    assert "--yes" in out                       # consent step is explicit
+    assert _FakeAdmin.started == []             # nothing transferred yet
+
+
+def test_pull_yes_starts_the_download(ctx, _no_network_pull, monkeypatch):
+    from luxe import modelstore as ms
+
+    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: [])
+    cmd.dispatch("/pull org/Champ --yes", ctx)
+    assert _FakeAdmin.started == ["org/Champ"]
+    assert "downloaded" in _text(ctx)
+
+
+def test_pull_refuses_a_model_already_in_the_store(ctx, _no_network_pull, monkeypatch):
+    from luxe import modelstore as ms
+
+    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: ["Champ"])
+    cmd.dispatch("/pull org/Champ --yes", ctx)
+    assert "--force" in _text(ctx)
+    assert _FakeAdmin.started == []
+
+
+def test_pull_reports_when_there_is_no_source(ctx, _no_network_pull):
+    cmd.dispatch("/pull JustAName --yes", ctx)
+    assert "Nowhere to pull" in _text(ctx)
+
+
+def test_pull_from_a_local_dir_imports_it(ctx, _no_network_pull, tmp_path, monkeypatch):
+    from luxe import modelstore as ms
+
+    src = tmp_path / "nas" / "Champ"
+    src.mkdir(parents=True)
+    (src / "config.json").write_text("{}")
+    (src / "model.safetensors").write_bytes(b"\0" * 256)
+    store = tmp_path / "store"
+    monkeypatch.setattr(ms, "DEFAULT_MODELS_DIR", store)
+    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: [])
+
+    cmd.dispatch(f"/pull Champ --from {src} --yes", ctx)
+
+    assert (store / "Champ" / "config.json").exists()
+    assert "✓" in _text(ctx)
+
+
+def test_pull_surfaces_admin_errors(ctx, monkeypatch):
+    from luxe import modelstore as ms
+
+    class Broken(_FakeAdmin):
+        def search(self, query, **k):
+            raise ms.ModelStoreError("oMLX admin unreachable at http://x")
+
+    monkeypatch.setattr(ms, "OmlxAdmin", Broken)
+    cmd.dispatch("/pull --search Qwen", ctx)
+    assert "unreachable" in _text(ctx)
+
+
+# --- /theme /tools /status /unload /retry ------------------------------------
+
+
+def test_theme_lists_palettes_and_marks_active(ctx):
+    from luxe.chat import theme as theme_mod
+
+    theme_mod.set_palette("auto")
+    cmd.dispatch("/theme", ctx)
+    out = _text(ctx)
+    for name in theme_mod.list_palettes():
+        assert name in out
+    assert "active" in out
+
+
+def test_theme_switches_the_palette(ctx):
+    from luxe.chat import theme as theme_mod
+
+    try:
+        cmd.dispatch("/theme cool", ctx)
+        assert theme_mod.active_palette() == "cool"
+        cmd.dispatch("/theme auto", ctx)
+        assert theme_mod.active_palette() == "auto"
+    finally:
+        theme_mod.set_palette(None)
+
+
+def test_theme_rejects_unknown_palette(ctx):
+    from luxe.chat import theme as theme_mod
+
+    cmd.dispatch("/theme neon", ctx)
+    assert "Unknown palette" in _text(ctx)
+    assert theme_mod.active_palette() == "auto"
+
+
+def test_tools_separates_active_from_read_only_gated(ctx):
+    ctx.slots.cfg.roles["monolith"].tools = ["read_file", "grep", "write_file",
+                                             "edit_file", "bash"]
+    cmd.dispatch("/tools", ctx)
+    out = _text(ctx)
+    assert "read_file" in out and "grep" in out
+    assert "Gated by read-only mode" in out
+    assert "/write" in out
+
+
+def test_tools_shows_everything_in_write_mode(ctx):
+    ctx.slots.cfg.roles["monolith"].tools = ["read_file", "write_file", "bash"]
+    ctx.session.write_enabled = True
+    cmd.dispatch("/tools", ctx)
+    out = _text(ctx)
+    assert "Gated by read-only mode" not in out
+    assert "allowlisted" in out          # bash mode is spelled out
+
+
+def test_status_reports_the_session(ctx):
+    cmd.dispatch("/status", ctx)
+    out = _text(ctx)
+    for key in ("repo", "backend", "model", "weights", "mode", "turns"):
+        assert key in out
+
+
+def test_unload_frees_ram_and_forgets_residency(ctx, monkeypatch):
+    unloaded: list = []
+    monkeypatch.setattr(ctx.slots.backend, "loaded_models", lambda: ["Champ"],
+                        raising=False)
+    monkeypatch.setattr(ctx.slots.backend, "unload_all_loaded",
+                        lambda **k: (unloaded.append("Champ"), {"Champ": True})[1],
+                        raising=False)
+    ctx.slots._resident = "Champ"
+
+    cmd.dispatch("/unload", ctx)
+
+    assert unloaded == ["Champ"]
+    assert ctx.slots.resident == ""          # next turn reloads
+    assert "unloaded Champ" in _text(ctx)
+
+
+def test_unload_with_nothing_loaded(ctx, monkeypatch):
+    monkeypatch.setattr(ctx.slots.backend, "loaded_models", lambda: [], raising=False)
+    cmd.dispatch("/unload", ctx)
+    assert "nothing loaded" in _text(ctx)
+
+
+def test_retry_resubmits_the_last_user_message(ctx):
+    from luxe.chat.session import ChatTurn
+
+    ctx.session.add_turn(ChatTurn(user="fix the parser", assistant="done"))
+    res = cmd.dispatch("/retry", ctx)
+    assert res.submit == "fix the parser"
+    assert "retrying" in _text(ctx)
+
+
+def test_retry_with_no_history(ctx):
+    res = cmd.dispatch("/retry", ctx)
+    assert res.submit == ""
+    assert "Nothing to retry" in _text(ctx)

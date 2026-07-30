@@ -25,7 +25,6 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-from luxe.chat.session import tier_label
 
 # Colours follow the user's ACTIVE Claude statusline theme (resolved live by
 # `chat/theme.py`): each span is styled by a theme ROLE (pwd/branch/commit/dirty/
@@ -243,6 +242,17 @@ class StatusState:
     steps: int = 0
     has_turn: bool = False
     opened_at: float = 0.0  # session start (epoch); 0 = unknown
+    # Provenance of `model` (chat/origin.py): local | network | remote |
+    # unknown. Rendered as a glyph in front of the model name so a session that
+    # streams weights off a NAS — or talks to another machine — never looks
+    # like a local one. Set by the front-ends; never resolved during a render
+    # (the lookup can do HTTP).
+    model_origin: str = "unknown"
+
+
+# Model-provenance markers (chat/origin.ModelOrigin.kind). "unknown" gets no
+# glyph — an old oMLX that doesn't report model paths shouldn't add noise.
+_ORIGIN_GLYPHS = {"local": "⌂", "network": "☁", "remote": "⇅"}
 
 
 def _short_model(model: str) -> str:
@@ -343,8 +353,17 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     # then the model name in the theme `model` role.
     segs.append(Segment([_S(state.slot, theme_mod.styles_for("slot"))], priority=2))
     model = state.model or slots.model_for("chat")
-    segs.append(Segment([_S(_short_model(model), theme_mod.styles_for("model"))],
-                        priority=1))
+    # Origin glyph rides WITH the model name (same protected segment): ⌂ local
+    # disk · ☁ network-backed weights · ⇅ remote endpoint. Network/remote are
+    # warn-coloured — that's a turn crossing the wire, which the bar used to
+    # hide entirely.
+    spans: list[Span] = []
+    glyph = _ORIGIN_GLYPHS.get(state.model_origin)
+    if glyph:
+        spans.append(_S(glyph + " ", theme_mod.styles_for(
+            "warn" if state.model_origin in ("network", "remote") else "muted")))
+    spans.append(_S(_short_model(model), theme_mod.styles_for("model")))
+    segs.append(Segment(spans, priority=1))
 
     return segs
 
