@@ -362,6 +362,24 @@ never touches this module.
   benchmark/maintain path passes no extra tools, so its bash stays allowlisted.
 - `luxe chat --dev` starts with write + unrestricted bash ON (sticky equivalent
   of `/write` + `/bash`), so dev work doesn't re-toggle each session
+- MCP tools in chat (2026-07-30, cli `--mcp <name>`; repeatable). Servers come
+  from the MCP config (`--mcp-config <path>`, default configs/mcp.yaml);
+  `streamable_http` transport carries auth via `api_key_env` (credential
+  resolved through luxe.secrets: env → ~/.luxe/secrets.env → keychain — the
+  VALUE never appears in YAML, same rule as backends). The discovered surface
+  is published module-level in `chat/mcptools.py` (like `search.set_index`) and
+  injected by `prepare_turn` through the extra-tool seam, so both front-ends
+  get it without signature churn. Gating: tools matching the server's
+  `gate_tools` fnmatch patterns mutate remote state and follow the /write gate
+  exactly like the native mutation surface; `--mcp-read-only` drops them
+  entirely. `only_tools` filters discovery. A server that fails to connect is
+  reported loudly and skipped — an unreachable relay must not stop a chat
+  session from starting (fallback-kit rule). `/tools` lists the MCP surface
+  with its gating. The benchmark/maintain path reads `enabled_for` from
+  configs/mcp.yaml as before and never touches `chat/mcptools.py`.
+- `--ctx <tier>` (chat/code startup flag) = `/ctx` before the first turn: sets
+  `session.num_ctx_override`, clamped per-turn to the box/model ceiling exactly
+  as `/ctx` is. Benchmark/maintain unaffected.
 - Defaults stay safe (read-only + allowlisted bash) but the state must be VISIBLE
   and flag-gated failures must be SELF-EXPLAINING: write mode (non-dev) injects
   `restricted_bash_def()` + `make_bash_fn(restricted_hint=True)` so an
