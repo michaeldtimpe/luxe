@@ -479,6 +479,49 @@ bench runner resumption decisions.
 
 Tests run without a live oMLX server (HTTP transport mocked).
 
+## Self-testing luxe (the fallback-kit drills)
+
+The unit suite proves the code; these prove **this host works right now** —
+real weights, real generations, deterministic verification. Luxe is the
+fleet's fallback dev tool, and an unproven fallback is no fallback: run the
+drills after provisioning, after `luxe update`, and on a whim.
+
+```bash
+luxe smoke                    # serving drill: manifest → weights on disk →
+                              # endpoint → catalog → one real turn + tool call
+                              # on main → one turn on the fallback. Exit 0 = READY.
+
+luxe smoke --chat --code      # agentic drills, in a planted scratch git repo:
+                              #   --chat  read-only turn that must READ a file
+                              #           to recover a magic word (never in the
+                              #           prompt)
+                              #   --code  fix a planted bug + failing test; luxe
+                              #           verifies with pytest + git diff — never
+                              #           by trusting the model's word
+                              # Scratch repo kept on failure (path printed).
+
+luxe smoke --code --backend m5   # drill a REMOTE host's manifest model from here
+```
+
+Escalation ladder when something feels off:
+
+1. `luxe smoke` (seconds) — is the host alive at all?
+2. `luxe smoke --chat --code` (a minute) — does the agentic pipeline work?
+3. **Headless scripted session** — reproduce anything a REPL session does:
+   `printf 'your message\n/quit\n' | luxe chat --repo <dir>` (no TTY → line
+   REPL; slash commands work, so `/doctor`, `/model`, `/write` + a task are
+   all scriptable). Feed multi-line prompts from a file — shell quoting eats
+   embedded quotes.
+4. **Post-hoc forensics** — every session already wrote the evidence:
+   `~/.luxe/sessions/<id>/debug.log` (always-on), `transcript.jsonl`
+   (incl. `error` records), and per-turn `~/.luxe/runs/<session>-<turn>/
+   events.jsonl` with every tool call. Nothing needs reproducing to be
+   diagnosed.
+
+`/doctor` inside any session runs the config/weights/index checks live
+(including manifest weight presence and an update-staleness check), and
+`luxe update` → re-drill is the whole maintenance ritual.
+
 ## Research notes
 
 External-project teardowns kept for cross-pollination. These also touch

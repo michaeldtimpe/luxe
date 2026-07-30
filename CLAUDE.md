@@ -75,6 +75,12 @@ when reached for — availability over capability. Concretely:
   turns in a planted scratch repo (--code = fix a bug + failing test,
   verified by pytest + git diff; --chat = read-only file-grounded answer).
   `--backend m5` drills a remote host's manifest models from here.
+  Headless diagnostics: pipe turns into the line REPL
+  (`printf 'msg\n/quit\n' | luxe chat --repo <dir>`); post-hoc forensics in
+  `~/.luxe/sessions/<id>/` (debug.log, transcript) + `~/.luxe/runs/`.
+  See README § "Self-testing luxe". Chat bash runs with luxe's venv bin
+  prepended to PATH (tools/shell.py `_chat_bash_env`) so agent test runs
+  (`pytest`) work on every host — bench bash env untouched.
 - **Every session writes `~/.luxe/sessions/<id>/debug.log`** (always-on;
   chat/debuglog.py) and failed turns persist kind="error" transcript records —
   post-outage diagnosis must not depend on what the TUI happened to show.
