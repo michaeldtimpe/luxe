@@ -82,7 +82,12 @@ def _validate_command(command: str) -> tuple[list[str], str | None]:
 _UNRESTRICTED_TIMEOUT = 600
 
 
-def _bash(args: dict[str, Any], *, unrestricted: bool = False) -> tuple[str, str | None]:
+def _bash(args: dict[str, Any], *, unrestricted: bool = False,
+          env: dict[str, str] | None = None) -> tuple[str, str | None]:
+    """`env=None` (the default, and the ONLY value the benchmark path ever
+    passes) inherits the process environment unchanged — byte-identical
+    behaviour. The chat front-end passes an augmented env (see
+    make_bash_fn)."""
     repo_root = get_repo_root()
     if repo_root is None:
         return "", "Repo root not set"
@@ -108,6 +113,7 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False) -> tuple[str, str
             command, shell=True,
             capture_output=True, text=True,
             cwd=repo_root, timeout=timeout,
+            env=env,   # None (bench default) == inherit, unchanged
         )
         output = proc.stdout + proc.stderr
         if len(output) > _MAX_OUTPUT:
@@ -124,14 +130,36 @@ _FLAG_GATED_MARKERS = ("not in allowlist", "operators not allowed",
                        "substitution not allowed")
 
 
+def _chat_bash_env() -> dict[str, str]:
+    """Chat-only subprocess env: luxe's venv bin prepended to PATH so
+    `python`/`python3`/`pytest` always resolve to an interpreter that HAS
+    pytest. Motivation (2026-07-30 m1-vs-m5 head-to-head): the m5's default
+    PATH had no `python`, so a write-mode agent could build but not run the
+    tests — exit 127 in the exact "fix it and verify" flow the fallback kit
+    exists for. Host PATH still wins for everything not in the venv."""
+    import os
+    import sys
+    from pathlib import Path
+
+    venv_bin = str(Path(sys.executable).parent)
+    env = dict(os.environ)
+    env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
+    return env
+
+
 def make_bash_fn(*, unrestricted: bool = False, restricted_hint: bool = False) -> ToolFn:
-    """Build a bash tool fn. `unrestricted=True` (chat dev mode) drops the
-    allowlist + chain/redirect guards. `restricted_hint=True` (chat write mode,
-    bash still allowlisted) front-loads a flag-state explanation onto any
-    allowlist/chain/substitution rejection so the output reflects WHY it failed
-    and how to fix it — instead of the model silently retrying variants."""
+    """Build a CHAT bash tool fn (the benchmark path uses the module-level
+    default, which never comes through here). `unrestricted=True` (chat dev
+    mode) drops the allowlist + chain/redirect guards. `restricted_hint=True`
+    (chat write mode, bash still allowlisted) front-loads a flag-state
+    explanation onto any allowlist/chain/substitution rejection so the output
+    reflects WHY it failed and how to fix it — instead of the model silently
+    retrying variants. Both variants run with the venv-augmented PATH
+    (_chat_bash_env) so test runs work on every fleet host."""
+    env = _chat_bash_env()
+
     def _fn(args: dict[str, Any]) -> tuple[str, str | None]:
-        out, err = _bash(args, unrestricted=unrestricted)
+        out, err = _bash(args, unrestricted=unrestricted, env=env)
         if err and restricted_hint and any(m in err for m in _FLAG_GATED_MARKERS):
             err = ("restricted shell — enable unrestricted dev mode with /bash "
                    "(or start `luxe chat --dev`). Original: " + err)

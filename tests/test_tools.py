@@ -521,6 +521,34 @@ class TestUnrestrictedBash:
     def test_restricted_bash_def_tells_model_to_surface_flag(self):
         assert "/bash" in shell.restricted_bash_def().description
 
+    def test_chat_bash_env_resolves_pytest(self, tmp_repo: Path):
+        """The m5 gap (2026-07-30): its default PATH had no python/pytest, so
+        a write-mode agent could build but never verify. Chat bash prepends
+        luxe's venv bin, so pytest resolves on EVERY fleet host."""
+        import sys
+        from pathlib import Path as P
+
+        env = shell._chat_bash_env()
+        assert env["PATH"].startswith(str(P(sys.executable).parent))
+
+        fn = shell.make_bash_fn(restricted_hint=True)
+        out, err = fn({"command": "pytest --version"})
+        assert err is None and "pytest" in out
+
+    def test_bench_bash_env_is_untouched(self, tmp_repo: Path, monkeypatch):
+        """The benchmark path's bash (module default, env=None) must inherit
+        the process environment byte-identically — no venv injection."""
+        seen = {}
+        real_run = shell.subprocess.run
+
+        def spy(*a, **k):
+            seen["env"] = k.get("env", "MISSING")
+            return real_run(*a, **k)
+
+        monkeypatch.setattr(shell.subprocess, "run", spy)
+        shell._bash({"command": "echo ok"})
+        assert seen["env"] is None
+
 
 # --- filesystem tools survive unreadable directories -------------------------
 
