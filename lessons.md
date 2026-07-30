@@ -30,6 +30,51 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-07-30] anyio cancel scopes must enter/exit on the SAME task — MCP HTTP transport close bug
+
+**What happened**: First `luxe chat --mcp` session against the relays closed
+with `MCP exit-stack drain failed: Attempted to exit cancel scope in a
+different task than it was entered in`. Connections worked; only shutdown was
+dirty — every session, every time.
+
+**Root cause**: `MCPClientManager` entered its `AsyncExitStack` in the
+startup coroutine (one task) and exited it from a `close()`-submitted
+coroutine (a different task on the same loop). anyio cancel scopes — which
+`mcp`'s `streamablehttp_client` uses internally — hard-require enter/exit on
+the same task. The old stdio transport merely tolerated the violation, so
+the latent bug shipped invisible and only surfaced when the HTTP transport
+made anyio strict about it.
+
+**Fix / takeaway**: One long-lived `_async_lifetime` task owns the whole
+stack: connect → signal ready → park on an `asyncio.Event` → unwind on the
+same task; `close()` just sets the event and joins. General rule: when a
+sync facade wraps async context managers, the enter and exit must be
+scheduled onto the SAME task, not merely the same loop — "it worked with
+transport A" is not evidence the lifecycle is correct.
+
+### [2026-07-30] a client-side timeout can't rescue a server-internal exec cap — diagnose at the layer that owns the subprocess
+
+**What happened**: kappa's `list_containers` intermittently failed in luxe
+chat. First response was to raise luxe's MCP client timeout 60→120s; the
+failure recurred anyway, now reported as a relay-side error
+(`nsenter … TimeoutExpired`), not a client timeout.
+
+**Root cause**: two stacked timeouts. The mage-hands relay runs `docker ps`
+via `subprocess.run(..., timeout=60)` INSIDE the relay; luxe's `timeout_s`
+only bounds how long the client waits. The DS718+'s Docker daemon
+intermittently takes >60s to answer `ps` under load, so the inner cap fired
+no matter what the outer one was set to. The relay's own stderr (via
+`container_logs` on the relay container itself) held the definitive
+`TimeoutExpired: ... timed out after 60 seconds` traceback.
+
+**Fix / takeaway**: raised the RELAY's per-tool timeout (`docker ps/logs`
+→ 120s, mage-hands `4f9eebe`, rebuilt on alpha+kappa) and set luxe's client
+timeout to 150s so the outer layer always outlives the inner one. General
+rule: when a call times out through N layers, find which layer's clock
+fired (its error text / its logs) before turning any knobs — and keep outer
+timeouts strictly longer than inner ones so the layer that owns the
+subprocess is the one that reports.
+
 ### [2026-06-03] gitkit single-pass can't scale to large repos — packaging, not detection, is the failure
 
 **What happened**: Dogfooding `gitreview`/`gitsummary`/`gitrefactor` on real repos

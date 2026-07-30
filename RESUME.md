@@ -1,5 +1,37 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-07-30, evening) — relay MCP in chat + TUI polish
+
+luxe chat can now drive the mage-hands relays (alpha · kappa · router1), and
+the TUI got three usability fixes. All on `main`, full suite 1866 passed.
+
+1. **MCP servers in interactive sessions** (`94632fb`). Generic support only
+   in this repo — relay hostnames/tokens live in PRIVATE dotfiles
+   (`luxe/relays.yaml` + `bin/luxe-relay` → symlinks `luxe-alpha`,
+   `luxe-kappa`, `luxe-router`, `luxe-all`). `mcp/client.py`:
+   `streamable_http` transport, `api_key_env` bearer auth via `luxe.secrets`,
+   `gate_tools`/`only_tools` fnmatch filters, and a single `_async_lifetime`
+   task owning all connection contexts (anyio same-task rule — see
+   lessons.md). Chat flags: `--mcp` / `--mcp-config` / `--mcp-read-only` /
+   `--ctx <tier>`. Surface publishes via `chat/mcptools.py` (module-level,
+   like `search.set_index`); `prepare_turn` injects it — inspection tools
+   every turn, `gate_tools` matches only in /write mode. Benchmark/maintain
+   path untouched. Contract: chat.sdd § "MCP tools in chat".
+2. **Scope + calibration**: relay access is m1 + m5 ONLY (m4 deliberately
+   excluded — user decision; tokens = `RELAY_TOKEN_*` in `~/.luxe/secrets.env`
+   per host). Drills on m5: single-relay turns peak 7–19% of 64K; worst case
+   (500-line container_logs, 33 KB) = 38% of 64K → wrapper presets `--ctx
+   large` (single relay) / `xlarge` (luxe-all, inspection-only) are validated.
+3. **Relay-side timeout fix** (mage-hands `4f9eebe`, deployed alpha+kappa):
+   `docker ps/logs` now `timeout=120` — kappa's daemon intermittently
+   exceeded the old 60s internal cap; luxe client timeout is 150s so it
+   outlives the relay's. See lessons.md (layered timeouts).
+4. **TUI fixes** (`ed04f3b`): duplicate-Paste dedup (tmux/iTerm double
+   delivery, 0.35s window); ↑/↓ input history (readline-style, draft
+   restored, chip lines not recorded); scrollback keys PgUp/PgDn ·
+   shift+↑/↓ · Home/End + banner hint (alt-screen TUI is invisible to
+   terminal/tmux scrollback — in-app keys ARE the scrollback).
+
 ## ⇒ SESSION HANDOFF (2026-07-30) — the fallback-kit pivot
 
 Mission re-scoped after the 2026-07-29 Anthropic outage (2h, all services):
