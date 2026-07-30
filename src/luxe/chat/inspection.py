@@ -291,9 +291,24 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
 
     # Search index: built at startup from the repo HEAD; a moved HEAD means the
     # model is searching a tree that no longer matches the files it will read.
+    # A session with no project deliberately has none — that's a state, not a
+    # fault, so it reports OK with the escape hatch rather than a warning.
     from luxe import search as search_mod
 
     index = search_mod.get_index()
+    if getattr(session, "project_kind", "git") == "none":
+        doc.add("project", OK, f"none attached ({repo_path or 'cwd'})",
+                "`/project <path>` or `/index` to enable code search")
+        doc.add("search index", OK, "not built (no project)")
+        doc.add("mode", OK, f"{'write on' if session.write_enabled else 'read-only'} · "
+                            f"bash {'unrestricted' if session.unrestricted_bash else 'allowlisted'}")
+        try:
+            import textual  # noqa: F401
+            doc.add("TUI", OK, "textual installed")
+        except ImportError:
+            doc.add("TUI", WARN, "textual missing — line REPL fallback",
+                    "`uv sync --extra chat`")
+        return doc
     if repo_path:
         from luxe.gitkit.health import current_head, is_git_repo
 

@@ -255,6 +255,13 @@ def reset_index() -> None:
     _index = None
 
 
+def get_index() -> SymbolIndex | None:
+    """The resident index, or None when nothing has been indexed (a no-project
+    chat session never builds one). Read-only accessor for the tool-surface and
+    preflight decisions; the tool path reads `_index` directly."""
+    return _index
+
+
 def find_symbol_def() -> ToolDef:
     return ToolDef(
         name="find_symbol",

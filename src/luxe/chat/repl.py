@@ -203,6 +203,8 @@ def run_chat_repl(
     startup_debug: bool = False,
     startup_compact: bool = False,
     theme_name: str | None = None,
+    on_project: Callable[[str | None], dict] | None = None,
+    project_kind: str = "git",
 ) -> None:
     from luxe.cli import _infer_task_type  # reuse the maintain heuristic
 
@@ -218,6 +220,7 @@ def run_chat_repl(
         repo_path=repo_path,
         project_hash=project_mem.project_hash(repo_path) if repo_path else "",
         languages=languages,
+        project_kind=project_kind,
     )
     if dev_mode:
         session.write_enabled = True
@@ -270,6 +273,7 @@ def run_chat_repl(
         on_compare=_make_compare_hook(console, cfg, repo_path, languages, slots),
         on_compare_review=_make_compare_review_hook(console),
         on_git_analysis=_make_git_analysis_hook(console, cfg, session, cancel),
+        on_project=_make_project_hook(session, on_project),
     )
 
     if resume_session_id:
@@ -380,6 +384,52 @@ class TurnPrep:
     backend_name: str = ""  # multi-backend provenance stamped on the transcript
 
 
+# Tools that are useless without a resident index (chat/project.py "none" mode).
+_INDEX_TOOLS = {"bm25_search": "search", "find_symbol": "symbols"}
+
+
+def index_tools_available() -> dict[str, bool]:
+    """Which index-backed tools have their index resident right now."""
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+
+    return {"bm25_search": search_mod.get_index() is not None,
+            "find_symbol": symbols_mod.get_index() is not None}
+
+
+def _drop_unavailable_index_tools(role_cfg):
+    """Strip `bm25_search` / `find_symbol` when their index isn't built."""
+    available = index_tools_available()
+    tools = [t for t in (role_cfg.tools or [])
+             if t not in _INDEX_TOOLS or available.get(t, False)]
+    if len(tools) == len(role_cfg.tools or []):
+        return role_cfg
+    return role_cfg.model_copy(update={"tools": tools})
+
+
+def _make_project_hook(session, on_project):
+    """Wrap cli's attach hook so the SESSION follows the new project too.
+
+    cli owns the lock and the indexes; the session owns repo_path / project_kind
+    / index_head, which drive the prompt frame, the git segment, and `/diff`.
+    Returns None when the front-end wasn't given a hook (tests, embedders)."""
+    if on_project is None:
+        return None
+
+    def _hook(target: str | None) -> dict:
+        summary = on_project(target)
+        session.repo_path = summary["root"]
+        session.project_kind = summary["kind"]
+        try:
+            from luxe.gitkit.health import current_head
+            session.index_head = current_head(summary["root"]) or ""
+        except Exception:
+            session.index_head = ""
+        return summary
+
+    return _hook
+
+
 def model_origin_notice(slots, status=None) -> str:
     """Resolve where the chat slot's model actually lives, record it on the
     status bar, and return the one-line startup notice (Rich markup).
@@ -424,6 +474,11 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     # /plan (B5) forces a read-only drafting turn regardless of write mode.
     write_on = session.write_enabled and not plan_mode
     role_cfg = base_role if write_on else make_read_only_role(base_role)
+    # No index (a session started outside a project) → withhold the tools that
+    # need one, rather than offering them and answering "index not built" to
+    # every call. Derived from what's actually resident, so `/index` mid-session
+    # turns them back on with no other bookkeeping.
+    role_cfg = _drop_unavailable_index_tools(role_cfg)
 
     # EVERY freeform interactive turn gets the conversational persona — chat is
     # a conversation, not a batch job. Keying this on `slot == "chat"` (the

@@ -5,7 +5,7 @@
 Started from two user-reported symptoms; ended as a small maintenance cycle.
 All work is on `main`, tests green (1690 passed, 6 skipped; +109 this session),
 `ruff check src/`
-down from 28 findings to 5 (all deliberate E-class).
+down from 28 findings to 5 (all deliberate E-class). Tests: 1782 passing.
 
 1. **The chat crash (root-caused, fixed).** `luxe-chat` from `$HOME` died ~4s
    into the first turn with `TimeoutError: [Errno 60]`. `spec_resolver.find_all_sdd`
@@ -57,6 +57,16 @@ down from 28 findings to 5 (all deliberate E-class).
    and `_languages_from_paths`. Measured: ~1s in a repo, ~16s from `$HOME`,
    with a loud truncation notice. Benchmark path untouched (builders called
    without `files=`).
+
+10. **Start a chat anywhere** (2026-07-30, `chat/project.py`) — sessions no
+   longer assume a codebase. The subject resolves to git (walking UP to the git
+   root, so a subdir session gets the whole repo), a marker directory, or none.
+   No-project mode builds no index and takes no repo lock (**0.5s startup from
+   `$HOME`**), keeps read tools, WITHHOLDS `bm25_search`/`find_symbol` from the
+   tool list, and frames the turn with `NO_PROJECT_CHAT_HINT`. `/project [path]`
+   attaches or switches mid-session (lock moves, new one acquired first);
+   `/index [path]` indexes where you are. `$HOME` and anything above it never
+   count as the project; a repo outside home does.
 
 **Not done / next:** `luxe pull` has NOT been exercised against a real kappa
 mount (kappa wasn't mounted) — the XSym path is unit-tested and validated

@@ -609,6 +609,12 @@ def _build_chat_indexes(repo_path: str):
     return bm25, sym_idx, scan
 
 
+def _tilde(path: str) -> str:
+    """Home-relative display path (`~/Downloads/luxe`)."""
+    home = str(Path.home())
+    return "~" + path[len(home):] if home and path.startswith(home) else path
+
+
 def _resolve_theme_name(flag: str | None) -> str:
     """Chat palette precedence (D2): `--theme` → `LUXE_THEME` → `auto`.
 
@@ -621,7 +627,10 @@ def _resolve_theme_name(flag: str | None) -> str:
 
 
 @main.command(name="chat")
-@click.option("--repo", "repo", default=".", help="Repo to work in (default: cwd)")
+@click.option("--repo", "repo", default=".",
+              help="Where to work (default: cwd). Resolves UP to the enclosing "
+                   "git root / project; a directory that is neither starts an "
+                   "unindexed chat session.")
 @click.option("--config", "config_path", default=None,
               help="Path to config YAML (default: configs/chat.yaml)")
 @click.option("--resume", "resume_session_id", default=None,
@@ -687,6 +696,20 @@ def chat_cmd(
             for k, v in entries.items()
         }
 
+    # What is this session about? A git root above cwd, a marker-bearing
+    # directory, or nothing at all (chat from anywhere). `--repo` given
+    # explicitly is honoured as-is; the default "." resolves upward.
+    from luxe.chat import project as project_mod
+
+    # ALWAYS resolve upward, flag or not: the `luxe-chat` wrapper passes
+    # `--repo "$PWD"` on every invocation, so treating an explicit --repo as
+    # "pin exactly here" would silently defeat walk-up for the primary entry
+    # point (caught by tests/test_chat_project.py).
+    project = project_mod.resolve(repo_path)
+    if project.root != repo_path and project.is_project:
+        console.print(f"[dim]· {_tilde(repo_path)} is inside "
+                      f"{_tilde(project.root)} — using the project root[/]")
+    repo_path = project.root
     set_repo_root(repo_path)
 
     # Cache the `.sdd` contract scan per repo root for this session (chat-only;
@@ -697,18 +720,72 @@ def chat_cmd(
 
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
-    bm25, sym_idx, scan = _build_chat_indexes(repo_path)
-    search_mod.set_index(bm25)
-    symbols_mod.set_index(sym_idx)
-    # Languages come from the scan we just did — no third walk of the tree.
-    languages = _languages_from_paths(scan.paths)
 
-    try:
-        ctx = acquire_repo_lock(repo_path, f"chat-{int(time.time())}")
-        ctx.__enter__()
-    except LockHeld as e:
-        console.print(f"[red]✗ {e}[/]")
-        sys.exit(3)
+    languages: frozenset[str] = frozenset()
+    if project.is_project:
+        bm25, sym_idx, scan = _build_chat_indexes(repo_path)
+        search_mod.set_index(bm25)
+        symbols_mod.set_index(sym_idx)
+        # Languages come from the scan we just did — no third walk of the tree.
+        languages = _languages_from_paths(scan.paths)
+    else:
+        # No project here: skip indexing entirely (it cost 210s from `$HOME` for
+        # coverage the model can't rely on). Read tools still work against cwd;
+        # `/index` or `/project <path>` turns code search on later.
+        console.print(
+            f"[dim]· no project at {_tilde(repo_path)} — chat mode "
+            "(read tools on; `/project <path>` or `/index` to add code "
+            "search)[/]")
+
+    # The repo lock serialises luxe runs against ONE codebase; a no-project
+    # session has no codebase to protect, and locking `$HOME` would stop you
+    # opening a second chat window.
+    ctx = None
+    if project.is_project:
+        try:
+            ctx = acquire_repo_lock(repo_path, f"chat-{int(time.time())}")
+            ctx.__enter__()
+        except LockHeld as e:
+            console.print(f"[red]✗ {e}[/]")
+            sys.exit(3)
+
+    def _attach_project(target: str | None) -> dict:
+        """`/project [path]` and `/index [path]`: re-resolve, re-index, and move
+        the repo lock. Returns a summary dict for the command to render; raises
+        LockHeld when the new project is busy (the session stays where it is)."""
+        nonlocal ctx, repo_path, languages
+        new = (project_mod.resolve(target) if target
+               else project_mod.resolve(repo_path))
+        new_ctx = None
+        if new.is_project and new.root != repo_path:
+            # Acquire the new lock BEFORE releasing the old one, so a failure
+            # leaves the session exactly as it was.
+            new_ctx = acquire_repo_lock(new.root, f"chat-{int(time.time())}")
+            new_ctx.__enter__()
+        if new_ctx is not None:
+            if ctx is not None:
+                try:
+                    ctx.__exit__(None, None, None)
+                except Exception:
+                    pass
+            ctx = new_ctx
+        repo_path = new.root
+        set_repo_root(repo_path)
+        spec_resolver.invalidate_scan_cache()
+        search_mod.reset_index()
+        symbols_mod.reset_index()
+        summary = {"root": new.root, "kind": new.kind, "label": new.label,
+                   "files": 0, "symbols": 0, "truncated": "", "used_git": False}
+        if new.is_project:
+            bm, sy, sc = _build_chat_indexes(new.root)
+            search_mod.set_index(bm)
+            symbols_mod.set_index(sy)
+            languages = _languages_from_paths(sc.paths)
+            summary.update(files=len(bm.paths), symbols=len(sy.symbols),
+                           truncated=sc.truncated, used_git=sc.used_git)
+        else:
+            languages = frozenset()
+        return summary
 
     # Front-end selection: the full-screen Textual TUI when stdout is a real
     # terminal AND textual is installed; otherwise the line REPL (CI / pipes /
@@ -737,6 +814,8 @@ def chat_cmd(
                 startup_debug=startup_debug,
                 startup_compact=startup_compact,
                 theme_name=theme_name,
+                on_project=_attach_project,
+                project_kind=project.kind,
             )
         else:
             run_chat_repl(
@@ -751,15 +830,18 @@ def chat_cmd(
                 startup_debug=startup_debug,
                 startup_compact=startup_compact,
                 theme_name=theme_name,
+                on_project=_attach_project,
+                project_kind=project.kind,
             )
     finally:
         search_mod.reset_index()
         symbols_mod.reset_index()
         spec_resolver.enable_scan_cache(False)  # also clears it
-        try:
-            ctx.__exit__(None, None, None)
-        except Exception:
-            pass
+        if ctx is not None:
+            try:
+                ctx.__exit__(None, None, None)
+            except Exception:
+                pass
 
 
 def _default_chat_config() -> str:
