@@ -126,11 +126,33 @@ def test_switch_builds_backend_from_entry_env_key_and_timeout(monkeypatch):
     assert sm.backend.api_key == "m5-secret"
 
 
-def test_switch_missing_env_key_resolves_empty(monkeypatch):
+def test_switch_missing_key_everywhere_resolves_empty(monkeypatch, tmp_path):
+    """No env, no secrets.env entry, no keychain → empty key (Backend's own
+    OMLX_API_KEY chain is the last fallback). Isolated from the real
+    ~/.luxe/secrets.env — resolution goes through luxe.secrets now."""
+    import luxe.secrets as secrets
+
     monkeypatch.delenv("OMLX_API_KEY_M5", raising=False)
+    monkeypatch.setattr(secrets, "SECRETS_PATH", tmp_path / "absent.env")
+    monkeypatch.setattr(secrets, "_from_keychain", lambda name: "")
     sm = slots_mod.SlotManager(_multi_cfg())
     sm.switch_backend("m5")
-    assert sm.backend.api_key == ""  # Backend falls back to OMLX_API_KEY env
+    assert sm.backend.api_key == ""
+
+
+def test_switch_key_resolves_from_secrets_file(monkeypatch, tmp_path):
+    """The m5 401 fix (2026-07-30): a key that lives only in secrets.env
+    (never exported by the shell) still reaches the Backend."""
+    import luxe.secrets as secrets
+
+    monkeypatch.delenv("OMLX_API_KEY_M5", raising=False)
+    f = tmp_path / "secrets.env"
+    f.write_text("OMLX_API_KEY_M5=tailnet-key\n")
+    monkeypatch.setattr(secrets, "SECRETS_PATH", f)
+    monkeypatch.setattr(secrets, "_from_keychain", lambda name: "")
+    sm = slots_mod.SlotManager(_multi_cfg())
+    sm.switch_backend("m5")
+    assert sm.backend.api_key == "tailnet-key"
 
 
 def test_switch_unreachable_raises_and_stays(monkeypatch):

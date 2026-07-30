@@ -467,7 +467,8 @@ class OmlxAdmin:
     def __init__(self, base_url: str = "http://127.0.0.1:8000", api_key: str = "",
                  timeout_s: float = 60.0):
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.environ.get("OMLX_API_KEY", "")
+        from luxe.secrets import resolve_api_key
+        self.api_key = api_key or resolve_api_key()
         self._client = httpx.Client(base_url=self.base_url,
                                     timeout=httpx.Timeout(timeout_s, connect=10.0))
         self._logged_in = False

@@ -269,8 +269,12 @@ class TestOmlxAdmin:
         with pytest.raises(ms.ModelStoreError, match="rejected the API key"):
             a.tasks()
 
-    def test_missing_api_key_is_explained(self, monkeypatch):
+    def test_missing_api_key_is_explained(self, monkeypatch, tmp_path):
+        import luxe.secrets as secrets
+
         monkeypatch.delenv("OMLX_API_KEY", raising=False)
+        monkeypatch.setattr(secrets, "SECRETS_PATH", tmp_path / "absent.env")
+        monkeypatch.setattr(secrets, "_from_keychain", lambda name: "")
         a = _admin(lambda r: httpx.Response(200, json={}), api_key="")
         with pytest.raises(ms.ModelStoreError, match="no oMLX API key"):
             a.login()

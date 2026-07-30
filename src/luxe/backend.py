@@ -151,11 +151,13 @@ class Backend:
         self.model = model
         self.timeout_s = timeout_s
         self.max_attempts = max_attempts
-        # Pick api_key from arg first, then OMLX_API_KEY env. Many oMLX
-        # deployments require auth; without a key, every chat call 401s.
-        import os as _os
+        # Pick api_key from arg first, then env → ~/.luxe/secrets.env →
+        # keychain (luxe.secrets). Many oMLX deployments require auth;
+        # without a key, every chat call 401s — and shells that source
+        # secrets.env without exporting used to produce exactly that.
         if not api_key:
-            api_key = _os.environ.get("OMLX_API_KEY", "")
+            from luxe.secrets import resolve_api_key
+            api_key = resolve_api_key()
         self.api_key = api_key
         headers = {}
         if api_key:
