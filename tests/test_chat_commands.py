@@ -860,3 +860,30 @@ def test_theme_switch_shows_a_sample_of_the_new_palette(ctx):
     finally:
         theme_mod.set_palette(None)
         theme_mod.reset_cache()
+
+
+class TestFullCommand:
+    """`/full` re-renders the LAST answer with no display cap — the default
+    render truncates at 50 lines and `/verbose full` only affects future
+    turns, so the hidden tail needs a retroactive expander."""
+
+    def test_full_reshows_last_answer(self, ctx):
+        from luxe.chat.session import ChatTurn
+        long_answer = "\n".join(f"line {i}" for i in range(120))
+        ctx.session.add_turn(ChatTurn(user="q1", assistant="short"))
+        ctx.session.add_turn(ChatTurn(user="q2", assistant=long_answer))
+        assert cmd.dispatch("/full", ctx).handled
+        text = _text(ctx)
+        assert "line 0" in text and "line 119" in text
+        assert "truncat" not in text.lower()
+
+    def test_full_skips_empty_assistant_turns(self, ctx):
+        from luxe.chat.session import ChatTurn
+        ctx.session.add_turn(ChatTurn(user="q", assistant="the real answer"))
+        ctx.session.add_turn(ChatTurn(user="interrupted", assistant=""))
+        assert cmd.dispatch("/full", ctx).handled
+        assert "the real answer" in _text(ctx)
+
+    def test_full_with_no_turns(self, ctx):
+        assert cmd.dispatch("/full", ctx).handled
+        assert "No answer to expand" in _text(ctx)

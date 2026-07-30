@@ -70,6 +70,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/doctor", "", "preflight this session: endpoint, model, index, disk, git"),
     ("/diff", "[--full] [--all]", "what this session changed (git-backed)"),
     ("/export", "[path]", "write the conversation to markdown"),
+    ("/full", "", "re-show the last answer without the display cap"),
     ("/ctx", "[small|medium|large|xlarge|huge]", "show or set context window size"),
     ("/write", "", "toggle write tools (default: read-only)"),
     ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
@@ -116,6 +117,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/doctor": _doctor,
         "/diff": _diff,
         "/export": _export,
+        "/full": _full,
         "/use": _use,
         "/ctx": _ctx,
         "/write": _write,
@@ -924,6 +926,24 @@ def _export(args, ctx: CommandContext) -> CommandResult:
         return CommandResult(handled=True)
     size = out.stat().st_size if out.is_file() else 0
     ctx.console.print(f"[green]✓[/] exported → {out} [dim]({size:,} bytes)[/]")
+    return CommandResult(handled=True)
+
+
+def _full(args, ctx: CommandContext) -> CommandResult:
+    """Re-render the LAST answer with no display cap.
+
+    The default render caps long answers (50 lines / 4000 chars) and the
+    hidden tail is not reachable after the fact — `/verbose full` only
+    changes FUTURE turns. The full text is always in session history, so
+    this re-shows it whole without re-running anything (2026-07-30)."""
+    from luxe.chat.render import build_final_renderable
+
+    text = next((t.assistant for t in reversed(ctx.session.turns)
+                 if (t.assistant or "").strip()), "")
+    if not text:
+        ctx.console.print("[yellow]No answer to expand yet.[/]")
+        return CommandResult(handled=True)
+    ctx.console.print(build_final_renderable(text, mode="full"))
     return CommandResult(handled=True)
 
 
