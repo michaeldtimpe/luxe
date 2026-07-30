@@ -26,6 +26,10 @@ auto-memory.
   identically; benchmark/maintain keep reading `omlx_base_url` only
 - All mono prompt edits go through `src/luxe/agents/prompts.py` registry
 - Pin `--work-dir ~/.luxe/bench-workspace` for bench runs (random tempdir leaks into prompts)
+- Fetch model weights through oMLX's own downloader (`/admin/api/hf/*`, wrapped by
+  `modelstore.OmlxAdmin`) — never a second `snapshot_download`, which would race
+  the server over the same HF cache. Mount imports are plain copies into
+  `~/.omlx/models/`, resolving symlinks AND Synology `XSym` stubs
 - `oMLX` `idle_timeout_seconds: 1800` (null keeps models resident forever)
 - `--keep-loaded` for bench mode (post-run unload fires by default)
 
@@ -36,6 +40,9 @@ auto-memory.
 - Use `--no-verify`, `--no-gpg-sign`, or other hook-skip flags
 - Force-push to `main` or `master`
 - Configure dense >30B mxfp8 models (don't fit on 64GB Mac under load)
+- Walk a user-chosen root with `Path.rglob`/`Path.glob` — pathlib swallows only
+  `PermissionError`, so an unreachable network-backed dir (`OSError(ETIMEDOUT)`)
+  crashes the caller. Use `luxe.fswalk.iter_files` (2026-07-29 chat crash)
 - Promote configs from `configs/_archive/` (reference-only; not the champion)
 
 ## Owns

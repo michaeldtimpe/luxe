@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from luxe.sdd import SddParseError
+from luxe.fswalk import iter_files
 from luxe.spec_resolver import _glob_matches, find_all_sdd
 
 
@@ -277,7 +278,9 @@ def _resolve_bare_filename(repo_root: Path, basename: str) -> Path | None:
     is more correct, not looser.
     """
     matches: list[Path] = []
-    for p in repo_root.rglob(basename):
+    # `iter_files`, not `rglob`: an unreadable subtree must not crash the linter
+    # (pathlib only swallows PermissionError — see fswalk).
+    for p in iter_files(repo_root, name_filter=lambda n: n == basename):
         if not p.is_file():
             continue
         rel_parts = p.relative_to(repo_root).parts

@@ -282,7 +282,13 @@ def _list_dir(args: dict[str, Any]) -> tuple[str, str | None]:
     path = _safe(args.get("path", "."))
     if not path.is_dir():
         return "", f"Not a directory: {args.get('path', '.')}"
-    entries = sorted(path.iterdir())
+    try:
+        entries = sorted(path.iterdir())
+    except OSError as e:
+        # Unreadable directory — a dead network mount times out here
+        # (OSError(ETIMEDOUT)). Say so plainly instead of handing the model a
+        # raw errno; it can then try a different path.
+        return "", f"Cannot read directory {args.get('path', '.')}: {e}"
     lines = []
     for e in entries[:_MAX_RESULTS]:
         suffix = "/" if e.is_dir() else ""
@@ -297,12 +303,37 @@ def _glob(args: dict[str, Any]) -> tuple[str, str | None]:
     if _REPO_ROOT is None:
         return "", "Repo root not set"
     pattern = args["pattern"]
-    matches = sorted(_REPO_ROOT.glob(pattern))
+    matches, stopped = _glob_matches_tolerant(_REPO_ROOT, pattern)
     lines = [str(m.relative_to(_REPO_ROOT)) for m in matches[:_MAX_RESULTS]]
     result = "\n".join(lines)
     if len(matches) > _MAX_RESULTS:
         result += f"\n... ({len(matches) - _MAX_RESULTS} more)"
+    if stopped:
+        result += f"\n(scan stopped early — {stopped}; results may be incomplete)"
     return result, None
+
+
+def _glob_matches_tolerant(root: Path, pattern: str) -> tuple[list[Path], str]:
+    """`root.glob(pattern)`, sorted, that survives an unreadable directory.
+
+    pathlib's glob generator swallows only `PermissionError`; anything else
+    (a timed-out network mount raises `OSError(ETIMEDOUT)`) propagates AND
+    kills the generator — it cannot be resumed. So we collect what arrived
+    before the failure and report why the list may be short, instead of
+    turning a partial answer into a tool error. See `luxe.fswalk`.
+    """
+    out: list[Path] = []
+    it = root.glob(pattern)
+    stopped = ""
+    while True:
+        try:
+            out.append(next(it))
+        except StopIteration:
+            break
+        except OSError as e:
+            stopped = str(e)
+            break
+    return sorted(out), stopped
 
 
 def _grep(args: dict[str, Any]) -> tuple[str, str | None]:

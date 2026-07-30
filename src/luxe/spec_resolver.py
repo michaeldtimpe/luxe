@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
+from luxe.fswalk import iter_files
 from luxe.sdd import SddFile, parse_sdd_file
 
 
@@ -124,27 +125,85 @@ class ResolvedChain:
         return out
 
 
+# --- scan cache (opt-in; chat-only) ----------------------------------------
+#
+# `find_all_sdd` walks the whole repo root, and the root is whatever the user
+# pointed at: `luxe chat --repo ~` means ~1.4M files ≈ 19s — PER TURN, since
+# `run_single` rebuilds the contract block each time. The scan is therefore
+# cacheable per repo root for the life of an interactive session.
+#
+# It is OPT-IN and OFF by default, because the benchmark/maintain path must
+# stay deterministic AND fresh: those runs pin `--work-dir
+# ~/.luxe/bench-workspace`, so successive instances share one root path with
+# DIFFERENT contents — a path-keyed cache would serve the previous instance's
+# contracts. Only `luxe chat` enables it (chat.sdd carve-out), and it drops the
+# entry as soon as a turn writes a `.sdd`.
+
+_scan_cache: dict[Path, list[SddFile]] = {}
+_scan_cache_enabled = False
+
+
+def enable_scan_cache(enabled: bool = True) -> None:
+    """Turn the per-root `find_all_sdd` cache on/off. Chat-only; disabling
+    also clears whatever was cached."""
+    global _scan_cache_enabled
+    _scan_cache_enabled = enabled
+    if not enabled:
+        _scan_cache.clear()
+
+
+def scan_cache_enabled() -> bool:
+    return _scan_cache_enabled
+
+
+def invalidate_scan_cache(repo_root: Path | str | None = None) -> None:
+    """Drop the cached scan for `repo_root` (or every root when None). Call
+    this whenever a `.sdd` may have been created, moved, or deleted."""
+    if repo_root is None:
+        _scan_cache.clear()
+        return
+    _scan_cache.pop(Path(repo_root).resolve(), None)
+
+
 def find_all_sdd(repo_root: Path) -> list[SddFile]:
     """Enumerate every well-formed `<dir>/<dir>.sdd` under `repo_root`.
 
     Used for mono-mode prompt injection where there's no per-file target
     but we still want the model to see every active contract in the
-    repo. Walks the tree once via `Path.rglob('*.sdd')` and filters to
+    repo. Walks the tree once via `fswalk.iter_files` and filters to
     files whose basename matches their parent directory's name (the
     canonical `.sdd` placement convention from §Lever 2 of the plan).
 
     `.sdd` files in unconventional locations (e.g. a sidecar dropped in
     a subdir without renaming) are silently ignored. Returns sorted by
     relative path for deterministic prompt construction.
+
+    The walk is `os.walk`-based, not `Path.rglob`: an unreadable or
+    unreachable subtree (network-backed placeholder dirs raise
+    `OSError(ETIMEDOUT)`) must degrade to "no contracts found there", not
+    crash the caller. See `fswalk`.
+
+    Results are cached per root only when `enable_scan_cache()` has been
+    called (interactive chat); every other caller re-walks, unchanged.
     """
     root = repo_root.resolve()
+    if _scan_cache_enabled:
+        hit = _scan_cache.get(root)
+        if hit is not None:
+            return list(hit)
     out: list[SddFile] = []
-    for candidate in sorted(root.rglob("*.sdd")):
+    candidates = iter_files(root, name_filter=lambda n: n.endswith(".sdd"))
+    for candidate in sorted(candidates):
         if not candidate.is_file():
             continue
         if candidate.parent.name + ".sdd" != candidate.name:
             continue
         out.append(parse_sdd_file(candidate))
+    if _scan_cache_enabled:
+        # Only well-formed scans are cached — a SddParseError propagates from
+        # the loop above, so a broken contract is re-reported every turn until
+        # it's fixed (never silently remembered as "no contracts").
+        _scan_cache[root] = list(out)
     return out
 
 

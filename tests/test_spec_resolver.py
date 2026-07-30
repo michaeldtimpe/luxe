@@ -470,3 +470,127 @@ class TestFormatSddBlock:
         block = format_sdd_block(sdds, tmp_path)
         assert "From `create/create.sdd`" in block
         assert "Forbids creating: **/scaffold_*.py" in block
+
+
+# --- scan cache (opt-in; chat-only) ----------------------------------------
+
+
+class TestScanCache:
+    """`find_all_sdd` walks the whole repo root, so interactive chat caches it
+    per root (19s/turn when the root is `$HOME`). The cache is OFF unless a
+    front-end asks for it — the bench pins one work_dir across instances with
+    different contents, where a path-keyed cache would serve stale contracts."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_cache(self):
+        from luxe import spec_resolver
+
+        spec_resolver.enable_scan_cache(False)
+        yield
+        spec_resolver.enable_scan_cache(False)
+
+    def test_disabled_by_default_sees_new_contracts(self, tmp_path):
+        from luxe import spec_resolver
+
+        assert spec_resolver.scan_cache_enabled() is False
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n")
+        assert [sf.title for sf in find_all_sdd(tmp_path)] == ["a"]
+        _write_sdd(tmp_path / "b" / "b.sdd", "# b\n")
+        assert [sf.title for sf in find_all_sdd(tmp_path)] == ["a", "b"]
+
+    def test_enabled_serves_second_call_without_walking(self, tmp_path, monkeypatch):
+        from luxe import spec_resolver
+
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n")
+        spec_resolver.enable_scan_cache()
+        first = find_all_sdd(tmp_path)
+
+        walks = []
+        real = spec_resolver.iter_files
+        monkeypatch.setattr(spec_resolver, "iter_files",
+                            lambda *a, **k: walks.append(1) or real(*a, **k))
+
+        second = find_all_sdd(tmp_path)
+        assert walks == []                                   # no re-walk
+        assert [sf.title for sf in second] == [sf.title for sf in first]
+
+    def test_cached_result_is_a_copy(self, tmp_path):
+        from luxe import spec_resolver
+
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n")
+        spec_resolver.enable_scan_cache()
+        first = find_all_sdd(tmp_path)
+        first.clear()                                        # caller mutation
+        assert [sf.title for sf in find_all_sdd(tmp_path)] == ["a"]
+
+    def test_invalidate_forces_a_rescan(self, tmp_path):
+        from luxe import spec_resolver
+
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n")
+        spec_resolver.enable_scan_cache()
+        assert [sf.title for sf in find_all_sdd(tmp_path)] == ["a"]
+
+        _write_sdd(tmp_path / "b" / "b.sdd", "# b\n")
+        assert [sf.title for sf in find_all_sdd(tmp_path)] == ["a"]   # stale, by design
+        spec_resolver.invalidate_scan_cache(tmp_path)
+        assert [sf.title for sf in find_all_sdd(tmp_path)] == ["a", "b"]
+
+    def test_cache_is_keyed_per_root(self, tmp_path):
+        from luxe import spec_resolver
+
+        one, two = tmp_path / "one", tmp_path / "two"
+        _write_sdd(one / "a" / "a.sdd", "# a\n")
+        _write_sdd(two / "b" / "b.sdd", "# b\n")
+        spec_resolver.enable_scan_cache()
+        assert [sf.title for sf in find_all_sdd(one)] == ["a"]
+        assert [sf.title for sf in find_all_sdd(two)] == ["b"]
+
+    def test_disabling_clears_the_cache(self, tmp_path):
+        from luxe import spec_resolver
+
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n")
+        spec_resolver.enable_scan_cache()
+        find_all_sdd(tmp_path)
+        spec_resolver.enable_scan_cache(False)
+        _write_sdd(tmp_path / "b" / "b.sdd", "# b\n")
+        assert [sf.title for sf in find_all_sdd(tmp_path)] == ["a", "b"]
+
+    def test_parse_errors_are_never_cached(self, tmp_path):
+        """A broken contract must keep raising until it's fixed — not be
+        remembered as an empty scan."""
+        from luxe import spec_resolver
+
+        _write_sdd(tmp_path / "broken" / "broken.sdd", "## Must\n- a\n## Must\n- b\n")
+        spec_resolver.enable_scan_cache()
+        with pytest.raises(SddParseError):
+            find_all_sdd(tmp_path)
+        with pytest.raises(SddParseError):
+            find_all_sdd(tmp_path)
+
+
+def test_chat_cmd_enables_and_clears_the_scan_cache(tmp_path, monkeypatch):
+    """Wiring check: `luxe chat` is the ONLY caller that turns the cache on,
+    and it must leave it off on exit (a later `luxe maintain` in the same
+    process must not inherit it)."""
+    from click.testing import CliRunner
+
+    from luxe import cli as cli_mod
+    from luxe import spec_resolver
+    import luxe.chat as chat_pkg
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_sdd(repo / "src" / "src.sdd", "# src\n## Must\n- a\n")
+
+    seen: list[bool] = []
+    monkeypatch.setattr(chat_pkg, "run_chat_repl",
+                        lambda *a, **k: seen.append(spec_resolver.scan_cache_enabled()))
+    monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: False, raising=False)
+
+    spec_resolver.enable_scan_cache(False)
+    result = CliRunner().invoke(cli_mod.chat_cmd,
+                                ["--repo", str(repo), "--keep-loaded"])
+
+    assert result.exit_code == 0, result.output
+    assert seen == [True]                                  # on during the session
+    assert spec_resolver.scan_cache_enabled() is False     # off again afterwards
