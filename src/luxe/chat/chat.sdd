@@ -174,6 +174,28 @@ never touches this module.
   `SlotManager.forget_resident()` so the next turn reloads), `/retry` re-runs the
   last user message via `CommandResult.submit` — the only sanctioned way a
   command turns into a turn; both front-ends act on that field.
+- A session can start ANYWHERE (2026-07-30). `chat/project.py` resolves the
+  subject once at startup: **git** (cwd is in a work tree → the project is the
+  GIT ROOT, so a subdir session sees the whole repo), **dir** (no git but a
+  marker: pyproject.toml/package.json/…), or **none**. `$HOME` and any directory
+  ABOVE it are never the project (a dotfiles repo at `~` must not become one); a
+  repo outside home is fine. `--repo` resolves upward too — the `luxe-chat`
+  wrapper always passes `--repo "$PWD"`, so treating an explicit flag as "pin
+  here" would defeat walk-up for the primary entry point.
+  In **none** mode: no index is built, no repo lock is taken (there's no codebase
+  to protect, and locking `$HOME` would block a second chat window), read tools
+  still work against cwd, `bm25_search`/`find_symbol` are WITHHELD from the tool
+  list (derived from `search/symbols.get_index()`, so `/index` re-enables them
+  with no other bookkeeping), and the prompt carries `NO_PROJECT_CHAT_HINT` so
+  the model says "not indexed here", never "luxe can't search". The status bar
+  shows `no project`.
+- `/project [path]` and `/index [path]` attach or switch mid-session via the
+  `CommandContext.on_project` hook, which cli owns because cli owns the lock:
+  it acquires the NEW lock before releasing the old one, so a `LockHeld` leaves
+  the session exactly where it was. The hook re-indexes, re-points
+  `set_repo_root`, invalidates the `.sdd` scan cache, and returns a summary the
+  command renders; both front-ends then update `session.repo_path` /
+  `project_kind` / `index_head`.
 - Startup indexing is ONE bounded scan (2026-07-30). `cli._build_chat_indexes`
   calls `fswalk.scan_source_files` once and passes the file list to BOTH
   `build_bm25_index(files=…)` and `build_symbol_index(files=…)`; languages come

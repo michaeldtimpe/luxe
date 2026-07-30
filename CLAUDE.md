@@ -76,6 +76,17 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     `--resume`/`/resume` now work inside the Textual TUI (transcript replays
     into the RichLog on mount). The `[chat]` extra installs via
     `uv sync --extra chat` — without it chat falls back to the line REPL.
+  - **Start a session anywhere** (2026-07-30; `chat/project.py`). The subject
+    resolves to **git** (walks UP to the git root — a subdir session gets the
+    whole repo), **dir** (pyproject.toml/package.json/… marker), or **none**.
+    `$HOME` and anything above it never count as the project. `--repo` resolves
+    upward too (the `luxe-chat` wrapper always passes `--repo "$PWD"`).
+    No-project mode: **no index, no repo lock**, read tools still work,
+    `bm25_search`/`find_symbol` withheld from the tool list, prompt carries
+    `NO_PROJECT_CHAT_HINT`, status bar shows `no project`. `/project [path]`
+    attaches or switches mid-session (moves the repo lock, acquiring the new one
+    first); `/index [path]` builds the index where you are. Startup from `$HOME`
+    is now **0.5s**.
   - **Startup indexing is bounded and single-pass** (2026-07-30). It used to
     walk the tree THREE times (BM25, symbols, language detection) with no cap:
     `luxe chat --repo ~` cost **210s of indexing + ~18s of language walking**.

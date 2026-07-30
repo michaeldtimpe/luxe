@@ -276,10 +276,14 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
         segs.append(Segment([_S(shown, theme_mod.styles_for("pwd"))],
                             priority=2, path=True))
 
-    # git (theme-coloured) — slots in after path when inside a repo
+    # git (theme-coloured) — slots in after path when inside a repo. When the
+    # session isn't attached to a project at all (started from `~`, say), say so
+    # instead: the model has no index, and that's worth seeing every turn.
     git_seg = _git_segment(repo)
     if git_seg:
         segs.append(Segment(git_seg, priority=1))
+    elif getattr(session, "project_kind", "git") == "none":
+        segs.append(Segment([_S("no project", _GREY)], priority=2))
 
     # ctx: `ctx N% <window-size>` (label = default fg; % used; size in the K/M
     # context convention). A pending `/ctx` override (clamped to the slot ceiling)

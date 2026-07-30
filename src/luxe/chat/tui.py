@@ -119,9 +119,10 @@ class ChatApp(App):
     ]
 
     def __init__(self, cfg, repo_path, languages, *, session, slots, infer,
-                 keep_loaded=False, resume_session_id=None):
+                 keep_loaded=False, resume_session_id=None, on_project=None):
         super().__init__()
         self._resume_id = resume_session_id
+        self._on_project = on_project
         self.cfg = cfg
         self.repo_path = repo_path
         self.languages = languages
@@ -195,6 +196,7 @@ class ChatApp(App):
             on_git_analysis=self._git_hook,
             on_compare=self._compare_hook,
             on_compare_review=self._compare_review_hook,
+            on_project=self._project_hook,
         )
         # `--resume <id>`: replay the prior transcript into the RichLog and seed
         # the live session's turns before the first prompt (chat.sdd — resume no
@@ -541,6 +543,24 @@ class ChatApp(App):
             "prompt_user must be called from a worker thread"
         return self.call_from_thread(self.push_screen_wait, PromptScreen(question, default))
 
+    def _project_hook(self, target: str | None) -> dict:
+        """`/project` / `/index`: run cli's attach (re-resolve + re-index + move
+        the repo lock), then re-point the app's own view of the repo so the
+        status bar, git segment, and turn setup all follow."""
+        if self._on_project is None:
+            raise RuntimeError("this session cannot switch projects")
+        summary = self._on_project(target)
+        self.repo_path = summary["root"]
+        self.session.repo_path = summary["root"]
+        self.session.project_kind = summary["kind"]
+        try:
+            from luxe.gitkit.health import current_head
+            self.session.index_head = current_head(summary["root"]) or ""
+        except Exception:
+            self.session.index_head = ""
+        self.refresh_status()
+        return summary
+
     def _resume_hook(self, session_id: str) -> None:
         """/resume (and --resume on mount): replay a prior transcript into the
         RichLog and extend the live session's turns. Runs on the UI thread at
@@ -662,7 +682,8 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
                  resume_session_id=None, dev_mode=False, startup_verbose=None,
                  startup_show_reasoning=False, startup_no_terse=False,
                  startup_debug=False, startup_compact=False, theme_name=None,
-                 infer_task_type=None) -> None:
+                 infer_task_type=None, on_project=None,
+                 project_kind="git") -> None:
     """Entry point: build the session + app and run it. Mirrors run_chat_repl's
     startup-flag handling so the two front-ends are interchangeable."""
     from luxe.chat.slots import SlotManager
@@ -680,6 +701,7 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
         repo_path=repo_path,
         project_hash=project_mem.project_hash(repo_path) if repo_path else "",
         languages=languages,
+        project_kind=project_kind,
     )
     if dev_mode:
         session.write_enabled = True
@@ -706,7 +728,7 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
 
     app = ChatApp(cfg, repo_path, languages, session=session, slots=slots,
                   infer=infer, keep_loaded=keep_loaded,
-                  resume_session_id=resume_session_id)
+                  resume_session_id=resume_session_id, on_project=on_project)
     try:
         app.run()
     finally:

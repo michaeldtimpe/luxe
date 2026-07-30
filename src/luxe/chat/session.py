@@ -16,7 +16,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from luxe.agents.prompts import READ_ONLY_CHAT_HINT, TERSE_HINT
+from luxe.agents.prompts import (
+    NO_PROJECT_CHAT_HINT,
+    READ_ONLY_CHAT_HINT,
+    TERSE_HINT,
+)
 from luxe.chat.summarize import SUMMARIZER_VERSION, fold_history
 from luxe.memory import project as project_mem
 
@@ -71,6 +75,10 @@ class ChatSession:
     session_id: str = ""
     project_hash: str = ""
     index_head: str = ""  # repo HEAD when BM25/symbol indices were built (staleness check)
+    # What this session is about: "git" | "dir" | "none" (chat/project.py).
+    # "none" = started somewhere that isn't a codebase: no index is built, and
+    # the index-backed tools are withheld rather than failing per call.
+    project_kind: str = "git"
     languages: frozenset = field(default_factory=frozenset)
     write_enabled: bool = False
     unrestricted_bash: bool = False  # set by /bash; only effective in write mode
@@ -138,8 +146,16 @@ class ChatSession:
         parts: list[str] = []
         # Lowest precedence: session-mode framing comes first so user/memory text
         # always reads as higher-priority. String lives in the prompt registry.
+        mode_hints: list[str] = []
+        if self.project_kind == "none":
+            # No index here: say so once, in the frame, instead of letting the
+            # model discover it by calling a tool that isn't on the list.
+            mode_hints.append(NO_PROJECT_CHAT_HINT)
         if not self.write_enabled:
-            parts.append(f"<session_mode>\n{READ_ONLY_CHAT_HINT}\n</session_mode>")
+            mode_hints.append(READ_ONLY_CHAT_HINT)
+        if mode_hints:
+            parts.append("<session_mode>\n" + "\n\n".join(mode_hints)
+                         + "\n</session_mode>")
         if memory_block:
             parts.append(memory_block)
         if history_text:

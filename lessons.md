@@ -3537,3 +3537,46 @@ user actually ran it from.
 `HOME_NOISE_DIRS`), `src/luxe/search.py`, `src/luxe/symbols.py`,
 `src/luxe/cli.py`, `src/luxe/chat/chat.sdd`, `tests/test_fswalk.py`,
 `tests/test_search.py`, `tests/test_symbols.py`.
+
+---
+
+### [2026-07-30] "Chat from anywhere" — no-project mode, and the `--repo` trap
+
+**What happened**: The user asked to start `luxe chat` from any directory,
+including one with no code in it. Until now every session assumed a codebase:
+it indexed the root (whatever that was), took a repo lock on it, and offered
+`bm25_search`/`find_symbol` unconditionally.
+
+**Root cause / design**: three separate assumptions had to be unpicked.
+1. **"cwd is the project."** Now `chat/project.py` resolves *upward* to the git
+   root, so a session started in `src/luxe/chat/` gets the whole repo (and the
+   `git ls-files` fast path). `$HOME` — and anything above it — is explicitly
+   never the project: a dotfiles repo at `~` must not turn a chat into a
+   210s indexing job. A repo *outside* home (`/Volumes/work/proj`) is fine, so
+   the guard is "is this an ancestor of home", not "is it under home".
+2. **"there is always something to index."** With no project, indexing is
+   skipped entirely (0.5s startup) and the index-backed tools are WITHHELD from
+   the tool list rather than offered and failing per call. The gate is derived
+   from `search/symbols.get_index()`, so `/index` re-enables them with no other
+   bookkeeping. The prompt gets `NO_PROJECT_CHAT_HINT` — the model must say
+   "not indexed here", never "luxe can't search" (the same failure mode as the
+   read-only confusion in the 2026-06-01 entry).
+3. **"a session owns one repo forever."** `/project [path]` and `/index [path]`
+   attach or switch mid-conversation. The hook lives in `cli.chat_cmd` because
+   cli owns the repo lock, and it acquires the NEW lock *before* releasing the
+   old one so a `LockHeld` leaves the session exactly where it was.
+
+**The trap, caught by a test**: the first implementation walked up only when
+`--repo` was absent, treating an explicit flag as "pin exactly here". But the
+`luxe-chat` wrapper — the primary entry point — passes `--repo "$PWD"` on every
+invocation, so walk-up would have been dead code in real use and alive only in
+my manual `--repo .` checks. An integration test that drove `chat_cmd` with a
+stubbed front-end failed on it immediately. Lesson: when a wrapper script is how
+the tool is actually invoked, test THAT invocation shape — a flag that is
+"optional" in the CLI may be mandatory in practice.
+
+**Affected files**: `src/luxe/chat/project.py` (new), `src/luxe/cli.py`,
+`src/luxe/chat/{repl,tui,commands,session,status}.py`,
+`src/luxe/chat/inspection.py`, `src/luxe/agents/prompts.py`,
+`src/luxe/symbols.py` (`get_index`), `src/luxe/chat/chat.sdd`,
+`tests/test_chat_project.py` (new), `tests/test_chat_commands.py`.

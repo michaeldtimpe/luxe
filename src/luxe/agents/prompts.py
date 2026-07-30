@@ -387,6 +387,18 @@ READ_ONLY_CHAT_HINT = (
 )
 
 
+NO_PROJECT_CHAT_HINT = (
+    "This chat session is not attached to a codebase: it started in a directory "
+    "that is not a project, so there is no repository index. `bm25_search` and "
+    "`find_symbol` are therefore not available this turn — do NOT claim luxe "
+    "lacks code search; it is simply not indexed here. You can still read any "
+    "path the user names with read_file, list_dir, grep, and glob, relative to "
+    "the current directory. If the request is about a specific codebase, ask the "
+    "user to run /project <path> (or /index) so it gets indexed. Otherwise just "
+    "answer the question: an unattached session is a normal way to use luxe."
+)
+
+
 TERSE_HINT = (
     "Respond tersely: report only what changed and the result, in as few words as "
     "possible. No preamble, no restating the request or the plan, no end-of-turn "

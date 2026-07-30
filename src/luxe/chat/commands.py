@@ -43,6 +43,9 @@ class CommandContext:
     on_compare_review: Callable[[str], None] | None = None
     on_resume: Callable[[str], None] | None = None
     on_git_analysis: Callable[[str, "bool | None"], None] | None = None  # (kind, deep) -> run gitkit report
+    # (path|None) -> summary dict. Re-resolves the project, rebuilds the index,
+    # and moves the repo lock; provided by cli.chat_cmd (it owns the lock).
+    on_project: Callable[["str | None"], dict] | None = None
 
 
 # (command, args, description) — rendered into an auto-aligned table by _help()
@@ -58,6 +61,8 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/tools", "", "list the tools the model has THIS turn (and what's gated)"),
     ("/theme", "[auto|cool|warm|mono]", "show or switch the colour palette"),
     ("/retry", "", "re-run your last message (e.g. after /write or /ctx)"),
+    ("/project", "[path]", "show, attach, or switch the project (re-indexes)"),
+    ("/index", "[path]", "build the code-search index for here (or <path>)"),
     ("/doctor", "", "preflight this session: endpoint, model, index, disk, git"),
     ("/diff", "[--full] [--all]", "what this session changed (git-backed)"),
     ("/export", "[path]", "write the conversation to markdown"),
@@ -102,6 +107,8 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/tools": _tools,
         "/theme": _theme,
         "/retry": _retry,
+        "/project": _project,
+        "/index": _index_cmd,
         "/doctor": _doctor,
         "/diff": _diff,
         "/export": _export,
@@ -489,8 +496,10 @@ def _status(args, ctx: CommandContext) -> CommandResult:
         except Exception:
             pass
 
+    kind_label = {"git": "git repo", "dir": "project", "none": "no project"}.get(
+        s.project_kind, s.project_kind)
     rows = [
-        ("repo", s.repo_path or "(none)"),
+        ("project", f"{s.repo_path or '(none)'}  ({kind_label})"),
         ("session", s.session_id or "(unsaved)"),
         ("backend", f"{sm.backend_name} · {getattr(sm.backend, 'base_url', '?')}"),
         ("model", f"{model}  {org.glyph} {org.label}"),
@@ -595,6 +604,99 @@ def _retry(args, ctx: CommandContext) -> CommandResult:
     preview = last if len(last) <= 60 else last[:59] + "…"
     ctx.console.print(f"[dim]· retrying:[/] {preview}")
     return CommandResult(handled=True, submit=last)
+
+
+def _project(args, ctx: CommandContext) -> CommandResult:
+    """Show, attach, or switch the project this session is about.
+
+    `/project`          what's attached now (and whether it's indexed)
+    `/project <path>`   attach/switch: re-resolve, re-index, move the repo lock
+
+    A session started outside a project is a normal way to use luxe — this is
+    how you give it a codebase without restarting.
+    """
+    from luxe.chat import project as project_mod
+    from luxe.chat import repl as repl_mod
+
+    if not args:
+        kind = ctx.session.project_kind
+        root = ctx.session.repo_path or "(none)"
+        label = {"git": "git repo", "dir": "project", "none": "no project"}.get(
+            kind, kind)
+        ctx.console.print(f"[bold]Project[/] {root}  [dim]({label})[/]")
+        avail = repl_mod.index_tools_available()
+        for tool, ok in avail.items():
+            mark = "[green]✓[/]" if ok else "[yellow]·[/]"
+            ctx.console.print(f"  {mark} {tool}"
+                              + ("" if ok else "  [dim](no index)[/]"))
+        if not all(avail.values()):
+            ctx.console.print("[dim]· `/index` to build it here, or "
+                              "`/project <path>` to attach a codebase[/]")
+        return CommandResult(handled=True)
+
+    if ctx.on_project is None:
+        ctx.console.print("[yellow]This session can't switch projects.[/]")
+        return CommandResult(handled=True)
+
+    target = str(Path(args[0]).expanduser())
+    if not Path(target).is_dir():
+        ctx.console.print(f"[red]✗ not a directory: {args[0]}[/]")
+        return CommandResult(handled=True)
+    resolved = project_mod.resolve(target)
+    if resolved.root != str(Path(target).resolve()):
+        ctx.console.print(f"[dim]· {args[0]} is inside {resolved.root} "
+                          "— attaching the whole project[/]")
+    return _do_attach(ctx, target, verb="project")
+
+
+def _index_cmd(args, ctx: CommandContext) -> CommandResult:
+    """Build the code-search index for the current directory (or `<path>`).
+
+    The escape hatch for "I started outside a project but I do want search
+    here", and for re-indexing after the tree moved.
+    """
+    if ctx.on_project is None:
+        ctx.console.print("[yellow]This session can't build an index.[/]")
+        return CommandResult(handled=True)
+    target = str(Path(args[0]).expanduser()) if args else None
+    if target and not Path(target).is_dir():
+        ctx.console.print(f"[red]✗ not a directory: {args[0]}[/]")
+        return CommandResult(handled=True)
+    return _do_attach(ctx, target, verb="index")
+
+
+def _do_attach(ctx: CommandContext, target: str | None, *, verb: str) -> CommandResult:
+    """Shared body: run the cli-provided attach hook and report the outcome."""
+    from luxe.locks import LockHeld
+
+    try:
+        summary = ctx.on_project(target)
+    except LockHeld as e:
+        ctx.console.print(f"[red]✗ {e}[/] [dim](staying on "
+                          f"{ctx.session.repo_path})[/]")
+        return CommandResult(handled=True)
+    except Exception as e:
+        ctx.console.print(f"[red]✗ {verb} failed: {type(e).__name__}: {e}[/]")
+        return CommandResult(handled=True)
+
+    root, kind = summary["root"], summary["kind"]
+    ctx.session.repo_path = root
+    ctx.session.project_kind = kind
+    if kind == "none":
+        ctx.console.print(
+            f"[yellow]· {root} isn't a project[/] [dim]— no index built. Read "
+            "tools still work; pass a path with a repo or a project marker "
+            "(pyproject.toml, package.json, …).[/]")
+        return CommandResult(handled=True)
+    how = "git-tracked" if summary.get("used_git") else "walked"
+    ctx.console.print(
+        f"[green]✓[/] project → {root} [dim]({summary['label']})[/]\n"
+        f"  [dim]indexed {summary['files']} files · {summary['symbols']} "
+        f"symbols · {how}[/]")
+    if summary.get("truncated"):
+        ctx.console.print(f"[yellow]· index truncated at the "
+                          f"{summary['truncated']}[/]")
+    return CommandResult(handled=True)
 
 
 def _doctor(args, ctx: CommandContext) -> CommandResult:

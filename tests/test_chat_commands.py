@@ -678,3 +678,113 @@ def test_export_reports_an_unwritable_destination(ctx, tmp_path):
     cmd.dispatch(f"/export {blocker / 'out.md'}", ctx)
 
     assert "cannot write export" in _text(ctx)
+
+
+# --- /project and /index ------------------------------------------------------
+
+
+def test_project_with_no_args_shows_what_is_attached(ctx):
+    ctx.session.project_kind = "none"
+    cmd.dispatch("/project", ctx)
+    out = _text(ctx)
+    assert "no project" in out
+    assert "bm25_search" in out and "find_symbol" in out
+    assert "/index" in out                      # the escape hatch is offered
+
+
+def test_project_shows_a_git_session_as_attached(ctx):
+    ctx.session.project_kind = "git"
+    cmd.dispatch("/project", ctx)
+    assert "git repo" in _text(ctx)
+
+
+def test_project_switch_calls_the_hook_and_repoints_the_session(ctx, tmp_path):
+    target = tmp_path / "proj"
+    target.mkdir()
+    calls: list = []
+
+    def _hook(path):
+        calls.append(path)
+        return {"root": str(target), "kind": "git", "label": "git repo",
+                "files": 42, "symbols": 100, "truncated": "", "used_git": True}
+
+    ctx.on_project = _hook
+    cmd.dispatch(f"/project {target}", ctx)
+
+    assert calls == [str(target)]
+    assert ctx.session.repo_path == str(target)
+    assert ctx.session.project_kind == "git"
+    out = _text(ctx)
+    assert "42 files" in out and "git-tracked" in out
+
+
+def test_project_switch_to_a_non_project_says_so(ctx, tmp_path):
+    plain = tmp_path / "notes"
+    plain.mkdir()
+    ctx.on_project = lambda p: {"root": str(plain), "kind": "none",
+                                "label": "no project", "files": 0,
+                                "symbols": 0, "truncated": "", "used_git": False}
+
+    cmd.dispatch(f"/project {plain}", ctx)
+
+    assert "isn't a project" in _text(ctx)
+    assert ctx.session.project_kind == "none"
+
+
+def test_project_rejects_a_missing_directory(ctx):
+    called: list = []
+    ctx.on_project = lambda p: called.append(p)
+    cmd.dispatch("/project /definitely/not/here", ctx)
+    assert "not a directory" in _text(ctx)
+    assert called == []
+
+
+def test_project_reports_a_held_lock_and_stays_put(ctx, tmp_path):
+    from luxe.locks import LockHeld
+
+    target = tmp_path / "busy"
+    target.mkdir()
+    ctx.session.repo_path = "/original"
+
+    from luxe.locks import LockInfo
+
+    def _hook(path):
+        raise LockHeld(LockInfo(pid=999, run_id="chat-123", started_at=0.0,
+                                repo_path="/busy"), Path("/tmp/x.lock"))
+
+    ctx.on_project = _hook
+    cmd.dispatch(f"/project {target}", ctx)
+
+    assert "another luxe run is active" in _text(ctx)
+    assert ctx.session.repo_path == "/original"      # unchanged
+
+
+def test_project_without_a_hook_is_explained(ctx, tmp_path):
+    d = tmp_path / "x"
+    d.mkdir()
+    ctx.on_project = None
+    cmd.dispatch(f"/project {d}", ctx)
+    assert "can't switch projects" in _text(ctx)
+
+
+def test_index_builds_here_by_default(ctx):
+    calls: list = []
+
+    def _hook(path):
+        calls.append(path)
+        return {"root": "/here", "kind": "dir", "label": "project (pyproject.toml)",
+                "files": 7, "symbols": 12, "truncated": "", "used_git": False}
+
+    ctx.on_project = _hook
+    cmd.dispatch("/index", ctx)
+
+    assert calls == [None]                       # None = "resolve where I am"
+    assert "7 files" in _text(ctx)
+
+
+def test_index_reports_truncation(ctx):
+    ctx.on_project = lambda p: {"root": "/here", "kind": "dir", "label": "project",
+                                "files": 8000, "symbols": 1, "used_git": False,
+                                "truncated": "8000-file cap"}
+    cmd.dispatch("/index", ctx)
+    assert "truncated" in _text(ctx) and "8000-file cap" in _text(ctx)
