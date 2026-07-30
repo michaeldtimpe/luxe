@@ -48,7 +48,7 @@ def test_render_final_modes(mode, expect_hint):
     out = io.StringIO()
     console = Console(file=out, force_terminal=False, width=100)
     render_final(console, text, mode=mode)
-    assert ("for full" in out.getvalue()) == expect_hint
+    assert ("/full expands" in out.getvalue()) == expect_hint
 
 
 def test_render_footer_text_shows_tokens_and_ctx_window():

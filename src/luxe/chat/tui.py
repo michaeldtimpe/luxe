@@ -598,7 +598,15 @@ class ChatApp(App):
         s.wall_s = result.wall_s
         s.tok_per_s = (result.completion_tokens / result.wall_s
                        if result.wall_s > 0 else 0.0)
-        s.ctx_pressure = result.final_context_pressure
+        # Server-truth context fill, same rule as the line REPL (repl.py): the
+        # chars/4 estimate misses tool schemas and reads a flat ~7% at a real
+        # ~12%. Also mirror into the live buffer — _end_busy's final _tick
+        # would otherwise overwrite this with the stale live estimate.
+        if result.last_prompt_tokens and outcome.num_ctx:
+            s.ctx_pressure = result.last_prompt_tokens / outcome.num_ctx
+        else:
+            s.ctx_pressure = result.final_context_pressure
+        self._ctx_pressure = s.ctx_pressure
         s.num_ctx = outcome.num_ctx
         s.prompt_tokens = result.prompt_tokens
         s.steps = result.steps

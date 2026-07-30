@@ -367,6 +367,18 @@ never touches this module.
   output / notes containing "# TODO: …" or "# paste your token here" is
   user-dictated content, not a code stub. Code extensions stay guarded; the
   benchmark/maintain path keeps the default guarded fns (tools.sdd).
+- `/full` (2026-07-30): re-renders the LAST answer with no display cap. The
+  default final render truncates at 50 lines / 4000 chars and `/verbose full`
+  only affects FUTURE turns — the truncation hint names `/full` so the hidden
+  tail is reachable retroactively (full text always lives in session history;
+  no re-run).
+- Status-bar ctx% derives from SERVER-reported `last_prompt_tokens /
+  effective num_ctx` in BOTH front-ends (repl.py AND tui.py — the tui missed
+  the 2026-07-30 fix and read a flat ~7% from the chars/4 estimate, which
+  misses tool schemas). The estimate is the fallback only when the server
+  reported no usage. The TUI must mirror the corrected value into its live
+  `_ctx_pressure` buffer — `_end_busy`'s final `_tick` would otherwise
+  overwrite the status with the stale live estimate.
 - MCP tools in chat (2026-07-30, cli `--mcp <name>`; repeatable). Servers come
   from the MCP config (`--mcp-config <path>`, default configs/mcp.yaml);
   `streamable_http` transport carries auth via `api_key_env` (credential

@@ -389,7 +389,8 @@ def build_final_renderable(text: str, *, mode: str = "truncated"):
     if not hidden:
         return Markdown(shown)
     return Group(Markdown(shown),
-                 Text(f"… +{hidden} lines — /verbose for full", style="dim"))
+                 Text(f"… +{hidden} lines — /full expands this answer · "
+                      "/verbose full shows every answer whole", style="dim"))
 
 
 def render_final(console: Console, text: str, *, mode: str = "truncated") -> None:

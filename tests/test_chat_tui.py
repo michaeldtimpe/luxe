@@ -42,6 +42,7 @@ class _FakeResult:
     prompt_tokens = 20
     peak_context_pressure = 0.1
     final_context_pressure = 0.1
+    last_prompt_tokens = 5000  # server-reported usage (RunResult field)
 
 
 @pytest.fixture(autouse=True)
@@ -519,4 +520,29 @@ def test_history_dedupes_consecutive_and_scroll_actions_safe(tmp_path):
             app.action_scroll_line_down()
             app.action_scroll_home()
             app.action_scroll_end()
+    asyncio.run(scenario())
+
+
+def test_status_ctx_pressure_uses_server_truth(tmp_path, monkeypatch):
+    """Regression (2026-07-30 "locked at 7%"): the TUI must derive ctx%
+    from server-reported last_prompt_tokens like the line REPL does — the
+    chars/4 estimate misses tool schemas and reads a flat ~7%. The live
+    buffer must carry the same value so _end_busy's final tick can't
+    clobber it with the stale estimate."""
+    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#prompt", Input).value = "hi"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.status.num_ctx > 0
+            expected = _FakeResult.last_prompt_tokens / app.status.num_ctx
+            assert app.status.ctx_pressure == pytest.approx(expected)
+            assert app.status.ctx_pressure != pytest.approx(
+                _FakeResult.final_context_pressure)
+            assert app._ctx_pressure == pytest.approx(expected)
     asyncio.run(scenario())
