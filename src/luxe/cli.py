@@ -1461,12 +1461,52 @@ def _pull_from_hf(admin, source) -> None:
         final = admin.wait_for(task_rec.task_id, on_progress=_tick)
     if final.status == "completed":
         console.print(f"[green]✓[/] {final.repo_id} downloaded")
+        # Recent oMLX downloads land as REAL bytes nested in the store
+        # (`<store>/<org>/<name>`); older ones left only an HF-cache copy —
+        # the wipe-vulnerable state. Materialize only when needed.
+        from luxe.modelstore import model_state
+        if model_state(source.name) == "ok":
+            console.print(f"[green]✓[/] {source.name} — real bytes in the store")
+        else:
+            _materialize_from_hf_cache(source)
     elif final.status == "cancelled":
         console.print(f"[yellow]· {final.repo_id} download cancelled[/]")
     else:
         console.print(f"[red]✗ {final.repo_id} failed: "
                       f"{final.error or final.status}[/]")
         sys.exit(4)
+
+
+def _materialize_from_hf_cache(source, models_dir=None) -> None:
+    """Copy a just-downloaded HF model out of the cache into the oMLX store as
+    REAL bytes (2026-07-30). oMLX's downloader leaves weights only in
+    `~/.cache/huggingface` — the cache that has already been wiped once. A
+    fallback-kit model must survive cache eviction, so the store entry is a
+    dereferenced copy, not a symlink. Best-effort: a failed copy leaves the
+    cache download intact and says so."""
+    from luxe import modelstore as ms
+
+    try:
+        org_repo = source.ref.replace("/", "--")
+        cache_dir = (Path.home() / ".cache" / "huggingface" / "hub"
+                     / f"models--{org_repo}")
+        snap = ms._resolve_hf_snapshot(cache_dir)
+        if snap is None:
+            console.print("[yellow]· downloaded, but no loadable snapshot "
+                          f"found under {cache_dir} — store not updated[/]")
+            return
+        src = ms.ModelSource(kind="mount", ref=str(snap), name=source.name,
+                             size_bytes=ms.dir_size(snap), note="hf-cache")
+        console.print(f"[dim]· materializing into the store "
+                      f"({ms.human_bytes(src.size_bytes)} — cache copies "
+                      "don't survive eviction)[/]")
+        ms.copy_into_store(src, models_dir=models_dir, force=True)
+        console.print(f"[green]✓[/] {source.name} → real bytes in the store")
+    except Exception as e:
+        console.print(f"[yellow]· store materialization failed ({e}) — the "
+                      f"model is only in the HF cache; re-run "
+                      f"`luxe pull {source.name} --from {Path.home()}/.cache/"
+                      "huggingface/hub` to fix[/]")
 
 
 @main.command(name="pr")
