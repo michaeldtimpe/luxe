@@ -704,6 +704,7 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
                  startup_verbose=None,
                  startup_show_reasoning=False, startup_no_terse=False,
                  startup_debug=False, startup_compact=False, theme_name=None,
+                 startup_ctx_tier=None,
                  infer_task_type=None, on_project=None,
                  project_kind="git") -> None:
     """Entry point: build the session + app and run it. Mirrors run_chat_repl's
@@ -742,6 +743,11 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
         session.terse = False
     if startup_compact:
         session.compact = True
+    if startup_ctx_tier:
+        from luxe.chat.session import CTX_TIERS
+        if startup_ctx_tier in CTX_TIERS:
+            # `--ctx <tier>` = /ctx before the first turn (clamped per-turn).
+            session.num_ctx_override = CTX_TIERS[startup_ctx_tier]
 
     meta = session_store.new_session(repo_path=repo_path,
                                      project_hash=session.project_hash,

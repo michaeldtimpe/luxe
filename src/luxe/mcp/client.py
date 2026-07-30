@@ -18,6 +18,7 @@ Architecture (per plan §4):
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
 import threading
 from contextlib import AsyncExitStack
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MCPServerConfig:
     name: str
-    transport: str = "stdio"  # stdio | streamable_http (HTTP NOT YET WIRED)
+    transport: str = "stdio"  # stdio | streamable_http
     command: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
@@ -50,6 +51,25 @@ class MCPServerConfig:
     enabled_for: list[str] = field(default_factory=list)
     max_calls_per_session: int = 50
     url: str = ""  # for streamable_http
+    # Extra request headers for streamable_http (values may use ${VAR}).
+    headers: dict[str, str] = field(default_factory=dict)
+    # Name of the credential resolved via luxe.secrets (env → secrets.env →
+    # keychain) and sent as `Authorization: Bearer <value>`. The VALUE never
+    # appears in config — same rule as backends' api_key_env.
+    api_key_env: str = ""
+    # fnmatch patterns (raw tool names) that mutate remote state; interactive
+    # chat only exposes them in write mode. Empty = nothing gated.
+    gate_tools: list[str] = field(default_factory=list)
+    # fnmatch allowlist (raw tool names); empty = expose every tool.
+    only_tools: list[str] = field(default_factory=list)
+
+    def tool_allowed(self, tool_name: str) -> bool:
+        if not self.only_tools:
+            return True
+        return any(fnmatch.fnmatch(tool_name, p) for p in self.only_tools)
+
+    def tool_gated(self, tool_name: str) -> bool:
+        return any(fnmatch.fnmatch(tool_name, p) for p in self.gate_tools)
 
 
 @dataclass
@@ -97,6 +117,11 @@ def load_mcp_config(path: str | Path | None = None) -> MCPClientConfig:
             enabled_for=[str(x) for x in s.get("enabled_for", [])],
             max_calls_per_session=int(s.get("max_calls_per_session", 50)),
             url=str(s.get("url", "")),
+            headers={k: _interp_env(str(v))
+                     for k, v in (s.get("headers") or {}).items()},
+            api_key_env=str(s.get("api_key_env", "")),
+            gate_tools=[str(x) for x in s.get("gate_tools", []) or []],
+            only_tools=[str(x) for x in s.get("only_tools", []) or []],
         ))
     cb_raw = client_raw.get("circuit_breaker", {}) or {}
     cb = CircuitBreakerConfig(
@@ -149,11 +174,12 @@ class MCPClientManager:
         self.cfg = cfg
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
-        self._stack: AsyncExitStack | None = None
         self._servers: dict[str, _ServerRuntime] = {}
         self._started = False
         self._closed = False
         self._total_calls = 0  # global for hard cap
+        self._shutdown: asyncio.Event | None = None
+        self._lifetime_fut = None
 
     # -- thread/loop bootstrap --
 
@@ -189,24 +215,42 @@ class MCPClientManager:
             self._started = True
             return self
         self._start_loop()
-        try:
-            fut = self._submit(self._async_start_all())
-            fut.result(timeout=60.0)
-        except Exception as e:
-            logger.warning("MCP client start failed: %s", e)
+        ready = threading.Event()
+        self._lifetime_fut = self._submit(self._async_lifetime(ready))
+        ok = ready.wait(timeout=120.0)
+        exc = (self._lifetime_fut.exception()
+               if self._lifetime_fut.done() else None)
+        if not ok or exc is not None:
+            logger.warning("MCP client start failed: %s", exc or "timeout")
             # Mark all configured servers down so discover_tools returns nothing.
             for s in self.cfg.servers:
-                self._servers[s.name] = _ServerRuntime(
-                    cfg=s, is_down=True, down_reason=f"startup failed: {e}",
-                )
+                if s.name not in self._servers or not self._servers[s.name].is_down:
+                    self._servers[s.name] = _ServerRuntime(
+                        cfg=s, is_down=True,
+                        down_reason=f"startup failed: {exc or 'timeout'}",
+                    )
         self._started = True
         return self
 
-    async def _async_start_all(self) -> None:
+    async def _async_lifetime(self, ready: threading.Event) -> None:
+        """Own every server's connection contexts in ONE task for the manager's
+        whole life: enter them, signal `ready`, then park on the shutdown event
+        and unwind on the same task. anyio cancel scopes (streamablehttp_client)
+        require enter/exit on the same task — exiting the stack from a `close()`-
+        submitted coroutine raises `Attempted to exit cancel scope in a
+        different task than it was entered in`."""
+        self._shutdown = asyncio.Event()
+        try:
+            async with AsyncExitStack() as stack:
+                await self._async_connect_all(stack)
+                ready.set()
+                await self._shutdown.wait()
+        finally:
+            ready.set()  # never leave start() hanging on a connect crash
+
+    async def _async_connect_all(self, stack: AsyncExitStack) -> None:
         from mcp import ClientSession
         from mcp.client.stdio import StdioServerParameters, stdio_client
-        self._stack = AsyncExitStack()
-        await self._stack.__aenter__()
 
         for s in self.cfg.servers:
             runtime = _ServerRuntime(cfg=s)
@@ -218,21 +262,39 @@ class MCPClientManager:
                     params = StdioServerParameters(
                         command=s.command, args=list(s.args), env=dict(s.env) or None,
                     )
-                    read, write = await self._stack.enter_async_context(stdio_client(params))
-                    session = await self._stack.enter_async_context(
-                        ClientSession(read, write)
+                    read, write = await stack.enter_async_context(stdio_client(params))
+                elif s.transport == "streamable_http":
+                    if not s.url:
+                        raise MCPError(
+                            f"server {s.name}: streamable_http transport requires `url`")
+                    from mcp.client.streamable_http import streamablehttp_client
+                    headers = dict(s.headers)
+                    if s.api_key_env:
+                        from luxe.secrets import resolve_api_key
+                        token = resolve_api_key(s.api_key_env)
+                        if not token:
+                            raise MCPError(
+                                f"server {s.name}: no credential for "
+                                f"{s.api_key_env} (env → ~/.luxe/secrets.env → "
+                                "keychain)")
+                        headers.setdefault("Authorization", f"Bearer {token}")
+                    read, write, _get_sid = await stack.enter_async_context(
+                        streamablehttp_client(s.url, headers=headers or None)
                     )
-                    await session.initialize()
-                    listing = await session.list_tools()
-                    runtime.session = session
-                    runtime.tool_names = [t.name for t in listing.tools]
-                    logger.info("MCP server %s up; tools: %s",
-                                s.name, runtime.tool_names)
                 else:
                     raise MCPError(
-                        f"server {s.name}: transport `{s.transport}` not yet "
-                        "implemented (only stdio in v1.0)"
+                        f"server {s.name}: unknown transport `{s.transport}` "
+                        "(stdio | streamable_http)"
                     )
+                session = await stack.enter_async_context(
+                    ClientSession(read, write)
+                )
+                await session.initialize()
+                listing = await session.list_tools()
+                runtime.session = session
+                runtime.tool_names = [t.name for t in listing.tools]
+                logger.info("MCP server %s up; tools: %s",
+                            s.name, runtime.tool_names)
             except Exception as e:
                 runtime.is_down = True
                 runtime.down_reason = f"connect failed: {e}"
@@ -245,12 +307,15 @@ class MCPClientManager:
         if self._loop is None:
             return
         try:
-            if self._stack is not None:
-                fut = self._submit(self._stack.__aexit__(None, None, None))
+            # Ask the lifetime task to unwind its own exit stack (same-task
+            # rule for anyio cancel scopes), then wait for it to finish.
+            if self._shutdown is not None:
+                self._loop.call_soon_threadsafe(self._shutdown.set)
+            if self._lifetime_fut is not None:
                 try:
-                    fut.result(timeout=5.0)
+                    self._lifetime_fut.result(timeout=10.0)
                 except Exception as e:
-                    logger.warning("MCP exit-stack drain failed: %s", e)
+                    logger.warning("MCP lifetime drain failed: %s", e)
             self._loop.call_soon_threadsafe(self._loop.stop)
             if self._loop_thread:
                 self._loop_thread.join(timeout=5.0)
@@ -275,8 +340,6 @@ class MCPClientManager:
             if only_for_task and runtime.cfg.enabled_for and \
                     only_for_task not in runtime.cfg.enabled_for:
                 continue
-            for tool in (runtime.session.list_tools_sync_cache or []) if False else []:
-                pass  # placeholder branch removed at runtime; see below
             # We hold the tool listing on _ServerRuntime.tool_names; re-fetch
             # via async call to get full Tool objects with schemas.
             try:
@@ -287,10 +350,26 @@ class MCPClientManager:
                 self._record_failure(runtime, str(e))
                 continue
             for tool in listing.tools:
+                if not runtime.cfg.tool_allowed(tool.name):
+                    continue
                 td = mcp_tool_to_tooldef(tool, name)
                 defs.append(td)
                 fns[td.name] = make_mcp_tool_fn(self.sync_call, name, tool.name)
         return defs, fns
+
+    def is_write_gated(self, namespaced_name: str) -> bool:
+        """True when this `mcp__server__tool` def matches its server's
+        `gate_tools` patterns — i.e. it mutates remote state and interactive
+        chat should withhold it until write mode is on."""
+        from luxe.mcp.bridge import split_namespaced_name
+        parts = split_namespaced_name(namespaced_name)
+        if parts is None:
+            return False
+        server, tool = parts
+        runtime = self._servers.get(server)
+        if runtime is None:
+            return False
+        return runtime.cfg.tool_gated(tool)
 
     def _record_failure(self, runtime: _ServerRuntime, reason: str) -> None:
         runtime.consecutive_failures += 1

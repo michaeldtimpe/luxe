@@ -680,6 +680,21 @@ def _shared_chat_options(f):
         click.option("--theme", "theme_name", default=None,
                      help="Curated luxe color palette: auto|cool|warm|mono "
                           "(default: auto)."),
+        click.option("--ctx", "ctx_tier", default=None,
+                     type=click.Choice(["small", "medium", "large", "xlarge",
+                                        "huge"]),
+                     help="Start with this /ctx tier (clamped per-turn to the "
+                          "box/model ceiling, same as /ctx)."),
+        click.option("--mcp", "mcp_servers", multiple=True,
+                     help="Connect this MCP server from the MCP config at "
+                          "startup (repeatable). Chat-only; tools matching the "
+                          "server's `gate_tools` need /write."),
+        click.option("--mcp-config", "mcp_config_path", default=None,
+                     help="Path to the MCP config YAML for --mcp "
+                          "(default: configs/mcp.yaml)."),
+        click.option("--mcp-read-only", is_flag=True, default=False,
+                     help="Drop `gate_tools`-matching MCP tools entirely — "
+                          "inspection surface only, even in write mode."),
     ]
     for opt in reversed(opts):
         f = opt(f)
@@ -713,6 +728,10 @@ def _run_interactive(
     startup_verbose: str | None, startup_show_reasoning: bool,
     startup_no_terse: bool, startup_debug: bool, startup_compact: bool,
     theme_name: str | None,
+    ctx_tier: str | None = None,
+    mcp_servers: tuple[str, ...] = (),
+    mcp_config_path: str | None = None,
+    mcp_read_only: bool = False,
 ):
     """Shared body of `luxe chat` / `luxe code` (posture via the two kwargs)."""
     from luxe.chat import run_chat_repl
@@ -841,6 +860,56 @@ def _run_interactive(
             languages = frozenset()
         return summary
 
+    # `--mcp <name>` (chat-only): connect the named servers from the MCP
+    # config and publish their tool surface via chat.mcptools; prepare_turn
+    # injects it through the extra-tool seam. A server that fails to connect
+    # is reported and skipped — an unreachable relay must not stop a chat
+    # session from starting (this is the fallback tool).
+    mcp_mgr = None
+    if mcp_servers:
+        from luxe.chat import mcptools
+        from luxe.mcp.client import (
+            MCPClientConfig,
+            MCPClientManager,
+            load_mcp_config,
+        )
+        mcp_cfg = load_mcp_config(mcp_config_path)
+        known = {s.name: s for s in mcp_cfg.servers}
+        unknown = [n for n in mcp_servers if n not in known]
+        if unknown:
+            console.print(
+                f"[red]✗ unknown MCP server(s): {', '.join(unknown)}. "
+                f"Configured: {', '.join(known) or '(none)'} "
+                f"[dim]({mcp_config_path or _default_mcp_config_hint()})[/][/]")
+            sys.exit(2)
+        selected = MCPClientConfig(
+            servers=[known[n] for n in dict.fromkeys(mcp_servers)],
+            circuit_breaker=mcp_cfg.circuit_breaker,
+        )
+        mcp_mgr = MCPClientManager(selected).start()
+        defs, fns = mcp_mgr.discover_tools()
+        always_defs = [d for d in defs if not mcp_mgr.is_write_gated(d.name)]
+        gated_defs = [d for d in defs if mcp_mgr.is_write_gated(d.name)]
+        if mcp_read_only and gated_defs:
+            console.print(f"[dim]· MCP: {len(gated_defs)} mutating tool(s) "
+                          "dropped (--mcp-read-only)[/]")
+            fns = {k: v for k, v in fns.items()
+                   if k not in {d.name for d in gated_defs}}
+            gated_defs = []
+        up = [s for s in mcp_mgr.server_status() if not s["down"]]
+        console.print(f"[dim]· MCP: {len(always_defs)} tool(s)"
+                      + (f" + {len(gated_defs)} write-gated" if gated_defs else "")
+                      + f" from {len(up)} server(s): "
+                      + ", ".join(s['name'] for s in up) + "[/]")
+        for s in mcp_mgr.server_status():
+            if s["down"]:
+                console.print(f"[yellow]· MCP server {s['name']} DOWN: "
+                              f"{s['down_reason']}[/]")
+        mcptools.set_surface(mcptools.MCPSurface(
+            always_defs=always_defs, gated_defs=gated_defs, fns=fns,
+            status_fn=mcp_mgr.server_status,
+        ))
+
     # Front-end selection: the full-screen Textual TUI when stdout is a real
     # terminal AND textual is installed; otherwise the line REPL (CI / pipes /
     # textual-absent). --resume rides either front-end (the TUI replays the
@@ -869,6 +938,7 @@ def _run_interactive(
                 startup_debug=startup_debug,
                 startup_compact=startup_compact,
                 theme_name=theme_name,
+                startup_ctx_tier=ctx_tier,
                 on_project=_attach_project,
                 project_kind=project.kind,
             )
@@ -886,6 +956,7 @@ def _run_interactive(
                 startup_debug=startup_debug,
                 startup_compact=startup_compact,
                 theme_name=theme_name,
+                startup_ctx_tier=ctx_tier,
                 on_project=_attach_project,
                 project_kind=project.kind,
             )
@@ -893,6 +964,13 @@ def _run_interactive(
         search_mod.reset_index()
         symbols_mod.reset_index()
         spec_resolver.enable_scan_cache(False)  # also clears it
+        if mcp_mgr is not None:
+            from luxe.chat import mcptools
+            mcptools.clear()
+            try:
+                mcp_mgr.close()
+            except Exception:
+                pass
         if ctx is not None:
             try:
                 ctx.__exit__(None, None, None)
@@ -902,6 +980,11 @@ def _run_interactive(
 
 def _default_chat_config() -> str:
     return str(Path(__file__).parent.parent.parent / "configs" / "chat.yaml")
+
+
+def _default_mcp_config_hint() -> str:
+    from luxe.mcp.client import default_mcp_config_path
+    return str(default_mcp_config_path())
 
 
 def _apply_slot_overrides(cfg, chat_model, plan_model, code_model) -> None:

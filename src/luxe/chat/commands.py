@@ -582,6 +582,27 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
                           f"enables {len(gated)})[/]")
         for t in gated:
             ctx.console.print(f"  [yellow]·[/] {t}")
+
+    # MCP tools (cli --mcp): the inspection surface is always on; tools the
+    # server config marks mutating (`gate_tools`) follow the /write gate.
+    from luxe.chat import mcptools
+    surf = mcptools.active()
+    if surf is not None:
+        mcp_active = list(surf.always_defs) + (list(surf.gated_defs) if write_on else [])
+        mcp_gated = [] if write_on else list(surf.gated_defs)
+        ctx.console.print(f"[bold]MCP tools[/] [dim]({len(mcp_active)} active)[/]")
+        for d in mcp_active:
+            ctx.console.print(f"  [green]·[/] {d.name}")
+        if mcp_gated:
+            ctx.console.print(f"[bold]MCP gated by read-only mode[/] [dim](/write "
+                              f"enables {len(mcp_gated)})[/]")
+            for d in mcp_gated:
+                ctx.console.print(f"  [yellow]·[/] {d.name}")
+        if surf.status_fn is not None:
+            for s in surf.status_fn():
+                if s.get("down"):
+                    ctx.console.print(f"  [yellow]⚠ server {s['name']} DOWN[/] "
+                                      f"[dim]— {s['down_reason']}[/]")
     return CommandResult(handled=True)
 
 

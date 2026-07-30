@@ -41,10 +41,12 @@ from luxe.chat.render import (
 from luxe.chat import status as status_mod
 from luxe.chat.session import (
     CTX_SUGGEST_PRESSURE,
+    CTX_TIERS,
     ChatSession,
     ChatTurn,
     next_tier_up,
 )
+from luxe.chat import mcptools
 from luxe.chat.slots import SlotManager
 from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
@@ -205,6 +207,7 @@ def run_chat_repl(
     startup_debug: bool = False,
     startup_compact: bool = False,
     theme_name: str | None = None,
+    startup_ctx_tier: str | None = None,
     on_project: Callable[[str | None], dict] | None = None,
     project_kind: str = "git",
 ) -> None:
@@ -245,6 +248,10 @@ def run_chat_repl(
         session.terse = False
     if startup_compact:
         session.compact = True
+    if startup_ctx_tier and startup_ctx_tier in CTX_TIERS:
+        # `--ctx <tier>` = /ctx before the first turn; the per-turn clamp to
+        # the box/model ceiling applies exactly as it does for /ctx.
+        session.num_ctx_override = CTX_TIERS[startup_ctx_tier]
 
     # Static bottom-toolbar status bar (chat.sdd lightweight variant): refreshed
     # from `status` between turns; the reader pins it under the input line.
@@ -557,6 +564,17 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         else:
             extra_tool_defs.append(restricted_bash_def())
             extra_tool_fns["bash"] = make_bash_fn(restricted_hint=True)
+
+    # MCP tools (cli `--mcp`, chat-only): inspection tools ride every turn;
+    # tools matching the server's `gate_tools` (mutating remote operations)
+    # follow the same /write gate as the native mutation surface. Withheld
+    # entirely for a model whose template can't call tools.
+    mcp_surface = mcptools.active()
+    if mcp_surface is not None and caps.usable:
+        extra_tool_defs.extend(mcp_surface.always_defs)
+        if write_on:
+            extra_tool_defs.extend(mcp_surface.gated_defs)
+        extra_tool_fns.update(mcp_surface.fns)
 
     # `/ctx` size override (chat-only) — clamp to the effective ceiling
     # (role's box ceiling ∧ the manifest's per-model cap for the model this

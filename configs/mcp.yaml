@@ -34,6 +34,17 @@ client:
   #   timeout_s: 30
   #   enabled_for: [chat, maintain, review]
   #   max_calls_per_session: 50
+  # - name: ops                        # remote MCP endpoint (chat: `luxe chat --mcp ops`)
+  #   transport: streamable_http
+  #   url: "https://example.internal/mcp"
+  #   api_key_env: OPS_MCP_TOKEN       # resolved env → ~/.luxe/secrets.env → keychain;
+  #                                    # sent as `Authorization: Bearer <value>`.
+  #                                    # NEVER put the value itself in YAML.
+  #   headers: {}                      # extra headers; values may use ${VAR}
+  #   gate_tools: ["run", "restart_*"] # mutating tools — /write-gated in chat
+  #   only_tools: []                   # fnmatch allowlist; empty = all tools
+  #   timeout_s: 60
+  #   max_calls_per_session: 50
 
   circuit_breaker:
     consecutive_failures: 3
