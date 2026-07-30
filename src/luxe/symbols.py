@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from luxe.tools.base import ToolDef, ToolFn
 
@@ -179,35 +179,65 @@ def build_symbol_index(
     repo_root: str | Path,
     excludes: set[str] | None = None,
     max_file_bytes: int = 256 * 1024,
+    files: list[Path] | None = None,
+    on_progress: Callable[[int], None] | None = None,
 ) -> SymbolIndex:
+    """AST-extract symbols from every source file under `repo_root`.
+
+    `files` skips the walk and parses exactly those paths — the chat front-end
+    shares one bounded scan between this and the BM25 index
+    (`fswalk.scan_source_files`). Without it the original walk runs unchanged,
+    keeping the benchmark path byte-identical. `on_progress(parsed_count)` is
+    called every 200 files so a slow tree can show movement.
+    """
     root = Path(repo_root).resolve()
     excludes = excludes if excludes is not None else _DEFAULT_EXCLUDES
 
     symbols: list[Symbol] = []
     coverage: dict[str, int] = {}
+    parsed = 0
 
-    for cur, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in excludes and not d.startswith(".") or d in {".github"}]
-        for fname in files:
-            p = Path(cur) / fname
-            lang = _detect_language(p.suffix)
-            if lang is None:
-                continue
+    for p in _symbol_candidates(root, files, excludes, max_file_bytes):
+        lang = _detect_language(p.suffix)
+        if lang is None:
+            continue
+        file_syms = _parse_file(p, lang)
+        parsed += 1
+        if on_progress is not None and parsed % 200 == 0:
+            on_progress(parsed)
+        if file_syms:
             try:
-                size = p.stat().st_size
-            except OSError:
-                continue
-            if size > max_file_bytes:
-                continue
-            file_syms = _parse_file(p, lang)
-            if file_syms:
                 rel = str(p.relative_to(root))
-                for s in file_syms:
-                    s.path = rel
-                symbols.extend(file_syms)
-                coverage[lang] = coverage.get(lang, 0) + 1
+            except ValueError:
+                rel = str(p)
+            for s in file_syms:
+                s.path = rel
+            symbols.extend(file_syms)
+            coverage[lang] = coverage.get(lang, 0) + 1
 
     return SymbolIndex(repo_root=root, symbols=symbols, coverage=coverage)
+
+
+def _symbol_candidates(root: Path, files: list[Path] | None,
+                       excludes: set[str] | frozenset[str], max_file_bytes: int):
+    """Parse targets: the caller's precomputed list (already size-filtered), or
+    the legacy walk."""
+    if files is not None:
+        yield from files
+        return
+    for cur, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs
+                   if d not in excludes and not d.startswith(".") or d == ".github"]
+        for fname in names:
+            p = Path(cur) / fname
+            if _detect_language(p.suffix) is None:
+                continue
+            try:
+                if p.stat().st_size > max_file_bytes:
+                    continue
+            except OSError:
+                continue
+            yield p
 
 
 # --- tool surface ----------------------------------------------------------

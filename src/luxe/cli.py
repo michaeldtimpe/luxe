@@ -552,6 +552,63 @@ def maintain(
             pass
 
 
+# Chat startup index bounds. The root is user-chosen, and `luxe chat --repo ~`
+# means ~1M files / 56k source candidates: 210s of tokenizing and tree-sitter
+# parsing before the first prompt (measured 2026-07-30). A project directory is
+# nowhere near these caps, so they only bite when you point luxe at a home
+# directory — and when they do, startup SAYS so.
+_INDEX_MAX_FILES = int(os.environ.get("LUXE_INDEX_MAX_FILES", "8000"))
+_INDEX_MAX_MB = int(os.environ.get("LUXE_INDEX_MAX_MB", "96"))
+
+
+def _build_chat_indexes(repo_path: str):
+    """Build the BM25 + symbol indexes from ONE bounded scan, with progress.
+
+    Chat-only: `luxe maintain` and the benchmarks keep calling the builders
+    directly (unbounded walk, byte-identical). Returns (bm25, symbol_index, scan)
+    — the scan is reused for language detection instead of walking again.
+    """
+    from luxe import fswalk
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+
+    extensions = frozenset(search_mod._DEFAULT_EXTENSIONS) | frozenset(
+        ext for exts in symbols_mod._LANGUAGE_EXTENSIONS.values() for ext in exts)
+
+    t0 = time.time()
+    with console.status("[dim]· Indexing repository for search "
+                        "(model loads on first turn)…[/]") as status:
+        scan = fswalk.scan_source_files(
+            repo_path, extensions=extensions,
+            max_files=_INDEX_MAX_FILES,
+            max_total_bytes=_INDEX_MAX_MB * 1024 * 1024,
+            use_git=os.environ.get("LUXE_INDEX_NO_GIT") != "1",
+            on_progress=lambda n: status.update(
+                f"[dim]· Scanning… {n} files[/]"),
+        )
+        status.update(f"[dim]· Indexing {scan.count} files (bm25)…[/]")
+        bm25 = search_mod.build_bm25_index(repo_path, files=scan.paths)
+        sym_idx = symbols_mod.build_symbol_index(
+            repo_path, files=scan.paths,
+            on_progress=lambda n: status.update(
+                f"[dim]· Indexing symbols… {n}/{scan.count} files[/]"),
+        )
+
+    how = "git-tracked" if scan.used_git else "walked"
+    console.print(f"[dim]  indexed {len(bm25.paths)} files · "
+                  f"{len(sym_idx.symbols)} symbols · {how} · "
+                  f"{time.time() - t0:.1f}s[/]")
+    if scan.truncated:
+        # Never a silent cap: name the limit, the consequence, and both escapes.
+        console.print(
+            f"[yellow]· index truncated at the {scan.truncated}[/] [dim]— "
+            f"`bm25_search`/`find_symbol` see the {scan.count} shallowest files "
+            f"under {repo_path}, not the whole tree. Chat from a project "
+            f"directory (git-tracked files only, ~1s), or raise "
+            f"LUXE_INDEX_MAX_FILES / LUXE_INDEX_MAX_MB.[/]")
+    return bm25, sym_idx, scan
+
+
 def _resolve_theme_name(flag: str | None) -> str:
     """Chat palette precedence (D2): `--theme` → `LUXE_THEME` → `auto`.
 
@@ -640,14 +697,11 @@ def chat_cmd(
 
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
-    console.print("[dim]· Indexing repository for search (model loads on first turn)…[/]")
-    bm25 = search_mod.build_bm25_index(repo_path)
-    sym_idx = symbols_mod.build_symbol_index(repo_path)
+    bm25, sym_idx, scan = _build_chat_indexes(repo_path)
     search_mod.set_index(bm25)
     symbols_mod.set_index(sym_idx)
-    console.print(f"[dim]  scanned {len(bm25.paths)} files · "
-                  f"{len(sym_idx.symbols)} symbols[/]")
-    languages = _detect_languages_for_repo(repo_path)
+    # Languages come from the scan we just did — no third walk of the tree.
+    languages = _languages_from_paths(scan.paths)
 
     try:
         ctx = acquire_repo_lock(repo_path, f"chat-{int(time.time())}")
@@ -1350,21 +1404,40 @@ def _infer_task_type(goal: str) -> str:
     return "review"
 
 
+_LANG_BY_EXT = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".tsx": "typescript", ".jsx": "javascript", ".rs": "rust",
+    ".go": "go",
+}
+
+
+def _languages_from_paths(paths) -> frozenset[str]:
+    """Languages present in an already-enumerated file list — no walk.
+
+    `luxe chat` calls this with the scan it built for the indexes; walking the
+    tree a third time cost ~18s from `$HOME` (measured 2026-07-30), and with
+    weaker pruning than the indexes used.
+    """
+    return frozenset(
+        lang for p in paths
+        if (lang := _LANG_BY_EXT.get(Path(p).suffix.lower())) is not None
+    )
+
+
 def _detect_languages_for_repo(repo_path: str) -> frozenset[str]:
-    p = Path(repo_path)
-    lang_map = {
-        ".py": "python", ".js": "javascript", ".ts": "typescript",
-        ".tsx": "typescript", ".jsx": "javascript", ".rs": "rust",
-        ".go": "go",
-    }
+    """Walk `repo_path` to find which languages it contains.
+
+    Still the walking version for `maintain`/gitkit (unchanged behavior). The
+    chat path uses `_languages_from_paths` instead — see above.
+    """
     found: set[str] = set()
     import os as _os
-    for root, dirs, files in _os.walk(p):
+    for root, dirs, files in _os.walk(Path(repo_path)):
         dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv"}]
         for f in files:
             ext = Path(f).suffix.lower()
-            if ext in lang_map:
-                found.add(lang_map[ext])
+            if ext in _LANG_BY_EXT:
+                found.add(_LANG_BY_EXT[ext])
     return frozenset(found)
 
 

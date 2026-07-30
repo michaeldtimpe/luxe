@@ -128,3 +128,42 @@ def test_tool_fn_no_matches(tmp_path: Path):
     text, err = _bm25_search_fn({"query": "zzzunmatchableXX9"})
     assert err is None
     assert "no matches" in text
+
+
+# --- precomputed file list (chat's shared bounded scan) ----------------------
+
+
+def test_build_bm25_index_accepts_a_precomputed_file_list(tmp_path):
+    """Chat scans once and feeds both indexes; passing `files` must skip the
+    walk entirely (including files the walk WOULD have found)."""
+    from luxe.search import build_bm25_index
+
+    (tmp_path / "indexed.py").write_text("def authenticate_user(): pass\n")
+    (tmp_path / "ignored.py").write_text("def other_thing(): pass\n")
+    (tmp_path / "also_ignored.py").write_text("def third(): pass\n")
+
+    idx = build_bm25_index(tmp_path, files=[tmp_path / "indexed.py"])
+
+    # Only the listed file is indexed — the other two exist and are NOT walked.
+    assert idx.paths == ["indexed.py"]
+
+
+def test_build_bm25_index_filters_the_list_by_extension(tmp_path):
+    from luxe.search import build_bm25_index
+
+    (tmp_path / "a.py").write_text("alpha beta\n")
+    (tmp_path / "notes.txt").write_text("alpha beta\n")
+
+    idx = build_bm25_index(tmp_path, files=[tmp_path / "a.py",
+                                            tmp_path / "notes.txt"])
+    assert idx.paths == ["a.py"]
+
+
+def test_build_bm25_index_without_files_still_walks(tmp_path):
+    """The benchmark path passes no `files` and must behave as before."""
+    from luxe.search import build_bm25_index
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("alpha beta\n")
+    idx = build_bm25_index(tmp_path)
+    assert idx.paths == ["pkg/a.py"]

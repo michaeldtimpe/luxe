@@ -181,3 +181,41 @@ def test_tool_fn_empty_index_redirects_to_bm25(tmp_path: Path):
     assert err is not None
     assert "empty" in err
     assert "bm25_search" in err
+
+
+def test_build_symbol_index_accepts_a_precomputed_file_list(tmp_path):
+    """Chat's shared scan feeds this too; `files` must bypass the walk."""
+    from luxe.symbols import build_symbol_index
+
+    (tmp_path / "indexed.py").write_text("class Alpha:\n    pass\n")
+    (tmp_path / "skipped.py").write_text("class Beta:\n    pass\n")
+
+    idx = build_symbol_index(tmp_path, files=[tmp_path / "indexed.py"])
+
+    names = {s.name for s in idx.symbols}
+    assert "Alpha" in names and "Beta" not in names
+    assert idx.symbols[0].path == "indexed.py"      # relative to the root
+
+
+def test_build_symbol_index_reports_progress(tmp_path):
+    from luxe.symbols import build_symbol_index
+
+    files = []
+    for i in range(450):
+        p = tmp_path / f"m{i}.py"
+        p.write_text(f"def f{i}(): pass\n")
+        files.append(p)
+
+    seen: list[int] = []
+    build_symbol_index(tmp_path, files=files, on_progress=seen.append)
+
+    assert seen == [200, 400]      # every 200 parsed files
+
+
+def test_build_symbol_index_without_files_still_walks(tmp_path):
+    from luxe.symbols import build_symbol_index
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("class Gamma:\n    pass\n")
+    idx = build_symbol_index(tmp_path)
+    assert {s.name for s in idx.symbols} == {"Gamma"}

@@ -3486,3 +3486,54 @@ and when copying from a NAS, never trust that a "regular file" is one.
 **Affected files**: `src/luxe/modelstore.py` (new), `src/luxe/cli.py`
 (`luxe pull`), `src/luxe/chat/commands.py` (`/pull`), `src/luxe/luxe.sdd`,
 `src/luxe/chat/chat.sdd`, `tests/test_modelstore.py` (new).
+
+---
+
+### [2026-07-30] Chat startup indexed the tree three times, unbounded — 210s from `$HOME`
+
+**What happened**: The user reported `· Indexing repository for search…` was
+"very slow" when running `luxe-chat` from `~`. Measured: **210.7s** of indexing
+(BM25 79.2s over 55,297 files, symbols 131.5s for 1,088,426 symbols) plus a
+further ~18s that turned out to be a third walk. ~34s of that was visible as
+process time before the first prompt even appeared.
+
+**Root cause**: three independent full walks of a user-chosen root, none bounded.
+1. `search.build_bm25_index` — walk, read, tokenize (~15 MB/s in Python).
+2. `symbols.build_symbol_index` — walk AGAIN, read AGAIN, tree-sitter parse.
+3. `cli._detect_languages_for_repo` — walk a THIRD time, with weaker pruning
+   (it didn't even skip dot-dirs, so `~/Library` and `~/.cache` were included).
+
+From `~` that's 1M files visited, 56k candidates, ~1 GB read twice. Nothing
+capped the work, and `~/Library` (488k files — half the tree) was never pruned
+because it isn't a dot-directory.
+
+**Fix / takeaway**:
+- ONE scan (`fswalk.scan_source_files`) feeds both indexes and the language
+  detection. The builders gained an optional `files=` parameter; called without
+  it they walk exactly as before, so benchmark/maintain stay byte-identical.
+- **`git ls-files` when the root is a repo.** `.gitignore` already encodes
+  "don't look here" better than any name-based prune list, and it costs ~10ms
+  where walking the same repo costs seconds. Correctness win too: no more
+  indexing whatever venv/vendor tree the prune list happened to miss.
+- **Breadth-first when walking.** A cap that keeps depth-first order spends the
+  whole budget inside whichever deep subtree sorts first; BFS keeps the shallow
+  (project-level) files that are actually worth searching.
+- **Caps with a loud notice** (`LUXE_INDEX_MAX_FILES=8000`,
+  `LUXE_INDEX_MAX_MB=96`). Truncating an index degrades a real capability, so
+  startup names the cap, says what `bm25_search`/`find_symbol` can no longer
+  see, and gives both escapes.
+- Threads don't help the parse: py-tree-sitter + the Python node walk are
+  GIL-bound (measured 1.0× on 8 workers). Don't reach for a thread pool here.
+
+Measured after: **~1s in a git repo (303 files), ~16s from `$HOME`** — and the
+`$HOME` case now says why it's still 16s and how to make it 1s.
+
+General lesson: a startup cost nobody measured had grown three walks deep. When
+a "prepare the workspace" step accepts a user-chosen root, bound it and print
+its cost — 0.4s in the repo you developed in hides 210s in the directory your
+user actually ran it from.
+
+**Affected files**: `src/luxe/fswalk.py` (`scan_source_files`, `SourceScan`,
+`HOME_NOISE_DIRS`), `src/luxe/search.py`, `src/luxe/symbols.py`,
+`src/luxe/cli.py`, `src/luxe/chat/chat.sdd`, `tests/test_fswalk.py`,
+`tests/test_search.py`, `tests/test_symbols.py`.

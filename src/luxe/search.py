@@ -15,6 +15,7 @@ than 3 chars. Good enough for code identifiers + natural-language queries.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,13 +69,47 @@ class BM25Index:
         return [(p, float(s)) for p, s in top if s > 0.0]
 
 
+def _candidates(root: Path, files: list[Path] | None,
+                extensions: set[str] | frozenset[str],
+                excludes: set[str] | frozenset[str],
+                max_file_bytes: int):
+    """Yield indexable files: either the caller's precomputed list (already
+    size-filtered by the scan) or the legacy walk."""
+    if files is not None:
+        for p in files:
+            if p.suffix.lower() in extensions:
+                yield p
+        return
+    for cur, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs
+                   if d not in excludes and not d.startswith(".") or d == ".github"]
+        for fname in names:
+            p = Path(cur) / fname
+            if p.suffix.lower() not in extensions:
+                continue
+            try:
+                if p.stat().st_size > max_file_bytes:
+                    continue
+            except OSError:
+                continue
+            yield p
+
+
 def build_bm25_index(
     repo_root: str | Path,
     extensions: set[str] | None = None,
     excludes: set[str] | None = None,
     max_file_bytes: int = 256 * 1024,
+    files: list[Path] | None = None,
 ) -> BM25Index:
-    """Walk repo_root, build a BM25 index over source files (line-tokenized)."""
+    """Walk repo_root, build a BM25 index over source files (line-tokenized).
+
+    `files` skips the walk and indexes exactly those paths (filtered to
+    `extensions`) — the chat front-end passes a bounded, once-computed scan
+    (`fswalk.scan_source_files`) so startup doesn't walk the tree twice. When
+    omitted the original walk runs unchanged, so the benchmark path is
+    byte-identical.
+    """
     root = Path(repo_root).resolve()
     extensions = extensions if extensions is not None else _DEFAULT_EXTENSIONS
     excludes = excludes if excludes is not None else _DEFAULT_EXCLUDES
@@ -82,28 +117,20 @@ def build_bm25_index(
     paths: list[str] = []
     docs: list[list[str]] = []
 
-    for cur, dirs, files in __import__("os").walk(root):
-        dirs[:] = [d for d in dirs if d not in excludes and not d.startswith(".") or d in {".github"}]
-        for fname in files:
-            p = Path(cur) / fname
-            if p.suffix.lower() not in extensions:
-                continue
-            try:
-                size = p.stat().st_size
-            except OSError:
-                continue
-            if size > max_file_bytes:
-                continue
-            try:
-                text = p.read_text(errors="replace")
-            except OSError:
-                continue
-            tokens = _tokenize(text)
-            if not tokens:
-                continue
+    for p in _candidates(root, files, extensions, excludes, max_file_bytes):
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        tokens = _tokenize(text)
+        if not tokens:
+            continue
+        try:
             rel = str(p.relative_to(root))
-            paths.append(rel)
-            docs.append(tokens)
+        except ValueError:
+            rel = str(p)
+        paths.append(rel)
+        docs.append(tokens)
 
     if not paths:
         # rank_bm25 raises on empty corpus; build a 1-doc empty index.
