@@ -12,11 +12,15 @@ What shipped:
 
 1. **Per-host model manifests** (`hosts:` in configs/chat.yaml → `HostManifest`
    in config.py). m5 (128 GB): main `Qwen3.6-35B-A3B-6bit`, fallback
-   `Qwen3.6-27B-6bit`. m1 (64 GB) + m4 (48 GB): main `Qwen3.6-27B-4bit`,
-   fallback `Qwen3.6-35B-A3B-4bit`. m1 `keep:`s the bench champion (user
-   decision: bench exception, weights stay). neo (8 GB) deliberately absent.
-   Slots resolve manifest-main first; overrides still win. gemma dropped from
-   the roster (no tool support).
+   `Qwen3.6-27B-6bit`. m1 (64 GB) + m4 (48 GB): main `Qwen3.6-35B-A3B-4bit`,
+   fallback `Qwen3.6-27B-4bit` — FLIPPED same day on real-turn data: Qwen3.6
+   is a multimodal family, oMLX 0.5.3 serves it on the slow `vlm` engine
+   (text-only models get the fast `batched` engine + paged prefix cache);
+   dense-27B prefilled the ~3.9K chat prompt at ~65 tok/s with zero cache
+   reuse (63-74s turns), the MoE holds ~10s. m1 `keep:`s the bench champion
+   (user decision: bench exception, weights stay). neo (8 GB) deliberately
+   absent. Slots resolve manifest-main first; overrides still win. gemma
+   dropped from the roster (no tool support).
 2. **Loud auto-degrade** (`SlotManager`): main missing from catalog / failed
    swap guard / BackendError on a healthy endpoint → session reroutes to the
    fallback with an announced, single-fire switch (`note_turn_failure` is the

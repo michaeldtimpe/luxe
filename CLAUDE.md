@@ -40,8 +40,10 @@ benchmark/maintain path (luxe.sdd):
 (b) **per-host manifests** (`hosts:` in chat.yaml, 2026-07-30 fallback-kit
 pivot): each fleet host declares an interactive main + fallback pair sized to
 its RAM — m5 (128 GB) = champion + 27B-6bit; m1 (64 GB) and m4 (48 GB) =
-27B-4bit + 35B-A3B-4bit. **The interactive default on m1/m4 is deliberately
-NOT the champion** — do not "restore" it. The champion pin is a benchmark pin:
+35B-A3B-4bit main + 27B-4bit fallback (MoE-first, flipped 2026-07-30: Qwen3.6
+is multimodal so oMLX runs it on the slow vlm engine — dense-27B prefills at
+~65 tok/s with no cache reuse; the MoE holds ~10s turns). **The interactive
+default on m1/m4 is deliberately NOT the champion** — do not "restore" it. The champion pin is a benchmark pin:
 `single_64gb.yaml` still selects it and m1 keeps its weights via the
 manifest's `keep:` list. A host with no `hosts:` entry behaves exactly as
 before (champion everywhere). Do not extend fan-out beyond these.
