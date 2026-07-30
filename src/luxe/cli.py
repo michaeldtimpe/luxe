@@ -1342,32 +1342,71 @@ def update_cmd(no_sync: bool):
 @main.command(name="smoke")
 @click.option("--config", "config_path", default=None,
               help="Config YAML (default: configs/chat.yaml)")
+@click.option("--backend", "backend_name", default=None,
+              help="Run against this configured backends: entry (e.g. m5). "
+                   "Drill models resolve from the TARGET host's manifest.")
 @click.option("--base-url", default="",
               help="oMLX endpoint to smoke (default: the config's default backend)")
+@click.option("--code", "code_drill", is_flag=True, default=False,
+              help="Run the CODING drill instead: plant a bug + failing test "
+                   "in a scratch repo, let the model fix it, verify with "
+                   "pytest + git diff.")
+@click.option("--chat", "chat_drill", is_flag=True, default=False,
+              help="Run the CHAT drill instead: a read-only turn that must "
+                   "read a file to answer.")
 @click.option("--skip-fallback", is_flag=True, default=False,
               help="Skip the fallback-model leg (it pays a full weight swap).")
 @click.option("--skip-tools", is_flag=True, default=False,
               help="Skip the tool-call turn.")
 @click.option("--keep-loaded", is_flag=True, default=False,
               help="Leave the last smoked model resident.")
-def smoke_cmd(config_path: str | None, base_url: str,
+def smoke_cmd(config_path: str | None, backend_name: str | None,
+              base_url: str, code_drill: bool, chat_drill: bool,
               skip_fallback: bool, skip_tools: bool, keep_loaded: bool):
-    """Aliveness drill for this host's fallback kit (minutes, not a bench).
+    """Aliveness drills for this host's fallback kit (minutes, not a bench).
 
-    Verifies the manifest, the weights on disk, the endpoint, and runs ONE
-    real turn + one tool call on the main model and one turn on the fallback.
+    Default: manifest → weights → endpoint → catalog → one real turn + tool
+    call on main → one turn on the fallback. `--code` / `--chat` run the
+    agentic drills instead (combinable): real run_single turns against a
+    planted scratch repo — the full coding pipeline, deterministically
+    verified. `--backend m5` drills a remote host's models from here.
     Exit 0 = ready; exit 1 = something needs fixing (each line says what).
     """
-    from luxe.chat.smoke import run_smoke
+    from luxe.chat.smoke import run_chat_drill, run_code_drill, run_smoke
 
     cfg = load_config(config_path or _default_chat_config())
+    if backend_name and backend_name not in cfg.backend_entries():
+        console.print(f"[red]✗ Unknown backend {backend_name!r}. "
+                      f"Configured: {', '.join(cfg.backend_entries())}.[/]")
+        sys.exit(2)
     t0 = time.time()
-    report = run_smoke(cfg, base_url=base_url or None,
-                       skip_fallback=skip_fallback, skip_tools=skip_tools)
     glyphs = {"pass": "[green]✓[/]", "warn": "[yellow]⚠[/]", "fail": "[red]✗[/]"}
-    for step in report.steps:
-        console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
-    if not keep_loaded:
+
+    reports = []
+    if code_drill or chat_drill:
+        if chat_drill:
+            console.print("[bold]chat drill[/]")
+            reports.append(run_chat_drill(cfg, backend_name=backend_name,
+                                          base_url=base_url or None))
+            for step in reports[-1].steps:
+                console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
+        if code_drill:
+            console.print("[bold]code drill[/]")
+            reports.append(run_code_drill(cfg, backend_name=backend_name,
+                                          base_url=base_url or None))
+            for step in reports[-1].steps:
+                console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
+    else:
+        reports.append(run_smoke(cfg, base_url=base_url or None,
+                                 skip_fallback=skip_fallback,
+                                 skip_tools=skip_tools))
+        for step in reports[-1].steps:
+            console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
+
+    failed = any(r.failed for r in reports)
+    if not keep_loaded and not backend_name:
+        # Only unload the endpoint we own; a remote host's residency is its
+        # own business (never unload a server another session may be using).
         try:
             from luxe.backend import Backend
             entry = cfg.backend_entry(cfg.default_backend_name())
@@ -1376,9 +1415,9 @@ def smoke_cmd(config_path: str | None, base_url: str,
                     ).unload_all_loaded()
         except Exception:
             pass
-    verdict = ("[red]NOT READY[/]" if report.failed else "[green]READY[/]")
+    verdict = ("[red]NOT READY[/]" if failed else "[green]READY[/]")
     console.print(f"[bold]{verdict}[/] [dim]({time.time() - t0:.0f}s)[/]")
-    sys.exit(1 if report.failed else 0)
+    sys.exit(1 if failed else 0)
 
 
 def _omlx_base_url_from_config() -> str:
