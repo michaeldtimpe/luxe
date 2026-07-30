@@ -172,6 +172,13 @@ def test_chat_yaml_manifests_declare_fallbacks():
     for name, m in cfg.hosts.items():
         assert m.main and m.fallback and m.fallback != m.main, name
     assert "Qwen3.6-35B-A3B-6bit" in cfg.hosts["m1"].keep
+    # Per-model /ctx clamps (2026-07-30 KV audit): dense-27B is capped at the
+    # 32K default on the small hosts (64 KB/token KV + ~65 tok/s prefill);
+    # the m1 bench champion clamps at 128K (28.4 GiB weights leave ~7.6 GiB).
+    assert cfg.hosts["m1"].ctx_max["Qwen3.6-27B-4bit"] == 32768
+    assert cfg.hosts["m1"].ctx_max["Qwen3.6-35B-A3B-6bit"] == 131072
+    assert cfg.hosts["m4"].ctx_max["Qwen3.6-27B-4bit"] == 32768
+    assert "Qwen3.6-35B-A3B-4bit" not in cfg.hosts["m1"].ctx_max  # MoE uncapped
 
 
 def test_host_manifest_normalizes_hostnames():

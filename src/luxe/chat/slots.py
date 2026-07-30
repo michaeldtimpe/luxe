@@ -99,9 +99,18 @@ class SlotManager:
 
     def ctx_ceiling(self, slot: str) -> int:
         """Hard num_ctx ceiling for `/ctx` on this slot: the role's
-        `num_ctx_max`, or its `num_ctx` when no expansion is configured."""
+        `num_ctx_max` (or its `num_ctx` when no expansion is configured),
+        further clamped by the host manifest's per-MODEL `ctx_max` for the
+        model this slot currently resolves to — overrides and auto-degrade
+        included, so a session that lands on the dense fallback clamps to the
+        dense cap automatically."""
         role = self.role_for(slot)
-        return role.num_ctx_max or role.num_ctx
+        ceiling = role.num_ctx_max or role.num_ctx
+        if self.manifest is not None:
+            cap = self.manifest.ctx_max.get(self.model_for(slot), 0)
+            if cap:
+                ceiling = min(ceiling, cap)
+        return ceiling
 
     def set_override(self, slot: str, model_id: str) -> None:
         if slot not in _SLOTS:

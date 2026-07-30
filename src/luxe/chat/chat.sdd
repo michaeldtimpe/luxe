@@ -20,8 +20,14 @@ never touches this module.
   Benchmark/maintain never call `model_for_slot`/`host_manifest`, so
   `single_64gb.yaml` selection is untouched
 - Per-host manifests (`hosts:` in configs/chat.yaml, keyed by short hostname,
-  parsed as HostManifest main/fallback/keep) are a DISK declaration as well as
-  a selection default: all three sets are expected locally cached on that host.
+  parsed as HostManifest main/fallback/keep/ctx_max) are a DISK declaration as
+  well as a selection default. `ctx_max` is a per-MODEL `/ctx` ceiling (KV
+  cost differs ~3× across the Qwen3.6 family: dense 64 KB/token vs MoE 20);
+  `SlotManager.ctx_ceiling` returns min(role num_ctx_max, the cap for the
+  model the slot CURRENTLY resolves to — overrides and auto-degrade
+  included), and `prepare_turn` clamps `/ctx` overrides through it every
+  turn, so a session degraded to the dense fallback shrinks to the dense cap
+  on its next turn. Also: all three sets are expected locally cached on that host.
   `luxe pull` provisions, `/doctor` + `luxe smoke` verify (including the
   dangling-symlink state a wiped HF cache leaves behind), and
   `luxe pull <name> --remove` refuses manifest models without --force.

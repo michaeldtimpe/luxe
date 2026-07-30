@@ -189,6 +189,35 @@ def test_turn_failure_on_healthy_endpoint_degrades(monkeypatch):
     assert sm.note_turn_failure() is None
 
 
+def test_ctx_ceiling_clamps_per_model(monkeypatch):
+    """The manifest's ctx_max keys on the model the slot CURRENTLY resolves
+    to — main uncapped, fallback capped, and a degrade applies the fallback's
+    cap automatically."""
+    import luxe.config as config_mod
+
+    from luxe.config import HostManifest, RoleConfig
+
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    ManifestBackend.served = ["Main-M", "Fb-M"]
+    monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith", num_ctx=32768,
+                                      num_ctx_max=262144)},
+        hosts={"here": HostManifest(main="Main-M", fallback="Fb-M",
+                                    ctx_max={"Fb-M": 32768,
+                                             "Big-M": 999999999})},
+    )
+    sm = slots_mod.SlotManager(cfg)
+    assert sm.ctx_ceiling("chat") == 262144      # main: role ceiling only
+
+    sm._degrade("test")                          # now resolving to Fb-M
+    assert sm.ctx_ceiling("chat") == 32768       # fallback's cap applies
+
+    sm.set_override("chat", "Big-M")             # manual pick, huge cap
+    assert sm.ctx_ceiling("chat") == 262144      # role ceiling still wins
+
+
 def test_turn_failure_on_dead_endpoint_does_not_degrade(monkeypatch):
     monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
     ManifestBackend.served = ["Main-M", "Fb-M"]
