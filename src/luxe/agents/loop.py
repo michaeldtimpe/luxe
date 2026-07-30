@@ -672,7 +672,6 @@ def run_agent(
     compaction_total_tokens_dropped = 0
     compaction_max_phase_this_run = 0
     compaction_phase_at_first_write: int | None = None
-    last_compaction_phase: int = 0  # latest phase >0; reset to 0 only on resolve event
 
     # forge-hybrid Phase 3 (B1) — respond terminal tool. Default OFF
     # (byte-identical baseline preserved). When LUXE_RESPOND_TERMINAL=1,
@@ -807,6 +806,11 @@ def run_agent(
         convergence_gate_enabled = False
     actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
     spec_violations_reprompted: set[str] = set()
+    # The previous iteration's response. Bound here (not just inside the loop)
+    # because the pre-step clean-exit guards below read it before this step's
+    # backend.chat runs; on step 0 there is nothing to read and `""` is right.
+    # Was a latent NameError + a `'resp' in dir()` probe (ruff F821, 2026-07-29).
+    resp: ChatResponse | None = None
 
     for step in range(role_cfg.max_steps):
         result.steps = step + 1
@@ -1109,7 +1113,7 @@ def run_agent(
             # semantics; the model has demonstrated unresponsiveness to the
             # control layer. `resp` is the prior iteration's response (the
             # second burst), still bound in local scope here.
-            result.final_text = resp.text or ""
+            result.final_text = (resp.text if resp else "") or ""
             if log_calls:
                 append_event(
                     run_id, "prose_burst_clean_exit",
@@ -1137,7 +1141,7 @@ def run_agent(
             completion_tokens=result.completion_tokens,
         )
         if hab_exit is not None:
-            result.final_text = resp.text or "" if 'resp' in dir() else ""
+            result.final_text = (resp.text if resp else "") or ""
             if log_calls:
                 append_event(
                     run_id, "habituation_exit",
@@ -1221,7 +1225,6 @@ def run_agent(
                 compaction_total_tokens_dropped += (cr.tokens_before - cr.tokens_after)
                 if cr.phase_reached > compaction_max_phase_this_run:
                     compaction_max_phase_this_run = cr.phase_reached
-                last_compaction_phase = cr.phase_reached
                 if log_calls:
                     append_event(
                         run_id, "compaction_phase_reached",
@@ -1235,7 +1238,7 @@ def run_agent(
             messages = elide_old_tool_results(messages, role_cfg.num_ctx)
 
         try:
-            resp: ChatResponse = backend.chat(
+            resp = backend.chat(
                 messages,
                 tools=openai_tools,
                 max_tokens=role_cfg.max_tokens_per_turn,
@@ -1680,7 +1683,7 @@ def run_agent(
                     consecutive_repeat_steps=0,
                 )
     else:
-        result.final_text = resp.text if 'resp' in dir() else ""
+        result.final_text = resp.text if resp else ""
         result.aborted = True
         result.abort_reason = f"Max steps reached ({role_cfg.max_steps})"
 

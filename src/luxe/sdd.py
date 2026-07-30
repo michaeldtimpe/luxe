@@ -128,7 +128,7 @@ def parse_sdd_file(path: Path) -> SddFile:
     """Read a `.sdd` file from disk and parse it. Path is canonicalized."""
     resolved = path.resolve()
     if not resolved.is_file():
-        raise SddParseError(f"not a file", path=resolved)
+        raise SddParseError("not a file", path=resolved)
     return parse_sdd(resolved.read_text(encoding="utf-8"), path=resolved)
 
 

@@ -269,7 +269,7 @@ def extract_path(name: str, args: dict[str, Any]) -> str | None:
 # happens in Phase 3a (archetype preflight) so any behavior change can be
 # isolated under the archetype probe.
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 _SCORE_TREND_WINDOW = 5
 _INTENSITY_MIN = 0.0

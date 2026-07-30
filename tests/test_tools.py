@@ -520,3 +520,61 @@ class TestUnrestrictedBash:
 
     def test_restricted_bash_def_tells_model_to_surface_flag(self):
         assert "/bash" in shell.restricted_bash_def().description
+
+
+# --- filesystem tools survive unreadable directories -------------------------
+
+
+def _fail_scandir_under(monkeypatch, doomed, exc):
+    import os as _os
+    from pathlib import Path as _Path
+
+    real = _os.scandir
+
+    def fake(path=".", *a, **k):
+        p = _Path(_os.fspath(path))
+        if p == doomed or doomed in p.parents:
+            raise exc
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(_os, "scandir", fake)
+
+
+def test_list_dir_reports_an_unreadable_directory(tmp_path, monkeypatch):
+    """A dead network mount raises OSError(ETIMEDOUT) from iterdir; the model
+    should get a sentence, not a raw errno."""
+    from luxe.tools import fs
+
+    doomed = tmp_path / "nas"
+    doomed.mkdir()
+    fs.set_repo_root(str(tmp_path))
+    monkeypatch.setattr(type(doomed), "iterdir",
+                        lambda self: (_ for _ in ()).throw(
+                            OSError(60, "Operation timed out")))
+
+    result, err = fs._list_dir({"path": "nas"})
+
+    assert result == ""
+    assert "Cannot read directory" in err and "timed out" in err
+
+
+def test_glob_returns_partial_results_when_a_subtree_dies(tmp_path, monkeypatch):
+    """pathlib's glob generator dies on the first non-permission OSError and
+    can't resume — return what we have plus why, not a tool error."""
+    import errno
+
+    from luxe.tools import fs
+
+    (tmp_path / "a.py").write_text("x")
+    doomed = tmp_path / "nas"
+    doomed.mkdir()
+    (doomed / "b.py").write_text("y")
+    fs.set_repo_root(str(tmp_path))
+
+    matches, stopped = fs._glob_matches_tolerant(tmp_path, "*.py")
+    assert [m.name for m in matches] == ["a.py"] and stopped == ""
+
+    _fail_scandir_under(monkeypatch, tmp_path,
+                        OSError(errno.ETIMEDOUT, "Operation timed out"))
+    matches, stopped = fs._glob_matches_tolerant(tmp_path, "**/*.py")
+    assert "timed out" in stopped        # reported, not raised

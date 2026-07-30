@@ -329,7 +329,7 @@ class MCPClientManager:
             )
 
         if self._loop is None:
-            return "", f"MCP loop not running"
+            return "", "MCP loop not running"
 
         async def _do():
             return await asyncio.wait_for(

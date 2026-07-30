@@ -437,10 +437,13 @@ class Backend:
         )
 
     def health(self) -> bool:
+        # OSError as well as httpx.HTTPError: a socket-level ETIMEDOUT (macOS
+        # errno 60, e.g. a dropped Tailscale route) is an OSError and must read
+        # as "unhealthy", not crash the caller.
         try:
             r = self._client.get("/v1/models")
             return r.status_code == 200
-        except httpx.HTTPError:
+        except (httpx.HTTPError, OSError):
             return False
 
     def list_models(self) -> list[str]:
@@ -460,13 +463,29 @@ class Backend:
         this returns only those actually in RAM. Uses /v1/models/status,
         which oMLX exposes alongside the OpenAI-compatible /v1/models.
         """
+        return [m.get("id", "") for m in self._models_status() if m.get("loaded")]
+
+    def model_paths(self) -> dict[str, str]:
+        """Map model id → the path oMLX loads its weights from.
+
+        Powers the chat front-end's local-vs-network provenance flag
+        (`chat/origin.py`): the path can be a symlink into the HF cache, a
+        network mount, or a cloud-sync placeholder tree. Best-effort — an old
+        or unreachable server yields `{}`.
+        """
+        return {m.get("id", ""): m.get("model_path", "")
+                for m in self._models_status() if m.get("id")}
+
+    def _models_status(self) -> list[dict[str, Any]]:
+        """`/v1/models/status` model records, or [] when unavailable."""
         try:
             r = self._client.get("/v1/models/status")
             r.raise_for_status()
             data = r.json()
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, OSError, ValueError):
             return []
-        return [m.get("id", "") for m in data.get("models", []) if m.get("loaded")]
+        models = data.get("models", [])
+        return models if isinstance(models, list) else []
 
     def unload_model(self, model_id: str) -> bool:
         """Free memory for one model. Returns True on success.
@@ -478,7 +497,7 @@ class Backend:
         try:
             r = self._client.post(f"/v1/models/{model_id}/unload")
             return r.status_code == 200
-        except httpx.HTTPError:
+        except (httpx.HTTPError, OSError):
             return False
 
     def unload_all_loaded(self, *, except_for: list[str] | None = None) -> dict[str, bool]:
@@ -508,7 +527,7 @@ class Backend:
             try:
                 if target_model in set(self.list_models()):
                     return True
-            except httpx.HTTPError:
+            except (httpx.HTTPError, OSError):
                 pass
             time.sleep(1.0)
         return False
