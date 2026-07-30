@@ -76,6 +76,17 @@ class TestStoreHelpers:
         assert ms.model_state("Stub", tmp_path) == "dangling"
         assert ms.model_state("Absent", tmp_path) == "missing"
 
+    def test_nested_org_layout_is_recognized(self, tmp_path):
+        """oMLX's own HF downloads land as `<store>/<org>/<Name>` and are
+        served by LEAF name — listing/state/remove must all see them."""
+        _model_dir(tmp_path / "mlx-community" / "Nested-4bit")
+        _model_dir(tmp_path / "TopLevel")
+        assert ms.local_model_names(tmp_path) == ["Nested-4bit", "TopLevel"]
+        assert ms.model_state("Nested-4bit", tmp_path) == "ok"
+        freed, note = ms.remove_model("Nested-4bit", tmp_path)
+        assert freed > 0
+        assert not (tmp_path / "mlx-community" / "Nested-4bit").exists()
+
     def test_remove_model_dir_and_symlink(self, tmp_path):
         _model_dir(tmp_path / "Real", weight_bytes=2048)
         target = _model_dir(tmp_path / "cache" / "snap")

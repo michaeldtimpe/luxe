@@ -124,13 +124,57 @@ def xsym_target(path: Path) -> str | None:
     return target or None
 
 
-def local_model_names(models_dir: Path | None = None) -> list[str]:
-    """Model directory names already present in the oMLX store."""
-    root = Path(models_dir or DEFAULT_MODELS_DIR)
+def _is_org_dir(p: Path) -> bool:
+    """A namespace directory, not a model — oMLX's own HF downloads land
+    nested as `<store>/<org>/<Name>` (e.g. `mlx-community/Qwen3.6-27B-4bit`),
+    and oMLX serves the LEAF name. A namespace has no config.json of its own
+    and at least one directory/symlink child; anything else (including an
+    empty or broken model dir) is treated as a model entry itself."""
     try:
-        return sorted(p.name for p in root.iterdir() if p.is_dir() or p.is_symlink())
+        if (not p.is_dir() or p.is_symlink()
+                or (p / "config.json").exists()):
+            return False
+        return any(c.is_dir() or c.is_symlink() for c in p.iterdir())
+    except OSError:
+        return False
+
+
+def store_entry(name: str, models_dir: Path | None = None) -> Path | None:
+    """The store path serving `name`: top-level `<store>/<name>`, else the
+    nested `<store>/<org>/<name>` an oMLX HF download creates."""
+    root = Path(models_dir or DEFAULT_MODELS_DIR)
+    p = root / name
+    try:
+        if p.is_dir() or p.is_symlink():
+            return p
+        for sub in root.iterdir():
+            if _is_org_dir(sub):
+                q = sub / name
+                if q.is_dir() or q.is_symlink():
+                    return q
+    except OSError:
+        pass
+    return None
+
+
+def local_model_names(models_dir: Path | None = None) -> list[str]:
+    """Model names present in the oMLX store — the names oMLX would serve:
+    top-level entries plus the leaf names under org namespace dirs."""
+    root = Path(models_dir or DEFAULT_MODELS_DIR)
+    names: set[str] = set()
+    try:
+        for p in root.iterdir():
+            if _is_org_dir(p):
+                try:
+                    names.update(c.name for c in p.iterdir()
+                                 if c.is_dir() or c.is_symlink())
+                except OSError:
+                    continue
+            elif p.is_dir() or p.is_symlink():
+                names.add(p.name)
     except OSError:
         return []
+    return sorted(names)
 
 
 def model_state(name: str, models_dir: Path | None = None) -> str:
@@ -142,12 +186,8 @@ def model_state(name: str, models_dir: Path | None = None) -> str:
     cannot actually load. `/doctor`, `luxe smoke`, and `pull --list` all key
     off this instead of bare directory presence.
     """
-    root = Path(models_dir or DEFAULT_MODELS_DIR)
-    p = root / name
-    try:
-        if not (p.is_dir() or p.is_symlink()):
-            return "missing"
-    except OSError:
+    p = store_entry(name, models_dir)
+    if p is None:
         return "missing"
     return "ok" if is_model_dir(p) else "dangling"
 
@@ -161,16 +201,16 @@ def remove_model(name: str, models_dir: Path | None = None) -> tuple[int, str]:
     separate, deliberate act). Raises ModelStoreError for an unknown name.
     """
     root = Path(models_dir or DEFAULT_MODELS_DIR)
-    p = root / name
+    p = store_entry(name, root)
+    if p is None:
+        raise ModelStoreError(f"{name!r} is not in the store ({root})")
     if p.is_symlink():
         target = os.readlink(p)
         p.unlink()
         return 0, f"unlinked (target left alone: {target})"
-    if p.is_dir():
-        freed = dir_size(p)
-        shutil.rmtree(p)
-        return freed, "removed"
-    raise ModelStoreError(f"{name!r} is not in the store ({root})")
+    freed = dir_size(p)
+    shutil.rmtree(p)
+    return freed, "removed"
 
 
 # --- sources ----------------------------------------------------------------
