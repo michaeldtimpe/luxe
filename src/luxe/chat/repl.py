@@ -793,6 +793,7 @@ def _run_turn(
             swap_seconds=slots.stats.seconds,
             started_at=started_at,
             ended_at=ended_at,
+            num_ctx=prep.role_cfg.num_ctx,
         )
         if status is not None:
             status.slot = prep.slot
@@ -802,9 +803,14 @@ def _run_turn(
             status.wall_s = result.wall_s
             status.tok_per_s = (result.completion_tokens / result.wall_s
                                 if result.wall_s > 0 else 0.0)
-            # C2: bar shows the final instantaneous pressure (matches the last
-            # [token-progress] line); peak lives in the footer.
-            status.ctx_pressure = result.final_context_pressure
+            # Bar shows the server-truth context fill when the turn reported
+            # usage (the chars/4 estimate misses tool schemas and read a flat
+            # 7% at a real ~12% — 2026-07-30); estimate is the fallback.
+            if result.last_prompt_tokens and role_cfg.num_ctx:
+                status.ctx_pressure = (result.last_prompt_tokens
+                                       / role_cfg.num_ctx)
+            else:
+                status.ctx_pressure = result.final_context_pressure
             status.num_ctx = role_cfg.num_ctx
             status.prompt_tokens = result.prompt_tokens
             status.steps = result.steps

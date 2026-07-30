@@ -409,20 +409,36 @@ def _clock(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
 
-def render_footer_text(slot: str, model: str, result, *, num_ctx: int = 0) -> str:
+def _ctx_fill(result, num_ctx: int) -> float:
+    """Honest context fill: the server-reported last-step prompt size over the
+    window. The chars/4 pressure estimate misses the tool schemas (~1.6K
+    tokens) and undercounts — it read a steady 7% while the server was billing
+    ~4K/32K (2026-07-30). Falls back to the estimate when the server didn't
+    report usage."""
+    last = getattr(result, "last_prompt_tokens", 0)
+    if num_ctx > 0 and last > 0:
+        return last / num_ctx
+    return result.peak_context_pressure
+
+
+def render_footer_text(slot: str, model: str, result, *, num_ctx: int = 0,
+                       ended_at: float | None = None) -> str:
     """Plain one-line footer for the TUI transcript (no console required).
-    `tok: P+C` is this task's prompt+completion tokens; ctx% is that token fill of
-    the window (`of <size>` shown when num_ctx is known)."""
-    ctx = f"ctx(peak): {result.peak_context_pressure:.0%}"
+    `tok: P+C` is this task's prompt+completion tokens; ctx% is the last step's
+    server-reported fill of the window (`of <size>` when num_ctx is known)."""
+    ctx = f"ctx: {_ctx_fill(result, num_ctx):.0%}"
     if num_ctx:
         ctx += f" of {num_ctx // 1024}K"
-    return "· " + " · ".join([
+    bits = [
         f"slot: {slot}", f"model: {model}", f"steps: {result.steps}",
         f"tools: {result.tool_calls_total}", f"{result.wall_s:.1f}s",
         f"{_tok_per_s(result):.0f} tok/s",
         f"tok: {result.prompt_tokens}+{result.completion_tokens}",
         ctx,
-    ])
+    ]
+    if ended_at is not None:
+        bits.append(_clock(ended_at))
+    return "· " + " · ".join(bits)
 
 
 def render_footer(
@@ -436,6 +452,7 @@ def render_footer(
     swap_seconds: float = 0.0,
     started_at: float | None = None,
     ended_at: float | None = None,
+    num_ctx: int = 0,
 ) -> None:
     mode = (f"[{theme_mod.rich('warn') or 'yellow'}]write[/]" if write_enabled
             else f"[{theme_mod.rich('success') or 'green'}]read-only[/]")
@@ -448,7 +465,8 @@ def render_footer(
         f"{result.wall_s:.1f}s",
         f"{_tok_per_s(result):.0f} tok/s",
         f"tok: {result.prompt_tokens}+{result.completion_tokens}",
-        f"ctx(peak): {result.peak_context_pressure:.0%}",
+        f"ctx: {_ctx_fill(result, num_ctx):.0%}"
+        + (f" of {num_ctx // 1024}K" if num_ctx else ""),
     ]
     if swap_count:
         bits.append(f"swaps: {swap_count} ({swap_seconds:.0f}s)")

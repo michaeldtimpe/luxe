@@ -59,6 +59,12 @@ class AgentResult:
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Server-reported prompt size of the LAST step (prompt_tokens above is the
+    # per-step SUM). This is the true context fill: it includes tool schemas
+    # and everything else the chars/4 pressure estimate misses. Additive
+    # reporting field only — no loop logic reads it (compaction/early-bail
+    # keep the estimate, so benchmark behavior is untouched).
+    last_prompt_tokens: int = 0
     wall_s: float = 0.0
     peak_context_pressure: float = 0.0
     final_context_pressure: float = 0.0  # last per-step pressure (matches token-progress)
@@ -1257,6 +1263,8 @@ def run_agent(
 
         result.prompt_tokens += resp.timing.prompt_tokens
         result.completion_tokens += resp.timing.completion_tokens
+        if resp.timing.prompt_tokens:
+            result.last_prompt_tokens = resp.timing.prompt_tokens
 
         # Token-interval progress logging — fires when cumulative completion
         # tokens crosses each LUXE_TOKEN_LOG_INTERVAL multiple. Lets us see
