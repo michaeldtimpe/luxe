@@ -40,12 +40,21 @@ down from 28 findings to 5 (all deliberate E-class).
    in `agents/loop.py`; made `_list_dir`/`glob` degrade on unreadable dirs;
    widened `Backend` probe guards to `OSError`.
 
-**Not done / next:** the `/help` audit's remaining candidates are `/export`
-(transcript → markdown), `/diff` (session changed-files), and `/doctor`
-(oMLX + index + disk preflight). `luxe pull` has NOT been exercised against a
-real kappa mount (kappa wasn't mounted this session) — the XSym path is covered
-by unit tests and validated against the local HF cache, but the first real NAS
-pull is worth watching. Details in `lessons.md` (4 entries, 2026-07-29).
+8. **`/export`, `/diff`, `/doctor`** (2026-07-30, `chat/inspection.py`) — the
+   `/help` audit's remaining candidates, now shipped. All read-only: `/export`
+   renders the persisted transcript to `<session dir>/transcript.md` (works
+   after `/resume`, marks interrupted turns, summarises attachments); `/diff` is
+   git-backed and scopes to the files this session wrote (ledger), falling back
+   to the working tree with the scope named, `--full` for the patch; `/doctor`
+   preflights endpoint → key → model → weight origin → disk → index freshness →
+   git tree → mode → TUI, printing the fix for every warning.
+
+**Not done / next:** `luxe pull` has NOT been exercised against a real kappa
+mount (kappa wasn't mounted) — the XSym path is unit-tested and validated
+against the local HF cache, but the first real NAS pull is worth watching.
+`/doctor` reports "search index not built" outside a real `luxe chat` startup;
+that's correct but worth remembering when testing handlers directly. Details in
+`lessons.md` (4 entries, 2026-07-29).
 
 ## ⇒ SESSION HANDOFF (2026-06-10) — gitkit hardening cycle: 5 phases shipped+dogfooded, tuning debt banked
 

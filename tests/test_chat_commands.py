@@ -546,3 +546,135 @@ def test_retry_with_no_history(ctx):
     res = cmd.dispatch("/retry", ctx)
     assert res.submit == ""
     assert "Nothing to retry" in _text(ctx)
+
+
+# --- /doctor /diff /export ---------------------------------------------------
+
+
+def _init_repo(path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", "."], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
+    (path / "a.py").write_text("one\ntwo\n")
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=path, check=True)
+
+
+def test_doctor_prints_a_verdict_line(ctx, monkeypatch):
+    from luxe.chat import origin as origin_mod
+
+    monkeypatch.setattr(origin_mod, "network_mounts", lambda **k: [])
+    cmd.dispatch("/doctor", ctx)
+    out = _text(ctx)
+    assert "Doctor" in out
+    assert "oMLX endpoint" in out and "mode" in out
+    # a verdict is always printed, whichever way it went
+    assert ("all clear" in out or "caveats" in out or "broken" in out)
+
+
+def test_diff_reports_no_changes_on_a_clean_tree(ctx):
+    _init_repo(Path(ctx._repo))
+    cmd.dispatch("/diff", ctx)
+    assert "no changes" in _text(ctx)
+
+
+def test_diff_lists_counts_and_untracked(ctx):
+    repo = Path(ctx._repo)
+    _init_repo(repo)
+    (repo / "a.py").write_text("one\ntwo\nthree\n")
+    (repo / "new.py").write_text("x\n")
+
+    cmd.dispatch("/diff", ctx)
+    out = _text(ctx)
+
+    assert "a.py" in out and "+1" in out
+    assert "new.py" in out and "untracked" in out
+    assert "--full" in out                    # hint to see the patch
+
+
+def test_diff_full_prints_the_patch(ctx):
+    repo = Path(ctx._repo)
+    _init_repo(repo)
+    (repo / "a.py").write_text("one\nCHANGED\n")
+
+    cmd.dispatch("/diff --full", ctx)
+    out = _text(ctx)
+
+    assert "+CHANGED" in out and "-two" in out
+
+
+def test_diff_scopes_to_session_files_when_the_ledger_has_them(ctx, monkeypatch):
+    from luxe.state import ledger as ledger_mod
+
+    repo = Path(ctx._repo)
+    _init_repo(repo)
+    (repo / "a.py").write_text("one\nedited\n")
+    (repo / "untouched.py").write_text("noise\n")
+    ctx.session.session_id = "sess1"
+    monkeypatch.setattr(ledger_mod, "load",
+                        lambda sid: ledger_mod.Ledger(files=["a.py"]))
+
+    cmd.dispatch("/diff", ctx)
+    out = _text(ctx)
+
+    assert "this session" in out and "a.py" in out
+    assert "untouched.py" not in out
+
+
+def test_diff_without_a_repo(ctx):
+    ctx.session.repo_path = ""
+    cmd.dispatch("/diff", ctx)
+    assert "No repo" in _text(ctx)
+
+
+def test_export_writes_markdown(ctx):
+    from luxe.chat.session import ChatTurn
+    from luxe.memory import session as session_store
+
+    meta = session_store.new_session(repo_path=ctx._repo)
+    ctx.session.session_id = meta.session_id
+    session_store.append_turn(meta.session_id, "user", text="hello there",
+                              slot="chat")
+    session_store.append_turn(meta.session_id, "assistant", text="hi", steps=1)
+    ctx.session.add_turn(ChatTurn(user="hello there", assistant="hi"))
+
+    cmd.dispatch("/export", ctx)
+    out = _text(ctx)
+
+    assert "exported" in out
+    written = session_store.session_dir(meta.session_id) / "transcript.md"
+    assert "hello there" in written.read_text()
+
+
+def test_export_to_an_explicit_path(ctx, tmp_path):
+    from luxe.memory import session as session_store
+
+    meta = session_store.new_session(repo_path=ctx._repo)
+    ctx.session.session_id = meta.session_id
+    session_store.append_turn(meta.session_id, "user", text="q", slot="chat")
+    dest = tmp_path / "sub" / "chat.md"
+
+    cmd.dispatch(f"/export {dest}", ctx)
+
+    assert dest.is_file()
+    assert "chat.md" in _text(ctx)      # (console wraps the full path at width)
+
+
+def test_export_before_a_session_exists(ctx):
+    ctx.session.session_id = ""
+    cmd.dispatch("/export", ctx)
+    assert "Nothing to export" in _text(ctx)
+
+
+def test_export_reports_an_unwritable_destination(ctx, tmp_path):
+    from luxe.memory import session as session_store
+
+    meta = session_store.new_session(repo_path=ctx._repo)
+    ctx.session.session_id = meta.session_id
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a dir")
+
+    cmd.dispatch(f"/export {blocker / 'out.md'}", ctx)
+
+    assert "cannot write export" in _text(ctx)
