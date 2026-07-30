@@ -128,6 +128,13 @@ def reset_index() -> None:
     _index = None
 
 
+def get_index() -> BM25Index | None:
+    """The resident index, or None when nothing has been indexed yet. Read-only
+    accessor for status/preflight surfaces (`/doctor`); the tool path reads
+    `_index` directly."""
+    return _index
+
+
 def bm25_search_def() -> ToolDef:
     return ToolDef(
         name="bm25_search",

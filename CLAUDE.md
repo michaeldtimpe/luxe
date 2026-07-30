@@ -86,10 +86,16 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     instead of weights); dangling links abort the copy. Copies stage in
     `.<name>.partial` and rename, so an interrupt never leaves a half-model.
     In chat, `/pull <ref>` previews and `/pull <ref> --yes` transfers.
-  - **Session commands added in the 2026-07-29 `/help` audit**: `/theme`
+  - **Session commands added in the 2026-07-29/30 `/help` audit**: `/theme`
     (live palette switch), `/tools` (real tool surface + what read-only gates),
     `/status` (session dump incl. model origin), `/unload` (free RAM without
-    quitting), `/retry` (re-run the last message via `CommandResult.submit`).
+    quitting), `/retry` (re-run the last message via `CommandResult.submit`),
+    plus `/export`, `/diff`, `/doctor` — logic in `chat/inspection.py`, all
+    read-only. `/diff` defaults to the files THIS session wrote (ledger),
+    diffs against HEAD, reports untracked as new; `/export` renders the
+    PERSISTED transcript (survives `/resume`) to `<session dir>/transcript.md`;
+    `/doctor` preflights endpoint/key/model/weights/disk/index/git/mode/TUI and
+    prints the fix for every warning.
   - **Read-only default ≠ missing capability.** luxe has the full mutation
     surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips

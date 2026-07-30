@@ -174,6 +174,19 @@ never touches this module.
   `SlotManager.forget_resident()` so the next turn reloads), `/retry` re-runs the
   last user message via `CommandResult.submit` — the only sanctioned way a
   command turns into a turn; both front-ends act on that field.
+- `/export`, `/diff`, `/doctor` live in `chat/inspection.py` — logic as testable
+  functions, rendering in `commands.py`. All three are READ-ONLY. `/export`
+  renders the PERSISTED transcript (so it works after `/resume` and captures
+  interrupted turns) and summarises attachments instead of inlining them;
+  default destination is `<session dir>/transcript.md`. `/diff` is git-backed
+  and defaults to the files THIS session wrote (ledger `files`), falling back to
+  the working tree with the scope named — it diffs against HEAD so staged edits
+  show, reports untracked files as new, and survives a repo with no commits.
+  `/doctor` returns ordered `Check`s (endpoint → key → model → weights → disk →
+  index → freshness → tree → mode → TUI); every WARN/FAIL carries the fix, an
+  unreachable endpoint is a FAIL not an exception, and nothing it calls may
+  raise. `search.get_index()` is the read-only accessor it uses — the tool path
+  still reads the module global.
 - Model provenance is always visible (`chat/origin.py`, 2026-07-29): every
   session states at startup whether the chat model's weights sit on local disk
   (`⌂`), on a network volume / cloud-sync tree (`☁`), or behind a remote
