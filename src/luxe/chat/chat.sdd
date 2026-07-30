@@ -58,7 +58,18 @@ never touches this module.
 - `luxe smoke` (chat/smoke.py) is the aliveness drill: manifest resolved,
   weights real on disk, endpoint up, catalog complete, one real generation +
   one tool call on main, one generation on the fallback (exercises the swap).
-  Minutes, not a bench; exit 0/1; run it after provisioning and on a schedule
+  Minutes, not a bench; exit 0/1; run it after provisioning and on a schedule.
+  `--code` / `--chat` run the AGENTIC drills instead (combinable): real
+  run_single turns against a planted scratch git repo — --code plants a
+  one-line bug + failing test and verifies the fix DETERMINISTICALLY (pytest
+  rc + git diff --name-only == calc.py, never by trusting the model's word);
+  --chat is a read-only turn that must read a file to recover a magic word
+  that exists nowhere in the prompt. Drill models resolve from the manifest
+  of the host the ENDPOINT points at (`--backend m5` must run an m5 model,
+  not this host's pair); an aborted run_single surfaces its abort_reason as
+  the failure; the scratch repo is kept on failure (path in the report) and
+  removed on success; a remote `--backend` drill never unloads that server's
+  models
 - Slot routing is visible: the render footer shows the fired slot + model every
   turn; `/use <slot>` and `/model <slot> <id>` are explicit user overrides
 - EVERY freeform interactive turn uses the CONVERSATIONAL persona:

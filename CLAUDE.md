@@ -71,6 +71,10 @@ when reached for — availability over capability. Concretely:
 - **`luxe smoke`** is the aliveness drill (minutes): manifest → weights →
   endpoint → catalog → one real turn + tool call on main → one turn on
   fallback. Run it after provisioning and on a schedule; exit 0 = ready.
+  **`luxe smoke --chat --code`** runs the agentic drills: real run_single
+  turns in a planted scratch repo (--code = fix a bug + failing test,
+  verified by pytest + git diff; --chat = read-only file-grounded answer).
+  `--backend m5` drills a remote host's manifest models from here.
 - **Every session writes `~/.luxe/sessions/<id>/debug.log`** (always-on;
   chat/debuglog.py) and failed turns persist kind="error" transcript records —
   post-outage diagnosis must not depend on what the TUI happened to show.

@@ -133,6 +133,142 @@ def test_fallback_leg_failure_is_reported():
     assert step.state == "fail" and "exploded" in step.detail
 
 
+# --- code / chat drills ------------------------------------------------------
+
+
+def _drill_cfg():
+    from luxe.config import RoleConfig as RC
+
+    return PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RC(model_key="monolith",
+                              tools=["read_file", "list_dir", "grep",
+                                     "bm25_search", "write_file", "edit_file",
+                                     "bash"])},
+        task_types={},
+        hosts={"here": HostManifest(main="Main-M", fallback="Fb-M")},
+    )
+
+
+class _FakeResult:
+    def __init__(self, text="", steps=3, tool_calls_total=4):
+        self.final_text = text
+        self.steps = steps
+        self.tool_calls_total = tool_calls_total
+
+
+def _fix_calc(repo):
+    calc = repo / "calc.py"
+    calc.write_text(calc.read_text().replace(
+        "return a - b  # planted bug", "return a + b"))
+
+
+def test_code_drill_passes_when_agent_fixes_the_bug(monkeypatch, tmp_path):
+    import luxe.agents.single as single_mod
+    from luxe.tools import fs as fs_mod
+
+    def fake_run_single(backend, role, *, goal, task_type, run_id=None, **kw):
+        _fix_calc(fs_mod.get_repo_root())
+        return _FakeResult()
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    report = smoke_mod.run_code_drill(_drill_cfg())
+    states = _states(report)
+    assert not report.failed
+    assert states["code agent"] == "pass"
+    assert states["tests"] == "pass"
+    assert states["diff"] == "pass"
+    assert "kept" not in states          # scratch repo cleaned up on success
+
+
+def test_code_drill_fails_when_agent_does_nothing(monkeypatch):
+    import shutil
+
+    import luxe.agents.single as single_mod
+
+    monkeypatch.setattr(single_mod, "run_single",
+                        lambda *a, **k: _FakeResult())
+    report = smoke_mod.run_code_drill(_drill_cfg())
+    states = _states(report)
+    assert report.failed
+    assert states["tests"] == "fail"
+    kept = next(s for s in report.steps if s.name == "kept")
+    shutil.rmtree(kept.detail.split(": ", 1)[1], ignore_errors=True)
+
+
+def test_code_drill_requires_tool_calls(monkeypatch):
+    import shutil
+
+    import luxe.agents.single as single_mod
+    from luxe.tools import fs as fs_mod
+
+    def fake_run_single(backend, role, *, goal, task_type, run_id=None, **kw):
+        _fix_calc(fs_mod.get_repo_root())      # right answer, wrong path
+        return _FakeResult(tool_calls_total=0)
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    report = smoke_mod.run_code_drill(_drill_cfg())
+    assert _states(report)["tool use"] == "fail"
+    kept = next(s for s in report.steps if s.name == "kept")
+    shutil.rmtree(kept.detail.split(": ", 1)[1], ignore_errors=True)
+
+
+def test_chat_drill_verifies_the_magic_word(monkeypatch):
+    import shutil
+
+    import luxe.agents.single as single_mod
+
+    monkeypatch.setattr(
+        single_mod, "run_single",
+        lambda *a, **k: _FakeResult(text=f"It is {smoke_mod._DRILL_MAGIC}."))
+    report = smoke_mod.run_chat_drill(_drill_cfg())
+    assert not report.failed
+    assert _states(report)["answer"] == "pass"
+
+    monkeypatch.setattr(single_mod, "run_single",
+                        lambda *a, **k: _FakeResult(text="No idea, sorry."))
+    report = smoke_mod.run_chat_drill(_drill_cfg())
+    assert _states(report)["answer"] == "fail"
+    kept = next(s for s in report.steps if s.name == "kept")
+    shutil.rmtree(kept.detail.split(": ", 1)[1], ignore_errors=True)
+
+
+def test_chat_drill_strips_the_write_surface(monkeypatch):
+    import shutil
+
+    import luxe.agents.single as single_mod
+
+    seen = {}
+
+    def fake_run_single(backend, role, *, goal, task_type, run_id=None, **kw):
+        seen["tools"] = list(role.tools)
+        seen["model"] = backend.model
+        return _FakeResult(text=smoke_mod._DRILL_MAGIC)
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    report = smoke_mod.run_chat_drill(_drill_cfg())
+    assert not report.failed
+    assert "write_file" not in seen["tools"]
+    assert "bash" not in seen["tools"]
+    assert "bm25_search" not in seen["tools"]   # no index in a drill repo
+    assert seen["model"] == "Main-M"            # this host's manifest main
+
+
+def test_drill_backend_resolves_remote_manifest(monkeypatch):
+    """A drill pointed at the m5 must run an m5 model, not this host's."""
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        hosts={"here": HostManifest(main="Local-M", fallback="Lf"),
+               "m5": HostManifest(main="Remote-M", fallback="Rf")},
+    )
+    backend, model = smoke_mod._resolve_drill_backend(
+        cfg, None, "http://m5.tailnet.example.ts.net:8000")
+    assert model == "Remote-M"
+    backend, model = smoke_mod._resolve_drill_backend(cfg, None, None)
+    assert model == "Local-M"
+
+
 def test_dangling_main_weights_fail_on_local_endpoint(monkeypatch):
     import luxe.modelstore as ms
     from luxe.chat import origin as origin_mod
