@@ -462,7 +462,24 @@ never touches this module.
   buffered on the app and shown as a compact `[pasted N lines]` chip in the
   input, expanded back to the full text at submit (chip deleted by the user →
   text appended instead, never dropped). The transcript echoes the chip form;
-  the model receives the expanded text.
+  the model receives the expanded text. Duplicate delivery (2026-07-30): some
+  terminal stacks (tmux/iTerm passthrough) deliver ONE clipboard paste as TWO
+  identical `Paste` events back-to-back; an identical paste arriving inside a
+  0.35s window is dropped. A deliberate re-paste of the same text lands
+  outside the window and inserts normally.
+
+  Input history (TUI, 2026-07-30): up/down cycle previously submitted lines
+  readline-style; the in-progress draft is kept and restored when arrowing
+  past the newest entry; consecutive duplicates collapse. Lines that
+  contained paste chips are NOT recorded (their buffered text is consumed at
+  submit — recalling the chip would send the literal chip string).
+
+  Transcript scrollback (TUI, 2026-07-30): the TUI runs on the alternate
+  screen, so the TERMINAL/tmux scrollback never sees transcript history —
+  in-app keys are the scrollback: PgUp/PgDn (page), shift+↑/↓ (line),
+  Home/End (top/bottom), mouse wheel; the RichLog retains 10000 lines. The
+  startup banner states this once. The persisted transcript (`/export`)
+  remains the full-fidelity record.
 
   The line REPL keeps its prior behaviour: a `rich.Live` 3-line `LiveActivity`
   (preview · activity · status) when `console.is_terminal`, else `Status` + line

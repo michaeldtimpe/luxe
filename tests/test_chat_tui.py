@@ -401,3 +401,122 @@ def test_retry_runs_a_turn_from_the_command_worker(tmp_path, monkeypatch):
             assert app.session.turns[-1].assistant == "**Hello** from the model"
             assert not app._busy
     asyncio.run(scenario())
+
+
+def test_paste_duplicate_event_deduped(tmp_path):
+    """tmux/iTerm can deliver ONE clipboard paste as TWO identical Paste events
+    back-to-back; the second inside the dedup window must be dropped."""
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("hello world"))
+            app._input._on_paste(events.Paste("hello world"))  # duplicate delivery
+            await pilot.pause()
+            assert app._input.value == "hello world"
+    asyncio.run(scenario())
+
+
+def test_paste_duplicate_multiline_deduped(tmp_path):
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("a\nb"))
+            app._input._on_paste(events.Paste("a\nb"))  # duplicate delivery
+            await pilot.pause()
+            assert app._input.value == "[pasted 2 lines]"      # one chip, not two
+            assert len(app._paste_chunks) == 1
+    asyncio.run(scenario())
+
+
+def test_paste_repeat_after_window_not_deduped(tmp_path):
+    """A genuine second paste of the same text (outside the window) inserts."""
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("dup"))
+            app._input._last_paste = ("dup", app._input._last_paste[1] - 1.0)
+            app._input._on_paste(events.Paste("dup"))
+            await pilot.pause()
+            assert app._input.value == "dupdup"
+    asyncio.run(scenario())
+
+
+def test_input_history_up_down_cycle(tmp_path):
+    """Up/down recall previously submitted lines; the draft is restored when
+    arrowing back past the newest entry."""
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app._input
+            inp.history_remember("first")
+            inp.history_remember("second")
+            inp.value = "draft in progress"
+            inp._history_prev()
+            assert inp.value == "second"
+            inp._history_prev()
+            assert inp.value == "first"
+            inp._history_prev()                       # at oldest: stays
+            assert inp.value == "first"
+            inp._history_next()
+            assert inp.value == "second"
+            inp._history_next()                       # past newest: draft back
+            assert inp.value == "draft in progress"
+            inp._history_next()                       # no-op when not navigating
+            assert inp.value == "draft in progress"
+    asyncio.run(scenario())
+
+
+def test_input_history_recorded_at_submit_not_for_chips(tmp_path, monkeypatch):
+    """Submitting a line records it; a line holding a paste chip is NOT
+    recorded (its buffered text is consumed at submit)."""
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            sent = []
+            monkeypatch.setattr(app, "_dispatch_line",
+                                lambda d, m=None: sent.append((d, m)))
+            inp = app._input
+            inp.focus()
+            inp.value = "plain question"
+            await pilot.press("enter")
+            assert inp._history == ["plain question"]
+            inp._on_paste(events.Paste("x\ny"))
+            await pilot.press("enter")
+            assert inp._history == ["plain question"]  # chip line not recorded
+            assert len(sent) == 2
+    asyncio.run(scenario())
+
+
+def test_history_dedupes_consecutive_and_scroll_actions_safe(tmp_path):
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app._input
+            inp.history_remember("same")
+            inp.history_remember("same")
+            assert inp._history == ["same"]
+            # scroll actions must not raise regardless of content size
+            app.action_scroll_up()
+            app.action_scroll_down()
+            app.action_scroll_line_up()
+            app.action_scroll_line_down()
+            app.action_scroll_home()
+            app.action_scroll_end()
+    asyncio.run(scenario())
