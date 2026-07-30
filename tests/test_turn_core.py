@@ -236,3 +236,42 @@ def test_line_run_turn_still_works_headless(_ctx, monkeypatch):
                              repl.CancelToken(), lambda m: "review")
     assert outcome.final_text == "the answer"
     assert not outcome.interrupted
+
+
+# --- contract-scan cache invalidation ---------------------------------------
+
+
+def test_finalize_turn_invalidates_scan_cache_when_a_sdd_is_written(_ctx, monkeypatch):
+    """Chat caches the `.sdd` scan per repo root for the session; a turn that
+    writes a contract must drop it so the next turn sees the new rules."""
+    from luxe import spec_resolver
+
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    dropped: list = []
+    monkeypatch.setattr(spec_resolver, "invalidate_scan_cache", dropped.append)
+
+    prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
+    prep.note_tool(_TC("write_file", path="src/luxe/luxe.sdd"))
+    result = prep.call(lambda tc: None, None, None)
+    repl.finalize_turn(session, prep, result, interrupted=False,
+                       message="hello", started_at=1.0, ended_at=2.0)
+
+    assert dropped == [session.repo_path]
+
+
+def test_finalize_turn_keeps_scan_cache_for_ordinary_writes(_ctx, monkeypatch):
+    from luxe import spec_resolver
+
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    dropped: list = []
+    monkeypatch.setattr(spec_resolver, "invalidate_scan_cache", dropped.append)
+
+    prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
+    prep.note_tool(_TC("edit_file", path="src/luxe/cli.py"))
+    result = prep.call(lambda tc: None, None, None)
+    repl.finalize_turn(session, prep, result, interrupted=False,
+                       message="hello", started_at=1.0, ended_at=2.0)
+
+    assert dropped == []

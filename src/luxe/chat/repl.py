@@ -8,9 +8,11 @@ same seam via `CancelToken` + `ChatCancelled`.
 
 from __future__ import annotations
 
+import logging
 import re
 import signal
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -46,6 +48,8 @@ from luxe.chat.session import (
 from luxe.chat.slots import SlotManager
 from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
+from luxe import spec_resolver
+from luxe.chat import origin as origin_mod
 from luxe.memory import project as project_mem
 from luxe.memory import session as session_store
 from luxe.state import ledger as ledger_mod
@@ -75,6 +79,8 @@ class TurnOutcome:
     started_at: float = 0.0
     ended_at: float = 0.0
 
+
+logger = logging.getLogger(__name__)
 
 # Pytest-style summary parsing (C1). Tolerant: each count matched independently,
 # singular/plural, anywhere in the output (not a fixed single-line format).
@@ -285,6 +291,9 @@ def run_chat_repl(
     _hint = build_status_hint()
     if _hint:
         console.print(f"[yellow][hint][/] [dim]{_hint}[/]")
+    # Where the weights actually live (local disk / network volume / remote
+    # host) — stated once at startup so a networked session is never implicit.
+    console.print(model_origin_notice(slots, status))
 
     try:
         while True:
@@ -316,7 +325,9 @@ def run_chat_repl(
                 res = cmd.dispatch(line, ctx)
                 if res.exit:
                     break
-                continue
+                if not res.submit:
+                    continue
+                line = res.submit   # /retry: fall through and run it as a turn
             try:
                 _run_turn(line, session, slots, cfg, languages, console, cancel,
                           infer, status)
@@ -328,6 +339,15 @@ def run_chat_repl(
                 hint = slots.unreachable_hint()
                 if hint:
                     console.print(f"[yellow]· {hint}[/]")
+            except Exception:
+                # Parity with the TUI worker: one bad turn must not end the
+                # session (an uncaught OSError from a repo walk did exactly
+                # that on 2026-07-29). Report the last line, log the rest.
+                exc_line = traceback.format_exc().strip().splitlines()[-1]
+                console.print(f"[red]✗ turn failed: {exc_line}[/]")
+                console.print("[yellow]· the session is still alive — retry, "
+                              "or /quit if it repeats[/]")
+                logger.error("chat turn crashed\n%s", traceback.format_exc())
     finally:
         if not keep_loaded:
             # WS3: show the unload is happening BEFORE the blocking call (it can
@@ -358,6 +378,27 @@ class TurnPrep:
     fingerprint: set
     test_result: list
     backend_name: str = ""  # multi-backend provenance stamped on the transcript
+
+
+def model_origin_notice(slots, status=None) -> str:
+    """Resolve where the chat slot's model actually lives, record it on the
+    status bar, and return the one-line startup notice (Rich markup).
+
+    Called once per front-end at startup — this is the ONLY place that pays for
+    the `/v1/models/status` lookup; every later read hits the per-endpoint
+    cache. Local weights are announced too, not just remote ones: the point is
+    that you can always tell, not that you get warned when it's bad.
+    """
+    model = slots.model_for("chat")
+    try:
+        org = origin_mod.origin_for(slots.backend, model)
+    except Exception:
+        org = origin_mod.ModelOrigin(kind="unknown", model_id=model)
+    if status is not None:
+        status.model_origin = org.kind
+    colour = "yellow" if org.is_over_the_network else "dim"
+    return (f"[dim]· model[/] {model} [dim]—[/] "
+            f"[{colour}]{org.glyph} {org.describe()}[/]")
 
 
 def prepare_turn(message, session, slots, cfg, languages, infer,
@@ -493,6 +534,11 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
     interrupted turn — those writes already happened on disk."""
     if prep.changed_files:
         ledger_mod.record_files(session.session_id, prep.changed_files)
+        # The contract scan is cached per repo root for the session (it walks
+        # the whole root — 19s when that root is $HOME). A turn that wrote a
+        # `.sdd` invalidates it so the next turn sees the new contract.
+        if any(str(p).endswith(".sdd") for p in prep.changed_files):
+            spec_resolver.invalidate_scan_cache(session.repo_path or None)
 
     assistant_text = (result.final_text if result else "") or ""
     session_store.append_turn(
@@ -659,6 +705,8 @@ def _run_turn(
         if status is not None:
             status.slot = prep.slot
             status.model = prep.model
+            status.model_origin = origin_mod.cached_origin_for(
+                slots.backend, prep.model).kind
             status.wall_s = result.wall_s
             status.tok_per_s = (result.completion_tokens / result.wall_s
                                 if result.wall_s > 0 else 0.0)

@@ -8,12 +8,15 @@ features (compare, resume) that the REPL wires in.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from rich.console import Console
 
+from luxe.chat import origin as origin_mod
 from luxe.chat.session import CTX_TIERS, ChatSession, tier_label
 from luxe.chat.slots import SlotManager
 from luxe.memory import project as project_mem
@@ -25,6 +28,10 @@ _SLOTS = ("chat", "plan", "code")
 class CommandResult:
     handled: bool
     exit: bool = False
+    # A message the front-end should run as a turn once the command returns
+    # (`/retry`). Kept as data rather than a callback so both front-ends —
+    # line REPL and TUI — act on it in their own turn machinery.
+    submit: str = ""
 
 
 @dataclass
@@ -44,7 +51,13 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/help", "", "show this help"),
     ("/model", "[slot] [model_id]", "show slots, or repoint chat|plan|code"),
     ("/backend", "[name|n]", "list configured oMLX backends, or switch to one"),
+    ("/pull", "[repo|name] [--search q] [--yes]", "fetch model weights (mount → HF)"),
     ("/use", "<slot>", "pin the next turn to chat|plan|code"),
+    ("/unload", "", "free oMLX RAM (unload resident weights) without quitting"),
+    ("/status", "", "session summary: repo, backend, model origin, usage"),
+    ("/tools", "", "list the tools the model has THIS turn (and what's gated)"),
+    ("/theme", "[auto|cool|warm|mono]", "show or switch the colour palette"),
+    ("/retry", "", "re-run your last message (e.g. after /write or /ctx)"),
     ("/ctx", "[small|medium|large|xlarge|huge]", "show or set context window size"),
     ("/write", "", "toggle write tools (default: read-only)"),
     ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
@@ -80,6 +93,12 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/help": _help,
         "/model": _model,
         "/backend": _backend,
+        "/pull": _pull,
+        "/unload": _unload,
+        "/status": _status,
+        "/tools": _tools,
+        "/theme": _theme,
+        "/retry": _retry,
         "/use": _use,
         "/ctx": _ctx,
         "/write": _write,
@@ -151,6 +170,12 @@ def _model(args, ctx: CommandContext) -> CommandResult:
         avail = ctx.slots.available_models()
         if avail:
             in_use = set(slot_models.values())
+            # Provenance per model (chat/origin.py) so "which of these is
+            # actually on this disk?" is answerable at selection time.
+            try:
+                origins = origin_mod.origins_for_backend(ctx.slots.backend)
+            except Exception:
+                origins = {}
             ctx.console.print("[dim]available models — `/model <slot> <n>`:[/]")
             for i, m in enumerate(avail, 1):
                 marks = []
@@ -159,7 +184,14 @@ def _model(args, ctx: CommandContext) -> CommandResult:
                 if m in in_use:
                     marks.append("in use")
                 tag = f"  [dim]({', '.join(marks)})[/]" if marks else ""
-                ctx.console.print(f"  [cyan]{i:2d}[/] {m}{tag}")
+                org = origins.get(m)
+                mark = ""
+                if org is not None and org.kind != "unknown":
+                    colour = "yellow" if org.is_over_the_network else "dim"
+                    mark = f" [{colour}]{org.glyph} {org.label}[/]"
+                ctx.console.print(f"  [cyan]{i:2d}[/] {m}{mark}{tag}")
+            ctx.console.print("[dim]  ⌂ local disk · ☁ network volume "
+                              "· ⇅ remote endpoint[/]")
         else:
             ctx.console.print("[dim](oMLX unreachable — `/model <slot> <id>` "
                               "still works)[/]")
@@ -189,6 +221,13 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     ctx.slots.set_override(slot, model_id)
     ctx.console.print(f"[green]✓[/] slot [cyan]{slot}[/] → {model_id} "
                       f"[dim](swaps on next {slot} turn)[/]")
+    try:
+        org = origin_mod.origin_for(ctx.slots.backend, model_id)
+    except Exception:
+        org = None
+    if org is not None and org.kind != "unknown":
+        colour = "yellow" if org.is_over_the_network else "dim"
+        ctx.console.print(f"  [{colour}]{org.glyph} {org.describe()}[/]")
     return CommandResult(handled=True)
 
 
@@ -243,6 +282,313 @@ def _backend(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print(f"[yellow]· dropped /model override on slot "
                           f"[cyan]{slot}[/] — model not served here[/]")
     return CommandResult(handled=True)
+
+
+def _pull(args, ctx: CommandContext) -> CommandResult:
+    """Fetch model weights onto this machine (chat-side `luxe pull`).
+
+    `/pull`                     local models + in-flight downloads
+    `/pull --search <query>`    search HuggingFace for MLX models
+    `/pull <repo|name>`         PREVIEW: where it would come from, and its size
+    `/pull <repo|name> --yes`   actually transfer it
+    `/pull <name> --from <dir>` import an explicit directory (mounted volume)
+
+    The preview step is the consent step: a chat command has no confirmation
+    prompt, and a pull can move tens of gigabytes. Transfers run on the command
+    worker, so the REPL stays responsive and Esc still interrupts.
+    """
+    from luxe import modelstore as ms
+
+    flags = {a for a in args if a.startswith("--")}
+    positional = [a for a in args if not a.startswith("--")]
+    from_path = ""
+    if "--from" in args:
+        i = args.index("--from")
+        if i + 1 < len(args):
+            from_path = args[i + 1]
+            if from_path in positional:
+                positional.remove(from_path)
+    if "--search" in flags:
+        query = " ".join(positional)
+        if not query:
+            ctx.console.print("[yellow]Usage: /pull --search <query>[/]")
+            return CommandResult(handled=True)
+
+    base_url = getattr(ctx.slots.backend, "base_url", "") or ""
+    api_key = getattr(ctx.slots.backend, "api_key", "") or ""
+    try:
+        with ms.OmlxAdmin(base_url=base_url, api_key=api_key) as admin:
+            if "--search" in flags:
+                _pull_show_search(ctx, admin, " ".join(positional))
+                return CommandResult(handled=True)
+            if not positional and not from_path:
+                _pull_show_state(ctx, admin)
+                return CommandResult(handled=True)
+
+            ref = positional[0] if positional else ms.store_name_for(from_path)
+            name = ms.store_name_for(ref)
+            if from_path:
+                src = ms._resolve_hf_snapshot(Path(from_path).expanduser())
+                if src is None:
+                    ctx.console.print(f"[red]✗ {from_path} is not an MLX model "
+                                      "directory (config.json + weights).[/]")
+                    return CommandResult(handled=True)
+                sources = [ms.ModelSource(kind="mount", ref=str(src), name=name,
+                                          size_bytes=ms.dir_size(src), note="--from")]
+            else:
+                ctx.console.print("[dim]· looking for it (mounts, then HF)…[/]")
+                sources = ms.resolve_sources(ref, admin=admin,
+                                             include_mounts="--hf" not in flags)
+            if not sources:
+                ctx.console.print(
+                    f"[red]✗ Nowhere to pull {ref!r} from.[/] [dim]Not on a "
+                    "mounted volume; an HF fetch needs a full `org/Model` id. "
+                    "Try `/pull --search <query>`.[/]")
+                return CommandResult(handled=True)
+
+            chosen = sources[0]
+            already = name in ms.local_model_names()
+            ctx.console.print(f"[bold]{name}[/] ← {chosen.describe()}")
+            if already and "--force" not in flags:
+                ctx.console.print("[yellow]· already in the local store "
+                                  "— add --force to replace it[/]")
+                return CommandResult(handled=True)
+            if "--yes" not in flags:
+                ctx.console.print(f"[dim]· preview only — run "
+                                  f"`/pull {ref} --yes` to transfer[/]")
+                return CommandResult(handled=True)
+
+            if chosen.kind == "mount":
+                _pull_copy(ctx, chosen, force="--force" in flags)
+            else:
+                _pull_download(ctx, admin, chosen)
+    except ms.ModelStoreError as e:
+        ctx.console.print(f"[red]✗ {e}[/]")
+    return CommandResult(handled=True)
+
+
+def _pull_show_state(ctx: CommandContext, admin) -> None:
+    from luxe.modelstore import ModelStoreError, human_bytes, local_model_names
+
+    names = local_model_names()
+    ctx.console.print(f"[bold]Local models[/] [dim]({len(names)})[/]")
+    for n in names:
+        ctx.console.print(f"  · {n}")
+    try:
+        tasks = admin.tasks()
+    except ModelStoreError as e:
+        ctx.console.print(f"[dim]· download queue unavailable: {e}[/]")
+        return
+    for t in tasks:
+        ctx.console.print(f"  ↓ {t.repo_id} — {t.status} {t.progress:.0f}% "
+                          f"[dim]{human_bytes(t.downloaded_size)}/"
+                          f"{human_bytes(t.total_size)}[/]")
+    ctx.console.print("[dim]· `/pull <repo-id>` to preview a fetch[/]")
+
+
+def _pull_show_search(ctx: CommandContext, admin, query: str) -> None:
+    from luxe.modelstore import human_bytes
+
+    hits = admin.search(query)
+    if not hits:
+        ctx.console.print(f"[yellow]No MLX models found for {query!r}.[/]")
+        return
+    for m in hits[:15]:
+        size = f"  [dim]{human_bytes(m.size_bytes)}[/]" if m.size_bytes else ""
+        ctx.console.print(f"  {m.repo_id}{size}  [dim]↓{m.downloads:,}[/]")
+    ctx.console.print("[dim]· `/pull <repo-id> --yes` to fetch[/]")
+
+
+def _pull_copy(ctx: CommandContext, source, *, force: bool) -> None:
+    from luxe import modelstore as ms
+
+    last = [0.0]
+
+    def _tick(done: int, total: int) -> None:
+        # One line per 10% — the chat log is a transcript, not a progress bar.
+        pct = (done / total * 100) if total else 0
+        if pct - last[0] >= 10:
+            last[0] = pct
+            ctx.console.print(f"[dim]  copying… {pct:.0f}% "
+                              f"({ms.human_bytes(done)})[/]")
+
+    res = ms.copy_into_store(source, force=force, on_progress=_tick)
+    ctx.console.print(f"[green]✓[/] {res.name} → {res.dest} "
+                      f"[dim]({ms.human_bytes(res.bytes_copied)} in "
+                      f"{res.seconds:.0f}s)[/]")
+
+
+def _pull_download(ctx: CommandContext, admin, source) -> None:
+    from luxe.modelstore import human_bytes
+
+    task = admin.start_download(source.ref)
+    ctx.console.print(f"[dim]· oMLX download task {task.task_id}[/]")
+    last = [0.0]
+
+    def _tick(t) -> None:
+        if t.progress - last[0] >= 10 or t.done:
+            last[0] = t.progress
+            ctx.console.print(f"[dim]  {t.status} {t.progress:.0f}% "
+                              f"({human_bytes(t.downloaded_size)}/"
+                              f"{human_bytes(t.total_size)})[/]")
+
+    final = admin.wait_for(task.task_id, on_progress=_tick)
+    if final.status == "completed":
+        ctx.console.print(f"[green]✓[/] {final.repo_id} downloaded "
+                          "[dim](/model to select it)[/]")
+    else:
+        ctx.console.print(f"[red]✗ {final.repo_id}: "
+                          f"{final.error or final.status}[/]")
+
+
+def _unload(args, ctx: CommandContext) -> CommandResult:
+    """Free oMLX RAM mid-session (the CLI's `luxe unload`, without quitting).
+
+    Useful before running something else on the box; the next turn reloads the
+    model, so the only cost is one warm-up.
+    """
+    backend = ctx.slots.backend
+    try:
+        loaded = backend.loaded_models()
+    except Exception as e:
+        ctx.console.print(f"[red]✗ oMLX unreachable: {e}[/]")
+        return CommandResult(handled=True)
+    if not loaded:
+        ctx.console.print("[dim]· nothing loaded — no RAM to free[/]")
+        return CommandResult(handled=True)
+    results = backend.unload_all_loaded()
+    ok = [m for m, good in results.items() if good]
+    for m in ok:
+        ctx.console.print(f"[green]✓[/] unloaded {m}")
+    for m, good in results.items():
+        if not good:
+            ctx.console.print(f"[yellow]✗ {m} — unload failed[/]")
+    # Residency is now unknown to the slot manager; force a reconfirm.
+    ctx.slots.forget_resident()
+    ctx.console.print("[dim]· next turn reloads the model (one warm-up)[/]")
+    return CommandResult(handled=True)
+
+
+def _status(args, ctx: CommandContext) -> CommandResult:
+    """One-screen session summary — the things spread across the status bar,
+    the banner, and `/model`, in one place."""
+    from luxe.modelstore import human_bytes
+
+    s, sm = ctx.session, ctx.slots
+    model = sm.model_for("chat")
+    org = origin_mod.cached_origin_for(sm.backend, model)
+    if org.kind == "unknown":
+        try:
+            org = origin_mod.origin_for(sm.backend, model)
+        except Exception:
+            pass
+
+    rows = [
+        ("repo", s.repo_path or "(none)"),
+        ("session", s.session_id or "(unsaved)"),
+        ("backend", f"{sm.backend_name} · {getattr(sm.backend, 'base_url', '?')}"),
+        ("model", f"{model}  {org.glyph} {org.label}"),
+        ("weights", org.detail or "(unreported)"),
+        ("resident", sm.resident or "(none loaded yet)"),
+        ("slot", "chat/plan/code → " + ", ".join(
+            f"{k}:{v}" for k, v in sm.slot_models().items())),
+        ("context", f"{s.num_ctx_override or sm.role_for('chat').num_ctx} tokens"
+                    f" (ceiling {sm.ctx_ceiling('chat')})"),
+        ("mode", f"write {'on' if s.write_enabled else 'off'} · "
+                 f"bash {'unrestricted' if s.unrestricted_bash else 'allowlisted'} · "
+                 f"terse {'on' if s.terse else 'off'} · "
+                 f"verbose {s.verbose_level}"),
+        ("turns", str(len(s.turns))),
+        ("swaps", f"{sm.stats.count} ({sm.stats.seconds:.0f}s)"),
+    ]
+    if s.attachments:
+        rows.append(("attached", f"{len(s.attachments)} file(s) for the next turn"))
+    try:
+        free = shutil.disk_usage(Path.home()).free
+        rows.append(("disk free", human_bytes(free)))
+    except OSError:
+        pass
+
+    width = max(len(k) for k, _ in rows)
+    ctx.console.print("[bold]Session[/]")
+    for key, val in rows:
+        ctx.console.print(f"  [dim]{key.ljust(width)}[/]  {val}")
+    return CommandResult(handled=True)
+
+
+def _tools(args, ctx: CommandContext) -> CommandResult:
+    """List the tool surface the model will actually get on the next turn.
+
+    Read-only mode STRIPS write tools rather than hiding a missing capability
+    (lessons.md 2026-06-01) — so the gated ones are listed too, with the toggle
+    that restores them. What the model sees is what this prints.
+    """
+    from luxe.mcp.server import _MUTATION_TOOL_NAMES
+
+    role = ctx.slots.role_for("chat")
+    configured = list(role.tools or [])
+    write_on = ctx.session.write_enabled
+    active = [t for t in configured if write_on or t not in _MUTATION_TOOL_NAMES]
+    gated = [t for t in configured if t not in active]
+
+    ctx.console.print(f"[bold]Tools this turn[/] [dim]({len(active)} active)[/]")
+    for t in active:
+        note = ""
+        if t == "bash":
+            note = ("  [dim](unrestricted dev shell)[/]" if ctx.session.unrestricted_bash
+                    else "  [dim](allowlisted commands — /bash for unrestricted)[/]")
+        ctx.console.print(f"  [green]·[/] {t}{note}")
+    ctx.console.print("  [green]·[/] update_ledger  [dim](always on)[/]")
+    if gated:
+        ctx.console.print(f"[bold]Gated by read-only mode[/] [dim](/write "
+                          f"enables {len(gated)})[/]")
+        for t in gated:
+            ctx.console.print(f"  [yellow]·[/] {t}")
+    return CommandResult(handled=True)
+
+
+def _theme(args, ctx: CommandContext) -> CommandResult:
+    """Show or switch the colour palette without restarting.
+
+    `auto` tracks the terminal / yet-another-statusline theme; the curated
+    palettes override it. Mirrors the `--theme` startup flag.
+    """
+    from luxe.chat import theme as theme_mod
+
+    choices = theme_mod.list_palettes()
+    if not args:
+        current = theme_mod.active_palette()
+        ctx.console.print("[bold]Palettes[/]")
+        for name in choices:
+            mark = " [cyan]← active[/]" if name == current else ""
+            hint = ("  [dim](tracks your terminal/statusline theme)[/]"
+                    if name == "auto" else "")
+            ctx.console.print(f"  {name}{hint}{mark}")
+        ctx.console.print("[dim]switch with /theme <name>[/]")
+        return CommandResult(handled=True)
+
+    name = args[0].lower()
+    if name not in choices:
+        ctx.console.print(f"[yellow]Unknown palette {name!r}. "
+                          f"Choose from: {', '.join(choices)}.[/]")
+        return CommandResult(handled=True)
+    theme_mod.set_palette(name)
+    ctx.console.print(f"[green]✓[/] palette → [cyan]{name}[/]"
+                      + ("  [dim](tracking your terminal theme)[/]"
+                         if name == "auto" else ""))
+    return CommandResult(handled=True)
+
+
+def _retry(args, ctx: CommandContext) -> CommandResult:
+    """Re-run the last user message — the natural follow-up to `/write`,
+    `/ctx`, `/model`, or a turn that failed."""
+    last = next((t.user for t in reversed(ctx.session.turns) if t.user), "")
+    if not last:
+        ctx.console.print("[yellow]Nothing to retry yet.[/]")
+        return CommandResult(handled=True)
+    preview = last if len(last) <= 60 else last[:59] + "…"
+    ctx.console.print(f"[dim]· retrying:[/] {preview}")
+    return CommandResult(handled=True, submit=last)
 
 
 def _use(args, ctx: CommandContext) -> CommandResult:

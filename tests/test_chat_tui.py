@@ -326,3 +326,78 @@ def test_prompt_user_requires_worker_thread(tmp_path):
             with pytest.raises(AssertionError):
                 app.prompt_user("pick?")
     asyncio.run(scenario())
+
+
+def test_turn_crash_does_not_kill_the_app(tmp_path, monkeypatch):
+    """Regression (2026-07-29): an uncaught OSError from the turn path — a repo
+    walk hitting an unreachable network-backed dir — unwound into Textual's
+    worker and killed the whole session. It must now report and survive."""
+    def _boom(*a, **k):
+        raise OSError(60, "Operation timed out")
+
+    monkeypatch.setattr(_repl, "run_single", _boom)
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        written: list = []
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            real_write = app.write
+            app.write = lambda r: (written.append(r), real_write(r))[1]
+            app.query_one("#prompt", Input).value = "hi there"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.is_running                       # session survived
+            assert not app._busy                        # busy state cleaned up
+            assert any("turn failed" in str(w) for w in written)
+            assert any("Operation timed out" in str(w) for w in written)
+    asyncio.run(scenario())
+
+
+def test_command_crash_does_not_kill_the_app(tmp_path, monkeypatch):
+    """Same contract for the command worker (/plan, /goal, gitkit …)."""
+    from luxe.chat import commands as cmd_mod
+
+    def _boom(*a, **k):
+        raise OSError(60, "Operation timed out")
+
+    monkeypatch.setattr(cmd_mod, "dispatch", _boom)
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        written: list = []
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            real_write = app.write
+            app.write = lambda r: (written.append(r), real_write(r))[1]
+            app.query_one("#prompt", Input).value = "/compact"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.is_running
+            assert not app._busy
+            assert any("turn failed" in str(w) for w in written)
+    asyncio.run(scenario())
+
+
+def test_retry_runs_a_turn_from_the_command_worker(tmp_path, monkeypatch):
+    """`/retry` hands a message back through CommandResult.submit; the TUI must
+    run it as a real turn, not print it."""
+    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+
+    async def scenario():
+        from luxe.chat.session import ChatTurn
+
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.session.add_turn(ChatTurn(user="do the thing", assistant="ok"))
+            app.query_one("#prompt", Input).value = "/retry"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.session.turns[-1].user == "do the thing"
+            assert app.session.turns[-1].assistant == "**Hello** from the model"
+            assert not app._busy
+    asyncio.run(scenario())

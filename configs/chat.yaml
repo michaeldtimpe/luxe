@@ -15,10 +15,10 @@ backends:
     api_key_env: OMLX_API_KEY_M5
     timeout_s: 2400
 
-# Chat color palette (D2): the shipped default is the curated 'cool' palette,
-# resolved as `--theme` flag → LUXE_THEME env → 'cool'. Set `LUXE_THEME=auto` (or
-# `--theme auto`) to track your terminal/YASL theme instead; 'warm'/'mono' are the
-# other curated options. (Default lives in cli.py:chat_cmd, not a parsed key here.)
+# Chat color palette (D2): the default is 'auto' — it tracks your ACTIVE
+# terminal/YASL statusline theme. Resolved as `--theme` flag → LUXE_THEME env →
+# 'auto'. The curated luxe palettes are opt-in: `--theme cool|warm|mono` (or
+# LUXE_THEME=cool). (Default lives in cli.py:chat_cmd, not a parsed key here.)
 
 profile:
   name: "Interactive chat (64 GB)"

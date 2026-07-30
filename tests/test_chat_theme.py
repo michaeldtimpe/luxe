@@ -78,3 +78,54 @@ def test_role_styles_reads_resolved_theme(monkeypatch):
         assert rs["white_brt"] == ("", "default")
     finally:
         theme.reset_cache()
+
+
+# --- `luxe chat` palette precedence (D2) ------------------------------------
+
+
+def test_cli_theme_defaults_to_auto(monkeypatch):
+    """Regression (2026-07-29): the shipped default was the curated 'cool'
+    palette, which overrode the user's active statusline theme even though both
+    chat.sdd and the --theme help text promise `auto`."""
+    from luxe.cli import _resolve_theme_name
+
+    monkeypatch.delenv("LUXE_THEME", raising=False)
+    assert _resolve_theme_name(None) == "auto"
+
+
+def test_cli_theme_env_then_flag_win(monkeypatch):
+    from luxe.cli import _resolve_theme_name
+
+    monkeypatch.setenv("LUXE_THEME", "warm")
+    assert _resolve_theme_name(None) == "warm"      # env beats the default
+    assert _resolve_theme_name("mono") == "mono"    # flag beats env
+
+
+def test_auto_palette_tracks_the_active_theme(monkeypatch):
+    """`auto` must not stamp curated hex over the resolved YASL roles."""
+    class FakeTheme:
+        pwd = "\x1b[38;5;114m"
+        model = "\x1b[38;5;5m"
+
+    monkeypatch.setattr(theme, "_load_yasl_theme", lambda name: FakeTheme())
+    theme.set_palette("auto")
+    try:
+        rs = theme.role_styles(force=True)
+        assert rs["pwd"] == ("#87d787", "color(114)")   # from the theme
+        assert rs["model"] == ("ansimagenta", "magenta")
+    finally:
+        theme.set_palette(None)
+        theme.reset_cache()
+
+
+def test_curated_palette_overrides_the_active_theme(monkeypatch):
+    class FakeTheme:
+        pwd = "\x1b[38;5;114m"
+
+    monkeypatch.setattr(theme, "_load_yasl_theme", lambda name: FakeTheme())
+    theme.set_palette("cool")
+    try:
+        assert theme.role_styles(force=True)["pwd"] == ("#5fd7d7", "#5fd7d7")
+    finally:
+        theme.set_palette(None)
+        theme.reset_cache()

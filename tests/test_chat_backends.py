@@ -221,6 +221,38 @@ def test_repl_turn_backend_error_prints_hint_only_multi(monkeypatch):
     assert "/backend" not in single_out
 
 
+def test_repl_turn_unexpected_exception_keeps_session_alive(monkeypatch):
+    """Regression (2026-07-29): only BackendError was contained, so an
+    OSError(ETIMEDOUT) raised while walking the repo tree ended the session.
+    Any turn-path exception must now report and leave the REPL running."""
+    from luxe.chat import repl as repl_mod
+
+    def _raise(*a, **k):
+        raise OSError(60, "Operation timed out")
+
+    monkeypatch.setattr(repl_mod, "run_single", _raise)
+
+    out = io.StringIO()
+    console = Console(file=out, force_terminal=False, width=120)
+    lines = iter(["hello there", "still here?"])
+
+    def reader():
+        try:
+            return next(lines)
+        except StopIteration:
+            raise EOFError
+
+    repl_mod.run_chat_repl(_single_cfg(), "", frozenset(), console=console,
+                           keep_loaded=True, reader=reader,
+                           infer_task_type=lambda m: "review")
+
+    text = out.getvalue()
+    assert "turn failed" in text
+    assert "Operation timed out" in text
+    # Both prompts were served — the loop kept going after the failure.
+    assert text.count("turn failed") == 2
+
+
 # --- /backend command dispatch ----------------------------------------------
 
 

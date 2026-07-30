@@ -13,8 +13,10 @@ REPL (`repl.run_chat_repl`) remains the non-TTY / textual-absent fallback.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+import traceback
 from collections import Counter
 
 from rich.text import Text
@@ -26,12 +28,12 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, RichLog, Static
 
 from luxe.chat import commands as cmd
+from luxe.chat import origin as origin_mod
 from luxe.chat import repl as _repl
 from luxe.chat import status as status_mod
 from luxe.chat.render import (
     ChatCancelled,
     build_final_renderable,
-    format_tool_call,
     format_tool_call_verbose,
     raise_if_cancelled,
     rainbow_banner,
@@ -43,6 +45,8 @@ from luxe.chat.status import StatusState
 from luxe.memory import session as session_store
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+logger = logging.getLogger(__name__)
 
 
 class PromptScreen(ModalScreen[str]):
@@ -173,6 +177,9 @@ class ChatApp(App):
         hint = build_status_hint()
         if hint:
             log.write(f"[yellow][hint][/] [dim]{hint}[/]")
+        # Model provenance (local disk / network volume / remote host), stated
+        # once — same notice the line REPL prints.
+        log.write(_repl.model_origin_notice(self.slots, self.status))
         # Cache long-lived widget refs (see __init__): used directly so the timer
         # and writes survive a modal screen being on top.
         self._gen = self.query_one("#generating", Static)
@@ -436,8 +443,24 @@ class ChatApp(App):
             hint = self.slots.unreachable_hint()
             if hint:
                 self.write(f"[yellow]· {hint}[/]")
+        except Exception:
+            # A turn must never take the app down. Textual's default is to let
+            # a worker exception unwind into WorkerFailed and kill the session
+            # (losing the conversation) — that is how one uncaught
+            # OSError(ETIMEDOUT) from a repo walk ended a chat on 2026-07-29.
+            self._report_turn_crash()
         finally:
             self.call_from_thread(self._end_busy)
+
+    def _report_turn_crash(self) -> None:
+        """Render an unexpected worker exception into the transcript instead of
+        letting it kill the app. The full traceback goes to the log so the
+        session stays usable and the failure is still diagnosable."""
+        exc_line = traceback.format_exc().strip().splitlines()[-1]
+        self.write(f"[red]✗ turn failed: {exc_line}[/]")
+        self.write("[yellow]· the session is still alive — retry, or "
+                   "`/quit` if it repeats[/]")
+        logger.error("chat turn crashed\n%s", traceback.format_exc())
 
     def _render_outcome(self, outcome, prep, interrupted) -> None:
         log = self._log()
@@ -459,6 +482,8 @@ class ChatApp(App):
         # update persistent status from the completed turn
         s = self.status
         s.slot, s.model = prep.slot, prep.model
+        s.model_origin = origin_mod.cached_origin_for(
+            self.slots.backend, prep.model).kind
         s.wall_s = result.wall_s
         s.tok_per_s = (result.completion_tokens / result.wall_s
                        if result.wall_s > 0 else 0.0)
@@ -483,6 +508,11 @@ class ChatApp(App):
             if getattr(res, "exit", False):
                 self.call_from_thread(self.action_quit_app)
                 return
+            # /retry hands a message back to be run as a turn (same worker, so
+            # the busy state and cancel token still cover it).
+            if getattr(res, "submit", ""):
+                self._execute_turn_blocking(res.submit)
+                return
             console = LogConsole(self)
             # /plan and /goal set session flags the line loop would act on; here we
             # run their routines on this worker, driving TUI turns + a modal prompt.
@@ -494,6 +524,12 @@ class ChatApp(App):
                 _repl._run_goal_loop(self.session, self.slots, self.cfg, self.languages,
                                      console, self.cancel, self.infer, None,
                                      run_turn=self._tui_run_turn)
+        except (ChatCancelled, KeyboardInterrupt):
+            self.write("[yellow]· interrupted[/]")
+        except Exception:
+            # Same contract as the turn worker: a failing command reports and
+            # the session survives.
+            self._report_turn_crash()
         finally:
             self.call_from_thread(self._end_busy)
 
@@ -501,7 +537,7 @@ class ChatApp(App):
     def prompt_user(self, question: str, default: str = "") -> str:
         """Block the calling WORKER for an answer via a modal. Must be called from
         a worker thread, not the UI thread (else it deadlocks)."""
-        assert not (threading.current_thread() is threading.main_thread()), \
+        assert threading.current_thread() is not threading.main_thread(), \
             "prompt_user must be called from a worker thread"
         return self.call_from_thread(self.push_screen_wait, PromptScreen(question, default))
 

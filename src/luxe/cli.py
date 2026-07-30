@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -14,6 +13,7 @@ from typing import Callable
 import click
 from rich.console import Console
 
+from luxe import spec_resolver
 from luxe.config import load_config
 
 console = Console()
@@ -224,7 +224,7 @@ def maintain(
     if prep.test_command:
         console.print(f"Tests: [dim]{prep.test_command}[/]")
     else:
-        console.print(f"Tests: [dim](none detected)[/]")
+        console.print("Tests: [dim](none detected)[/]")
 
     try:
         ctx = acquire_repo_lock(spec.repo_path, spec.run_id)
@@ -502,18 +502,18 @@ def maintain(
                     console.print(f"\n[bold green]✓ PR opened:[/] {pr_state.pr_url}"
                                   f" {'(draft)' if pr_state.is_draft else ''}")
                 else:
-                    console.print(f"\n[yellow]· No PR opened (no diff produced)[/]")
+                    console.print("\n[yellow]· No PR opened (no diff produced)[/]")
             except pr_mod.NoMutationsError as e:
                 console.print(f"\n[red]✗ {e}[/]")
-                console.print(f"[dim]Status: failed_no_mutations_produced. "
-                              f"Resume not applicable.[/]")
+                console.print("[dim]Status: failed_no_mutations_produced. "
+                              "Resume not applicable.[/]")
                 sys.exit(4)
             except pr_mod.PRError as e:
                 console.print(f"\n[red]✗ PR cycle blocked: {e}[/]")
                 console.print(f"[dim]Resume with: luxe pr {spec.run_id}[/]")
                 sys.exit(5)
         elif detected_task in {"review", "summarize"}:
-            console.print(f"\n[dim](read-only task; no PR)[/]")
+            console.print("\n[dim](read-only task; no PR)[/]")
 
         if save_report and final_report:
             out = Path(output_dir)
@@ -550,6 +550,17 @@ def maintain(
             ctx.__exit__(None, None, None)
         except Exception:
             pass
+
+
+def _resolve_theme_name(flag: str | None) -> str:
+    """Chat palette precedence (D2): `--theme` → `LUXE_THEME` → `auto`.
+
+    `auto` tracks the user's ACTIVE YASL/statusline theme (chat.sdd; the
+    `--theme` help text says the same). The curated luxe palettes are OPT-IN —
+    shipping `cool` as the default silently overrode the user's own theme
+    (reported 2026-07-29).
+    """
+    return flag or os.environ.get("LUXE_THEME") or "auto"
 
 
 @main.command(name="chat")
@@ -597,10 +608,7 @@ def chat_cmd(
     from luxe.locks import LockHeld, acquire_repo_lock
     from luxe.tools.fs import set_repo_root
 
-    # Theme precedence (D2): --theme flag → LUXE_THEME env → shipped default 'cool'.
-    # The curated palette thus applies without a flag; `--theme auto` (or
-    # LUXE_THEME=auto) restores terminal/YASL tracking.
-    theme_name = theme_name or os.environ.get("LUXE_THEME") or "cool"
+    theme_name = _resolve_theme_name(theme_name)
 
     repo_path = _resolve_repo(repo)
     cfg = load_config(config_path or _default_chat_config())
@@ -623,6 +631,12 @@ def chat_cmd(
         }
 
     set_repo_root(repo_path)
+
+    # Cache the `.sdd` contract scan per repo root for this session (chat-only;
+    # see spec_resolver). `run_single` rebuilds the contract block every turn
+    # and the scan walks the whole root — ~19s per turn with `--repo ~`.
+    # `finalize_turn` drops the entry when a turn writes a `.sdd`.
+    spec_resolver.enable_scan_cache()
 
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
@@ -687,6 +701,7 @@ def chat_cmd(
     finally:
         search_mod.reset_index()
         symbols_mod.reset_index()
+        spec_resolver.enable_scan_cache(False)  # also clears it
         try:
             ctx.__exit__(None, None, None)
         except Exception:
@@ -970,6 +985,184 @@ def unload_models(except_for: tuple[str, ...]):
                 console.print(f"  [yellow]✗ {mid} — unload failed[/]")
 
 
+@main.command(name="pull")
+@click.argument("ref", required=False, default="")
+@click.option("--search", "search_query", default="",
+              help="Search HuggingFace for MLX models instead of downloading.")
+@click.option("--list", "list_state", is_flag=True,
+              help="Show local models and any in-flight downloads.")
+@click.option("--from", "from_path", default="",
+              help="Import from an explicit directory (a mounted volume, an export).")
+@click.option("--hf", "force_hf", is_flag=True,
+              help="Skip the mount scan and fetch from HuggingFace.")
+@click.option("--force", is_flag=True, help="Replace an existing model directory.")
+@click.option("--yes", "-y", "assume_yes", is_flag=True, help="Don't ask to confirm.")
+@click.option("--base-url", default="", help="oMLX endpoint (default: local).")
+@click.option("--models-dir", default="",
+              help="oMLX model store (default: ~/.omlx/models).")
+def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
+             force_hf: bool, force: bool, assume_yes: bool, base_url: str,
+             models_dir: str):
+    """Fetch model weights: `luxe pull <hf-repo-id>` or `luxe pull <name> --from <dir>`.
+
+    Prefers a copy already on a mounted volume (kappa/alpha over SMB) — same
+    bytes at LAN speed — and falls back to HuggingFace via the oMLX downloader.
+    """
+    from luxe import modelstore as ms
+
+    endpoint = base_url or _omlx_base_url_from_config()
+    dest_dir = Path(models_dir) if models_dir else ms.DEFAULT_MODELS_DIR
+
+    with ms.OmlxAdmin(base_url=endpoint) as admin:
+        try:
+            if search_query:
+                _pull_search(admin, search_query)
+                return
+            if list_state:
+                _pull_list(admin, dest_dir)
+                return
+            if not ref:
+                console.print("[yellow]Nothing to do — pass a model "
+                              "(`luxe pull mlx-community/Qwen3.6-27B-6bit`), "
+                              "`--search <query>`, or `--list`.[/]")
+                sys.exit(2)
+
+            name = ms.store_name_for(ref)
+            if from_path:
+                src = ms._resolve_hf_snapshot(Path(from_path).expanduser())
+                if src is None:
+                    console.print(f"[red]✗ {from_path} is not an MLX model "
+                                  "directory (needs config.json + weights).[/]")
+                    sys.exit(2)
+                sources = [ms.ModelSource(kind="mount", ref=str(src), name=name,
+                                          size_bytes=ms.dir_size(src),
+                                          note="--from")]
+            else:
+                if not force_hf:
+                    console.print("[dim]· scanning mounted volumes…[/]")
+                sources = ms.resolve_sources(ref, admin=admin,
+                                             include_mounts=not force_hf)
+            if not sources:
+                console.print(
+                    f"[red]✗ Nowhere to pull {ref!r} from.[/] Not on a mounted "
+                    "volume, and an HF fetch needs a full repo id "
+                    "(`org/Model`). Try `luxe pull --search <query>`.")
+                sys.exit(2)
+
+            chosen = sources[0]
+            console.print(f"[bold]{name}[/] ← {chosen.describe()}")
+            if len(sources) > 1:
+                for alt in sources[1:]:
+                    console.print(f"  [dim]alt: {alt.describe()}[/]")
+            if name in ms.local_model_names(dest_dir) and not force:
+                console.print(f"[yellow]· {name} is already in {dest_dir} "
+                              "— pass --force to replace it.[/]")
+                sys.exit(0)
+            if not assume_yes and not click.confirm("Pull it?", default=True):
+                console.print("[dim]· cancelled[/]")
+                return
+
+            if chosen.kind == "mount":
+                _pull_from_mount(chosen, dest_dir, force)
+            else:
+                _pull_from_hf(admin, chosen)
+        except ms.ModelStoreError as e:
+            console.print(f"[red]✗ {e}[/]")
+            sys.exit(4)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]· interrupted (partial copy removed)[/]")
+            sys.exit(130)
+
+
+def _omlx_base_url_from_config() -> str:
+    """The chat config's oMLX endpoint, falling back to the local default."""
+    try:
+        return load_config(_default_chat_config()).omlx_base_url
+    except Exception:
+        return "http://127.0.0.1:8000"
+
+
+def _pull_search(admin, query: str) -> None:
+    from luxe.modelstore import human_bytes
+
+    hits = admin.search(query)
+    if not hits:
+        console.print(f"[yellow]No MLX models found for {query!r}.[/]")
+        return
+    console.print(f"[bold]HuggingFace — MLX models matching {query!r}[/]")
+    for m in hits:
+        size = f"  [dim]{human_bytes(m.size_bytes)}[/]" if m.size_bytes else ""
+        console.print(f"  {m.repo_id}{size}  [dim]↓{m.downloads:,}[/]")
+    console.print("[dim]· `luxe pull <repo-id>` to fetch one[/]")
+
+
+def _pull_list(admin, dest_dir) -> None:
+    from luxe.modelstore import ModelStoreError, human_bytes, local_model_names
+
+    names = local_model_names(dest_dir)
+    console.print(f"[bold]Local models[/] [dim]({dest_dir})[/]")
+    for n in names:
+        console.print(f"  · {n}")
+    if not names:
+        console.print("  [dim](none)[/]")
+    try:
+        tasks = admin.tasks()
+    except ModelStoreError as e:
+        console.print(f"[dim]· download queue unavailable: {e}[/]")
+        return
+    if tasks:
+        console.print("[bold]Downloads[/]")
+        for t in tasks:
+            console.print(f"  · {t.repo_id} — {t.status} {t.progress:.0f}% "
+                          f"[dim]{human_bytes(t.downloaded_size)}"
+                          f"/{human_bytes(t.total_size)}[/]"
+                          + (f" [red]{t.error}[/]" if t.error else ""))
+
+
+def _pull_from_mount(source, dest_dir, force: bool) -> None:
+    from rich.progress import (BarColumn, DownloadColumn, Progress,
+                               TextColumn, TimeRemainingColumn)
+
+    from luxe import modelstore as ms
+
+    with Progress(TextColumn("[dim]copying[/]"), BarColumn(), DownloadColumn(),
+                  TimeRemainingColumn(), console=console) as bar:
+        task = bar.add_task("copy", total=source.size_bytes or None)
+        res = ms.copy_into_store(
+            source, models_dir=dest_dir, force=force,
+            on_progress=lambda done, total: bar.update(task, completed=done),
+        )
+    console.print(f"[green]✓[/] {res.name} → {res.dest} "
+                  f"[dim]({ms.human_bytes(res.bytes_copied)} in {res.seconds:.0f}s)[/]")
+    console.print("[dim]· oMLX picks it up on its next model scan "
+                  "(`luxe pull --list` to confirm)[/]")
+
+
+def _pull_from_hf(admin, source) -> None:
+    from rich.progress import (BarColumn, DownloadColumn, Progress,
+                               TextColumn, TimeRemainingColumn)
+
+    task_rec = admin.start_download(source.ref)
+    console.print(f"[dim]· oMLX download task {task_rec.task_id}[/]")
+    with Progress(TextColumn("[dim]downloading[/]"), BarColumn(), DownloadColumn(),
+                  TimeRemainingColumn(), console=console) as bar:
+        row = bar.add_task("dl", total=task_rec.total_size or None)
+
+        def _tick(t):
+            bar.update(row, completed=t.downloaded_size,
+                       total=t.total_size or None)
+
+        final = admin.wait_for(task_rec.task_id, on_progress=_tick)
+    if final.status == "completed":
+        console.print(f"[green]✓[/] {final.repo_id} downloaded")
+    elif final.status == "cancelled":
+        console.print(f"[yellow]· {final.repo_id} download cancelled[/]")
+    else:
+        console.print(f"[red]✗ {final.repo_id} failed: "
+                      f"{final.error or final.status}[/]")
+        sys.exit(4)
+
+
 @main.command(name="pr")
 @click.argument("run_id")
 @click.option("--push-only", is_flag=True, help="Only do the push step (no PR create)")
@@ -991,7 +1184,7 @@ def pr_cmd(run_id: str, push_only: bool, watch_ci: bool):
         console.print(f"[bold green]✓ PR ready:[/] {state.pr_url}"
                       f" {'(draft)' if state.is_draft else ''}")
     else:
-        console.print(f"[green]✓ Resume complete[/] (no PR created)")
+        console.print("[green]✓ Resume complete[/] (no PR created)")
 
 
 @main.command(name="serve")
@@ -1199,7 +1392,7 @@ def check(config_path: str | None):
     for m in sorted(available):
         console.print(f"  {m}")
 
-    console.print(f"\nPipeline model requirements:")
+    console.print("\nPipeline model requirements:")
     for role_name, model_id in config.models.items():
         found = model_id in available
         status = "[green]✓[/]" if found else "[red]✗[/]"

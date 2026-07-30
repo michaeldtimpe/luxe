@@ -49,7 +49,11 @@ never touches this module.
   NEVER unloads models on the old server (it may be the endpoint that just went
   down). A turn failing with BackendError keeps the REPL/TUI alive and — only
   when >1 backend is configured — prints the `/backend` escape hatch (e.g.
-  "local oMLX unreachable — try /backend m5"). The status bar gains a `backend`
+  "local oMLX unreachable — try /backend m5"). ANY other turn/command
+  exception is contained the same way (last traceback line to the transcript,
+  full traceback to the logger, session stays up) — a crashed turn is a
+  message, never an exit. Containing only BackendError is what let an
+  `OSError(ETIMEDOUT)` from a repo walk kill the TUI on 2026-07-29. The status bar gains a `backend`
   segment (mid drop-priority) only when >1 backend is configured; configs
   without `backends:` synthesize a single "local" entry and behave identically
   to the single-backend days. Benchmark/maintain read `omlx_base_url` only.
@@ -156,6 +160,36 @@ never touches this module.
   clamped by `num_ctx_max`; the startup banner shows the git build via
   `buildinfo.version_string()`, and `luxe chat` gains
   `--verbose/--show-reasoning/--no-terse/--debug/--theme` startup flags
+- `/pull` fetches model weights (2026-07-29) — mounted volume first (LAN copy),
+  HuggingFace second (oMLX's downloader via `modelstore.OmlxAdmin`; never a
+  second downloader of our own). Consent is two-step in chat: `/pull <ref>`
+  PREVIEWS source + size, `/pull <ref> --yes` transfers — a slash command has
+  no confirmation prompt and a pull can move tens of GB. It is a COMMAND, never
+  a tool: the model cannot initiate a download. Same core as `luxe pull`.
+- Session-shape commands (2026-07-29 `/help` audit): `/theme` switches the
+  palette live (previously startup-only, so the shipped default was
+  unescapable), `/tools` prints the ACTUAL tool surface for the next turn with
+  read-only-gated tools listed separately, `/status` is the one-screen session
+  dump (incl. model origin), `/unload` frees oMLX RAM mid-session (and must call
+  `SlotManager.forget_resident()` so the next turn reloads), `/retry` re-runs the
+  last user message via `CommandResult.submit` — the only sanctioned way a
+  command turns into a turn; both front-ends act on that field.
+- Model provenance is always visible (`chat/origin.py`, 2026-07-29): every
+  session states at startup whether the chat model's weights sit on local disk
+  (`⌂`), on a network volume / cloud-sync tree (`☁`), or behind a remote
+  endpoint (`⇅`), the status bar carries that glyph next to the model name
+  (warn-coloured when the wire is involved), `/model` labels every listed
+  model, and a weight swap names the origin. Resolution is one guarded
+  `/v1/models/status` call per endpoint, cached; it happens at startup / on
+  `/backend` switch (worker threads) — NEVER during a render, and a failure
+  degrades to `unknown` (no glyph), never to a blocked turn.
+- The `.sdd` contract scan is cached per repo root for the session
+  (`spec_resolver.enable_scan_cache`, enabled in `cli.chat_cmd` only):
+  `run_single` rebuilds the contract block every turn and the walk covers the
+  whole root — ~19s/turn with `--repo ~`. `finalize_turn` invalidates the entry
+  when a turn writes a `.sdd`. The cache is OFF for benchmark/maintain by
+  construction: they pin one `--work-dir` across instances with different
+  contents, where a path-keyed cache would serve stale contracts.
 - Static analyzers (`tools/analysis.py`) resolve via PATH → `python -m <module>`
   → `uvx` (NO auto-install — agent venvs may be frozen) and degrade to a
   SUCCESSFUL machine-readable `{"status":"skipped",…}` when unavailable, so a
