@@ -626,40 +626,77 @@ def _resolve_theme_name(flag: str | None) -> str:
     return flag or os.environ.get("LUXE_THEME") or "auto"
 
 
+def _shared_chat_options(f):
+    """Click options shared by `luxe chat` and `luxe code`. One list, two
+    commands: the postures differ (project requirement, write default), the
+    option surface must not drift."""
+    opts = [
+        click.option("--repo", "repo", default=".",
+                     help="Where to work (default: cwd). Resolves UP to the "
+                          "enclosing git root / project; a directory that is "
+                          "neither starts an unindexed chat session."),
+        click.option("--config", "config_path", default=None,
+                     help="Path to config YAML (default: configs/chat.yaml)"),
+        click.option("--resume", "resume_session_id", default=None,
+                     help="Resume a prior chat session by id"),
+        click.option("--backend", "backend_name", default=None,
+                     help="Start on this configured backend (a `backends:` "
+                          "entry name, e.g. m5). Chat-only; default = the "
+                          "entry marked default."),
+        click.option("--chat-model", default=None,
+                     help="Override the chat-slot model"),
+        click.option("--plan-model", default=None,
+                     help="Override the plan-slot model"),
+        click.option("--code-model", default=None,
+                     help="Override the code-slot model"),
+        click.option("--keep-loaded", is_flag=True, default=False,
+                     help="Skip the post-session model unload."),
+        click.option("--dev", "dev_mode", is_flag=True, default=False,
+                     help="Start in dev mode: write tools + unrestricted shell "
+                          "ON (equivalent to /write + /bash)."),
+        click.option("--verbose", "startup_verbose", default=None,
+                     type=click.Choice(["off", "diff", "full"]),
+                     help="Set tool-output verbosity at startup."),
+        click.option("--show-reasoning", "startup_show_reasoning",
+                     is_flag=True, default=False,
+                     help="Stream the model's reasoning live from startup."),
+        click.option("--no-terse", "startup_no_terse", is_flag=True,
+                     default=False,
+                     help="Disable terse model output (terse is ON by default)."),
+        click.option("--debug", "startup_debug", is_flag=True, default=False,
+                     help="Show everything: verbose full + reasoning."),
+        click.option("--compact", "startup_compact", is_flag=True,
+                     default=False,
+                     help="Compact display: tighter on-screen output ceiling."),
+        click.option("--theme", "theme_name", default=None,
+                     help="Curated luxe color palette: auto|cool|warm|mono "
+                          "(default: auto)."),
+    ]
+    for opt in reversed(opts):
+        f = opt(f)
+    return f
+
+
 @main.command(name="chat")
-@click.option("--repo", "repo", default=".",
-              help="Where to work (default: cwd). Resolves UP to the enclosing "
-                   "git root / project; a directory that is neither starts an "
-                   "unindexed chat session.")
-@click.option("--config", "config_path", default=None,
-              help="Path to config YAML (default: configs/chat.yaml)")
-@click.option("--resume", "resume_session_id", default=None,
-              help="Resume a prior chat session by id")
-@click.option("--backend", "backend_name", default=None,
-              help="Start on this configured backend (a `backends:` entry name, "
-                   "e.g. m5). Chat-only; default = the entry marked default.")
-@click.option("--chat-model", default=None, help="Override the chat-slot model")
-@click.option("--plan-model", default=None, help="Override the plan-slot model")
-@click.option("--code-model", default=None, help="Override the code-slot model")
-@click.option("--keep-loaded", is_flag=True, default=False,
-              help="Skip the post-session model unload.")
-@click.option("--dev", "dev_mode", is_flag=True, default=False,
-              help="Start in dev mode: write tools + unrestricted shell ON "
-                   "(equivalent to /write + /bash). Skips per-session toggling.")
-@click.option("--verbose", "startup_verbose", default=None,
-              type=click.Choice(["off", "diff", "full"]),
-              help="Set tool-output verbosity at startup (e.g. before a /goal run).")
-@click.option("--show-reasoning", "startup_show_reasoning", is_flag=True, default=False,
-              help="Stream the model's reasoning live from startup.")
-@click.option("--no-terse", "startup_no_terse", is_flag=True, default=False,
-              help="Disable terse model output (terse is ON by default).")
-@click.option("--debug", "startup_debug", is_flag=True, default=False,
-              help="Show everything: verbose full + reasoning (overrides --verbose).")
-@click.option("--compact", "startup_compact", is_flag=True, default=False,
-              help="Compact display: tighter on-screen output ceiling.")
-@click.option("--theme", "theme_name", default=None,
-              help="Curated luxe color palette: auto|cool|warm|mono (default: auto).")
-def chat_cmd(
+@_shared_chat_options
+def chat_cmd(**kwargs):
+    """Interactive terminal agent (Claude-CLI-style). Starts anywhere; default:
+    the host manifest's main model in every slot, read-only tools (toggle with
+    /write). Use `luxe code` for a project-first, write-on session."""
+    _run_interactive(require_project=False, start_write=False, **kwargs)
+
+
+@main.command(name="code")
+@_shared_chat_options
+def code_cmd(**kwargs):
+    """Project coding session: same engine as `luxe chat`, different posture —
+    REQUIRES a project (git root or marker directory; errors out otherwise)
+    and starts with write tools ON. Bash stays gated (/bash to enable)."""
+    _run_interactive(require_project=True, start_write=True, **kwargs)
+
+
+def _run_interactive(
+    *, require_project: bool, start_write: bool,
     repo: str, config_path: str | None, resume_session_id: str | None,
     backend_name: str | None,
     chat_model: str | None, plan_model: str | None, code_model: str | None,
@@ -668,8 +705,7 @@ def chat_cmd(
     startup_no_terse: bool, startup_debug: bool, startup_compact: bool,
     theme_name: str | None,
 ):
-    """Interactive terminal agent (Claude-CLI-style). Default: champion in
-    every slot, read-only tools (toggle with /write)."""
+    """Shared body of `luxe chat` / `luxe code` (posture via the two kwargs)."""
     from luxe.chat import run_chat_repl
     from luxe.locks import LockHeld, acquire_repo_lock
     from luxe.tools.fs import set_repo_root
@@ -706,6 +742,15 @@ def chat_cmd(
     # "pin exactly here" would silently defeat walk-up for the primary entry
     # point (caught by tests/test_chat_project.py).
     project = project_mod.resolve(repo_path)
+    if require_project and not project.is_project:
+        # `luxe code` is dead simple on purpose: inside a project it just
+        # works; outside one it says so and stops rather than degrading.
+        console.print(f"[red]✗ no project at {_tilde(repo_path)} — "
+                      "`luxe code` needs a git repo or a marker-bearing "
+                      "directory.[/]")
+        console.print("[dim]  cd into your project (or pass --repo <path>), "
+                      "or use `luxe chat` for a no-project session.[/]")
+        sys.exit(2)
     if project.root != repo_path and project.is_project:
         console.print(f"[dim]· {_tilde(repo_path)} is inside "
                       f"{_tilde(project.root)} — using the project root[/]")
@@ -808,6 +853,7 @@ def chat_cmd(
                 keep_loaded=keep_loaded,
                 resume_session_id=resume_session_id,
                 dev_mode=dev_mode,
+                start_write=start_write,
                 startup_verbose=startup_verbose,
                 startup_show_reasoning=startup_show_reasoning,
                 startup_no_terse=startup_no_terse,
@@ -824,6 +870,7 @@ def chat_cmd(
                 keep_loaded=keep_loaded,
                 resume_session_id=resume_session_id,
                 dev_mode=dev_mode,
+                start_write=start_write,
                 startup_verbose=startup_verbose,
                 startup_show_reasoning=startup_show_reasoning,
                 startup_no_terse=startup_no_terse,
@@ -1131,14 +1178,17 @@ def unload_models(except_for: tuple[str, ...]):
               help="Import from an explicit directory (a mounted volume, an export).")
 @click.option("--hf", "force_hf", is_flag=True,
               help="Skip the mount scan and fetch from HuggingFace.")
+@click.option("--remove", "remove_state", is_flag=True,
+              help="Delete <ref> from the LOCAL store instead of fetching. "
+                   "Refuses this host's manifest models unless --force.")
 @click.option("--force", is_flag=True, help="Replace an existing model directory.")
 @click.option("--yes", "-y", "assume_yes", is_flag=True, help="Don't ask to confirm.")
 @click.option("--base-url", default="", help="oMLX endpoint (default: local).")
 @click.option("--models-dir", default="",
               help="oMLX model store (default: ~/.omlx/models).")
 def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
-             force_hf: bool, force: bool, assume_yes: bool, base_url: str,
-             models_dir: str):
+             force_hf: bool, remove_state: bool, force: bool, assume_yes: bool,
+             base_url: str, models_dir: str):
     """Fetch model weights: `luxe pull <hf-repo-id>` or `luxe pull <name> --from <dir>`.
 
     Prefers a copy already on a mounted volume (kappa/alpha over SMB) — same
@@ -1149,13 +1199,18 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
     endpoint = base_url or _omlx_base_url_from_config()
     dest_dir = Path(models_dir) if models_dir else ms.DEFAULT_MODELS_DIR
 
+    if remove_state:
+        _pull_remove(ref, dest_dir, force=force, assume_yes=assume_yes)
+        return
+
     with ms.OmlxAdmin(base_url=endpoint) as admin:
         try:
             if search_query:
                 _pull_search(admin, search_query)
                 return
             if list_state:
-                _pull_list(admin, dest_dir)
+                _pull_list(admin, dest_dir,
+                           endpoint=endpoint, base_url_given=bool(base_url))
                 return
             if not ref:
                 console.print("[yellow]Nothing to do — pass a model "
@@ -1210,6 +1265,48 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
             sys.exit(130)
 
 
+@main.command(name="smoke")
+@click.option("--config", "config_path", default=None,
+              help="Config YAML (default: configs/chat.yaml)")
+@click.option("--base-url", default="",
+              help="oMLX endpoint to smoke (default: the config's default backend)")
+@click.option("--skip-fallback", is_flag=True, default=False,
+              help="Skip the fallback-model leg (it pays a full weight swap).")
+@click.option("--skip-tools", is_flag=True, default=False,
+              help="Skip the tool-call turn.")
+@click.option("--keep-loaded", is_flag=True, default=False,
+              help="Leave the last smoked model resident.")
+def smoke_cmd(config_path: str | None, base_url: str,
+              skip_fallback: bool, skip_tools: bool, keep_loaded: bool):
+    """Aliveness drill for this host's fallback kit (minutes, not a bench).
+
+    Verifies the manifest, the weights on disk, the endpoint, and runs ONE
+    real turn + one tool call on the main model and one turn on the fallback.
+    Exit 0 = ready; exit 1 = something needs fixing (each line says what).
+    """
+    from luxe.chat.smoke import run_smoke
+
+    cfg = load_config(config_path or _default_chat_config())
+    t0 = time.time()
+    report = run_smoke(cfg, base_url=base_url or None,
+                       skip_fallback=skip_fallback, skip_tools=skip_tools)
+    glyphs = {"pass": "[green]✓[/]", "warn": "[yellow]⚠[/]", "fail": "[red]✗[/]"}
+    for step in report.steps:
+        console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
+    if not keep_loaded:
+        try:
+            from luxe.backend import Backend
+            entry = cfg.backend_entry(cfg.default_backend_name())
+            Backend(base_url=base_url or entry.base_url, model="",
+                    api_key=os.environ.get(entry.api_key_env, "")
+                    ).unload_all_loaded()
+        except Exception:
+            pass
+    verdict = ("[red]NOT READY[/]" if report.failed else "[green]READY[/]")
+    console.print(f"[bold]{verdict}[/] [dim]({time.time() - t0:.0f}s)[/]")
+    sys.exit(1 if report.failed else 0)
+
+
 def _omlx_base_url_from_config() -> str:
     """The chat config's oMLX endpoint, falling back to the local default."""
     try:
@@ -1232,13 +1329,86 @@ def _pull_search(admin, query: str) -> None:
     console.print("[dim]· `luxe pull <repo-id>` to fetch one[/]")
 
 
-def _pull_list(admin, dest_dir) -> None:
-    from luxe.modelstore import ModelStoreError, human_bytes, local_model_names
+def _pull_remove(ref: str, dest_dir, *, force: bool, assume_yes: bool) -> None:
+    """`luxe pull <name> --remove`: delete one entry from the local store.
+
+    Manifest-guarded: this host's declared main/fallback/keep models are the
+    fallback kit — deleting one is refused without --force.
+    """
+    from luxe import modelstore as ms
+
+    if not ref:
+        console.print("[red]✗ --remove needs a model name "
+                      "(`luxe pull <name> --remove`).[/]")
+        sys.exit(2)
+    name = ms.store_name_for(ref)
+    try:
+        manifest = load_config(_default_chat_config()).host_manifest()
+    except Exception:
+        manifest = None
+    if manifest is not None and name in manifest.all_models() and not force:
+        console.print(f"[red]✗ {name} is in this host's manifest "
+                      "(configs/chat.yaml hosts:) — it's part of the fallback "
+                      "kit. Pass --force if you really mean it.[/]")
+        sys.exit(2)
+    state = ms.model_state(name, dest_dir)
+    if state == "missing":
+        console.print(f"[yellow]· {name} is not in {dest_dir} — nothing to do.[/]")
+        sys.exit(0)
+    if not assume_yes and not click.confirm(
+            f"Remove {name} ({state}) from {dest_dir}?", default=False):
+        console.print("[dim]· cancelled[/]")
+        return
+    try:
+        freed, note = ms.remove_model(name, dest_dir)
+    except ms.ModelStoreError as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(4)
+    detail = f" · {ms.human_bytes(freed)} freed" if freed else ""
+    console.print(f"[bold]✓ {name}[/] — {note}{detail}")
+
+
+def _pull_list(admin, dest_dir, *, endpoint: str = "",
+               base_url_given: bool = False) -> None:
+    from luxe.modelstore import (ModelStoreError, human_bytes,
+                                 local_model_names, model_state)
+
+    # `--base-url <remote>` used to silently list the LOCAL store (2026-07-30
+    # finding) — a remote endpoint's disk is only knowable via its admin API.
+    remote = False
+    if base_url_given:
+        try:
+            from luxe.chat.origin import endpoint_is_local
+            remote = not endpoint_is_local(endpoint)
+        except Exception:
+            remote = False
+    if remote:
+        try:
+            stored = admin.stored_models()
+        except ModelStoreError as e:
+            console.print(f"[red]✗ can't list {endpoint}'s store: {e}[/]")
+            return
+        console.print(f"[bold]Models on {endpoint}[/]")
+        for m in stored:
+            size = m.get("size_bytes") or m.get("size") or 0
+            suffix = f"  [dim]{human_bytes(size)}[/]" if size else ""
+            console.print(f"  · {m.get('name') or m.get('repo_id')}{suffix}")
+        if not stored:
+            console.print("  [dim](none reported)[/]")
+        return
 
     names = local_model_names(dest_dir)
     console.print(f"[bold]Local models[/] [dim]({dest_dir})[/]")
     for n in names:
-        console.print(f"  · {n}")
+        state = model_state(n, dest_dir)
+        if state == "ok":
+            console.print(f"  · {n}")
+        else:
+            # A listed model the server can't load is worse than an absent
+            # one — say so instead of letting the stub masquerade as weights.
+            console.print(f"  · {n}  [red]⚠ {state}[/] "
+                          f"[dim](weights don't resolve — `luxe pull` it "
+                          f"again or `--remove` the stub)[/]")
     if not names:
         console.print("  [dim](none)[/]")
     try:

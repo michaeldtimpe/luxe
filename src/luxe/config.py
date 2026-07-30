@@ -81,6 +81,50 @@ class ChatSlots(BaseModel):
     code: SlotConfig = Field(default_factory=SlotConfig)
 
 
+class HostManifest(BaseModel):
+    """Per-host model manifest for the interactive front-end (chat-only).
+
+    Keyed by short hostname under `hosts:` in configs/chat.yaml. `main` is the
+    model every slot resolves to on this host (unless `slots:` or a CLI/`/model`
+    override says otherwise); `fallback` is the model the session auto-degrades
+    to — loudly — when `main` cannot be served or fails to load (the 2026-07-29
+    deleted-weights incident is the motivating failure). `keep` lists extra
+    model ids that must stay on disk (e.g. the benchmark champion on m1) so
+    `/doctor` watches them and `luxe pull --remove` refuses them.
+
+    The manifest is a declaration about DISK as well as selection: main,
+    fallback, and keep are expected to be locally cached on the host
+    (`luxe pull` provisions, `/doctor` verifies). Benchmark/maintain never
+    read `hosts:`.
+    """
+
+    main: str
+    fallback: str = ""
+    keep: list[str] = Field(default_factory=list)
+
+    def all_models(self) -> list[str]:
+        """main + fallback + keep, deduped, order-preserving."""
+        out: list[str] = []
+        for mid in [self.main, self.fallback, *self.keep]:
+            if mid and mid not in out:
+                out.append(mid)
+        return out
+
+
+def short_hostname() -> str:
+    """Lowercased first label of this machine's hostname ("m1.local" -> "m1").
+
+    Mirrors the normalization chat/origin.py uses for endpoint locality.
+    Guarded: returns "" when gethostname fails (it can raise OSError).
+    """
+    import socket
+
+    try:
+        return socket.gethostname().split(".")[0].lower()
+    except OSError:
+        return ""
+
+
 class TaskTypeConfig(BaseModel):
     description: str = ""
     pipeline: list[str] = Field(default_factory=list)
@@ -114,6 +158,13 @@ class PipelineConfig(BaseModel):
     # Empty = show everything the server reports (previous behaviour).
     # Benchmark/maintain never read it.
     visible_models: list[str] = Field(default_factory=list)
+    # Per-host main/fallback model manifests, keyed by short hostname
+    # (chat-only; see HostManifest). Absent block => legacy behaviour
+    # (champion-everywhere via the monolith role). NOTE: pydantic drops
+    # unknown top-level keys silently, so a typo'd `hosts:` block vanishes
+    # without error — `/doctor` and `luxe smoke` assert the resolved manifest
+    # to close that hole.
+    hosts: dict[str, HostManifest] = Field(default_factory=dict)
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:
@@ -130,11 +181,37 @@ class PipelineConfig(BaseModel):
         Server order is preserved so `/model <slot> <n>` indexes stay stable.
         An id in `visible_models` that the server does NOT serve is dropped
         silently — the roster is a filter, not a claim about what exists.
+        This host's manifest models (main/fallback/keep) are always allowed:
+        a fallback that isn't rostered would be invisible to `/model` and
+        `/doctor` exactly when it matters most.
         """
         if not self.visible_models:
             return list(model_ids)
         allowed = set(self.visible_models)
+        manifest = self.host_manifest()
+        if manifest is not None:
+            allowed.update(manifest.all_models())
         return [m for m in model_ids if m in allowed]
+
+    # -- per-host manifest (chat-only) ---------------------------------------
+
+    def host_manifest(self, hostname: str | None = None) -> HostManifest | None:
+        """This host's manifest from `hosts:`, or None (no block / no match).
+
+        Matching is by lowercased short hostname against lowercased keys, so
+        `m1.local` matches an `m1:` entry. Chat-only; benchmark/maintain never
+        call this.
+        """
+        if not self.hosts:
+            return None
+        name = (hostname if hostname is not None else short_hostname())
+        if not name:
+            return None
+        name = name.split(".")[0].lower()
+        for key, manifest in self.hosts.items():
+            if key.split(".")[0].lower() == name:
+                return manifest
+        return None
 
     def slot_config(self, slot: str) -> SlotConfig:
         """Return the SlotConfig for `slot`, defaulting to an empty SlotConfig
@@ -148,13 +225,19 @@ class PipelineConfig(BaseModel):
     def model_for_slot(self, slot: str) -> str:
         """Resolve a chat slot to a concrete model id.
 
-        Falls back to the `monolith` role's model whenever the slot's
-        `model_key` is empty, so an unconfigured slot is the champion — identical
-        to `model_for_role("monolith")`.
+        Resolution order for an unconfigured slot (empty `model_key`):
+        this host's manifest `main` (when a `hosts:` entry matches), else the
+        `monolith` role's model. An explicit `slots:` entry or CLI/`/model`
+        override always wins over the manifest. Chat-only — the benchmark/
+        maintain path never calls this, so `hosts:` cannot perturb it.
         """
         sc = self.slot_config(slot)
-        key = sc.model_key or self.role("monolith").model_key
-        return self.models[key]
+        if sc.model_key:
+            return self.models[sc.model_key]
+        manifest = self.host_manifest()
+        if manifest is not None and manifest.main:
+            return manifest.main
+        return self.models[self.role("monolith").model_key]
 
     # -- multi-backend (chat-only) -------------------------------------------
 

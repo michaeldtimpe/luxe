@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from luxe.config import ChatSlots, PipelineConfig, RoleConfig, SlotConfig, load_config
+from luxe.config import (ChatSlots, HostManifest, PipelineConfig, RoleConfig,
+                         SlotConfig, load_config)
 
 
 def test_load_default_config(config_path: Path):
@@ -135,16 +136,80 @@ def test_slots_absent_resolves_every_slot_to_champion(config_path: Path):
         assert cfg.model_for_slot(slot) == champ
 
 
-def test_chat_yaml_default_is_champion_everywhere():
-    """The shipped configs/chat.yaml ships with `slots:` omitted → champion
-    in every slot (byte-identical model selection to single_64gb)."""
+def test_chat_yaml_default_follows_host_manifest(monkeypatch):
+    """2026-07-30 fallback-kit pivot: with `slots:` omitted, every slot
+    resolves to THIS host's manifest `main`; a host with no `hosts:` entry
+    keeps the champion. Benchmark/maintain never read `hosts:` or slots, so
+    single_64gb.yaml is untouched (covered by the test above)."""
+    import luxe.config as config_mod
+
     chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
     cfg = load_config(chat_cfg)
     assert cfg.slots is None
     champ = cfg.model_for_role("monolith")
+
+    # Fleet hosts resolve to their declared mains, uniformly across slots.
+    for host, expected in (("m5", champ), ("m1", "Qwen3.6-27B-4bit"),
+                           ("m4", "Qwen3.6-27B-4bit")):
+        monkeypatch.setattr(config_mod, "short_hostname", lambda h=host: h)
+        for slot in ("chat", "plan", "code"):
+            assert cfg.model_for_slot(slot) == expected, (host, slot)
+
+    # An unknown host (no manifest entry) falls back to the champion.
+    monkeypatch.setattr(config_mod, "short_hostname", lambda: "zeta")
     assert cfg.model_for_slot("chat") == champ
-    assert cfg.model_for_slot("plan") == champ
-    assert cfg.model_for_slot("code") == champ
+
+
+def test_chat_yaml_manifests_declare_fallbacks():
+    """Every fleet host's manifest has a non-empty fallback distinct from its
+    main (the auto-degrade contract needs both), and m1 keeps the benchmark
+    champion on disk (the bench exception)."""
+    chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
+    cfg = load_config(chat_cfg)
+    assert set(cfg.hosts) == {"m1", "m4", "m5"}
+    for name, m in cfg.hosts.items():
+        assert m.main and m.fallback and m.fallback != m.main, name
+    assert "Qwen3.6-35B-A3B-6bit" in cfg.hosts["m1"].keep
+
+
+def test_host_manifest_normalizes_hostnames():
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        hosts={"M1": HostManifest(main="A", fallback="B")},
+    )
+    assert cfg.host_manifest("m1.local").main == "A"
+    assert cfg.host_manifest("M1.Tailnet.ts.net").main == "A"
+    assert cfg.host_manifest("m5") is None
+    assert cfg.host_manifest("") is None
+
+
+def test_explicit_slot_beats_host_manifest():
+    """slots:/CLI overrides win over the manifest — the manifest is a default,
+    not a lock."""
+    cfg = PipelineConfig(
+        models={"monolith": "Champ", "coder": "Coder"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        slots=ChatSlots(code=SlotConfig(model_key="coder")),
+        hosts={"here": HostManifest(main="Main-M", fallback="Fb-M")},
+    )
+    assert cfg.model_for_slot("code") == "Coder"
+
+
+def test_visible_always_allows_manifest_models(monkeypatch):
+    """The roster filter must never hide this host's manifest models — a
+    fallback invisible to /model and /doctor fails exactly when needed."""
+    import luxe.config as config_mod
+
+    monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        visible_models=["Champ"],
+        hosts={"here": HostManifest(main="Main-M", fallback="Fb-M")},
+    )
+    served = ["Champ", "Main-M", "Fb-M", "Stale-Model"]
+    assert cfg.visible(served) == ["Champ", "Main-M", "Fb-M"]
 
 
 def test_empty_model_key_falls_back_to_champion():

@@ -45,6 +45,15 @@ class SlotManager:
         self.overrides: dict[str, str] = {}
         self.stats = SwapStats()
         self._on_status = on_status  # callable(str) for swap notices
+        # Per-host manifest (chat-only): main/fallback pair for auto-degrade.
+        # None when no `hosts:` entry matches this machine.
+        self.manifest = cfg.host_manifest()
+        # Degrade state: when the manifest main can't be served/loaded, every
+        # resolution of `main` is rerouted to `degraded_to` and the switch is
+        # announced ONCE via on_status. Manual /model overrides still win.
+        self.degraded_from: str | None = None
+        self.degraded_to: str | None = None
+        self._catalog_checked = False
         # Start resident on the chat slot's model — that's the conversational
         # default and the model we keep warm.
         self._resident = self.model_for("chat")
@@ -73,7 +82,13 @@ class SlotManager:
             raise KeyError(f"Unknown slot {slot!r}; expected one of {_SLOTS}.")
         if slot in self.overrides:
             return self.overrides[slot]
-        return self.cfg.model_for_slot(slot)
+        resolved = self.cfg.model_for_slot(slot)
+        # Auto-degrade reroute (manifest main -> fallback). Explicit /model
+        # overrides bypass this on purpose: picking a model by hand is an
+        # instruction, not a default to second-guess.
+        if self.degraded_from is not None and resolved == self.degraded_from:
+            return self.degraded_to or resolved
+        return resolved
 
     def slot_models(self) -> dict[str, str]:
         return {s: self.model_for(s) for s in _SLOTS}
@@ -172,12 +187,81 @@ class SlotManager:
             return None
         return f"{self.backend_name} oMLX unreachable — try /backend {other}"
 
+    # -- auto-degrade (manifest fallback, chat-only) --------------------------
+
+    def _degrade(self, reason: str) -> bool:
+        """Reroute the manifest main to its fallback for the rest of the
+        session. Returns True when a degrade actually happened. Loud by
+        contract: a session silently running a different model than asked
+        is the failure mode this exists to kill."""
+        m = self.manifest
+        if (m is None or not m.fallback or m.fallback == m.main
+                or self.degraded_from is not None):
+            return False
+        self.degraded_from = m.main
+        self.degraded_to = m.fallback
+        # Residency belief may refer to the failed main; force the next
+        # backend_for() to confirm/load the fallback.
+        if self._resident == m.main:
+            self._resident = ""
+        if self._on_status:
+            self._on_status(
+                f"⚠ DEGRADED: {m.main} unavailable ({reason}) — "
+                f"running on fallback {m.fallback}. "
+                f"Fix the main model and /model chat {m.main} to restore.")
+        return True
+
+    def _served_models(self) -> set[str] | None:
+        """Server catalog, or None when the endpoint can't answer (down /
+        transient) — callers must treat None as "unknown", not "empty"."""
+        try:
+            return set(self.backend.list_models())
+        except Exception:
+            return None
+
+    def note_turn_failure(self) -> str | None:
+        """Called by the front-ends after a turn-level BackendError. When the
+        endpoint itself is healthy but the manifest main was the model that
+        failed (oMLX lazy-loads on first request, so missing/corrupt weights
+        surface HERE, not at swap time), degrade and return a user-facing
+        notice. Returns None when this isn't a degrade case (endpoint down,
+        non-manifest model, no fallback, already degraded)."""
+        m = self.manifest
+        if m is None or self.degraded_from is not None:
+            return None
+        current = self.backend.model
+        if current != m.main:
+            return None
+        try:
+            healthy = self.backend.health()
+        except Exception:
+            healthy = False
+        if not healthy:
+            return None  # endpoint problem, not a model problem
+        if self._degrade("turn failed while the endpoint is healthy"):
+            return (f"switched to fallback {m.fallback} — "
+                    f"/retry to re-run your message on it")
+        return None
+
     # -- swap orchestration -------------------------------------------------
 
     def backend_for(self, slot: str) -> Backend:
         """Return a Backend whose resident model matches `slot`, swapping
-        weights (unload-all + thermal_guard) only when the target differs."""
+        weights (unload-all + thermal_guard) only when the target differs.
+
+        First use also verifies the target against the server catalog: the
+        resident model is assumed, never confirmed, at construction (gotcha:
+        a missing-weights main would otherwise fail only at request time)."""
         target = self.model_for(slot)
+        if not self._catalog_checked:
+            served = self._served_models()
+            if served is not None:
+                self._catalog_checked = True
+                m = self.manifest
+                if (m is not None and target == m.main
+                        and target not in served and m.fallback in served
+                        and self._degrade("not in the server catalog")):
+                    target = self.model_for(slot)
         if target == self._resident:
             self.backend.model = target
             return self.backend
@@ -202,11 +286,19 @@ class SlotManager:
         # Free the doubled RAM before loading the new weights.
         self.backend.unload_all_loaded(except_for=[target])
         self.backend.model = target
-        # Confirm the target is resident before the first chat call.
-        self.backend.thermal_guard(target)
+        # Confirm the target is resident before the first chat call. The
+        # guard's verdict used to be discarded; for the manifest main a False
+        # here (not in the catalog within the wait) now triggers the fallback
+        # instead of a doomed first request.
+        ok = self.backend.thermal_guard(target)
         elapsed = time.monotonic() - t0
         self.stats.count += 1
         self.stats.seconds += elapsed
+        if (not ok and self.manifest is not None
+                and target == self.manifest.main
+                and self._degrade("did not come up after a weight swap")):
+            self._swap_to(self.model_for(slot), slot)  # depth 1: degrade fires once
+            return
         self._resident = target
 
     def unload_all(self) -> None:

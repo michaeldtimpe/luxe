@@ -99,3 +99,104 @@ def test_unknown_slot_raises():
     sm = slots_mod.SlotManager(_champion_cfg())
     with pytest.raises(KeyError):
         sm.model_for("planner")
+
+
+# --- auto-degrade (host-manifest fallback) ----------------------------------
+
+
+class ManifestBackend(FakeBackend):
+    """FakeBackend with a catalog + health, for the degrade paths."""
+
+    served: list[str] = ["Main-M", "Fb-M"]
+    healthy = True
+    guard_ok = True
+
+    def list_models(self):
+        return list(self.served)
+
+    def health(self):
+        return self.healthy
+
+    def thermal_guard(self, target_model, settle_s=2.0, max_wait_s=30.0):
+        self.thermal_calls.append(target_model)
+        return self.guard_ok
+
+
+def _manifest_cfg(monkeypatch) -> PipelineConfig:
+    import luxe.config as config_mod
+
+    from luxe.config import HostManifest
+
+    monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
+    return PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        hosts={"here": HostManifest(main="Main-M", fallback="Fb-M")},
+    )
+
+
+def test_manifest_main_drives_slots_and_no_degrade_when_served(monkeypatch):
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    ManifestBackend.served = ["Main-M", "Fb-M"]
+    sm = slots_mod.SlotManager(_manifest_cfg(monkeypatch))
+    assert sm.resident == "Main-M"
+    b = sm.backend_for("chat")
+    assert b.model == "Main-M"
+    assert sm.degraded_from is None
+
+
+def test_catalog_miss_degrades_loudly(monkeypatch):
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    ManifestBackend.served = ["Fb-M"]          # main vanished from the catalog
+    notices: list[str] = []
+    sm = slots_mod.SlotManager(_manifest_cfg(monkeypatch),
+                               on_status=notices.append)
+    b = sm.backend_for("chat")
+    assert b.model == "Fb-M"
+    assert sm.degraded_from == "Main-M" and sm.degraded_to == "Fb-M"
+    assert any("DEGRADED" in n for n in notices)
+    # Every slot now reroutes; a manual override would still win.
+    assert sm.model_for("plan") == "Fb-M"
+    sm.set_override("plan", "Main-M")
+    assert sm.model_for("plan") == "Main-M"
+
+
+def test_failed_swap_guard_degrades_to_fallback(monkeypatch):
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    ManifestBackend.served = ["Main-M", "Fb-M"]
+    ManifestBackend.guard_ok = False           # weights never come up
+    try:
+        notices: list[str] = []
+        sm = slots_mod.SlotManager(_manifest_cfg(monkeypatch),
+                                   on_status=notices.append)
+        sm._resident = ""                      # force a swap on next turn
+        sm.backend_for("chat")
+        assert sm.degraded_to == "Fb-M"
+        assert any("DEGRADED" in n for n in notices)
+    finally:
+        ManifestBackend.guard_ok = True
+
+
+def test_turn_failure_on_healthy_endpoint_degrades(monkeypatch):
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    ManifestBackend.served = ["Main-M", "Fb-M"]
+    sm = slots_mod.SlotManager(_manifest_cfg(monkeypatch))
+    sm.backend.model = "Main-M"
+    notice = sm.note_turn_failure()
+    assert notice and "Fb-M" in notice
+    assert sm.degraded_to == "Fb-M"
+    # Second failure doesn't re-fire (already degraded).
+    assert sm.note_turn_failure() is None
+
+
+def test_turn_failure_on_dead_endpoint_does_not_degrade(monkeypatch):
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    ManifestBackend.served = ["Main-M", "Fb-M"]
+    ManifestBackend.healthy = False
+    try:
+        sm = slots_mod.SlotManager(_manifest_cfg(monkeypatch))
+        sm.backend.model = "Main-M"
+        assert sm.note_turn_failure() is None   # endpoint problem, not model
+        assert sm.degraded_from is None
+    finally:
+        ManifestBackend.healthy = True

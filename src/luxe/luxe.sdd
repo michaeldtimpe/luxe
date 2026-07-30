@@ -15,9 +15,16 @@ auto-memory.
   `configs/single_64gb.yaml`); the m5max_moe bake-off (2026-05-10) is settled
 - No per-task model selection, model fan-out, or router; re-bench only on
   explicit user request and write results under `acceptance/m5max_moe_<id>/`.
-  Sole sanctioned exception: `luxe chat` slots (chat/plan/code), opt-in via
-  `configs/chat.yaml` `slots:`; default is champion-everywhere (no fan-out),
-  scoped to the interactive front-end and never the benchmark/maintain path
+  Sole sanctioned exceptions, BOTH scoped to the interactive front-end
+  (`luxe chat` / `luxe code`) and never the benchmark/maintain path:
+  (a) `luxe chat` slots (chat/plan/code), opt-in via `configs/chat.yaml`
+  `slots:`; (b) per-HOST manifests (`hosts:` in chat.yaml, 2026-07-30
+  fallback-kit pivot) — each fleet host declares an interactive main +
+  fallback pair sized to its RAM, with loud auto-degrade (chat.sdd). The
+  champion pin above is a BENCHMARK pin: `single_64gb.yaml` still selects it
+  and m1 keeps its weights (manifest `keep:`), but the interactive default on
+  m1/m4 is deliberately NOT the champion. A host with no `hosts:` entry is
+  champion-everywhere, byte-identical to the pre-manifest behaviour
 - Multi-backend endpoint selection (`backends:` map + `/backend`/`--backend`)
   joins the slots carve-out: chat-only, config-sourced (BackendEntry =
   base_url/api_key_env/timeout_s/default; keys resolve from env at Backend

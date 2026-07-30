@@ -198,6 +198,7 @@ def run_chat_repl(
     reader: Callable[[], str] | None = None,
     infer_task_type: Callable[[str], str] | None = None,
     dev_mode: bool = False,
+    start_write: bool = False,
     startup_verbose: str | None = None,
     startup_show_reasoning: bool = False,
     startup_no_terse: bool = False,
@@ -226,6 +227,10 @@ def run_chat_repl(
     if dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True
+    if start_write:
+        # `luxe code` posture: write tools ON from turn one (its reason to
+        # exist is changing code). Bash stays gated — /bash as usual.
+        session.write_enabled = True
 
     # C3 startup verbosity flags (set before the loop so /goal users get them
     # without typing REPL commands first). --debug = verbose full + reasoning.
@@ -258,6 +263,15 @@ def run_chat_repl(
         base_url=slots.backend.base_url,
     )
     session.session_id = meta.session_id
+
+    # Always-on per-session debug log (chat.sdd): everything luxe.* logs this
+    # session lands in <session dir>/debug.log — the post-hoc answer to "what
+    # happened" that the screen (especially the TUI) can't provide.
+    from luxe.chat import debuglog
+    dbglog = debuglog.install(session_store.session_dir(meta.session_id))
+    logger.info("session %s start · repo=%s · backend=%s (%s) · slots=%s",
+                meta.session_id, repo_path or "(none)", slots.backend_name,
+                slots.backend.base_url, slots.slot_models())
 
     # Record the HEAD the resident BM25/symbol indices (built in chat_cmd just
     # before this) reflect, so /git* can warn if the repo moves mid-session.
@@ -342,9 +356,19 @@ def run_chat_repl(
                 # the config offers another backend, point at the escape hatch
                 # (e.g. "local oMLX unreachable — try /backend m5").
                 console.print(f"[red]✗ {e}[/]")
-                hint = slots.unreachable_hint()
-                if hint:
-                    console.print(f"[yellow]· {hint}[/]")
+                logger.error("turn BackendError: %s", e)
+                session_store.append_turn(session.session_id, "error",
+                                          text=str(e), model=slots.backend.model)
+                # Manifest auto-degrade: a healthy endpoint whose main model
+                # fails a turn (lazy load hits missing/corrupt weights HERE)
+                # switches the session to the fallback, loudly.
+                notice = slots.note_turn_failure()
+                if notice:
+                    console.print(f"[yellow]· {notice}[/]")
+                else:
+                    hint = slots.unreachable_hint()
+                    if hint:
+                        console.print(f"[yellow]· {hint}[/]")
             except Exception:
                 # Parity with the TUI worker: one bad turn must not end the
                 # session (an uncaught OSError from a repo walk did exactly
@@ -354,6 +378,8 @@ def run_chat_repl(
                 console.print("[yellow]· the session is still alive — retry, "
                               "or /quit if it repeats[/]")
                 logger.error("chat turn crashed\n%s", traceback.format_exc())
+                session_store.append_turn(session.session_id, "error",
+                                          text=exc_line)
     finally:
         if not keep_loaded:
             # WS3: show the unload is happening BEFORE the blocking call (it can
@@ -364,6 +390,8 @@ def run_chat_repl(
         if slots.stats.count:
             console.print(f"[dim]· session swaps: {slots.stats.count} "
                           f"({slots.stats.seconds:.0f}s total)[/]")
+        logger.info("session %s end", session.session_id)
+        debuglog.uninstall(dbglog)
 
 
 @dataclass

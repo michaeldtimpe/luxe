@@ -83,6 +83,16 @@ class TestExport:
         assert "attached: `big.py`" in md
         assert "48000" not in md
 
+    def test_markdown_renders_error_records(self):
+        """A failed turn exports as part of the story, not a silent gap."""
+        meta = session_store.new_session(repo_path="/x")
+        session_store.append_turn(meta.session_id, "user", text="hi", slot="chat")
+        session_store.append_turn(meta.session_id, "error",
+                                  text="BackendError: 502", model="Main-M")
+        m, recs = session_store.load_session(meta.session_id)
+        md = inspection.transcript_markdown(m, recs)
+        assert "⚠ turn failed (Main-M): BackendError: 502" in md
+
     def test_export_writes_beside_the_transcript_by_default(self):
         sid = self._session()
         out = inspection.export_transcript(sid)
@@ -261,6 +271,62 @@ class TestDoctor:
         sm.backend = Boom()
         doc = inspection.run_doctor(session, sm, repo)
         assert _states(doc)["oMLX endpoint"] == inspection.FAIL
+
+    def test_no_hosts_block_reports_single_model_default(self, doctor_ctx):
+        session, sm, repo = doctor_ctx
+        doc = inspection.run_doctor(session, sm, repo)
+        manifest = next(c for c in doc.checks if c.name == "host manifest")
+        assert manifest.state == inspection.OK
+        assert "none configured" in manifest.detail
+
+    def test_unmatched_hostname_warns_with_fix(self, doctor_ctx, monkeypatch):
+        import luxe.config as config_mod
+        from luxe.config import HostManifest
+
+        session, sm, repo = doctor_ctx
+        monkeypatch.setattr(config_mod, "short_hostname", lambda: "zeta")
+        sm.cfg.hosts = {"m1": HostManifest(main="A", fallback="B")}
+        doc = inspection.run_doctor(session, sm, repo)
+        manifest = next(c for c in doc.checks if c.name == "host manifest")
+        assert manifest.state == inspection.WARN
+        assert "zeta" in manifest.detail and "hosts:" in manifest.fix
+
+    def test_manifest_weights_checked_on_local_endpoint(self, doctor_ctx,
+                                                        monkeypatch):
+        import luxe.config as config_mod
+        import luxe.modelstore as ms
+        from luxe.chat import origin as origin_mod
+        from luxe.config import HostManifest
+
+        session, sm, repo = doctor_ctx
+        monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
+        sm.cfg.hosts = {"here": HostManifest(main="Main-M", fallback="Fb-M",
+                                             keep=["Bench-M"])}
+        sm.manifest = sm.cfg.host_manifest()
+        monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: True)
+        states = {"Main-M": "dangling", "Fb-M": "ok", "Bench-M": "missing"}
+        monkeypatch.setattr(ms, "model_state",
+                            lambda mid, *a, **k: states.get(mid, "missing"))
+
+        doc = inspection.run_doctor(session, sm, repo)
+        by_name = {c.name: c for c in doc.checks}
+        assert by_name["weights:Main-M"].state == inspection.FAIL
+        assert "pull" in by_name["weights:Main-M"].fix
+        assert by_name["weights:Fb-M"].state == inspection.OK
+        assert by_name["weights:Bench-M"].state == inspection.WARN
+
+    def test_degraded_session_warns(self, doctor_ctx, monkeypatch):
+        import luxe.config as config_mod
+        from luxe.config import HostManifest
+
+        session, sm, repo = doctor_ctx
+        monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
+        sm.cfg.hosts = {"here": HostManifest(main="Main-M", fallback="Fb-M")}
+        sm.degraded_from, sm.degraded_to = "Main-M", "Fb-M"
+        doc = inspection.run_doctor(session, sm, repo)
+        degraded = next(c for c in doc.checks if c.name == "degraded")
+        assert degraded.state == inspection.WARN
+        assert "Fb-M" in degraded.detail and "Main-M" in degraded.fix
 
     def test_missing_model_fails_and_suggests_pull(self, doctor_ctx):
         session, sm, repo = doctor_ctx

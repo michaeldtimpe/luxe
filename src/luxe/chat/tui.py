@@ -181,6 +181,11 @@ class ChatApp(App):
         # Model provenance (local disk / network volume / remote host), stated
         # once — same notice the line REPL prints.
         log.write(_repl.model_origin_notice(self.slots, self.status))
+        # Route SlotManager notices (weight swaps, auto-degrade) into the
+        # transcript. run_chat_app constructs slots before the app exists, so
+        # the binding lands here; self.write is thread-safe, and the degrade
+        # announcement MUST be visible in the TUI, not just the line REPL.
+        self.slots._on_status = lambda m: self.write(f"[dim]· {m}[/]")
         # Cache long-lived widget refs (see __init__): used directly so the timer
         # and writes survive a modal screen being on top.
         self._gen = self.query_one("#generating", Static)
@@ -443,9 +448,17 @@ class ChatApp(App):
             # Mirror the line REPL: a dead endpoint fails the turn, not the
             # app; multi-backend configs get the /backend escape hatch.
             self.write(f"[red]✗ {e}[/]")
-            hint = self.slots.unreachable_hint()
-            if hint:
-                self.write(f"[yellow]· {hint}[/]")
+            logger.error("turn BackendError: %s", e)
+            session_store.append_turn(self.session.session_id, "error",
+                                      text=str(e),
+                                      model=self.slots.backend.model)
+            notice = self.slots.note_turn_failure()
+            if notice:
+                self.write(f"[yellow]· {notice}[/]")
+            else:
+                hint = self.slots.unreachable_hint()
+                if hint:
+                    self.write(f"[yellow]· {hint}[/]")
         except Exception:
             # A turn must never take the app down. Textual's default is to let
             # a worker exception unwind into WorkerFailed and kill the session
@@ -464,6 +477,8 @@ class ChatApp(App):
         self.write("[yellow]· the session is still alive — retry, or "
                    "`/quit` if it repeats[/]")
         logger.error("chat turn crashed\n%s", traceback.format_exc())
+        session_store.append_turn(self.session.session_id, "error",
+                                  text=exc_line)
 
     def _render_outcome(self, outcome, prep, interrupted) -> None:
         log = self._log()
@@ -684,7 +699,8 @@ class LogConsole:
 
 
 def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
-                 resume_session_id=None, dev_mode=False, startup_verbose=None,
+                 resume_session_id=None, dev_mode=False, start_write=False,
+                 startup_verbose=None,
                  startup_show_reasoning=False, startup_no_terse=False,
                  startup_debug=False, startup_compact=False, theme_name=None,
                  infer_task_type=None, on_project=None,
@@ -711,6 +727,9 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
     if dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True
+    if start_write:
+        # `luxe code` posture: write tools ON from turn one; bash stays gated.
+        session.write_enabled = True
     if startup_debug:
         session.verbose_level = "full"
         session.show_reasoning = True
@@ -731,6 +750,14 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
     session.session_id = meta.session_id
     session.index_head = current_head(repo_path) if repo_path else ""
 
+    # Always-on per-session debug log — the TUI owns the screen, so without
+    # this every logger.error traceback was simply lost (chat.sdd).
+    from luxe.chat import debuglog
+    dbglog = debuglog.install(session_store.session_dir(meta.session_id))
+    logger.info("session %s start · repo=%s · backend=%s (%s) · slots=%s",
+                meta.session_id, repo_path or "(none)", slots.backend_name,
+                slots.backend.base_url, slots.slot_models())
+
     app = ChatApp(cfg, repo_path, languages, session=session, slots=slots,
                   infer=infer, keep_loaded=keep_loaded,
                   resume_session_id=resume_session_id, on_project=on_project)
@@ -742,3 +769,5 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
                 slots.unload_all()
             except Exception:
                 pass
+        logger.info("session %s end", session.session_id)
+        debuglog.uninstall(dbglog)
