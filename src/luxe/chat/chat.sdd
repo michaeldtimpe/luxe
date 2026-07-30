@@ -259,11 +259,16 @@ never touches this module.
   and defaults to the files THIS session wrote (ledger `files`), falling back to
   the working tree with the scope named — it diffs against HEAD so staged edits
   show, reports untracked files as new, and survives a repo with no commits.
-  `/doctor` returns ordered `Check`s (endpoint → key → model → weights → disk →
-  index → freshness → tree → mode → TUI); every WARN/FAIL carries the fix, an
-  unreachable endpoint is a FAIL not an exception, and nothing it calls may
-  raise. `search.get_index()` is the read-only accessor it uses — the tool path
-  still reads the module global.
+  `/doctor` returns ordered `Check`s (endpoint → key → model → weights →
+  manifest → disk → update → index → freshness → tree → mode → TUI); every
+  WARN/FAIL carries the fix, an unreachable endpoint is a FAIL not an
+  exception, and nothing it calls may raise. The `update` check is the ONE
+  doctor line allowed to touch the network (a ≤4s `git fetch` on the luxe
+  source repo via `buildinfo.fetch_origin`; behind → WARN "`luxe update`");
+  offline degrades to a quiet OK "unchecked" — doctor runs during outages by
+  design, and session startup stays offline-pure (banner hints use local refs
+  only). `search.get_index()` is the read-only accessor it uses — the tool
+  path still reads the module global.
 - The model roster is CONFIG-FILTERED (2026-07-30): `visible_models:` in
   `configs/chat.yaml` is the only set `/model` offers and slots may resolve to
   (`PipelineConfig.visible`, applied in `SlotManager.available_models`). Server

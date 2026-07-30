@@ -360,6 +360,25 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     except OSError as e:
         doc.add("disk", WARN, str(e))
 
+    # Update check — the ONE doctor line allowed to touch the network (a
+    # short git fetch on the luxe source repo). Startup banners stay
+    # offline-pure; /doctor is exactly where a round-trip is tolerable.
+    # Offline is NOT a warning: doctor runs during outages by design.
+    try:
+        from luxe import buildinfo
+        if buildinfo.fetch_origin(timeout_s=4):
+            behind = buildinfo.behind_origin()
+            if behind:
+                doc.add("update", WARN,
+                        f"{behind} commit(s) behind origin/main",
+                        "`luxe update`")
+            else:
+                doc.add("update", OK, "current with origin/main")
+        else:
+            doc.add("update", OK, "unchecked (offline or no remote)")
+    except Exception as e:
+        doc.add("update", OK, f"unchecked ({e})")
+
     # Search index: built at startup from the repo HEAD; a moved HEAD means the
     # model is searching a tree that no longer matches the files it will read.
     # A session with no project deliberately has none — that's a state, not a

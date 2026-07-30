@@ -1274,6 +1274,71 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
             sys.exit(130)
 
 
+@main.command(name="update")
+@click.option("--no-sync", is_flag=True, default=False,
+              help="Skip `uv sync` after pulling (code only, no dep changes).")
+def update_cmd(no_sync: bool):
+    """Update THIS host's luxe checkout: fetch → rebase onto origin/main →
+    `uv sync --extra chat`. Says what's incoming before touching anything;
+    no-op (and says so) when already current. Targets the luxe source repo
+    regardless of where you run it."""
+    import subprocess as sp
+
+    from luxe import buildinfo
+
+    root = buildinfo._repo_root()
+    old, dirty = buildinfo.version_parts()
+    console.print(f"[bold]luxe[/] [dim]{root}[/] · version {old}"
+                  + (" [yellow](dirty — rebase will autostash)[/]" if dirty
+                     else ""))
+
+    with console.status("[dim]fetching origin…[/]"):
+        fetched = buildinfo.fetch_origin(timeout_s=20)
+    if not fetched:
+        console.print("[red]✗ couldn't fetch origin[/] [dim](offline, or no "
+                      "remote configured) — try again with network[/]")
+        sys.exit(1)
+
+    behind = buildinfo.behind_origin()
+    if behind == 0:
+        console.print("[green]✓ already current with origin/main[/]")
+        return
+
+    def _git(*args, timeout=120):
+        return sp.run(["git", "-C", str(root), *args],
+                      capture_output=True, text=True, timeout=timeout)
+
+    log = _git("log", "--oneline", "HEAD..origin/main")
+    console.print(f"[bold]{behind} commit(s) incoming:[/]")
+    for line in log.stdout.strip().splitlines()[:15]:
+        console.print(f"  [dim]{line}[/]")
+
+    pulled = _git("pull", "--rebase")
+    if pulled.returncode != 0:
+        console.print(f"[red]✗ git pull --rebase failed:[/]\n"
+                      f"[dim]{(pulled.stderr or pulled.stdout).strip()}[/]")
+        sys.exit(1)
+
+    if not no_sync:
+        with console.status("[dim]uv sync --extra chat…[/]"):
+            try:
+                synced = sp.run(["uv", "sync", "--extra", "chat"],
+                                cwd=str(root), capture_output=True, text=True,
+                                timeout=600)
+            except FileNotFoundError:
+                synced = None
+        if synced is None:
+            console.print("[yellow]⚠ uv not on PATH — run "
+                          "`uv sync --extra chat` in the repo yourself[/]")
+        elif synced.returncode != 0:
+            console.print(f"[yellow]⚠ uv sync failed:[/]\n"
+                          f"[dim]{synced.stderr.strip()[-500:]}[/]")
+
+    new, _ = buildinfo.version_parts()
+    console.print(f"[bold][green]✓[/] {old} → {new}[/] [dim]— restart any "
+                  "open chat/code sessions to pick it up[/]")
+
+
 @main.command(name="smoke")
 @click.option("--config", "config_path", default=None,
               help="Config YAML (default: configs/chat.yaml)")

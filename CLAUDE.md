@@ -74,6 +74,11 @@ when reached for — availability over capability. Concretely:
 - **Every session writes `~/.luxe/sessions/<id>/debug.log`** (always-on;
   chat/debuglog.py) and failed turns persist kind="error" transcript records —
   post-outage diagnosis must not depend on what the TUI happened to show.
+- **`luxe update`** (wrapper `luxe-update`) is the one-word host update:
+  fetch → show incoming → rebase onto origin/main → `uv sync --extra chat`;
+  no-op when current. `/doctor`'s `update` check is the only networked doctor
+  line (≤4s fetch; offline = quiet OK, never a warning — doctor runs during
+  outages). Startup banners stay offline-pure (local refs only).
 - gemma is out of the roster (no tool support); the bench apparatus is cold
   storage — capability re-benching only on explicit request.
 
