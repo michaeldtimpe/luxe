@@ -12,6 +12,15 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
 - `cve_lookup` is gated to `task_type == "manage"` only (surface bloat regresses implement)
 - New honesty-pattern guards land with a regression test in `tests/test_tools.py`
 
+- The placeholder guard's prose exemption is CHAT-ONLY (2026-07-30):
+  `make_prose_aware_write_fns()` skips `_check_placeholder_text` for prose
+  extensions (`_PROSE_EXTENSIONS`: .txt/.md/.rst/.log/…) because in notes and
+  session transcripts "# TODO: implement …" is user-dictated content, not a
+  code stub. All other guards apply unchanged. Reachable ONLY via the chat
+  front-end's write-mode extra-tool seam (same pattern as unrestricted bash);
+  the module `TOOL_FNS`/`MUTATION_FNS` keep `prose_exempt=False`, so the
+  benchmark/maintain path is byte-identical
+
 - `bash` defaults to the hardened allowlist + chain/redirect rejection
   (`_validate_command`). The module `TOOL_FNS["bash"]` MUST stay restricted —
   every benchmark/maintain run uses it. The unrestricted variant

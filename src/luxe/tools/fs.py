@@ -372,15 +372,47 @@ def _grep(args: dict[str, Any]) -> tuple[str, str | None]:
         return "\n".join(lines) if lines else "(no matches)", None
 
 
-def _write_file(args: dict[str, Any]) -> tuple[str, str | None]:
+# Prose extensions the CHAT front-end exempts from the placeholder guard
+# (make_prose_aware_write_fns): in notes/docs/session transcripts,
+# "# TODO: implement …" or "# paste your token here" is CONTENT the user asked
+# to save, not a stub sneaking past review — the guard exists for code writes.
+# Code extensions stay guarded everywhere; the benchmark/maintain path uses
+# the module TOOL_FNS (prose_exempt=False) and is byte-identical.
+_PROSE_EXTENSIONS = frozenset({
+    ".txt", ".md", ".markdown", ".rst", ".adoc", ".log", ".csv", ".tsv",
+})
+
+
+def _is_prose_path(rel: str) -> bool:
+    return Path(rel).suffix.lower() in _PROSE_EXTENSIONS
+
+
+def make_prose_aware_write_fns() -> dict[str, ToolFn]:
+    """Chat-only write/edit variants: prose files skip the placeholder guard.
+
+    All other guards (role-path, mass-deletion, `_safe` scoping, SpecDD
+    Forbids) apply unchanged. Swapped in per-turn through `run_single`'s
+    extra-tool seam by the chat front-end in write mode — never the default.
+    """
+    def _w(args: dict[str, Any]) -> tuple[str, str | None]:
+        return _write_file(args, prose_exempt=True)
+
+    def _e(args: dict[str, Any]) -> tuple[str, str | None]:
+        return _edit_file(args, prose_exempt=True)
+    return {"write_file": _w, "edit_file": _e}
+
+
+def _write_file(args: dict[str, Any], *, prose_exempt: bool = False,
+                ) -> tuple[str, str | None]:
     rel = args["path"]
     content = args["content"]
 
     # Honesty guards — applied before any I/O so a refusal costs nothing.
     if (err := _check_role_path(rel)):
         return "", err
-    if (err := _check_placeholder_text(content)):
-        return "", err
+    if not (prose_exempt and _is_prose_path(rel)):
+        if (err := _check_placeholder_text(content)):
+            return "", err
 
     # `_safe` rejects path-escape attempts; convert to a tool error so
     # the call site doesn't have to worry about PermissionError leaking
@@ -415,7 +447,8 @@ def _write_file(args: dict[str, Any]) -> tuple[str, str | None]:
     return f"Wrote {len(content)} bytes to {rel}", None
 
 
-def _edit_file(args: dict[str, Any]) -> tuple[str, str | None]:
+def _edit_file(args: dict[str, Any], *, prose_exempt: bool = False,
+               ) -> tuple[str, str | None]:
     rel = args["path"]
     if (err := _check_role_path(rel)):
         return "", err
@@ -436,8 +469,9 @@ def _edit_file(args: dict[str, Any]) -> tuple[str, str | None]:
     new = args["new_string"]
 
     # Block placeholder text from sneaking in via edits.
-    if (err := _check_placeholder_text(new)):
-        return "", err
+    if not (prose_exempt and _is_prose_path(rel)):
+        if (err := _check_placeholder_text(new)):
+            return "", err
 
     count = text.count(old)
     if count == 0:

@@ -606,3 +606,84 @@ def test_glob_returns_partial_results_when_a_subtree_dies(tmp_path, monkeypatch)
                         OSError(errno.ETIMEDOUT, "Operation timed out"))
     matches, stopped = fs._glob_matches_tolerant(tmp_path, "**/*.py")
     assert "timed out" in stopped        # reported, not raised
+
+
+class TestProseAwareWriteFns:
+    """Chat-only write/edit variants (make_prose_aware_write_fns): prose
+    files skip the placeholder guard — "save these notes with '# TODO:
+    implement X'" is user-dictated content, not a code stub. Everything else
+    (code extensions, role-path, mass-deletion, path scoping) is unchanged,
+    and the DEFAULT fns keep guarding prose so the benchmark path is
+    byte-identical."""
+
+    def test_prose_write_allows_placeholder_text(self, tmp_repo: Path):
+        fns = fs.make_prose_aware_write_fns()
+        result, err = fns["write_file"]({
+            "path": "session-notes.txt",
+            "content": "# paste your RELAY_TOKEN here\n# TODO: implement weekly report\n",
+        })
+        assert err is None
+        assert (tmp_repo / "session-notes.txt").is_file()
+
+    def test_prose_markdown_also_exempt(self, tmp_repo: Path):
+        fns = fs.make_prose_aware_write_fns()
+        _, err = fns["write_file"]({
+            "path": "runbook.md",
+            "content": "steps:\n\n    # fill in the token here\n",
+        })
+        assert err is None
+
+    def test_code_write_still_guarded(self, tmp_repo: Path):
+        fns = fs.make_prose_aware_write_fns()
+        _, err = fns["write_file"]({
+            "path": "handler.js",
+            "content": "function reset() {\n  // Your reset code here\n}",
+        })
+        assert err is not None
+        assert "placeholder" in err.lower()
+
+    def test_default_fns_still_guard_prose(self, tmp_repo: Path):
+        """Benchmark behavior unchanged: the module TOOL_FNS block placeholder
+        text in .txt too."""
+        _, err = fs.MUTATION_FNS["write_file"]({
+            "path": "notes.txt",
+            "content": "<paste the modified content here>",
+        })
+        assert err is not None
+        assert "placeholder" in err.lower()
+
+    def test_prose_edit_allows_placeholder_replacement(self, tmp_repo: Path):
+        (tmp_repo / "notes.txt").write_text("line one\n")
+        fns = fs.make_prose_aware_write_fns()
+        _, err = fns["edit_file"]({
+            "path": "notes.txt",
+            "old_string": "line one",
+            "new_string": "# TODO: implement the cron entry",
+        })
+        assert err is None
+        assert "# TODO: implement" in (tmp_repo / "notes.txt").read_text()
+
+    def test_prose_edit_code_file_still_guarded(self, tmp_repo: Path):
+        (tmp_repo / "mod.py").write_text("x = 1\n")
+        fns = fs.make_prose_aware_write_fns()
+        _, err = fns["edit_file"]({
+            "path": "mod.py",
+            "old_string": "x = 1",
+            "new_string": "# TODO: implement x properly",
+        })
+        assert err is not None
+        assert "placeholder" in err.lower()
+
+    def test_prose_variant_keeps_other_guards(self, tmp_repo: Path):
+        fns = fs.make_prose_aware_write_fns()
+        # role-path guard intact
+        _, err = fns["write_file"]({"path": "verifier.txt", "content": "hi"})
+        assert err is not None and "role label" in err
+        # mass-deletion guard intact
+        big = "\n".join(f"line {i}" for i in range(120)) + "\n"
+        (tmp_repo / "big.txt").write_text(big)
+        _, err = fns["write_file"]({"path": "big.txt", "content": "stub\n"})
+        assert err is not None
+        # path scoping intact
+        _, err = fns["write_file"]({"path": "../escape.txt", "content": "x"})
+        assert err is not None
