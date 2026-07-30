@@ -3656,3 +3656,42 @@ reasoning about role tables.
 **Affected files**: `src/luxe/chat/theme.py`, `src/luxe/chat/status.py`,
 `src/luxe/chat/commands.py`, `tests/test_chat_modelcaps.py`,
 `tests/test_chat_origin.py`.
+
+### [2026-07-30] Qwen3.6 rides oMLX's slow vlm engine — dense-27B is interactively unusable
+
+**What happened**: The freshly-provisioned m1 fallback kit ran 63-74s chat
+turns on its dense-27B-4bit main ("hello" took 65s). An identical-prompt
+probe showed ~65 tok/s prefill with ZERO prefix-cache reuse (65.8s → 62.6s);
+the MoE sibling cached fine (12.7s → 4.5s).
+
+**Why**: Qwen3.6 is a genuinely multimodal family (`vision_config`,
+`*ForConditionalGeneration`), so oMLX 0.5.3 routes every variant to its vlm
+engine — the fast `batched` engine (paged SSD prefix cache, specprefill) is
+text-only-models-only. The MoE mostly dodges the cost via ~3B active params;
+the dense pays in full. This also retro-explains the m5's historical
+"25-minute dense 16K turns over Tailscale" — it was never the link.
+
+**What changed**: m1/m4 manifests flipped to MoE-main/dense-fallback
+(aa8301b); per-model `/ctx` clamps in the manifest cap the dense at 32K
+(0135884). Engine choice, not RAM, is the dense context ceiling. Re-check if
+oMLX optimizes its vlm text path.
+
+### [2026-07-30] secrets.env without `export` = fleet-wide latent 401
+
+**What happened**: `luxe smoke --code` on the m5 died with 401 "API key
+required" — in the exact outage-drill scenario the fallback kit exists for.
+The same command worked on the m1 for months.
+
+**Why**: `~/.luxe/secrets.env` has no `export` lines, so any shell that
+sources it without `set -a` launches luxe with an empty environment. The
+m1's shell profile happens to export the key (masking the bug); the m5's
+doesn't. Two independent 401s in one day (an unexported subshell on m1, the
+m5 interactive shell) proved it a class, not an incident.
+
+**What changed**: luxe resolves its own credentials (`luxe/secrets.py`,
+08e9e84): env → secrets.env (export/quoted lines tolerated) → macOS login
+keychain, wired into every Backend/OmlxAdmin constructor. A fallback tool
+must not outsource its credentials to per-host dotfile discipline. Related:
+a bare `uv sync --extra chat` pruned the dev extra and broke the code drill
+(pytest is a RUNTIME dep now) — canonical sync is
+`--extra chat --extra dev --extra analyzers` everywhere.
