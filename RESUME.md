@@ -1,5 +1,52 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-07-29) — chat crash fix, model provenance, `luxe pull`, once-over
+
+Started from two user-reported symptoms; ended as a small maintenance cycle.
+All work is on `main`, tests green (1690 passed, 6 skipped; +109 this session),
+`ruff check src/`
+down from 28 findings to 5 (all deliberate E-class).
+
+1. **The chat crash (root-caused, fixed).** `luxe-chat` from `$HOME` died ~4s
+   into the first turn with `TimeoutError: [Errno 60]`. `spec_resolver.find_all_sdd`
+   walked the repo root with `Path.rglob`, which swallows ONLY `PermissionError`;
+   `~/Library/CloudStorage/SynologyDrive-*` raised `OSError(ETIMEDOUT)` from
+   `scandir` and unwound through the Textual worker, killing the session.
+   New `src/luxe/fswalk.py` (os.walk-based, vendor-pruned, logs skips) is now the
+   only sanctioned way to walk a user-chosen root — a `Must not` in `luxe.sdd`.
+   Both front-ends now contain ANY turn/command exception instead of only
+   `BackendError`.
+2. **Contract-scan cache.** `find_all_sdd` runs per turn and took ~19s with
+   `--repo ~` (1.4M files). Opt-in per-root cache (`spec_resolver.enable_scan_cache`,
+   enabled ONLY by `cli.chat_cmd`, invalidated when a turn writes a `.sdd`).
+   Deliberately off for bench/maintain: they pin one `--work-dir` across
+   instances with different contents.
+3. **Theme default corrected.** `cli.chat_cmd` shipped `--theme cool`, overriding
+   the user's llmtop/YASL theme, while both `chat.sdd` and the `--help` text
+   promised `auto`. Default is `auto` again; curated palettes are opt-in.
+4. **Model provenance** (`src/luxe/chat/origin.py`). Every session now states
+   whether weights are on local disk (⌂), a network volume (☁), or behind a
+   remote endpoint (⇅) — startup notice, status-bar glyph, `/model` listing,
+   weight-swap line. On m1 all 15 models are local; the network exposure is the
+   `m5` Tailscale backend, which now announces itself.
+5. **`luxe pull` / `/pull`** (`src/luxe/modelstore.py`). Mount-first, HF-second
+   model fetching. HF goes through oMLX's own downloader (`/admin/api/hf/*`,
+   cookie login); mount imports resolve symlinks and Synology `XSym` stubs.
+   Chat consent is two-step (`/pull <ref>` previews, `--yes` transfers).
+6. **`/help` audit** → added `/theme`, `/tools`, `/status`, `/unload`, `/retry`
+   (+ `CommandResult.submit`, the one sanctioned command→turn path).
+7. **Once-over** → fixed a possibly-unbound `resp` (two guard sites, one with a
+   `'resp' in dir()` workaround) and deleted write-only `last_compaction_phase`
+   in `agents/loop.py`; made `_list_dir`/`glob` degrade on unreadable dirs;
+   widened `Backend` probe guards to `OSError`.
+
+**Not done / next:** the `/help` audit's remaining candidates are `/export`
+(transcript → markdown), `/diff` (session changed-files), and `/doctor`
+(oMLX + index + disk preflight). `luxe pull` has NOT been exercised against a
+real kappa mount (kappa wasn't mounted this session) — the XSym path is covered
+by unit tests and validated against the local HF cache, but the first real NAS
+pull is worth watching. Details in `lessons.md` (4 entries, 2026-07-29).
+
 ## ⇒ SESSION HANDOFF (2026-06-10) — gitkit hardening cycle: 5 phases shipped+dogfooded, tuning debt banked
 
 **Branch `feat/gitkit-cycle`** (atop the landed `feat/chat-tui`→main fast-forward;
