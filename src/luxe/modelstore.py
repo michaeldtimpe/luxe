@@ -133,6 +133,46 @@ def local_model_names(models_dir: Path | None = None) -> list[str]:
         return []
 
 
+def model_state(name: str, models_dir: Path | None = None) -> str:
+    """Weight presence for one store entry: "ok" | "dangling" | "missing".
+
+    "dangling" is the HF-cache-wipe signature (2026-07-30 finding): the store
+    entry EXISTS — usually a symlink into `~/.cache/huggingface` — but the
+    weights behind it don't resolve, so listings report a model the server
+    cannot actually load. `/doctor`, `luxe smoke`, and `pull --list` all key
+    off this instead of bare directory presence.
+    """
+    root = Path(models_dir or DEFAULT_MODELS_DIR)
+    p = root / name
+    try:
+        if not (p.is_dir() or p.is_symlink()):
+            return "missing"
+    except OSError:
+        return "missing"
+    return "ok" if is_model_dir(p) else "dangling"
+
+
+def remove_model(name: str, models_dir: Path | None = None) -> tuple[int, str]:
+    """Delete one entry from the local store. Returns (bytes_freed, note).
+
+    A real directory is removed recursively (bytes_freed = its size). A
+    symlink is unlinked WITHOUT touching its target — the HF cache behind a
+    linked model may back other aliases (and deleting cache bytes is a
+    separate, deliberate act). Raises ModelStoreError for an unknown name.
+    """
+    root = Path(models_dir or DEFAULT_MODELS_DIR)
+    p = root / name
+    if p.is_symlink():
+        target = os.readlink(p)
+        p.unlink()
+        return 0, f"unlinked (target left alone: {target})"
+    if p.is_dir():
+        freed = dir_size(p)
+        shutil.rmtree(p)
+        return freed, "removed"
+    raise ModelStoreError(f"{name!r} is not in the store ({root})")
+
+
 # --- sources ----------------------------------------------------------------
 
 

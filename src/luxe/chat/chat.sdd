@@ -12,12 +12,52 @@ never touches this module.
 - Context precedence (highest wins): current user turn > project memory >
   conversation summary. `extra_context` is tagged `<project_memory>` /
   `<conversation_history>` / `<current_request>` so history can't read as commands
-- Default slot config = champion in chat/plan/code (`model_for_slot` returns the
-  monolith model when `slots` is None or `model_key=""`); byte-identical model
-  selection to `single_64gb.yaml`
+- Default slot config = THIS HOST'S manifest `main` in chat/plan/code
+  (2026-07-30 fallback-kit pivot): `model_for_slot` resolves an empty
+  `model_key` to `hosts:<hostname>`.main first, then to the monolith model.
+  A host with no `hosts:` entry keeps champion-everywhere. Explicit `slots:`,
+  CLI `--<slot>-model`, and `/model` overrides always beat the manifest.
+  Benchmark/maintain never call `model_for_slot`/`host_manifest`, so
+  `single_64gb.yaml` selection is untouched
+- Per-host manifests (`hosts:` in configs/chat.yaml, keyed by short hostname,
+  parsed as HostManifest main/fallback/keep) are a DISK declaration as well as
+  a selection default: all three sets are expected locally cached on that host.
+  `luxe pull` provisions, `/doctor` + `luxe smoke` verify (including the
+  dangling-symlink state a wiped HF cache leaves behind), and
+  `luxe pull <name> --remove` refuses manifest models without --force.
+  Fleet 2026-07-30: m5 = 35B-A3B-6bit / 27B-6bit; m1 + m4 = 27B-4bit /
+  35B-A3B-4bit; m1 also keeps the bench champion (keep:). neo (8 GB) has no
+  entry on purpose
+- AUTO-DEGRADE is loud and single-fire: when the manifest main (a) is missing
+  from the server catalog at first `backend_for`, (b) fails the post-swap
+  thermal_guard, or (c) throws a turn-level BackendError while the endpoint
+  reports healthy (oMLX lazy-loads, so missing/corrupt weights surface at
+  request time — `SlotManager.note_turn_failure`), every default resolution of
+  main reroutes to the manifest fallback, announced via on_status (both
+  front-ends render it), surfaced in `/doctor` as a WARN, and never silently:
+  a session running a different model than asked is the failure mode this
+  kills. Manual `/model` overrides bypass the reroute; an endpoint-down
+  BackendError does NOT degrade (that's a backend problem, `/backend` is the
+  escape hatch)
 - Multi-slot fan-out activates ONLY on explicit `configs/chat.yaml` `slots:` —
   the sanctioned, opt-in exception to luxe.sdd "no per-task model selection",
   scoped to this front-end
+- `luxe code` is the same engine as `luxe chat` with a POSTURE preset (shared
+  body `cli._run_interactive`; option surfaces must not drift — one
+  `_shared_chat_options` list): it REQUIRES a project (resolve.kind "none" →
+  exit 2 with the fix, never a degraded session) and starts with
+  `write_enabled=True`. Bash stays gated. The persona rules above are
+  UNCHANGED in code posture — freeform turns stay conversational
+- Every session writes `<session dir>/debug.log` (chat/debuglog.py): a DEBUG
+  FileHandler on the `luxe` package logger, installed once the session id
+  exists, removed in the front-end finally. File-only by design — the TUI owns
+  the screen and previously ate every logger.error traceback. Failed turns
+  also persist a kind="error" transcript record (rendered by `/export`,
+  ignored by resume pairing)
+- `luxe smoke` (chat/smoke.py) is the aliveness drill: manifest resolved,
+  weights real on disk, endpoint up, catalog complete, one real generation +
+  one tool call on main, one generation on the fallback (exercises the swap).
+  Minutes, not a bench; exit 0/1; run it after provisioning and on a schedule
 - Slot routing is visible: the render footer shows the fired slot + model every
   turn; `/use <slot>` and `/model <slot> <id>` are explicit user overrides
 - EVERY freeform interactive turn uses the CONVERSATIONAL persona:

@@ -32,13 +32,48 @@ If a re-bench is ever needed, follow `~/Downloads/luxe/RESUME.md` §
 "M5 Max MoE bake-off" structure and produce results under
 `acceptance/m5max_moe_<rebench-id>/`.
 
-**Sanctioned exception — `luxe chat` model slots.** The interactive REPL
-(`src/luxe/chat/`, shipped 2026-06-01) exposes opt-in `chat`/`plan`/`code` model
-slots via `configs/chat.yaml` `slots:`. This is the ONLY sanctioned per-work-type
-model selection (carve-out noted in `src/luxe/luxe.sdd`). It defaults to
-champion-everywhere (no fan-out; byte-identical model selection), and is scoped
-to the interactive front-end — never the benchmark/maintain path. Do not extend
-fan-out beyond this.
+**Sanctioned exceptions — `luxe chat` slots + per-host manifests.** The
+interactive front-end (`src/luxe/chat/`) has two sanctioned carve-outs from
+single-champion, both scoped to `luxe chat`/`luxe code` and never the
+benchmark/maintain path (luxe.sdd):
+(a) opt-in `chat`/`plan`/`code` model slots via `configs/chat.yaml` `slots:`;
+(b) **per-host manifests** (`hosts:` in chat.yaml, 2026-07-30 fallback-kit
+pivot): each fleet host declares an interactive main + fallback pair sized to
+its RAM — m5 (128 GB) = champion + 27B-6bit; m1 (64 GB) and m4 (48 GB) =
+27B-4bit + 35B-A3B-4bit. **The interactive default on m1/m4 is deliberately
+NOT the champion** — do not "restore" it. The champion pin is a benchmark pin:
+`single_64gb.yaml` still selects it and m1 keeps its weights via the
+manifest's `keep:` list. A host with no `hosts:` entry behaves exactly as
+before (champion everywhere). Do not extend fan-out beyond these.
+
+## Fallback kit (2026-07-30 pivot — read this before touching chat)
+
+Luxe's mission narrowed after the 2026-07-29 Anthropic outage: it is the
+**local fallback dev tool** for the fleet (m1 · m4 · m5), and it has to WORK
+when reached for — availability over capability. Concretely:
+
+- **Two entry points, one engine**: `luxe chat` (anywhere, read-only,
+  conversation) and `luxe code` (REQUIRES a project, write tools ON from turn
+  one, bash still gated). Wrappers `luxe-chat`/`luxe-code` live in
+  `~/dotfiles/bin`. Shared body `cli._run_interactive`.
+- **Per-host main+fallback manifests** (`hosts:` in configs/chat.yaml) with
+  **loud auto-degrade**: main missing from the catalog / failing to load /
+  failing a turn on a healthy endpoint → the session switches to the declared
+  fallback and says so (status line, `/doctor`, debug.log). See chat.sdd.
+- **Manifest models are locally cached, verified, and protected**:
+  `luxe pull` provisions (kappa mount preferred, HF via oMLX admin API),
+  `/doctor` + `luxe pull --list` detect DANGLING store symlinks (the
+  HF-cache-wipe signature — a listed model the server can't load),
+  `luxe pull <name> --remove` deletes but refuses manifest models sans
+  --force.
+- **`luxe smoke`** is the aliveness drill (minutes): manifest → weights →
+  endpoint → catalog → one real turn + tool call on main → one turn on
+  fallback. Run it after provisioning and on a schedule; exit 0 = ready.
+- **Every session writes `~/.luxe/sessions/<id>/debug.log`** (always-on;
+  chat/debuglog.py) and failed turns persist kind="error" transcript records —
+  post-outage diagnosis must not depend on what the TUI happened to show.
+- gemma is out of the roster (no tool support); the bench apparatus is cold
+  storage — capability re-benching only on explicit request.
 
 ## Interactive front-end (`luxe chat` / `luxe compare`)
 

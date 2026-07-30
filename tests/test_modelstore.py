@@ -63,6 +63,35 @@ class TestStoreHelpers:
         assert ms.local_model_names(tmp_path) == ["A", "B"]
         assert ms.local_model_names(tmp_path / "nope") == []
 
+    def test_model_state_distinguishes_ok_dangling_missing(self, tmp_path):
+        """The 2026-07-30 finding: a store entry symlinked into a wiped HF
+        cache LISTS as present but can never load. model_state names it."""
+        _model_dir(tmp_path / "Real")
+        (tmp_path / "Stub").symlink_to(tmp_path / "gone-snapshot")
+        good_target = _model_dir(tmp_path / "elsewhere" / "snap")
+        (tmp_path / "Linked").symlink_to(good_target)
+
+        assert ms.model_state("Real", tmp_path) == "ok"
+        assert ms.model_state("Linked", tmp_path) == "ok"
+        assert ms.model_state("Stub", tmp_path) == "dangling"
+        assert ms.model_state("Absent", tmp_path) == "missing"
+
+    def test_remove_model_dir_and_symlink(self, tmp_path):
+        _model_dir(tmp_path / "Real", weight_bytes=2048)
+        target = _model_dir(tmp_path / "cache" / "snap")
+        (tmp_path / "Linked").symlink_to(target)
+
+        freed, note = ms.remove_model("Real", tmp_path)
+        assert freed > 0 and not (tmp_path / "Real").exists()
+
+        freed, note = ms.remove_model("Linked", tmp_path)
+        assert freed == 0 and "target left alone" in note
+        assert not (tmp_path / "Linked").is_symlink()
+        assert (target / "config.json").is_file()   # cache copy untouched
+
+        with pytest.raises(ms.ModelStoreError):
+            ms.remove_model("Absent", tmp_path)
+
 
 # --- mount discovery --------------------------------------------------------
 

@@ -1,5 +1,45 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-07-30) — the fallback-kit pivot
+
+Mission re-scoped after the 2026-07-29 Anthropic outage (2h, all services):
+luxe is the fleet's **local fallback dev tool** and must be provably alive,
+not benchmark-optimal. Decided with the user in-session; recorded in
+CLAUDE.md ("Fallback kit"), luxe.sdd, chat.sdd. All on `main`, tests green
+(1829 passed, 6 skipped), ruff still the 5 deliberate findings.
+
+What shipped:
+
+1. **Per-host model manifests** (`hosts:` in configs/chat.yaml → `HostManifest`
+   in config.py). m5 (128 GB): main `Qwen3.6-35B-A3B-6bit`, fallback
+   `Qwen3.6-27B-6bit`. m1 (64 GB) + m4 (48 GB): main `Qwen3.6-27B-4bit`,
+   fallback `Qwen3.6-35B-A3B-4bit`. m1 `keep:`s the bench champion (user
+   decision: bench exception, weights stay). neo (8 GB) deliberately absent.
+   Slots resolve manifest-main first; overrides still win. gemma dropped from
+   the roster (no tool support).
+2. **Loud auto-degrade** (`SlotManager`): main missing from catalog / failed
+   swap guard / BackendError on a healthy endpoint → session reroutes to the
+   fallback with an announced, single-fire switch (`note_turn_failure` is the
+   lazy-load-failure hook — oMLX surfaces missing weights at request time).
+3. **`luxe code`** + updated `~/dotfiles/bin/luxe-code` wrapper: same engine,
+   project-REQUIRED posture, write on, bash gated. `luxe chat` unchanged
+   (anywhere, read-only).
+4. **Always-on `debug.log` per session** (chat/debuglog.py) + kind="error"
+   transcript records + `/export` renders them. The TUI previously ate every
+   traceback (no logging handler existed anywhere).
+5. **`/doctor` manifest checks**: hosts-entry resolution, degrade state,
+   per-model weight presence with DANGLING detection (store symlinks into the
+   wiped HF cache list as present but never load — `pull --list` flags them
+   too). `luxe pull <name> --remove` (manifest-guarded), `pull --list
+   --base-url` now really lists the remote store.
+6. **`luxe smoke`** (chat/smoke.py): the minutes-scale aliveness drill —
+   manifest → weights → endpoint → catalog → real turn + tool call on main →
+   real turn on fallback. Exit 0/1. Run after provisioning + on a schedule.
+
+Ops state (see tasks): m1/m5 provisioning + prune, M4 prep script on kappa.
+kappa mounts via `osascript mount volume` (keychain creds). M5 admin API is
+the only remote management path (no ssh keys).
+
 ## ⇒ SESSION HANDOFF (2026-07-29) — chat crash fix, model provenance, `luxe pull`, once-over
 
 Started from two user-reported symptoms; ended as a small maintenance cycle.

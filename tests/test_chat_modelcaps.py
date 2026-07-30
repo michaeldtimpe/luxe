@@ -233,16 +233,20 @@ class TestVisibleModels:
         assert sm.available_models() == ["Champ", "gemma-3-27b-it-4bit"]
 
     def test_the_shipped_config_roster_matches_the_working_set(self):
+        """The fallback-kit roster (2026-07-30): exactly the union of the
+        fleet manifests. gemma is OUT — no tool support (oMLX silently drops
+        the tools array for it), and the kit has no seat for a
+        conversation-only model."""
         from luxe.config import load_config
 
         cfg = load_config("configs/chat.yaml")
         assert set(cfg.visible_models) == {
-            "Qwen3.6-35B-A3B-6bit",
-            "Qwen3.6-27B-6bit",
-            "Qwen2.5-Coder-14B-Instruct-MLX-4bit",
-            "Qwen2.5-32B-Instruct-4bit",
-            "gemma-3-27b-it-4bit",
+            "Qwen3.6-35B-A3B-6bit",     # bench champion · m5 main
+            "Qwen3.6-27B-6bit",         # m5 fallback
+            "Qwen3.6-27B-4bit",         # m1/m4 main
+            "Qwen3.6-35B-A3B-4bit",     # m1/m4 fallback
         }
+        assert "gemma-3-27b-it-4bit" not in cfg.visible_models
 
 
 # --- palette calm-down ------------------------------------------------------

@@ -74,6 +74,11 @@ def transcript_markdown(meta, records: list[dict]) -> str:
             paths = rec.get("paths") or ([rec["path"]] if rec.get("path") else [])
             label = ", ".join(f"`{p}`" for p in paths) or "(files)"
             body += ["", f"> attached: {label}"]
+        elif kind == "error":
+            # Failed turns are part of the story (2026-07-30): a session whose
+            # question got no answer must not export as if nothing happened.
+            model = f" ({rec['model']})" if rec.get("model") else ""
+            body += ["", f"> ⚠ turn failed{model}: {text or '(no detail)'}"]
 
     lines.append(f"- **Turns:** {turns}")
     return "\n".join(lines + body).rstrip() + "\n"
@@ -216,6 +221,66 @@ class Doctor:
 _MIN_FREE_GB = 40      # a champion swap writes ~28 GB of weights + KV headroom
 
 
+def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
+    """Fallback-kit checks: manifest resolution, degrade state, weight presence.
+
+    The 2026-07-29 incident this exists for: champion weights silently deleted,
+    chat started fine and returned nothing. Nothing owned the assertion "these
+    weights should be here" — now this does. Never raises.
+    """
+    try:
+        cfg = slots.cfg
+        manifest = cfg.host_manifest()
+        if not getattr(cfg, "hosts", None):
+            doc.add("host manifest", OK, "none configured (single-model default)")
+            return
+        if manifest is None:
+            from luxe.config import short_hostname
+            doc.add("host manifest", WARN,
+                    f"no hosts: entry matches {short_hostname() or '(unknown)'!r}",
+                    "add this host under hosts: in configs/chat.yaml")
+            return
+        fb = manifest.fallback or "—"
+        doc.add("host manifest", OK, f"main {manifest.main} · fallback {fb}")
+
+        if getattr(slots, "degraded_from", None):
+            doc.add("degraded", WARN,
+                    f"running fallback {slots.degraded_to} — "
+                    f"{slots.degraded_from} unavailable",
+                    f"restore it (`luxe pull {slots.degraded_from}`), then "
+                    f"`/model chat {slots.degraded_from}`")
+
+        # Weight presence on the LOCAL store — a remote endpoint's disk is its
+        # own doctor's problem; served-catalog coverage is checked below.
+        from luxe.chat.origin import endpoint_is_local
+        from luxe.modelstore import model_state
+        if endpoint_is_local(getattr(slots.backend, "base_url", "")):
+            for mid in manifest.all_models():
+                state = model_state(mid)
+                role = ("main" if mid == manifest.main
+                        else "fallback" if mid == manifest.fallback else "keep")
+                if state == "ok":
+                    doc.add(f"weights:{mid}", OK, f"{role} · on disk")
+                else:
+                    sev = FAIL if role == "main" else WARN
+                    why = ("store entry dangles into a wiped cache"
+                           if state == "dangling" else "not in the store")
+                    doc.add(f"weights:{mid}", sev, f"{role} · {why}",
+                            f"`luxe pull {mid}` (kappa mount or HF)")
+        if reachable:
+            try:
+                served = set(slots.backend.list_models())
+            except Exception:
+                served = set()
+            for mid in (manifest.main, manifest.fallback):
+                if mid and served and mid not in served:
+                    doc.add(f"served:{mid}", WARN, "not in the server catalog",
+                            "restart oMLX after provisioning "
+                            "(`brew services restart omlx`)")
+    except Exception as e:
+        doc.add("host manifest", WARN, f"check errored: {e}")
+
+
 def run_doctor(session, slots, repo_path: str) -> Doctor:
     """Preflight the things that silently break a chat session.
 
@@ -278,6 +343,12 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
             doc.add("weights", WARN, "location unreported by oMLX")
     else:
         doc.add("chat model", WARN, f"{model} (unverified — endpoint down)")
+
+    # Host manifest (fallback kit): the declared main/fallback pair for this
+    # machine, and whether its weights are actually on disk. Config-only plus
+    # local filesystem — runs in no-project sessions too. Guarded throughout
+    # (doctor contract: nothing here may raise).
+    _manifest_checks(doc, slots, reachable)
 
     try:
         free = shutil.disk_usage(Path.home()).free
