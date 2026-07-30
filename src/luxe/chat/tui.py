@@ -494,7 +494,8 @@ class ChatApp(App):
         self._session_in += result.prompt_tokens
         self._session_out += result.completion_tokens
         footer = (render_footer_text(prep.slot, prep.model, result,
-                                     num_ctx=outcome.num_ctx)
+                                     num_ctx=outcome.num_ctx,
+                                     ended_at=time.time())
                   + f" · session tok: {self._session_in}+{self._session_out}")
         log.write(Text(footer, style="dim"))
         # update persistent status from the completed turn
