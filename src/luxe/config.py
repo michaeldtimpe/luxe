@@ -108,6 +108,12 @@ class PipelineConfig(BaseModel):
     # Interactive-only model slots (`luxe chat`). None or empty model_keys =>
     # champion-everywhere (no fan-out). Read only by the chat front-end.
     slots: ChatSlots | None = None
+    # Chat-only roster filter: when non-empty, `/model` lists ONLY these ids and
+    # slots may only resolve to them. The oMLX server can serve a dozen stale
+    # models (old bake-off entries, HF-cache aliases); this is the working set.
+    # Empty = show everything the server reports (previous behaviour).
+    # Benchmark/maintain never read it.
+    visible_models: list[str] = Field(default_factory=list)
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:
@@ -117,6 +123,18 @@ class PipelineConfig(BaseModel):
     def model_for_role(self, role_name: str) -> str:
         role_cfg = self.role(role_name)
         return self.models[role_cfg.model_key]
+
+    def visible(self, model_ids: list[str]) -> list[str]:
+        """Filter server-reported model ids to the configured roster.
+
+        Server order is preserved so `/model <slot> <n>` indexes stay stable.
+        An id in `visible_models` that the server does NOT serve is dropped
+        silently — the roster is a filter, not a claim about what exists.
+        """
+        if not self.visible_models:
+            return list(model_ids)
+        allowed = set(self.visible_models)
+        return [m for m in model_ids if m in allowed]
 
     def slot_config(self, slot: str) -> SlotConfig:
         """Return the SlotConfig for `slot`, defaulting to an empty SlotConfig

@@ -76,6 +76,15 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     `--resume`/`/resume` now work inside the Textual TUI (transcript replays
     into the RichLog on mount). The `[chat]` extra installs via
     `uv sync --extra chat` — without it chat falls back to the line REPL.
+  - **Model roster + tool capability** (2026-07-30). `configs/chat.yaml`
+    `visible_models:` is the working set `/model` offers (5 ids on m1/m5);
+    everything else the server holds is hidden. Local weights carry NO glyph
+    now — only ☁ network / ⇅ remote. **`chat/modelcaps.py` detects tool
+    support from the chat template**: gemma-3 has none (system/user/assistant
+    only + an alternation guard) and oMLX *silently drops* the `tools` array
+    for it, so luxe withholds the whole tool surface and tells the model not to
+    fake it. Gemma is therefore selectable (`/model chat gemma-3-27b-it-4bit`)
+    but NOT the default — a default has to be able to read a file.
   - **Start a session anywhere** (2026-07-30; `chat/project.py`). The subject
     resolves to **git** (walks UP to the git root — a subdir session gets the
     whole repo), **dir** (pyproject.toml/package.json/… marker), or **none**.

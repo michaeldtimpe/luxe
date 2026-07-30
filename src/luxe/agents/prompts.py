@@ -399,6 +399,17 @@ NO_PROJECT_CHAT_HINT = (
 )
 
 
+NO_TOOLS_MODEL_HINT = (
+    "The model serving this turn cannot call tools: its chat template has no "
+    "tool support, so luxe has withheld the tool surface rather than send tools "
+    "that would be silently dropped. Answer from the conversation and from what "
+    "the user tells you. Do NOT claim to have read, edited, or run anything, and "
+    "do not pretend a tool call happened. If the request genuinely needs reading "
+    "or changing files, say so plainly and tell the user to switch models with "
+    "/model chat <id> (the champion supports tools)."
+)
+
+
 TERSE_HINT = (
     "Respond tersely: report only what changed and the result, in as few words as "
     "possible. No preamble, no restating the request or the plan, no end-of-turn "

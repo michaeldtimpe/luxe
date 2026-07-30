@@ -198,10 +198,12 @@ def _flat(segs) -> str:
     return " · ".join("".join(t for t, _p, _r in seg.spans) for seg in segs)
 
 
-def test_status_bar_marks_local_weights(slots):
+def test_status_bar_leaves_local_weights_unmarked(slots):
+    """Local is the norm — no glyph (2026-07-30). Absence of ☁/⇅ means local."""
     out = _flat(fields(ChatSession(), slots, "",
                        StatusState(model="Champ", model_origin="local")))
-    assert "⌂ Champ" in out
+    assert "Champ" in out
+    assert "⌂" not in out
 
 
 def test_status_bar_marks_network_weights(slots):
@@ -221,6 +223,12 @@ def test_status_bar_adds_no_glyph_when_unknown(slots):
     assert "Champ" in out
     for glyph in ("⌂", "☁", "⇅", "?"):
         assert glyph not in out
+
+
+def test_origin_glyphs_cover_only_wire_crossings():
+    from luxe.chat.status import _ORIGIN_GLYPHS
+
+    assert set(_ORIGIN_GLYPHS) == {"network", "remote"}
 
 
 def test_network_origin_is_warn_coloured(slots):

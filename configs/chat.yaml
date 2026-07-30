@@ -26,6 +26,19 @@ profile:
   memory_budget_gb: 64
   peak_model_gb: 30.0
 
+# Chat-only roster (2026-07-30): the ONLY models `/model` offers and slots may
+# resolve to. The oMLX servers still hold older bake-off entries and an HF-cache
+# alias (`mlx-community--Qwen3.6-35B-A3B-6bit`) — this is the working set for
+# both hosts. Everything here is on local disk, which is why `/model` no longer
+# prints a `local` marker: absence of ☁/⇅ means local. Empty list = show
+# everything the server reports. Benchmark/maintain ignore this key.
+visible_models:
+  - Qwen3.6-35B-A3B-6bit              # champion (MoE, tools) — chat default
+  - Qwen3.6-27B-6bit                  # preferred dense coder
+  - Qwen2.5-Coder-14B-Instruct-MLX-4bit
+  - Qwen2.5-32B-Instruct-4bit
+  - gemma-3-27b-it-4bit               # conversation only — NO tool support
+
 models:
   # The pinned champion. Add more entries here to point a chat slot at a
   # different MLX model the oMLX server can load, e.g.:
@@ -35,6 +48,16 @@ models:
   # Select per-session via /model; not slot-mapped by default to avoid
   # weight-swap latency between chat and code turns.
   dense_27b: "Qwen3.6-27B-6bit"
+  coder_14b: "Qwen2.5-Coder-14B-Instruct-MLX-4bit"
+  dense_32b: "Qwen2.5-32B-Instruct-4bit"
+  # Gemma 3 converses well but its chat template has NO tool support (roles are
+  # system/user/assistant only, and it raises on non-alternating turns). oMLX
+  # silently DROPS the `tools` array for it — verified 2026-07-30 — so an
+  # agentic turn would never call a tool and never say why. luxe detects this
+  # from the template (chat/modelcaps.py) and withholds the tool surface with an
+  # explanation. Selectable via `/model chat gemma-3-27b-it-4bit`; NOT the
+  # default, because the default has to be able to read files.
+  gemma_27b: "gemma-3-27b-it-4bit"
 
 roles:
   monolith:

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from luxe.agents.prompts import (
     NO_PROJECT_CHAT_HINT,
+    NO_TOOLS_MODEL_HINT,
     READ_ONLY_CHAT_HINT,
     TERSE_HINT,
 )
@@ -79,6 +80,10 @@ class ChatSession:
     # "none" = started somewhere that isn't a codebase: no index is built, and
     # the index-backed tools are withheld rather than failing per call.
     project_kind: str = "git"
+    # Set per-turn by prepare_turn when the routed model's chat template can't
+    # do tool calls (chat/modelcaps.py): the whole tool surface is withheld, so
+    # the frame must say so or the model will narrate tool use it never did.
+    tools_withheld: bool = False
     languages: frozenset = field(default_factory=frozenset)
     write_enabled: bool = False
     unrestricted_bash: bool = False  # set by /bash; only effective in write mode
@@ -147,6 +152,8 @@ class ChatSession:
         # Lowest precedence: session-mode framing comes first so user/memory text
         # always reads as higher-priority. String lives in the prompt registry.
         mode_hints: list[str] = []
+        if self.tools_withheld:
+            mode_hints.append(NO_TOOLS_MODEL_HINT)
         if self.project_kind == "none":
             # No index here: say so once, in the frame, instead of letting the
             # model discover it by calling a tool that isn't on the list.

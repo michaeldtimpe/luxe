@@ -16,6 +16,7 @@ from typing import Callable
 
 from rich.console import Console
 
+from luxe.chat import modelcaps
 from luxe.chat import origin as origin_mod
 from luxe.chat.session import CTX_TIERS, ChatSession, tier_label
 from luxe.chat.slots import SlotManager
@@ -46,6 +47,9 @@ class CommandContext:
     # (path|None) -> summary dict. Re-resolves the project, rebuilds the index,
     # and moves the repo lock; provided by cli.chat_cmd (it owns the lock).
     on_project: Callable[["str | None"], dict] | None = None
+    # The live status-bar snapshot, so commands that invalidate it can say so
+    # (`/clear` must clear ctx%/cache — they describe a conversation that's gone).
+    status: object | None = None
 
 
 # (command, args, description) — rendered into an auto-aligned table by _help()
@@ -59,7 +63,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/unload", "", "free oMLX RAM (unload resident weights) without quitting"),
     ("/status", "", "session summary: repo, backend, model origin, usage"),
     ("/tools", "", "list the tools the model has THIS turn (and what's gated)"),
-    ("/theme", "[auto|cool|warm|mono]", "show or switch the colour palette"),
+    ("/theme", "[preview|auto|cool|warm|mono]", "preview or switch the colour palette"),
     ("/retry", "", "re-run your last message (e.g. after /write or /ctx)"),
     ("/project", "[path]", "show, attach, or switch the project (re-indexes)"),
     ("/index", "[path]", "build the code-search index for here (or <path>)"),
@@ -199,12 +203,17 @@ def _model(args, ctx: CommandContext) -> CommandResult:
                 tag = f"  [dim]({', '.join(marks)})[/]" if marks else ""
                 org = origins.get(m)
                 mark = ""
-                if org is not None and org.kind != "unknown":
-                    colour = "yellow" if org.is_over_the_network else "dim"
-                    mark = f" [{colour}]{org.glyph} {org.label}[/]"
+                # Local is the norm — no marker for it (absence of ☁/⇅ IS
+                # "local", per the 2026-07-30 roster trim). Only a wire crossing
+                # is worth a glyph.
+                if org is not None and org.is_over_the_network:
+                    mark = f" [yellow]{org.glyph} {org.label}[/]"
+                if not modelcaps.for_model(ctx.slots.backend, m).usable:
+                    mark += " [yellow]⚠ no tool support[/]"
                 ctx.console.print(f"  [cyan]{i:2d}[/] {m}{mark}{tag}")
-            ctx.console.print("[dim]  ⌂ local disk · ☁ network volume "
-                              "· ⇅ remote endpoint[/]")
+            if any(o.is_over_the_network for o in origins.values()):
+                ctx.console.print("[dim]  ☁ network volume · ⇅ remote endpoint "
+                                  "(unmarked = local disk)[/]")
         else:
             ctx.console.print("[dim](oMLX unreachable — `/model <slot> <id>` "
                               "still works)[/]")
@@ -238,9 +247,14 @@ def _model(args, ctx: CommandContext) -> CommandResult:
         org = origin_mod.origin_for(ctx.slots.backend, model_id)
     except Exception:
         org = None
-    if org is not None and org.kind != "unknown":
-        colour = "yellow" if org.is_over_the_network else "dim"
-        ctx.console.print(f"  [{colour}]{org.glyph} {org.describe()}[/]")
+    if org is not None and org.is_over_the_network:
+        ctx.console.print(f"  [yellow]{org.glyph} {org.describe()}[/]")
+    cap = modelcaps.for_model(ctx.slots.backend, model_id)
+    if not cap.usable:
+        ctx.console.print(
+            f"  [yellow]⚠ {model_id} cannot call tools[/] [dim]— {cap.reason}. "
+            "luxe will withhold the tool surface on its turns: conversation "
+            "only, no reading or editing files.[/]")
     return CommandResult(handled=True)
 
 
@@ -540,6 +554,15 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
     """
     from luxe.mcp.server import _MUTATION_TOOL_NAMES
 
+    cap = modelcaps.for_model(ctx.slots.backend, ctx.slots.model_for("chat"))
+    if not cap.usable:
+        ctx.console.print("[bold]Tools this turn[/] [yellow](none)[/]")
+        ctx.console.print(f"  [yellow]⚠ {ctx.slots.model_for('chat')} cannot "
+                          f"call tools[/] [dim]— {cap.reason}[/]")
+        ctx.console.print("  [dim]switch with `/model chat <id>` to get the tool "
+                          "surface back[/]")
+        return CommandResult(handled=True)
+
     role = ctx.slots.role_for("chat")
     configured = list(role.tools or [])
     write_on = ctx.session.write_enabled
@@ -563,14 +586,18 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
 
 
 def _theme(args, ctx: CommandContext) -> CommandResult:
-    """Show or switch the colour palette without restarting.
+    """Show, preview, or switch the colour palette without restarting.
 
-    `auto` tracks the terminal / yet-another-statusline theme; the curated
-    palettes override it. Mirrors the `--theme` startup flag.
+    `/theme`          list palettes, marking the active one
+    `/theme preview`  render THIS session's status bar in every palette
+    `/theme <name>`   switch (auto = track your terminal/statusline theme)
     """
     from luxe.chat import theme as theme_mod
 
     choices = theme_mod.list_palettes()
+    if args and args[0].lower() in ("preview", "demo", "sample"):
+        _theme_preview(ctx, choices)
+        return CommandResult(handled=True)
     if not args:
         current = theme_mod.active_palette()
         ctx.console.print("[bold]Palettes[/]")
@@ -591,7 +618,53 @@ def _theme(args, ctx: CommandContext) -> CommandResult:
     ctx.console.print(f"[green]✓[/] palette → [cyan]{name}[/]"
                       + ("  [dim](tracking your terminal theme)[/]"
                          if name == "auto" else ""))
+    _theme_sample(ctx, label="")
     return CommandResult(handled=True)
+
+
+def _theme_preview(ctx: CommandContext, choices: list[str]) -> None:
+    """Render the real status bar (and a tool + diff line) once per palette.
+
+    Comparing palettes by name is guesswork; this shows the actual thing being
+    coloured, with the session's own data, so a choice takes one look. The active
+    palette is restored afterwards — previewing must not change anything.
+    """
+    from luxe.chat import theme as theme_mod
+
+    before = theme_mod.active_palette()
+    try:
+        for name in choices:
+            theme_mod.set_palette(name)
+            mark = " [cyan]← active[/]" if name == before else ""
+            ctx.console.print(f"\n[bold]{name}[/]{mark}")
+            _theme_sample(ctx, label=name)
+    finally:
+        theme_mod.set_palette(before)
+    ctx.console.print(f"\n[dim]· switch with `/theme <name>`; still on "
+                      f"[cyan]{before}[/][/]")
+
+
+def _theme_sample(ctx: CommandContext, *, label: str) -> None:
+    """One palette's worth of sample output: status bar + tool + diff lines."""
+    from luxe.chat import status as status_mod
+    from luxe.chat import theme as theme_mod
+
+    try:
+        segs = status_mod.fields(ctx.session, ctx.slots,
+                                ctx.session.repo_path or "", ctx.status
+                                or status_mod.StatusState())
+        ctx.console.print(status_mod.to_rich_text(status_mod.fit(segs, 96)))
+    except Exception:
+        pass
+    ctx.console.print("  " + theme_mod.m("accent", "read_file")
+                      + " " + theme_mod.m("muted", "src/luxe/cli.py")
+                      + "  " + theme_mod.m("success", "✓ 1.2k")
+                      + "   " + theme_mod.m("error", "✗ error")
+                      + "   " + theme_mod.m("warn", "! warning")
+                      + "   " + theme_mod.m("info", "· note"))
+    ctx.console.print("  " + theme_mod.m("diff_hunk", "@@ -1,3 +1,4 @@")
+                      + " " + theme_mod.m("diff_add", "+added")
+                      + " " + theme_mod.m("diff_del", "-removed"))
 
 
 def _retry(args, ctx: CommandContext) -> CommandResult:
@@ -1277,10 +1350,30 @@ def _resume(args, ctx: CommandContext) -> CommandResult:
 
 
 def _clear(args, ctx: CommandContext) -> CommandResult:
+    """Start a fresh conversation: drop the turns AND the per-turn status.
+
+    The status bar's `ctx N%` / `cache` describe the conversation that just went
+    away; leaving them up made a cleared session look full (reported 2026-07-30).
+    The window size and mode flags survive — those are settings, not history.
+    """
     ctx.session.turns.clear()
     ctx.session.pinned_slot = None
+    ctx.session.attachments.clear()
+    reset_turn_status(ctx.status)
     ctx.console.print("[dim]· conversation cleared[/]")
     return CommandResult(handled=True)
+
+
+def reset_turn_status(status) -> None:
+    """Zero the turn-derived status fields (context pressure, resident prompt
+    size, timings, step count). Keeps slot/model/num_ctx: they still apply."""
+    if status is None:
+        return
+    for field, value in (("ctx_pressure", 0.0), ("prompt_tokens", 0),
+                         ("steps", 0), ("wall_s", 0.0), ("tok_per_s", 0.0),
+                         ("has_turn", False)):
+        if hasattr(status, field):
+            setattr(status, field, value)
 
 
 def _quit(args, ctx: CommandContext) -> CommandResult:

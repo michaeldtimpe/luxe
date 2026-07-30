@@ -68,6 +68,20 @@ down from 28 findings to 5 (all deliberate E-class). Tests: 1782 passing.
    `/index [path]` indexes where you are. `$HOME` and anything above it never
    count as the project; a repo outside home does.
 
+11. **Roster trim, tool-capability detection, calmer palette** (2026-07-30) —
+   `configs/chat.yaml visible_models:` limits `/model` to the 5 working models;
+   local weights lose the ⌂ glyph (only ☁/⇅ remain). `chat/modelcaps.py` reads
+   the chat template and WITHHOLDS the tool surface for a model that can't call
+   tools — gemma-3 can't, and oMLX silently drops the `tools` array rather than
+   erroring (verified live). Gemma is selectable, not the default. `/clear` now
+   resets ctx%/cache/steps; `/theme preview` renders the bar in every palette;
+   `off` chips and the slot chip are muted instead of red/blue.
+
+**Open questions for the user:** (a) gemma-3-27b as the chat default is possible
+but tool-less — say the word and it flips (conversation only). (b) 10 unused
+models still occupy ~100 GB on m1; `/pull --list` shows them, pruning is manual
+and was deliberately NOT done.
+
 **Not done / next:** `luxe pull` has NOT been exercised against a real kappa
 mount (kappa wasn't mounted) — the XSym path is unit-tested and validated
 against the local HF cache, but the first real NAS pull is worth watching.
