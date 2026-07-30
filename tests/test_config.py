@@ -149,8 +149,10 @@ def test_chat_yaml_default_follows_host_manifest(monkeypatch):
     champ = cfg.model_for_role("monolith")
 
     # Fleet hosts resolve to their declared mains, uniformly across slots.
-    for host, expected in (("m5", champ), ("m1", "Qwen3.6-27B-4bit"),
-                           ("m4", "Qwen3.6-27B-4bit")):
+    # (m1/m4 main is the MoE — flipped 2026-07-30; dense-27B prefill is ~65
+    # tok/s on oMLX's vlm engine, unusable interactively.)
+    for host, expected in (("m5", champ), ("m1", "Qwen3.6-35B-A3B-4bit"),
+                           ("m4", "Qwen3.6-35B-A3B-4bit")):
         monkeypatch.setattr(config_mod, "short_hostname", lambda h=host: h)
         for slot in ("chat", "plan", "code"):
             assert cfg.model_for_slot(slot) == expected, (host, slot)

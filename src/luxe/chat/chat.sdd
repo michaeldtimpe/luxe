@@ -25,9 +25,10 @@ never touches this module.
   `luxe pull` provisions, `/doctor` + `luxe smoke` verify (including the
   dangling-symlink state a wiped HF cache leaves behind), and
   `luxe pull <name> --remove` refuses manifest models without --force.
-  Fleet 2026-07-30: m5 = 35B-A3B-6bit / 27B-6bit; m1 + m4 = 27B-4bit /
-  35B-A3B-4bit; m1 also keeps the bench champion (keep:). neo (8 GB) has no
-  entry on purpose
+  Fleet 2026-07-30: m5 = 35B-A3B-6bit / 27B-6bit; m1 + m4 = 35B-A3B-4bit /
+  27B-4bit (MoE main — Qwen3.6 is multimodal, oMLX serves it on the slow vlm
+  engine; dense-27B prefill is ~65 tok/s with no cache reuse, MoE ~10s turns);
+  m1 also keeps the bench champion (keep:). neo (8 GB) has no entry on purpose
 - AUTO-DEGRADE is loud and single-fire: when the manifest main (a) is missing
   from the server catalog at first `backend_for`, (b) fails the post-swap
   thermal_guard, or (c) throws a turn-level BackendError while the endpoint

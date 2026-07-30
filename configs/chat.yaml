@@ -39,16 +39,21 @@ hosts:
   m5:                                  # M5 Max, 128 GB
     main: "Qwen3.6-35B-A3B-6bit"
     fallback: "Qwen3.6-27B-6bit"
+  # Small hosts run the MoE as main (flipped 2026-07-30 after real-turn data:
+  # Qwen3.6 is a multimodal family, so oMLX routes it to the slow vlm engine —
+  # the dense 27B prefills at ~65 tok/s with no cache reuse (63-74s chat
+  # turns), while the MoE's ~3B active params keep turns ~10s. The dense stays
+  # as the quality fallback; revisit if oMLX's vlm text path gets fast.)
   m1:                                  # M1 Max MBP, 64 GB (36 GB wired cap)
-    main: "Qwen3.6-27B-4bit"
-    fallback: "Qwen3.6-35B-A3B-4bit"
+    main: "Qwen3.6-35B-A3B-4bit"
+    fallback: "Qwen3.6-27B-4bit"
     keep:
       # Benchmark champion (single_64gb.yaml) — bench exception, kept on
       # disk so the maintain/bench path stays runnable. Not a chat default.
       - "Qwen3.6-35B-A3B-6bit"
   m4:                                  # M4 Pro MBP, 48 GB
-    main: "Qwen3.6-27B-4bit"
-    fallback: "Qwen3.6-35B-A3B-4bit"
+    main: "Qwen3.6-35B-A3B-4bit"
+    fallback: "Qwen3.6-27B-4bit"
 
 # Chat-only roster: the ONLY models `/model` offers and slots may resolve to
 # (this host's manifest models are always allowed on top). gemma dropped
@@ -59,8 +64,8 @@ hosts:
 visible_models:
   - Qwen3.6-35B-A3B-6bit              # bench champion · m5 main
   - Qwen3.6-27B-6bit                  # m5 fallback
-  - Qwen3.6-27B-4bit                  # m1/m4 main
-  - Qwen3.6-35B-A3B-4bit              # m1/m4 fallback
+  - Qwen3.6-35B-A3B-4bit              # m1/m4 main (MoE — fast on vlm engine)
+  - Qwen3.6-27B-4bit                  # m1/m4 fallback (dense — slow prefill)
 
 models:
   # The pinned benchmark champion (single_64gb.yaml); also the m5 chat main.
