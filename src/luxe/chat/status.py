@@ -250,9 +250,11 @@ class StatusState:
     model_origin: str = "unknown"
 
 
-# Model-provenance markers (chat/origin.ModelOrigin.kind). "unknown" gets no
-# glyph — an old oMLX that doesn't report model paths shouldn't add noise.
-_ORIGIN_GLYPHS = {"local": "⌂", "network": "☁", "remote": "⇅"}
+# Model-provenance markers (chat/origin.ModelOrigin.kind). Only a WIRE CROSSING
+# gets a glyph: local is the norm, so its absence means local (2026-07-30 — "if
+# I see it, it is local"). "unknown" is silent too — an old oMLX that doesn't
+# report model paths shouldn't add noise.
+_ORIGIN_GLYPHS = {"network": "☁", "remote": "⇅"}
 
 
 def _short_model(model: str) -> str:
@@ -314,9 +316,11 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     now = time.strftime("%H:%M", time.localtime())
     segs.append(Segment([_S("last ", _GREY), _S(now, _DEFAULT)], priority=7))
 
-    # write on/off · bash on/off — label default fg, state ON=success / OFF=error
+    # write on/off · bash on/off — ON=success, OFF=MUTED. Off is the safe
+    # default, not a failure: rendering it in the error role put two reds in
+    # every default session's bar (reported 2026-07-30). Red is for errors.
     _on = theme_mod.styles_for("success")
-    _off = theme_mod.styles_for("error")
+    _off = theme_mod.styles_for("muted")
     segs.append(Segment([_S("write ", _DEFAULT),
                          _S("on" if session.write_enabled else "off",
                             _on if session.write_enabled else _off)], priority=3))
@@ -357,15 +361,14 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     # then the model name in the theme `model` role.
     segs.append(Segment([_S(state.slot, theme_mod.styles_for("slot"))], priority=2))
     model = state.model or slots.model_for("chat")
-    # Origin glyph rides WITH the model name (same protected segment): ⌂ local
-    # disk · ☁ network-backed weights · ⇅ remote endpoint. Network/remote are
-    # warn-coloured — that's a turn crossing the wire, which the bar used to
-    # hide entirely.
+    # Origin glyph rides WITH the model name (same protected segment):
+    # ☁ network-backed weights · ⇅ remote endpoint, warn-coloured — that's a turn
+    # crossing the wire, which the bar used to hide entirely. Local weights get
+    # no glyph at all.
     spans: list[Span] = []
     glyph = _ORIGIN_GLYPHS.get(state.model_origin)
     if glyph:
-        spans.append(_S(glyph + " ", theme_mod.styles_for(
-            "warn" if state.model_origin in ("network", "remote") else "muted")))
+        spans.append(_S(glyph + " ", theme_mod.styles_for("warn")))
     spans.append(_S(_short_model(model), theme_mod.styles_for("model")))
     segs.append(Segment(spans, priority=1))
 

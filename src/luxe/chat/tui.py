@@ -197,6 +197,7 @@ class ChatApp(App):
             on_compare=self._compare_hook,
             on_compare_review=self._compare_review_hook,
             on_project=self._project_hook,
+            status=self.status,
         )
         # `--resume <id>`: replay the prior transcript into the RichLog and seed
         # the live session's turns before the first prompt (chat.sdd — resume no
@@ -507,6 +508,10 @@ class ChatApp(App):
         self.call_from_thread(self._begin_busy)
         try:
             res = cmd.dispatch(line, self.ctx)
+            if line.strip().lower().startswith("/clear"):
+                # The footer's cumulative session tokens describe the cleared
+                # conversation too — zero them with the status bar.
+                self._session_in = self._session_out = 0
             if getattr(res, "exit", False):
                 self.call_from_thread(self.action_quit_app)
                 return

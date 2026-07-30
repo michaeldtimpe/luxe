@@ -98,12 +98,18 @@ class SlotManager:
         return self._resident
 
     def available_models(self) -> list[str]:
-        """oMLX-loadable model ids (GET /v1/models), guarded — returns [] if the
-        server is unreachable so `/model` never crashes when oMLX is down."""
+        """Selectable model ids: what the server serves, filtered to the config's
+        `visible_models` roster.
+
+        Guarded — returns [] if the server is unreachable so `/model` never
+        crashes when oMLX is down. The roster keeps stale bake-off entries and
+        HF-cache aliases out of the picker (chat-only; see config.visible).
+        """
         try:
-            return self.backend.list_models()
+            served = self.backend.list_models()
         except Exception:
             return []
+        return self.cfg.visible(served)
 
     # -- backend switching (multi-backend, chat-only) ------------------------
 

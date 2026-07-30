@@ -49,6 +49,7 @@ from luxe.chat.slots import SlotManager
 from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
 from luxe import spec_resolver
+from luxe.chat import modelcaps
 from luxe.chat import origin as origin_mod
 from luxe.memory import project as project_mem
 from luxe.memory import session as session_store
@@ -274,6 +275,7 @@ def run_chat_repl(
         on_compare_review=_make_compare_review_hook(console),
         on_git_analysis=_make_git_analysis_hook(console, cfg, session, cancel),
         on_project=_make_project_hook(session, on_project),
+        status=status,
     )
 
     if resume_session_id:
@@ -479,6 +481,13 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     # every call. Derived from what's actually resident, so `/index` mid-session
     # turns them back on with no other bookkeeping.
     role_cfg = _drop_unavailable_index_tools(role_cfg)
+    # A model whose chat template can't render tool calls gets NO tool surface:
+    # oMLX silently drops the tools array for it, so offering them would produce
+    # an agent that never calls a tool and never says why (chat/modelcaps.py).
+    caps = modelcaps.for_model(backend, model)
+    session.tools_withheld = not caps.usable
+    if not caps.usable:
+        role_cfg = role_cfg.model_copy(update={"tools": []})
 
     # EVERY freeform interactive turn gets the conversational persona — chat is
     # a conversation, not a batch job. Keying this on `slot == "chat"` (the

@@ -219,6 +219,35 @@ never touches this module.
   unreachable endpoint is a FAIL not an exception, and nothing it calls may
   raise. `search.get_index()` is the read-only accessor it uses — the tool path
   still reads the module global.
+- The model roster is CONFIG-FILTERED (2026-07-30): `visible_models:` in
+  `configs/chat.yaml` is the only set `/model` offers and slots may resolve to
+  (`PipelineConfig.visible`, applied in `SlotManager.available_models`). Server
+  order is preserved so `/model <slot> <n>` stays stable; roster ids the server
+  doesn't serve are dropped silently. Empty list = show everything (old
+  behaviour). Benchmark/maintain never read it.
+- Provenance markers are for WIRE CROSSINGS ONLY: ☁ network volume, ⇅ remote
+  endpoint. Local weights get NO glyph in `/model` or the status bar — with a
+  local-only roster, "if I see it, it is local" (2026-07-30). The legend prints
+  only when a marked model is actually listed.
+- Tool capability is DETECTED, never assumed (`chat/modelcaps.py`, 2026-07-30).
+  A model whose chat template renders no tool calls (gemma-3: roles are
+  system/user/assistant, plus an alternation guard) gets the ENTIRE tool surface
+  withheld, `session.tools_withheld = True`, and `NO_TOOLS_MODEL_HINT` in the
+  frame telling it not to pretend a tool ran. This is not cosmetic: oMLX does not
+  reject a request carrying `tools` for such a model, it SILENTLY DROPS them
+  (verified live), which would otherwise produce an agent that never calls a tool
+  and never says why. Detection reads the local template via oMLX's reported
+  `model_path`; a remote endpoint is UNKNOWN and keeps tools ON — a detection gap
+  must never disarm the agent.
+- `/clear` resets the TURN-DERIVED status too (ctx%, cache, steps, wall, tok/s,
+  has_turn) plus pending attachments, via `commands.reset_turn_status`. Window
+  size, slot, model, and mode flags survive — those are settings, not history.
+  `CommandContext.status` exists for exactly this.
+- `/theme preview` renders THIS session's status bar + a tool line + a diff line
+  once per palette and restores the active one; `/theme <name>` prints the same
+  sample as immediate confirmation. Palette hygiene: `off` states are MUTED (not
+  the error role) and the `slot` chip is muted (not blue) — a saturated colour on
+  a constant plus red on a safe default was the "red/white/purple/blue" bar.
 - Model provenance is always visible (`chat/origin.py`, 2026-07-29): every
   session states at startup whether the chat model's weights sit on local disk
   (`⌂`), on a network volume / cloud-sync tree (`☁`), or behind a remote

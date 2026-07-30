@@ -40,13 +40,15 @@ _FALLBACK: dict[str, tuple[str, str]] = {
     "alert":     ("ansired", "red"),
     # luxe-only semantic roles (B4). Fallbacks are ANSI-named so they track the
     # terminal/iTerm profile even without a YASL theme; `_ALIAS` below points each
-    # at a real YASL role so a custom theme drives them too. `slot` deliberately
-    # does NOT alias `model` (magenta) — that's the purple dominance we're killing.
+    # at a real YASL role so a custom theme drives them too. `slot` is MUTED, not
+    # blue: it's usually the constant "chat", and a saturated colour on a constant
+    # was half of the "red/white/purple/blue" bar reported 2026-07-30. It also
+    # deliberately does not alias `model` (magenta) — that's the purple dominance.
     "accent":    ("ansicyan", "cyan"),
     "success":   ("ansigreen", "green"),
     "error":     ("ansired", "red"),
     "info":      ("ansiblue", "blue"),
-    "slot":      ("ansiblue", "blue"),
+    "slot":      ("ansibrightblack", "bright_black"),
     "muted":     ("ansibrightblack", "bright_black"),
     "diff_add":  ("ansigreen", "green"),
     "diff_del":  ("ansired", "red"),
@@ -60,13 +62,16 @@ _YASL_ROLES = (
     "model", "white_brt", "safe", "warn", "alert",
 )
 
-# luxe-only roles inherit a real YASL role so a custom theme drives them. Roles
-# absent here (info, slot) keep their ANSI-named fallback by design.
+# luxe-only roles inherit a real YASL role so a custom theme drives them.
+# `info` is the one exception — it keeps its ANSI-named fallback by design.
 _ALIAS: dict[str, str] = {
     "accent":    "ctx",
     "success":   "safe",
     "error":     "alert",
     "muted":     "commit",
+    # The slot chip follows the theme's LABEL colour (grey in llmtop) rather
+    # than shouting in a colour the user never chose.
+    "slot":      "label",
     "diff_add":  "safe",
     "diff_del":  "alert",
     "diff_hunk": "ctx",

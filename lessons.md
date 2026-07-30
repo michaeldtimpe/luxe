@@ -3580,3 +3580,79 @@ the tool is actually invoked, test THAT invocation shape — a flag that is
 `src/luxe/chat/inspection.py`, `src/luxe/agents/prompts.py`,
 `src/luxe/symbols.py` (`get_index`), `src/luxe/chat/chat.sdd`,
 `tests/test_chat_project.py` (new), `tests/test_chat_commands.py`.
+
+---
+
+### [2026-07-30] oMLX silently drops `tools` for a model whose template lacks them
+
+**What happened**: The user asked for `gemma-3-27b-it-4bit` as the default chat
+model. Before changing the default I read its chat template: roles are
+`system`/`user`/`assistant` only, no `tools` block anywhere, plus
+`raise_exception("Conversation roles must alternate …")`. Probed the live server
+with the 0.8 GB gemma-3-1b sibling:
+
+- Request WITH a `tools` array → HTTP 200, prose reply, **no** `tool_calls`, and
+  `prompt_tokens=16` — the tool definitions never reached the prompt.
+- Request with a `role: "tool"` result message → HTTP 200, the tool output
+  reinterpreted as user prose.
+
+So it does not fail loudly. An agentic turn on that model would call no tools,
+report no error, and — with luxe's conversational persona — happily narrate work
+it never did.
+
+**Root cause**: chat-template capability is per-model and invisible at the API
+surface. luxe had been assuming every served model can do what the champion can.
+
+**Fix / takeaway**: `chat/modelcaps.py` classifies tool support by reading the
+template shipped with the weights (via oMLX's reported `model_path`) and luxe
+withholds the ENTIRE tool surface for an `unsupported` model, sets
+`session.tools_withheld`, and injects `NO_TOOLS_MODEL_HINT` ("do not claim to
+have read, edited, or run anything"). `unknown` — a remote endpoint, a missing
+template, a probe failure — keeps tools ON: a detection gap must never disarm
+the agent. Gemma stays selectable but is not the default.
+
+Two related observations from the same session, both expected rather than bugs:
+the model self-reported as "luxe" (that's the persona doing its job) and as
+"Gemma 2B" (LLMs have no reliable self-knowledge — never trust a model's account
+of its own identity or size).
+
+**Also measured** (the "45 s feels slow" report): a warm champion answers a
+trivial turn in **1.7 s at 38 tok/s**; the same turn with the champion NOT
+resident took 13.2 s. The user's slow turns were weight swaps — gemma-3-27b
+(17.7 GB) and the champion (29.2 GB) cannot coexist under the 38.7 GB wired
+ceiling, so every alternation is a full unload + load. `/unload` and
+`/status`'s swap counter make that visible; staying on one model per session
+avoids it. Agentic turns additionally pay one prefill per tool-call step.
+
+**Affected files**: `src/luxe/chat/modelcaps.py` (new), `src/luxe/chat/repl.py`,
+`src/luxe/chat/session.py`, `src/luxe/agents/prompts.py`,
+`src/luxe/chat/commands.py`, `configs/chat.yaml`, `src/luxe/config.py`,
+`tests/test_chat_modelcaps.py` (new).
+
+---
+
+### [2026-07-30] The status bar read "red, white, purple, blue" — two of those were luxe's own choices
+
+**What happened**: With `auto` (tracking the user's llmtop theme) the bar looked
+garish. Building `/theme preview` — which renders the real bar in every palette —
+made the source of each colour obvious in one look.
+
+**Root cause**: two colours came from luxe, not from the user's theme.
+1. `write off` / `bash off` used the **error** role. Off is the safe DEFAULT, not
+   a failure, so every default session showed two red chips.
+2. The `slot` chip had a hardcoded `ansiblue` fallback with no theme alias — a
+   saturated colour on a field that almost always reads "chat".
+
+The remaining purple (model name) and red (git dirty counters) are the user's own
+llmtop roles, faithfully tracked — which is what `auto` is for.
+
+**Fix / takeaway**: off → `muted`, slot → the theme's `label` role. Plus
+`/theme preview` so palette choice is empirical instead of a guess, and
+`/theme <name>` now prints a sample immediately. Takeaway: when a UI "tracks the
+user's theme", audit which colours are actually theirs — the offensive ones are
+usually the few you invented, and a preview surface finds them faster than
+reasoning about role tables.
+
+**Affected files**: `src/luxe/chat/theme.py`, `src/luxe/chat/status.py`,
+`src/luxe/chat/commands.py`, `tests/test_chat_modelcaps.py`,
+`tests/test_chat_origin.py`.

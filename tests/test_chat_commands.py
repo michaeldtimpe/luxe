@@ -317,9 +317,11 @@ def test_model_list_flags_where_each_model_lives(ctx, tmp_path, monkeypatch):
     cmd.dispatch("/model", ctx)
     out = _text(ctx)
 
-    assert "⌂ local" in out          # on this disk
+    # Local is unmarked (2026-07-30: "if I see it, it is local"); only a wire
+    # crossing gets a glyph, and the legend appears only when one is shown.
+    assert "⌂" not in out
     assert "☁ network" in out        # streams over SMB
-    assert "⌂ local disk" in out     # legend
+    assert "unmarked = local disk" in out
     origin_mod.reset_cache()
 
 
@@ -788,3 +790,73 @@ def test_index_reports_truncation(ctx):
                                 "truncated": "8000-file cap"}
     cmd.dispatch("/index", ctx)
     assert "truncated" in _text(ctx) and "8000-file cap" in _text(ctx)
+
+
+# --- /clear resets the status line -------------------------------------------
+
+
+def test_clear_resets_the_turn_status(ctx):
+    """Reported 2026-07-30: `ctx N%` and `cache` survived /clear, so a cleared
+    session looked full. They describe the conversation that just went away."""
+    from luxe.chat.status import StatusState
+
+    st = StatusState(model="Champ", slot="code", num_ctx=32768, has_turn=True,
+                     ctx_pressure=0.61, prompt_tokens=20_000, steps=7,
+                     wall_s=12.0, tok_per_s=40.0)
+    ctx.status = st
+    ctx.session.turns.append(__import__("luxe.chat.session", fromlist=["ChatTurn"])
+                             .ChatTurn(user="q", assistant="a"))
+
+    cmd.dispatch("/clear", ctx)
+
+    assert ctx.session.turns == []
+    assert st.ctx_pressure == 0.0 and st.prompt_tokens == 0
+    assert st.steps == 0 and st.has_turn is False
+    # Settings survive — they aren't history.
+    assert st.num_ctx == 32768 and st.model == "Champ"
+
+
+def test_clear_without_a_status_is_fine(ctx):
+    ctx.status = None
+    cmd.dispatch("/clear", ctx)
+    assert "cleared" in _text(ctx)
+
+
+def test_clear_drops_pending_attachments(ctx):
+    ctx.session.attachments.append({"path": "a.py", "content": "x"})
+    cmd.dispatch("/clear", ctx)
+    assert ctx.session.attachments == []
+
+
+# --- /theme preview -----------------------------------------------------------
+
+
+def test_theme_preview_renders_every_palette_and_restores(ctx):
+    from luxe.chat import theme as theme_mod
+
+    theme_mod.set_palette("auto")
+    try:
+        cmd.dispatch("/theme preview", ctx)
+        out = _text(ctx)
+        for name in theme_mod.list_palettes():
+            assert name in out
+        assert "read_file" in out            # the sample tool line
+        assert "+added" in out               # the sample diff line
+        assert theme_mod.active_palette() == "auto"   # preview changes nothing
+    finally:
+        theme_mod.set_palette(None)
+        theme_mod.reset_cache()
+
+
+def test_theme_switch_shows_a_sample_of_the_new_palette(ctx):
+    from luxe.chat import theme as theme_mod
+
+    try:
+        cmd.dispatch("/theme mono", ctx)
+        out = _text(ctx)
+        assert "palette → " in out
+        assert "read_file" in out            # immediate visual confirmation
+        assert theme_mod.active_palette() == "mono"
+    finally:
+        theme_mod.set_palette(None)
+        theme_mod.reset_cache()
