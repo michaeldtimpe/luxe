@@ -558,9 +558,11 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
             extra_tool_defs.append(restricted_bash_def())
             extra_tool_fns["bash"] = make_bash_fn(restricted_hint=True)
 
-    # `/ctx` size override (chat-only) — clamp to the role's hard ceiling so a
-    # tier request can never exceed what this box/model can hold.
-    ctx_ceiling = base_role.num_ctx_max or base_role.num_ctx
+    # `/ctx` size override (chat-only) — clamp to the effective ceiling
+    # (role's box ceiling ∧ the manifest's per-model cap for the model this
+    # turn actually runs) so a tier request can never exceed what this
+    # box/model pair can hold — including after an auto-degrade.
+    ctx_ceiling = slots.ctx_ceiling(slot)
     if session.num_ctx_override:
         effective_ctx = min(session.num_ctx_override, ctx_ceiling)
         if effective_ctx != role_cfg.num_ctx:

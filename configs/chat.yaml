@@ -51,9 +51,21 @@ hosts:
       # Benchmark champion (single_64gb.yaml) — bench exception, kept on
       # disk so the maintain/bench path stays runnable. Not a chat default.
       - "Qwen3.6-35B-A3B-6bit"
+    # Per-model /ctx ceilings (2026-07-30 KV audit; fp16 KV, no quant).
+    # MoE-4bit: 20 KB/tok → 256K KV = 5 GiB in ~17 GiB headroom → uncapped.
+    # dense-4bit: 64 KB/tok → 256K = 16 GiB of ~21 GiB headroom (no margin),
+    #   and its ~65 tok/s vlm-engine prefill makes >32K turns take tens of
+    #   minutes anyway — capped at the 32K default.
+    # champion-6bit: 28.4 GiB weights leave ~7.6 GiB → 128K (2.5 GiB KV) max.
+    ctx_max:
+      "Qwen3.6-27B-4bit": 32768
+      "Qwen3.6-35B-A3B-6bit": 131072
   m4:                                  # M4 Pro MBP, 48 GB
     main: "Qwen3.6-35B-A3B-4bit"
     fallback: "Qwen3.6-27B-4bit"
+    # Same dense-27B story as m1, on a smaller box.
+    ctx_max:
+      "Qwen3.6-27B-4bit": 32768
 
 # Chat-only roster: the ONLY models `/model` offers and slots may resolve to
 # (this host's manifest models are always allowed on top). gemma dropped

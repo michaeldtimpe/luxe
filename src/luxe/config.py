@@ -101,6 +101,15 @@ class HostManifest(BaseModel):
     main: str
     fallback: str = ""
     keep: list[str] = Field(default_factory=list)
+    # Per-MODEL `/ctx` ceilings (tokens), keyed by model id. The role-level
+    # `num_ctx_max` says what the BOX allows; this says what a specific model
+    # on this box allows — KV-cache cost differs wildly per architecture
+    # (Qwen3.6 dense = 64 KB/token vs MoE = 20 KB/token, 2026-07-30 audit), so
+    # one role ceiling can't be right for both. The effective `/ctx` ceiling
+    # is min(role ceiling, this cap for the CURRENT model); absent entry = no
+    # extra cap. Applies live: a session degraded to the fallback clamps to
+    # the fallback's cap on its next turn.
+    ctx_max: dict[str, int] = Field(default_factory=dict)
 
     def all_models(self) -> list[str]:
         """main + fallback + keep, deduped, order-preserving."""

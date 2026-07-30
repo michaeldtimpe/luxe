@@ -1320,16 +1320,22 @@ def update_cmd(no_sync: bool):
         sys.exit(1)
 
     if not no_sync:
-        with console.status("[dim]uv sync --extra chat…[/]"):
+        # chat = TUI; dev = pytest (the --code drill runs it via the venv
+        # python, so it's a RUNTIME need on every host); analyzers = the
+        # lint/typecheck/security tools shell-outs. A bare `--extra chat`
+        # sync pruned dev from the m1 and broke the drill (2026-07-30).
+        extras = ["--extra", "chat", "--extra", "dev", "--extra", "analyzers"]
+        with console.status("[dim]uv sync (chat+dev+analyzers)…[/]"):
             try:
-                synced = sp.run(["uv", "sync", "--extra", "chat"],
+                synced = sp.run(["uv", "sync", *extras],
                                 cwd=str(root), capture_output=True, text=True,
                                 timeout=600)
             except FileNotFoundError:
                 synced = None
         if synced is None:
             console.print("[yellow]⚠ uv not on PATH — run "
-                          "`uv sync --extra chat` in the repo yourself[/]")
+                          "`uv sync --extra chat --extra dev --extra "
+                          "analyzers` in the repo yourself[/]")
         elif synced.returncode != 0:
             console.print(f"[yellow]⚠ uv sync failed:[/]\n"
                           f"[dim]{synced.stderr.strip()[-500:]}[/]")
