@@ -44,8 +44,25 @@ the TUI got three usability fixes. All on `main`, full suite 1866 passed.
    end-of-turn tick can't clobber it.
 7. **m5 parity + host state**: m5 has the analysis toolchain (poppler,
    qpdf, tesseract, sox, exiftool, imagemagick, ripgrep — runbook logged);
-   RELAY_TOKEN_* seeded in m5's secrets.env (Keychain `seedkeys` still
-   pending, needs a local login shell). Relay access stays m1+m5 only.
+   RELAY_TOKEN_* seeded in m5's secrets.env AND now in m5's login Keychain
+   (done 2026-07-30 — `OMLX_API_KEY` + all three `RELAY_TOKEN_*` verified
+   present). Relay access stays m1+m5 only.
+8. **Keychain seeding, dotfiles `28a3da7`**: seeding m5 surfaced three
+   quiet bugs in `bin/seedkeys`' `_kc` name scan, all now fixed —
+   (a) `[A-Z_]+` excluded digits, truncating `RELAY_TOKEN_ROUTER1` to
+   `RELAY_TOKEN_ROUTER`, so pasting a token there created an entry nothing
+   reads (`relays.yaml` resolves `api_key_env: RELAY_TOKEN_ROUTER1`) while
+   reporting success; (b) claude.zsh's prose placeholder `` `_kc NAME` ``
+   was read as a real secret, and its permanent `MISS` pinned `all_ok=0`
+   so the plaintext-backup cleanup could never fire on any host; (c) the
+   can't-read-zsh fallback list omitted all three relay tokens — it fires
+   exactly on a fresh host where nobody would notice. New companion
+   `bin/seedkeys-env` mirrors `~/.luxe/secrets.env` into the Keychain
+   (parses like `luxe/secrets.py:_from_file`, never sources the file, `-U`
+   idempotent, `--dry-run`), so 64-char tokens are never retyped.
+   **m1 + m4 still carry the old `seedkeys`** — `git -C ~/dotfiles pull`
+   before seeding keys there; until then the truncated-name failure is
+   live on those hosts and it looks like success.
 
 ## ⇒ SESSION HANDOFF (2026-07-30) — the fallback-kit pivot
 
