@@ -213,6 +213,31 @@ def list_palettes() -> list[str]:
     return ["auto", *_PALETTES]
 
 
+# Persisted palette preference (2026-07-30): `/theme <name>` sticks across
+# sessions. One name in a plain file — NOT the memory subsystem, and read at
+# startup with flag/env taking precedence (cli._resolve_theme_name).
+_PREF_PATH = Path.home() / ".luxe" / "theme"
+
+
+def save_preference(name: str) -> bool:
+    """Persist the palette choice for future sessions. Never raises."""
+    try:
+        _PREF_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PREF_PATH.write_text((name or "auto").strip().lower() + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def load_preference() -> str | None:
+    """The persisted palette name, or None (unset/unreadable/unknown)."""
+    try:
+        name = _PREF_PATH.read_text().strip().lower()
+    except OSError:
+        return None
+    return name if name in list_palettes() else None
+
+
 def active_palette() -> str:
     """Name of the palette in force ('auto' = tracking the terminal theme)."""
     return _active_palette or "auto"

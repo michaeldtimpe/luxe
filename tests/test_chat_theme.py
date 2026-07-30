@@ -83,13 +83,14 @@ def test_role_styles_reads_resolved_theme(monkeypatch):
 # --- `luxe chat` palette precedence (D2) ------------------------------------
 
 
-def test_cli_theme_defaults_to_auto(monkeypatch):
+def test_cli_theme_defaults_to_auto(monkeypatch, tmp_path):
     """Regression (2026-07-29): the shipped default was the curated 'cool'
     palette, which overrode the user's active statusline theme even though both
     chat.sdd and the --theme help text promise `auto`."""
     from luxe.cli import _resolve_theme_name
 
     monkeypatch.delenv("LUXE_THEME", raising=False)
+    monkeypatch.setattr(theme, "_PREF_PATH", tmp_path / "theme")  # no saved pref
     assert _resolve_theme_name(None) == "auto"
 
 
@@ -99,6 +100,38 @@ def test_cli_theme_env_then_flag_win(monkeypatch):
     monkeypatch.setenv("LUXE_THEME", "warm")
     assert _resolve_theme_name(None) == "warm"      # env beats the default
     assert _resolve_theme_name("mono") == "mono"    # flag beats env
+
+
+# --- persisted /theme preference (2026-07-30) --------------------------------
+
+
+def test_theme_preference_round_trip(monkeypatch, tmp_path):
+    monkeypatch.setattr(theme, "_PREF_PATH", tmp_path / "theme")
+    assert theme.load_preference() is None
+    assert theme.save_preference("cool")
+    assert theme.load_preference() == "cool"
+
+
+def test_theme_preference_rejects_unknown_names(monkeypatch, tmp_path):
+    pref = tmp_path / "theme"
+    monkeypatch.setattr(theme, "_PREF_PATH", pref)
+    pref.write_text("solarized-disco\n")
+    assert theme.load_preference() is None
+
+
+def test_cli_theme_uses_saved_preference(monkeypatch, tmp_path):
+    """No flag, no env → the persisted /theme choice drives startup; flag and
+    env still beat it (a saved palette must never trump an explicit ask)."""
+    from luxe.cli import _resolve_theme_name
+
+    monkeypatch.delenv("LUXE_THEME", raising=False)
+    pref = tmp_path / "theme"
+    pref.write_text("mono\n")
+    monkeypatch.setattr(theme, "_PREF_PATH", pref)
+    assert _resolve_theme_name(None) == "mono"
+    monkeypatch.setenv("LUXE_THEME", "warm")
+    assert _resolve_theme_name(None) == "warm"
+    assert _resolve_theme_name("cool") == "cool"
 
 
 def test_auto_palette_tracks_the_active_theme(monkeypatch):
