@@ -54,6 +54,12 @@ class SlotManager:
         self.degraded_from: str | None = None
         self.degraded_to: str | None = None
         self._catalog_checked = False
+        # Single-residency policy (2026-07-30, user decision): ONE model in
+        # RAM per host — the headroom is reserved for context. The swap path
+        # always enforced this; this flag makes the first-use path enforce it
+        # too (a session inheriting someone else's resident model would
+        # otherwise leave two loaded on a big-RAM host like the m5).
+        self._residency_enforced = False
         # Start resident on the chat slot's model — that's the conversational
         # default and the model we keep warm.
         self._resident = self.model_for("chat")
@@ -178,8 +184,10 @@ class SlotManager:
         self.backend = backend
         self.backend_name = name
         # Unknown residency on the new server: force the next backend_for() to
-        # confirm/load the target there (never unloads the old server).
+        # confirm/load the target there (never unloads the old server) — and
+        # re-enforce single-residency on the NEW server's first use.
         self._resident = ""
+        self._residency_enforced = False
         # Prime this endpoint's model provenance while we're off the UI thread,
         # so the status bar's origin marker is right from the first render.
         try:
@@ -274,6 +282,16 @@ class SlotManager:
                         and target not in served and m.fallback in served
                         and self._degrade("not in the server catalog")):
                     target = self.model_for(slot)
+        if not self._residency_enforced:
+            # One model resident per host (headroom is for ctx): evict
+            # anything a prior session/tool left loaded besides our target.
+            # The swap path below does this anyway; this covers the
+            # target-already-resident short-circuit.
+            try:
+                self.backend.unload_all_loaded(except_for=[target])
+            except Exception:
+                pass
+            self._residency_enforced = True
         if target == self._resident:
             self.backend.model = target
             return self.backend

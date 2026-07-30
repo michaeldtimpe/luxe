@@ -62,7 +62,9 @@ Same-day follow-ons (all shipped, tested, pushed — 1849 tests):
 
 Fleet state at close: m1 + m5 both at 51c239e, drill-proven BY THE USER
 (m1 code drill 32s on MoE-4bit; m5 code drill 7s on the champion — and m5
-interactive chat is ~1s/turn with both models resident, no swap cost). M4
+interactive chat is ~1s/turn warm). SINGLE-RESIDENCY policy (user decision,
+same day): one model in RAM per host incl. the m5 — headroom is for ctx;
+enforced in SlotManager first-use + swaps + smoke/drills (chat.sdd). M4
 pending the user's m4-prep.sh run (script + Claude verification prompt on
 kappa, LUXE_HOME=~/code/luxe there). ALL hosts are ssh-reachable via
 ~/.ssh/config aliases (`ssh m5` = mtimpe@…; the old "no ssh to m5" belief
