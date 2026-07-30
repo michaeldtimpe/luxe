@@ -1415,9 +1415,10 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
         # own business (never unload a server another session may be using).
         try:
             from luxe.backend import Backend
+            from luxe.secrets import resolve_api_key
             entry = cfg.backend_entry(cfg.default_backend_name())
             Backend(base_url=base_url or entry.base_url, model="",
-                    api_key=os.environ.get(entry.api_key_env, "")
+                    api_key=resolve_api_key(entry.api_key_env)
                     ).unload_all_loaded()
         except Exception:
             pass

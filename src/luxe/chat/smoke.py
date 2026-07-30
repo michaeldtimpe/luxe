@@ -150,7 +150,6 @@ def _resolve_drill_backend(cfg, backend_name: str | None,
     """(Backend, model, entry) for a drill. The model comes from the manifest
     of the host the URL POINTS AT — a drill against the m5 must run an m5
     model (it serves the 6-bit pair, not this host's 4-bit pair)."""
-    import os
     from urllib.parse import urlparse
 
     from luxe.chat.origin import endpoint_is_local
@@ -162,10 +161,12 @@ def _resolve_drill_backend(cfg, backend_name: str | None,
         host = short_hostname()
     else:
         host = (urlparse(url).hostname or "").split(".")[0].lower()
+    from luxe.secrets import resolve_api_key
+
     manifest = cfg.host_manifest(host) if host else None
     model = manifest.main if manifest else cfg.model_for_slot("code")
     backend = Backend(base_url=url, model=model, timeout_s=entry.timeout_s,
-                      api_key=os.environ.get(entry.api_key_env, ""))
+                      api_key=resolve_api_key(entry.api_key_env))
     return backend, model
 
 
@@ -313,11 +314,10 @@ def run_smoke(cfg, *, base_url: str | None = None,
               skip_fallback: bool = False,
               skip_tools: bool = False) -> SmokeReport:
     """Run the drill against `cfg`'s default backend (or `base_url`)."""
-    import os
-
     from luxe.chat.origin import endpoint_is_local
     from luxe.config import short_hostname
     from luxe.modelstore import model_state
+    from luxe.secrets import resolve_api_key
 
     report = SmokeReport()
 
@@ -344,7 +344,7 @@ def run_smoke(cfg, *, base_url: str | None = None,
     entry = cfg.backend_entry(cfg.default_backend_name())
     url = base_url or entry.base_url
     backend = Backend(base_url=url, model=main, timeout_s=entry.timeout_s,
-                      api_key=os.environ.get(entry.api_key_env, ""))
+                      api_key=resolve_api_key(entry.api_key_env))
 
     # 2. Weights really on disk (local endpoints only — dangling symlinks into
     #    a wiped HF cache list fine and load never).

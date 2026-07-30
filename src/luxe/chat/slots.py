@@ -66,13 +66,16 @@ class SlotManager:
 
     def _build_backend(self, entry: BackendEntry) -> Backend:
         """Backend from a config entry. The API key is resolved HERE from the
-        entry's env-var name (never stored in YAML); an empty value lets
-        Backend fall back to OMLX_API_KEY."""
+        entry's env-var name via luxe.secrets (env → secrets.env → keychain;
+        never stored in YAML); an empty value lets Backend fall back to
+        OMLX_API_KEY through the same chain."""
+        from luxe.secrets import resolve_api_key
+
         return Backend(
             base_url=entry.base_url,
             model=self._resident,
             timeout_s=entry.timeout_s,
-            api_key=os.environ.get(entry.api_key_env, ""),
+            api_key=resolve_api_key(entry.api_key_env),
         )
 
     # -- resolution ---------------------------------------------------------
