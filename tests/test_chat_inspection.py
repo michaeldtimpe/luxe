@@ -214,11 +214,15 @@ class _Backend:
 
 @pytest.fixture
 def doctor_ctx(tmp_path, monkeypatch):
+    from luxe import buildinfo
     from luxe.chat import origin as origin_mod
     from luxe.chat import slots as slots_mod
 
     origin_mod.reset_cache()
     monkeypatch.setattr(origin_mod, "network_mounts", lambda **k: [])
+    # The update check must never hit the network in tests (nor slow them by
+    # its 4s fetch timeout) — default to the offline branch.
+    monkeypatch.setattr(buildinfo, "fetch_origin", lambda **k: False)
     cfg = PipelineConfig(models={"monolith": "Champ"},
                          roles={"monolith": RoleConfig(model_key="monolith")})
     monkeypatch.setattr(slots_mod, "Backend", lambda **k: _Backend())
@@ -271,6 +275,35 @@ class TestDoctor:
         sm.backend = Boom()
         doc = inspection.run_doctor(session, sm, repo)
         assert _states(doc)["oMLX endpoint"] == inspection.FAIL
+
+    def test_update_check_offline_is_quiet(self, doctor_ctx):
+        session, sm, repo = doctor_ctx
+        doc = inspection.run_doctor(session, sm, repo)
+        update = next(c for c in doc.checks if c.name == "update")
+        assert update.state == inspection.OK
+        assert "unchecked" in update.detail
+
+    def test_update_check_behind_warns_with_fix(self, doctor_ctx, monkeypatch):
+        from luxe import buildinfo
+
+        session, sm, repo = doctor_ctx
+        monkeypatch.setattr(buildinfo, "fetch_origin", lambda **k: True)
+        monkeypatch.setattr(buildinfo, "behind_origin", lambda *a, **k: 3)
+        doc = inspection.run_doctor(session, sm, repo)
+        update = next(c for c in doc.checks if c.name == "update")
+        assert update.state == inspection.WARN
+        assert "3 commit" in update.detail and "luxe update" in update.fix
+
+    def test_update_check_current_is_ok(self, doctor_ctx, monkeypatch):
+        from luxe import buildinfo
+
+        session, sm, repo = doctor_ctx
+        monkeypatch.setattr(buildinfo, "fetch_origin", lambda **k: True)
+        monkeypatch.setattr(buildinfo, "behind_origin", lambda *a, **k: 0)
+        doc = inspection.run_doctor(session, sm, repo)
+        update = next(c for c in doc.checks if c.name == "update")
+        assert update.state == inspection.OK
+        assert "current" in update.detail
 
     def test_no_hosts_block_reports_single_model_default(self, doctor_ctx):
         session, sm, repo = doctor_ctx

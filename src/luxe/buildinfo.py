@@ -44,6 +44,20 @@ def version_string() -> str:
     return f"{sha}+dirty" if dirty else sha
 
 
+def fetch_origin(timeout_s: float = 5.0) -> bool:
+    """`git fetch origin` on the luxe SOURCE repo. The one sanctioned network
+    touch for update checks (`luxe update`, `/doctor`) — session startup never
+    calls it, so banners stay offline-pure. False on any failure/timeout."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(_repo_root()), "fetch", "origin", "--quiet"],
+            capture_output=True, text=True, timeout=timeout_s,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def behind_origin(ref: str = "origin/main") -> int:
     """Commits local HEAD is behind `ref`, using already-fetched refs (NO
     network). Returns 0 when up-to-date, offline, or not a git/remote checkout."""
