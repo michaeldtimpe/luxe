@@ -3298,3 +3298,191 @@ via the retry loop.
 
 **Affected files**: none (operational); `scripts/run_c11_long_context_49k.sh`
 result unaffected (n=200 completed clean after resume).
+
+---
+
+### [2026-07-29] `Path.rglob` over `$HOME` killed the chat TUI — pathlib only swallows `PermissionError`
+
+**What happened**: `luxe-chat` launched from `~` indexed fine ("scanned 54911
+files"), then died ~4s after the first "hello" with a Textual `WorkerFailed`
+traceback ending in `TimeoutError: [Errno 60] Operation timed out`. The whole
+app exited; the session was lost with only the user turn persisted.
+
+**Root cause**: two independent defects, stacked.
+
+1. `spec_resolver.find_all_sdd()` enumerated contracts with
+   `Path.rglob("*.sdd")` over the repo root. CPython's pathlib catches
+   **only `PermissionError`** from `os.scandir` — every other `OSError`
+   propagates out of the generator. With `--repo ~`, the walk descended into
+   `~/Library/CloudStorage/SynologyDrive-*` placeholder trees; with the NAS
+   unreachable, `scandir` raised `OSError(ETIMEDOUT)` and the exception
+   unwound through `run_single` → the turn worker. Reproduced standalone in
+   3.1s — exactly the observed timing. `citations._resolve_bare_filename`
+   had the same `rglob` exposure one stage later in the turn.
+2. The TUI's turn worker caught `BackendError` and nothing else, so any other
+   exception became `WorkerFailed` and took the app down. The line REPL had
+   the identical gap.
+
+**Fix / takeaway**:
+- New `src/luxe/fswalk.iter_files()` — `os.walk`-based (scandir failures route
+  to `onerror` and the walk continues) with default vendor/VCS pruning and
+  DEBUG logging of skipped dirs. `find_all_sdd` and the citation
+  bare-filename resolver both use it. **Never `rglob`/`glob` a user-chosen
+  root** — that is now a `Must not` in `src/luxe/luxe.sdd`.
+- Both front-ends now contain *any* turn/command exception: report the last
+  traceback line, log the rest, keep the session alive. A crashed turn is a
+  message, not an exit.
+- General principle: a "read the repo" helper is only as robust as the worst
+  directory under the root, and the root is user-chosen. Home directories
+  contain network mounts, cloud placeholders, and permission holes.
+- Cost note: with `--repo ~` the `.sdd` scan walks ~1.4M files ≈ 19s, and
+  `run_single` rebuilds the contract block EVERY turn. Fixed in the same
+  cycle by an opt-in per-root scan cache (`spec_resolver.enable_scan_cache`,
+  turned on only by `cli.chat_cmd`; invalidated when a turn writes a `.sdd`).
+  It stays off for benchmark/maintain on purpose — those pin one
+  `--work-dir` across instances with *different contents*, so a path-keyed
+  cache would hand instance N+1 the contracts of instance N. A cache whose
+  key is a path is only safe where the path's contents are stable.
+
+**Affected files**: `src/luxe/fswalk.py` (new), `src/luxe/spec_resolver.py`,
+`src/luxe/citations.py`, `src/luxe/chat/tui.py`, `src/luxe/chat/repl.py`,
+`src/luxe/luxe.sdd`, `tests/test_fswalk.py` (new), `tests/test_chat_tui.py`,
+`tests/test_chat_backends.py`.
+
+---
+
+### [2026-07-29] The shipped chat palette overrode the user's statusline theme
+
+**What happened**: `luxe chat` ignored the user's active `llmtop` YASL theme.
+
+**Root cause**: `cli.chat_cmd` resolved `--theme` → `LUXE_THEME` → **`cool`**,
+i.e. a curated luxe palette applied by default and stamped fixed hex over
+every themed role. Both `chat/chat.sdd` ("`auto` (default) tracks the
+YASL/terminal theme") and the `--theme` help text ("default: auto") said
+otherwise — the D2 default was changed in code and nowhere else, so the
+contradiction sat unnoticed.
+
+**Fix / takeaway**: default is `auto` again; curated palettes are opt-in via
+`--theme cool|warm|mono` / `LUXE_THEME`. Precedence now lives in a testable
+`cli._resolve_theme_name()`. Takeaway: when a default contradicts its own
+`.sdd` and its own `--help` string, the code is the bug — and a default that
+overrides something the user configured elsewhere needs an explicit opt-in.
+
+**Affected files**: `src/luxe/cli.py`, `configs/chat.yaml`,
+`tests/test_chat_theme.py`.
+
+---
+
+### [2026-07-29] "Local" was an assumption, not a fact — model provenance is now stated
+
+**What happened**: After the chat-crash fix, the user pointed out a second gap:
+nothing in `luxe chat` said whether the model they were talking to was on this
+machine. A session can (a) run against a remote endpoint over Tailscale
+(`configs/chat.yaml` `backends: m5`), or (b) load weights whose `model_path`
+resolves onto an SMB/NFS mount or a cloud-sync placeholder tree. Both look
+exactly like a local session: same banner, same status bar, same latency story
+until the first multi-GB load.
+
+**Root cause**: the UI had no notion of provenance. The backend name appears in
+the status bar only when >1 endpoint is configured, and the weight path was
+never surfaced at all — even though oMLX reports `model_path` in
+`/v1/models/status` and the champion's own weights had, historically, been
+recovered from a NAS (memory `project_champion_weights_recovery_kappa`).
+
+**Fix / takeaway**: `src/luxe/chat/origin.py` classifies each model as
+`local` (⌂) / `network` (☁) / `remote` (⇅) / `unknown`, from two signals: is
+the endpoint host this machine, and — if so — does the symlink-resolved
+`model_path` land on a network mount (`mount(8)`, fstype in
+smbfs/nfs/afpfs/cifs/webdav/…) or under `~/Library/CloudStorage`. Surfaced in
+four places: startup notice, status-bar glyph next to the model name, `/model`
+listing + legend, and the weight-swap line. One guarded `/v1/models/status`
+call per endpoint, cached; resolution never runs during a render (it can do
+HTTP), and any failure degrades to `unknown` rather than blocking a turn.
+
+Takeaway: **state the boring case too**. Flagging only the network case would
+leave "no flag" ambiguous between "local" and "we didn't check" — the reason
+the user couldn't tell in the first place. Measured on m1: all 15 models are
+local (the champion lives in the HF cache on the internal SSD); the network
+exposure is the `m5` endpoint, which now announces itself.
+
+**Affected files**: `src/luxe/chat/origin.py` (new), `src/luxe/chat/status.py`,
+`src/luxe/chat/repl.py`, `src/luxe/chat/tui.py`, `src/luxe/chat/slots.py`,
+`src/luxe/chat/commands.py`, `src/luxe/backend.py` (`model_paths()` +
+`OSError` in the probe guards), `src/luxe/chat/chat.sdd`,
+`tests/test_chat_origin.py` (new), `tests/test_chat_commands.py`.
+
+---
+
+### [2026-07-29] Once-over: two latent bugs the linter had been reporting all along
+
+**What happened**: A general bug-fix/refactor pass over `src/` (28 ruff findings,
+untriaged for months) turned up two real defects hiding among the style noise.
+
+**Root cause**:
+1. **`resp` possibly-unbound (`F821`, two sites in `agents/loop.py`)** — the
+   prose-burst and habituation clean-exit guards run BEFORE this step's
+   `backend.chat` and read the *previous* iteration's response. Reachability
+   protected them (both require a prior intervention step), but one site had
+   already grown a `'resp' in dir()` probe — a workaround for a NameError
+   someone hit. Fixed properly: `resp` is bound to `None` before the loop and
+   the guards read `resp.text if resp else ""`.
+2. **`last_compaction_phase` write-only (`F841`)** — assigned every compaction
+   step, read nowhere; its comment promised a "reset on resolve event" that
+   never existed. The watchdog it looks like it should feed
+   (`respond_compaction_phantom`) reads `compaction_max_phase_this_run`
+   instead. Deleted.
+
+Also hardened, same class as the day's chat crash: `_list_dir` and the `glob`
+tool now degrade gracefully on an unreadable directory (a dead mount raises
+`OSError(ETIMEDOUT)` from `iterdir`/`glob`) — `glob` returns the partial match
+list plus *why* it stopped, since pathlib's generator cannot be resumed once it
+raises. `Backend.health/loaded_models/unload_model/thermal_guard` now catch
+`OSError` alongside `httpx.HTTPError` (a socket ETIMEDOUT is neither an httpx
+error nor "healthy").
+
+**Fix / takeaway**: F-class ruff findings are not style. 28 findings had
+accumulated to the point where two genuine bugs were camouflaged by 20 unused
+imports and f-strings. Keep `ruff check src/` at zero F-findings so the next
+real one is visible on sight (src is now down to 5, all E-class and deliberate).
+
+**Affected files**: `src/luxe/agents/loop.py`, `src/luxe/tools/fs.py`,
+`src/luxe/backend.py`, plus mechanical F401/F541/E714 cleanup across `src/`.
+
+---
+
+### [2026-07-29] `luxe pull` — fetch weights from a mount or HF, without a second downloader
+
+**What happened**: Getting a model onto the box meant leaving luxe (hf CLI,
+manual `rsync` from the NAS, or the oMLX admin web UI). `luxe pull` / `/pull`
+closes that.
+
+**Root cause / design**: two decisions worth remembering.
+- **Don't reimplement the download.** oMLX already runs a `snapshot_download`
+  worker with resume/cancel/progress, writing into the same HF cache its loader
+  reads. A luxe-side downloader would race it over that cache and could leave
+  models the server can't see. So `modelstore.OmlxAdmin` drives
+  `/admin/api/hf/*` instead — which needs a **session cookie** from
+  `/admin/api/login` (the `Authorization: Bearer` key that works for `/v1/*` is
+  rejected on `/admin/*`).
+- **Mount beats internet.** A copy already on the LAN is the same bytes at
+  ~100× the latency budget, so `resolve_sources` ranks mounted volumes above
+  HuggingFace. Discovery is depth- and wall-clock-bounded — an unreachable SMB
+  share blocks per directory.
+
+The trap that made this non-trivial: Synology SMB exposes symlinks as **`XSym`
+regular files** (exactly 1067 bytes, 4th line = target). An HF-cache snapshot on
+kappa is *all* links into `blobs/`, so a naive copy imports 1067-byte stubs and
+`dir_size` reports a 27 GB model as ~20 KB — which is precisely how the manual
+champion recovery went wrong (memory `project_champion_weights_recovery_kappa`).
+`modelstore` resolves both symlinks and XSym stubs when sizing AND copying, and
+a dangling link aborts the copy rather than importing a model that lists fine
+and fails to load. Verified against the real champion snapshot: 27.1 GB, 19
+files, links resolved.
+
+**Fix / takeaway**: when a local service already owns a resource (a cache, a
+queue, a lock), drive its API instead of writing a parallel implementation —
+and when copying from a NAS, never trust that a "regular file" is one.
+
+**Affected files**: `src/luxe/modelstore.py` (new), `src/luxe/cli.py`
+(`luxe pull`), `src/luxe/chat/commands.py` (`/pull`), `src/luxe/luxe.sdd`,
+`src/luxe/chat/chat.sdd`, `tests/test_modelstore.py` (new).

@@ -76,6 +76,20 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     `--resume`/`/resume` now work inside the Textual TUI (transcript replays
     into the RichLog on mount). The `[chat]` extra installs via
     `uv sync --extra chat` — without it chat falls back to the line REPL.
+  - **`/pull` — get model weights** (2026-07-29; `src/luxe/modelstore.py`, CLI
+    `luxe pull`). Mounted volume first (kappa/alpha over SMB — same bytes at LAN
+    speed), else HuggingFace **through oMLX's own downloader**
+    (`/admin/api/hf/*`; cookie session via `/admin/api/login`, Bearer alone is
+    rejected). Never write a second `snapshot_download` — it would race the
+    server over the HF cache. Mount imports resolve symlinks AND Synology
+    `XSym` stubs (1067-byte regular files on SMB — a naive copy imports stubs
+    instead of weights); dangling links abort the copy. Copies stage in
+    `.<name>.partial` and rename, so an interrupt never leaves a half-model.
+    In chat, `/pull <ref>` previews and `/pull <ref> --yes` transfers.
+  - **Session commands added in the 2026-07-29 `/help` audit**: `/theme`
+    (live palette switch), `/tools` (real tool surface + what read-only gates),
+    `/status` (session dump incl. model origin), `/unload` (free RAM without
+    quitting), `/retry` (re-run the last message via `CommandResult.submit`).
   - **Read-only default ≠ missing capability.** luxe has the full mutation
     surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips
@@ -99,6 +113,12 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
   - **Status bar** (`chat/status.py`): order `path · git · ctx · cache · start ·
     last · write · bash · slot · model` (`ctx N% <size>` e.g. 128K; `cache`=resident
     prompt size — no cross-turn cache; `write`/`bash` on/off; slot+model last).
+    The model name carries a PROVENANCE glyph (`chat/origin.py`, 2026-07-29):
+    `⌂` weights on local disk · `☁` network volume / cloud-sync tree · `⇅`
+    remote endpoint (warn-coloured for the last two; no glyph when unknown).
+    Same fact is stated at startup, in `/model`'s listing, and on a weight
+    swap. One cached `/v1/models/status` probe per endpoint, resolved off the
+    render path; failures degrade to `unknown`.
     Palette: path blue (fixed hex), slot purple, model yellow, state on=green/off=red,
     ctx/write/bash labels in default fg, grey else; git keeps the theme's role
     colours. Startup banner minimal (bar shows repo/slot/model/mode). `fields()`
@@ -252,6 +272,11 @@ unbiased flips can silently change benchmark behavior.
    (`.claude/hooks/precommit-pull.sh`, wired in `.claude/settings.json`) plus
    repo-local `pull.rebase`/`rebase.autoStash` auto-rebase before each commit. See
    `lessons.md` 2026-05-25 + memory `feedback_git_linear_history`.
+8. **Never `Path.rglob`/`glob` a user-chosen root.** pathlib swallows only
+   `PermissionError`, so an unreachable network dir (`OSError(ETIMEDOUT)` from
+   a NAS mount or `~/Library/CloudStorage`) crashes the caller — that killed
+   the chat TUI on 2026-07-29. Use `luxe.fswalk.iter_files` (os.walk-based,
+   prunes vendor dirs, logs skips). `luxe.sdd` Must-not.
 
 ## When the user asks for new work
 
