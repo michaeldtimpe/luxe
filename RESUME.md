@@ -31,6 +31,21 @@ the TUI got three usability fixes. All on `main`, full suite 1866 passed.
    restored, chip lines not recorded); scrollback keys PgUp/PgDn ·
    shift+↑/↓ · Home/End + banner hint (alt-screen TUI is invisible to
    terminal/tmux scrollback — in-app keys ARE the scrollback).
+5. **Honesty-guard prose exemption** (`fd35e99`): chat write mode swaps in
+   `make_prose_aware_write_fns()` — prose extensions (.txt/.md/…) skip the
+   placeholder guard ("save notes with '# TODO: …'" is user-dictated
+   content, not a code stub). Code files stay guarded; benchmark TOOL_FNS
+   byte-identical (regression-pinned). Lesson in lessons.md.
+6. **`/full` + TUI ctx% server truth** (`6ae1990`): `/full` re-renders the
+   last answer past the 50-line display cap (the old hint pointed at
+   /verbose, which is future-turns-only); tui.py got the same
+   `last_prompt_tokens / num_ctx` ctx% rule repl.py already had (estimate
+   read a flat ~7%), corrected value mirrored into the live buffer so the
+   end-of-turn tick can't clobber it.
+7. **m5 parity + host state**: m5 has the analysis toolchain (poppler,
+   qpdf, tesseract, sox, exiftool, imagemagick, ripgrep — runbook logged);
+   RELAY_TOKEN_* seeded in m5's secrets.env (Keychain `seedkeys` still
+   pending, needs a local login shell). Relay access stays m1+m5 only.
 
 ## ⇒ SESSION HANDOFF (2026-07-30) — the fallback-kit pivot
 
