@@ -74,20 +74,87 @@ class PromptScreen(ModalScreen[str]):
 
 
 class ChatInput(Input):
-    """The prompt input, paste-aware. Textual's stock Input keeps only the
-    FIRST line of a paste — silently destructive for multi-line pastes (code,
-    logs). Here: single-line pastes insert normally; multi-line pastes buffer
-    on the app and show a compact "[pasted N lines]" chip in the input, which
-    is expanded back to the full text at submit time."""
+    """The prompt input: paste-aware with input history.
+
+    Paste: Textual's stock Input keeps only the FIRST line of a paste —
+    silently destructive for multi-line pastes (code, logs). Here:
+    single-line pastes insert normally; multi-line pastes buffer on the app
+    and show a compact "[pasted N lines]" chip in the input, which is
+    expanded back to the full text at submit time. Some terminal stacks
+    (tmux/iTerm passthrough) deliver ONE clipboard paste as TWO identical
+    Paste events back-to-back, so an identical paste inside the dedup window
+    is dropped — no human re-pastes the same text in a third of a second.
+
+    History: up/down cycle previously submitted lines (readline-style); the
+    in-progress draft is kept and restored when you arrow back past the
+    newest entry. Lines that contained paste chips are not recorded — their
+    buffered text is consumed at submit, so recalling the chip would send
+    the literal "[pasted N lines]" string.
+    """
+
+    _PASTE_DEDUP_WINDOW_S = 0.35
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_paste: tuple[str, float] = ("", 0.0)
+        self._history: list[str] = []
+        self._hist_idx: int | None = None
+        self._draft = ""
 
     def _on_paste(self, event) -> None:
         text = getattr(event, "text", "") or ""
+        now = time.monotonic()
+        last_text, last_at = self._last_paste
+        self._last_paste = (text, now)
+        if text and text == last_text and (now - last_at) < self._PASTE_DEDUP_WINDOW_S:
+            event.stop()
+            event.prevent_default()
+            return
         if "\n" in text:
             event.stop()
             event.prevent_default()
             self.app.buffer_paste(text)
             return
         super()._on_paste(event)
+
+    # -- input history -------------------------------------------------------
+    def history_remember(self, line: str) -> None:
+        if line and (not self._history or self._history[-1] != line):
+            self._history.append(line)
+        self._hist_idx = None
+        self._draft = ""
+
+    def _history_prev(self) -> None:
+        if not self._history:
+            return
+        if self._hist_idx is None:
+            self._draft = self.value
+            self._hist_idx = len(self._history) - 1
+        elif self._hist_idx > 0:
+            self._hist_idx -= 1
+        self.value = self._history[self._hist_idx]
+        self.cursor_position = len(self.value)
+
+    def _history_next(self) -> None:
+        if self._hist_idx is None:
+            return
+        if self._hist_idx < len(self._history) - 1:
+            self._hist_idx += 1
+            self.value = self._history[self._hist_idx]
+        else:
+            self._hist_idx = None
+            self.value = self._draft
+        self.cursor_position = len(self.value)
+
+    def on_key(self, event) -> None:
+        if event.key == "up":
+            event.stop()
+            event.prevent_default()
+            self._history_prev()
+        elif event.key == "down":
+            event.stop()
+            event.prevent_default()
+            self._history_next()
 
 
 class StatusBar(Static):
@@ -112,9 +179,14 @@ class ChatApp(App):
         Binding("escape", "cancel", "Cancel turn", show=True),
         Binding("ctrl+c", "cancel", "Cancel turn", show=False, priority=True),
         Binding("ctrl+q", "quit_app", "Quit", show=True),
-        # Scroll the transcript even while the input holds focus.
+        # Scroll the transcript even while the input holds focus. The TUI runs
+        # on the alternate screen, so the TERMINAL/tmux scrollback never sees
+        # transcript history — these keys (plus mouse wheel) are the scrollback.
         Binding("pageup", "scroll_up", "Scroll up", show=False),
         Binding("pagedown", "scroll_down", "Scroll down", show=False),
+        Binding("shift+up", "scroll_line_up", "Scroll line up", show=False),
+        Binding("shift+down", "scroll_line_down", "Scroll line down", show=False),
+        Binding("home", "scroll_home", "To top", show=False),
         Binding("end", "scroll_end", "To bottom", show=False),
     ]
 
@@ -175,6 +247,11 @@ class ChatApp(App):
         log.write(rainbow_banner("luxe")
                   + f"  [dim]· version {sha}[/] {state} "
                   + f"[dim]· session {self.session.session_id} · /help[/]")
+        # The alt-screen TUI is invisible to terminal/tmux scrollback — say so
+        # once, with the keys that ARE the scrollback (plus ↑/↓ input history).
+        log.write("[dim]· scroll: PgUp/PgDn · shift+↑/↓ · Home/End · mouse "
+                  "wheel (terminal scrollback can't see the TUI) · "
+                  "↑/↓ recall your prior inputs[/]")
         hint = build_status_hint()
         if hint:
             log.write(f"[yellow][hint][/] [dim]{hint}[/]")
@@ -265,7 +342,10 @@ class ChatApp(App):
         # The transcript shows the compact chip form; the model gets the
         # expanded text.
         display = line
+        had_chunks = bool(self._paste_chunks)
         message = self._expand_pastes(line) if self._paste_chunks else line
+        if not had_chunks and isinstance(event.input, ChatInput):
+            event.input.history_remember(line)
         if not message:
             return
         if self._busy:
@@ -305,6 +385,18 @@ class ChatApp(App):
     def action_scroll_down(self) -> None:
         if self._transcript is not None:
             self._transcript.scroll_page_down()
+
+    def action_scroll_line_up(self) -> None:
+        if self._transcript is not None:
+            self._transcript.scroll_up()
+
+    def action_scroll_line_down(self) -> None:
+        if self._transcript is not None:
+            self._transcript.scroll_down()
+
+    def action_scroll_home(self) -> None:
+        if self._transcript is not None:
+            self._transcript.scroll_home()
 
     def action_scroll_end(self) -> None:
         if self._transcript is not None:
