@@ -40,9 +40,34 @@ What shipped:
    manifest → weights → endpoint → catalog → real turn + tool call on main →
    real turn on fallback. Exit 0/1. Run after provisioning + on a schedule.
 
-Ops state (see tasks): m1/m5 provisioning + prune, M4 prep script on kappa.
-kappa mounts via `osascript mount volume` (keychain creds). M5 admin API is
-the only remote management path (no ssh keys).
+Same-day follow-ons (all shipped, tested, pushed — 1849 tests):
+
+7. **m1/m4 pair FLIPPED to MoE-main** (aa8301b) after real-turn data; root
+   cause in lessons.md: Qwen3.6 is multimodal → oMLX's slow vlm engine;
+   dense-27B = ~65 tok/s prefill, no cache reuse. Per-model `/ctx` clamps
+   in the manifest (`ctx_max`, 0135884): dense 32K on m1/m4, m1 bench
+   champion 128K, MoE uncapped (KV audit: dense 64 KB/token, MoE 20).
+8. **`luxe update`** + `luxe-update` wrapper + `/doctor` networked `update`
+   check (offline = quiet OK); fleet script at
+   `/Volumes/homes/mysterice/luxe-fleet/update.sh`. Canonical sync is
+   `--extra chat --extra dev --extra analyzers` — dev is a RUNTIME need
+   (the code drill runs pytest via the venv python).
+9. **`luxe smoke --chat --code`** agentic drills (9ba0d0e): real run_single
+   turns in a planted scratch repo, deterministically verified (pytest rc +
+   git diff); `--backend m5` drills a remote host using the REMOTE host's
+   manifest. Theme persistence (`~/.luxe/theme`), honest footer ctx% from
+   server usage + HH:MM:SS timestamps also landed.
+10. **luxe resolves its own API keys** (08e9e84): env → ~/.luxe/secrets.env
+    → keychain. The export-less secrets.env 401 class is dead (lessons.md).
+
+Fleet state at close: m1 + m5 both at 51c239e, drill-proven BY THE USER
+(m1 code drill 32s on MoE-4bit; m5 code drill 7s on the champion — and m5
+interactive chat is ~1s/turn with both models resident, no swap cost). M4
+pending the user's m4-prep.sh run (script + Claude verification prompt on
+kappa, LUXE_HOME=~/code/luxe there). ALL hosts are ssh-reachable via
+~/.ssh/config aliases (`ssh m5` = mtimpe@…; the old "no ssh to m5" belief
+was a wrong-username artifact). kappa mounts via `osascript mount volume`
+(keychain creds); kappa hub carries both 4-bit models for M4 LAN pulls.
 
 ## ⇒ SESSION HANDOFF (2026-07-29) — chat crash fix, model provenance, `luxe pull`, once-over
 
