@@ -564,6 +564,13 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         else:
             extra_tool_defs.append(restricted_bash_def())
             extra_tool_fns["bash"] = make_bash_fn(restricted_hint=True)
+        # Chat-only: prose files (.txt/.md/…) skip the placeholder honesty
+        # guard — "save these notes with '# TODO: implement X'" is content the
+        # user dictated, not a code stub (the guard's target). Code extensions
+        # stay guarded; benchmark/maintain keep the default TOOL_FNS
+        # (tools.sdd). Same per-turn seam as the bash swap above.
+        from luxe.tools.fs import make_prose_aware_write_fns
+        extra_tool_fns.update(make_prose_aware_write_fns())
 
     # MCP tools (cli `--mcp`, chat-only): inspection tools ride every turn;
     # tools matching the server's `gate_tools` (mutating remote operations)

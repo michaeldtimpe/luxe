@@ -362,6 +362,11 @@ never touches this module.
   benchmark/maintain path passes no extra tools, so its bash stays allowlisted.
 - `luxe chat --dev` starts with write + unrestricted bash ON (sticky equivalent
   of `/write` + `/bash`), so dev work doesn't re-toggle each session
+- Write-mode turns swap in `make_prose_aware_write_fns()` (2026-07-30): prose
+  files (.txt/.md/…) skip the placeholder honesty guard — saving session
+  output / notes containing "# TODO: …" or "# paste your token here" is
+  user-dictated content, not a code stub. Code extensions stay guarded; the
+  benchmark/maintain path keeps the default guarded fns (tools.sdd).
 - MCP tools in chat (2026-07-30, cli `--mcp <name>`; repeatable). Servers come
   from the MCP config (`--mcp-config <path>`, default configs/mcp.yaml);
   `streamable_http` transport carries auth via `api_key_env` (credential

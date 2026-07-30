@@ -30,6 +30,29 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-07-30] honesty guards are benchmark-calibrated — interactive prose writes false-positive
+
+**What happened**: In a relay chat session with `/write` on, "save these ops
+notes to session-notes.txt" failed twice: `write_file` refused with
+"refusing to write placeholder text" because the USER-dictated content
+contained `# paste your RELAY_TOKEN_KAPPA here` and `# TODO: implement …`.
+The file was never written; the model could only report the blockage.
+
+**Root cause**: `_check_placeholder_text` (fs.py) exists to stop the
+unsupervised benchmark agent writing code stubs instead of implementations.
+Its patterns match COMMENT-prefixed phrases — but in a .txt/.md notes file
+those "comments" are the content being saved. Interactive chat has a human
+dictating and reviewing; the guard's threat model doesn't apply to prose.
+
+**Fix / takeaway**: `make_prose_aware_write_fns()` — chat write-mode swaps in
+write/edit variants that skip ONLY the placeholder guard for prose extensions
+(.txt/.md/.rst/.log/…), via the same per-turn extra-tool seam as unrestricted
+bash. Code extensions stay guarded; role-path/mass-deletion/scoping/Forbids
+unchanged; module TOOL_FNS untouched → benchmark path byte-identical. General
+rule: a guard tuned for an unsupervised agent loop needs re-examination
+before it applies to a human-in-the-loop surface — same check, different
+threat model.
+
 ### [2026-07-30] anyio cancel scopes must enter/exit on the SAME task — MCP HTTP transport close bug
 
 **What happened**: First `luxe chat --mcp` session against the relays closed
