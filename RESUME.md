@@ -49,6 +49,15 @@ down from 28 findings to 5 (all deliberate E-class).
    preflights endpoint → key → model → weight origin → disk → index freshness →
    git tree → mode → TUI, printing the fix for every warning.
 
+9. **Startup indexing bounded** (2026-07-30) — the reported "indexing is very
+   slow" was three unbounded walks: BM25, symbols, and language detection.
+   210s + ~18s from `$HOME`. Now one `fswalk.scan_source_files` (git `ls-files`
+   in a repo, breadth-first walk otherwise, `Library` etc. pruned at depth 1,
+   capped by `LUXE_INDEX_MAX_FILES`/`LUXE_INDEX_MAX_MB`) feeding both builders
+   and `_languages_from_paths`. Measured: ~1s in a repo, ~16s from `$HOME`,
+   with a loud truncation notice. Benchmark path untouched (builders called
+   without `files=`).
+
 **Not done / next:** `luxe pull` has NOT been exercised against a real kappa
 mount (kappa wasn't mounted) — the XSym path is unit-tested and validated
 against the local HF cache, but the first real NAS pull is worth watching.

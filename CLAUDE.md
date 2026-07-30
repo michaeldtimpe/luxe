@@ -76,6 +76,17 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     `--resume`/`/resume` now work inside the Textual TUI (transcript replays
     into the RichLog on mount). The `[chat]` extra installs via
     `uv sync --extra chat` — without it chat falls back to the line REPL.
+  - **Startup indexing is bounded and single-pass** (2026-07-30). It used to
+    walk the tree THREE times (BM25, symbols, language detection) with no cap:
+    `luxe chat --repo ~` cost **210s of indexing + ~18s of language walking**.
+    Now `cli._build_chat_indexes` runs `fswalk.scan_source_files` once — git
+    `ls-files` when the root is a repo, else a breadth-first walk that prunes
+    `HOME_NOISE_DIRS` (`Library`, …) at depth 1 — and feeds the list to both
+    builders plus `_languages_from_paths`. Caps: `LUXE_INDEX_MAX_FILES` (8000),
+    `LUXE_INDEX_MAX_MB` (96), `LUXE_INDEX_NO_GIT=1` to force the walk.
+    Measured after: **~1s in a repo, ~16s from `$HOME`**. Truncation prints
+    what the model can't see + how to lift it. Benchmark/maintain keep the
+    unbounded walk (builders called without `files=`).
   - **`/pull` — get model weights** (2026-07-29; `src/luxe/modelstore.py`, CLI
     `luxe pull`). Mounted volume first (kappa/alpha over SMB — same bytes at LAN
     speed), else HuggingFace **through oMLX's own downloader**

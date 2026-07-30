@@ -174,6 +174,16 @@ never touches this module.
   `SlotManager.forget_resident()` so the next turn reloads), `/retry` re-runs the
   last user message via `CommandResult.submit` — the only sanctioned way a
   command turns into a turn; both front-ends act on that field.
+- Startup indexing is ONE bounded scan (2026-07-30). `cli._build_chat_indexes`
+  calls `fswalk.scan_source_files` once and passes the file list to BOTH
+  `build_bm25_index(files=…)` and `build_symbol_index(files=…)`; languages come
+  from the same list (`_languages_from_paths`), never a third walk. The scan
+  uses `git ls-files` when the root is a repo (so `.gitignore` does the pruning),
+  is breadth-first otherwise (a cap should keep the SHALLOW files), prunes
+  `HOME_NOISE_DIRS` at depth 1 only, and is bounded by `LUXE_INDEX_MAX_FILES`
+  (8000) / `LUXE_INDEX_MAX_MB` (96). Truncation is never silent: startup names
+  the cap, what the model can no longer see, and both escapes. Chat-only — the
+  builders' no-`files` path is the unchanged unbounded walk the benchmarks use.
 - `/export`, `/diff`, `/doctor` live in `chat/inspection.py` — logic as testable
   functions, rendering in `commands.py`. All three are READ-ONLY. `/export`
   renders the PERSISTED transcript (so it works after `/resume` and captures

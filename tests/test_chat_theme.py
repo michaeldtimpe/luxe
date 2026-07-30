@@ -129,3 +129,21 @@ def test_curated_palette_overrides_the_active_theme(monkeypatch):
     finally:
         theme.set_palette(None)
         theme.reset_cache()
+
+
+# --- chat startup language detection ----------------------------------------
+
+
+def test_languages_come_from_the_scan_without_walking():
+    """Chat derives languages from the index scan; walking the tree a third
+    time cost ~18s from `$HOME` (2026-07-30)."""
+    from pathlib import Path
+
+    from luxe.cli import _languages_from_paths
+
+    langs = _languages_from_paths([
+        Path("/r/a.py"), Path("/r/b.tsx"), Path("/r/c.rs"),
+        Path("/r/README.md"), Path("/r/d.go"),
+    ])
+    assert langs == frozenset({"python", "typescript", "rust", "go"})
+    assert _languages_from_paths([]) == frozenset()
