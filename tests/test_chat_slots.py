@@ -66,7 +66,9 @@ def test_distinct_code_model_swaps_once():
     assert sm.stats.count == 1
     assert sm.resident == "Coder"
     assert sm.backend.thermal_calls == ["Coder"]
-    assert sm.backend.unload_calls == [["Coder"]]  # except_for the target
+    # Two unloads: the first-use single-residency eviction (except Champ),
+    # then the swap's own except-target unload (2026-07-30 policy).
+    assert sm.backend.unload_calls == [["Champ"], ["Coder"]]
 
 
 def test_consecutive_code_turns_do_not_rethrash():
@@ -187,6 +189,20 @@ def test_turn_failure_on_healthy_endpoint_degrades(monkeypatch):
     assert sm.degraded_to == "Fb-M"
     # Second failure doesn't re-fire (already degraded).
     assert sm.note_turn_failure() is None
+
+
+def test_first_use_evicts_other_residents(monkeypatch):
+    """Single-residency policy (2026-07-30): even when the target is already
+    'resident' (the no-swap short-circuit), the first backend_for() evicts
+    everything else — a big-RAM host must never accumulate warm models."""
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    ManifestBackend.served = ["Main-M", "Fb-M"]
+    sm = slots_mod.SlotManager(_manifest_cfg(monkeypatch))
+    assert sm.resident == "Main-M"           # optimistic, no swap coming
+    sm.backend_for("chat")
+    assert sm.backend.unload_calls == [["Main-M"]]   # evict-except fired once
+    sm.backend_for("chat")
+    assert sm.backend.unload_calls == [["Main-M"]]   # and only once
 
 
 def test_ctx_ceiling_clamps_per_model(monkeypatch):

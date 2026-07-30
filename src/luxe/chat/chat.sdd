@@ -115,6 +115,13 @@ never touches this module.
   segment (mid drop-priority) only when >1 backend is configured; configs
   without `backends:` synthesize a single "local" entry and behave identically
   to the single-backend days. Benchmark/maintain read `omlx_base_url` only.
+- SINGLE-RESIDENCY POLICY (2026-07-30, user decision): ONE model in RAM per
+  host — including the 128 GB m5, whose headroom is reserved for CONTEXT,
+  not warm spares. The swap path always unloaded-except-target;
+  `backend_for`'s first use now evicts other residents even on the no-swap
+  short-circuit (re-armed on `switch_backend` for the new server), and the
+  smoke pings + drills unload-except before generating. Cost accepted: a
+  manual `/model` hop to the other manifest model pays a full unload+load
 - Different-model slot use sequences weight swaps via
   `Backend.unload_all_loaded` + `thermal_guard`; swap count + seconds are
   instrumented and surfaced; keep chat-slot model resident, group code work

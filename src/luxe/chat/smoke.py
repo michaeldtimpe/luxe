@@ -204,6 +204,12 @@ def _run_drill_turn(backend, role, goal: str, task_type: str, repo, report,
 
     prior_root = getattr(fs_mod, "_REPO_ROOT", None)
     fs_mod.set_repo_root(str(repo))
+    try:
+        # Single-residency policy: a drill must not leave two models loaded
+        # (the m5 ended up with both after a drill ran beside a warm model).
+        backend.unload_all_loaded(except_for=[backend.model])
+    except Exception:
+        pass
     t0 = time.monotonic()
     try:
         result = run_single(backend, role, goal=goal, task_type=task_type,
@@ -390,6 +396,12 @@ def run_smoke(cfg, *, base_url: str | None = None,
 
     # 5-7. Real generations: main ping, main tool call, fallback ping (the
     #      fallback leg exercises the unload+load swap — it's the slow one).
+    #      Single-residency before the first ping too: never leave a host
+    #      with two models loaded because something else was warm.
+    try:
+        backend.unload_all_loaded(except_for=[main])
+    except Exception:
+        pass
     if _ping(backend, main, report, "main turn") and not skip_tools:
         _tool_ping(backend, main, report)
     if fallback and not skip_fallback:
