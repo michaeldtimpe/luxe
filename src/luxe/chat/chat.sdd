@@ -185,7 +185,11 @@ never touches this module.
   longer hardcodes magenta. `auto` (default) tracks the YASL/terminal theme;
   `--theme cool|warm|mono` (C-T) selects a curated luxe palette (256/RGB) that
   overrides terminal ANSI — needed because a standard-index YASL theme equals the
-  ANSI fallback, so auto looks unchanged
+  ANSI fallback, so auto looks unchanged. `/theme <name>` PERSISTS the choice
+  to `~/.luxe/theme` (2026-07-30) so future sessions start with it; startup
+  precedence is `--theme` > `LUXE_THEME` > persisted > `auto`, an explicit
+  flag/env always beating the saved default. `/theme preview` renders the real
+  status bar + tool/diff lines in every palette without changing anything
 - Goal completion is SENTINEL-required + ledger-corroborated (C1): a settled round
   is done only when `completed` is non-empty, grew at least once this run, and the
   reply carries `LUXE_GOAL_DONE` — for 2 consecutive rounds. It does NOT require

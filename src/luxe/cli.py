@@ -616,14 +616,23 @@ def _tilde(path: str) -> str:
 
 
 def _resolve_theme_name(flag: str | None) -> str:
-    """Chat palette precedence (D2): `--theme` → `LUXE_THEME` → `auto`.
+    """Chat palette precedence: `--theme` → `LUXE_THEME` → persisted `/theme`
+    choice (`~/.luxe/theme`) → `auto`.
 
     `auto` tracks the user's ACTIVE YASL/statusline theme (chat.sdd; the
     `--theme` help text says the same). The curated luxe palettes are OPT-IN —
     shipping `cool` as the default silently overrode the user's own theme
-    (reported 2026-07-29).
+    (reported 2026-07-29). `/theme <name>` persists (2026-07-30), so a chosen
+    palette survives across sessions without a flag or env var.
     """
-    return flag or os.environ.get("LUXE_THEME") or "auto"
+    explicit = flag or os.environ.get("LUXE_THEME")
+    if explicit:
+        return explicit
+    try:
+        from luxe.chat import theme as theme_mod
+        return theme_mod.load_preference() or "auto"
+    except Exception:
+        return "auto"
 
 
 def _shared_chat_options(f):

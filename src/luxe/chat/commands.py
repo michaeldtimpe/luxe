@@ -600,13 +600,17 @@ def _theme(args, ctx: CommandContext) -> CommandResult:
         return CommandResult(handled=True)
     if not args:
         current = theme_mod.active_palette()
+        saved = theme_mod.load_preference()
         ctx.console.print("[bold]Palettes[/]")
         for name in choices:
             mark = " [cyan]← active[/]" if name == current else ""
+            mark += " [dim](saved default)[/]" if name == saved else ""
             hint = ("  [dim](tracks your terminal/statusline theme)[/]"
                     if name == "auto" else "")
             ctx.console.print(f"  {name}{hint}{mark}")
-        ctx.console.print("[dim]switch with /theme <name>[/]")
+        ctx.console.print("[dim]compare with /theme preview · "
+                          "switch with /theme <name> (sticks across "
+                          "sessions)[/]")
         return CommandResult(handled=True)
 
     name = args[0].lower()
@@ -615,9 +619,12 @@ def _theme(args, ctx: CommandContext) -> CommandResult:
                           f"Choose from: {', '.join(choices)}.[/]")
         return CommandResult(handled=True)
     theme_mod.set_palette(name)
+    saved = theme_mod.save_preference(name)
     ctx.console.print(f"[green]✓[/] palette → [cyan]{name}[/]"
                       + ("  [dim](tracking your terminal theme)[/]"
-                         if name == "auto" else ""))
+                         if name == "auto" else "")
+                      + ("  [dim]· saved — future sessions start here[/]"
+                         if saved else ""))
     _theme_sample(ctx, label="")
     return CommandResult(handled=True)
 
