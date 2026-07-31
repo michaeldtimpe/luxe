@@ -1228,6 +1228,16 @@ def run_deep_report(
 
     # --- Stages 0+1: survey + chunk plan (cached per repo, HEAD-keyed) -------
     current_shas: dict[str, str] = {}
+    # `cached` means exactly one thing: the loaded map dict, or None. Skipping
+    # the survey/save_map branch is a SEPARATE decision — diff mode and a
+    # successful incremental replan both skip it without having loaded a map.
+    # (These were once the same variable, with `cached = True` used as a
+    # sentinel; that made `cached` unindexable-but-truthy and cost 4 mypy
+    # errors.) Both must be bound before the branch: diff mode never reaches
+    # the `else`, so leaving `cached` unassigned there is an UnboundLocalError
+    # on the guard below.
+    cached: dict | None = None
+    skip_map_io = False
     if chunks_override is not None:
         # Diff mode: chunks cover the CHANGED files only. NO survey pass (diff
         # audits must be fast) and NO map/ reads or writes; a FRESH whole-repo
@@ -1235,7 +1245,7 @@ def run_deep_report(
         chunks = chunks_override
         survey_notes = survey_notes_override or "(no survey — diff-scoped audit)"
         framing = []
-        cached = True  # sentinel: skip the survey/save_map branch below
+        skip_map_io = True  # no map read/write in diff mode
     else:
         status = map_status(target, head=head)
         cached = None if rebuild_map else load_map(target, head=head)
@@ -1280,11 +1290,11 @@ def run_deep_report(
                              chunks=chunks, content_budget=content_budget,
                              framing=framing, summary_render=summary.render(),
                              files=current_shas, baseline=plan.baseline)
-                    cached = True  # sentinel: skip the survey/save_map branch
+                    skip_map_io = True  # replanned in place; nothing to re-survey
                 else:
                     _emit(f"incremental unavailable — {plan.reason}; "
                           "full rebuild (re-survey)")
-    if not cached:
+    if cached is None and not skip_map_io:
         framing = framing_files(target)
         survey_ctx = (f"{health_block}\n\n<repo_map>\n{summary.render()}\n</repo_map>"
                       f"\n\n{_framing_block(framing)}")
