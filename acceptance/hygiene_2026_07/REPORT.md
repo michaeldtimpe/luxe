@@ -66,7 +66,8 @@ where it counts.
 | ruff (`src/`) | 6 | **5** — exactly the deliberate set RESUME.md documents |
 | mypy | 102 errors / 18 files | **95** (−7: 3 from HS-004, 4 from HS-006) |
 | bandit | 120 low / 1 med / 2 high | **identical** |
-| `luxe smoke` | READY (17s) | see § Close-out |
+| `luxe smoke` | READY (17s) | **READY (17s)** |
+| `luxe smoke --chat --code` | not run | **READY (44s)** — both drills pass |
 
 Test count reconciles exactly: 1877 + 5 golden + 3 marker-policy + 2
 spec-resolver = 1887, − 4 deselected = 1883.
@@ -91,18 +92,40 @@ optimization, and after measuring there were no optimization candidates
 left for a harness to serve. Building one would have been the exact
 speculative work the plan rules out. No Tier A perf proposals arose.
 
-## Dogfood: `luxe gitaudit`
+## Dogfood: `luxe gitaudit` — abandoned, and it found a bug anyway
 
 Launched at Phase 1 start against this repo. It self-planned **73 chunks /
-74 passes / ~287 min** and was still running at report time (see
-`gitaudit.txt`). Its findings are therefore **not** incorporated — no card
-in this sweep came from it. Product feedback regardless:
+74 passes / ~287 min**, completed chunk 1, and then **wedged permanently on
+chunk 2** — killed at 22:49 (`EXIT=143`) after 40 minutes, 1/73 chunks done.
+The plan permits abandoning with a reason; this is the reason.
 
-- The deep path is honest about cost up front (`plan: 73 chunks · ~287 min`),
-  which is the right behaviour, but ~5 hours makes it an overnight tool for a
-  repo this size, not an interactive one.
-- It holds ~21 GB resident throughout, which serialised the rest of the
-  sweep's model work (the `--chat`/`--code` smoke drills had to wait).
+It wedged because I evicted its weights (B5) with a 30-second `/status` +
+`/doctor` spot-check. But the *response* to that eviction is a genuine bug:
+
+**B6 — the request never returned and never timed out.** 23 minutes on a
+600s read timeout, no `BackendError`, no retry, no log line, process parked
+in `S` on an ESTABLISHED socket. The server was healthy the whole time —
+`luxe smoke` was green in 17s immediately after the kill — so this is a
+client-side hang in `Backend`, not an oMLX outage. Not root-caused; see
+`raw_findings.md` § B6 for the repro sketch. For a tool whose mission is
+being available during an outage, a silent unbounded hang is the worst
+available failure shape, and it needs no mistake to trigger: any concurrent
+chat `/quit`, admin unload, or oMLX restart mid-turn does it.
+
+So the dogfood produced no findings *of its own* — no card in this sweep
+came from gitaudit's output — but running it surfaced two real defects (B5,
+B6) that no static analyzer would have.
+
+Product feedback on gitkit itself:
+
+- It is honest about cost up front (`plan: 73 chunks · ~287 min`), which is
+  right, but ~5 hours makes it an overnight tool at this repo size.
+- **No resume.** 40 minutes of work and chunk 1's findings evaporated on
+  kill. The `map/` cache survives (survey + partition), and per-chunk notes
+  are cached under `map/notes/<kind>/` — but the incremental path is
+  HEAD-keyed and only reuses *validated* chunk notes, so an interrupted run
+  restarts the chunk pass. A deep run this long wants to be killable and
+  resumable.
 
 ## Drill: can luxe fix its own problems?
 
@@ -175,8 +198,27 @@ python -m benchmarks.maintain_suite.run --variants configs/single_64gb.yaml \
 
 ## Close-out status
 
-`luxe smoke` and `luxe smoke --chat --code` (plan § 5.3) were **deferred
-until `gitaudit` finishes** — it holds ~21 GB resident and forcing a second
-model load risks evicting its weights mid-run. Baseline smoke was green
-(READY, 17s) before the sweep began. This is the one plan step not completed
-at report time; see the handoff note in RESUME.md.
+All plan gates cleared.
+
+- **5.1** full suite green, count up from baseline: **1883 passed, 6
+  skipped, 4 deselected** (1877 + 10 new tests − 4 deselected).
+- **5.2** analyzers diffed against Phase 0: ruff 223 → 222 (one removal,
+  no new findings), mypy 102 → 95 (exactly the 7 targeted), bandit
+  identical.
+- **5.3** `luxe smoke` **READY (17s)**; `luxe smoke --chat --code`
+  **READY (44s)** — chat drill recovered the planted magic word (3 steps,
+  2 tool calls); code drill fixed the planted bug with pytest green and
+  *exactly* `calc.py` changed (7 steps, 9 tool calls). The fallback kit is
+  intact after every change in this sweep.
+- **5.4** interactive spot-check: `/status` and `/doctor` clean, no
+  tracebacks, `doctor` all-clear on 15 checks, index built in 0.9s.
+- **5.5** Tier A files changed (`spec_resolver.py`,
+  `maintain_suite/run.py`), both byte-identity-gated. Bench command offered
+  above, **not run**.
+- **5.6** this report, `RESUME.md` handoff, 2 `lessons.md` entries.
+
+Worth noting the contrast with the drill log: `luxe smoke --code`'s planted
+bug-fix drill **passed**, while the real HS-006 refactor drill failed. The
+smoke drill runs in a standalone scratch repo with no editable-install
+shadowing, so its verification is real — which is exactly the property the
+worktree drill protocol lacked.

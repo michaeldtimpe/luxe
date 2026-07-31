@@ -115,6 +115,39 @@ means touching Tier A files for zero runtime benefit, so it is deferred as a
 batch rather than dribbled through this sweep. The one exception, A6, is
 carded because it is a genuine readability hazard.
 
+### B6 — a model unloaded mid-request hangs luxe past its read timeout
+`src/luxe/backend.py:146,167` — `timeout_s: float = 600.0`,
+`httpx.Timeout(timeout_s, connect=30.0)`.
+
+Observed, not theorised. After B5 evicted the weights out from under the
+`gitaudit` run, its in-flight `/v1/chat/completions` call **never returned
+and never timed out**:
+
+- request issued ~22:26; weights evicted ~22:29; still blocked at 22:49.
+- **23 minutes on a 600s read timeout.** No `BackendError`, no retry, no
+  log line — the process sat in `S` state on an ESTABLISHED socket with
+  2.45s of CPU consumed over 40 minutes of wall.
+- The server was fine throughout: `luxe smoke` run immediately after the
+  kill was green in 17s (endpoint, catalog, main turn, tool call, fallback
+  turn). So this is a **client-side** hang, not an oMLX outage.
+
+**Not root-caused.** I did not determine why the httpx read timeout failed
+to fire — plausible candidates are the server holding the connection open
+while dribbling nothing, or the timeout not applying to the phase the
+request was parked in. That investigation is the first step, not the fix.
+
+Why it matters more than its trigger: luxe's entire mission is being
+available during an outage. A hang with no timeout, no error and no log
+line is the worst failure shape for a fallback tool — `~/.luxe/sessions/`
+gets nothing, so post-hoc diagnosis has nothing to read either. The trigger
+does not require my mistake: any concurrent `luxe chat` `/quit` (B5), any
+admin unload, or an oMLX restart mid-turn reproduces it.
+
+Repro sketch: start a long `luxe gitaudit --deep`, wait for a chunk pass to
+begin, then `curl` the oMLX admin unload (or quit a chat session on the same
+endpoint). Expect a `BackendError` within `timeout_s`; observe an indefinite
+hang.
+
 ### B5 — `luxe chat` exit unloads *every* model on the server, not its own
 `src/luxe/chat/repl.py:391-396` → `slots.unload_all()` →
 `backend.unload_all_loaded()`, which iterates `loaded_models()` — i.e. the
