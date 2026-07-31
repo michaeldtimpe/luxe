@@ -30,6 +30,126 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-07-31] A per-read timeout is not a deadline — oMLX keepalives make luxe hang forever
+
+**What happened**: a `luxe gitaudit` run sat on one request for 23 minutes
+with a 600s read timeout configured — no error, no retry, no log line —
+while the oMLX server was demonstrably healthy (`luxe smoke` green in 17s
+right after). Killing it was the only way out.
+
+**Root cause**: `httpx.Timeout(timeout_s, ...)` is a **per-read** deadline —
+it fires only when no byte arrives for that long. It is not a cap on total
+request time. And oMLX emits keepalive bytes on *both* response shapes:
+
+  - streaming: SSE chunks whose `model` field is literally `"keepalive"`,
+    carrying `delta.content == ""`;
+  - non-streaming: a single space byte (`b' '`) about every 10s under
+    `Transfer-Encoding: chunked` (legal leading JSON whitespace, so the
+    eventual parse still succeeds).
+
+Every keepalive resets the only clock luxe has, so a request whose
+generation has stopped can never time out. `_chat_stream` then discards the
+keepalives silently — `content` is `""`, which is falsy — and spins.
+`grep -ri keepalive src/luxe` returned nothing: the concept was simply
+unknown to the codebase.
+
+Proved four ways. Synthetic server at `timeout_s=3`: a *silent* server
+raises `ReadTimeout` at exactly 3.00s, while one trickling a heartbeat per
+second hangs past 20s on **both** the streaming and non-streaming paths.
+Against live oMLX, unloading the model mid-request left streaming alive at
+90s and non-streaming alive at 100s under a 60s read timeout, with the raw
+`b' '` keepalives captured on the wire.
+
+**Fix / takeaway**: **a liveness signal is not a progress signal, and a
+per-read timeout cannot tell them apart.** Any client of a keepalive-capable
+server needs a *progress* deadline — time since the last byte that actually
+advanced the work (content, tool-call fragment, usage, finish_reason) —
+because the transport heartbeat is specifically designed to look like
+activity. Note the blast radius: the non-stream path is the
+benchmark/maintain path, so an n=75 sweep can wedge on one fixture forever
+with no error. The trigger needs no mistake — any model swap, worker crash
+or OOM recovery that stops generation while holding the connection does it.
+
+Corollary: **raising `timeout_s` does not fix this.** A stashed
+`timeout_s: 600 -> 2400` workaround from 2026-07-29 ("dense 16384-tok turns
+can run ~25min; 600s read-timed-out -> dead-request hangs over the M5
+tunnel") treats the symptom; no finite per-read value helps when the server
+keeps trickling.
+
+**Affected files**: `src/luxe/backend.py` (`_chat_stream`, the non-stream
+`post`), `acceptance/hygiene_2026_07/raw_findings.md` § B6.
+
+### [2026-07-30] A git worktree + an editable install = tests that silently grade the wrong tree
+
+**What happened**: The hygiene sweep routed a refactor card to `luxe code`
+as a fallback-kit drill, in an isolated `git worktree` so the agent could
+never touch the live checkout. The agent made its edits, ran
+`python -m pytest tests/test_gitkit_deep.py tests/test_gitkit_diff.py -q`
+inside the worktree, reported *"All 109 tests pass"*, and stopped. The
+executor re-ran the same command to verify: 109 passed. Both were wrong.
+The diff contained an `UnboundLocalError` on every `gitaudit --base/--pr`
+deep run — it moved a sentinel out of `cached` without leaving `cached`
+bound on the diff-mode path.
+
+**Root cause**: the venv installs luxe as an **editable install pointing at
+the main checkout**. `cd`-ing into a worktree changes cwd, not import
+resolution:
+
+```
+$ .venv/bin/python -c "import luxe.gitkit.deep as d; print(d.__file__)"
+/Users/michaeltimpe/Downloads/luxe/src/luxe/gitkit/deep.py   # not the worktree
+```
+
+pytest collected the worktree's *test files* and ran them against the
+parent's *source*. The green run was real and meaningless. Existing
+coverage was fine all along — `test_large_diff_routes_deep_chunks_over_changed_files_only`
+fails loudly on the broken code the moment you force the right source
+(`PYTHONPATH=<worktree>/src` → `1 failed, 19 passed`).
+
+**Fix / takeaway**: worktree isolation isolates *writes*, not *imports*.
+Any drill or agent-verification loop that runs tests in a worktree must set
+`PYTHONPATH=<worktree>/src` or `uv sync` its own venv inside the worktree —
+otherwise the verification step is a rubber stamp that certifies the code
+you did not change. Generalised rule: **before believing a green run in a
+new environment, make that environment produce a red.** Watching the
+pinning test fail on the pre-change code is not ceremony; it is the only
+thing that proves the harness is pointed at the code under test. This is not
+luxe-specific — it applies to every `git worktree` + editable-install
+workflow.
+
+**Affected files**: `src/luxe/gitkit/deep.py`,
+`acceptance/hygiene_2026_07/drill_log.md`, and the drill protocol in
+`docs/plans/2026-07-30-hygiene-sweep.md` (§ Phase 3, steps c–d), which is
+wrong as written.
+
+### [2026-07-30] A registered pytest marker is documentation, not behaviour
+
+**What happened**: `pyproject.toml` registered `live_model` with the text
+*"skip by default; run manually after stopping oMLX"*, and
+`tests/test_mlx_direct_smoke.py`'s docstring repeated *"Marked
+`live_model` — skipped by default."* Neither was true. Registering a marker
+in `[tool.pytest.ini_options] markers` only silences `--strict-markers`; it
+selects nothing. The tests ran on every single invocation, loading real MLX
+weights in-process — 7.9s of a 47.8s suite — and were 4 hard
+`ModuleNotFoundError`s on any machine without Apple-silicon MLX. That is
+why CI could not go green even after its other faults were fixed.
+
+**Root cause**: the marker was added with the *intent* recorded in prose and
+the *mechanism* never written. Nothing fails when a policy exists only as a
+comment, so nothing surfaced the gap for months.
+
+**Fix / takeaway**: `addopts = "-m 'not live_model and not live_backend'"` is
+what implements the promise; a command-line `-m` still overrides it, so the
+documented manual invocation keeps working. Pinned by
+`tests/test_marker_policy.py`, which asserts both directions. Takeaway:
+**when a config file states a policy in prose, write the test that fails if
+the policy isn't enforced** — otherwise the prose is a wish. Cost of the
+gap: −17% suite wall (46.0s → 38.2s median, 3 runs each) and ten weeks of
+dead CI.
+
+**Affected files**: `pyproject.toml`, `tests/test_marker_policy.py`,
+`.github/workflows/luxe-tests.yml`.
+
 ### [2026-07-30] honesty guards are benchmark-calibrated — interactive prose writes false-positive
 
 **What happened**: In a relay chat session with `/write` on, "save these ops

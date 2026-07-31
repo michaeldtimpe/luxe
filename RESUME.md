@@ -1,5 +1,87 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-07-30, overnight) — hygiene sweep
+
+Unattended bugfix/refactor/optimization pass over the repo, plan in
+`docs/plans/2026-07-30-hygiene-sweep.md`, full write-up in
+`acceptance/hygiene_2026_07/REPORT.md`. 8 commits, **local on `main`, NOT
+pushed** — awaiting review.
+
+The sweep's value was in things that were silently not running, not defects:
+
+1. **CI had been dead for ten weeks** (`3e4a695`). `paths: luxe/**` +
+   `working-directory: luxe` were left over from when luxe was a monorepo
+   subdirectory. Post-extraction, branch/PR pushes never triggered, and the
+   tag pushes that did (GitHub skips `paths` for tags) failed in ~10s — 13
+   consecutive times, last green 2026-04-28. Fixed and rehearsed in a scratch
+   venv built exactly as the runner does. CI now also syncs `--extra chat`;
+   without it the whole TUI module import-skips and 26 tests silently
+   don't run.
+2. **The `live_model` marker documented a skip nobody implemented**
+   (`49de966`). Registering a marker selects nothing. The MLX tests ran on
+   every invocation and were 4 hard errors on any Linux runner — the reason
+   CI couldn't go green. `addopts` now enforces it; `-m live_model` still
+   overrides. Side effect: **suite −17%** (46.0s → 38.2s median).
+3. **Golden-request guard** (`b0d4eeb`) — `tests/test_golden_request.py`
+   snapshots the exact HTTP body `run_single` builds (messages, full tools
+   array, sampling params, role from the shipped config). "Bench path stays
+   byte-identical" is now a test, not a discipline. Regenerate deliberately
+   with `LUXE_UPDATE_GOLDEN=1`.
+4. Tier A fixes, both cleared the byte-identity gate: `.sdd` contracts header
+   no longer emitted with nothing under it (`3153608`); `results` no longer
+   shadowed in the bench `finally` (`26c7763`).
+
+**Read this before running another `luxe code` drill**: worktree isolation
+does NOT isolate imports. The editable install points at the main checkout,
+so `pytest` inside a worktree grades the *parent's* source. A drill agent
+reported "109 tests pass" on a diff containing an `UnboundLocalError`, and
+the executor's first verification pass was fooled the same way. Use
+`PYTHONPATH=<worktree>/src` or a per-worktree venv. The plan's drill
+protocol (§ Phase 3 c–d) is wrong as written. Two lessons.md entries.
+
+Final: 1883 passed / 6 skipped / 4 deselected · ruff `src` back to the 5
+deliberate findings · mypy 102 → 95 · bandit unchanged.
+
+5. **Two defects the dogfood `gitaudit` run surfaced by failing**, neither
+   fixed:
+   - **B5**: `luxe chat`'s exit unloads *every* model on the server, not the
+     ones it loaded. With m5 a shared fleet endpoint, one host's `/quit`
+     evicts another host's weights. Hit live.
+   - **B6 (ROOT-CAUSED 2026-07-31)**: a model unloaded mid-request **hangs
+     luxe with no timeout** — 23 min on a 600s read timeout, no error, no
+     retry, no log line, while the server stayed healthy. Cause:
+     `httpx.Timeout` is a **per-read** deadline, not a total-request cap,
+     and oMLX emits keepalive bytes on both paths — `"model":"keepalive"`
+     SSE chunks when streaming, a bare space byte every ~10s under chunked
+     encoding when not. Every keepalive resets luxe's only clock;
+     `_chat_stream` discards them silently (`content == ""` is falsy) and
+     spins. **The non-stream path is the benchmark/maintain path**, so an
+     n=75 sweep can wedge on one fixture forever with no error. Raising
+     `timeout_s` does NOT help — your stashed 600→2400 workaround
+     (`stash@{1}`, 2026-07-29) treats the symptom. Fix designed (a
+     *progress* deadline; keepalives don't count as progress) but NOT
+     implemented — backend.py is Tier A. Evidence: `raw_findings.md` § B6
+     + lessons.md.
+
+`gitaudit` itself was abandoned at 1/73 chunks (wedged by B6) — no card came
+from its output. gitkit note: a ~5h deep run has no resume.
+
+Close-out gates cleared: `luxe smoke` READY (17s), `luxe smoke --chat --code`
+READY (44s, both agentic drills pass) — the fallback kit is intact.
+
+**Heads-up on `.claude/hooks/precommit-pull.sh`**: its `git pull --rebase
+--autostash` runs BEFORE the Bash command, so *unstaged* edits get
+autostashed and only *already-staged* files are restored. It silently ate
+this session's RESUME.md + lessons.md edits twice (recovered from
+`stash@{0}`). Stage in one command, commit in a separate one. Your older
+`stash@{1}` (dense timeout bump) and `stash@{2}` (gitkit cycle) are
+untouched.
+
+**Open, needs your call** (REPORT.md § Deferred): B5 · B6 · 18 transitive
+CVEs (dependency bumps are a stop-and-ask trigger — not landed unattended) ·
+`git clone` with no timeout · 95 remaining mypy errors (annotation debt, not
+defects).
+
 ## ⇒ SESSION HANDOFF (2026-07-30, evening) — relay MCP in chat + TUI polish
 
 luxe chat can now drive the mage-hands relays (alpha · kappa · router1), and
