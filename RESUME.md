@@ -65,7 +65,13 @@ deliberate findings · mypy 102 → 95 · bandit unchanged.
      `iter_raw()` for visibility — **request unchanged**, golden-request
      snapshot untouched. Field-validated against live oMLX on both paths
      (30s / 64s aborts where it previously hung unbounded); healthy turns at
-     default bounds unaffected; 8 real-socket tests. Evidence:
+     default bounds unaffected; 8 real-socket tests. Bounds are now
+     **per-endpoint** via `BackendEntry` (`2586bf1`): chat.yaml gains
+     `stall_timeout_s` / `decode_stall_timeout_s`, both `None` = inherit
+     Backend's default, forwarded by `backend_kwargs()` which omits unset
+     keys. m5 carries `stall_timeout_s: 2400` (its ~25min dense prefill
+     leaves only 300s under the 1800s default); `local` stays on defaults.
+     Chat-only — benchmark/maintain never read `backends:`. Evidence:
      `raw_findings.md` § B6 + lessons.md.
 
 `gitaudit` itself was abandoned at 1/73 chunks (wedged by B6) — no card came
