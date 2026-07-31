@@ -27,11 +27,15 @@ auto-memory.
   champion-everywhere, byte-identical to the pre-manifest behaviour
 - Multi-backend endpoint selection (`backends:` map + `/backend`/`--backend`)
   joins the slots carve-out: chat-only, config-sourced (BackendEntry =
-  base_url/api_key_env/timeout_s/stall_timeout_s/decode_stall_timeout_s/default;
-  keys resolve from env at Backend construction, NEVER from YAML). The two
+  base_url/api_key_env/timeout_s/stall_timeout_s/decode_stall_timeout_s/
+  shared/default; keys resolve from env at Backend construction, NEVER from
+  YAML). The two
   stall bounds are the B6 PROGRESS deadlines and default to `None` = "use
   Backend's default", so an entry that omits them is byte-identical to one
   written before they existed; the numbers live in `backend.py` alone.
+  `shared` (auto-detected: non-loopback = shared) turns OFF single-residency
+  eviction — luxe frees only models THIS session loaded, never another
+  client's (B5).
   When `backends:` is absent a single "local" entry is synthesized from
   `omlx_base_url` so existing configs parse identically; benchmark/maintain
   keep reading `omlx_base_url` only

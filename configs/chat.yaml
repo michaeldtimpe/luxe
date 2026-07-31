@@ -21,6 +21,11 @@ backends:
     # stays at the default: once tokens flow they arrive sub-second, so 120s
     # is already ~100x headroom and a longer gap means the turn is dead.
     stall_timeout_s: 2400
+    # `shared` is auto-detected from base_url — anything non-loopback counts,
+    # so this fleet endpoint is shared without needing the key. That turns OFF
+    # single-residency eviction here: luxe frees only the models THIS session
+    # loaded, never another host's (B5). Set `shared: false` if m5 ever becomes
+    # dedicated and you want the RAM reclaimed aggressively again.
 
 # Chat color palette (D2): the default is 'auto' — it tracks your ACTIVE
 # terminal/YASL statusline theme. Resolved as `--theme` flag → LUXE_THEME env →

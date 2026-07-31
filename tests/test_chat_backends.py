@@ -39,6 +39,7 @@ class FakeBackend:
         self.decode_stall_timeout_s = decode_stall_timeout_s
         self.api_key = api_key
         self.unload_calls: list = []
+        self.unloaded_models: list = []
         self.thermal_calls: list = []
 
     def health(self):
@@ -50,6 +51,17 @@ class FakeBackend:
     def unload_all_loaded(self, *, except_for=None):
         self.unload_calls.append(except_for)
         return {}
+
+    # B5: per-model unload + a resident view, so tests can tell "evicted
+    # everything" apart from "freed only what this session loaded".
+    loaded: dict[str, list[str]] = {}
+
+    def loaded_models(self):
+        return list(type(self).loaded.get(self.base_url, []))
+
+    def unload_model(self, model_id):
+        self.unloaded_models.append(model_id)
+        return True
 
     def thermal_guard(self, target_model, **kw):
         self.thermal_calls.append(target_model)
@@ -437,3 +449,76 @@ def test_shipped_chat_yaml_sets_m5_progress_deadline():
     assert m5.stall_timeout_s >= m5.timeout_s
     # local stays on the defaults — nothing to tune on a loopback endpoint.
     assert cfg.backends["local"].stall_timeout_s is None
+
+
+# --- B5: single-residency must not evict other clients' models -------------
+
+
+def test_local_endpoint_still_evicts_everything_on_exit():
+    """Unchanged behaviour where luxe owns the box: the RAM should come back."""
+    sm = slots_mod.SlotManager(_single_cfg())
+    sm.unload_all()
+    assert sm.backend.unload_calls == [None]      # the mass unload
+    assert sm.backend.unloaded_models == []
+
+
+def test_shared_endpoint_never_mass_unloads_on_exit(monkeypatch):
+    """A remote endpoint may be serving another host — evict only our own."""
+    monkeypatch.setenv("OMLX_API_KEY_M5", "k")
+    FakeBackend.served = {M5: ["Champ"]}
+    sm = slots_mod.SlotManager(_multi_cfg())
+    sm.switch_backend("m5")
+    sm._loaded_by_us = {"Champ"}
+    sm.unload_all()
+    assert sm.backend.unload_calls == [], "mass unload reached a shared endpoint"
+    assert sm.backend.unloaded_models == ["Champ"]
+
+
+def test_shared_endpoint_leaves_models_it_did_not_load(monkeypatch):
+    """The failure that motivated B5: someone else's weights are not ours."""
+    monkeypatch.setenv("OMLX_API_KEY_M5", "k")
+    FakeBackend.served = {M5: ["Champ"]}
+    sm = slots_mod.SlotManager(_multi_cfg())
+    sm.switch_backend("m5")
+    sm._loaded_by_us = set()          # we loaded nothing this session
+    sm.unload_all()
+    assert sm.backend.unload_calls == []
+    assert sm.backend.unloaded_models == [], "evicted a model this session never loaded"
+
+
+def test_shared_endpoint_skips_first_use_residency_eviction(monkeypatch):
+    """Residency enforcement fires on the first turn — and used to mass-evict."""
+    monkeypatch.setenv("OMLX_API_KEY_M5", "k")
+    FakeBackend.served = {M5: ["Champ"]}
+    FakeBackend.loaded = {M5: ["SomeoneElsesModel"]}
+    try:
+        sm = slots_mod.SlotManager(_multi_cfg())
+        sm.switch_backend("m5")
+        sm.backend_for("chat")
+        assert sm.backend.unload_calls == [], "first-use eviction hit a shared endpoint"
+    finally:
+        FakeBackend.loaded = {}
+
+
+def test_shared_endpoint_claims_a_model_it_caused_to_load(monkeypatch):
+    """If the target wasn't resident, our request loads it — so it IS ours."""
+    monkeypatch.setenv("OMLX_API_KEY_M5", "k")
+    FakeBackend.served = {M5: ["Champ"]}
+    FakeBackend.loaded = {M5: []}                 # nothing resident yet
+    try:
+        sm = slots_mod.SlotManager(_multi_cfg())
+        sm.switch_backend("m5")
+        target = sm.backend_for("chat").model
+        assert target in sm._loaded_by_us
+    finally:
+        FakeBackend.loaded = {}
+
+
+def test_shipped_chat_yaml_marks_m5_shared_and_local_owned():
+    from pathlib import Path
+
+    from luxe.config import load_config
+
+    cfg = load_config(Path(__file__).parents[1] / "configs" / "chat.yaml")
+    assert cfg.backends["m5"].is_shared() is True
+    assert cfg.backends["local"].is_shared() is False

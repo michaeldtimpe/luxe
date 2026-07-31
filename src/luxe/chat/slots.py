@@ -59,6 +59,10 @@ class SlotManager:
         # too (a session inheriting someone else's resident model would
         # otherwise leave two loaded on a big-RAM host like the m5).
         self._residency_enforced = False
+        # B5: models THIS session caused to load. On a shared endpoint we only
+        # ever unload from this set — evicting a model we didn't load means
+        # pulling weights out from under whoever did.
+        self._loaded_by_us: set[str] = set()
         # Start resident on the chat slot's model — that's the conversational
         # default and the model we keep warm.
         self._resident = self.model_for("chat")
@@ -68,6 +72,19 @@ class SlotManager:
         # omlx_base_url — byte-identical behaviour to the single-backend days.
         self.backend_name = cfg.default_backend_name()
         self.backend = self._build_backend(cfg.backend_entry(self.backend_name))
+
+    def _endpoint_is_shared(self) -> bool:
+        """True when other clients may be using the ACTIVE endpoint (B5).
+
+        Single-residency ("one model in RAM per host") is a policy about a box
+        luxe owns. Applied to a fleet endpoint it evicts other hosts' models
+        mid-turn — observed 2026-07-30, when a 30-second /doctor spot-check
+        pulled the weights out from under a running gitaudit.
+        """
+        try:
+            return self.cfg.backend_entry(self.backend_name).is_shared()
+        except Exception:
+            return False
 
     def _build_backend(self, entry: BackendEntry) -> Backend:
         """Backend from a config entry. The API key is resolved HERE from the
@@ -286,10 +303,22 @@ class SlotManager:
             # anything a prior session/tool left loaded besides our target.
             # The swap path below does this anyway; this covers the
             # target-already-resident short-circuit.
-            try:
-                self.backend.unload_all_loaded(except_for=[target])
-            except Exception:
-                pass
+            # NOT on a shared endpoint (B5): "anything a prior session left
+            # loaded" may be another host's live model.
+            if self._endpoint_is_shared():
+                # We evict nothing here, so instead learn whether OUR first
+                # request is what puts `target` in RAM. If it is already
+                # resident someone else loaded it and it is not ours to free.
+                try:
+                    if target not in self.backend.loaded_models():
+                        self._loaded_by_us.add(target)
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.backend.unload_all_loaded(except_for=[target])
+                except Exception:
+                    pass
             self._residency_enforced = True
         if target == self._resident:
             self.backend.model = target
@@ -312,8 +341,17 @@ class SlotManager:
                 f"(slot: {slot}){whence}"
             )
         t0 = time.monotonic()
-        # Free the doubled RAM before loading the new weights.
-        self.backend.unload_all_loaded(except_for=[target])
+        # Free the doubled RAM before loading the new weights. On a shared
+        # endpoint (B5) free only what WE loaded — the doubled-RAM concern is
+        # ours, the other resident models are someone else's session.
+        if self._endpoint_is_shared():
+            for mid in sorted(self._loaded_by_us - {target}):
+                try:
+                    self.backend.unload_model(mid)
+                except Exception:
+                    pass
+        else:
+            self.backend.unload_all_loaded(except_for=[target])
         self.backend.model = target
         # Confirm the target is resident before the first chat call. The
         # guard's verdict used to be discarded; for the manifest main a False
@@ -329,10 +367,26 @@ class SlotManager:
             self._swap_to(self.model_for(slot), slot)  # depth 1: degrade fires once
             return
         self._resident = target
+        self._loaded_by_us.add(target)
 
     def unload_all(self) -> None:
+        """Release weights at session end.
+
+        On an endpoint luxe owns, that means everything — the box is ours and
+        the RAM should come back. On a SHARED endpoint it means only the models
+        this session caused to load (B5): unloading the rest evicted other
+        hosts' models, which is how a /doctor spot-check killed a running
+        gitaudit on 2026-07-30.
+        """
         try:
-            self.backend.unload_all_loaded()
+            if self._endpoint_is_shared():
+                for mid in sorted(self._loaded_by_us):
+                    try:
+                        self.backend.unload_model(mid)
+                    except Exception:
+                        pass
+            else:
+                self.backend.unload_all_loaded()
         except Exception:
             pass
 
