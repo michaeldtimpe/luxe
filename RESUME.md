@@ -47,7 +47,7 @@ deliberate findings · mypy 102 → 95 · bandit unchanged.
    - **B5**: `luxe chat`'s exit unloads *every* model on the server, not the
      ones it loaded. With m5 a shared fleet endpoint, one host's `/quit`
      evicts another host's weights. Hit live.
-   - **B6 (ROOT-CAUSED 2026-07-31)**: a model unloaded mid-request **hangs
+   - **B6 (ROOT-CAUSED + FIXED 2026-07-31, `1d1724a`)**: a model unloaded mid-request **hangs
      luxe with no timeout** — 23 min on a 600s read timeout, no error, no
      retry, no log line, while the server stayed healthy. Cause:
      `httpx.Timeout` is a **per-read** deadline, not a total-request cap,
@@ -58,10 +58,15 @@ deliberate findings · mypy 102 → 95 · bandit unchanged.
      spins. **The non-stream path is the benchmark/maintain path**, so an
      n=75 sweep can wedge on one fixture forever with no error. Raising
      `timeout_s` does NOT help — your stashed 600→2400 workaround
-     (`stash@{1}`, 2026-07-29) treats the symptom. Fix designed (a
-     *progress* deadline; keepalives don't count as progress) but NOT
-     implemented — backend.py is Tier A. Evidence: `raw_findings.md` § B6
-     + lessons.md.
+     (`stash@{1}`, 2026-07-29) treats the symptom. **Fixed**: a second clock
+     on *progress* rather than bytes (`stall_timeout_s` 1800s before the
+     first token, `decode_stall_timeout_s` 120s once tokens flow;
+     keepalives never count). Non-stream now reads via `stream()`+
+     `iter_raw()` for visibility — **request unchanged**, golden-request
+     snapshot untouched. Field-validated against live oMLX on both paths
+     (30s / 64s aborts where it previously hung unbounded); healthy turns at
+     default bounds unaffected; 8 real-socket tests. Evidence:
+     `raw_findings.md` § B6 + lessons.md.
 
 `gitaudit` itself was abandoned at 1/73 chunks (wedged by B6) — no card came
 from its output. gitkit note: a ~5h deep run has no resume.
