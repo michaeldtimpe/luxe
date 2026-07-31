@@ -41,7 +41,7 @@ import pytest
 from luxe.agents import prompts as prompts_mod
 from luxe.agents.single import run_single
 from luxe.backend import Backend
-from luxe.config import RoleConfig, load_config
+from luxe.config import load_config
 from luxe.tools import fs
 
 
