@@ -110,15 +110,33 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     coding sessions" bug. Slots still pick the MODEL only.
   - **Multi-backend (chat-only carve-out, luxe.sdd):** `configs/chat.yaml`
     `backends:` maps names → BackendEntry(base_url, api_key_env, timeout_s,
-    default). `/backend` lists (health ✓/✗, active), `/backend <name|n>`
+    stall_timeout_s, decode_stall_timeout_s, default). `/backend` lists (health ✓/✗, active), `/backend <name|n>`
     switches (health-checked; drops unresolvable `/model` overrides; never
     unloads the OLD server), `--backend <name>` picks at startup. Keys come
     from env vars only (m5 → OMLX_API_KEY_M5) — never YAML. Absent block ⇒ a
     synthesized "local" entry from `omlx_base_url`; benchmark/maintain read
     `omlx_base_url` only. m5 entry carries `timeout_s: 2400` (dense turns
-    over Tailscale) — the old hardcoded Backend timeout hack is retired.
+    over Tailscale) — the old hardcoded Backend timeout hack is retired —
+    plus `stall_timeout_s: 2400` (see "Progress deadlines" below).
     SessionMeta records backend_name/base_url; assistant transcript records
     are stamped `"backend"`.
+  - **Progress deadlines — a request that stalls must not hang (B6, 2026-07-31).**
+    `httpx.Timeout` is a PER-READ deadline and oMLX emits keepalives on both
+    response paths (`"model":"keepalive"` SSE chunks when streaming; a bare
+    `b' '` every ~10s under chunked encoding when not), so every keepalive
+    resets it and no finite `timeout_s` can bound a request whose generation
+    has stopped — one hung 23 min against a 600s timeout with no error and no
+    log line. `Backend` therefore keeps a SECOND clock on *progress* (content
+    delta / tool-call fragment / usage / finish_reason; keepalives never
+    count): `stall_timeout_s` (1800s) before the first token, where a long
+    prefill is legitimate, and `decode_stall_timeout_s` (120s) once tokens
+    flow, where a gap is unambiguous. A stall raises `httpx.ReadTimeout` so
+    the retry classifier treats it as transient. Overridable per endpoint via
+    `BackendEntry`; unset = inherit Backend's default (the numbers live in
+    `backend.py` alone). **Raising `timeout_s` is not a fix** — it only moves
+    the symptom. This one is NOT chat-only: the non-stream path is the
+    benchmark/maintain path, which could previously wedge on one fixture
+    forever.
   - **`/attach <path> [...]`** stages file contents ONE-SHOT for the next
     turn: 48KB/file + 128KB/turn caps, binary refused (null-byte sniff),
     injected as `<attached_files>` just below `<system_constraints>`, cleared
