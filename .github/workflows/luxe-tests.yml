@@ -1,22 +1,25 @@
 name: luxe-tests
 
+# The repo root IS luxe. This workflow used to carry `paths: luxe/**` and
+# `working-directory: luxe`, left over from when luxe was a subdirectory of a
+# larger monorepo. After the 2026-04-29 extraction that combination meant
+# branch and PR pushes never triggered at all, while tag pushes (GitHub does
+# not evaluate `paths` filters for tags) triggered and died in ~10s on a
+# missing working directory. Do not reintroduce either.
 on:
   push:
-    paths:
-      - 'luxe/**'
-      - '.github/workflows/luxe-tests.yml'
+    branches:
+      - main
   pull_request:
-    paths:
-      - 'luxe/**'
-      - '.github/workflows/luxe-tests.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   pytest:
     name: pytest (Python 3.11)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: luxe
     steps:
       - uses: actions/checkout@v5
 
@@ -28,8 +31,15 @@ jobs:
       - name: Set up Python 3.11
         run: uv python install 3.11
 
-      - name: Sync dev dependencies
-        run: uv sync --extra dev
+      # `chat` is not optional here: luxe's mission is the interactive
+      # fallback front-end, and without textual/prompt_toolkit the whole TUI
+      # module import-skips — 26 tests silently not run.
+      - name: Sync dependencies
+        run: uv sync --extra dev --extra chat
 
+      # No `-x`: stopping at the first failure hides the rest of the suite,
+      # which is the opposite of what a CI report is for. The live_model
+      # tests deselect via the marker filter in pyproject (HS-001) — MLX is
+      # Apple-silicon only and cannot install on this runner.
       - name: Run pytest
-        run: uv run pytest -x --tb=short
+        run: uv run pytest -q --tb=short
