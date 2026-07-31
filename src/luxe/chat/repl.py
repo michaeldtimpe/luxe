@@ -567,6 +567,14 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     _led_def, _led_fn = make_update_ledger_tool(session.session_id)
     extra_tool_defs = [_led_def]
     extra_tool_fns = {"update_ledger": _led_fn}
+    # net_probe (2026-07-31): the bounded connectivity ladder, read-only and
+    # in-process — the model reaches for THIS instead of hand-rolled curl
+    # commands with no timeout (session 5bb630813c21). Rides every chat turn
+    # like the ledger tool; benchmark/maintain never pass extra tools.
+    from luxe.netdiag import make_net_probe_tool
+    _net_def, _net_fn = make_net_probe_tool()
+    extra_tool_defs.append(_net_def)
+    extra_tool_fns["net_probe"] = _net_fn
     if write_on:
         from luxe.tools.shell import (
             make_bash_fn,

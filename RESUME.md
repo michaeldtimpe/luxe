@@ -38,6 +38,26 @@ bullets), tools.sdd (make_bash_fn cancel/on_start seams). Two lessons.md
 entries (completion-only logging; \r paste). Open, deliberate: the 600s
 unrestricted-bash timeout is unchanged.
 
+**Follow-up (same day): `src/luxe/netdiag.py`** — purpose-built network
+diagnostics so the model stops improvising probe ladders with unbounded
+curls. One implementation, three surfaces: `net_probe` tool (rides every
+chat turn via the extra-tool seam; read-only, in-process, every layer
+hard-bounded), `/net [host]` + `luxe net` (deterministic
+DNS→TCP→TLS→HTTP(S) ladder + captive-portal check + DNS-free rung to
+1.1.1.1 + GET /health on every `backends:` entry — live: full ladder + local
+oMLX + m5 over Tailscale in 0.94s), and `luxe net --watch N` (verdict
+TRANSITIONS only, appended to ~/.luxe/netwatch.log). Classified verdicts:
+offline / dns-broken / tcp-blocked / captive-portal / tls-intercepted /
+tls-blocked (the plane signature) / degraded / ok, each with an advice line.
+Pure classifier + probes unit-tested against local synthetic servers
+(silent-TCP handshake timeout, self-signed TLS via in-test cryptography
+cert, portal redirect, hanging resolver bounded by a daemon-thread future —
+getaddrinfo has no timeout parameter). Deliberately NOT in /doctor (its
+offline-purity contract allows exactly one networked line; chat.sdd bullet
+pins this). Suite 1957 passed. Deferred: mount (kappa/alpha SMB)
+reachability needs thread-bounded stat — a dead SMB mount blocks even
+`stat` — left for a follow-up.
+
 ## ⇒ SESSION HANDOFF (2026-07-30, overnight) — hygiene sweep
 
 Unattended bugfix/refactor/optimization pass over the repo, plan in

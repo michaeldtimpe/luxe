@@ -68,6 +68,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/project", "[path]", "show, attach, or switch the project (re-indexes)"),
     ("/index", "[path]", "build the code-search index for here (or <path>)"),
     ("/doctor", "", "preflight this session: endpoint, model, index, disk, git"),
+    ("/net", "[host]", "layered network report: DNS/TCP/TLS/HTTP + backends"),
     ("/diff", "[--full] [--all]", "what this session changed (git-backed)"),
     ("/export", "[path]", "write the conversation to markdown"),
     ("/full", "", "re-show the last answer without the display cap"),
@@ -177,6 +178,7 @@ def _build_handlers() -> dict:
         "/resume": _resume,
         "/clear": _clear,
         "/copy": _copy,
+        "/net": _net,
         "/quit": _quit,
         "/exit": _quit,   # hidden alias (not listed in /help)
         "/q": _quit,      # hidden quick-exit alias
@@ -974,6 +976,31 @@ def _full(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print("[yellow]No answer to expand yet.[/]")
         return CommandResult(handled=True)
     ctx.console.print(build_final_renderable(text, mode="full"))
+    return CommandResult(handled=True)
+
+
+def _net(args, ctx: CommandContext) -> CommandResult:
+    """Deterministic layered network report (no model in the loop): the
+    public DNS→TCP→TLS→HTTP ladder + captive-portal check + every configured
+    `backends:` endpoint. Lives here, NOT in /doctor — doctor's offline-purity
+    contract allows exactly one networked line (chat.sdd). Bounded: every
+    probe carries a hard deadline; worst case is a few seconds."""
+    from luxe import netdiag
+
+    host = args[0] if args else netdiag.ANCHOR_HOST
+    ctx.console.print(f"[dim]probing {host} + configured backends "
+                      "(bounded, a few seconds)…[/]")
+    try:
+        report = netdiag.full_report(ctx.slots.cfg, host=host)
+    except Exception as e:
+        ctx.console.print(f"[red]✗ net report failed: {e}[/]")
+        return CommandResult(handled=True)
+    for ok, line in netdiag.render_lines(report):
+        glyph = "[green]✓[/]" if ok else "[red]✗[/]"
+        ctx.console.print(f"  {glyph} {line}")
+    style = "green" if report.ladder.verdict == netdiag.V_OK else "yellow"
+    ctx.console.print(f"[{style}]verdict: {report.ladder.verdict}[/] — "
+                      f"{report.ladder.advice}")
     return CommandResult(handled=True)
 
 
