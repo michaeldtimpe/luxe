@@ -57,3 +57,11 @@ markers = [
     "live_model: requires the 35B model loaded in-process via mlx_lm (skip by default; run manually after stopping oMLX)",
     "live_backend: requires a running oMLX HTTP server (skip by default in CI)",
 ]
+# The markers above promise "skip by default"; this is what implements it.
+# Without it the live_model tests ran on every invocation — loading real MLX
+# weights (~17% of the suite wall) and hard-erroring on any box without
+# Apple-silicon MLX, i.e. every Linux CI runner. A `-m` passed on the command
+# line overrides this one, so the documented manual invocation
+# (`pytest tests/test_mlx_direct_smoke.py -m live_model`) still works.
+# Pinned by tests/test_marker_policy.py.
+addopts = "-m 'not live_model and not live_backend'"
