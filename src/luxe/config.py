@@ -19,12 +19,36 @@ class BackendEntry(BaseModel):
     when the variable is empty/unset). `timeout_s` exists because remote
     endpoints (e.g. m5 over Tailscale running dense 16384-tok turns, ~25 min)
     need a far larger read timeout than the local default.
+
+    `stall_timeout_s` / `decode_stall_timeout_s` are the PROGRESS deadlines
+    (B6). `timeout_s` above is a per-read deadline and cannot bound a request
+    that oMLX is keeping alive with keepalive bytes while producing nothing;
+    these bound it by time-since-actual-progress instead. Both are `None` by
+    default, meaning "whatever `Backend` defaults to" — the numbers live in
+    `backend.py` alone so a per-endpoint override here can never silently
+    drift from the shipped default.
     """
 
     base_url: str
     api_key_env: str = "OMLX_API_KEY"
     timeout_s: float = 600.0
+    stall_timeout_s: float | None = None
+    decode_stall_timeout_s: float | None = None
     default: bool = False
+
+    def backend_kwargs(self) -> dict[str, float]:
+        """Timeout kwargs for `Backend(...)`, omitting anything unset.
+
+        Omission matters: passing `None` through would override Backend's
+        defaults with nothing. An entry that doesn't mention the progress
+        deadlines must behave exactly as it did before they existed.
+        """
+        kw: dict[str, float] = {"timeout_s": self.timeout_s}
+        if self.stall_timeout_s is not None:
+            kw["stall_timeout_s"] = self.stall_timeout_s
+        if self.decode_stall_timeout_s is not None:
+            kw["decode_stall_timeout_s"] = self.decode_stall_timeout_s
+        return kw
 
 
 class RoleConfig(BaseModel):

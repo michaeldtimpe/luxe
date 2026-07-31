@@ -79,8 +79,8 @@ class SlotManager:
         return Backend(
             base_url=entry.base_url,
             model=self._resident,
-            timeout_s=entry.timeout_s,
             api_key=resolve_api_key(entry.api_key_env),
+            **entry.backend_kwargs(),
         )
 
     # -- resolution ---------------------------------------------------------

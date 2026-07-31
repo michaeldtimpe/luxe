@@ -165,8 +165,9 @@ def _resolve_drill_backend(cfg, backend_name: str | None,
 
     manifest = cfg.host_manifest(host) if host else None
     model = manifest.main if manifest else cfg.model_for_slot("code")
-    backend = Backend(base_url=url, model=model, timeout_s=entry.timeout_s,
-                      api_key=resolve_api_key(entry.api_key_env))
+    backend = Backend(base_url=url, model=model,
+                      api_key=resolve_api_key(entry.api_key_env),
+                      **entry.backend_kwargs())
     return backend, model
 
 
@@ -349,8 +350,9 @@ def run_smoke(cfg, *, base_url: str | None = None,
 
     entry = cfg.backend_entry(cfg.default_backend_name())
     url = base_url or entry.base_url
-    backend = Backend(base_url=url, model=main, timeout_s=entry.timeout_s,
-                      api_key=resolve_api_key(entry.api_key_env))
+    backend = Backend(base_url=url, model=main,
+                      api_key=resolve_api_key(entry.api_key_env),
+                      **entry.backend_kwargs())
 
     # 2. Weights really on disk (local endpoints only — dangling symlinks into
     #    a wiped HF cache list fine and load never).
