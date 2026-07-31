@@ -116,9 +116,9 @@ not. Every keepalive resets luxe's only clock, so the request can never
 time out; `_chat_stream` discards the keepalives silently because their
 `content` is `""`. Reproduced on both paths against a synthetic server and
 against live oMLX. **The non-stream path is the benchmark/maintain path**,
-so an n=75 sweep can wedge on one fixture forever with no error. Fix shape
-is designed but NOT implemented — Tier A behaviour change, awaiting your
-call. For a tool whose mission is
+so an n=75 sweep can wedge on one fixture forever with no error. **Fixed in `1d1724a`** — a progress deadline (keepalives are liveness, not
+progress), validated against live oMLX on both paths with the golden-request
+snapshot untouched. For a tool whose mission is
 being available during an outage, a silent unbounded hang is the worst
 available failure shape, and it needs no mistake to trigger: any concurrent
 chat `/quit`, admin unload, or oMLX restart mid-turn does it.

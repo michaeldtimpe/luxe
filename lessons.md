@@ -60,8 +60,8 @@ Against live oMLX, unloading the model mid-request left streaming alive at
 90s and non-streaming alive at 100s under a 60s read timeout, with the raw
 `b' '` keepalives captured on the wire.
 
-**Fix / takeaway**: **a liveness signal is not a progress signal, and a
-per-read timeout cannot tell them apart.** Any client of a keepalive-capable
+**Fix / takeaway** (shipped `1d1724a`): **a liveness signal is not a
+progress signal, and a per-read timeout cannot tell them apart.** Any client of a keepalive-capable
 server needs a *progress* deadline — time since the last byte that actually
 advanced the work (content, tool-call fragment, usage, finish_reason) —
 because the transport heartbeat is specifically designed to look like

@@ -115,7 +115,7 @@ means touching Tier A files for zero runtime benefit, so it is deferred as a
 batch rather than dribbled through this sweep. The one exception, A6, is
 carded because it is a genuine readability hazard.
 
-### B6 — **ROOT-CAUSED** — oMLX keepalive bytes defeat luxe's only timeout
+### B6 — **FIXED** (`1d1724a`) — oMLX keepalive bytes defeated luxe's only timeout
 `src/luxe/backend.py:167` (`httpx.Timeout(timeout_s, connect=30.0)`),
 `backend.py:217` (non-stream `post`), `backend.py:332-390` (`_chat_stream`).
 
@@ -186,14 +186,29 @@ cheapest way to reach it.
 deadline anywhere in `Backend`. There is no wall-clock cap, no
 stall/progress detector, and no idle-since-last-token check.
 
-**Fix shape** (not implemented — Tier A behaviour change, see REPORT):
-a *progress* deadline rather than a read deadline. Track the last
-**productive** byte (content delta, tool-call fragment, usage, or
-finish_reason) and abort when that exceeds a cap; keepalives explicitly do
-not count as progress. The non-stream path needs to read via
-`client.stream()` + `iter_raw()` to get per-chunk visibility, accumulating
-the body and treating whitespace-only chunks as non-progress. The request
-payload is untouched either way, so the golden-request gate still holds.
+**Fix, shipped in `1d1724a`**: a second clock, on *progress* rather than
+bytes. Progress = content delta, tool-call fragment, usage, or
+finish_reason; keepalives never reset it. Two bounds, because a stalled
+request and a slow one are indistinguishable until the first token —
+`stall_timeout_s` (1800s) before any content, since a long prefill is
+exactly what keepalives exist to cover, and `decode_stall_timeout_s` (120s)
+once tokens are flowing, where a gap is unambiguous. A stall raises
+`httpx.ReadTimeout`, so `classify_failure` retries it as transient — the
+right move when a model was swapped out underneath us.
+
+The non-stream path now reads via `client.stream()` + `iter_raw()` purely
+for visibility. **The request is unchanged**, which is load-bearing here:
+`tests/test_golden_request.py` passes with the snapshot untouched (its
+capture moved to the transport layer so it pins the wire bytes regardless
+of which client method issues them).
+
+Validated against live oMLX with the model unloaded mid-request:
+streaming aborted at 30s (*"26s of keepalive chunks with no first token"*),
+non-streaming at 64s (*"30s of keepalive padding with no response
+content"*) — both previously unbounded. Healthy turns at default bounds are
+unaffected, and 8 real-socket tests in `tests/test_backend_stall.py` pin
+both directions (keepalives must not keep a dead request alive, and must
+not kill a live one).
 
 ### B5 — `luxe chat` exit unloads *every* model on the server, not its own
 `src/luxe/chat/repl.py:391-396` → `slots.unload_all()` →
