@@ -234,7 +234,10 @@ def format_sdd_block(sdd_files: list[SddFile], repo_root: Path) -> str:
     if not sdd_files:
         return ""
     root = repo_root.resolve()
-    lines = ["## Repository contracts (.sdd files)", ""]
+    # Build the bodies first. Emitting the header up-front meant a repo whose
+    # contracts are all aspirational (Must / Must not / Done when) appended a
+    # bare header with nothing under it to every task prompt.
+    body: list[str] = []
     for sf in sdd_files:
         try:
             rel = sf.path.relative_to(root)
@@ -242,14 +245,17 @@ def format_sdd_block(sdd_files: list[SddFile], repo_root: Path) -> str:
             rel = sf.path
         if not (sf.forbids or sf.forbids_create or sf.owns):
             continue
-        lines.append(f"From `{rel}`:")
+        body.append(f"From `{rel}`:")
         for glob in sf.owns:
-            lines.append(f"- Owns: {glob}")
+            body.append(f"- Owns: {glob}")
         for glob in sf.forbids:
-            lines.append(f"- Forbids: {glob}")
+            body.append(f"- Forbids: {glob}")
         for glob in sf.forbids_create:
-            lines.append(f"- Forbids creating: {glob}")
-        lines.append("")
+            body.append(f"- Forbids creating: {glob}")
+        body.append("")
+    if not body:
+        return ""
+    lines = ["## Repository contracts (.sdd files)", "", *body]
     return "\n".join(lines).rstrip() + "\n"
 
 
