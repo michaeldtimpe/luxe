@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, Field
@@ -35,6 +36,26 @@ class BackendEntry(BaseModel):
     stall_timeout_s: float | None = None
     decode_stall_timeout_s: float | None = None
     default: bool = False
+    # Whether this endpoint is shared with other clients (B5). luxe's
+    # single-residency policy evicts every other model on the server — correct
+    # when luxe owns the box, actively harmful on a fleet endpoint like m5,
+    # where it pulls weights out from under another host mid-turn. `None` =
+    # auto-detect: loopback is owned, anything reachable over the network is
+    # assumed shared. Set explicitly to override either way.
+    shared: bool | None = None
+
+    def is_shared(self) -> bool:
+        """True when other clients may be using this endpoint.
+
+        Auto-detection is deliberately conservative: the cost of wrongly
+        assuming *shared* is some extra RAM held on a machine luxe owns; the
+        cost of wrongly assuming *owned* is evicting a colleague's model
+        mid-generation. Default to the cheap mistake.
+        """
+        if self.shared is not None:
+            return self.shared
+        host = urlparse(self.base_url).hostname or ""
+        return host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "")
 
     def backend_kwargs(self) -> dict[str, float]:
         """Timeout kwargs for `Backend(...)`, omitting anything unset.

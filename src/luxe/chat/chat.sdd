@@ -96,7 +96,7 @@ never touches this module.
   registry (never inline in this module)
 - Backend switching is CHAT-ONLY and CONFIG-SOURCED (luxe.sdd carve-out): the
   `backends:` map (BackendEntry = base_url / api_key_env / timeout_s /
-  stall_timeout_s / decode_stall_timeout_s / default; the last two are the B6
+  stall_timeout_s / decode_stall_timeout_s / shared / default; the last two are the B6
   progress deadlines, `None` = inherit Backend's default, forwarded via
   `BackendEntry.backend_kwargs()` which OMITS unset keys rather than passing
   None)
