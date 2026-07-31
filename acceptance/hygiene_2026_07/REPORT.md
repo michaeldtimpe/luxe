@@ -135,6 +135,16 @@ Not fixed — it's a chat behaviour change, outside this sweep's remit.
   landing them unattended in a tool whose mission is *being available* is a
   bad trade. Suggested: `uv lock --upgrade-package aiohttp --upgrade-package
   starlette …` then the full suite + `luxe smoke`.
+- **B5 — `luxe chat` exit unloads every model on the server**, not just the
+  ones it loaded (`repl.py:391` → `unload_all_loaded()` over the server's
+  whole resident set). Hit live: a 30-second `/status` + `/doctor`
+  spot-check evicted the weights out from under the `gitaudit` run going in
+  another process. Recoverable (oMLX reloads on demand) but disruptive — and
+  with m5 as a shared fleet endpoint in `backends:`, one host's `/quit`
+  unloads models another host is using. Behaviour change to chat, so
+  deferred: either restrict the unload to this session's models
+  (`unload_all_loaded(except_for=…)` is the existing seam) or skip it for
+  non-local endpoints.
 - **B1 — `git clone` with no timeout** (`cli.py:37`,
   `gitkit/runner.py:120`). Real hang risk; any cap risks killing a
   legitimately slow clone. Wants a number from you.
