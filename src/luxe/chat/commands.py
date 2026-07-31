@@ -71,6 +71,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/diff", "[--full] [--all]", "what this session changed (git-backed)"),
     ("/export", "[path]", "write the conversation to markdown"),
     ("/full", "", "re-show the last answer without the display cap"),
+    ("/copy", "", "copy the last answer to the system clipboard"),
     ("/ctx", "[small|medium|large|xlarge|huge]", "show or set context window size"),
     ("/write", "", "toggle write tools (default: read-only)"),
     ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
@@ -95,14 +96,47 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
 
 
 def is_command(line: str) -> bool:
-    return line.strip().startswith("/")
+    """A leading `/` is a command UNLESS the first token is not a known
+    command AND looks like a filesystem path (a second `/`, or it exists on
+    disk) — pasting `/Users/me/Downloads` used to error as an unknown
+    command with no way to send it (2026-07-31). A path-free unknown token
+    (`/writ`) still routes to dispatch so typos get the error, not the model."""
+    s = line.strip()
+    if not s.startswith("/"):
+        return False
+    head = s.split()[0].lower()
+    if head in _handlers():
+        return True
+    import os
+    if "/" in head[1:] or os.path.exists(os.path.expanduser(s.split()[0])):
+        return False
+    return True
+
+
+_HANDLERS: "dict | None" = None
+
+
+def _handlers() -> dict:
+    """Command registry, built lazily (the handler fns are defined below)."""
+    global _HANDLERS
+    if _HANDLERS is None:
+        _HANDLERS = _build_handlers()
+    return _HANDLERS
 
 
 def dispatch(line: str, ctx: CommandContext) -> CommandResult:
     parts = line.strip().split()
     cmd = parts[0].lower()
     args = parts[1:]
-    handlers = {
+    fn = _handlers().get(cmd)
+    if fn is None:
+        ctx.console.print(f"[yellow]Unknown command {cmd}. Try /help.[/]")
+        return CommandResult(handled=True)
+    return fn(args, ctx)
+
+
+def _build_handlers() -> dict:
+    return {
         "/help": _help,
         "/model": _model,
         "/backend": _backend,
@@ -142,15 +176,11 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
         "/compare": _compare,
         "/resume": _resume,
         "/clear": _clear,
+        "/copy": _copy,
         "/quit": _quit,
         "/exit": _quit,   # hidden alias (not listed in /help)
         "/q": _quit,      # hidden quick-exit alias
     }
-    fn = handlers.get(cmd)
-    if fn is None:
-        ctx.console.print(f"[yellow]Unknown command {cmd}. Try /help.[/]")
-        return CommandResult(handled=True)
-    return fn(args, ctx)
 
 
 def _help(args, ctx: CommandContext) -> CommandResult:
@@ -944,6 +974,43 @@ def _full(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print("[yellow]No answer to expand yet.[/]")
         return CommandResult(handled=True)
     ctx.console.print(build_final_renderable(text, mode="full"))
+    return CommandResult(handled=True)
+
+
+def _copy(args, ctx: CommandContext) -> CommandResult:
+    """Copy the LAST answer to the system clipboard.
+
+    The TUI runs with mouse capture on and RichLog has no text selection, so
+    terminal-level copy needs a modifier-drag most users don't know
+    (Option/Shift). This is the sanctioned copy-out path alongside `/export`
+    (2026-07-31). Uses the platform clipboard tool — never OSC 52 (the
+    alternate-screen TUI owns the tty)."""
+    import shutil
+    import subprocess
+    import sys
+
+    text = next((t.assistant for t in reversed(ctx.session.turns)
+                 if (t.assistant or "").strip()), "")
+    if not text:
+        ctx.console.print("[yellow]No answer to copy yet.[/]")
+        return CommandResult(handled=True)
+
+    candidates = ([["pbcopy"]] if sys.platform == "darwin"
+                  else [["wl-copy"], ["xclip", "-selection", "clipboard"],
+                        ["xsel", "--clipboard", "--input"]])
+    tool = next((c for c in candidates if shutil.which(c[0])), None)
+    if tool is None:
+        ctx.console.print("[yellow]No clipboard tool found "
+                          "(pbcopy/wl-copy/xclip/xsel). `/export` writes the "
+                          "transcript to a file instead.[/]")
+        return CommandResult(handled=True)
+    try:
+        subprocess.run(tool, input=text.encode("utf-8"), check=True, timeout=10)
+    except Exception as e:
+        ctx.console.print(f"[red]✗ clipboard copy failed: {e}[/]")
+        return CommandResult(handled=True)
+    ctx.console.print(f"[green]✓[/] copied last answer "
+                      f"[dim]({len(text):,} chars)[/]")
     return CommandResult(handled=True)
 
 

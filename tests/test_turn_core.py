@@ -238,6 +238,97 @@ def test_line_run_turn_still_works_headless(_ctx, monkeypatch):
     assert not outcome.interrupted
 
 
+# --- interrupted turns keep observed state (2026-07-31) -----------------------
+
+
+def test_finalize_interrupted_turn_records_observed_tool_calls(_ctx, monkeypatch):
+    """ChatCancelled loses the in-flight AgentResult, but tools that COMPLETED
+    were observed via note_tool — the transcript must not claim tool_calls=0
+    (session 5bb630813c21 turn 11: one bash call ran, record said none)."""
+    import json
+
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("probe the network", session, sm, cfg, frozenset(),
+                             lambda m: "review")
+    prep.note_tool(_TC("bash", command="curl -v https://x"))
+    prep.note_tool(_TC("bash", command="curl -v https://y"))
+
+    outcome = repl.finalize_turn(session, prep, None, interrupted=True,
+                                 message="probe the network",
+                                 started_at=1.0, ended_at=2.0)
+    assert outcome.tool_calls == 2
+    tp = session_store.session_dir(session.session_id) / "transcript.jsonl"
+    records = [json.loads(ln) for ln in tp.read_text().splitlines()]
+    last = [r for r in records if r["kind"] == "assistant"][-1]
+    assert last["interrupted"] is True
+    assert last["tool_calls"] == 2
+
+
+def test_finalize_interrupted_turn_persists_partial_stream(_ctx, monkeypatch):
+    """'partial turn saved' must actually save the streamed prose, not an
+    empty record."""
+    import json
+
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("hi", session, sm, cfg, frozenset(), lambda m: "review")
+
+    repl.finalize_turn(session, prep, None, interrupted=True, message="hi",
+                       started_at=1.0, ended_at=2.0,
+                       partial_text="Half an answer that was")
+    tp = session_store.session_dir(session.session_id) / "transcript.jsonl"
+    records = [json.loads(ln) for ln in tp.read_text().splitlines()]
+    last = [r for r in records if r["kind"] == "assistant"][-1]
+    assert last["text"] == "Half an answer that was"
+    assert session.turns[-1].assistant == "Half an answer that was"
+
+
+def test_finalize_completed_turn_ignores_partial_text(_ctx, monkeypatch):
+    """A completed turn keeps the model's final text even when a stream buffer
+    is passed (it always is by the front-ends)."""
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("hi", session, sm, cfg, frozenset(), lambda m: "review")
+    result = prep.call(lambda tc: None, None, None)
+    outcome = repl.finalize_turn(session, prep, result, interrupted=False,
+                                 message="hi", started_at=1.0, ended_at=2.0,
+                                 partial_text="stream buffer contents")
+    assert outcome.final_text == "the answer"
+    # completed turns keep the AgentResult's own count, not the observed one
+    assert outcome.tool_calls == 3
+
+
+def test_prepare_turn_passes_cancel_and_on_start_to_chat_bash(_ctx, monkeypatch):
+    """Write+dev mode wires the CancelToken and the dispatch callback into the
+    chat bash fn (the cancellable/visible variant)."""
+    from luxe.tools import fs as fs_mod
+    cfg, session, sm = _ctx
+    fs_mod.set_repo_root(session.repo_path)
+    session.write_enabled = True
+    session.unrestricted_bash = True
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+
+    started: list = []
+    tok = repl.CancelToken()
+    bash_fn = None
+
+    # capture what prepare_turn hands run_single
+    def fake_run_single(backend, role_cfg, **kw):
+        nonlocal bash_fn
+        bash_fn = kw["extra_tool_fns"]["bash"]
+        return _FakeResult()
+
+    monkeypatch.setattr(repl, "run_single", fake_run_single)
+    prep = repl.prepare_turn("run it", session, sm, cfg, frozenset(),
+                             lambda m: "review", cancel=tok,
+                             on_tool_start=started.append)
+    prep.call(lambda tc: None, None, None)
+    out, err = bash_fn({"command": "echo wired"})
+    assert err is None and "wired" in out
+    assert started == ["echo wired"]
+
+
 # --- contract-scan cache invalidation ---------------------------------------
 
 

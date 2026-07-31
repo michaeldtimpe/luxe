@@ -74,6 +74,52 @@ def test_is_command():
     assert not cmd.is_command("hello")
 
 
+def test_is_command_pasted_path_is_a_message(tmp_path):
+    """A leading-/ token that isn't a known command and looks like a path must
+    go to the model, not error as an unknown command (2026-07-31: pasting
+    `/Users/me/Downloads` was unsendable)."""
+    # second slash → path-looking, regardless of existence
+    assert not cmd.is_command("/Users/michaeltimpe/Downloads")
+    assert not cmd.is_command("/etc/hosts is where?")
+    # exists on disk (single-segment) → also a message
+    assert not cmd.is_command(str(tmp_path))
+    # unknown AND path-free → still a command (typos get the error, not the model)
+    assert cmd.is_command("/writ")
+    assert cmd.is_command("/frobnicate now")
+    # known commands stay commands even with path-y args
+    assert cmd.is_command("/attach /Users/me/notes.txt")
+    assert cmd.is_command("/export /tmp/out.md")
+
+
+def test_copy_puts_last_answer_on_clipboard(ctx, monkeypatch):
+    from luxe.chat.session import ChatTurn
+
+    ctx.session.add_turn(ChatTurn(user="q", assistant="the copied answer",
+                                  slot="chat", model="m"))
+    calls = {}
+    monkeypatch.setattr(cmd, "_HANDLERS", None)  # rebuild registry (test isolation)
+    import shutil as _shutil
+    import subprocess as _sub
+    monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(argv, input=b"", check=False, timeout=0):
+        calls["argv"] = argv
+        calls["input"] = input
+        return None
+
+    monkeypatch.setattr(_sub, "run", fake_run)
+    res = cmd.dispatch("/copy", ctx)
+    assert res.handled
+    assert calls["input"] == b"the copied answer"
+    assert "copied last answer" in _text(ctx)
+
+
+def test_copy_with_no_answer_yet(ctx):
+    res = cmd.dispatch("/copy", ctx)
+    assert res.handled
+    assert "No answer to copy" in _text(ctx)
+
+
 def test_help(ctx):
     res = cmd.dispatch("/help", ctx)
     assert res.handled and not res.exit

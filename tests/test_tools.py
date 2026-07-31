@@ -550,6 +550,119 @@ class TestUnrestrictedBash:
         assert seen["env"] is None
 
 
+class _Tok:
+    """Duck-typed CancelToken (shell must not import from luxe.chat)."""
+
+    def __init__(self, requested=False):
+        self.requested = requested
+
+
+class TestCancellableBash:
+    """Chat-only cancellable subprocess runner (2026-07-31, session
+    5bb630813c21): with a CancelToken, esc kills the process group within the
+    poll cadence instead of blocking until the 60/600s timeout. The benchmark
+    path (cancel=None) keeps subprocess.run byte-identically."""
+
+    def test_bench_path_never_uses_cancellable_runner(self, tmp_repo: Path, monkeypatch):
+        def boom(*a, **k):
+            raise AssertionError("cancellable runner reached from cancel=None")
+
+        monkeypatch.setattr(shell, "_run_cancellable", boom)
+        out, err = shell._bash({"command": "echo ok"})
+        assert err is None and "ok" in out  # subprocess.run path, unchanged
+
+    def test_cancellable_path_happy_output(self, tmp_repo: Path):
+        fn = shell.make_bash_fn(unrestricted=True, cancel=_Tok())
+        out, err = fn({"command": "echo hello && echo world"})
+        assert err is None
+        assert "hello" in out and "world" in out
+
+    def test_cancellable_path_nonzero_exit(self, tmp_repo: Path):
+        fn = shell.make_bash_fn(unrestricted=True, cancel=_Tok())
+        _out, err = fn({"command": "exit 3"})
+        assert err == "exit code 3"
+
+    def test_pre_set_cancel_kills_immediately(self, tmp_repo: Path):
+        import time as _t
+
+        fn = shell.make_bash_fn(unrestricted=True, cancel=_Tok(requested=True))
+        t0 = _t.monotonic()
+        out, err = fn({"command": "sleep 30"})
+        assert _t.monotonic() - t0 < 5  # nowhere near the 600s budget
+        assert out == "" and err == "cancelled by user"
+
+    def test_cancel_mid_flight_kills_within_poll_cadence(self, tmp_repo: Path):
+        import threading
+        import time as _t
+
+        tok = _Tok()
+        fn = shell.make_bash_fn(unrestricted=True, cancel=tok)
+        threading.Timer(0.5, lambda: setattr(tok, "requested", True)).start()
+        t0 = _t.monotonic()
+        _out, err = fn({"command": "sleep 30"})
+        assert _t.monotonic() - t0 < 5
+        assert err == "cancelled by user"
+
+    def test_cancellable_path_still_enforces_timeout(self, tmp_repo: Path, monkeypatch):
+        monkeypatch.setattr(shell, "_UNRESTRICTED_TIMEOUT", 1)
+        fn = shell.make_bash_fn(unrestricted=True, cancel=_Tok())
+        _out, err = fn({"command": "sleep 30"})
+        assert err == "Command timed out after 1s"
+
+    def test_cancel_kills_whole_process_group(self, tmp_repo: Path):
+        """`sh -c` children must die with the shell — killing only the shell
+        would leave the hung curl running (the original failure mode). The
+        `&& echo` keeps sh as the parent (no exec), so python is a genuine
+        child of the group."""
+        import os
+        import threading
+        import time as _t
+
+        pidfile = tmp_repo / "child.pid"
+        tok = _Tok()
+        fn = shell.make_bash_fn(unrestricted=True, cancel=tok)
+        threading.Timer(1.0, lambda: setattr(tok, "requested", True)).start()
+        cmd = ("python3 -c \"import os,time; "
+               "open('child.pid','w').write(str(os.getpid())); "
+               "time.sleep(30)\" && echo done")
+        _out, err = fn({"command": cmd})
+        assert err == "cancelled by user"
+        pid = int(pidfile.read_text())
+        deadline = _t.monotonic() + 3
+        while _t.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return  # child died with the group
+            _t.sleep(0.1)
+        os.kill(pid, 9)  # don't leak the child on failure
+        raise AssertionError("sh's python child survived the group kill")
+
+    def test_on_start_fires_at_dispatch_with_command(self, tmp_repo: Path):
+        seen: list = []
+        fn = shell.make_bash_fn(unrestricted=True, on_start=seen.append)
+        fn({"command": "echo dispatched"})
+        assert seen == ["echo dispatched"]
+
+    def test_on_start_exception_never_fails_the_tool(self, tmp_repo: Path):
+        def boom(_cmd):
+            raise RuntimeError("ui died")
+
+        fn = shell.make_bash_fn(unrestricted=True, on_start=boom)
+        out, err = fn({"command": "echo ok"})
+        assert err is None and "ok" in out
+
+    def test_restricted_variant_also_cancellable(self, tmp_repo: Path):
+        """Write-mode (allowlisted) chat bash gets the same cancel path."""
+        import time as _t
+
+        fn = shell.make_bash_fn(restricted_hint=True, cancel=_Tok(requested=True))
+        t0 = _t.monotonic()
+        _out, err = fn({"command": "python -c 'import time; time.sleep(30)'"})
+        assert _t.monotonic() - t0 < 5
+        assert err == "cancelled by user"
+
+
 # --- filesystem tools survive unreadable directories -------------------------
 
 

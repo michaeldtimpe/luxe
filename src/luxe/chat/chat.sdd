@@ -138,10 +138,29 @@ never touches this module.
   swallow it) at the next token — not only at tool boundaries. Persists the
   partial transcript and returns to the prompt (no process exit). In the TUI,
   cancel ALSO dismisses any open `PromptScreen` modal so a blocked worker
-  unwinds. Responsiveness is bounded by the backend's token-streaming cadence; an
-  in-flight `bash` subprocess finishes first. The benchmark/maintain path
-  (`on_token=None`, `stream=False`) is unaffected and keeps tool-boundary
+  unwinds. Responsiveness is bounded by the backend's token-streaming cadence.
+  An in-flight chat `bash` subprocess is KILLED (2026-07-31): `prepare_turn`
+  threads the CancelToken into `make_bash_fn(cancel=…)`, whose Popen runner
+  polls the token (~0.2s) and kills the whole process group — previously esc
+  blocked on `subprocess.run` for up to the 600s dev budget (session
+  5bb630813c21: a hung curl made cancel a ten-minute wait). The
+  benchmark/maintain path (`on_token=None`, `stream=False`, module
+  `TOOL_FNS["bash"]`, `cancel=None`) is unaffected and keeps tool-boundary
   cancellation.
+- An interrupted turn persists what actually happened (2026-07-31):
+  `finalize_turn` records the tool calls the front-end OBSERVED
+  (`TurnPrep.observed_calls` — the in-flight AgentResult is lost when
+  ChatCancelled unwinds) and the streamed prose so far (`partial_text`), so
+  "partial turn saved" is true — the record used to be
+  steps=0/tool_calls=0/text="" no matter what ran.
+- Tool dispatch is visible AT DISPATCH, not only on completion (2026-07-31):
+  loop.py logs `tool dispatch …name/args` + `tool done` + per-step
+  `ctx_pressure_est` at DEBUG (chat's debug.log captures them; the bench
+  configures no handler so stdout/events.jsonl are unchanged), `finalize_turn`
+  logs the server-truth ctx% per turn, the line REPL prints a dim `$ <cmd>`
+  line when bash STARTS, and the TUI activity line names the currently
+  executing command via `make_bash_fn(on_start=…)` — a hung command
+  identifies itself instead of hiding behind counts of finished calls.
 - The per-turn pipeline is UI-agnostic: `prepare_turn` (slot/role/tool/ledger
   setup + the verbatim `run_single` closure) and `finalize_turn` (persistence +
   `TurnOutcome`) are shared by BOTH front-ends; `run_single`'s call args are
@@ -246,7 +265,15 @@ never touches this module.
   dump (incl. model origin), `/unload` frees oMLX RAM mid-session (and must call
   `SlotManager.forget_resident()` so the next turn reloads), `/retry` re-runs the
   last user message via `CommandResult.submit` — the only sanctioned way a
-  command turns into a turn; both front-ends act on that field.
+  command turns into a turn; both front-ends act on that field. `/copy`
+  (2026-07-31) puts the LAST answer on the system clipboard via the platform
+  tool (pbcopy/wl-copy/xclip/xsel; never OSC 52 — the alternate-screen TUI
+  owns the tty) — the TUI captures the mouse and RichLog has no selection, so
+  this + `/export` are the sanctioned copy-out paths. A leading-`/` line whose
+  first token is NOT a known command and looks like a filesystem path (second
+  `/`, or exists on disk) is dispatched as a MESSAGE (`commands.is_command`),
+  so a pasted absolute path is sendable; path-free unknown tokens still get
+  the unknown-command error (typo protection).
 - A session can start ANYWHERE (2026-07-30). `chat/project.py` resolves the
   subject once at startup: **git** (cwd is in a work tree → the project is the
   GIT ROOT, so a subdir session sees the whole repo), **dir** (no git but a
@@ -483,11 +510,18 @@ never touches this module.
   buffered on the app and shown as a compact `[pasted N lines]` chip in the
   input, expanded back to the full text at submit (chip deleted by the user →
   text appended instead, never dropped). The transcript echoes the chip form;
-  the model receives the expanded text. Duplicate delivery (2026-07-30): some
-  terminal stacks (tmux/iTerm passthrough) deliver ONE clipboard paste as TWO
-  identical `Paste` events back-to-back; an identical paste arriving inside a
-  0.35s window is dropped. A deliberate re-paste of the same text lands
-  outside the window and inserts normally.
+  the model receives the expanded text. Line endings (2026-07-31): terminals
+  emulate KEYSTROKES on paste, so newlines arrive as `\r` — event text is
+  normalized (`\r\n`/`\r` → `\n`) BEFORE the multi-line check and the dedup
+  compare; detection uses `splitlines()`, never `"\n" in text` (the un-normalized
+  check fell through to the stock first-line-only handler: session
+  5bb630813c21 pasted a full terminal copy as just its "Last login:" banner).
+  Duplicate delivery (2026-07-30): some terminal stacks (tmux/iTerm
+  passthrough) deliver ONE clipboard paste as TWO identical `Paste` events;
+  an identical paste arriving inside a 1.5s window is dropped (widened from
+  0.35s — large pastes parse slower than the old window, which let the
+  duplicate through). A deliberate re-paste of the same text lands outside
+  the window and inserts normally.
 
   Input history (TUI, 2026-07-30): up/down cycle previously submitted lines
   readline-style; the in-progress draft is kept and restored when arrowing

@@ -47,6 +47,25 @@ from luxe.spec import Spec
 from luxe.spec_validator import validate as spec_validate
 from luxe.tools.base import ToolCache, ToolDef, ToolCall, ToolFn, dispatch_tool, validate_args
 
+# DEBUG-only forensics (2026-07-31): dispatch-time tool lines + per-step ctx
+# pressure. In chat sessions these land in ~/.luxe/sessions/<id>/debug.log
+# (chat/debuglog.py attaches a DEBUG handler to the `luxe` package logger); on
+# the benchmark path no handler is configured, so they are dropped without
+# touching stdout — the [token-progress] print and events.jsonl are unchanged.
+import logging as _logging
+
+logger = _logging.getLogger(__name__)
+
+
+def _args_preview(arguments, cap: int = 300) -> str:
+    """Compact single-line rendering of tool args for the debug log."""
+    try:
+        s = json.dumps(arguments, ensure_ascii=False, default=str)
+    except Exception:
+        s = repr(arguments)
+    s = s.replace("\n", "\\n")
+    return s if len(s) <= cap else s[:cap] + "…"
+
 
 @dataclass
 class AgentResult:
@@ -824,6 +843,11 @@ def run_agent(
         pressure = context_pressure(messages, role_cfg.num_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
         result.final_context_pressure = pressure  # instantaneous; matches token-progress
+        # Per-step ctx forensics (chars/4 ESTIMATE — the server-truth number is
+        # logged by chat's finalize_turn; the two legitimately disagree, the
+        # estimate missing tool schemas). debug.log-only; see logger note at top.
+        logger.debug("step=%d ctx_pressure_est=%.1f%% num_ctx=%d msgs=%d",
+                     step + 1, pressure * 100, role_cfg.num_ctx, len(messages))
         if on_progress is not None:
             on_progress(pressure)  # chat-only live ctx% (one source of truth, C2)
 
@@ -1538,10 +1562,20 @@ def run_agent(
                 respond_terminated = True
                 break
 
+            # Dispatch-time visibility: every other record (events.jsonl,
+            # on_tool_event, /verbose) fires on COMPLETION, so a hung tool
+            # was invisible everywhere — including post-hoc (session
+            # 5bb630813c21: 9m40s on a curl with no trace of the command).
+            logger.debug("tool dispatch step=%d name=%s args=%s",
+                         step + 1, tc.name, _args_preview(tc.arguments))
             executed = dispatch_tool(
                 tc.name, tc.arguments, tool_fns,
                 cache=cache, cacheable=cacheable,
             )
+            logger.debug("tool done name=%s wall_s=%.2f error=%s bytes_out=%d",
+                         tc.name, getattr(executed, "wall_s", 0.0) or 0.0,
+                         (getattr(executed, "error", None) or "")[:200] or None,
+                         getattr(executed, "bytes_out", 0) or 0)
             result.tool_calls.append(executed)
             # SpecDD Lever 1: track every successfully-dispatched call (name,
             # args) for the spec validator. Skip error and schema-reject
