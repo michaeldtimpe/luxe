@@ -30,6 +30,65 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-07-31] One unreachable MCP server silently disarmed every healthy one
+
+**What happened**: the mage-hands relays (alpha · kappa · router1) were wired
+into chat via `~/dotfiles/luxe/relays.yaml` and the `luxe-alpha`/`luxe-kappa`/
+`luxe-router`/`luxe-all` wrappers. `luxe-alpha` worked perfectly — 20 tools,
+and the champion chained six of them unprompted off "Is my NAS healthy?".
+`luxe-all` published **zero** tools, while the startup line claimed
+`· MCP: 0 tool(s) from 2 server(s): alpha, kappa` — counting as "up" two
+servers that had produced nothing. Measured: `['alpha']` → 20 tools,
+`['alpha','kappa']` → 0.
+
+**Root cause**: two bugs stacked, both in `mcp/client.py`.
+
+1. **Shared cancel scope.** Every server's connection contexts were entered
+   into ONE `AsyncExitStack` on ONE task (`_async_lifetime`) — a deliberate
+   design, because anyio cancel scopes must be entered and exited on the same
+   task. But a failing transport raises out of its INTERNAL anyio task group
+   as `CancelledError`, which cancels that shared scope. kappa's dead endpoint
+   therefore tore down alpha's already-working `ClientSession`.
+2. **`except Exception` cannot catch it.** `CancelledError` is a
+   **BaseException**. The per-server `except Exception` never ran, so the
+   failing server was never marked down (`is_down=False`, `session=None`) and
+   the exception escaped to unwind everything.
+
+The visible symptoms were both downstream of these: `list_tools failed:`
+with an empty reason (the bare cancellation stringifies to `""`) and
+`'NoneType' object has no attribute 'list_tools'`.
+
+**Fix / takeaway**: isolate the blast radius rather than trying to order the
+failures — one task and one `AsyncExitStack` per server, gathered with
+`return_exceptions=True`. Then three rules that generalize past MCP:
+
+- **At an async boundary that owns a cancel scope, catch `BaseException`.**
+  `except Exception` is a silent no-op against anyio failures.
+- **A resource with no handle is DOWN.** Health must be derived from whether
+  the session exists, never tracked as an independent flag that can disagree
+  with reality — that disagreement is what let the count claim "2 servers".
+- **A failure reason must name the cause.** anyio hides it inside
+  `ExceptionGroup` and surfaces it only when the stack unwinds, so the
+  cancellation-derived reason is provisional and `ready` is deferred until the
+  unwind refines it. "connect failed: Cancelled via cancel scope 0x10bbbb610"
+  is useless during an outage; "connect failed: [SSL:
+  CERTIFICATE_VERIFY_FAILED]" tells the operator exactly what to go fix.
+
+Fallback-kit framing: "an unreachable relay must not stop a chat session from
+starting" was already the rule, but it was written and tested for ONE server.
+The rule is really *availability degrades per-server* — an untested
+generalization is not a guarantee.
+
+Two non-luxe findings fell out of the same session: kappa's relay is up but
+serves a certificate that fails verification, and router1's tailnet node is
+ephemeral so it does not resolve while its relay is down.
+
+**Affected files**: `src/luxe/mcp/client.py` (`_async_lifetime`,
+`_async_server_lifetime`, `_async_connect_one`, `start`, `discover_tools`,
+`_exc_text`), `tests/test_mcp_isolation.py` (6 regression tests driving the
+real `start()` path with only the transport handshake faked),
+`src/luxe/chat/chat.sdd`.
+
 ### [2026-07-31] Completion-only logging makes a hung tool invisible — and cancel can't reach it
 
 **What happened**: chat session `5bb630813c21` turn 11 hung for 9m40s on a

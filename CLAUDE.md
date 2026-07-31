@@ -197,6 +197,20 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     PERSISTED transcript (survives `/resume`) to `<session dir>/transcript.md`;
     `/doctor` preflights endpoint/key/model/weights/disk/index/git/mode/TUI and
     prints the fix for every warning.
+  - **MCP tools attach at STARTUP via `--mcp <name>`** (chat-only, repeatable;
+    servers from `--mcp-config <path>`, default `configs/mcp.yaml`). There is no
+    way to attach a server mid-session — a plain `luxe chat` has no MCP surface
+    no matter what the user tells the model. The mage-hands home-lab relays are
+    wired this way through the private dotfiles repo (`~/dotfiles/luxe/relays.yaml`
+    + the `luxe-alpha`/`luxe-kappa`/`luxe-router`/`luxe-all` wrappers); no
+    hostname or token belongs in THIS repo. Tools are namespaced
+    `mcp__<server>__<tool>`; the server's `gate_tools` patterns follow the
+    `/write` gate, `--mcp-read-only` drops them entirely. **Servers are isolated
+    per connection** (2026-07-31): one task + one `AsyncExitStack` each, so a
+    dead server can neither cancel a healthy one nor be reported "up" with no
+    session. Don't reintroduce a shared exit stack, and catch `BaseException`
+    (not `Exception`) at any anyio connect boundary — see `lessons.md`
+    2026-07-31 and the chat.sdd MCP bullet.
   - **Read-only default ≠ missing capability.** luxe has the full mutation
     surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips
