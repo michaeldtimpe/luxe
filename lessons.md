@@ -122,6 +122,17 @@ workflow.
 `docs/plans/2026-07-30-hygiene-sweep.md` (§ Phase 3, steps c–d), which is
 wrong as written.
 
+**Same class, bitten again 2026-07-31**: the resurrected CI went red on its
+first real run because `tests/test_bfcl_multi_turn.py` probed
+`_bfcl_data_dir()` at import time without the `try/except FileNotFoundError`
+its sibling probe 200 lines earlier already had — a collection ERROR, not a
+skip, on any machine lacking `~/.luxe/bfcl-data`. My pre-push rehearsal
+built a runner-equivalent venv and still missed it, because it isolated
+*packages* but inherited my *$HOME*. The general rehearsal is
+`HOME=$(mktemp -d) uv run --no-sync pytest -q` — and note that a module-level
+`pytestmark = skipif(...)` does NOT protect module-level code, which runs
+during collection before the skip applies.
+
 ### [2026-07-30] A registered pytest marker is documentation, not behaviour
 
 **What happened**: `pyproject.toml` registered `live_model` with the text

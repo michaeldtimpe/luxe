@@ -222,7 +222,14 @@ def test_long_context_extension_fires_in_generation():
 
 import re as _re  # noqa: E402
 
-_HAS_MISS = (_bfcl_data_dir() / "BFCL_v4_multi_turn_miss_func.json").is_file()
+# Guarded exactly like _HAS_DATA above: `_bfcl_data_dir()` RAISES when the
+# vendored data is absent, and this runs at import time — before the
+# module-level `pytestmark` skip can take effect — so an unguarded probe is a
+# collection ERROR, not a skip, on any machine without the data (i.e. CI).
+try:
+    _HAS_MISS = (_bfcl_data_dir() / "BFCL_v4_multi_turn_miss_func.json").is_file()
+except FileNotFoundError:
+    _HAS_MISS = False
 _CALL_RE = _re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\(")
 
 
