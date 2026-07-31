@@ -36,6 +36,7 @@ import json
 import os
 from pathlib import Path
 
+import httpx
 import pytest
 
 from luxe.agents import prompts as prompts_mod
@@ -107,17 +108,21 @@ def _build_fixture_repo(root: Path) -> None:
         p.write_text(body)
 
 
-class _StubResponse:
-    """Minimal stand-in for httpx.Response covering Backend.chat's usage."""
+_CANNED_REPLY = {
+    "choices": [{"message": {"content": "done", "role": "assistant"},
+                 "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+}
 
-    status_code = 200
-    text = ""
 
-    def json(self) -> dict:
-        return {
-            "choices": [{"message": {"content": "done"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-        }
+def _capturing_client(backend, bodies: list) -> httpx.Client:
+    """An httpx.Client whose transport records each request body verbatim."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=_CANNED_REPLY)
+
+    return httpx.Client(base_url=backend.base_url,
+                        transport=httpx.MockTransport(handler))
 
 
 def _capture_request_body(tmp_path: Path, monkeypatch) -> dict:
@@ -132,12 +137,10 @@ def _capture_request_body(tmp_path: Path, monkeypatch) -> dict:
     bodies: list[dict] = []
 
     backend = Backend(base_url="http://127.0.0.1:8000", model="golden-model", api_key="k")
-
-    def fake_post(url: str, json: dict | None = None, **_):  # noqa: A002
-        bodies.append(json)
-        return _StubResponse()
-
-    monkeypatch.setattr(backend._client, "post", fake_post)
+    # Capture at the TRANSPORT, not by stubbing a client method: what matters
+    # is the bytes that would go on the wire, and that must stay pinned however
+    # Backend chooses to issue them (post() vs stream(), buffered vs not).
+    backend._client = _capturing_client(backend, bodies)
 
     # The real champion role — the snapshot pins the benchmark request, so it
     # must reflect the shipped config, not a test-local invention.
@@ -301,10 +304,7 @@ def test_extra_context_default_does_not_perturb_the_body(tmp_path, monkeypatch):
     _build_fixture_repo(repo)
     bodies: list[dict] = []
     backend = Backend(base_url="http://127.0.0.1:8000", model="golden-model", api_key="k")
-    monkeypatch.setattr(
-        backend._client, "post",
-        lambda url, json=None, **_: (bodies.append(json), _StubResponse())[1],
-    )
+    backend._client = _capturing_client(backend, bodies)
     cfg = load_config(Path(__file__).parents[1] / "configs" / "single_64gb.yaml")
     prev_root = fs.get_repo_root()
     fs.set_repo_root(repo)

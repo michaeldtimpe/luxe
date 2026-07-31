@@ -146,10 +146,33 @@ class Backend:
         timeout_s: float = 600.0,
         api_key: str = "",
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+        # --- progress deadlines (B6) ---------------------------------------
+        # `timeout_s` above is httpx's PER-READ deadline: it fires only after
+        # that long with NO byte at all. oMLX deliberately breaks the silence —
+        # it emits keepalives so a long prefill doesn't trip the read timeout
+        # (SSE chunks with `"model": "keepalive"` when streaming; a bare space
+        # byte under chunked encoding when not). Those bytes reset the read
+        # clock, so a request whose generation has STOPPED — model unloaded
+        # mid-flight, worker crash, OOM recovery — used to hang forever with no
+        # error and no log line. Observed at 23 minutes against a 600s timeout.
+        #
+        # So we keep a second clock, on PROGRESS rather than on bytes.
+        # Keepalives are liveness, not progress, and never reset it.
+        #
+        # Two bounds, because a stalled request and a slow one look identical
+        # until the first token: before any content arrives the wait is a
+        # legitimate prefill (which is exactly what keepalives exist to cover),
+        # so it gets a generous budget; once tokens are flowing a gap is
+        # unambiguous and gets a tight one. Raising `timeout_s` cannot
+        # substitute for either — no finite per-read value survives a trickle.
+        stall_timeout_s: float = 1800.0,
+        decode_stall_timeout_s: float = 120.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
+        self.stall_timeout_s = stall_timeout_s
+        self.decode_stall_timeout_s = decode_stall_timeout_s
         self.max_attempts = max_attempts
         # Pick api_key from arg first, then env → ~/.luxe/secrets.env →
         # keychain (luxe.secrets). Many oMLX deployments require auth;
@@ -214,8 +237,20 @@ class Backend:
         while attempt < self.max_attempts:
             t0 = time.monotonic()
             try:
-                resp = self._client.post("/v1/chat/completions", json=body)
-                wall = time.monotonic() - t0
+                # Read via stream() rather than post() purely for visibility:
+                # post() hands back a fully-buffered body, which gives us no
+                # way to notice that the only thing arriving is keepalive
+                # whitespace. The REQUEST is unchanged (same method, URL and
+                # json=body), so the benchmark payload stays byte-identical —
+                # tests/test_golden_request.py pins that.
+                with self._client.stream(
+                    "POST", "/v1/chat/completions", json=body
+                ) as resp:
+                    if resp.status_code >= 400:
+                        resp.read()
+                    else:
+                        raw_body = self._read_body_with_progress(resp)
+                    wall = time.monotonic() - t0
                 if resp.status_code >= 400:
                     decision = classify_failure(
                         status_code=resp.status_code,
@@ -240,7 +275,7 @@ class Backend:
                     attempt += 1
                     continue
                 # Success path
-                data = resp.json()
+                data = json.loads(raw_body)
                 choice = data["choices"][0]
                 msg = choice["message"]
                 usage = data.get("usage", {})
@@ -298,6 +333,40 @@ class Backend:
         reason = last_decision.reason if last_decision else "unknown"
         raise BackendError(f"oMLX retries exhausted after {self.max_attempts} attempts ({reason})")
 
+    def _read_body_with_progress(self, resp) -> bytes:
+        """Accumulate a non-streamed response body, aborting if it stalls.
+
+        oMLX pads a pending non-stream response with a bare space byte every
+        ~10s under `Transfer-Encoding: chunked` (legal leading JSON
+        whitespace, so the eventual parse still works). Those bytes keep
+        httpx's read timeout from ever firing, so we time the gap between
+        bytes that carry actual content instead.
+
+        Raises `httpx.ReadTimeout` on stall so `classify_failure` treats it
+        exactly like any other read timeout — transient, therefore retried,
+        which is the right response when a model was swapped out underneath
+        us and the retry will simply reload it.
+        """
+        if resp.is_stream_consumed:
+            # Already materialised (e.g. httpx.MockTransport in tests, or any
+            # transport that buffers eagerly). Nothing can trickle, so there is
+            # nothing to time — and iter_raw() would raise StreamConsumed.
+            return resp.content
+        buf = bytearray()
+        last_progress = time.monotonic()
+        for raw in resp.iter_raw():
+            now = time.monotonic()
+            if raw.strip():           # anything that isn't padding is progress
+                last_progress = now
+            elif now - last_progress > self.stall_timeout_s:
+                raise httpx.ReadTimeout(
+                    f"progress stall: {now - last_progress:.0f}s of keepalive "
+                    f"padding with no response content "
+                    f"(stall_timeout_s={self.stall_timeout_s:.0f})"
+                )
+            buf += raw
+        return bytes(buf)
+
     def _chat_stream(
         self,
         body: dict[str, Any],
@@ -328,6 +397,10 @@ class Backend:
             usage: dict[str, Any] = {}
             ttft = 0.0
             started = False
+            # Distinct from `started` (which pins ttft to the first *content*
+            # token): tool-call fragments are progress too, and a tool-only
+            # turn must still get the tighter decode bound.
+            decoding = False
             try:
                 with self._client.stream("POST", "/v1/chat/completions", json=body) as resp:
                     if resp.status_code >= 400:
@@ -351,7 +424,21 @@ class Backend:
                         attempt += 1
                         continue
 
+                    last_progress = time.monotonic()
                     for line in resp.iter_lines():
+                        # Checked BEFORE the blank-line skip, and before the
+                        # keepalive chunks are discarded below: those are
+                        # precisely the events that must not count as progress.
+                        now = time.monotonic()
+                        bound = (self.decode_stall_timeout_s if decoding
+                                 else self.stall_timeout_s)
+                        if now - last_progress > bound:
+                            raise httpx.ReadTimeout(
+                                f"progress stall: {now - last_progress:.0f}s of "
+                                f"keepalive chunks with no "
+                                f"{'tokens' if decoding else 'first token'} "
+                                f"(bound={bound:.0f}s)"
+                            )
                         if not line:
                             continue
                         if line.startswith("data: "):
@@ -366,6 +453,7 @@ class Backend:
                         # Usage-only terminal chunk has empty choices.
                         if chunk.get("usage"):
                             usage = chunk["usage"]
+                            last_progress = time.monotonic()
                         for choice in chunk.get("choices", []):
                             delta = choice.get("delta", {}) or {}
                             piece = delta.get("content") or ""
@@ -374,9 +462,13 @@ class Backend:
                                     ttft = time.monotonic() - t0
                                     started = True
                                 text_parts.append(piece)
+                                last_progress = time.monotonic()
+                                decoding = True
                                 if on_token:
                                     on_token(piece)
                             for tc in delta.get("tool_calls") or []:
+                                last_progress = time.monotonic()
+                                decoding = True
                                 idx = tc.get("index", 0)
                                 slot = tool_frags.setdefault(
                                     idx, {"id": "", "name": "", "arguments": ""}
@@ -390,6 +482,7 @@ class Backend:
                                     slot["arguments"] += fn["arguments"]
                             if choice.get("finish_reason"):
                                 finish_reason = choice["finish_reason"]
+                                last_progress = time.monotonic()
 
                 wall = time.monotonic() - t0
                 tc_list: list[ToolCallResponse] = []
