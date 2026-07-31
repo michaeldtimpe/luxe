@@ -88,10 +88,23 @@ this session's RESUME.md + lessons.md edits twice (recovered from
 `stash@{1}` (dense timeout bump) and `stash@{2}` (gitkit cycle) are
 untouched.
 
-**Open, needs your call** (REPORT.md § Deferred): B5 · B6 · 18 transitive
-CVEs (dependency bumps are a stop-and-ask trigger — not landed unattended) ·
-`git clone` with no timeout · 95 remaining mypy errors (annotation debt, not
-defects).
+**All deferred items are now closed** (2026-07-31, REPORT.md § Deferred):
+
+- **B5** `245ed05` — `BackendEntry.shared` (auto-detected: non-loopback =
+  shared) gates all THREE mass-eviction sites, not just the exit one it was
+  filed against. On a shared endpoint luxe frees only models it loaded.
+- **B2** `67cd79f` — pip-audit 18 → **0**. `mcp` pinned `>=1.28.1,<2`: the
+  resolver wanted 2.0.0, a major bump to the relay client API. Lifting that
+  pin needs a real relay drill, not just a green suite.
+- **B1** `1443021` — bounded on PROGRESS (git low-speed stall detection,
+  <1 KB/s for 60s) rather than duration, plus `GIT_TERMINAL_PROMPT=0`; the
+  1800s subprocess cap is only a backstop. Both duplicate clone paths now
+  share `luxe.gitclone`.
+- **B3** `0685009` — mypy 96 → **41** from four root causes. A `ConsoleLike`
+  Protocol was tried and reverted (net +1: `rich.Console.is_terminal` is a
+  read-only property). The rest is narrowing debt, no cluster > 3.
+
+Still worth knowing: `mcp` 2.0.0 is available and deliberately not taken.
 
 ## ⇒ SESSION HANDOFF (2026-07-30, evening) — relay MCP in chat + TUI polish
 

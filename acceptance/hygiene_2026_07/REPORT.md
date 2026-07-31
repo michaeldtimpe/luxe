@@ -164,37 +164,43 @@ Secondary: piped multi-line prompts become **one turn per line** in the line
 REPL. The README's headless pattern only supports single-line messages.
 Not fixed — it's a chat behaviour change, outside this sweep's remit.
 
-## Deferred — needs your call
+## Deferred — all four now addressed (2026-07-31)
 
-- **B2 — 18 transitive CVEs** (aiohttp ×8, starlette ×3, setuptools ×2,
-  cryptography, mcp, msgpack, pydantic-settings, python-multipart). All have
-  fix versions. Dependency bumps are an explicit stop-and-ask trigger, and
-  landing them unattended in a tool whose mission is *being available* is a
-  bad trade. Suggested: `uv lock --upgrade-package aiohttp --upgrade-package
-  starlette …` then the full suite + `luxe smoke`.
-- **B5 — `luxe chat` exit unloads every model on the server**, not just the
-  ones it loaded (`repl.py:391` → `unload_all_loaded()` over the server's
-  whole resident set). Hit live: a 30-second `/status` + `/doctor`
-  spot-check evicted the weights out from under the `gitaudit` run going in
-  another process. Recoverable (oMLX reloads on demand) but disruptive — and
-  with m5 as a shared fleet endpoint in `backends:`, one host's `/quit`
-  unloads models another host is using. Behaviour change to chat, so
-  deferred: either restrict the unload to this session's models
-  (`unload_all_loaded(except_for=…)` is the existing seam) or skip it for
-  non-local endpoints.
-- **B1 — `git clone` with no timeout** (`cli.py:37`,
-  `gitkit/runner.py:120`). Real hang risk; any cap risks killing a
-  legitimately slow clone. Wants a number from you.
-- **B3 — 95 remaining mypy errors.** Read every high-signal class; they are
-  narrowing failures on correctly-guarded code, i.e. annotation debt, not
-  defects. Deferred as a batch rather than dribbled through Tier A files.
-- **B4 — four git-subprocess wrappers in `chat/`.** Looks like duplication;
-  the contracts genuinely differ (status.py's 2s cap is tuned for
-  per-keystroke redraw). Consolidating would flatten deliberate decisions.
+| | was | now |
+|---|---|---|
+| **B5** chat exit evicted every model on the server | open | **fixed** `245ed05` |
+| **B2** 18 transitive CVEs | open | **0 vulns** `67cd79f` |
+| **B1** `git clone` unbounded | needed a number | **fixed** `1443021` |
+| **B3** 95 mypy errors | annotation debt | **96 -> 41** `0685009` |
+| **B6** silent unbounded hang | root-caused | **fixed** `1d1724a`, per-endpoint `2586bf1` |
 
-Refuted leads are recorded in `raw_findings.md` § C so the next sweep
-doesn't re-spend time on them — notably the `encoding=` audit (70 sites,
-refuted empirically) and the plan's own seed 1.8b (refuted twice).
+Notes on the judgement calls, since each departed from the filed shape:
+
+- **B5** was filed as "exit unloads everything", but the same mass-eviction
+  ran at two *more* places — first-use residency enforcement and every weight
+  swap. Fixing only the exit would have left a shared endpoint cleared on the
+  first turn of every session. All three are gated on a new
+  `BackendEntry.shared` (auto-detected: non-loopback = shared). The asymmetry
+  is deliberate: wrongly assuming shared costs RAM we own, wrongly assuming
+  owned evicts a colleague's model mid-generation.
+- **B2** — unconstrained, the resolver took `mcp` to **2.0.0**, a major bump
+  to the client API driving the fleet relays. The CVE is fixed in 1.28.1, so
+  pyproject pins `mcp>=1.28.1,<2`: the fix without the migration. Lifting the
+  pin should be gated on a real relay drill, not a green suite.
+- **B1** — you'd asked for a number; a duration is the wrong knob. A large
+  clone over a slow link isn't a failure. The guard is git's own low-speed
+  stall detection (under 1 KB/s for 60s), with `timeout=1800` only as a
+  backstop, plus `GIT_TERMINAL_PROMPT=0` so a private URL fails instead of
+  blocking on a prompt. The two duplicate clone implementations now share
+  `luxe.gitclone`.
+- **B3** — halved from four root causes, not 55 scattered annotations. A
+  `ConsoleLike` Protocol was tried and **reverted**: net +1 error, because
+  `rich.Console.is_terminal` is a read-only property. The residual 41 are
+  narrowing failures on correctly-guarded code, no cluster larger than 3.
+
+Refuted leads stay in `raw_findings.md` § C so the next sweep doesn't
+re-spend time on them — notably the `encoding=` audit (70 sites, refuted
+empirically) and the plan's own seed 1.8b (refuted twice).
 
 ## If any Tier A file changed — bench validation
 
