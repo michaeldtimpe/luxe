@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -13,6 +12,7 @@ from typing import Callable
 import click
 from rich.console import Console
 
+from luxe import gitclone
 from luxe import spec_resolver
 from luxe.config import load_config
 
@@ -33,13 +33,9 @@ def _resolve_repo(repo: str, *, full_history: bool = False) -> str:
     if repo.startswith(("http://", "https://", "git@")):
         clone_dir = Path(tempfile.mkdtemp(prefix="luxe_"))
         console.print(f"[dim]Cloning {repo} → {clone_dir}[/]")
-        clone_args = (["--filter=blob:none"] if full_history else ["--depth=1"])
-        result = subprocess.run(
-            ["git", "clone", *clone_args, repo, str(clone_dir)],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            console.print(f"[red]Clone failed:[/] {result.stderr}")
+        ok, err = gitclone.clone(repo, clone_dir, full_history=full_history)
+        if not ok:
+            console.print(f"[red]Clone failed:[/] {err}")
             sys.exit(1)
         return str(clone_dir)
 

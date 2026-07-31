@@ -11,9 +11,9 @@ session is left untouched after a `/gitsummary` over a freshly-cloned repo).
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
+from luxe import gitclone
 from luxe.agents import prompts
 
 # Per-run generation ceiling for the FINAL report (safety margin, not the fix —
@@ -111,12 +111,10 @@ def _derive_dest(base_path: str | Path, url: str) -> Path:
 
 def _clone(url: str, dest: Path, *, full_history: bool, console) -> bool:
     """Clone `url` into `dest`. Full history for summaries; shallow otherwise."""
-    args = ["--filter=blob:none"] if full_history else ["--depth=1"]
     console.print(f"[dim]· cloning {url} → {dest}…[/]")
-    proc = subprocess.run(
-        ["git", "clone", *args, url, str(dest)], capture_output=True, text=True)
-    if proc.returncode != 0:
-        console.print(f"[red]clone failed:[/] {(proc.stderr or proc.stdout).strip()}")
+    ok, err = gitclone.clone(url, dest, full_history=full_history)
+    if not ok:
+        console.print(f"[red]clone failed:[/] {err}")
         return False
     return True
 
