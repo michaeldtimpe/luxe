@@ -106,8 +106,19 @@ It wedged because I evicted its weights (B5) with a 30-second `/status` +
 600s read timeout, no `BackendError`, no retry, no log line, process parked
 in `S` on an ESTABLISHED socket. The server was healthy the whole time —
 `luxe smoke` was green in 17s immediately after the kill — so this is a
-client-side hang in `Backend`, not an oMLX outage. Not root-caused; see
-`raw_findings.md` § B6 for the repro sketch. For a tool whose mission is
+client-side hang in `Backend`, not an oMLX outage.
+
+**Now root-caused** (2026-07-31, `raw_findings.md` § B6): `httpx.Timeout` is
+a **per-read** deadline, not a total-request cap, and oMLX emits keepalive
+bytes on both response paths — `"model":"keepalive"` SSE chunks when
+streaming, and a bare space byte every ~10s under chunked encoding when
+not. Every keepalive resets luxe's only clock, so the request can never
+time out; `_chat_stream` discards the keepalives silently because their
+`content` is `""`. Reproduced on both paths against a synthetic server and
+against live oMLX. **The non-stream path is the benchmark/maintain path**,
+so an n=75 sweep can wedge on one fixture forever with no error. Fix shape
+is designed but NOT implemented — Tier A behaviour change, awaiting your
+call. For a tool whose mission is
 being available during an outage, a silent unbounded hang is the worst
 available failure shape, and it needs no mistake to trigger: any concurrent
 chat `/quit`, admin unload, or oMLX restart mid-turn does it.

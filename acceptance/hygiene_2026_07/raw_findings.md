@@ -115,38 +115,85 @@ means touching Tier A files for zero runtime benefit, so it is deferred as a
 batch rather than dribbled through this sweep. The one exception, A6, is
 carded because it is a genuine readability hazard.
 
-### B6 — a model unloaded mid-request hangs luxe past its read timeout
-`src/luxe/backend.py:146,167` — `timeout_s: float = 600.0`,
-`httpx.Timeout(timeout_s, connect=30.0)`.
+### B6 — **ROOT-CAUSED** — oMLX keepalive bytes defeat luxe's only timeout
+`src/luxe/backend.py:167` (`httpx.Timeout(timeout_s, connect=30.0)`),
+`backend.py:217` (non-stream `post`), `backend.py:332-390` (`_chat_stream`).
 
-Observed, not theorised. After B5 evicted the weights out from under the
-`gitaudit` run, its in-flight `/v1/chat/completions` call **never returned
-and never timed out**:
+**Mechanism, in one line: httpx's `timeout` is a per-read deadline, not a
+total-request deadline, and oMLX emits keepalive bytes on both response
+paths — so every keepalive resets luxe's only clock and the request can
+never time out.**
 
-- request issued ~22:26; weights evicted ~22:29; still blocked at 22:49.
-- **23 minutes on a 600s read timeout.** No `BackendError`, no retry, no
-  log line — the process sat in `S` state on an ESTABLISHED socket with
-  2.45s of CPU consumed over 40 minutes of wall.
-- The server was fine throughout: `luxe smoke` run immediately after the
-  kill was green in 17s (endpoint, catalog, main turn, tool call, fallback
-  turn). So this is a **client-side** hang, not an oMLX outage.
+Evidence, all reproduced:
 
-**Not root-caused.** I did not determine why the httpx read timeout failed
-to fire — plausible candidates are the server holding the connection open
-while dribbling nothing, or the timeout not applying to the phase the
-request was parked in. That investigation is the first step, not the fix.
+**1. The timeout config itself is fine.** Synthetic server, `timeout_s=3`:
+a server that accepts and then sends *nothing* raises
+`ReadTimeout` at exactly 3.00s. So this is not a misconfigured client.
 
-Why it matters more than its trigger: luxe's entire mission is being
-available during an outage. A hang with no timeout, no error and no log
-line is the worst failure shape for a fallback tool — `~/.luxe/sessions/`
-gets nothing, so post-hoc diagnosis has nothing to read either. The trigger
-does not require my mistake: any concurrent `luxe chat` `/quit` (B5), any
-admin unload, or an oMLX restart mid-turn reproduces it.
+**2. Any trickle defeats it — on BOTH paths.** Same server, same
+`timeout_s=3`, now emitting one heartbeat per second:
 
-Repro sketch: start a long `luxe gitaudit --deep`, wait for a chunk pass to
-begin, then `curl` the oMLX admin unload (or quit a chat session on the same
-endpoint). Expect a `BackendError` within `timeout_s`; observe an indefinite
-hang.
+| path | result |
+|---|---|
+| streaming (`_chat_stream`) | **still hanging at 20s** |
+| non-streaming (`post`) | **still hanging at 20s** |
+
+**3. oMLX really does trickle.** Field repro against the live server —
+issue a completion, unload the model at t=8s:
+
+*Streaming* — the server interleaves heartbeat chunks whose `model` field
+is literally `"keepalive"`:
+
+```json
+{"id":"chatcmpl-80277421","object":"chat.completion.chunk","created":0,
+ "model":"keepalive",
+ "choices":[{"index":0,"delta":{"role":"assistant","content":""},
+             "finish_reason":null}]}
+```
+
+After the unload, real tokens stop but keepalives continue — chunk #40 at
+58s, last byte at 88s, **still streaming at the 90s deadline**.
+
+*Non-streaming* — `Content-Type: application/json`,
+`Transfer-Encoding: chunked`, and the server sends **a single space byte
+(`b' '`) roughly every 10 seconds** while the request is pending (legal
+leading JSON whitespace, so the eventual parse still succeeds):
+
+```
+[  3.90s] status 200  transfer-encoding=chunked  content-type=application/json
+[  3.90s] raw#1 len=1 b' '
+[  8.01s] --> unload   <-- 200
+[ 13.90s] raw#2 len=1 b' '
+[ 23.92s] raw#3 len=1 b' '
+[ 75.00s] raw chunks seen: 8   done=False        <-- 60s read timeout never fired
+```
+
+**4. luxe silently swallows the keepalives.** `grep -ri keepalive src/luxe`
+returns **nothing** — the concept is unknown to the codebase. In
+`_chat_stream` a keepalive has `delta.content == ""`, which is falsy, so
+`if piece:` skips it; `usage` is absent and `finish_reason` is null, so the
+loop simply spins. No token, no progress, no log line, forever.
+
+**Blast radius is wider than the incident.** The non-stream path is the
+**benchmark/maintain path** — Tier A. A `maintain_suite` or SWE-bench n=75
+run can wedge forever on a single fixture with no error and no timeout.
+And the trigger does not require an unload: *any* state where oMLX stops
+producing while holding the connection (model swap, worker crash, OOM
+recovery) yields the same infinite hang. My B5 eviction was merely the
+cheapest way to reach it.
+
+**Why luxe has no second line of defence**: `timeout_s` is the only
+deadline anywhere in `Backend`. There is no wall-clock cap, no
+stall/progress detector, and no idle-since-last-token check.
+
+**Fix shape** (not implemented — Tier A behaviour change, see REPORT):
+a *progress* deadline rather than a read deadline. Track the last
+**productive** byte (content delta, tool-call fragment, usage, or
+finish_reason) and abort when that exceeds a cap; keepalives explicitly do
+not count as progress. The non-stream path needs to read via
+`client.stream()` + `iter_raw()` to get per-chunk visibility, accumulating
+the body and treating whitespace-only chunks as non-progress. The request
+payload is untouched either way, so the golden-request gate still holds.
 
 ### B5 — `luxe chat` exit unloads *every* model on the server, not its own
 `src/luxe/chat/repl.py:391-396` → `slots.unload_all()` →
