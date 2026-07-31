@@ -4,7 +4,7 @@ Executed overnight, unattended, per the plan in
 `docs/plans/2026-07-30-hygiene-sweep.md`. The user's "perform this work
 overnight without intervention" superseded the plan's § 2.4 checkpoint;
 triage is presented here instead of gating execution. **Nothing has been
-pushed** — all 8 commits are local on `main`, awaiting review.
+pushed** — all commits are local on `main`, awaiting review.
 
 ## Headline
 
@@ -23,7 +23,9 @@ entirely in **things that were silently not running** rather than in defects:
 
 ## Cards
 
-6 carded, **6 landed**. All Tier A changes cleared the byte-identity gate.
+7 carded, **7 landed**. All Tier A changes cleared the byte-identity gate.
+HS-007 was added during the Phase 1.7 manual sweep, after the queue was
+first written.
 
 | ID | Title | Tier | Type | Commit |
 |----|-------|------|------|--------|
@@ -33,9 +35,10 @@ entirely in **things that were silently not running** rather than in defects:
 | HS-004 | Stop shadowing `results` in the bench `finally` | **A** | refactor | `26c7763` |
 | HS-005 | Drop unused `os` import | C | bug | `bb49706` |
 | HS-006 | Split `cached` from the skip-map-io sentinel | C | refactor | `9f18b0b` |
+| HS-007 | Drop dead `_looks_like_url` helper | C | refactor | `74270ac` |
 
 Plus `b0d4eeb` (Phase 0 baselines + golden-request guard) and the docs
-commit carrying this report.
+commits carrying this report. **10 commits total, all local.**
 
 ## The golden-request guard (the durable deliverable)
 
