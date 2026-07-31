@@ -37,7 +37,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -218,7 +218,10 @@ def _luxe_run_dir(run_id: str) -> Path:
 
 
 def _luxe_run_exists(run_id: str) -> bool:
-    return run_id and (_luxe_run_dir(run_id) / "run.json").is_file()
+    # bool(run_id), not run_id: `"" and ...` returns "" — truthy-equivalent for
+    # every current caller, but the declared -> bool was a lie and an
+    # `is False` comparison would have silently missed it.
+    return bool(run_id) and (_luxe_run_dir(run_id) / "run.json").is_file()
 
 
 def _luxe_completed_stages(run_id: str) -> list[str]:
@@ -1027,7 +1030,7 @@ def run_fixture(
     retry_errors: bool = False,
     retry_skipped: bool = False,
     dry_run: bool = False,
-    log: callable = print,
+    log: Callable = print,
     variant: Variant | None = None,
     overlay_dir: Path | None = None,
     per_fixture_timeout_s: float | None = None,

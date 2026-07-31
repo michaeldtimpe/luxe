@@ -38,6 +38,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from luxe.agents import prompts
 from luxe.context import estimate_tokens
@@ -729,7 +730,10 @@ def map_status(target: str | Path, *, head: str) -> MapStatus:
     n_chunks = int(meta.get("n_chunks", 0) or 0)
     budget = int(meta.get("content_budget", 0) or 0)
     mapped_at = int(meta.get("mapped_at", 0) or 0)
-    common = dict(head=b_head, n_chunks=n_chunks,
+    # Explicitly Any-valued: the fields are heterogeneous (str/int/dict), so
+    # an inferred dict[str, object] makes every `MapStatus(**common)` below a
+    # type error while being perfectly correct at runtime.
+    common: dict[str, Any] = dict(head=b_head, n_chunks=n_chunks,
                   content_budget=budget, mapped_at=mapped_at,
                   version=int(meta.get("version", 1) or 1),
                   files=dict(meta.get("files", {}) or {}),
