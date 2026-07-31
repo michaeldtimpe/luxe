@@ -27,10 +27,16 @@ class FakeBackend:
     healthy: dict[str, bool] = {}
     served: dict[str, list[str]] = {}
 
-    def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
+    def __init__(self, base_url="", model="", timeout_s=600.0, api_key="",
+                 stall_timeout_s=1800.0, decode_stall_timeout_s=120.0):
         self.base_url = base_url
         self.model = model
         self.timeout_s = timeout_s
+        # Mirrors the real Backend signature — the progress deadlines (B6) are
+        # forwarded from BackendEntry, so the double has to accept them or the
+        # wiring test can't observe what reached the constructor.
+        self.stall_timeout_s = stall_timeout_s
+        self.decode_stall_timeout_s = decode_stall_timeout_s
         self.api_key = api_key
         self.unload_calls: list = []
         self.thermal_calls: list = []
@@ -360,3 +366,74 @@ def test_status_backend_segment_tracks_switch():
     sm.switch_backend("m5")
     text = _flat(fields(ChatSession(), sm, "", StatusState()))
     assert "backend m5" in text
+
+
+# --- progress deadlines wired from BackendEntry (B6) -----------------------
+
+
+def test_backend_kwargs_omits_unset_progress_deadlines():
+    """An entry that doesn't mention them must behave as before they existed.
+
+    Passing None through would override Backend's own defaults with nothing,
+    so the kwargs dict has to omit the keys entirely.
+    """
+    from luxe.config import BackendEntry
+
+    entry = BackendEntry(base_url="http://x:8000")
+    assert entry.backend_kwargs() == {"timeout_s": 600.0}
+
+
+def test_backend_kwargs_forwards_set_progress_deadlines():
+    from luxe.config import BackendEntry
+
+    entry = BackendEntry(base_url="http://x:8000", timeout_s=2400,
+                         stall_timeout_s=2400, decode_stall_timeout_s=180)
+    assert entry.backend_kwargs() == {
+        "timeout_s": 2400.0, "stall_timeout_s": 2400.0,
+        "decode_stall_timeout_s": 180.0,
+    }
+
+
+def test_entry_without_deadlines_yields_backend_defaults():
+    """The synthesized/local path must inherit backend.py's defaults."""
+    from luxe.backend import Backend
+    from luxe.config import BackendEntry
+
+    entry = BackendEntry(base_url="http://127.0.0.1:8000")
+    b = Backend(base_url=entry.base_url, model="m", api_key="k",
+                **entry.backend_kwargs())
+    default = Backend(base_url=entry.base_url, model="m", api_key="k")
+    assert b.stall_timeout_s == default.stall_timeout_s
+    assert b.decode_stall_timeout_s == default.decode_stall_timeout_s
+
+
+def test_slot_manager_forwards_progress_deadlines(monkeypatch):
+    """End-to-end: chat.yaml value -> BackendEntry -> live Backend attribute."""
+    monkeypatch.setenv("OMLX_API_KEY_M5", "m5-secret")
+    FakeBackend.served = {M5: ["Champ"]}
+    cfg = _multi_cfg()
+    cfg.backends["m5"].stall_timeout_s = 2400.0
+    cfg.backends["m5"].decode_stall_timeout_s = 180.0
+    sm = slots_mod.SlotManager(cfg)
+    sm.switch_backend("m5")
+    assert sm.backend.stall_timeout_s == 2400.0
+    assert sm.backend.decode_stall_timeout_s == 180.0
+
+
+def test_shipped_chat_yaml_sets_m5_progress_deadline():
+    """The m5 entry needs headroom over its ~25min dense prefill.
+
+    Backend's 1800s default leaves only ~300s above the documented 1500s
+    prefill; this pins the deliberate override so a future edit that drops it
+    is a test failure rather than a silent tightening.
+    """
+    from pathlib import Path
+
+    from luxe.config import load_config
+
+    cfg = load_config(Path(__file__).parents[1] / "configs" / "chat.yaml")
+    m5 = cfg.backends["m5"]
+    assert m5.stall_timeout_s == 2400.0
+    assert m5.stall_timeout_s >= m5.timeout_s
+    # local stays on the defaults — nothing to tune on a loopback endpoint.
+    assert cfg.backends["local"].stall_timeout_s is None

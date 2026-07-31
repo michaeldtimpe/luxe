@@ -14,6 +14,13 @@ backends:
     base_url: "http://m5.tailca7308.ts.net:8000"
     api_key_env: OMLX_API_KEY_M5
     timeout_s: 2400
+    # Progress deadline (B6), raised to match timeout_s. A dense 16384-tok
+    # turn here prefills for ~25 min (~1500s) emitting only keepalives, which
+    # leaves just 300s of headroom under Backend's 1800s default — too close
+    # for a link that also absorbs Tailscale hiccups. decode_stall_timeout_s
+    # stays at the default: once tokens flow they arrive sub-second, so 120s
+    # is already ~100x headroom and a longer gap means the turn is dead.
+    stall_timeout_s: 2400
 
 # Chat color palette (D2): the default is 'auto' — it tracks your ACTIVE
 # terminal/YASL statusline theme. Resolved as `--theme` flag → LUXE_THEME env →

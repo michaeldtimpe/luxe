@@ -95,7 +95,11 @@ never touches this module.
   surface and does real work when asked. The string lives in the prompt
   registry (never inline in this module)
 - Backend switching is CHAT-ONLY and CONFIG-SOURCED (luxe.sdd carve-out): the
-  `backends:` map (BackendEntry = base_url / api_key_env / timeout_s / default)
+  `backends:` map (BackendEntry = base_url / api_key_env / timeout_s /
+  stall_timeout_s / decode_stall_timeout_s / default; the last two are the B6
+  progress deadlines, `None` = inherit Backend's default, forwarded via
+  `BackendEntry.backend_kwargs()` which OMITS unset keys rather than passing
+  None)
   is the sole registry of endpoints — `/backend` lists entries (name, base_url,
   health ✓/✗, active marker) and `/backend <name|n>` switches; `--backend
   <name>` picks the startup entry. API keys are NEVER in YAML: `api_key_env`
