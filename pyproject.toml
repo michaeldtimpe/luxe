@@ -13,7 +13,12 @@ dependencies = [
     "pydantic>=2.0",
     "rich>=13.0",
     "click>=8.0",
-    "mcp>=1.0",
+    # >=1.28.1 closes PYSEC-2026-3483. Held below 2.0 deliberately: mcp 2.0
+    # is a major bump touching the client API that src/luxe/mcp/client.py
+    # drives the fleet relays with, and this pin buys the security fix
+    # without that risk. Lifting it is its own change, with a real relay
+    # drill (luxe-alpha / luxe-kappa) as the gate.
+    "mcp>=1.28.1,<2",
     "rank_bm25>=0.2.2",
     "tree-sitter>=0.20",
     "tree-sitter-language-pack>=0.13,<1.0",
