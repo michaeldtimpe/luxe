@@ -80,10 +80,22 @@ class ChatInput(Input):
     silently destructive for multi-line pastes (code, logs). Here:
     single-line pastes insert normally; multi-line pastes buffer on the app
     and show a compact "[pasted N lines]" chip in the input, which is
-    expanded back to the full text at submit time. Some terminal stacks
-    (tmux/iTerm passthrough) deliver ONE clipboard paste as TWO identical
-    Paste events back-to-back, so an identical paste inside the dedup window
-    is dropped — no human re-pastes the same text in a third of a second.
+    expanded back to the full text at submit time.
+
+    Line endings (2026-07-31): terminals emulate KEYSTROKES on paste, so
+    newlines arrive as \r (CR), not \n — `"\n" in text` misclassified every
+    \r-separated paste as single-line and fell through to the stock
+    first-line-only handler (session 5bb630813c21: a full terminal copy
+    pasted as just its "Last login:" banner line). All \r\n / \r are
+    normalized to \n on arrival; multi-line detection uses splitlines().
+
+    Some terminal stacks (tmux/iTerm passthrough) deliver ONE clipboard
+    paste as TWO identical Paste events back-to-back, so an identical paste
+    inside the dedup window is dropped. The window is 1.5s — large pastes
+    can take >0.35s to parse, which let the duplicate through (same
+    session: the banner line landed twice, concatenated). A deliberate
+    re-paste of identical text on the same input line within 1.5s is not a
+    real workflow; re-paste after submit is unaffected.
 
     History: up/down cycle previously submitted lines (readline-style); the
     in-progress draft is kept and restored when you arrow back past the
@@ -92,7 +104,7 @@ class ChatInput(Input):
     the literal "[pasted N lines]" string.
     """
 
-    _PASTE_DEDUP_WINDOW_S = 0.35
+    _PASTE_DEDUP_WINDOW_S = 1.5
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -102,20 +114,33 @@ class ChatInput(Input):
         self._draft = ""
 
     def _on_paste(self, event) -> None:
-        text = getattr(event, "text", "") or ""
+        # Normalize FIRST: paste is emulated typing, so terminals deliver
+        # newlines as \r — the raw text of a multi-line paste often contains
+        # no \n at all (see class docstring).
+        raw = getattr(event, "text", "") or ""
+        text = raw.replace("\r\n", "\n").replace("\r", "\n")
+        event.stop()
+        event.prevent_default()
         now = time.monotonic()
         last_text, last_at = self._last_paste
         self._last_paste = (text, now)
         if text and text == last_text and (now - last_at) < self._PASTE_DEDUP_WINDOW_S:
-            event.stop()
-            event.prevent_default()
             return
-        if "\n" in text:
-            event.stop()
-            event.prevent_default()
+        lines = text.splitlines()
+        if len(lines) > 1:
             self.app.buffer_paste(text)
             return
-        super()._on_paste(event)
+        # Single line (possibly with a trailing newline stripped by
+        # splitlines) — insert at the cursor, replacing any selection,
+        # mirroring the stock Input handler.
+        line = lines[0] if lines else ""
+        if not line:
+            return
+        selection = self.selection
+        if selection.is_empty:
+            self.insert_text_at_cursor(line)
+        else:
+            self.replace(line, *selection)
 
     # -- input history -------------------------------------------------------
     def history_remember(self, line: str) -> None:
@@ -213,6 +238,7 @@ class ChatApp(App):
         self._gen_started = 0.0
         self._ctx_pressure = 0.0          # live context pressure (on_progress)
         self._activity: str | None = None  # gitkit/compare set this for the live line
+        self._running_cmd = ""             # bash command currently executing
         self._timer = None
         self._queue: list[tuple[str, str]] = []  # type-ahead: (display, message) mid-run
         self._paste_chunks: list[tuple[str, str]] = []  # (chip, full text) pending
@@ -436,6 +462,7 @@ class ChatApp(App):
         self._gen_started = time.time()
         self._ctx_pressure = 0.0
         self._activity = None
+        self._running_cmd = ""
 
     def _end_busy(self) -> None:
         self._tick()  # final frame so the last ~100ms isn't clipped
@@ -467,6 +494,12 @@ class ChatApp(App):
             body = f"{self._activity} · {elapsed:4.1f}s · esc to interrupt"
         else:
             tools = " · ".join(f"{n} ({c})" for n, c in self._tool_counts.most_common(4))
+            # The command currently EXECUTING (set at bash dispatch, cleared on
+            # completion) — a hung command names itself instead of the line
+            # showing only counts of finished calls.
+            running = self._running_cmd
+            if running:
+                tools = (tools + " · " if tools else "") + f"$ {running[:80]}"
             body = (f"{elapsed:4.1f}s" + (f" · {tools}" if tools else "")
                     + " · esc to interrupt")
         tail = self._stream[-200:].replace("\n", " ")
@@ -483,14 +516,23 @@ class ChatApp(App):
         single-turn worker AND the goal/plan loops (which call it per round via
         `_tui_run_turn`)."""
         self.call_from_thread(self._reset_gen)
+
+        def _on_tool_start(command: str) -> None:
+            # Worker thread; the UI timer (_tick) reads the plain str — no
+            # marshalling needed for a display-only field.
+            self._running_cmd = command
+
         prep = _repl.prepare_turn(message, self.session, self.slots, self.cfg,
-                                  self.languages, self.infer, plan_mode=plan_mode)
+                                  self.languages, self.infer, plan_mode=plan_mode,
+                                  cancel=self.cancel,
+                                  on_tool_start=_on_tool_start)
         # Reflect the window this turn actually uses (incl. a /ctx override).
         self.status.num_ctx = prep.role_cfg.num_ctx
         self.call_from_thread(
             self.write, Text(f"slot: {prep.slot} · model: {prep.model}", style="dim"))
 
         def _on_event(tc):
+            self._running_cmd = ""  # completed — back to counts-only
             self._tool_counts[getattr(tc, "name", "?")] += 1
             prep.note_tool(tc)
             # Per-tool transcript lines only under /verbose (else the live counts
@@ -517,7 +559,8 @@ class ChatApp(App):
         ended = time.time()
         outcome = _repl.finalize_turn(self.session, prep, result,
                                       interrupted=interrupted, message=message,
-                                      started_at=started, ended_at=ended)
+                                      started_at=started, ended_at=ended,
+                                      partial_text=self._stream)
         self.call_from_thread(self._render_outcome, outcome, prep, interrupted)
         return outcome
 
@@ -575,7 +618,9 @@ class ChatApp(App):
     def _render_outcome(self, outcome, prep, interrupted) -> None:
         log = self._log()
         if interrupted:
-            log.write("[yellow]· interrupted — partial turn saved[/]")
+            ran = outcome.tool_calls
+            note = f" ({ran} tool call{'s' if ran != 1 else ''} completed)" if ran else ""
+            log.write(f"[yellow]· interrupted — partial turn saved{note}[/]")
             return
         result = outcome.result
         if result is None:

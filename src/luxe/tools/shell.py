@@ -81,13 +81,64 @@ def _validate_command(command: str) -> tuple[list[str], str | None]:
 # and builds routinely exceed the 60s allowlisted ceiling.
 _UNRESTRICTED_TIMEOUT = 600
 
+# Cancellation poll cadence for the chat-only Popen runner (_run_cancellable).
+_CANCEL_POLL_S = 0.2
+
+
+def _run_cancellable(command: str, *, cwd, env, timeout: int,
+                     cancel) -> tuple[str, str | None]:
+    """Chat-only subprocess runner that honours a CancelToken mid-flight.
+
+    `subprocess.run` blocks the worker thread until the command exits or the
+    timeout fires — with the 600s dev-mode budget, one hung curl made esc a
+    ten-minute wait (session 5bb630813c21, 2026-07-31). This variant polls a
+    duck-typed token (any object with a truthy `.requested`) and kills the
+    WHOLE process group (start_new_session) so `sh -c` children die with the
+    shell. Only reachable via make_bash_fn(cancel=...); the benchmark path
+    keeps subprocess.run in _bash, byte-identical."""
+    import os
+    import signal as _signal
+    import time as _time
+
+    proc = subprocess.Popen(
+        command, shell=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=cwd, env=env, start_new_session=True,
+    )
+
+    def _kill() -> None:
+        try:
+            os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
+
+    deadline = _time.monotonic() + timeout
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=_CANCEL_POLL_S)
+            output = (stdout or "") + (stderr or "")
+            if len(output) > _MAX_OUTPUT:
+                output = output[:_MAX_OUTPUT] + f"\n... (truncated at {_MAX_OUTPUT} bytes)"
+            return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
+        except subprocess.TimeoutExpired:
+            if getattr(cancel, "requested", False):
+                _kill()
+                proc.communicate()  # reap; pipes already buffered
+                return "", "cancelled by user"
+            if _time.monotonic() >= deadline:
+                _kill()
+                proc.communicate()
+                return "", f"Command timed out after {timeout}s"
+
 
 def _bash(args: dict[str, Any], *, unrestricted: bool = False,
-          env: dict[str, str] | None = None) -> tuple[str, str | None]:
+          env: dict[str, str] | None = None,
+          cancel=None) -> tuple[str, str | None]:
     """`env=None` (the default, and the ONLY value the benchmark path ever
     passes) inherits the process environment unchanged — byte-identical
     behaviour. The chat front-end passes an augmented env (see
-    make_bash_fn)."""
+    make_bash_fn). `cancel=None` (benchmark default) keeps the original
+    subprocess.run path; a token switches to the cancellable Popen runner."""
     repo_root = get_repo_root()
     if repo_root is None:
         return "", "Repo root not set"
@@ -107,6 +158,10 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         if binary not in _ALLOWLIST:
             return "", f"Command '{binary}' not in allowlist. Allowed: {sorted(_ALLOWLIST)}"
         timeout = _TIMEOUT
+
+    if cancel is not None:
+        return _run_cancellable(command, cwd=repo_root, env=env,
+                                timeout=timeout, cancel=cancel)
 
     try:
         proc = subprocess.run(
@@ -147,7 +202,8 @@ def _chat_bash_env() -> dict[str, str]:
     return env
 
 
-def make_bash_fn(*, unrestricted: bool = False, restricted_hint: bool = False) -> ToolFn:
+def make_bash_fn(*, unrestricted: bool = False, restricted_hint: bool = False,
+                 cancel=None, on_start=None) -> ToolFn:
     """Build a CHAT bash tool fn (the benchmark path uses the module-level
     default, which never comes through here). `unrestricted=True` (chat dev
     mode) drops the allowlist + chain/redirect guards. `restricted_hint=True`
@@ -155,11 +211,23 @@ def make_bash_fn(*, unrestricted: bool = False, restricted_hint: bool = False) -
     explanation onto any allowlist/chain/substitution rejection so the output
     reflects WHY it failed and how to fix it — instead of the model silently
     retrying variants. Both variants run with the venv-augmented PATH
-    (_chat_bash_env) so test runs work on every fleet host."""
+    (_chat_bash_env) so test runs work on every fleet host.
+
+    `cancel` (duck-typed: `.requested` bool) makes the subprocess killable
+    mid-flight — esc lands within ~0.2s instead of waiting out the timeout.
+    `on_start` is called with the command string BEFORE execution so the
+    front-end can show what is currently running (a hung command used to be
+    invisible: every existing record fires on completion). Both are chat-only
+    seams; guarded so a broken callback never fails the tool."""
     env = _chat_bash_env()
 
     def _fn(args: dict[str, Any]) -> tuple[str, str | None]:
-        out, err = _bash(args, unrestricted=unrestricted, env=env)
+        if on_start is not None:
+            try:
+                on_start(str(args.get("command", "")))
+            except Exception:
+                pass
+        out, err = _bash(args, unrestricted=unrestricted, env=env, cancel=cancel)
         if err and restricted_hint and any(m in err for m in _FLAG_GATED_MARKERS):
             err = ("restricted shell — enable unrestricted dev mode with /bash "
                    "(or start `luxe chat --dev`). Original: " + err)

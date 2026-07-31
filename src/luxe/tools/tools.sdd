@@ -28,6 +28,17 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   ONLY via `luxe chat` dev mode (opt-in `/bash`, write-mode only), passed through
   `run_single`'s extra-tool seam; it never becomes the default fn
 
+- `make_bash_fn` carries two further CHAT-ONLY seams (2026-07-31):
+  `cancel` (duck-typed `.requested` — never an import from luxe.chat; tools
+  must not depend on the chat layer) switches `_bash` to `_run_cancellable`,
+  a Popen runner that polls the token (~0.2s) and SIGKILLs the process GROUP
+  (start_new_session) so esc doesn't block on a hung command until the
+  60/600s timeout; `on_start` fires with the command string BEFORE execution
+  (dispatch-time visibility) and is exception-guarded — a broken UI callback
+  never fails the tool. `cancel=None` (the bench default, and the only value
+  `TOOL_FNS["bash"]` can produce) keeps the original `subprocess.run` path
+  byte-identically; the timeout is enforced on both paths
+
 ## Must not
 - Bypass `_safe()` path scoping in any new tool
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)

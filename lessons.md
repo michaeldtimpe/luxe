@@ -30,6 +30,60 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-07-31] Completion-only logging makes a hung tool invisible — and cancel can't reach it
+
+**What happened**: chat session `5bb630813c21` turn 11 hung for 9m40s on a
+curl inside dev-mode bash. The user pressed esc — nothing happened until
+they gave up. Post-hoc, the transcript said `steps=0, tool_calls=0` and no
+artifact anywhere recorded what command was running: events.jsonl, the
+`on_tool_event` callback, `/verbose` lines, and the activity-line counts all
+fire when a tool COMPLETES.
+
+**Root cause**: two compounding designs. (1) Every observability surface was
+completion-keyed, so an in-flight tool had no record — the exact case you
+need forensics for (a hang) is the one case that never completes. (2) The
+tool subprocess ran via `subprocess.run(timeout=600)`, which blocks the
+worker thread; the CancelToken is only checked in `on_token`/`on_tool_event`
+callbacks, so cancellation had nothing to interrupt until the tool returned.
+Bonus: on interrupt the in-flight `AgentResult` is lost, and `finalize_turn`
+wrote zeros — "partial turn saved" saved nothing.
+
+**Fix / takeaway**: log at DISPATCH, not only completion (DEBUG lines in
+loop.py land in chat's debug.log; bench has no handler so its artifacts are
+byte-identical); give the front-end a dispatch callback
+(`make_bash_fn(on_start=…)`) so the live UI names the running command; make
+the subprocess killable (`_run_cancellable`: Popen + token poll + group
+SIGKILL, chat-only via `cancel=`); and record what the front-end OBSERVED
+(`TurnPrep.observed_calls` + streamed partial text) when the result object
+is gone. General principle: any record that only exists on completion is
+useless for diagnosing the thing that doesn't complete.
+
+**Affected files**: `src/luxe/agents/loop.py`, `src/luxe/tools/shell.py`,
+`src/luxe/chat/repl.py`, `src/luxe/chat/tui.py`, `chat.sdd`, `tools.sdd`.
+
+### [2026-07-31] Terminal paste delivers \r, not \n — the multi-line check silently truncated pastes
+
+**What happened**: pasting a full terminal copy into the chat TUI inserted
+only `Last login: Fri Jul 31 07:14:34 on ttys005` — the first line of the
+scrollback — and inserted it twice (the same session's turn 12 preserves the
+double-banner verbatim).
+
+**Root cause**: terminals emulate keystrokes on paste, and Enter is CR — so
+a multi-line clipboard arrives as `\r`-separated text. `ChatInput._on_paste`
+detected multi-line pastes with `"\n" in text` (False for `\r`), fell
+through to stock Textual `Input._on_paste`, which keeps
+`event.text.splitlines()[0]` only. The duplicate: some stacks deliver one
+paste as two identical events, and the 0.35s dedup window was shorter than
+the parse time of a large paste, so the second copy landed.
+
+**Fix / takeaway**: normalize `\r\n`/`\r` → `\n` BEFORE any line-shape
+decision and compare dedup on the normalized text; widen the window to 1.5s.
+Never use `"\n" in s` as a multi-line test on data that came off a tty —
+use `len(s.splitlines()) > 1`.
+
+**Affected files**: `src/luxe/chat/tui.py` (`ChatInput`), `chat.sdd`,
+`tests/test_chat_tui.py`.
+
 ### [2026-07-31] A per-read timeout is not a deadline — oMLX keepalives make luxe hang forever
 
 **What happened**: a `luxe gitaudit` run sat on one request for 23 minutes

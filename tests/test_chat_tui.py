@@ -447,10 +447,84 @@ def test_paste_repeat_after_window_not_deduped(tmp_path):
             await pilot.pause()
             app._input.focus()
             app._input._on_paste(events.Paste("dup"))
-            app._input._last_paste = ("dup", app._input._last_paste[1] - 1.0)
+            app._input._last_paste = ("dup", app._input._last_paste[1] - 2.0)
             app._input._on_paste(events.Paste("dup"))
             await pilot.pause()
             assert app._input.value == "dupdup"
+    asyncio.run(scenario())
+
+
+# --- \r line endings (2026-07-31, session 5bb630813c21) ----------------------
+# Terminals emulate keystrokes on paste, so newlines arrive as \r. The old
+# `"\n" in text` check misclassified those as single-line and the stock Input
+# handler kept only splitlines()[0] — a full terminal copy pasted as just its
+# "Last login:" banner line.
+
+
+def test_paste_cr_separated_buffers_as_chip(tmp_path):
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("Last login: Fri\rcurl -v https://x\rHTTP/2 200"))
+            await pilot.pause()
+            assert "[pasted 3 lines]" in app._input.value
+            # buffered text is NORMALIZED — the model sees \n
+            assert app._paste_chunks == [("[pasted 3 lines]",
+                                          "Last login: Fri\ncurl -v https://x\nHTTP/2 200")]
+    asyncio.run(scenario())
+
+
+def test_paste_crlf_separated_buffers_as_chip(tmp_path):
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("a\r\nb"))
+            await pilot.pause()
+            assert "[pasted 2 lines]" in app._input.value
+            assert app._paste_chunks == [("[pasted 2 lines]", "a\nb")]
+    asyncio.run(scenario())
+
+
+def test_paste_single_line_with_trailing_cr_inserts_inline(tmp_path):
+    """One line + trailing newline is still a single-line paste — no chip."""
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("just one line\r"))
+            await pilot.pause()
+            assert app._input.value == "just one line"
+            assert app._paste_chunks == []
+    asyncio.run(scenario())
+
+
+def test_paste_cr_duplicate_delivery_deduped(tmp_path):
+    """The live failure combined BOTH bugs: a \r-separated copy delivered
+    twice landed as the first line concatenated with itself. Normalization +
+    dedup must reduce it to ONE chip."""
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("Last login: Fri\rreal output"))
+            app._input._on_paste(events.Paste("Last login: Fri\rreal output"))
+            await pilot.pause()
+            assert app._input.value == "[pasted 2 lines]"
+            assert len(app._paste_chunks) == 1
     asyncio.run(scenario())
 
 

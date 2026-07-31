@@ -1,5 +1,43 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-07-31) — chat UX fixes from the 5bb630813c21 review
+
+Reviewed the plane-WiFi chat session `5bb630813c21` (user-reported friction
+list) and shipped six fixes. Full suite 1931 passed / 6 skipped; the bench
+path is untouched (golden-request snapshot + new seam tests enforce it).
+
+1. **Paste \r truncation + double paste** (tui.py): terminals deliver paste
+   newlines as `\r`; the `"\n" in text` check fell through to stock Textual's
+   first-line-only handler — a full terminal copy pasted as just the
+   "Last login:" banner, twice (dedup window was narrower than large-paste
+   parse time). Normalize `\r\n`/`\r`→`\n` first; dedup window 0.35s→1.5s.
+2. **Dispatch-time tool visibility** (loop.py + shell.py + both front-ends):
+   every record used to fire on COMPLETION, so a hung command was invisible
+   live and post-hoc. Now: DEBUG `tool dispatch`/`tool done` lines land in
+   debug.log; TUI activity line shows `$ <cmd>` while it runs; line REPL
+   prints a dim `$ cmd` at dispatch (chat-only `make_bash_fn(on_start=…)`).
+3. **Cancellable chat bash** (shell.py `_run_cancellable`): esc now kills the
+   process group within ~0.2s instead of blocking on `subprocess.run` for up
+   to the 600s dev budget. Duck-typed token; `cancel=None` (bench) keeps
+   `subprocess.run` byte-identically.
+4. **Interrupted turns persist reality** (repl.py `finalize_turn`): observed
+   tool calls (`TurnPrep.observed_calls`) + streamed partial prose are
+   recorded; the transcript no longer claims steps=0/tool_calls=0/text="".
+5. **ctx% forensics**: per-step estimate logged at DEBUG in the loop;
+   `finalize_turn` logs server-truth vs estimate per turn. (The status-bar
+   "inconsistency" is real and known: chars/4 estimate live, server truth at
+   turn end — now both are in debug.log.)
+6. **`/copy` + path-`/` fallthrough** (commands.py): `/copy` puts the last
+   answer on the clipboard (pbcopy/wl-copy/xclip/xsel; TUI mouse capture
+   makes terminal selection non-obvious); a leading-`/` token that isn't a
+   known command and looks like a path is sent as a MESSAGE, so pasting
+   `/Users/…` works; `/writ` still errors.
+
+Contracts updated: chat.sdd (cancel/dispatch-visibility/paste/interrupt
+bullets), tools.sdd (make_bash_fn cancel/on_start seams). Two lessons.md
+entries (completion-only logging; \r paste). Open, deliberate: the 600s
+unrestricted-bash timeout is unchanged.
+
 ## ⇒ SESSION HANDOFF (2026-07-30, overnight) — hygiene sweep
 
 Unattended bugfix/refactor/optimization pass over the repo, plan in

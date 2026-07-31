@@ -422,6 +422,12 @@ class TurnPrep:
     fingerprint: set
     test_result: list
     backend_name: str = ""  # multi-backend provenance stamped on the transcript
+    # Completed tool calls observed via note_tool. finalize_turn's fallback for
+    # an interrupted turn — the in-flight AgentResult is lost when ChatCancelled
+    # unwinds, and the transcript used to claim steps=0/tool_calls=0 even when
+    # tools had run (session 5bb630813c21 turn 11: one bash call, 9m40s hang,
+    # nothing recorded).
+    observed_calls: list = field(default_factory=list)
 
 
 # Tools that are useless without a resident index (chat/project.py "none" mode).
@@ -492,11 +498,17 @@ def model_origin_notice(slots, status=None) -> str:
 
 
 def prepare_turn(message, session, slots, cfg, languages, infer,
-                 *, plan_mode: bool = False) -> TurnPrep:
+                 *, plan_mode: bool = False, cancel=None,
+                 on_tool_start=None) -> TurnPrep:
     """UI-agnostic turn setup: slot routing, role/tool/ledger wiring, `/ctx`
     clamp, `extra_context`, user-turn persistence, and the `run_single` closure.
     Shared by both front-ends; the benchmark path is untouched (these tools/args
-    are chat-only). Rendering is the caller's job (see `TurnPrep`)."""
+    are chat-only). Rendering is the caller's job (see `TurnPrep`).
+
+    `cancel` (CancelToken) makes the chat bash subprocess killable mid-flight;
+    `on_tool_start(command)` fires at bash DISPATCH so the front-end can show
+    the currently running command (completion-time events can't — a hung
+    command was invisible). Both optional; None keeps prior behaviour."""
     from luxe.mcp.server import make_read_only_role
     from luxe.state.ledger import make_update_ledger_tool
 
@@ -563,10 +575,12 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         )
         if session.unrestricted_bash:
             extra_tool_defs.append(unrestricted_bash_def())
-            extra_tool_fns["bash"] = make_bash_fn(unrestricted=True)
+            extra_tool_fns["bash"] = make_bash_fn(
+                unrestricted=True, cancel=cancel, on_start=on_tool_start)
         else:
             extra_tool_defs.append(restricted_bash_def())
-            extra_tool_fns["bash"] = make_bash_fn(restricted_hint=True)
+            extra_tool_fns["bash"] = make_bash_fn(
+                restricted_hint=True, cancel=cancel, on_start=on_tool_start)
         # Chat-only: prose files (.txt/.md/…) skip the placeholder honesty
         # guard — "save these notes with '# TODO: implement X'" is content the
         # user dictated, not a code stub (the guard's target). Code extensions
@@ -610,8 +624,10 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     changed_files: list[str] = []
     fingerprint: set = set()
     test_result: list = [None]  # latest (passed, failed, errors) seen this turn (C1)
+    observed_calls: list = []   # completed calls; interrupt-stats fallback
 
     def _note_tool(tc) -> None:
+        observed_calls.append(tc.name)
         args = getattr(tc, "arguments", {}) or {}
         prim = (args.get("path") or args.get("query")
                 or args.get("command") or args.get("pattern"))
@@ -645,15 +661,23 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         ctx_ceiling=ctx_ceiling, changed_files=changed_files,
         fingerprint=fingerprint, test_result=test_result,
         backend_name=getattr(slots, "backend_name", ""),
+        observed_calls=observed_calls,
     )
 
 
 def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
-                  message: str, started_at: float, ended_at: float) -> TurnOutcome:
+                  message: str, started_at: float, ended_at: float,
+                  partial_text: str = "") -> TurnOutcome:
     """UI-agnostic post-turn bookkeeping: record changed files, persist the
     assistant turn, update in-memory history, and build the `TurnOutcome` (incl.
     rendering inputs) the front-end renders from. Files are recorded even on an
-    interrupted turn — those writes already happened on disk."""
+    interrupted turn — those writes already happened on disk.
+
+    On interrupt the in-flight AgentResult is lost (ChatCancelled unwinds
+    run_single), so the transcript record falls back to what the front-end
+    observed: `prep.observed_calls` for the tool-call count and `partial_text`
+    (the streamed prose so far) for the body — "partial turn saved" used to
+    save an empty record (steps=0/tool_calls=0/len=0) no matter what ran."""
     if prep.changed_files:
         ledger_mod.record_files(session.session_id, prep.changed_files)
         # The contract scan is cached per repo root for the session (it walks
@@ -663,20 +687,43 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
             spec_resolver.invalidate_scan_cache(session.repo_path or None)
 
     assistant_text = (result.final_text if result else "") or ""
+    if not assistant_text and interrupted:
+        assistant_text = partial_text or ""
+    observed = len(prep.observed_calls)
+    tool_calls_total = result.tool_calls_total if result else observed
     session_store.append_turn(
         session.session_id, "assistant",
         text=assistant_text, run_id=prep.run_id, interrupted=interrupted,
         steps=(result.steps if result else 0),
-        tool_calls=(result.tool_calls_total if result else 0),
+        tool_calls=tool_calls_total,
         backend=prep.backend_name,
     )
+    # Server-truth turn record for post-hoc ctx forensics — the status bar's
+    # number is otherwise unlogged (the TUI swallows stdout; debug.log is the
+    # only surface that survives the session).
+    if result is not None:
+        num_ctx = prep.role_cfg.num_ctx
+        last_pt = getattr(result, "last_prompt_tokens", 0) or 0
+        ctx_srv = last_pt / num_ctx if last_pt and num_ctx else 0.0
+        logger.debug(
+            "turn done run_id=%s steps=%d tool_calls=%d prompt_tokens=%d "
+            "last_prompt_tokens=%d num_ctx=%d ctx_server=%.1f%% ctx_est=%.1f%% "
+            "peak_est=%.1f%%",
+            prep.run_id, result.steps, result.tool_calls_total,
+            result.prompt_tokens, last_pt, num_ctx,
+            ctx_srv * 100, result.final_context_pressure * 100,
+            result.peak_context_pressure * 100)
+    else:
+        logger.debug("turn interrupted run_id=%s observed_tool_calls=%d "
+                     "partial_chars=%d", prep.run_id, observed,
+                     len(assistant_text))
     session_store.touch(session.session_id)
     session.add_turn(ChatTurn(
         user=message, assistant=assistant_text, slot=prep.slot,
         model=prep.model, run_id=prep.run_id,
     ))
     return TurnOutcome(
-        tool_calls=(result.tool_calls_total if result else 0),
+        tool_calls=tool_calls_total,
         files_changed=len(set(prep.changed_files)),
         final_text=assistant_text,
         interrupted=interrupted,
@@ -704,8 +751,17 @@ def _run_turn(
     status: StatusState | None = None,
     plan_mode: bool = False,
 ) -> TurnOutcome:
+    # Dispatch-time visibility: print the bash command as it STARTS (dim `$`
+    # line) so a hung command is identifiable on screen; the usual tool line
+    # still summarizes it on completion. `cancel` makes that subprocess
+    # killable mid-flight (esc/Ctrl-C lands in ~0.2s, not at the timeout).
+    def _on_tool_start(command: str) -> None:
+        if command:
+            console.print(f"[dim]$ {_escape(command)}[/]", highlight=False)
+
     prep = prepare_turn(message, session, slots, cfg, languages, infer,
-                        plan_mode=plan_mode)
+                        plan_mode=plan_mode, cancel=cancel,
+                        on_tool_start=_on_tool_start)
     role_cfg = prep.role_cfg
     bash_note = " · [red]bash:unrestricted[/]" if prep.dev_bash else ""
     console.print(f"[dim]slot: {prep.slot} · model: {prep.model}{bash_note}[/]")
@@ -725,6 +781,7 @@ def _run_turn(
     interrupted = False
     result = None
     started_at = time.time()
+    stream_parts: list[str] = []  # streamed prose; persisted if interrupted
 
     try:
         if console.is_terminal:
@@ -760,6 +817,7 @@ def _run_turn(
                 def _on_token(delta):
                     # B1: cancel lands mid-generation (cadence-bound, not instant).
                     raise_if_cancelled(cancel)
+                    stream_parts.append(delta)
                     activity.on_token(delta)
                     if session.show_reasoning:
                         reasoner.feed(delta)
@@ -784,6 +842,7 @@ def _run_turn(
 
             def _on_token(delta):
                 raise_if_cancelled(cancel)
+                stream_parts.append(delta)
                 if session.show_reasoning:
                     reasoner.feed(delta)
 
@@ -805,7 +864,9 @@ def _run_turn(
     # UI-agnostic bookkeeping (records changed files even on interrupt, persists
     # the assistant turn, builds the outcome the renderer reads from).
     outcome = finalize_turn(session, prep, result, interrupted=interrupted,
-                            message=message, started_at=started_at, ended_at=ended_at)
+                            message=message, started_at=started_at,
+                            ended_at=ended_at,
+                            partial_text="".join(stream_parts))
 
     if not interrupted and result is not None:
         # WS4 output ladder: full when /verbose full (or /debug), else compact
