@@ -11,7 +11,6 @@ swap path is dead code and the experience is identical to single-champion.
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 
