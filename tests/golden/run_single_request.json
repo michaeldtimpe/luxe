@@ -1,0 +1,363 @@
+{
+  "extra_body": {
+    "num_ctx": 32768
+  },
+  "max_tokens": 8192,
+  "messages": [
+    {
+      "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes \u2014 only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1\u20133 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n",
+      "role": "system"
+    },
+    {
+      "content": "Task type: implement\nGoal: Add a docstring to render().\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report.\n\n## Repository contracts (.sdd files)\n\nFrom `src/src.sdd`:\n- Owns: src/**\n- Forbids: vendor/**\n- Forbids creating: src/legacy_*.py\n",
+      "role": "user"
+    }
+  ],
+  "model": "golden-model",
+  "stream": false,
+  "temperature": 0.0,
+  "tools": [
+    {
+      "function": {
+        "description": "Read a file's contents with line numbers. Use offset/limit for large files.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "limit": {
+              "description": "Max lines to return",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Start line (0-based)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "Relative path from repo root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "List directory contents. Directories end with /.",
+        "name": "list_dir",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Relative path (default: repo root)",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Find files matching a glob pattern (e.g. **/*.py).",
+        "name": "glob",
+        "parameters": {
+          "properties": {
+            "pattern": {
+              "description": "Glob pattern",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Search file contents with regex. Uses ripgrep if available.",
+        "name": "grep",
+        "parameters": {
+          "properties": {
+            "glob": {
+              "description": "File glob filter (e.g. *.py)",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "Regex search pattern",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Find source files most relevant to a natural-language query. Better than grep for queries like 'where is auth middleware applied?'. Returns up to k file paths with relevance scores.",
+        "name": "bm25_search",
+        "parameters": {
+          "properties": {
+            "k": {
+              "description": "Max results (default 10)",
+              "type": "integer"
+            },
+            "query": {
+              "description": "Natural-language query",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Find a class/function/method/struct/etc. by name in the AST symbol index. Exact lookup; faster and more precise than bm25_search for known symbols. Falls back gracefully when the language is not in the symbol index \u2014 pass any name, see the `note` in the response.",
+        "name": "find_symbol",
+        "parameters": {
+          "properties": {
+            "k": {
+              "description": "Max results (default 50)",
+              "type": "integer"
+            },
+            "kind": {
+              "description": "Optional: function/class/method/struct/interface/type/const/var/any",
+              "type": "string"
+            },
+            "language": {
+              "description": "Optional: python/javascript/typescript/rust/go/any",
+              "type": "string"
+            },
+            "name": {
+              "description": "Symbol name (substring match)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Create a new file, or overwrite an existing one, with the given content. Missing parent directories are created automatically \u2014 use this to scaffold brand-new files and whole directory trees, not only to rewrite files that already exist.",
+        "name": "write_file",
+        "parameters": {
+          "properties": {
+            "content": {
+              "description": "File content to write",
+              "type": "string"
+            },
+            "path": {
+              "description": "Relative path from repo root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Replace a string in a file. old_string must be unique unless replace_all is true.",
+        "name": "edit_file",
+        "parameters": {
+          "properties": {
+            "new_string": {
+              "description": "Replacement text",
+              "type": "string"
+            },
+            "old_string": {
+              "description": "Text to find",
+              "type": "string"
+            },
+            "path": {
+              "description": "Relative path from repo root",
+              "type": "string"
+            },
+            "replace_all": {
+              "description": "Replace all occurrences",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path",
+            "old_string",
+            "new_string"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Show git diff. Optionally filter by path or ref, or show staged changes.",
+        "name": "git_diff",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Limit diff to this path",
+              "type": "string"
+            },
+            "ref": {
+              "description": "Diff against this ref (branch/commit)",
+              "type": "string"
+            },
+            "staged": {
+              "description": "Show staged changes only",
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Show recent git commits (oneline format).",
+        "name": "git_log",
+        "parameters": {
+          "properties": {
+            "n": {
+              "description": "Number of commits (default 20)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "Limit to commits touching this path",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Show details of a specific commit.",
+        "name": "git_show",
+        "parameters": {
+          "properties": {
+            "ref": {
+              "description": "Commit hash or ref (default HEAD)",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Run a shell command (allowlisted binaries: cargo, cat, echo, find, git, go, grep, head, ls, make, npm, npx, pip, pytest, python, ruff, sed, sort, tail, tree, wc). Scoped to repo root.",
+        "name": "bash",
+        "parameters": {
+          "properties": {
+            "command": {
+              "description": "Shell command to execute",
+              "type": "string"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Run ruff linter on Python code.",
+        "name": "lint",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Path to analyze (default: repo root)",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Run mypy type checker on Python code.",
+        "name": "typecheck",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Path to analyze (default: repo root)",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Run bandit security scanner on Python code.",
+        "name": "security_scan",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Path to analyze (default: repo root)",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Audit Python dependencies for known vulnerabilities.",
+        "name": "deps_audit",
+        "parameters": {
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}
