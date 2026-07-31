@@ -222,3 +222,125 @@ def test_server_status_empty_when_no_servers():
         assert mgr.server_status() == []
     finally:
         mgr.close()
+
+
+# --- startup isolation ------------------------------------------------------
+#
+# Regression for the multi-server poisoning bug: every server used to share ONE
+# AsyncExitStack in ONE task, so an unreachable server's anyio CancelledError
+# (a BaseException, which `except Exception` misses) escaped and tore down the
+# sessions of servers that had already connected. `--mcp alpha --mcp kappa`
+# returned 0 tools while reporting both servers "up"; alpha alone returned 20.
+
+def _http_server(name: str) -> MCPServerConfig:
+    return MCPServerConfig(name=name, transport="streamable_http",
+                           url=f"https://{name}.example/mcp", timeout_s=1.0)
+
+
+def _manager_with_fake_connect(names: list[str], failures: dict[str, str],
+                               monkeypatch) -> MCPClientManager:
+    """Run the REAL start() path with the transport handshake faked out.
+
+    `failures` maps a server name to how it dies:
+      "cancel"     — bare anyio CancelledError, no cause attached
+      "cancel+grp" — CancelledError, with the real cause raised on stack unwind
+      "error"      — an ordinary Exception
+    """
+    async def _fake_connect_one(self, s, runtime, stack):
+        mode = failures.get(s.name)
+        if mode in ("cancel", "cancel+grp"):
+            if mode == "cancel+grp":
+                async def _raise_on_unwind(*exc_info):
+                    raise ExceptionGroup(
+                        "unhandled errors in a TaskGroup",
+                        [ConnectionError("[SSL: CERTIFICATE_VERIFY_FAILED] nope")],
+                    )
+                stack.push_async_exit(_raise_on_unwind)
+            raise asyncio.CancelledError("Cancelled via cancel scope 0xdeadbeef")
+        if mode == "error":
+            raise RuntimeError("plain boom")
+        runtime.session = _FakeSession(behavior="ok")
+        runtime.tool_names = [f"{s.name}_tool"]
+
+    monkeypatch.setattr(MCPClientManager, "_async_connect_one", _fake_connect_one)
+    cfg = MCPClientConfig(servers=[_http_server(n) for n in names],
+                          circuit_breaker=CircuitBreakerConfig())
+    return MCPClientManager(cfg).start()
+
+
+def test_failing_server_does_not_poison_healthy_sibling(monkeypatch):
+    mgr = _manager_with_fake_connect(["good", "bad"], {"bad": "cancel"}, monkeypatch)
+    try:
+        status = {s["name"]: s for s in mgr.server_status()}
+        assert status["good"]["down"] is False
+        assert mgr._servers["good"].session is not None
+        assert status["bad"]["down"] is True
+    finally:
+        mgr.close()
+
+
+def test_one_healthy_server_survives_several_failures(monkeypatch):
+    mgr = _manager_with_fake_connect(
+        ["bad1", "good", "bad2"],
+        {"bad1": "cancel", "bad2": "error"},
+        monkeypatch,
+    )
+    try:
+        status = {s["name"]: s for s in mgr.server_status()}
+        assert status["good"]["down"] is False
+        assert status["bad1"]["down"] is True and status["bad2"]["down"] is True
+        # The healthy server still lists tools — the whole point of the fix.
+        defs, _fns = mgr.discover_tools()
+        assert [d.name for d in defs] == []  # _FakeSession lists no tools
+        assert mgr._servers["good"].consecutive_failures == 0
+    finally:
+        mgr.close()
+
+
+def test_down_server_is_never_reported_up(monkeypatch):
+    """A session-less runtime must never sit at down=False.
+
+    That combination is what let the status line claim "0 tool(s) from 2
+    server(s)" — counting servers as up that could not produce a single tool.
+    """
+    mgr = _manager_with_fake_connect(["bad"], {"bad": "cancel"}, monkeypatch)
+    try:
+        assert mgr._servers["bad"].session is None
+        assert mgr._servers["bad"].is_down is True
+        up = [s for s in mgr.server_status() if not s["down"]]
+        assert up == []
+    finally:
+        mgr.close()
+
+
+def test_down_reason_names_the_real_cause_not_the_cancellation(monkeypatch):
+    """The cause surfaces on stack unwind; a bare cancel reason gets refined."""
+    mgr = _manager_with_fake_connect(["bad"], {"bad": "cancel+grp"}, monkeypatch)
+    try:
+        reason = mgr._servers["bad"].down_reason
+        assert "CERTIFICATE_VERIFY_FAILED" in reason
+        assert "cancel scope" not in reason
+    finally:
+        mgr.close()
+
+
+def test_discover_tools_skips_session_less_runtime():
+    """Defence in depth: never dereference a None session (AttributeError was
+    the second half of the original failure report)."""
+    mgr = _bootstrap_manager_with_servers({"a": _server("a", behavior="ok")})
+    try:
+        mgr._servers["a"].session = None
+        defs, fns = mgr.discover_tools()
+        assert defs == [] and fns == {}
+        assert mgr._servers["a"].consecutive_failures == 1
+    finally:
+        mgr.close()
+
+
+def test_exc_text_flattens_exception_groups_and_names_bare_cancels():
+    from luxe.mcp.client import _exc_text
+
+    grp = ExceptionGroup("unhandled errors in a TaskGroup",
+                         [ConnectionError("no route to host")])
+    assert _exc_text(grp) == "no route to host"
+    assert _exc_text(asyncio.CancelledError()) == "CancelledError"

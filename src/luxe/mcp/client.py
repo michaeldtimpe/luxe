@@ -21,6 +21,7 @@ import asyncio
 import fnmatch
 import logging
 import threading
+import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -137,6 +138,20 @@ class MCPError(RuntimeError):
     pass
 
 
+def _exc_text(e: BaseException) -> str:
+    """Readable one-liner for an exception, flattening ExceptionGroups.
+
+    anyio surfaces transport failures as `ExceptionGroup('unhandled errors in
+    a TaskGroup', [ConnectError(...)])`, whose `str()` hides the only useful
+    part, and bare `CancelledError` stringifies to "". Both made `down_reason`
+    useless — the reason a relay is down has to name the actual cause.
+    """
+    subs = getattr(e, "exceptions", None)
+    if subs:
+        return "; ".join(_exc_text(x) for x in subs)
+    return str(e) or type(e).__name__
+
+
 class ServerDown(MCPError):
     pass
 
@@ -215,90 +230,168 @@ class MCPClientManager:
             self._started = True
             return self
         self._start_loop()
-        ready = threading.Event()
-        self._lifetime_fut = self._submit(self._async_lifetime(ready))
-        ok = ready.wait(timeout=120.0)
+        readies = {s.name: threading.Event() for s in self.cfg.servers}
+        self._lifetime_fut = self._submit(self._async_lifetime(readies))
+        deadline = time.monotonic() + 120.0
+        for ev in readies.values():
+            ev.wait(timeout=max(0.0, deadline - time.monotonic()))
         exc = (self._lifetime_fut.exception()
                if self._lifetime_fut.done() else None)
-        if not ok or exc is not None:
-            logger.warning("MCP client start failed: %s", exc or "timeout")
-            # Mark all configured servers down so discover_tools returns nothing.
-            for s in self.cfg.servers:
-                if s.name not in self._servers or not self._servers[s.name].is_down:
-                    self._servers[s.name] = _ServerRuntime(
-                        cfg=s, is_down=True,
-                        down_reason=f"startup failed: {exc or 'timeout'}",
-                    )
+        if exc is not None:
+            logger.warning("MCP client start failed: %s", _exc_text(exc))
+        # Honesty sweep: a server that never produced a session is DOWN, full
+        # stop. Without this a runtime could sit at is_down=False with
+        # session=None and be counted "up" while contributing zero tools —
+        # exactly the state that made `--mcp a --mcp b` report
+        # "0 tool(s) from 2 server(s)".
+        for s in self.cfg.servers:
+            runtime = self._servers.get(s.name)
+            if runtime is None:
+                self._servers[s.name] = _ServerRuntime(
+                    cfg=s, is_down=True,
+                    down_reason=f"startup never began: {_exc_text(exc)}"
+                    if exc is not None else "startup never began",
+                )
+            elif runtime.session is None and not runtime.is_down:
+                runtime.is_down = True
+                runtime.down_reason = "startup timed out before the session was ready"
         self._started = True
         return self
 
-    async def _async_lifetime(self, ready: threading.Event) -> None:
-        """Own every server's connection contexts in ONE task for the manager's
-        whole life: enter them, signal `ready`, then park on the shutdown event
-        and unwind on the same task. anyio cancel scopes (streamablehttp_client)
-        require enter/exit on the same task — exiting the stack from a `close()`-
-        submitted coroutine raises `Attempted to exit cancel scope in a
-        different task than it was entered in`."""
+    async def _async_lifetime(self, readies: dict[str, threading.Event]) -> None:
+        """Supervise one INDEPENDENT connection task per server.
+
+        Each server owns its own `AsyncExitStack` inside its own task. That is
+        load-bearing twice over:
+
+        1. anyio cancel scopes (streamablehttp_client, stdio_client) must be
+           entered and exited on the same task, so the stack cannot be unwound
+           from a `close()`-submitted coroutine.
+        2. A failing transport raises out of its INTERNAL anyio task group as
+           `CancelledError` — a BaseException. When every server shared one
+           stack in one task, one unreachable server cancelled that scope and
+           tore down the sessions of servers that had already connected fine:
+           `--mcp alpha --mcp kappa` yielded 0 tools even though alpha alone
+           yielded 20. Per-task stacks contain that blast radius.
+
+        `return_exceptions=True` keeps one task's death from cancelling its
+        siblings through the gather.
+        """
         self._shutdown = asyncio.Event()
         try:
-            async with AsyncExitStack() as stack:
-                await self._async_connect_all(stack)
-                ready.set()
-                await self._shutdown.wait()
+            await asyncio.gather(
+                *(self._async_server_lifetime(s, readies[s.name])
+                  for s in self.cfg.servers),
+                return_exceptions=True,
+            )
         finally:
-            ready.set()  # never leave start() hanging on a connect crash
+            for ev in readies.values():
+                ev.set()  # never leave start() hanging on a connect crash
 
-    async def _async_connect_all(self, stack: AsyncExitStack) -> None:
+    async def _async_server_lifetime(self, s: MCPServerConfig,
+                                     ready: threading.Event) -> None:
+        """Connect ONE server, signal `ready`, then hold it open until shutdown."""
+        runtime = _ServerRuntime(cfg=s)
+        self._servers[s.name] = runtime
+        # A bare CancelledError names no cause ("Cancelled via cancel scope
+        # 0x…"). The REAL error (ConnectError, SSL verify failure, …) only
+        # surfaces as the ExceptionGroup thrown when the stack unwinds, so a
+        # cancellation-derived reason is provisional and the unwind refines it.
+        provisional_reason = False
+        try:
+            async with AsyncExitStack() as stack:
+                try:
+                    await self._async_connect_one(s, runtime, stack)
+                except BaseException as e:  # noqa: BLE001 — see _async_lifetime
+                    # BaseException, not Exception: anyio delivers a transport
+                    # failure as CancelledError, which `except Exception` lets
+                    # through. Letting it escape is what poisoned the siblings.
+                    runtime.session = None
+                    runtime.is_down = True
+                    if isinstance(e, asyncio.CancelledError):
+                        # Stay quiet: the unwind below names the real cause and
+                        # logs it once. Reporting "transport cancelled" here too
+                        # would print every failure twice, the useless line first.
+                        provisional_reason = True
+                        runtime.down_reason = "connect failed: transport cancelled"
+                        logger.debug("MCP server %s cancelled during connect; "
+                                     "awaiting the underlying cause", s.name)
+                    else:
+                        runtime.down_reason = f"connect failed: {_exc_text(e)}"
+                        logger.warning("MCP server %s failed to start: %s",
+                                       s.name, runtime.down_reason)
+                    # Deliberately NOT signalling `ready` here: on the failure
+                    # path the stack still has to unwind, and that unwind is
+                    # what names the real cause. The outer `finally` signals
+                    # once the reason is final, so start() never reads a
+                    # provisional one.
+                    return
+                ready.set()
+                assert self._shutdown is not None
+                await self._shutdown.wait()
+        except BaseException as e:  # noqa: BLE001
+            # Raised while holding the connection open or while unwinding the
+            # stack. During close() this is just teardown noise; before it, the
+            # session is genuinely gone.
+            runtime.session = None
+            if provisional_reason:
+                runtime.down_reason = f"connect failed: {_exc_text(e)}"
+                logger.warning("MCP server %s failed to start: %s",
+                               s.name, _exc_text(e))
+            elif not (self._closed or runtime.is_down):
+                runtime.is_down = True
+                runtime.down_reason = f"connection lost: {_exc_text(e)}"
+                logger.warning("MCP server %s connection lost: %s",
+                               s.name, _exc_text(e))
+            else:
+                # Teardown noise from close() — the exit stacks unwinding is
+                # expected, not a fault worth a warning during shutdown.
+                logger.debug("MCP server %s lifetime ended: %s", s.name, _exc_text(e))
+        finally:
+            ready.set()
+
+    async def _async_connect_one(self, s: MCPServerConfig,
+                                 runtime: _ServerRuntime,
+                                 stack: AsyncExitStack) -> None:
         from mcp import ClientSession
         from mcp.client.stdio import StdioServerParameters, stdio_client
 
-        for s in self.cfg.servers:
-            runtime = _ServerRuntime(cfg=s)
-            self._servers[s.name] = runtime
-            try:
-                if s.transport == "stdio":
-                    if not s.command:
-                        raise MCPError(f"server {s.name}: stdio transport requires `command`")
-                    params = StdioServerParameters(
-                        command=s.command, args=list(s.args), env=dict(s.env) or None,
-                    )
-                    read, write = await stack.enter_async_context(stdio_client(params))
-                elif s.transport == "streamable_http":
-                    if not s.url:
-                        raise MCPError(
-                            f"server {s.name}: streamable_http transport requires `url`")
-                    from mcp.client.streamable_http import streamablehttp_client
-                    headers = dict(s.headers)
-                    if s.api_key_env:
-                        from luxe.secrets import resolve_api_key
-                        token = resolve_api_key(s.api_key_env)
-                        if not token:
-                            raise MCPError(
-                                f"server {s.name}: no credential for "
-                                f"{s.api_key_env} (env → ~/.luxe/secrets.env → "
-                                "keychain)")
-                        headers.setdefault("Authorization", f"Bearer {token}")
-                    read, write, _get_sid = await stack.enter_async_context(
-                        streamablehttp_client(s.url, headers=headers or None)
-                    )
-                else:
+        if s.transport == "stdio":
+            if not s.command:
+                raise MCPError(f"server {s.name}: stdio transport requires `command`")
+            params = StdioServerParameters(
+                command=s.command, args=list(s.args), env=dict(s.env) or None,
+            )
+            read, write = await stack.enter_async_context(stdio_client(params))
+        elif s.transport == "streamable_http":
+            if not s.url:
+                raise MCPError(
+                    f"server {s.name}: streamable_http transport requires `url`")
+            from mcp.client.streamable_http import streamablehttp_client
+            headers = dict(s.headers)
+            if s.api_key_env:
+                from luxe.secrets import resolve_api_key
+                token = resolve_api_key(s.api_key_env)
+                if not token:
                     raise MCPError(
-                        f"server {s.name}: unknown transport `{s.transport}` "
-                        "(stdio | streamable_http)"
-                    )
-                session = await stack.enter_async_context(
-                    ClientSession(read, write)
-                )
-                await session.initialize()
-                listing = await session.list_tools()
-                runtime.session = session
-                runtime.tool_names = [t.name for t in listing.tools]
-                logger.info("MCP server %s up; tools: %s",
-                            s.name, runtime.tool_names)
-            except Exception as e:
-                runtime.is_down = True
-                runtime.down_reason = f"connect failed: {e}"
-                logger.warning("MCP server %s failed to start: %s", s.name, e)
+                        f"server {s.name}: no credential for "
+                        f"{s.api_key_env} (env → ~/.luxe/secrets.env → "
+                        "keychain)")
+                headers.setdefault("Authorization", f"Bearer {token}")
+            read, write, _get_sid = await stack.enter_async_context(
+                streamablehttp_client(s.url, headers=headers or None)
+            )
+        else:
+            raise MCPError(
+                f"server {s.name}: unknown transport `{s.transport}` "
+                "(stdio | streamable_http)"
+            )
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        listing = await session.list_tools()
+        runtime.session = session
+        runtime.tool_names = [t.name for t in listing.tools]
+        logger.info("MCP server %s up; tools: %s", s.name, runtime.tool_names)
 
     def close(self) -> None:
         if self._closed:
@@ -339,6 +432,12 @@ class MCPClientManager:
                 continue
             if only_for_task and runtime.cfg.enabled_for and \
                     only_for_task not in runtime.cfg.enabled_for:
+                continue
+            if runtime.session is None:
+                # Belt-and-braces against the start() sweep ever missing one:
+                # never dereference a session-less runtime (that AttributeError
+                # was the second half of the "0 tools from 2 servers" report).
+                self._record_failure(runtime, "no session")
                 continue
             # We hold the tool listing on _ServerRuntime.tool_names; re-fetch
             # via async call to get full Tool objects with schemas.

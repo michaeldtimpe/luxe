@@ -1,5 +1,46 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-07-31, evening) — MCP multi-server isolation fix
+
+Triggered by "I integrated the mage-hands relay tools but luxe doesn't know
+about them". Two separate things, only one a bug.
+
+**Not a bug — invocation.** The relays attach only via `--mcp <name>` at
+process start; `luxe-chat` never passes it, so a plain chat session has no
+relay surface, and there is no way to attach one mid-session (telling the
+model "I started the relay" does nothing). The wrappers are
+`luxe-alpha`/`luxe-kappa`/`luxe-router`/`luxe-all` (`~/dotfiles/bin/luxe-relay`
++ `~/dotfiles/luxe/relays.yaml`, both in the private dotfiles repo). Verified
+working end-to-end: `luxe-alpha` → 20 tools, and off a bare "Is my NAS
+healthy?" the champion chained `performance` → `storage_health` →
+`disk_usage` → `pending_updates` → `list_containers` → `firewall_status` and
+wrote a correct operator report (46s, 6 tool calls). No prompt work was
+needed — the mage-hands tool descriptions carry their own Tier A/B/C guidance.
+
+**The bug — `luxe-all` published ZERO tools.** `['alpha']` → 20 tools but
+`['alpha','kappa']` → 0, with the startup line claiming `0 tool(s) from 2
+server(s)`. Every server shared one `AsyncExitStack` on one task, so an
+unreachable server's anyio `CancelledError` (a **BaseException**, missed by
+`except Exception`) escaped and tore down the sessions of servers that had
+already connected. Fix: one task + one exit stack per server
+(`_async_server_lifetime`, gathered with `return_exceptions=True`); catch
+`BaseException` at the connect boundary; treat a session-less runtime as DOWN
+in both `start()` and `discover_tools`; and make `down_reason` name the real
+cause (`_exc_text` flattens anyio's `ExceptionGroup`; the provisional
+cancellation reason is refined by the stack unwind before `start()` reads it).
+After: all three combinations publish alpha's 20 tools and both dead relays
+report why. 6 regression tests in `tests/test_mcp_isolation.py` drive the real
+`start()` path with only the transport handshake faked. Suite 1967 passed;
+the one failure (`test_miss_func_49`) is the known `uv sync`-prunes-`mpmath`
+gotcha and fails identically on a clean tree. Contract: chat.sdd MCP bullet;
+lessons.md entry.
+
+**Fleet state found in passing (not luxe bugs).** kappa's relay is up but
+serves a cert that fails verification (`CERTIFICATE_VERIFY_FAILED: unable to
+get local issuer certificate`); router1's tailnet node is ephemeral and does
+not resolve while its relay is down. Only alpha's relay was up. Both are
+mage-hands-side, untouched here.
+
 ## ⇒ SESSION HANDOFF (2026-07-31) — chat UX fixes from the 5bb630813c21 review
 
 Reviewed the plane-WiFi chat session `5bb630813c21` (user-reported friction

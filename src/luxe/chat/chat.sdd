@@ -439,7 +439,21 @@ never touches this module.
   exactly like the native mutation surface; `--mcp-read-only` drops them
   entirely. `only_tools` filters discovery. A server that fails to connect is
   reported loudly and skipped — an unreachable relay must not stop a chat
-  session from starting (fallback-kit rule). `/tools` lists the MCP surface
+  session from starting (fallback-kit rule), and (2026-07-31) must not stop
+  any OTHER server either: connections are ISOLATED PER SERVER, one asyncio
+  task and one `AsyncExitStack` each (`mcp/client.py`
+  `_async_server_lifetime`). Sharing one stack across servers meant a failing
+  transport's anyio `CancelledError` — a BaseException that `except Exception`
+  does not catch — escaped and tore down sessions that had already connected:
+  `--mcp alpha --mcp kappa` published 0 tools while alpha alone published 20.
+  Two invariants follow. (a) The connect boundary catches `BaseException`, not
+  `Exception`. (b) A server with no session is DOWN — `start()` sweeps for that
+  state and `discover_tools` skips it, so the startup count can never report a
+  server "up" that contributed no tools. `down_reason` must name the real cause
+  (`_exc_text` flattens anyio's `ExceptionGroup`; a bare cancellation reason is
+  provisional and refined by the unwind before `start()` reads it) — "connect
+  failed: Cancelled via cancel scope 0x…" tells an operator nothing during an
+  outage, which is when this path matters. `/tools` lists the MCP surface
   with its gating. The benchmark/maintain path reads `enabled_for` from
   configs/mcp.yaml as before and never touches `chat/mcptools.py`.
 - `--ctx <tier>` (chat/code startup flag) = `/ctx` before the first turn: sets
