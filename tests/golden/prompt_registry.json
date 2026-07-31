@@ -1,0 +1,93 @@
+{
+  "baseline_system": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes \u2014 only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1\u20133 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n",
+  "baseline_task_prefix": "Begin by reading what's relevant to plan your change. When you're done, end with a final report.",
+  "overlays": {
+    "document_strict_only": {
+      "document": "document_strict"
+    },
+    "implement_via_cot": {
+      "bugfix": "cot",
+      "implement": "cot"
+    },
+    "manage_strict_only": {
+      "manage": "manage_strict"
+    },
+    "swebench_strict_counterexample_only": {
+      "bugfix": "swebench_bugfix_counterexample"
+    },
+    "swebench_strict_only": {
+      "bugfix": "swebench_bugfix"
+    },
+    "swebench_strict_respond_only": {
+      "bugfix": "swebench_bugfix_respond"
+    }
+  },
+  "variants": {
+    "baseline": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 96,
+      "task_prefix_sha256": "f30491c596527d182cf57d2e1f81ab9bfb456b07d27f39632e6691f3bfaf0115"
+    },
+    "chat_conversational": {
+      "system_len": 927,
+      "system_sha256": "53a9239b9f80d4857897ca497126a931a2c5aaef95e793e1c57e9978f4111eb2",
+      "task_prefix_len": 114,
+      "task_prefix_sha256": "36cca98af3b9e327e5fa368070ec2d6c1ec1207538965553c37b49412fa9bf43"
+    },
+    "combined": {
+      "system_len": 1653,
+      "system_sha256": "858fab80eaa080eeae7c7867af1c49a1cf8954a553078e3ae215e6acfa7beb08",
+      "task_prefix_len": 551,
+      "task_prefix_sha256": "aeadf98ae37695fa8b1c4e49e5b824aebc842f2c37ddb8cf052f1414ad769ac2"
+    },
+    "cot": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 551,
+      "task_prefix_sha256": "aeadf98ae37695fa8b1c4e49e5b824aebc842f2c37ddb8cf052f1414ad769ac2"
+    },
+    "document_strict": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 676,
+      "task_prefix_sha256": "c68b9fdb6354deb74a3b987f008853b627bef0ae80e08e6139875d77df6c8d55"
+    },
+    "hads_persona": {
+      "system_len": 1336,
+      "system_sha256": "356b236e2b87fb0311763502c4d410d18bd9d04ab20d8979b1f2e81a7d12ae95",
+      "task_prefix_len": 96,
+      "task_prefix_sha256": "f30491c596527d182cf57d2e1f81ab9bfb456b07d27f39632e6691f3bfaf0115"
+    },
+    "manage_strict": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 1489,
+      "task_prefix_sha256": "7920036352550ce10048b426c9f0a0570fd868d7b3e155e8188c8d86ff9df64a"
+    },
+    "sot": {
+      "system_len": 1289,
+      "system_sha256": "9222303537fec93e386e0e028149f4636fb34899030192777472b398598f583b",
+      "task_prefix_len": 96,
+      "task_prefix_sha256": "f30491c596527d182cf57d2e1f81ab9bfb456b07d27f39632e6691f3bfaf0115"
+    },
+    "swebench_bugfix": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 1425,
+      "task_prefix_sha256": "9d6aaf831f4a6a1bea7dac5bc1d8b1df6ca47ff49c001bc7ee617e33cafb2723"
+    },
+    "swebench_bugfix_counterexample": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 1797,
+      "task_prefix_sha256": "8237f61a507183e20c8a51bd317aebae21e7d99d65a7eb9db5c9d022afab194c"
+    },
+    "swebench_bugfix_respond": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 1723,
+      "task_prefix_sha256": "949325898a67a510e5750de40925c9b15b8e6311cdeb25c8fd690bf86b8feef8"
+    }
+  }
+}

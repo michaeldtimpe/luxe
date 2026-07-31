@@ -58,6 +58,15 @@ acceptance/*
 !acceptance/eval_suite/
 acceptance/eval_suite/*
 !acceptance/eval_suite/baselines/
+# Hygiene sweep (2026-07): the curated documents are the deliverable and are
+# tracked; the raw analyzer/pytest dumps they cite are regenerable and are not.
+!acceptance/hygiene_2026_07/
+acceptance/hygiene_2026_07/*
+!acceptance/hygiene_2026_07/NOTES.md
+!acceptance/hygiene_2026_07/raw_findings.md
+!acceptance/hygiene_2026_07/queue.md
+!acceptance/hygiene_2026_07/drill_log.md
+!acceptance/hygiene_2026_07/REPORT.md
 benchmarks/bench_*.json
 benchmarks/small_models_*.json
 
