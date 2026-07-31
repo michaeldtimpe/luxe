@@ -93,10 +93,6 @@ _PRIOR_FINDINGS_KINDS = ("gitchange",)
 _PLAN_KINDS = ("gitchange",)
 
 
-def _looks_like_url(s: str) -> bool:
-    return s.startswith(("http://", "https://", "git@", "ssh://"))
-
-
 def _derive_dest(base_path: str | Path, url: str) -> Path:
     """Local destination for a clone: `<base dir>/<repo name>`, de-duplicated."""
     name = url.rstrip("/").rsplit("/", 1)[-1]

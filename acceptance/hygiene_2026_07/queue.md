@@ -119,3 +119,20 @@ annotation debt rather than defects.
   4 fewer mypy errors in the file.
 - executor: **luxe-code** (drill)
 - status: PENDING
+
+### HS-007 dead private helper `_looks_like_url`
+- file: `src/luxe/gitkit/runner.py:96`
+- tier: C   type: refactor   size: S
+- source: manual (unreferenced-symbol scan, Phase 1.7)
+- evidence: defined in `4432925` ("prompt to clone a URL when the target
+  isn't a git repo") and referenced nowhere since — the caller was rewritten
+  to ask `health`/git itself instead of pattern-matching the string. Grep
+  over `src/`, `tests/`, `benchmarks/`, `scripts/` returns only the
+  definition line.
+- fix: delete the function.
+- test: none — deleting an unreferenced private helper; the gitkit suite is
+  the regression net.
+- verify: `uv run pytest tests/test_gitkit*.py tests/test_gitplan.py -q`
+  (165 green); ruff clean; full suite unchanged at 1883.
+- executor: opus
+- **status: DONE** — see commit below
