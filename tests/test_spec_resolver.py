@@ -460,6 +460,31 @@ class TestFormatSddBlock:
         assert "Forbids creating: **/test_*.py" in block
         assert "Forbids creating: **/repro.py" in block
 
+    def test_all_prose_only_yields_no_block_at_all(self, tmp_path):
+        """No contract contributes a line ⇒ "" , not a dangling header.
+
+        The header used to be emitted before the loop, so a repo whose `.sdd`
+        files are all aspirational (Must / Must not / Done when) appended a
+        bare "## Repository contracts (.sdd files)" with nothing under it to
+        every task prompt — prompt noise the model has to read past on every
+        single turn.
+        """
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n## Must\n- tidy\n")
+        _write_sdd(tmp_path / "b" / "b.sdd",
+                   "# b\n## Must not\n- sloppy\n## Done when\n- tidy\n")
+        sdds = find_all_sdd(tmp_path)
+        assert len(sdds) == 2, "fixture no longer exercises the skip path"
+        assert format_sdd_block(sdds, tmp_path) == ""
+
+    def test_header_still_present_when_one_contract_contributes(self, tmp_path):
+        """The empty case must not cost us the header in the normal case."""
+        _write_sdd(tmp_path / "a" / "a.sdd", "# a\n## Must\n- tidy\n")
+        _write_sdd(tmp_path / "b" / "b.sdd", "# b\n## Owns\n- b/**\n")
+        block = format_sdd_block(find_all_sdd(tmp_path), tmp_path)
+        assert block.startswith("## Repository contracts (.sdd files)")
+        assert "From `b/b.sdd`" in block
+        assert "From `a/a.sdd`" not in block
+
     def test_surfaces_sdd_with_only_forbids_create(self, tmp_path):
         # A file with only Forbids creating still appears in the prompt.
         _write_sdd(
