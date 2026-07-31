@@ -1634,10 +1634,14 @@ def main() -> int:
         try:
             from luxe.backend import Backend as _UnloadBackend
             _ub = _UnloadBackend(model="(bench-end-unload)")
-            results = _ub.unload_all_loaded()
-            if results:
-                n_ok = sum(1 for v in results.values() if v)
-                print(f"\n[bench end] unloaded {n_ok}/{len(results)} model(s) from oMLX")
+            # NOT `results` — that name holds the run's list[FixtureResult] in
+            # the enclosing scope, and rebinding it here is a landmine for
+            # anyone who later adds a statement between this and the return.
+            unload_results = _ub.unload_all_loaded()
+            if unload_results:
+                n_ok = sum(1 for v in unload_results.values() if v)
+                print(f"\n[bench end] unloaded {n_ok}/{len(unload_results)} "
+                      f"model(s) from oMLX")
         except Exception as e:
             print(f"\n[bench end] model unload skipped: {e}")
         if cleanup_work_dir:
