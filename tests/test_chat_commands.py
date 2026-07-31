@@ -120,6 +120,38 @@ def test_copy_with_no_answer_yet(ctx):
     assert "No answer to copy" in _text(ctx)
 
 
+def test_net_renders_report_and_verdict(ctx, monkeypatch):
+    from luxe import netdiag
+
+    canned = netdiag.NetReport(
+        ladder=netdiag.LadderReport(
+            host="example.com",
+            probes=[netdiag.Probe("dns", "example.com", True, 12.0,
+                                  detail="1.2.3.4"),
+                    netdiag.Probe("tls", "example.com:443", False, 5000.0,
+                                  error="handshake timed out after 5s")],
+            verdict=netdiag.V_TLS_BLOCKED,
+            advice="plain HTTP may work"),
+        endpoints=[netdiag.Probe("endpoint", "m5 (http://m5:8000)", False,
+                                 4000.0, error="ConnectError: refused")])
+    seen = {}
+
+    def fake_full_report(cfg, host=netdiag.ANCHOR_HOST):
+        seen["cfg"] = cfg
+        seen["host"] = host
+        return canned
+
+    monkeypatch.setattr(netdiag, "full_report", fake_full_report)
+    res = cmd.dispatch("/net myhost.example", ctx)
+    assert res.handled
+    out = _text(ctx)
+    assert seen["host"] == "myhost.example"
+    assert seen["cfg"] is ctx.slots.cfg
+    assert "verdict: tls-blocked" in out
+    assert "handshake timed out" in out
+    assert "m5" in out
+
+
 def test_help(ctx):
     res = cmd.dispatch("/help", ctx)
     assert res.handled and not res.exit

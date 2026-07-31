@@ -274,6 +274,23 @@ never touches this module.
   `/`, or exists on disk) is dispatched as a MESSAGE (`commands.is_command`),
   so a pasted absolute path is sendable; path-free unknown tokens still get
   the unknown-command error (typo protection).
+- Network diagnostics live in `src/luxe/netdiag.py` (2026-07-31), NEVER as
+  more `/doctor` lines (doctor's offline-purity contract allows exactly one
+  networked check). Three surfaces, one implementation: the `net_probe` tool
+  (rides every chat turn via the extra-tool seam, like update_ledger —
+  read-only, in-process, every layer hard-bounded, so the model reaches for
+  it instead of hand-rolling curl commands with no timeout — the session
+  5bb630813c21 failure); `/net [host]` + `luxe net` (deterministic report:
+  DNS→TCP→TLS→HTTP(S) ladder + captive-portal check + every configured
+  `backends:` endpoint via GET /health); `luxe net --watch N` (re-probe on an
+  interval, print verdict TRANSITIONS only, append to ~/.luxe/netwatch.log).
+  The ladder ends in a CLASSIFIED verdict (offline / dns-broken / tcp-blocked
+  / captive-portal / tls-intercepted / tls-blocked / degraded / ok) — the
+  classifier is pure and unit-tested; probes are tested against local
+  synthetic servers (silent-TCP handshake timeout, self-signed TLS, portal
+  redirect). No probe may block past its deadline (DNS runs on an abandoned
+  daemon thread — getaddrinfo has no timeout parameter). The benchmark/
+  maintain path never touches this module.
 - A session can start ANYWHERE (2026-07-30). `chat/project.py` resolves the
   subject once at startup: **git** (cwd is in a work tree → the project is the
   GIT ROOT, so a subdir session sees the whole repo), **dir** (no git but a

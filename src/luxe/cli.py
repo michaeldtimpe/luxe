@@ -1506,6 +1506,72 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
     sys.exit(1 if failed else 0)
 
 
+@main.command(name="net")
+@click.option("--host", default=None,
+              help="Hostname for the public ladder (default: a public anchor)")
+@click.option("--config", "config_path", default=None,
+              help="Pipeline config (default: the chat config)")
+@click.option("--watch", "watch_s", default=0, type=int,
+              help="Re-probe every N seconds; print verdict TRANSITIONS only "
+                   "(Ctrl-C to stop). Transitions also append to "
+                   "~/.luxe/netwatch.log.")
+def net_cmd(host: str | None, config_path: str | None, watch_s: int):
+    """Layered network report: DNS → TCP → TLS → HTTP(S) + captive-portal
+    check + every configured `backends:` endpoint. Deterministic (no model),
+    every probe hard-bounded — total wall is a few seconds. The verdict names
+    the broken LAYER (tls-blocked, captive-portal, dns-broken, …) instead of
+    describing symptoms.
+    """
+    from luxe import netdiag
+
+    try:
+        cfg = load_config(config_path or _default_chat_config())
+    except Exception:
+        cfg = None
+    anchor = host or netdiag.ANCHOR_HOST
+
+    def _render(report) -> None:
+        for ok, line in netdiag.render_lines(report):
+            glyph = "[green]✓[/]" if ok else "[red]✗[/]"
+            console.print(f"  {glyph} {line}")
+        style = "green" if report.ladder.verdict == netdiag.V_OK else "yellow"
+        console.print(f"[{style}]verdict: {report.ladder.verdict}[/] — "
+                      f"{report.ladder.advice}")
+
+    report = netdiag.full_report(cfg, host=anchor)
+    _render(report)
+    if not watch_s:
+        sys.exit(0 if report.ladder.verdict == netdiag.V_OK else 1)
+
+    # Watch mode: the question on a bad network is "when does it change?"
+    # (session 5bb630813c21: HTTPS silently recovered mid-flight). Quiet
+    # while stable; a verdict transition prints + appends to the log.
+    log_path = Path.home() / ".luxe" / "netwatch.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    last = report.ladder.verdict
+    console.print(f"[dim]watching every {watch_s}s — verdict transitions "
+                  f"only (log: {log_path}) · Ctrl-C to stop[/]")
+    try:
+        while True:
+            time.sleep(max(watch_s, 5))
+            report = netdiag.full_report(cfg, host=anchor)
+            now = report.ladder.verdict
+            if now != last:
+                stamp = time.strftime("%H:%M:%S")
+                console.print(f"[bold]{stamp} {last} → {now}[/] — "
+                              f"{report.ladder.advice}")
+                try:
+                    with log_path.open("a", encoding="utf-8") as fh:
+                        fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                                 f"{last} -> {now}\n")
+                except OSError:
+                    pass
+                last = now
+    except KeyboardInterrupt:
+        console.print(f"[dim]stopped — last verdict: {last}[/]")
+        sys.exit(0)
+
+
 def _omlx_base_url_from_config() -> str:
     """The chat config's oMLX endpoint, falling back to the local default."""
     try:
