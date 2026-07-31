@@ -115,6 +115,29 @@ means touching Tier A files for zero runtime benefit, so it is deferred as a
 batch rather than dribbled through this sweep. The one exception, A6, is
 carded because it is a genuine readability hazard.
 
+### B5 — `luxe chat` exit unloads *every* model on the server, not its own
+`src/luxe/chat/repl.py:391-396` → `slots.unload_all()` →
+`backend.unload_all_loaded()`, which iterates `loaded_models()` — i.e. the
+server's whole resident set — and unloads all of it unless `--keep-loaded`
+was passed.
+
+**Hit live during this sweep.** A `/quit` from a 30-second `/status`
++ `/doctor` spot-check evicted the weights of the `luxe gitaudit` run that
+had been going for ten minutes in another process, on the same endpoint
+(`loaded_count` went 1 → 0). oMLX reloads on demand so it is recoverable,
+not corrupting, but it costs a reload and can interrupt an in-flight request.
+
+This matters more than it looks: `configs/chat.yaml` `backends:` makes m5 a
+**shared fleet endpoint**. Under that topology one host quitting a chat
+session unloads the models another host is actively using.
+
+Deferred, not fixed — it is a behaviour change to the chat front-end
+(an explicit stop-and-ask trigger). Two candidate shapes, both needing a
+decision: unload only the models *this session* loaded (`slots` already
+tracks swaps, so the set is known), or skip the unload when the endpoint is
+non-local. `except_for` already exists on `unload_all_loaded` and is the
+natural seam.
+
 ### B4 — four git-subprocess wrappers in `chat/`
 `status.py:_run_git` (timeout 2), `inspection.py:_git` (10),
 `project.py:_git_root` (10), `smoke.py` (30, inline). Looks like textbook
