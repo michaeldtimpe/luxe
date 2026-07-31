@@ -49,7 +49,7 @@ from luxe.chat.session import (
 from luxe.chat import mcptools
 from luxe.chat.slots import SlotManager
 from luxe.chat.status import StatusState
-from luxe.config import PipelineConfig
+from luxe.config import PipelineConfig, RoleConfig
 from luxe import spec_resolver
 from luxe.chat import modelcaps
 from luxe.chat import origin as origin_mod
@@ -412,7 +412,10 @@ class TurnPrep:
     slot: str
     model: str
     dev_bash: bool
-    role_cfg: object
+    # RoleConfig, not `object` — every consumer reads `.num_ctx`/`.tools` off
+    # it, and the loose annotation hid 8 attribute errors behind a type that
+    # promises nothing.
+    role_cfg: RoleConfig
     run_id: str
     ctx_ceiling: int
     changed_files: list

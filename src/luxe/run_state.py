@@ -119,7 +119,19 @@ def load_pr_state(run_id: str) -> PRState | None:
     return PRState.from_dict(json.loads(p.read_text()))
 
 
-def append_event(run_id: str, kind: str, **data) -> None:
+def append_event(run_id: str | None, kind: str, **data) -> None:
+    """Append one telemetry record to a run's events.jsonl.
+
+    `run_id` is Optional because every caller in `agents/loop.py` reaches
+    this through `log_calls` (= `bool(run_id) and ...`), a truthiness mypy
+    cannot propagate — 28 of the tracked type errors were that one pattern.
+    Widening the parameter and no-opping on a falsy id types those calls
+    honestly AND closes the latent bug underneath them: `run_dir(None)`
+    would previously have built a directory literally named "None" and
+    written telemetry into it.
+    """
+    if not run_id:
+        return
     p = run_dir(run_id) / "events.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     record = {"kind": kind, "ts": time.time(), "run_id": run_id, **data}
