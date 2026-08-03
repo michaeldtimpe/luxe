@@ -113,11 +113,16 @@ def test_dead_endpoint_fails_before_generations():
     assert "main turn" not in _states(report)
 
 
-def test_empty_response_is_the_deleted_weights_signature():
+def test_empty_response_states_observable_and_discriminator():
     _Backend.reply_text = ""
     report = smoke_mod.run_smoke(_cfg(), skip_fallback=True)
     step = next(s for s in report.steps if s.name == "main turn")
-    assert step.state == "fail" and "deleted weights" in step.detail
+    # Observable-first hint (2026-08-03): names the symptom and the
+    # completion_tokens discriminator, not a single theory.
+    assert step.state == "fail"
+    assert "empty response" in step.detail
+    assert "completion_tokens=" in step.detail
+    assert "dangling weights" in step.detail
 
 
 def test_missing_tool_call_fails():
