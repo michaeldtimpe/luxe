@@ -76,9 +76,21 @@ def _ping(backend: Backend, model: str, report: SmokeReport,
     if (resp.text or "").strip():
         report.add(label, "pass", f"{model} answered in {dt:.1f}s", dt)
         return True
+    # State the observable, then the discriminator — not a single theory.
+    # (2026-08-03: this hint used to assert "the 'deleted weights'
+    # signature"; a thinking model burning its whole max_tokens budget in
+    # the reasoning channel produces the identical empty response, and the
+    # old wording sent that investigation to `luxe pull` instead of the
+    # token counter.)
+    # Defensive: a hint composer must never raise (test doubles and older
+    # ChatResponse shapes may lack timing).
+    ct = getattr(getattr(resp, "timing", None), "completion_tokens", "?")
     report.add(label, "fail",
-               f"{model}: empty response (the 'deleted weights' signature "
-               "— check `luxe pull --list` for dangling entries)", dt)
+               f"{model}: empty response on HTTP 200 "
+               f"(completion_tokens={ct}: at/near the max_tokens cap → "
+               "reasoning-channel model burned the budget before answering; "
+               "near zero → check `luxe pull --list` for a dangling weights "
+               "entry)", dt)
     return False
 
 
@@ -97,9 +109,22 @@ def _tool_ping(backend: Backend, model: str, report: SmokeReport) -> None:
         report.add("tool call", "pass",
                    f"{model} called read_file in {dt:.1f}s", dt)
     else:
+        # State the observables; the content-channel check is the
+        # discriminator. (2026-08-03: the old "template dropping `tools`?
+        # see chat/modelcaps.py" hint anchored the coder investigation on
+        # the wrong layer — the template was fine, the model was emitting
+        # fenced-JSON tool calls into `content` that nothing parsed.)
+        has_prose = bool((resp.text or "").strip())
+        hint = (
+            "content non-empty — the model may be emitting tool calls in an "
+            "unparsed dialect; inspect resp.text against "
+            "backend.recover_tool_calls_from_text"
+            if has_prose else
+            "content ALSO empty — tools may not be reaching the prompt; "
+            "see chat/modelcaps.py"
+        )
         report.add("tool call", "fail",
-                   f"{model} produced no tool call (template dropping "
-                   "`tools`? see chat/modelcaps.py)", dt)
+                   f"{model} produced no tool call ({hint})", dt)
 
 
 # --- coding / chat drills (2026-07-30) ---------------------------------------
