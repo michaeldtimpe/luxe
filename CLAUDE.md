@@ -221,7 +221,12 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     longer reproducible. The egress guard refuses non-public hosts on every
     redirect hop; note `ipaddress.is_private` is NOT enough — the tailnet is
     100.64.0.0/10 (RFC 6598) and reports as non-private, so `is_global` carries
-    the check.
+    the check. `LUXE_WEB_ALLOWLIST` adds an optional fnmatch host allowlist on
+    top (unset = any public host; set = deny-by-default for hosts).
+    **`src/luxe/web/` is the ONLY web/browser stack** — it absorbed
+    `src/luxe/browser.py` (`browse_navigate`/`browse_read`, `[browser]` extra)
+    on 2026-08-03 after the two landed in parallel. Don't add a second stack,
+    browser dependency, or gating model.
   - **Read-only default ≠ missing capability.** luxe has the full mutation
     surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips

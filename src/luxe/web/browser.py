@@ -50,17 +50,40 @@ def _browsers_root():
     return Path.home() / ".cache" / "ms-playwright"
 
 
+def _system_chrome() -> str | None:
+    """An already-installed Chrome/Chromium, if there is one.
+
+    Carried over from the 2026-08-02 `browser.py` stack, whose real advantage
+    was needing NO browser download — it drove the Chrome the user already
+    had. Preserving that here makes `playwright install chromium` an
+    optimisation rather than a hard requirement on every fleet host.
+    """
+    import os
+    import shutil
+
+    for candidate in ("google-chrome", "google-chrome-stable", "chromium",
+                      "chromium-browser"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+    for path in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                 "/Applications/Chromium.app/Contents/MacOS/Chromium"):
+        if os.path.exists(path):
+            return path
+    return None
+
+
 @functools.lru_cache(maxsize=1)
 def availability() -> Availability:
-    """Can we render right now? Distinguishes the two failure modes.
+    """Can we render right now? Distinguishes the failure modes.
 
     Deliberately does NOT start the Playwright driver. `sync_playwright()`
     spawns a Node subprocess, and tearing it back down emits asyncio
     "Task was destroyed but it is pending" / TargetClosedError chatter on
     stderr — which would land in the middle of a chat session every time the
-    status line or /doctor asked a simple capability question. Import + an
-    on-disk browser directory answer it for free; a genuine launch failure
-    still surfaces as a clean WebError from render_url.
+    status line or /doctor asked a simple capability question. Import plus a
+    filesystem check answer it for free; a genuine launch failure still
+    surfaces as a clean WebError from render_url.
 
     Cached: the answer cannot change within a process without an install.
     """
@@ -70,7 +93,8 @@ def availability() -> Availability:
         return Availability(
             ok=False,
             reason="playwright is not installed",
-            fix="uv sync --extra web && .venv/bin/playwright install chromium",
+            fix="uv sync --extra web  (then optionally: "
+                ".venv/bin/playwright install chromium)",
         )
     root = _browsers_root()
     try:
@@ -78,13 +102,15 @@ def availability() -> Availability:
                         for p in root.iterdir())
     except OSError:
         installed = False
-    if not installed:
-        return Availability(
-            ok=False,
-            reason=f"no Chromium browser found in {root}",
-            fix=".venv/bin/playwright install chromium",
-        )
-    return Availability(ok=True)
+    if installed:
+        return Availability(ok=True)
+    if _system_chrome():
+        return Availability(ok=True)
+    return Availability(
+        ok=False,
+        reason=f"no Chromium in {root} and no system Chrome found",
+        fix=".venv/bin/playwright install chromium  (or install Google Chrome)",
+    )
 
 
 def render_url(url: str, *, timeout_s: float = DEFAULT_RENDER_TIMEOUT_S,
@@ -106,7 +132,20 @@ def render_url(url: str, *, timeout_s: float = DEFAULT_RENDER_TIMEOUT_S,
 
     timeout_ms = int(timeout_s * 1000)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # Prefer Playwright's own Chromium; fall back to the system Chrome via
+        # executable_path so a host without the download still renders.
+        launch_kwargs: dict = {"headless": True}
+        root = _browsers_root()
+        try:
+            have_download = any(q.is_dir() and q.name.startswith("chromium")
+                                for q in root.iterdir())
+        except OSError:
+            have_download = False
+        if not have_download:
+            system = _system_chrome()
+            if system:
+                launch_kwargs["executable_path"] = system
+        browser = p.chromium.launch(**launch_kwargs)
         try:
             context = browser.new_context(
                 user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "

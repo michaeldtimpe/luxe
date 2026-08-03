@@ -197,8 +197,9 @@ is traceable to a commit. `/ctx huge` reaches a 256K window where the box's
 **Web (`/web`, default OFF):** `web_fetch` retrieves a page over HTTP(S) and
 returns readable markdown (HTML stripped to prose/headings/code/links; JSON and
 plain text pass through). `render=true` loads the page in headless Chromium for
-JavaScript-rendered sites — that needs `uv sync --extra web` plus
-`playwright install chromium`, neither of which is a base dependency. `web_search`
+JavaScript-rendered sites — that needs `uv sync --extra web`; the Chromium
+download (`playwright install chromium`) is optional, since an already-installed
+Google Chrome or Chromium is used automatically when it's absent. `web_search`
 appears only when a provider key resolves (`BRAVE_API_KEY` or `TAVILY_API_KEY`,
 via env → `~/.luxe/secrets.env` → Keychain — the NAME goes in config, never the
 value). Start a session with the surface already on via `luxe chat --web`.
@@ -208,9 +209,12 @@ loopback, link-local and **tailnet (100.64.0.0/10)** hosts are refused, on every
 redirect hop and after any JS navigation, so the tool cannot be pointed at your
 oMLX endpoint, a NAS, the mage-hands relays, or cloud metadata. Set
 `LUXE_WEB_ALLOW_PRIVATE=1` in the environment to scrape a local address
-deliberately — it is an operator decision, never a tool argument. The web tools
-are chat-only and never reach the benchmark/maintain surface: a reproducible eval
-cannot depend on the live internet.
+deliberately — it is an operator decision, never a tool argument. For a
+locked-down deployment, `LUXE_WEB_ALLOWLIST` (comma-separated fnmatch host
+patterns, e.g. `docs.python.org,*.github.com`) adds deny-by-default host
+filtering on top; unset means any public host. The web tools are chat-only and
+never reach the benchmark/maintain surface: a reproducible eval cannot depend on
+the live internet.
 
 **Git & MCP:** native read-only `git_diff/log/show` tools are always available; for
 richer git, add the commented git MCP server in `configs/mcp.yaml` (it's auto-

@@ -60,6 +60,24 @@ def _allow_private() -> bool:
     return os.environ.get("LUXE_WEB_ALLOW_PRIVATE", "") == "1"
 
 
+def _host_allowlist() -> tuple[str, ...]:
+    """Optional fnmatch host allowlist from `LUXE_WEB_ALLOWLIST`.
+
+    Unset ⇒ empty ⇒ **no host restriction** (the IP-class guard below still
+    applies). Set ⇒ deny-by-default: only matching hosts are reachable.
+
+    Inherited from the 2026-08-02 `browser.py` stack, which was allowlist-only
+    and deny-by-default with a fixed 11-domain list. That is the right posture
+    for a locked-down deployment and the wrong default for a dev tool — a
+    hardcoded list silently refuses the docs page you actually need. Note an
+    allowlist alone is NOT a substitute for the IP guard: it says nothing
+    about where a name RESOLVES, so it cannot stop the tailnet/CGNAT case.
+    The two layers compose; neither replaces the other.
+    """
+    raw = os.environ.get("LUXE_WEB_ALLOWLIST", "")
+    return tuple(p.strip().lower() for p in raw.split(",") if p.strip())
+
+
 def _is_public_ip(ip: str) -> bool:
     """True only for addresses reachable on the public internet.
 
@@ -128,6 +146,16 @@ def _assert_public(url: str) -> None:
             "are allowed (no file://, data:, ftp://)")
     if not host:
         raise WebError(f"no host in URL: {url!r}")
+
+    allowlist = _host_allowlist()
+    if allowlist:
+        import fnmatch
+        if not any(fnmatch.fnmatch(host.lower(), pat) for pat in allowlist):
+            raise WebError(
+                f"refused {host} — not in LUXE_WEB_ALLOWLIST "
+                f"({', '.join(allowlist)}). Add a pattern to that env var to "
+                "allow it, or unset the variable to allow any public host.")
+
     if _allow_private():
         return
     try:

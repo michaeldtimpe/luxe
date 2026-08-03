@@ -591,14 +591,6 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     _pp_def, _pp_fn = make_planeproxy_tool()
     extra_tool_defs.append(_pp_def)
     extra_tool_fns["planeproxy_diag"] = _pp_fn
-    # Browser tools (2026-08-02, restored from ff6eab7): read-only headless-
-    # Chrome navigate + read for JS-rendered pages, host-allowlisted and
-    # deny-by-default. Deps ([browser] extra) are lazy — absent deps yield a
-    # clear tool error, never an import failure here.
-    from luxe.browser import make_browser_tools
-    for _b_def, _b_fn in make_browser_tools():
-        extra_tool_defs.append(_b_def)
-        extra_tool_fns[_b_def.name] = _b_fn
     if write_on:
         from luxe.tools.shell import (
             make_bash_fn,

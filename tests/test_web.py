@@ -72,6 +72,43 @@ def test_guard_resolves_names_not_patterns(monkeypatch):
     assert "127.0.0.1" in str(e.value)
 
 
+def test_no_allowlist_means_any_public_host(monkeypatch):
+    """Unset LUXE_WEB_ALLOWLIST ⇒ no host restriction (IP guard still runs)."""
+    monkeypatch.delenv("LUXE_WEB_ALLOWLIST", raising=False)
+    from luxe.web.fetch import _host_allowlist
+    assert _host_allowlist() == ()
+
+
+def test_allowlist_when_set_is_deny_by_default(monkeypatch):
+    monkeypatch.delenv("LUXE_WEB_ALLOW_PRIVATE", raising=False)
+    monkeypatch.setenv("LUXE_WEB_ALLOWLIST", "docs.python.org, *.github.com")
+    from luxe.web.fetch import _assert_public
+
+    _assert_public("https://docs.python.org/3/")       # exact
+    _assert_public("https://api.github.com/repos")     # glob
+    with pytest.raises(WebError) as e:
+        _assert_public("https://example.com/")
+    assert "LUXE_WEB_ALLOWLIST" in str(e.value)
+
+
+def test_allowlist_does_not_replace_the_ip_guard(monkeypatch):
+    """An allowlisted NAME that resolves privately is still refused.
+
+    The inherited allowlist-only design could not express this: it checks the
+    hostname and never asks where it points.
+    """
+    monkeypatch.delenv("LUXE_WEB_ALLOW_PRIVATE", raising=False)
+    monkeypatch.setenv("LUXE_WEB_ALLOWLIST", "*.internal.test")
+    import socket
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("100.89.62.17", 443))])
+    from luxe.web.fetch import _assert_public
+    with pytest.raises(WebError) as e:
+        _assert_public("https://kappa.internal.test/")
+    assert "100.89.62.17" in str(e.value)
+
+
 def test_tool_argument_cannot_lift_the_guard(monkeypatch):
     """The escape hatch is an env var by design; no tool arg may reach it."""
     monkeypatch.delenv("LUXE_WEB_ALLOW_PRIVATE", raising=False)

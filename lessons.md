@@ -30,6 +30,55 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-03] Two sessions built the same feature; the autostash nearly shipped conflict markers
+
+**What happened**: two things, one root.
+
+(a) Two parallel Claude sessions independently built a web/browser stack for
+chat within 48 hours. 2026-08-02 restored `src/luxe/browser.py`
+(`browse_navigate`/`browse_read`, headless-Chrome CDP, `[browser]` extra =
+pychrome + trafilatura, always-on, hostname allowlist). 2026-07-31 built
+`src/luxe/web/` (`web_fetch`/`web_search`, httpx + stdlib extraction with a
+Playwright renderer, `[web]` extra, `/web`-gated, IP-class egress guard).
+Neither knew about the other. Both shipped and both worked — two browser
+dependencies, two gating models, two guards, for one capability.
+
+(b) The second session's commit rebased onto the first via the auto-rebase
+PreToolUse hook. `rebase.autoStash` hit conflicts in `pyproject.toml`,
+`RESUME.md` and `commands.py`, and `git add -A && git commit` swept the
+`<<<<<<< Updated upstream` markers straight into the commit. `pyproject.toml`
+became unparseable — `tomllib` raised, so pytest could not even collect. It
+was caught only because `git log` was read before pushing and showed an
+unexpected commit in between.
+
+**Root cause**: (a) no cross-session claim on in-flight work. A feature exists
+in the repo only once it lands, so two agents surveying "does luxe have web
+tools?" both correctly answered no, hours apart. (b) `git add -A` trusts the
+working tree. An autostash conflict leaves markers in FILES, not in the index
+state that `git commit` would refuse, so nothing in the normal commit path
+objects — and a hook that rebases silently makes the window invisible.
+
+**Fix / takeaway**:
+- **Read `git log` before pushing, always** — not to check your own commit, but
+  to see whose work arrived under you. That single habit caught both halves of
+  this.
+- **Grep for conflict markers before committing** when any hook or config can
+  rebase/stash on your behalf. `git add -A` is not a review step. A broken
+  `pyproject.toml` is the loud failure; a half-merged `.md` is the quiet one
+  that survives.
+- **Consolidate immediately, don't accumulate.** The duplicate stacks were
+  merged the next day (2026-08-03) into `src/luxe/web/`, porting the two ideas
+  the deleted stack got right (optional host allowlist; system-Chrome fallback)
+  rather than discarding them wholesale. Contracts now carry an explicit
+  single-stack clause so the next session cannot "restore" it a third time.
+- **Mark superseded handoffs in `RESUME.md` in place.** The 2026-08-02 entry
+  read as current instructions to build the module that had just been deleted;
+  a future session following it would have recreated the duplication.
+
+**Affected files**: `src/luxe/web/**`, `src/luxe/browser.py` (removed),
+`tests/test_browser_tools.py` (removed), `src/luxe/chat/{repl,commands}.py`,
+`pyproject.toml`, `web.sdd`, `chat.sdd`, `CLAUDE.md`, `RESUME.md`.
+
 ### [2026-07-31] One unreachable MCP server silently disarmed every healthy one
 
 **What happened**: the mage-hands relays (alpha · kappa · router1) were wired
