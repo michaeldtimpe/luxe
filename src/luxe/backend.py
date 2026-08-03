@@ -55,6 +55,95 @@ class ChatResponse:
     retries: int = 0
 
 
+# --- Text-channel tool-call recovery -----------------------------------------
+#
+# Some models write a tool call into `content` instead of the template's
+# native wrapper. Qwen2.5-Coder (1.5B/3B/7B, temp 0) does this consistently:
+# it emits a fenced ```json {"name": ..., "arguments": {...}} ``` block, the
+# server's template parser never sees a `<tool_call>` tag, and the response
+# arrives with `tool_calls: null` and the call sitting in prose. The agent
+# then counts 0 tool calls and the turn dies. (Root-caused 2026-08-03 during
+# the neo bake-off; micro-mind's equivalent recovery path measured
+# native=0/recovered=1 on every Qwen2.5-Coder turn.)
+#
+# Recovery is deliberately narrow, mirroring micro-mind's belt-and-braces
+# parser: only when the request OFFERED tools, only when the native channel
+# is empty, and only when the extracted JSON names an offered tool with dict
+# arguments. Prose that merely contains braces never matches; a model that
+# names an un-offered tool is not "recovered" into calling it.
+
+
+def _first_balanced_json(text: str, start: int) -> str | None:
+    """The shortest balanced {...} substring starting at `start`, or None."""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def recover_tool_calls_from_text(
+    text: str, tools: list[dict[str, Any]] | None
+) -> list[ToolCallResponse]:
+    """Salvage a tool call the model wrote into `content`.
+
+    Returns at most one call (single-action bias — a content-channel model
+    that "chains" calls in prose is speculating, not acting). Empty list when
+    nothing recoverable is present.
+    """
+    if not text or not tools:
+        return []
+    offered = {
+        (t.get("function") or {}).get("name")
+        for t in tools
+        if isinstance(t, dict)
+    }
+    offered.discard(None)
+    if not offered:
+        return []
+    pos = text.find("{")
+    while pos != -1:
+        candidate = _first_balanced_json(text, pos)
+        if candidate:
+            try:
+                obj = json.loads(candidate)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict) and obj.get("name") in offered:
+                args = obj.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {"_raw": args}
+                if isinstance(args, dict):
+                    return [ToolCallResponse(
+                        id="recovered_call_0",
+                        name=obj["name"],
+                        arguments=args,
+                    )]
+        pos = text.find("{", pos + 1)
+    return []
+
+
 # --- Retry classification ---------------------------------------------------
 
 _TRANSIENT_BODY_MARKERS = ("loading", "swapping", "warming", "starting", "not yet ready")
@@ -301,8 +390,16 @@ class Backend:
                         arguments=args,
                     ))
 
+                text = msg.get("content") or ""
+                if not tc_list:
+                    # Native channel empty — check the text channel (see
+                    # recover_tool_calls_from_text above for why).
+                    tc_list = recover_tool_calls_from_text(text, tools)
+                    if tc_list:
+                        text = ""
+
                 return ChatResponse(
-                    text=msg.get("content") or "",
+                    text=text,
                     tool_calls=tc_list,
                     finish_reason=choice.get("finish_reason", ""),
                     timing=timing,
@@ -497,8 +594,19 @@ class Backend:
                         id=frag["id"], name=frag["name"], arguments=args,
                     ))
 
+                text = "".join(text_parts)
+                if not tc_list:
+                    # Same text-channel salvage as the non-streaming path.
+                    # The raw JSON already streamed to `on_token` (the UI
+                    # showed it); what matters here is that the agent loop
+                    # sees a call, not prose.
+                    tc_list = recover_tool_calls_from_text(
+                        text, body.get("tools"))
+                    if tc_list:
+                        text = ""
+
                 return ChatResponse(
-                    text="".join(text_parts),
+                    text=text,
                     tool_calls=tc_list,
                     finish_reason=finish_reason,
                     timing=GenerationTiming(
