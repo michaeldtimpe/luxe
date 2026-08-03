@@ -4056,3 +4056,38 @@ must not outsource its credentials to per-host dotfile discipline. Related:
 a bare `uv sync --extra chat` pruned the dev extra and broke the code drill
 (pytest is a RUNTIME dep now) — canonical sync is
 `--extra chat --extra dev --extra analyzers` everywhere.
+
+---
+
+### [2026-08-03] Coder models "produced no tool call" — the call was in `content` all along, as fenced JSON
+
+**What happened**: Every Qwen2.5-Coder size (1.5B baseline, 3B and 7B in the
+neo bake-off) failed the smoke tool-call leg with "produced no tool call
+(template dropping `tools`? see chat/modelcaps.py)". The same weights called
+tools fine under micro-mind's harness. modelcaps was innocent: the coder GGUF
+templates carry a proper `{%- if tools %}` block. A minimal curl against a
+dedicated llama-server showed the real shape — `tool_calls: null` with the
+call sitting in `content` as a fenced ```json {"name": ..., "arguments": ...}
+``` block. The coder's code-completion instinct wraps the call in a code fence
+instead of the template's `<tool_call>` tags, so the server's native parser
+finds nothing.
+
+**Root cause**: luxe only ever read `message.tool_calls`. micro-mind ships a
+text-channel recovery parser ("belt-and-braces", built 2026-05-14, never seen
+firing on instruct models) — its bake-off traces show `native_tool_calls=0,
+recovered_tool_calls=1` on every coder turn. The two harnesses disagreed about
+the same weights because one of them had a parser the other lacked, not
+because the model behaved differently.
+
+**Fix / takeaway**: Ported the recovery: `backend.py::
+recover_tool_calls_from_text`, wired at both the non-streaming and streaming
+return sites, gated hard — only when tools were offered, only when the native
+channel is empty, only when the extracted JSON names an *offered* tool with
+dict arguments. 11 unit tests (`tests/test_backend_recovery.py`); smoke
+tool-call leg now passes on Coder-3B. Takeaways: (1) when two harnesses
+disagree about one model, diff the harnesses before blaming the model; (2)
+don't write theories into error hints — "see chat/modelcaps.py" anchored the
+investigation on the wrong layer; state the observable instead ("native
+tool_calls empty; content non-empty").
+
+**Affected files**: `src/luxe/backend.py`, `tests/test_backend_recovery.py`.
