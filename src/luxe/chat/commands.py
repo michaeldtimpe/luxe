@@ -69,6 +69,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/index", "[path]", "build the code-search index for here (or <path>)"),
     ("/doctor", "", "preflight this session: endpoint, model, index, disk, git"),
     ("/net", "[host]", "layered network report: DNS/TCP/TLS/HTTP + backends"),
+    ("/planeproxy", "[status|doctor]", "diagnose the planeproxy SSH tunnel (read-only)"),
     ("/diff", "[--full] [--all]", "what this session changed (git-backed)"),
     ("/export", "[path]", "write the conversation to markdown"),
     ("/full", "", "re-show the last answer without the display cap"),
@@ -179,6 +180,8 @@ def _build_handlers() -> dict:
         "/clear": _clear,
         "/copy": _copy,
         "/net": _net,
+        "/planeproxy": _planeproxy,
+        "/pp": _planeproxy,  # short alias (listed under /planeproxy in /help)
         "/quit": _quit,
         "/exit": _quit,   # hidden alias (not listed in /help)
         "/q": _quit,      # hidden quick-exit alias
@@ -610,7 +613,16 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
             note = ("  [dim](unrestricted dev shell)[/]" if ctx.session.unrestricted_bash
                     else "  [dim](allowlisted commands — /bash for unrestricted)[/]")
         ctx.console.print(f"  [green]·[/] {t}{note}")
-    ctx.console.print("  [green]·[/] update_ledger  [dim](always on)[/]")
+    # Always-on extras registered on the chat seam (repl.prepare_turn) —
+    # keep this list honest with what the seam actually appends.
+    for extra, note in (
+        ("update_ledger", "always on"),
+        ("net_probe", "always on — bounded network ladder"),
+        ("planeproxy_diag", "always on — read-only tunnel diagnosis"),
+        ("browse_navigate", "always on — allowlisted, needs [browser] extra"),
+        ("browse_read", "always on — allowlisted, needs [browser] extra"),
+    ):
+        ctx.console.print(f"  [green]·[/] {extra}  [dim]({note})[/]")
     if gated:
         ctx.console.print(f"[bold]Gated by read-only mode[/] [dim](/write "
                           f"enables {len(gated)})[/]")
@@ -1001,6 +1013,32 @@ def _net(args, ctx: CommandContext) -> CommandResult:
     style = "green" if report.ladder.verdict == netdiag.V_OK else "yellow"
     ctx.console.print(f"[{style}]verdict: {report.ladder.verdict}[/] — "
                       f"{report.ladder.advice}")
+    return CommandResult(handled=True)
+
+
+def _planeproxy(args, ctx: CommandContext) -> CommandResult:
+    """Deterministic planeproxy diagnosis (no model in the loop): runs the
+    tool's own read-only `status --json` / `doctor --json` under a hard
+    deadline and prints the doctor checks, tunnel + isolation state, and a
+    classified verdict with the fix. READ-ONLY by contract (chat.sdd): this
+    command never runs `up`/`down` — starting or stopping the tunnel stays
+    with the user."""
+    from luxe import planeproxy
+
+    check = (args[0].lower() if args else "both")
+    if check not in ("status", "doctor", "both"):
+        ctx.console.print("[yellow]Usage: /planeproxy [status|doctor][/]")
+        return CommandResult(handled=True)
+    ctx.console.print("[dim]probing planeproxy (read-only, bounded — a few "
+                      "seconds)…[/]")
+    try:
+        report = planeproxy.full_report(check=check)
+    except Exception as e:
+        ctx.console.print(f"[red]✗ planeproxy report failed: {e}[/]")
+        return CommandResult(handled=True)
+    for ok, line in planeproxy.render_lines(report):
+        glyph = "[green]✓[/]" if ok else "[red]✗[/]"
+        ctx.console.print(f"  {glyph} {line}")
     return CommandResult(handled=True)
 
 

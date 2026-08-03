@@ -1,5 +1,56 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-02) — planeproxy diagnostics + browser tools restored
+
+Two additive features, both on the chat extra-tool seam (benchmark path
+byte-identical — golden-request snapshot unchanged).
+
+1. **`src/luxe/planeproxy.py`** — bounded, read-only diagnostics for the
+   user's planeproxy SSH tunnel, mirroring netdiag section-for-section.
+   Runs the tool's OWN `planeproxy status --json` / `doctor --json` under a
+   15s subprocess deadline; pure `classify()` turns the two payloads into a
+   verdict (host-key-mismatch ≻ captive-portal ≻ stranded-routing ≻
+   endpoint-unreachable ≻ auth-failed ≻ not-running ≻ tunnel-down ≻ ok,
+   plus not-installed / probe-failed), each with one advice line. The
+   host-key-mismatch advice IS the product: STOP, the network is
+   intercepting — never install a network CA, never disable verification.
+   Three surfaces: `planeproxy_diag` tool (always-on chat seam, verdict
+   first + compact pruned JSON), `/planeproxy [status|doctor]` (+ `/pp`),
+   `luxe planeproxy [--check ...] [--json]` (exit 0 only on ok). A missing
+   binary is a structured `not-installed` verdict, never an error
+   (analysis.py B3); doctor's exit-1-with-valid-JSON is a successful probe.
+   `PLANEPROXY_HINT` (prompts.py) rides `<session_mode>` via a new
+   `ChatSession.planeproxy_present` field, set by ONE stat at session build
+   in both front-ends — default False keeps tests machine-independent.
+   READ-ONLY by contract (chat.sdd bullet): no surface runs up/down.
+   Live smoke on this machine (tunnel up, isolation on): full doctor
+   table + tunnel/isolation lines, verdict ok, `luxe planeproxy` exit 0.
+2. **`src/luxe/browser.py`** — the ff6eab7 browser tools restored:
+   `browse_navigate`/`browse_read`, headless-Chrome CDP (pychrome) +
+   trafilatura extraction, 12KB cap, read-only (no click/fill/screenshot),
+   fnmatch host allowlist (`LUXE_BROWSER_ALLOWLIST` override, empty =
+   deny-all). Adapted: luxe ToolDef, `("", err)` error tuples, and LAZY
+   deps behind a new `[browser]` extra (now installed via
+   `uv pip install pychrome trafilatura` — deliberately not `uv sync`,
+   which prunes unselected extras); module import succeeds bare and a
+   missing dep returns "uv sync --extra browser".
+   `make_browser_tools()` registers on the chat seam next to net_probe.
+   `/tools` now lists ALL always-on seam extras (was a hardcoded
+   update_ledger line that omitted net_probe).
+
+Tests: `tests/test_planeproxy.py` (classifier table incl. mismatch-beats-
+portal precedence, timeout/bad-JSON/missing-binary plumbing, tool contracts,
+render lines — subprocess always monkeypatched), `tests/test_browser_tools.py`
+(clean import with deps hidden, actionable missing-dep errors, allowlist
+table incl. suffix-spoof + deny-on-empty + env parsing, never-raises —
+missing-dep conditions FORCED via sys.modules, so the file passes
+identically with the extra installed or absent; the first draft trusted the
+venv and launched real Chrome the day the deps landed), `/planeproxy` render
+test in test_chat_commands.py. Full suite at home: 2002 passed / 6 skipped.
+(In-flight runs showed 40 failures — all environment-induced by planeproxy
+isolation intercepting httpx test traffic; strip proxy env before believing
+failures on a tunnelled machine.)
+
 ## ⇒ SESSION HANDOFF (2026-07-31, evening) — MCP multi-server isolation fix
 
 Triggered by "I integrated the mage-hands relay tools but luxe doesn't know

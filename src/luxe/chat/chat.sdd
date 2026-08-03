@@ -291,6 +291,30 @@ never touches this module.
   redirect). No probe may block past its deadline (DNS runs on an abandoned
   daemon thread — getaddrinfo has no timeout parameter). The benchmark/
   maintain path never touches this module.
+- planeproxy diagnostics live in `src/luxe/planeproxy.py` (2026-08-02), same
+  three-surface shape as netdiag: the `planeproxy_diag` tool (rides every chat
+  turn via the extra-tool seam), `/planeproxy [status|doctor]` in chat, and
+  `luxe planeproxy` CLI. Every probe is BOUNDED (subprocess deadline; a hang
+  becomes an error string) and READ-ONLY: the module runs only the tool's own
+  `status --json`/`doctor --json` and MUST NEVER run `up`/`down`/`on`/`off` —
+  starting or stopping the tunnel is a user action (mutations are commands
+  with consent flows, and no such command exists by design). The classifier
+  is pure and unit-tested; a missing binary is a structured `not-installed`
+  verdict, never an error (analysis.py B3). Doctrine the surfaces must never
+  contradict: a host-key mismatch is a STOP (the network is intercepting),
+  never a retry, and no surface — advice string, tool description, or prompt
+  hint — may ever suggest installing a network's CA certificate or disabling
+  certificate verification.
+- Browser tools live in `src/luxe/browser.py` (restored 2026-08-02 from
+  ff6eab7): `browse_navigate` + `browse_read`, READ-ONLY by design (no
+  click/fill/screenshot), registered on the chat extra-tool seam only —
+  never the benchmark path. Hosts are ALLOWLISTED (fnmatch patterns,
+  `DEFAULT_BROWSER_ALLOWLIST`, `LUXE_BROWSER_ALLOWLIST` env override) and
+  an empty allowlist denies ALL — deny-by-default. Dependencies (`pychrome`,
+  `trafilatura`) are the optional `[browser]` extra, imported lazily inside
+  the tool bodies: module import must succeed with no deps installed, and a
+  missing dep returns the actionable "uv sync --extra browser" tool error,
+  never an ImportError.
 - A session can start ANYWHERE (2026-07-30). `chat/project.py` resolves the
   subject once at startup: **git** (cwd is in a work tree → the project is the
   GIT ROOT, so a subdir session sees the whole repo), **dir** (no git but a

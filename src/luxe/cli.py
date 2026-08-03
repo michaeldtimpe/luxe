@@ -1572,6 +1572,32 @@ def net_cmd(host: str | None, config_path: str | None, watch_s: int):
         sys.exit(0)
 
 
+@main.command(name="planeproxy")
+@click.option("--check", type=click.Choice(["status", "doctor", "both"]),
+              default="both", help="Which probe to run (default: both)")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit the raw report as JSON instead of the rendered lines")
+def planeproxy_cmd(check: str, as_json: bool):
+    """Diagnose the planeproxy SSH tunnel (read-only). Runs its own
+    `status --json` / `doctor --json` under a hard deadline and classifies
+    the result into a verdict with the one fix that matters (host-key
+    mismatch, captive portal, stranded routing, …). Never starts or stops
+    the tunnel. Exit 0 when healthy, 1 otherwise.
+    """
+    from luxe import planeproxy as pp
+
+    report = pp.full_report(check=check)
+    if as_json:
+        import dataclasses
+        import json as json_mod
+        click.echo(json_mod.dumps(dataclasses.asdict(report), indent=2))
+    else:
+        for ok, line in pp.render_lines(report):
+            glyph = "[green]✓[/]" if ok else "[red]✗[/]"
+            console.print(f"  {glyph} {line}")
+    sys.exit(0 if report.verdict == pp.PP_OK else 1)
+
+
 def _omlx_base_url_from_config() -> str:
     """The chat config's oMLX endpoint, falling back to the local default."""
     try:

@@ -152,6 +152,42 @@ def test_net_renders_report_and_verdict(ctx, monkeypatch):
     assert "m5" in out
 
 
+def test_planeproxy_renders_report_and_verdict(ctx, monkeypatch):
+    from luxe import planeproxy
+
+    canned = planeproxy.PlaneproxyReport(
+        installed=True, bin_path="/fake/planeproxy",
+        status=planeproxy.ProbeResult(
+            "status", True,
+            {"pid": 1, "tunnel": {"state": "up", "endpoint": "gw:443",
+                                  "reconnects": 0},
+             "isolation": {"enabled": True, "allow": ["anthropic.com"],
+                           "refused": 7}},
+            10.0),
+        doctor=planeproxy.ProbeResult(
+            "doctor", True,
+            {"checks": [{"name": "captive portal", "status": "FAIL",
+                         "detail": "HTTP 302 → http://portal/login"}],
+             "already_up": True},
+            500.0),
+        verdict=planeproxy.PP_CAPTIVE_PORTAL,
+        advice="sign in at http://captive.apple.com first")
+    seen = {}
+
+    def fake_full_report(check="both"):
+        seen["check"] = check
+        return canned
+
+    monkeypatch.setattr(planeproxy, "full_report", fake_full_report)
+    res = cmd.dispatch("/planeproxy doctor", ctx)
+    assert res.handled
+    out = _text(ctx)
+    assert seen["check"] == "doctor"
+    assert "verdict: captive-portal" in out
+    assert "HTTP 302" in out
+    assert "sign in at http://captive.apple.com" in out
+
+
 def test_help(ctx):
     res = cmd.dispatch("/help", ctx)
     assert res.handled and not res.exit

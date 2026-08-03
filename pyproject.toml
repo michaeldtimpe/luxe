@@ -49,6 +49,10 @@ extended-bench = [
 # fallback for non-TTY / textual-absent installs (degrades further to input()).
 # Not base deps so benchmark/headless installs stay lean.
 chat = ["prompt_toolkit>=3.0", "textual>=0.74,<2.0"]
+# Chat-only browser tools (src/luxe/browser.py): headless-Chrome CDP client +
+# rendered-text extraction. Deliberately optional and imported lazily — with
+# the extra absent the tools return an actionable error instead of importing.
+browser = ["pychrome", "trafilatura"]
 
 [project.scripts]
 luxe = "luxe.cli:main"
