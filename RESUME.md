@@ -1,5 +1,40 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-03) — ONE web stack: `src/luxe/browser.py` folded into `src/luxe/web/`
+
+Two web/browser implementations landed in the same week from parallel sessions
+that didn't know about each other (2026-08-02 `browser.py`; 2026-07-31
+`web/`). Both shipped and both worked, which is exactly the state not to leave
+standing: two browser dependencies, two gating models, two guards. Consolidated
+into **`src/luxe/web/`**.
+
+**Kept (`web/`)** — `web_fetch` + `web_search`, `/web`-gated (default OFF),
+stateless one-call fetch that needs no browser at all for the common case,
+IP-class egress guard, `[web]` extra.
+
+**Removed** — `src/luxe/browser.py`, `tests/test_browser_tools.py`, the
+`browse_navigate`/`browse_read` tool pair, its always-on seam registration, and
+the `[browser]` extra (pychrome + trafilatura). Rationale: two tools for one
+job is surface bloat on a 35B model; a two-call navigate-then-read protocol
+buys nothing for one-shot reads; and its guard was allowlist-only, which cannot
+see where a hostname RESOLVES and so never closed the tailnet/CGNAT hole.
+
+**Ported rather than lost** — the two things that stack got right:
+1. **Optional host allowlist**, now `LUXE_WEB_ALLOWLIST` (comma-separated
+   fnmatch patterns). Unset = any public host; set = deny-by-default for
+   hosts. It LAYERS on the IP guard instead of replacing it. The original's
+   hardcoded 11-domain deny-by-default list is the right posture for a
+   locked-down deployment and the wrong default for a dev tool — it silently
+   refuses the docs page you actually need.
+2. **System-Chrome fallback.** Its real advantage was needing no browser
+   download; `web/browser.py` now uses an installed Google Chrome/Chromium
+   when Playwright's Chromium isn't present, so `playwright install chromium`
+   is an optimisation, not a per-host requirement.
+
+`planeproxy.py` from the same 2026-08-02 commit is untouched — unrelated and
+still always-on. Suite 2028 passed (1 known mpmath failure). Contracts: web.sdd (single-stack clause),
+chat.sdd (replaces the browser bullet), CLAUDE.md, README.
+
 ## ⇒ SESSION HANDOFF (2026-08-02) — planeproxy diagnostics + browser tools restored
 
 Two additive features, both on the chat extra-tool seam (benchmark path
@@ -25,7 +60,11 @@ byte-identical — golden-request snapshot unchanged).
    READ-ONLY by contract (chat.sdd bullet): no surface runs up/down.
    Live smoke on this machine (tunnel up, isolation on): full doctor
    table + tunnel/isolation lines, verdict ok, `luxe planeproxy` exit 0.
-2. **`src/luxe/browser.py`** — the ff6eab7 browser tools restored:
+2. **`src/luxe/browser.py`** — ⚠ **SUPERSEDED 2026-08-03**: this module was
+   removed and folded into `src/luxe/web/` (see the top handoff). The
+   description below is historical — do not restore it. `planeproxy` (item 1)
+   is unaffected and still current.
+   The ff6eab7 browser tools restored:
    `browse_navigate`/`browse_read`, headless-Chrome CDP (pychrome) +
    trafilatura extraction, 12KB cap, read-only (no click/fill/screenshot),
    fnmatch host allowlist (`LUXE_BROWSER_ALLOWLIST` override, empty =
@@ -113,7 +152,9 @@ web surface further):**
    path is untested against a live provider. Add one to `~/.luxe/secrets.env`
    (or seed via `seedkeys`), then drill it on m1/m4/m5. Until then `web_fetch`
    is URL-only in practice.
-3. **Consolidate the TWO overlapping browser stacks** (discovered 2026-08-03
+3. ~~**Consolidate the TWO overlapping browser stacks**~~ — **DONE 2026-08-03**,
+   see the handoff at the top of this file. Original note kept for context:
+   (discovered 2026-08-03
    on rebase; nothing is broken, but this should not be left standing). The
    2026-08-02 handoff above restored `src/luxe/browser.py` —
    `browse_navigate`/`browse_read` over headless-Chrome CDP, ALWAYS-ON, with a

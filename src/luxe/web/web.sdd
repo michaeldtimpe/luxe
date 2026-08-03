@@ -8,6 +8,17 @@ Added 2026-07-31. Every surface here is CHAT-ONLY and gated behind `/web`
 documentation is guessing; it is gated because luxe is the offline fallback
 kit and network egress from a tool is a capability you opt into.
 
+**Single stack (2026-08-03).** This package is the ONLY web/browser surface in
+luxe. It absorbed `src/luxe/browser.py` (`browse_navigate`/`browse_read` over
+headless-Chrome CDP, `[browser]` extra = pychrome + trafilatura), which had
+landed independently two days earlier — the two were built in parallel by
+different sessions and neither knew about the other. What was kept from it:
+the optional host allowlist (now `LUXE_WEB_ALLOWLIST`, layered on the IP guard
+rather than replacing it) and the system-Chrome fallback (so the Chromium
+download is optional). What was dropped: the second tool pair, the second
+browser dependency, the second extra, and always-on gating. Do not
+reintroduce any of them.
+
 ## Must
 - Stay OUT of `TOOL_FNS`/`MUTATION_FNS`. These tools reach the live internet,
   so a benchmark or maintain run that could call them would stop being
@@ -33,6 +44,10 @@ kit and network egress from a tool is a capability you opt into.
 - Resolve provider keys through `luxe.secrets` by env-var NAME only (env →
   ~/.luxe/secrets.env → Keychain). A key VALUE never appears in YAML or in
   this repo — same rule as the oMLX backends and the relay tokens
+- Treat `LUXE_WEB_ALLOWLIST` as an ADDITIONAL layer, never a replacement for
+  the IP-class guard. Unset = no host restriction; set = deny-by-default for
+  hosts. A hostname allowlist cannot see where a name resolves, so on its own
+  it does not close the tailnet/CGNAT hole `_is_public_ip` exists for
 
 ## Must not
 - Make `playwright` a base or `[chat]` dependency. It is `[web]`, plus a

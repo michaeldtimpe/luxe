@@ -305,16 +305,19 @@ never touches this module.
   never a retry, and no surface — advice string, tool description, or prompt
   hint — may ever suggest installing a network's CA certificate or disabling
   certificate verification.
-- Browser tools live in `src/luxe/browser.py` (restored 2026-08-02 from
-  ff6eab7): `browse_navigate` + `browse_read`, READ-ONLY by design (no
-  click/fill/screenshot), registered on the chat extra-tool seam only —
-  never the benchmark path. Hosts are ALLOWLISTED (fnmatch patterns,
-  `DEFAULT_BROWSER_ALLOWLIST`, `LUXE_BROWSER_ALLOWLIST` env override) and
-  an empty allowlist denies ALL — deny-by-default. Dependencies (`pychrome`,
-  `trafilatura`) are the optional `[browser]` extra, imported lazily inside
-  the tool bodies: module import must succeed with no deps installed, and a
-  missing dep returns the actionable "uv sync --extra browser" tool error,
-  never an ImportError.
+- There is EXACTLY ONE web/browser stack: `src/luxe/web/` (see web.sdd).
+  Consolidated 2026-08-03 from two implementations that landed in parallel
+  the same week — `src/luxe/browser.py` (`browse_navigate`/`browse_read` over
+  headless-Chrome CDP, always-on, `[browser]` extra = pychrome + trafilatura)
+  was REMOVED in favour of `web_fetch`/`web_search`, and its two good ideas
+  were ported rather than lost: an optional fnmatch host allowlist
+  (`LUXE_WEB_ALLOWLIST`, deny-by-default WHEN SET, unset = any public host)
+  and a system-Chrome fallback so `playwright install chromium` is an
+  optimisation, not a requirement. Do not reintroduce a second stack, a
+  second browser dependency, or a second gating model: one surface, one
+  guard, one extra. The allowlist LAYERS on the IP-class egress guard and
+  does not replace it — an allowlist says nothing about where a name
+  resolves, so it cannot stop the tailnet/CGNAT case on its own.
 - A session can start ANYWHERE (2026-07-30). `chat/project.py` resolves the
   subject once at startup: **git** (cwd is in a work tree → the project is the
   GIT ROOT, so a subdir session sees the whole repo), **dir** (no git but a

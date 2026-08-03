@@ -49,17 +49,11 @@ extended-bench = [
 # fallback for non-TTY / textual-absent installs (degrades further to input()).
 # Not base deps so benchmark/headless installs stay lean.
 chat = ["prompt_toolkit>=3.0", "textual>=0.74,<2.0"]
-# Chat-only browser tools (src/luxe/browser.py): headless-Chrome CDP client +
-# rendered-text extraction. Deliberately optional and imported lazily — with
-# the extra absent the tools return an actionable error instead of importing.
-browser = ["pychrome", "trafilatura"]
 # Headless-browser rendering for the chat-only `/web` tools (render=true).
 # NOT a base dep and not in [chat]: the Chromium binary is a further
 # ~150-400 MB `playwright install chromium`, and the fallback kit must stay
 # installable on every fleet host without it. Plain web_fetch (httpx +
 # stdlib extraction) works with none of this; only JS-rendered pages need it.
-# NOTE (2026-08-03): [browser] and [web] are two overlapping stacks that
-# landed in parallel — consolidation is a recorded TODO, see RESUME.
 web = ["playwright>=1.40"]
 
 [project.scripts]

@@ -623,11 +623,9 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
         ("update_ledger", "always on"),
         ("net_probe", "always on — bounded network ladder"),
         ("planeproxy_diag", "always on — read-only tunnel diagnosis"),
-        ("browse_navigate", "always on — allowlisted, needs [browser] extra"),
-        ("browse_read", "always on — allowlisted, needs [browser] extra"),
     ):
-        # escape(): "[browser]" is valid Rich markup, so an unescaped note
-        # rendered as "needs  extra" with the extra's name swallowed.
+        # escape(): a note naming an extra like "[web]" is valid Rich markup,
+        # and unescaped it renders as "needs  extra" with the name swallowed.
         ctx.console.print(f"  [green]·[/] {extra}  [dim]({escape(note)})[/]")
     # The /web surface is gated, so it is listed separately from the
     # always-on extras above.
