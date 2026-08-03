@@ -399,6 +399,20 @@ NO_PROJECT_CHAT_HINT = (
 )
 
 
+# Injected by ChatSession.build_extra_context ONLY when the planeproxy binary
+# exists on this machine (checked once at session build — cheap stat; the
+# field defaults off so benchmark/maintain and other machines are untouched).
+PLANEPROXY_HINT = (
+    "This machine has planeproxy, the user's SSH-tunnel tool for hostile "
+    "networks (in-flight Wi-Fi, captive portals). When the user's tunnel, "
+    "proxies, or Anthropic connectivity misbehave, use the planeproxy_diag "
+    "tool to diagnose it — never ssh -v, ps, or log spelunking, and never "
+    "start or stop the tunnel yourself. A host-key mismatch means the network "
+    "is intercepting: treat it as a stop, and never suggest installing a "
+    "network's CA certificate or disabling TLS verification."
+)
+
+
 NO_TOOLS_MODEL_HINT = (
     "The model serving this turn cannot call tools: its chat template has no "
     "tool support, so luxe has withheld the tool surface rather than send tools "

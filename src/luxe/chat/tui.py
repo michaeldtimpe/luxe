@@ -871,6 +871,10 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
         languages=languages,
         project_kind=project_kind,
     )
+    # Same one-time stat as run_chat_repl: hint the planeproxy tool when the
+    # binary exists on this machine (session.planeproxy_present → PLANEPROXY_HINT).
+    from luxe.planeproxy import binary_present as _pp_present
+    session.planeproxy_present = _pp_present()
     if dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True

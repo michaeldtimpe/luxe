@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from luxe.agents.prompts import (
     NO_PROJECT_CHAT_HINT,
     NO_TOOLS_MODEL_HINT,
+    PLANEPROXY_HINT,
     READ_ONLY_CHAT_HINT,
     TERSE_HINT,
 )
@@ -84,6 +85,10 @@ class ChatSession:
     # do tool calls (chat/modelcaps.py): the whole tool surface is withheld, so
     # the frame must say so or the model will narrate tool use it never did.
     tools_withheld: bool = False
+    # Set once at session build (repl/tui) when the planeproxy binary exists:
+    # injects PLANEPROXY_HINT so the model reaches for planeproxy_diag instead
+    # of shell forensics. Defaults False so tests stay machine-independent.
+    planeproxy_present: bool = False
     languages: frozenset = field(default_factory=frozenset)
     write_enabled: bool = False
     unrestricted_bash: bool = False  # set by /bash; only effective in write mode
@@ -160,6 +165,10 @@ class ChatSession:
             mode_hints.append(NO_PROJECT_CHAT_HINT)
         if not self.write_enabled:
             mode_hints.append(READ_ONLY_CHAT_HINT)
+        if self.planeproxy_present:
+            # This machine runs the user's SSH-tunnel tool: point the model
+            # at planeproxy_diag (and its no-CA/no-bypass doctrine) up front.
+            mode_hints.append(PLANEPROXY_HINT)
         if mode_hints:
             parts.append("<session_mode>\n" + "\n\n".join(mode_hints)
                          + "\n</session_mode>")

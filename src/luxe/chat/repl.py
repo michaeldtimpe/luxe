@@ -227,6 +227,10 @@ def run_chat_repl(
         languages=languages,
         project_kind=project_kind,
     )
+    # One cheap stat at session build: machines with the user's SSH-tunnel
+    # tool get PLANEPROXY_HINT in the frame (session.py); others see nothing.
+    from luxe.planeproxy import binary_present as _pp_present
+    session.planeproxy_present = _pp_present()
     if dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True
@@ -575,6 +579,23 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     _net_def, _net_fn = make_net_probe_tool()
     extra_tool_defs.append(_net_def)
     extra_tool_fns["net_probe"] = _net_fn
+    # planeproxy_diag (2026-08-02): bounded, read-only diagnosis of the user's
+    # SSH-tunnel tool via its own `status --json`/`doctor --json` — the model
+    # reaches for THIS instead of ssh -v / ps / log spelunking. Never runs
+    # up/down (mutations are commands with consent flows, chat.sdd). Same
+    # always-on seam as net_probe; benchmark/maintain never pass extra tools.
+    from luxe.planeproxy import make_planeproxy_tool
+    _pp_def, _pp_fn = make_planeproxy_tool()
+    extra_tool_defs.append(_pp_def)
+    extra_tool_fns["planeproxy_diag"] = _pp_fn
+    # Browser tools (2026-08-02, restored from ff6eab7): read-only headless-
+    # Chrome navigate + read for JS-rendered pages, host-allowlisted and
+    # deny-by-default. Deps ([browser] extra) are lazy — absent deps yield a
+    # clear tool error, never an import failure here.
+    from luxe.browser import make_browser_tools
+    for _b_def, _b_fn in make_browser_tools():
+        extra_tool_defs.append(_b_def)
+        extra_tool_fns[_b_def.name] = _b_fn
     if write_on:
         from luxe.tools.shell import (
             make_bash_fn,
