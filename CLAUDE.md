@@ -211,6 +211,17 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     session. Don't reintroduce a shared exit stack, and catch `BaseException`
     (not `Exception`) at any anyio connect boundary — see `lessons.md`
     2026-07-31 and the chat.sdd MCP bullet.
+  - **Web tools are `/web`-gated, default OFF** (2026-07-31; `src/luxe/web/`,
+    walk `web/web.sdd` first). `web_fetch` (bounded GET → stdlib HTML→markdown;
+    `render=true` = headless Chromium via the optional `[web]` extra) and
+    `web_search` (Brave/Tavily key through luxe.secrets; withheld when no key
+    resolves). Gated independently of `/write` — reading a page mutates nothing
+    locally. Chat-only via the extra-tool seam: **never add these to
+    `TOOL_FNS`**, since a benchmark that can reach the live internet is no
+    longer reproducible. The egress guard refuses non-public hosts on every
+    redirect hop; note `ipaddress.is_private` is NOT enough — the tailnet is
+    100.64.0.0/10 (RFC 6598) and reports as non-private, so `is_global` carries
+    the check.
   - **Read-only default ≠ missing capability.** luxe has the full mutation
     surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips

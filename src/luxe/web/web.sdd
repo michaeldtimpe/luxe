@@ -1,0 +1,59 @@
+# web
+
+Web access for `luxe chat`: bounded HTTP fetch, HTML→markdown extraction,
+optional headless-browser rendering, and provider-backed search.
+
+Added 2026-07-31. Every surface here is CHAT-ONLY and gated behind `/web`
+(default OFF). The package exists because a coding agent that cannot read
+documentation is guessing; it is gated because luxe is the offline fallback
+kit and network egress from a tool is a capability you opt into.
+
+## Must
+- Stay OUT of `TOOL_FNS`/`MUTATION_FNS`. These tools reach the live internet,
+  so a benchmark or maintain run that could call them would stop being
+  reproducible. They reach a turn ONLY through `run_single`'s extra-tool seam,
+  from `prepare_turn`, and only when `session.web_enabled` is set
+- Apply `fetch._assert_public` to EVERY URL before any request, and again to
+  every redirect hop and post-render final URL. luxe sits on a tailnet beside
+  privileged mage-hands relays, an oMLX endpoint on localhost, and a NAS: an
+  ungated fetch tool is an SSRF weapon pointed at the operator's own fleet
+- Resolve the hostname to check it. A textual blocklist is theatre —
+  `localtest.me` and countless other public names resolve to 127.0.0.1
+- Bound every request twice: a per-read timeout AND a total-wall deadline.
+  httpx timeouts are per-read, so a trickling response outlives any of them
+  (the same trap `backend.py` documents for keepalives)
+- Cap response bytes during streaming, before decode — never materialize an
+  unbounded body into a chat turn
+- Return `(str, str | None)` from every tool fn and never raise into the agent
+  loop (tools.sdd)
+- Report emptiness honestly: a page that extracted to almost nothing must say
+  so and name the `render=true` retry, not return a blank-looking success
+- Withhold `web_search` entirely when no provider key resolves. A tool that
+  can only answer "no API key" is worse than no tool
+- Resolve provider keys through `luxe.secrets` by env-var NAME only (env →
+  ~/.luxe/secrets.env → Keychain). A key VALUE never appears in YAML or in
+  this repo — same rule as the oMLX backends and the relay tokens
+
+## Must not
+- Make `playwright` a base or `[chat]` dependency. It is `[web]`, plus a
+  separate ~150-400 MB `playwright install chromium`; the fallback kit has to
+  install and run on every fleet host without it
+- Raise `ImportError` at the model when Chromium is absent. `browser.availability()`
+  is the single answer to "can we render?", and it names the exact fix
+- Let the model lift the egress guard. `LUXE_WEB_ALLOW_PRIVATE=1` is an
+  environment decision by the operator, never a tool argument
+- Add a networked line to `/doctor`. Its offline-purity contract allows
+  exactly one (`update`); the web check reads local keys and probes a local
+  binary path only (chat.sdd)
+- Tie `/web` to `/write`. Reading a page mutates nothing on disk; conflating
+  the two would misprice both gates
+
+## Owns
+- src/luxe/web/**
+- The `/web` command, `--web` startup flag, and `session.web_enabled`
+
+## Forbids
+- Inline prompt strings (agents.sdd: the registry is the single source). Tool
+  DESCRIPTIONS live here because they are tool schema, not prompts
+- Any write to the filesystem. This package reads the web and returns text;
+  saving a page is `write_file`'s job, behind `/write`

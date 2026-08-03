@@ -659,6 +659,10 @@ def _shared_chat_options(f):
         click.option("--dev", "dev_mode", is_flag=True, default=False,
                      help="Start in dev mode: write tools + unrestricted shell "
                           "ON (equivalent to /write + /bash)."),
+        click.option("--web", "start_web", is_flag=True, default=False,
+                     help="Start with web tools ON (equivalent to /web): "
+                          "web_fetch, plus web_search when a provider key is "
+                          "configured."),
         click.option("--verbose", "startup_verbose", default=None,
                      type=click.Choice(["off", "diff", "full"]),
                      help="Set tool-output verbosity at startup."),
@@ -720,7 +724,7 @@ def _run_interactive(
     repo: str, config_path: str | None, resume_session_id: str | None,
     backend_name: str | None,
     chat_model: str | None, plan_model: str | None, code_model: str | None,
-    keep_loaded: bool, dev_mode: bool,
+    keep_loaded: bool, dev_mode: bool, start_web: bool = False,
     startup_verbose: str | None, startup_show_reasoning: bool,
     startup_no_terse: bool, startup_debug: bool, startup_compact: bool,
     theme_name: str | None,
@@ -927,6 +931,7 @@ def _run_interactive(
                 keep_loaded=keep_loaded,
                 resume_session_id=resume_session_id,
                 dev_mode=dev_mode,
+                start_web=start_web,
                 start_write=start_write,
                 startup_verbose=startup_verbose,
                 startup_show_reasoning=startup_show_reasoning,
@@ -945,6 +950,7 @@ def _run_interactive(
                 keep_loaded=keep_loaded,
                 resume_session_id=resume_session_id,
                 dev_mode=dev_mode,
+                start_web=start_web,
                 start_write=start_write,
                 startup_verbose=startup_verbose,
                 startup_show_reasoning=startup_show_reasoning,

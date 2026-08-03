@@ -327,6 +327,11 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     segs.append(Segment([_S("bash ", _DEFAULT),
                          _S("on" if session.unrestricted_bash else "off",
                             _on if session.unrestricted_bash else _off)], priority=3))
+    # web on/off — same shape as write/bash. Shown only when ON: network
+    # egress is the exception, and a third always-present "off" chip would
+    # crowd the bar for the offline default everyone actually runs.
+    if getattr(session, "web_enabled", False):
+        segs.append(Segment([_S("web ", _DEFAULT), _S("on", _on)], priority=3))
 
     # backend name — only when the config offers >1 endpoint (multi-backend is
     # the exception, not the rule; single-backend bars stay untouched). Mid

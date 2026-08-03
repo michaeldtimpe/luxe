@@ -50,6 +50,82 @@ test in test_chat_commands.py. Full suite at home: 2002 passed / 6 skipped.
 (In-flight runs showed 40 failures — all environment-induced by planeproxy
 isolation intercepting httpx test traffic; strip proxy env before believing
 failures on a tunnelled machine.)
+## ⇒ SESSION HANDOFF (2026-07-31, late) — web tools (`/web`), fleet confirmed
+
+**Fleet drill first.** `luxe smoke` on m5: READY in 9s, exit 0 — manifest
+(main Qwen3.6-35B-A3B-6bit · fallback Qwen3.6-27B-6bit), both weight sets on
+disk, endpoint, catalog, main turn 2.7s, tool call 1.9s, fallback turn 4.1s.
+All three mage-hands relays were brought up this session (alpha was already
+up; kappa and router1 via `relay.sh <name> up`) — `luxe-all` now publishes 38
+read-only tools from 3 servers.
+
+**New: `src/luxe/web/`** — the chat-only web surface, `/web` (and `--web`),
+**default OFF**. Four modules + `web.sdd`:
+
+- `fetch.py` — bounded GET. Two clocks (per-read timeout AND total wall
+  deadline), byte cap applied during streaming before decode, redirects
+  followed BY HAND so the guard re-runs per hop.
+- `extract.py` — HTML→markdown, **stdlib only** (no bs4/readability/lxml; the
+  fallback kit stays installable everywhere). Drops script/style/nav/header/
+  footer chrome, keeps headings, code blocks, list items, absolute link
+  targets. Non-HTML passes through unreformatted (reformatting a JSON API
+  response would corrupt it).
+- `browser.py` — headless Chromium via Playwright behind the optional `[web]`
+  extra + `playwright install chromium`. `availability()` is the single
+  "can we render?" answer and deliberately does NOT start the driver —
+  `sync_playwright()` spawns a Node subprocess whose teardown prints asyncio
+  chatter to stderr, which would land mid-chat-session; it checks import + the
+  on-disk browser dir instead, cached.
+- `search.py` — Brave/Tavily, key by env NAME through luxe.secrets. No key ⇒
+  the tool is **withheld**, not shipped-and-broken.
+
+**The egress guard is the load-bearing part.** luxe sits on a tailnet beside
+privileged relays, localhost oMLX, and a NAS, so an ungated fetch tool is SSRF
+against the operator's own fleet. It resolves the hostname (a textual blocklist
+is theatre — `localtest.me` resolves to 127.0.0.1) and refuses any non-public
+address, re-checking every redirect hop and the post-JS final URL. **A test
+caught a real gap mid-build**: `ipaddress.is_private` returns **False** for
+100.64.0.0/10 (RFC 6598 CGNAT) — which is exactly the tailnet range — so the
+obvious private/loopback/link-local check would have left every mage-hands relay
+fetchable. `is_global` now carries the check. Verified live: alpha, kappa and
+localhost:8000 are all refused by name.
+
+Gating is independent of `/write` on purpose (reading a page mutates nothing on
+disk). `/tools` shows the surface and what gates it; `/doctor` reports key +
+render availability with no network call (offline-purity contract intact);
+status bar gains a `web on` chip only when enabled. 33 tests in
+`tests/test_web.py`; suite 2000 passed (the one failure, `test_miss_func_49`,
+is the known `uv sync` prunes-mpmath gotcha and fails identically on a clean
+tree). Contracts: `web/web.sdd` (new), chat.sdd, CLAUDE.md, README.
+
+**Deferred (agreed 2026-08-03, not blocking — do these before extending the
+web surface further):**
+
+1. **Interactive browsing.** `render=true` loads and READS a page; it cannot
+   drive one. Click/type/scroll/wait across a persistent page session needs
+   page-lifetime management (who owns the browser between tool calls, when it
+   closes, what a cancelled turn does to it) — a materially bigger surface
+   than one-shot render, and the reason it was scoped out rather than
+   half-built. The egress guard must re-run on every in-session navigation,
+   not just at open.
+2. **Search key provisioning.** No `BRAVE_API_KEY`/`TAVILY_API_KEY` resolves
+   on any fleet host yet, so `web_search` is withheld everywhere — the code
+   path is untested against a live provider. Add one to `~/.luxe/secrets.env`
+   (or seed via `seedkeys`), then drill it on m1/m4/m5. Until then `web_fetch`
+   is URL-only in practice.
+3. **Consolidate the TWO overlapping browser stacks** (discovered 2026-08-03
+   on rebase; nothing is broken, but this should not be left standing). The
+   2026-08-02 handoff above restored `src/luxe/browser.py` —
+   `browse_navigate`/`browse_read` over headless-Chrome CDP, ALWAYS-ON, with a
+   deny-by-default host ALLOWLIST and the `[browser]` extra (pychrome +
+   trafilatura). This session independently added `src/luxe/web/` —
+   `web_fetch`/`web_search`, `/web`-GATED, with a deny-by-default IP-CLASS
+   egress guard and the `[web]` extra (playwright). They were built in parallel
+   and neither knew about the other. Both now ship. Decide: one stack or two,
+   one gating model or two (always-on vs `/web`), one guard (hostname
+   allowlist vs `is_global` IP classification — note the allowlist approach
+   does not by itself stop the CGNAT/tailnet case documented above), and one
+   browser dependency instead of pychrome AND playwright.
 
 ## ⇒ SESSION HANDOFF (2026-07-31, evening) — MCP multi-server isolation fix
 

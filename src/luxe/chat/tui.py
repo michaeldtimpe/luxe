@@ -845,7 +845,8 @@ class LogConsole:
 
 
 def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
-                 resume_session_id=None, dev_mode=False, start_write=False,
+                 resume_session_id=None, dev_mode=False, start_web=False,
+                 start_write=False,
                  startup_verbose=None,
                  startup_show_reasoning=False, startup_no_terse=False,
                  startup_debug=False, startup_compact=False, theme_name=None,
@@ -878,6 +879,8 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
     if dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True
+    if start_web:
+        session.web_enabled = True
     if start_write:
         # `luxe code` posture: write tools ON from turn one; bash stays gated.
         session.write_enabled = True
