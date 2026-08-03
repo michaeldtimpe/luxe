@@ -661,8 +661,8 @@ def _shared_chat_options(f):
                           "ON (equivalent to /write + /bash)."),
         click.option("--web", "start_web", is_flag=True, default=False,
                      help="Start with web tools ON (equivalent to /web): "
-                          "web_fetch, plus web_search when a provider key is "
-                          "configured."),
+                          "web_fetch, plus web_search / web_answer when "
+                          "their provider keys are configured."),
         click.option("--verbose", "startup_verbose", default=None,
                      type=click.Choice(["off", "diff", "full"]),
                      help="Set tool-output verbosity at startup."),

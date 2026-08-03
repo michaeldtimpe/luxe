@@ -496,9 +496,13 @@ never touches this module.
   address on every redirect hop and after JS navigation — `is_private` is NOT
   sufficient, because the tailnet is 100.64.0.0/10 (RFC 6598), which it reports
   as public; `is_global` is the load-bearing predicate. `/tools` lists the web
-  surface and what gates it, `/doctor` reports search-key + render availability
-  without a network call (offline-purity contract intact), and the status bar
-  shows a `web on` chip only when enabled.
+  surface and what gates it, `/doctor` reports search-key + answers-key +
+  render availability without a network call (offline-purity contract
+  intact), and the status bar carries a permanent `web on`/`web off` chip
+  alongside write/bash (always visible since 2026-08-03 — gate state is
+  information, not clutter). `web_answer` (Brave Answers, 2026-08-03) is a
+  separate feature from `web_search` on a separate key
+  (`BRAVE_ANSWERS_API_KEY`) — see web.sdd.
 - `--ctx <tier>` (chat/code startup flag) = `/ctx` before the first turn: sets
   `session.num_ctx_override`, clamped per-turn to the box/model ceiling exactly
   as `/ctx` is. Benchmark/maintain unaffected.

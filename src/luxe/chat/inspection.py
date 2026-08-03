@@ -287,14 +287,18 @@ def _add_web_check(doc, session) -> None:
     outages. Key lookup and the Chromium probe are both local."""
     if not getattr(session, "web_enabled", False):
         doc.add("web", OK, "off (no network egress from tools)",
-                "`/web` to enable web_fetch/web_search")
+                "`/web` to enable web_fetch/web_search/web_answer")
         return
     from luxe.web import search as _search
     from luxe.web.browser import availability as _avail
 
+    from luxe.web import answers as _answers
+
     bits = ["web_fetch on"]
     provider = _search.active_provider()
     bits.append(f"search via {provider[0].name}" if provider else "search withheld (no key)")
+    bits.append("answers on" if _answers.configured()
+                else "answers withheld (no key)")
     a = _avail()
     bits.append("render ready" if a.ok else "render unavailable")
     state = OK if (provider and a.ok) else WARN

@@ -213,9 +213,12 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     2026-07-31 and the chat.sdd MCP bullet.
   - **Web tools are `/web`-gated, default OFF** (2026-07-31; `src/luxe/web/`,
     walk `web/web.sdd` first). `web_fetch` (bounded GET → stdlib HTML→markdown;
-    `render=true` = headless Chromium via the optional `[web]` extra) and
+    `render=true` = headless Chromium via the optional `[web]` extra),
     `web_search` (Brave/Tavily key through luxe.secrets; withheld when no key
-    resolves). Gated independently of `/write` — reading a page mutates nothing
+    resolves), and `web_answer` (2026-08-03; Brave Answers — a SEPARATE
+    product/subscription from search: one server-side grounded answer via
+    the OpenAI-compatible /res/v1/chat/completions endpoint, keyed by
+    `BRAVE_ANSWERS_API_KEY`, withheld independently). Gated independently of `/write` — reading a page mutates nothing
     locally. Chat-only via the extra-tool seam: **never add these to
     `TOOL_FNS`**, since a benchmark that can reach the live internet is no
     longer reproducible. The egress guard refuses non-public hosts on every
@@ -248,8 +251,9 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     arrows; the footer carries `tok/s` and start/end timestamps + elapsed
     (`chat/render.py`).
   - **Status bar** (`chat/status.py`): order `path · git · ctx · cache · start ·
-    last · write · bash · slot · model` (`ctx N% <size>` e.g. 128K; `cache`=resident
-    prompt size — no cross-turn cache; `write`/`bash` on/off; slot+model last).
+    last · write · bash · web · slot · model` (`ctx N% <size>` e.g. 128K; `cache`=resident
+    prompt size — no cross-turn cache; `write`/`bash`/`web` on/off, all three
+    always visible; slot+model last).
     The model name carries a PROVENANCE glyph (`chat/origin.py`, 2026-07-29):
     `⌂` weights on local disk · `☁` network volume / cloud-sync tree · `⇅`
     remote endpoint (warn-coloured for the last two; no glyph when unknown).
