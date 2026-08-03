@@ -630,6 +630,7 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
     # The /web surface is gated, so it is listed separately from the
     # always-on extras above.
     if ctx.session.web_enabled:
+        from luxe.web.answers import configured as _answers_configured
         from luxe.web.search import configured as _search_configured
         ctx.console.print("  [green]·[/] web_fetch  [dim](/web on)[/]")
         if _search_configured():
@@ -637,8 +638,14 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
         else:
             ctx.console.print("  [yellow]·[/] web_search  "
                               "[dim](withheld — no provider API key)[/]")
+        if _answers_configured():
+            ctx.console.print("  [green]·[/] web_answer  [dim](/web on — "
+                              "grounded answers, separate from search)[/]")
+        else:
+            ctx.console.print("  [yellow]·[/] web_answer  "
+                              "[dim](withheld — no BRAVE_ANSWERS_API_KEY)[/]")
     else:
-        ctx.console.print("  [yellow]·[/] web_fetch, web_search  "
+        ctx.console.print("  [yellow]·[/] web_fetch, web_search, web_answer  "
                           "[dim](off — /web to enable)[/]")
     if gated:
         ctx.console.print(f"[bold]Gated by read-only mode[/] [dim](/write "
@@ -1204,6 +1211,14 @@ def _web_mode(args, ctx: CommandContext) -> CommandResult:
     else:
         ctx.console.print("  [yellow]·[/] web_search withheld [dim]— "
                           "no provider key found (see /doctor)[/]")
+    # Answers is a separate product on a separate key — report it separately.
+    from luxe.web.answers import configured as _answers_configured
+    if _answers_configured():
+        ctx.console.print("  [green]·[/] web_answer available [dim](brave "
+                          "answers — one grounded answer per question)[/]")
+    else:
+        ctx.console.print("  [yellow]·[/] web_answer withheld [dim]— "
+                          "no BRAVE_ANSWERS_API_KEY (see /doctor)[/]")
     # State the render capability up front: the model is told to retry with
     # render=true on a JS-heavy page, and that advice is useless if Chromium
     # was never installed on this host.

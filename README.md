@@ -202,7 +202,13 @@ download (`playwright install chromium`) is optional, since an already-installed
 Google Chrome or Chromium is used automatically when it's absent. `web_search`
 appears only when a provider key resolves (`BRAVE_API_KEY` or `TAVILY_API_KEY`,
 via env → `~/.luxe/secrets.env` → Keychain — the NAME goes in config, never the
-value). Start a session with the surface already on via `luxe chat --web`.
+value). `web_answer` is a **separate feature** on a **separate key**: Brave
+Answers (its own subscription) returns one server-side answer grounded in a
+live search, and the tool appears only when `BRAVE_ANSWERS_API_KEY` resolves —
+use it for quick factual questions, and `web_search` + `web_fetch` when you
+want the model to read and verify sources itself. Start a session with the
+surface already on via `luxe chat --web`; the status bar always carries a
+`web on`/`web off` chip alongside `write`/`bash`.
 
 Egress is guarded: only public http/https addresses are reachable. Private,
 loopback, link-local and **tailnet (100.64.0.0/10)** hosts are refused, on every

@@ -53,7 +53,9 @@ _SEARCH_DESC = (
     "Search the web and return ranked results with titles, URLs and snippets. "
     "Use it when you do not already know the URL; then call web_fetch on the "
     "result you want to read in full. Snippets are not sources — quote or "
-    "rely only on content you actually fetched."
+    "rely only on content you actually fetched. For a quick factual question "
+    "where one synthesized answer is enough, web_answer (when available) is "
+    "faster than searching and reading."
 )
 
 _SEARCH_PARAMS = {
@@ -62,6 +64,28 @@ _SEARCH_PARAMS = {
         "query": {"type": "string", "description": "Search query."},
         "count": {"type": "integer",
                   "description": "Number of results, 1-20 (default 5)."},
+    },
+    "required": ["query"],
+}
+
+_ANSWER_DESC = (
+    "Ask a question and get one AI-generated answer grounded in a live web "
+    "search, with the synthesis done server-side (Brave Answers). This is a "
+    "DIFFERENT feature from web_search: web_search returns ranked links for "
+    "you to read via web_fetch; web_answer returns a finished answer. Prefer "
+    "web_answer for quick factual questions; prefer web_search + web_fetch "
+    "when you need to inspect sources, read full pages, or verify claims."
+)
+
+_ANSWER_PARAMS = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string",
+                  "description": "The question to answer."},
+        "model": {"type": "string",
+                  "enum": ["brave", "brave-pro"],
+                  "description": "Answer model; omit for the provider "
+                                 "default. brave-pro is deeper and slower."},
     },
     "required": ["query"],
 }
@@ -117,12 +141,34 @@ def make_web_search_tool():
                    parameters=_SEARCH_PARAMS), _fn
 
 
+def make_web_answer_tool():
+    """(ToolDef, ToolFn) for `web_answer`. Caller withholds it with no key."""
+    from luxe.web.answers import answer
+
+    def _fn(args: dict) -> tuple[str, str | None]:
+        args = args or {}
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return "", "web_answer: `query` is required"
+        try:
+            return answer(query, model=str(args.get("model") or "")), None
+        except WebError as e:
+            return "", str(e)
+        except Exception as e:
+            return "", f"web_answer failed: {type(e).__name__}: {e}"
+
+    return ToolDef(name="web_answer", description=_ANSWER_DESC,
+                   parameters=_ANSWER_PARAMS), _fn
+
+
 def web_tools(*, include_search: bool = True) -> tuple[list, dict]:
     """All enabled web tools as (defs, fns) for the extra-tool seam.
 
-    `web_search` is included only when a provider key resolves — a tool that
-    can only ever return "no API key" is worse than no tool at all.
+    `web_search` and `web_answer` are each included only when their OWN key
+    resolves (they are separate subscriptions) — a tool that can only ever
+    return "no API key" is worse than no tool at all.
     """
+    from luxe.web.answers import configured as answers_configured
     from luxe.web.search import configured
 
     defs, fns = [], {}
@@ -131,6 +177,10 @@ def web_tools(*, include_search: bool = True) -> tuple[list, dict]:
     fns[d.name] = f
     if include_search and configured():
         d, f = make_web_search_tool()
+        defs.append(d)
+        fns[d.name] = f
+    if include_search and answers_configured():
+        d, f = make_web_answer_tool()
         defs.append(d)
         fns[d.name] = f
     return defs, fns

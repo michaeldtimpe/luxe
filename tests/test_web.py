@@ -13,11 +13,13 @@ import threading
 
 import pytest
 
+from luxe.web import answers as answers_mod
 from luxe.web import extract as extract_mod
 from luxe.web import search as search_mod
 from luxe.web.extract import extract_text, to_markdown
 from luxe.web.fetch import FetchResult, WebError, _is_public_ip, fetch_url
-from luxe.web.tools import make_web_fetch_tool, make_web_search_tool, web_tools
+from luxe.web.tools import (make_web_answer_tool, make_web_fetch_tool,
+                            make_web_search_tool, web_tools)
 
 
 # --- egress guard -----------------------------------------------------------
@@ -260,10 +262,12 @@ def test_tidy_collapses_blank_lines():
 
 def test_search_withheld_without_a_key(monkeypatch):
     monkeypatch.setattr(search_mod, "active_provider", lambda: None)
+    monkeypatch.setattr(answers_mod, "_key", lambda: "")
     defs, fns = web_tools()
     names = [d.name for d in defs]
     assert "web_fetch" in names
     assert "web_search" not in names and "web_search" not in fns
+    assert "web_answer" not in names and "web_answer" not in fns
 
 
 def test_search_included_when_a_key_resolves(monkeypatch):
@@ -287,6 +291,78 @@ def test_render_hits_formats_results():
     assert "https://u.test" in out and "web_fetch" in out
 
 
+# --- answers (a separate product from search, gated on its own key) ---------
+
+def test_answers_gated_independently_of_search(monkeypatch):
+    """Search key present, answers key absent ⇒ web_search yes, web_answer no
+    — and vice versa. They are separate subscriptions (web.sdd)."""
+    monkeypatch.setattr(search_mod, "active_provider",
+                        lambda: (search_mod._PROVIDERS[0], "k"))
+    monkeypatch.setattr(search_mod, "configured", lambda: True)
+    monkeypatch.setattr(answers_mod, "_key", lambda: "")
+    names = [d.name for d in web_tools()[0]]
+    assert "web_search" in names and "web_answer" not in names
+
+    monkeypatch.setattr(search_mod, "active_provider", lambda: None)
+    monkeypatch.setattr(search_mod, "configured", lambda: False)
+    monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
+    names = [d.name for d in web_tools()[0]]
+    assert "web_search" not in names and "web_answer" in names
+
+
+def test_answer_tool_reports_missing_key_as_a_tool_error(monkeypatch):
+    monkeypatch.setattr(answers_mod, "_key", lambda: "")
+    _defn, fn = make_web_answer_tool()
+    out, err = fn({"query": "anything"})
+    assert out == "" and "API key" in err
+
+
+def test_answer_parses_openai_shape(monkeypatch):
+    import httpx
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"model": "brave-pro",
+                    "choices": [{"message": {"role": "assistant",
+                                             "content": "K2."}}]}
+
+    monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    out = answers_mod.answer("second highest mountain?")
+    assert "K2." in out and "brave-pro" in out
+
+
+def test_answer_rejects_unknown_model(monkeypatch):
+    monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
+    with pytest.raises(WebError) as e:
+        answers_mod.answer("q", model="gpt-9")
+    assert "brave" in str(e.value)
+
+
+def test_answer_empty_content_is_an_error_not_a_blank_success(monkeypatch):
+    import httpx
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": ""}}]}
+
+    monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    with pytest.raises(WebError) as e:
+        answers_mod.answer("q")
+    assert "empty" in str(e.value)
+
+
 # --- chat gating ------------------------------------------------------------
 #
 # The load-bearing guarantee: web tools reach a turn ONLY via the extra-tool
@@ -306,6 +382,7 @@ def test_web_tools_are_absent_from_the_benchmark_tool_surface():
         names = {d.name for d in defs} | set(fns)
         assert "web_fetch" not in names, task_type
         assert "web_search" not in names, task_type
+        assert "web_answer" not in names, task_type
 
 
 def test_session_web_defaults_off():

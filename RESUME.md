@@ -1,5 +1,37 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-03b) — `web_answer` (Brave Answers) + permanent web chip + keys provisioned
+
+Operator session on the m5 box. Three things landed, all chat-only:
+
+1. **`web_answer` tool** (`src/luxe/web/answers.py`) — Brave **Answers** is a
+   separate product from Brave **Search**: an OpenAI-compatible
+   chat-completions endpoint (`POST /res/v1/chat/completions`, NOT
+   `/res/v1/answers` — that path 403s) that runs its own live search
+   server-side and returns ONE synthesized grounded answer
+   (`choices[0].message.content`; non-stream only — `enable_citations`
+   422s on blocking calls). Separate subscription, separate billing,
+   separate key: `BRAVE_ANSWERS_API_KEY`, withheld independently of
+   `web_search`'s `BRAVE_API_KEY`. Tool description steers the model:
+   answers for quick facts, search+fetch to read/verify sources itself.
+   `/web`, `/tools`, `/doctor`, `--web` help all report it separately.
+   Contract in web.sdd ("Search and answers are DIFFERENT features").
+2. **Status bar `web` chip is now permanent** (`chat/status.py`) —
+   `web on`/`web off` alongside write/bash, no longer hidden when off
+   (operator request: gate state is information, not clutter). chat.sdd +
+   CLAUDE.md order updated: `… write · bash · web · slot · model`.
+3. **This host is fully provisioned**: `[web]` extra + Playwright Chromium
+   installed and verified (plain fetch, render=true, live web_search via
+   brave, live web_answer turn all green); `BRAVE_API_KEY` +
+   `BRAVE_ANSWERS_API_KEY` added to `~/.luxe/secrets.env`. `/copy`
+   verified working end-to-end (pbcopy path).
+
+Suite 2034 passed (mpmath reinstalled — the known `uv sync` prune). Tests:
++5 in test_web.py (independent gating both directions, missing-key tool
+error, OpenAI-shape parsing, unknown-model reject, empty-answer-is-error);
+bench-surface test now also excludes web_answer; status tests cover web
+on/off + segment order.
+
 ## ⇒ SESSION HANDOFF (2026-08-03) — ONE web stack: `src/luxe/browser.py` folded into `src/luxe/web/`
 
 Two web/browser implementations landed in the same week from parallel sessions

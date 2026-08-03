@@ -39,13 +39,14 @@ def _flat(segs) -> str:
 
 def test_mode_shows_on_off_explicitly(slots):
     out = _flat(fields(ChatSession(), slots, "", StatusState()))
-    assert "write off" in out and "bash off" in out
+    assert "write off" in out and "bash off" in out and "web off" in out
 
 
 def test_mode_on_when_enabled(slots):
-    out = _flat(fields(ChatSession(write_enabled=True, unrestricted_bash=True),
+    out = _flat(fields(ChatSession(write_enabled=True, unrestricted_bash=True,
+                                   web_enabled=True),
                        slots, "", StatusState()))
-    assert "write on" in out and "bash on" in out
+    assert "write on" in out and "bash on" in out and "web on" in out
 
 
 def test_session_mode_chip_omitted_when_default(slots):
@@ -71,7 +72,8 @@ def test_segment_order_matches_spec(slots):
 
     def pos(token): return next(i for i, l in enumerate(labels) if token in l)
     assert pos("/r") < pos("ctx ") < pos("cache ") < pos("start ") < pos("last ") \
-        < pos("write ") < pos("bash ") < pos("chat") < pos("Champ-9000")
+        < pos("write ") < pos("bash ") < pos("web ") < pos("chat") \
+        < pos("Champ-9000")
 
 
 def test_ctx_shows_percent_and_window_size(slots):

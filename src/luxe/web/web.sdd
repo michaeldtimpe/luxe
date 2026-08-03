@@ -1,7 +1,17 @@
 # web
 
 Web access for `luxe chat`: bounded HTTP fetch, HTML→markdown extraction,
-optional headless-browser rendering, and provider-backed search.
+optional headless-browser rendering, provider-backed search, and grounded
+answers.
+
+**Search and answers are DIFFERENT features** (2026-08-03): `web_search`
+returns ranked links the model then reads via `web_fetch`; `web_answer`
+(answers.py — Brave Answers, an OpenAI-compatible chat-completions endpoint
+at /res/v1/chat/completions) returns ONE server-side-synthesized grounded
+answer. They are separate Brave subscriptions with separate billing, keyed
+separately: `BRAVE_API_KEY` (search) vs `BRAVE_ANSWERS_API_KEY` (answers).
+Each tool is withheld independently when its own key does not resolve. Do
+not fold one into the other or share a key between them.
 
 Added 2026-07-31. Every surface here is CHAT-ONLY and gated behind `/web`
 (default OFF). The package exists because a coding agent that cannot read
@@ -39,8 +49,9 @@ reintroduce any of them.
   loop (tools.sdd)
 - Report emptiness honestly: a page that extracted to almost nothing must say
   so and name the `render=true` retry, not return a blank-looking success
-- Withhold `web_search` entirely when no provider key resolves. A tool that
-  can only answer "no API key" is worse than no tool
+- Withhold `web_search` / `web_answer` entirely when their respective key
+  does not resolve. A tool that can only answer "no API key" is worse than
+  no tool
 - Resolve provider keys through `luxe.secrets` by env-var NAME only (env →
   ~/.luxe/secrets.env → Keychain). A key VALUE never appears in YAML or in
   this repo — same rule as the oMLX backends and the relay tokens
