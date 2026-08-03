@@ -194,6 +194,24 @@ terminal/YASL theme instead. The banner shows the build's git short-SHA so a run
 is traceable to a commit. `/ctx huge` reaches a 256K window where the box's
 `num_ctx_max` allows it (default window stays 32K).
 
+**Web (`/web`, default OFF):** `web_fetch` retrieves a page over HTTP(S) and
+returns readable markdown (HTML stripped to prose/headings/code/links; JSON and
+plain text pass through). `render=true` loads the page in headless Chromium for
+JavaScript-rendered sites — that needs `uv sync --extra web` plus
+`playwright install chromium`, neither of which is a base dependency. `web_search`
+appears only when a provider key resolves (`BRAVE_API_KEY` or `TAVILY_API_KEY`,
+via env → `~/.luxe/secrets.env` → Keychain — the NAME goes in config, never the
+value). Start a session with the surface already on via `luxe chat --web`.
+
+Egress is guarded: only public http/https addresses are reachable. Private,
+loopback, link-local and **tailnet (100.64.0.0/10)** hosts are refused, on every
+redirect hop and after any JS navigation, so the tool cannot be pointed at your
+oMLX endpoint, a NAS, the mage-hands relays, or cloud metadata. Set
+`LUXE_WEB_ALLOW_PRIVATE=1` in the environment to scrape a local address
+deliberately — it is an operator decision, never a tool argument. The web tools
+are chat-only and never reach the benchmark/maintain surface: a reproducible eval
+cannot depend on the live internet.
+
 **Git & MCP:** native read-only `git_diff/log/show` tools are always available; for
 richer git, add the commented git MCP server in `configs/mcp.yaml` (it's auto-
 namespaced `mcp__git__<tool>`). luxe has no large-repo *chunking* yet — it relies

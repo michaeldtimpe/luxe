@@ -281,6 +281,31 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
         doc.add("host manifest", WARN, f"check errored: {e}")
 
 
+def _add_web_check(doc, session) -> None:
+    """Report the /web surface. Never networked — the offline-purity contract
+    allows exactly one networked doctor line (`update`), and doctor runs during
+    outages. Key lookup and the Chromium probe are both local."""
+    if not getattr(session, "web_enabled", False):
+        doc.add("web", OK, "off (no network egress from tools)",
+                "`/web` to enable web_fetch/web_search")
+        return
+    from luxe.web import search as _search
+    from luxe.web.browser import availability as _avail
+
+    bits = ["web_fetch on"]
+    provider = _search.active_provider()
+    bits.append(f"search via {provider[0].name}" if provider else "search withheld (no key)")
+    a = _avail()
+    bits.append("render ready" if a.ok else "render unavailable")
+    state = OK if (provider and a.ok) else WARN
+    fix = ""
+    if not provider:
+        fix = _search.missing_key_message()
+    elif not a.ok:
+        fix = a.fix
+    doc.add("web", state, " · ".join(bits), fix)
+
+
 def run_doctor(session, slots, repo_path: str) -> Doctor:
     """Preflight the things that silently break a chat session.
 
@@ -392,6 +417,7 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
         doc.add("search index", OK, "not built (no project)")
         doc.add("mode", OK, f"{'write on' if session.write_enabled else 'read-only'} · "
                             f"bash {'unrestricted' if session.unrestricted_bash else 'allowlisted'}")
+        _add_web_check(doc, session)
         try:
             import textual  # noqa: F401
             doc.add("TUI", OK, "textual installed")
@@ -435,6 +461,7 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     bash = ("unrestricted" if session.unrestricted_bash else "allowlisted")
     doc.add("mode", OK, f"{mode} · bash {bash}",
             "" if session.write_enabled else "`/write` to let the model edit files")
+    _add_web_check(doc, session)
 
     try:
         import textual  # noqa: F401

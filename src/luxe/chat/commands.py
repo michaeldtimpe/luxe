@@ -77,6 +77,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/ctx", "[small|medium|large|xlarge|huge]", "show or set context window size"),
     ("/write", "", "toggle write tools (default: read-only)"),
     ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
+    ("/web", "", "toggle web tools: fetch/render pages + search (default: off)"),
     ("/verbose", "[diff|full|off]", "show full tool I/O (diffs, file contents, results)"),
     ("/reasoning", "", "toggle live streaming of the model's thinking"),
     ("/debug", "", 'toggle "show everything" (verbose full + reasoning)'),
@@ -158,6 +159,7 @@ def _build_handlers() -> dict:
         "/ctx": _ctx,
         "/write": _write,
         "/bash": _bash_mode,
+        "/web": _web_mode,
         "/verbose": _verbose,
         "/reasoning": _reasoning,
         "/debug": _debug,
@@ -589,6 +591,8 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
     (lessons.md 2026-06-01) — so the gated ones are listed too, with the toggle
     that restores them. What the model sees is what this prints.
     """
+    from rich.markup import escape
+
     from luxe.mcp.server import _MUTATION_TOOL_NAMES
 
     cap = modelcaps.for_model(ctx.slots.backend, ctx.slots.model_for("chat"))
@@ -622,7 +626,22 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
         ("browse_navigate", "always on — allowlisted, needs [browser] extra"),
         ("browse_read", "always on — allowlisted, needs [browser] extra"),
     ):
-        ctx.console.print(f"  [green]·[/] {extra}  [dim]({note})[/]")
+        # escape(): "[browser]" is valid Rich markup, so an unescaped note
+        # rendered as "needs  extra" with the extra's name swallowed.
+        ctx.console.print(f"  [green]·[/] {extra}  [dim]({escape(note)})[/]")
+    # The /web surface is gated, so it is listed separately from the
+    # always-on extras above.
+    if ctx.session.web_enabled:
+        from luxe.web.search import configured as _search_configured
+        ctx.console.print("  [green]·[/] web_fetch  [dim](/web on)[/]")
+        if _search_configured():
+            ctx.console.print("  [green]·[/] web_search  [dim](/web on)[/]")
+        else:
+            ctx.console.print("  [yellow]·[/] web_search  "
+                              "[dim](withheld — no provider API key)[/]")
+    else:
+        ctx.console.print("  [yellow]·[/] web_fetch, web_search  "
+                          "[dim](off — /web to enable)[/]")
     if gated:
         ctx.console.print(f"[bold]Gated by read-only mode[/] [dim](/write "
                           f"enables {len(gated)})[/]")
@@ -1159,6 +1178,46 @@ def _bash_mode(args, ctx: CommandContext) -> CommandResult:
 
 
 _VERBOSE_LEVELS = ("off", "diff", "full")
+
+
+def _web_mode(args, ctx: CommandContext) -> CommandResult:
+    """Toggle the web tool surface (default OFF).
+
+    Independent of /write on purpose: fetching a page mutates nothing on
+    disk, so tying it to the file-write gate would be a category error. It is
+    off by default because luxe is the offline fallback kit — network egress
+    from a tool is a capability you opt into, not one you inherit.
+    """
+    from luxe.web import search as search_mod
+
+    ctx.session.web_enabled = not ctx.session.web_enabled
+    if not ctx.session.web_enabled:
+        ctx.console.print("web tools: [green]OFF[/] "
+                          "[dim](no network egress from tools; /web to enable)[/]")
+        return CommandResult(handled=True)
+
+    ctx.console.print("web tools: [yellow]ON[/] "
+                      "[dim](web_fetch — public http/https only; private, "
+                      "loopback and tailnet hosts are refused)[/]")
+    if search_mod.configured():
+        provider = search_mod.active_provider()
+        name = provider[0].name if provider else "?"
+        ctx.console.print(f"  [green]·[/] web_search available [dim](via {name})[/]")
+    else:
+        ctx.console.print("  [yellow]·[/] web_search withheld [dim]— "
+                          "no provider key found (see /doctor)[/]")
+    # State the render capability up front: the model is told to retry with
+    # render=true on a JS-heavy page, and that advice is useless if Chromium
+    # was never installed on this host.
+    from luxe.web.browser import availability
+    avail = availability()
+    if avail.ok:
+        ctx.console.print("  [green]·[/] headless render available "
+                          "[dim](render=true)[/]")
+    else:
+        ctx.console.print(f"  [yellow]·[/] headless render unavailable [dim]— "
+                          f"{avail.reason}; fix: {avail.fix}[/]")
+    return CommandResult(handled=True)
 
 
 def _verbose(args, ctx: CommandContext) -> CommandResult:

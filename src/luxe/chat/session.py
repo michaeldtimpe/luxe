@@ -92,6 +92,11 @@ class ChatSession:
     languages: frozenset = field(default_factory=frozenset)
     write_enabled: bool = False
     unrestricted_bash: bool = False  # set by /bash; only effective in write mode
+    # set by /web: exposes web_fetch (+ web_search when a provider key
+    # resolves). Default OFF — luxe is the OFFLINE fallback kit, so network
+    # egress from a tool is opt-in per session, independent of write mode
+    # (reading a web page mutates nothing locally).
+    web_enabled: bool = False
     pinned_slot: str | None = None  # set by /use; consumed on the next turn
     num_ctx_override: int | None = None  # set by /ctx; clamped per-turn to num_ctx_max
     turns: list[ChatTurn] = field(default_factory=list)

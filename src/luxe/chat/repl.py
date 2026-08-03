@@ -200,6 +200,7 @@ def run_chat_repl(
     reader: Callable[[], str] | None = None,
     infer_task_type: Callable[[str], str] | None = None,
     dev_mode: bool = False,
+    start_web: bool = False,
     start_write: bool = False,
     startup_verbose: str | None = None,
     startup_show_reasoning: bool = False,
@@ -234,6 +235,8 @@ def run_chat_repl(
     if dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True
+    if start_web:
+        session.web_enabled = True
     if start_write:
         # `luxe code` posture: write tools ON from turn one (its reason to
         # exist is changing code). Bash stays gated — /bash as usual.
@@ -617,6 +620,16 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         # (tools.sdd). Same per-turn seam as the bash swap above.
         from luxe.tools.fs import make_prose_aware_write_fns
         extra_tool_fns.update(make_prose_aware_write_fns())
+
+    # Web tools (chat-only, `/web`, default OFF — web.sdd). Independent of
+    # write mode: fetching a page mutates nothing locally. `web_search` is
+    # included only when a provider key resolves. Benchmark/maintain never
+    # pass extra tools, so their surface is unchanged and still offline.
+    if session.web_enabled:
+        from luxe.web.tools import web_tools
+        _web_defs, _web_fns = web_tools()
+        extra_tool_defs.extend(_web_defs)
+        extra_tool_fns.update(_web_fns)
 
     # MCP tools (cli `--mcp`, chat-only): inspection tools ride every turn;
     # tools matching the server's `gate_tools` (mutating remote operations)

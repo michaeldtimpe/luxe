@@ -480,6 +480,22 @@ never touches this module.
   outage, which is when this path matters. `/tools` lists the MCP surface
   with its gating. The benchmark/maintain path reads `enabled_for` from
   configs/mcp.yaml as before and never touches `chat/mcptools.py`.
+- Web tools (2026-07-31, `/web` + `--web`, default OFF; package `src/luxe/web/`,
+  contract `web/web.sdd`). `web_fetch` (bounded HTTP GET → stdlib HTML→markdown
+  extraction, `render=true` for headless Chromium) and `web_search` (provider
+  key via luxe.secrets; withheld entirely when no key resolves). Injected
+  through the extra-tool seam in `prepare_turn` exactly like `net_probe` and the
+  MCP surface, so the benchmark/maintain path never sees them — a reproducible
+  eval must not be able to reach the live internet. **Gated independently of
+  `/write`**: reading a page mutates nothing on disk, and default-OFF is the
+  fallback-kit posture (network egress is opted into, not inherited). The
+  egress guard (`web/fetch.py`) refuses any host resolving to a non-public
+  address on every redirect hop and after JS navigation — `is_private` is NOT
+  sufficient, because the tailnet is 100.64.0.0/10 (RFC 6598), which it reports
+  as public; `is_global` is the load-bearing predicate. `/tools` lists the web
+  surface and what gates it, `/doctor` reports search-key + render availability
+  without a network call (offline-purity contract intact), and the status bar
+  shows a `web on` chip only when enabled.
 - `--ctx <tier>` (chat/code startup flag) = `/ctx` before the first turn: sets
   `session.num_ctx_override`, clamped per-turn to the box/model ceiling exactly
   as `/ctx` is. Benchmark/maintain unaffected.
