@@ -1451,9 +1451,15 @@ def update_cmd(no_sync: bool):
               help="Skip the tool-call turn.")
 @click.option("--keep-loaded", is_flag=True, default=False,
               help="Leave the last smoked model resident.")
+@click.option("--expect-model", default="",
+              help="Identity preflight: fail (exit 2) unless the target "
+                   "endpoint serves a model whose id contains this "
+                   "substring. Run before n-rep acceptance nights — a "
+                   "health check is not an identity check.")
 def smoke_cmd(config_path: str | None, backend_name: str | None,
               base_url: str, code_drill: bool, chat_drill: bool,
-              skip_fallback: bool, skip_tools: bool, keep_loaded: bool):
+              skip_fallback: bool, skip_tools: bool, keep_loaded: bool,
+              expect_model: str):
     """Aliveness drills for this host's fallback kit (minutes, not a bench).
 
     Default: manifest → weights → endpoint → catalog → one real turn + tool
@@ -1472,6 +1478,15 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
         sys.exit(2)
     t0 = time.time()
     glyphs = {"pass": "[green]✓[/]", "warn": "[yellow]⚠[/]", "fail": "[red]✗[/]"}
+
+    if expect_model:
+        from luxe.chat.smoke import check_expected_model
+        ok, detail = check_expected_model(cfg, expect_model,
+                                          base_url=base_url or None,
+                                          backend_name=backend_name)
+        console.print(f"  {glyphs['pass' if ok else 'fail']} identity — {detail}")
+        if not ok:
+            sys.exit(2)
 
     reports = []
     if code_drill or chat_drill:
