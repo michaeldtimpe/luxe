@@ -245,6 +245,7 @@ class TestVisibleModels:
             "Qwen3.6-27B-6bit",         # m5 fallback
             "Qwen3.6-27B-4bit",         # m1/m4 main
             "Qwen3.6-35B-A3B-4bit",     # m1/m4 fallback
+            "GLM-4.5-Air-4bit",         # m5 keep: opt-in capacity model
         }
         assert "gemma-3-27b-it-4bit" not in cfg.visible_models
 

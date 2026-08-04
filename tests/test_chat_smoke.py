@@ -274,6 +274,20 @@ def test_drill_backend_resolves_remote_manifest(monkeypatch):
     assert model == "Local-M"
 
 
+def test_drill_backend_model_override_beats_the_manifest(monkeypatch):
+    """`--model` drills a specific cached model (e.g. the m5 capacity model,
+    which is a keep:, never a main) — it must beat manifest resolution."""
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        hosts={"here": HostManifest(main="Local-M", fallback="Lf")},
+    )
+    backend, model = smoke_mod._resolve_drill_backend(
+        cfg, None, None, "Capacity-M")
+    assert model == "Capacity-M"
+    assert backend.model == "Capacity-M"
+
+
 def test_dangling_main_weights_fail_on_local_endpoint(monkeypatch):
     import luxe.modelstore as ms
     from luxe.chat import origin as origin_mod

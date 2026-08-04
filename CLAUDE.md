@@ -46,7 +46,14 @@ is multimodal so oMLX runs it on the slow vlm engine — dense-27B prefills at
 default on m1/m4 is deliberately NOT the champion** — do not "restore" it. The champion pin is a benchmark pin:
 `single_64gb.yaml` still selects it and m1 keeps its weights via the
 manifest's `keep:` list. A host with no `hosts:` entry behaves exactly as
-before (champion everywhere). Do not extend fan-out beyond these.
+before (champion everywhere). (c) **The m5-only capacity model**
+(2026-08-03/04): `GLM-4.5-Air-4bit` (106B-A12B, bake-off-passing) lives in
+m5's `keep:` + `visible_models` for capacity-over-speed sessions — opt-in
+per session via `/model all GLM-4.5-Air-4bit`, never a slot default, never
+a manifest main/fallback, never on m1/m4 (60 GB doesn't fit), never the
+bench champion. Overnight drill verdict 9/9 at ~2× wall:
+`acceptance/glm_capacity_drills/REPORT.md` (local),
+`scripts/capacity_drills.py` to re-run. Do not extend fan-out beyond these.
 
 ## Fallback kit (2026-07-30 pivot — read this before touching chat)
 

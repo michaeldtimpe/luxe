@@ -56,7 +56,7 @@ class CommandContext:
 # so every description starts at the same column regardless of command width.
 _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/help", "", "show this help"),
-    ("/model", "[slot] [model_id]", "show slots, or repoint chat|plan|code"),
+    ("/model", "[slot|all] [model_id]", "show slots, or repoint chat|plan|code (all = every slot)"),
     ("/backend", "[name|n]", "list configured oMLX backends, or switch to one"),
     ("/pull", "[repo|name] [--search q] [--yes]", "fetch model weights (mount → HF)"),
     ("/use", "<slot>", "pin the next turn to chat|plan|code"),
@@ -216,6 +216,12 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     `/model <slot>`         show that slot's model
     `/model <slot> <n>`     point the slot at the n-th available model
     `/model <slot> <id>`    point the slot at an explicit model id
+    `/model all <n|id>`     point ALL slots (chat+plan+code) at one model
+
+    `all` exists because freeform turns are keyword-routed to a slot
+    (`_infer_task_type`), so pinning only `chat` still lets a "fix…"/"add…"
+    message land on the code slot's model. One command = the whole session
+    runs the picked model.
     """
     if not args:
         slot_models = ctx.slots.slot_models()
@@ -258,11 +264,12 @@ def _model(args, ctx: CommandContext) -> CommandResult:
                               "still works)[/]")
         return CommandResult(handled=True)
     slot = args[0]
-    if slot not in _SLOTS:
-        ctx.console.print(f"[yellow]Unknown slot {slot!r}; expected chat|plan|code.[/]")
+    if slot not in _SLOTS and slot != "all":
+        ctx.console.print(f"[yellow]Unknown slot {slot!r}; expected chat|plan|code|all.[/]")
         return CommandResult(handled=True)
     if len(args) < 2:
-        ctx.console.print(f"  {slot} → {ctx.slots.model_for(slot)}")
+        for s in (_SLOTS if slot == "all" else (slot,)):
+            ctx.console.print(f"  {s} → {ctx.slots.model_for(s)}")
         return CommandResult(handled=True)
     sel = args[1]
     # Numeric selection indexes into the available-model list (1-based).
@@ -279,9 +286,15 @@ def _model(args, ctx: CommandContext) -> CommandResult:
         model_id = avail[idx - 1]
     else:
         model_id = sel
-    ctx.slots.set_override(slot, model_id)
-    ctx.console.print(f"[green]✓[/] slot [cyan]{slot}[/] → {model_id} "
-                      f"[dim](swaps on next {slot} turn)[/]")
+    targets = tuple(_SLOTS) if slot == "all" else (slot,)
+    for s in targets:
+        ctx.slots.set_override(s, model_id)
+    if slot == "all":
+        ctx.console.print(f"[green]✓[/] slots [cyan]{'·'.join(targets)}[/] → "
+                          f"{model_id} [dim](swaps on next turn)[/]")
+    else:
+        ctx.console.print(f"[green]✓[/] slot [cyan]{slot}[/] → {model_id} "
+                          f"[dim](swaps on next {slot} turn)[/]")
     try:
         org = origin_mod.origin_for(ctx.slots.backend, model_id)
     except Exception:

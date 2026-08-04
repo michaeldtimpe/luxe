@@ -51,6 +51,16 @@ hosts:
   m5:                                  # M5 Max, 128 GB
     main: "Qwen3.6-35B-A3B-6bit"
     fallback: "Qwen3.6-27B-6bit"
+    keep:
+      # Capacity experiment (2026-08-03): bake-off-validated big MoE for
+      # turns where depth beats speed. Opt-in per session via /model —
+      # never a main/fallback, never routed to by default.
+      - "GLM-4.5-Air-4bit"
+    ctx_max:
+      # Native window cap (GLM-4.5-Air is a 128K model; the monolith role's
+      # 262144 /ctx ceiling would overshoot it). Not a RAM cap — 4bit weights
+      # are ~60 GB, leaving ample KV headroom on 128 GB.
+      "GLM-4.5-Air-4bit": 131072
   # Small hosts run the MoE as main (flipped 2026-07-30 after real-turn data:
   # Qwen3.6 is a multimodal family, so oMLX routes it to the slow vlm engine —
   # the dense 27B prefills at ~65 tok/s with no cache reuse (63-74s chat
@@ -90,6 +100,11 @@ visible_models:
   - Qwen3.6-27B-6bit                  # m5 fallback
   - Qwen3.6-35B-A3B-4bit              # m1/m4 main (MoE — fast on vlm engine)
   - Qwen3.6-27B-4bit                  # m1/m4 fallback (dense — slow prefill)
+  # Capacity model (2026-08-03): 106B-A12B MoE, 10/10 on the m5max_moe
+  # bake-off gate. m5-only weights (~60 GB) — the roster is intersected with
+  # each host's server catalog, so m1/m4 never offer it. Pin per session:
+  # `/model chat GLM-4.5-Air-4bit` (or plan|code) when depth beats speed.
+  - GLM-4.5-Air-4bit
 
 models:
   # The pinned benchmark champion (single_64gb.yaml); also the m5 chat main.
@@ -99,6 +114,10 @@ models:
   dense_27b: "Qwen3.6-27B-6bit"
   dense_27b_4bit: "Qwen3.6-27B-4bit"
   moe_4bit: "Qwen3.6-35B-A3B-4bit"
+  # m5-only capacity model (see visible_models note). A handle for ad-hoc
+  # slot pointing; deliberately NOT wired into `slots:` — that block is
+  # fleet-shared and m1/m4 can't hold 60 GB of weights.
+  glm_air: "GLM-4.5-Air-4bit"
 
 roles:
   monolith:

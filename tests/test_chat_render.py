@@ -86,3 +86,29 @@ def test_footer_no_timestamp_line_without_bookends():
     console, buf = _console()
     render_footer(console, slot="chat", model="m", write_enabled=False, result=_result())
     assert "elapsed" not in buf.getvalue()
+
+
+# --- leaked-reasoning hygiene ------------------------------------------------
+
+
+def test_strip_leaked_reasoning_drops_headless_think_block():
+    """The GLM leak shape: no opening tag, reasoning + `</think>` + answer
+    all in content (server splitter needs the opening tag to separate)."""
+    from luxe.chat.render import strip_leaked_reasoning
+
+    leaked = "Now I have all the evidence. Step 1...\n</think>\n## Report\nAnswer."
+    assert strip_leaked_reasoning(leaked) == "## Report\nAnswer."
+
+
+def test_strip_leaked_reasoning_drops_a_full_think_block():
+    from luxe.chat.render import strip_leaked_reasoning
+
+    leaked = "<think>chain of thought</think>The answer is 42."
+    assert strip_leaked_reasoning(leaked) == "The answer is 42."
+
+
+def test_strip_leaked_reasoning_is_a_noop_without_the_marker():
+    from luxe.chat.render import strip_leaked_reasoning
+
+    for text in ("plain reply", "", "code: `<thinking>` isn't the marker"):
+        assert strip_leaked_reasoning(text) == text

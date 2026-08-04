@@ -1456,10 +1456,15 @@ def update_cmd(no_sync: bool):
                    "endpoint serves a model whose id contains this "
                    "substring. Run before n-rep acceptance nights — a "
                    "health check is not an identity check.")
+@click.option("--model", "model_override", default=None,
+              help="Drill this cached model instead of the manifest main "
+                   "(--chat/--code only — e.g. the m5 capacity model, which "
+                   "is a keep:, never a main). The default kit drill stays "
+                   "manifest-driven.")
 def smoke_cmd(config_path: str | None, backend_name: str | None,
               base_url: str, code_drill: bool, chat_drill: bool,
               skip_fallback: bool, skip_tools: bool, keep_loaded: bool,
-              expect_model: str):
+              expect_model: str, model_override: str | None):
     """Aliveness drills for this host's fallback kit (minutes, not a bench).
 
     Default: manifest → weights → endpoint → catalog → one real turn + tool
@@ -1493,16 +1498,21 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
         if chat_drill:
             console.print("[bold]chat drill[/]")
             reports.append(run_chat_drill(cfg, backend_name=backend_name,
-                                          base_url=base_url or None))
+                                          base_url=base_url or None,
+                                          model=model_override))
             for step in reports[-1].steps:
                 console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
         if code_drill:
             console.print("[bold]code drill[/]")
             reports.append(run_code_drill(cfg, backend_name=backend_name,
-                                          base_url=base_url or None))
+                                          base_url=base_url or None,
+                                          model=model_override))
             for step in reports[-1].steps:
                 console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
     else:
+        if model_override:
+            console.print("[yellow]⚠ --model applies to --chat/--code drills "
+                          "only; the kit drill is manifest-driven.[/]")
         reports.append(run_smoke(cfg, base_url=base_url or None,
                                  skip_fallback=skip_fallback,
                                  skip_tools=skip_tools))
