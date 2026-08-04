@@ -39,6 +39,13 @@ auto-memory.
   When `backends:` is absent a single "local" entry is synthesized from
   `omlx_base_url` so existing configs parse identically; benchmark/maintain
   keep reading `omlx_base_url` only
+- Backend retry decisions log on BOTH response paths (2026-08-04):
+  `_chat_stream` mirrors the non-stream path's
+  `logger.warning("backend … decision=…")` lines so an outage's retry
+  history reaches any installed session log handler (chat debug.log — the
+  scenario the fallback kit exists for). `on_retry` stays callback-only;
+  never remove the log lines in favor of it, and keep the two paths' line
+  format identical (one parser in `scripts/toolcall_taxonomy.py` covers both)
 - All mono prompt edits go through `src/luxe/agents/prompts.py` registry
 - Pin `--work-dir ~/.luxe/bench-workspace` for bench runs (random tempdir leaks into prompts)
 - Fetch model weights through oMLX's own downloader (`/admin/api/hf/*`, wrapped by

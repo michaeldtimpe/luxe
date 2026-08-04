@@ -376,16 +376,24 @@ uv run python scripts/toolcall_taxonomy.py --days 45 --context-days 400 \
 ```
 
 The 2026-08-04 run: **no class cleared the bar, so no hardening shipped** —
-`agents/loop.py` and `tools/base.py` are untouched. Verdicts per candidate in
+verdicts per candidate in
 `acceptance/toolcall_taxonomy_2026_08/C2-VERDICTS.md`; the silent
 text-fallback drop (the highest-expected-value candidate on paper) is
-**refuted at 0 occurrences in both windows**. The actionable finding is that
-tool RESULTS, text-fallback drops, and backend retry reasons are **never
-persisted**, so three classes can only be approximated — closing that is a
-bench-visible change and a user decision, not a drive-by. Run it under
+**refuted at 0 occurrences in both windows**. Run it under
 `uv run` (it reads the live tool registry; plain `python3` degrades to a
 static snapshot and says so). See `lessons.md` 2026-08-04 for why the
 hand-written tool list had to go.
+
+**Measurement gaps closed same day (user-approved follow-up, additive
+telemetry only — see `agents.sdd` § "Tool-call telemetry events"):** the
+loop now emits `tool_reject` (reason=schema|unknown_tool, name + message)
+and `textfallback_drop` (dropped names) into events.jsonl, and
+`backend._chat_stream` logs the same retry `decision=` line as the
+non-stream path so chat outage retry history reaches debug.log. None of
+this touches messages, dispatch, or control flow — the loop's model-visible
+behavior is unchanged, only the records got richer. The taxonomy script
+prefers direct events and suppresses its legacy proxies so mixed corpora
+(records straddling 2026-08-04) never double-count.
 
 ## Architecture: SpecDD Lever 2 `.sdd` chain
 

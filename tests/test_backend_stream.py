@@ -172,3 +172,24 @@ def test_stream_request_includes_usage_options():
     backend.chat([{"role": "user", "content": "hi"}], stream=True)
     assert captured["body"]["stream"] is True
     assert captured["body"]["stream_options"] == {"include_usage": True}
+
+
+# --- (3) stream-path retry decisions reach the logger (2026-08-04) ---------
+
+
+def test_stream_failure_decision_is_logged(caplog):
+    """The stream path used to hand retry decisions to `on_retry` and log
+    nothing — during an outage the retry history never reached debug.log.
+    It must now log the same `decision=` line as the non-stream path."""
+    import logging
+
+    from luxe.backend import BackendError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="bad request")
+
+    backend = _backend(httpx.MockTransport(handler))
+    with caplog.at_level(logging.WARNING, logger="luxe.backend"):
+        with pytest.raises(BackendError):
+            backend.chat([{"role": "user", "content": "hi"}], stream=True)
+    assert any("decision=" in r.getMessage() for r in caplog.records)

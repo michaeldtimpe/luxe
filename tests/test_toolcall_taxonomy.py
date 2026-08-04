@@ -216,3 +216,67 @@ class TestRendering:
 
     def test_read_only_over_a_missing_root(self, tmp_path):
         assert tt.main(["--luxe-root", str(tmp_path / "nope")]) == 1
+
+
+class TestDirectEvents:
+    """2026-08-04 follow-up: the loop emits `tool_reject` and
+    `textfallback_drop` directly. Direct events are preferred and the
+    legacy proxies must not double-count what they already covered."""
+
+    def test_tool_reject_schema_counts_per_name(self, luxe):
+        _run(luxe, "s1-0", [
+            {"kind": "tool_reject", "reason": "schema", "name": "edit_file",
+             "step": 2, "message": "Schema error: missing required key"},
+            {"kind": "single_mode_done", "schema_rejects": 1},
+        ])
+        b, _ = _collect(luxe)
+        assert b["schema_reject"].count == 1  # direct + remainder(0), not 2
+        assert b["schema_reject"].by_key["edit_file"] == 1
+
+    def test_legacy_run_total_still_counts(self, luxe):
+        _run(luxe, "s1-0", [{"kind": "single_mode_done", "schema_rejects": 2}])
+        b, _ = _collect(luxe)
+        assert b["schema_reject"].count == 2
+
+    def test_mixed_run_counts_only_the_remainder(self, luxe):
+        _run(luxe, "s1-0", [
+            {"kind": "tool_reject", "reason": "schema", "name": "edit_file",
+             "step": 1, "message": "m"},
+            {"kind": "single_mode_done", "schema_rejects": 3},
+        ])
+        b, _ = _collect(luxe)
+        assert b["schema_reject"].count == 3  # 1 direct + 2 remainder
+
+    def test_unknown_tool_direct_suppresses_the_name_heuristic(self, luxe):
+        _run(luxe, "s1-0", [
+            {"kind": "tool_reject", "reason": "unknown_tool",
+             "name": "final_report", "step": 3,
+             "message": "Unknown tool: final_report"},
+            {"kind": "tool_call", "name": "final_report", "step": 3},
+        ])
+        b, _ = _collect(luxe)
+        assert b["unknown_tool_name"].count == 1
+        assert b["unknown_tool_name"].by_key["final_report"] == 1
+
+    def test_textfallback_direct_event_counts_names(self, luxe):
+        _run(luxe, "s1-0", [
+            {"kind": "textfallback_drop", "names": ["made_up"], "step": 1,
+             "recovered": False},
+        ])
+        b, _ = _collect(luxe)
+        assert b["textfallback_drop"].count == 1
+        assert b["textfallback_drop"].by_key["made_up"] == 1
+
+    def test_textfallback_direct_suppresses_the_prose_proxy(self, luxe):
+        _run(luxe, "s1-0", [
+            {"kind": "textfallback_drop", "names": ["made_up"], "step": 1,
+             "recovered": False},
+        ])
+        _session(luxe, "s1", [
+            {"kind": "user", "text": "q"},
+            {"kind": "assistant", "run_id": "s1-0",
+             "text": '<tool_call>{"name": "made_up"}</tool_call>',
+             "steps": 1, "tool_calls": 0},
+        ])
+        b, _ = _collect(luxe)
+        assert b["textfallback_drop"].count == 1  # direct only, proxy quiet
