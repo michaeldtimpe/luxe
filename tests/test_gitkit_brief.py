@@ -218,3 +218,28 @@ class TestSpliceePrimitive:
 
     def test_read_block_returns_none_when_absent(self):
         assert project_mem.read_block("nothing here", "brief") is None
+
+
+class TestPreambleRecovery:
+    """The champion narrates before it complies (CLAUDE.md's load-bearing
+    finding). Recover deterministically instead of prompting harder."""
+
+    def test_leading_monologue_is_sliced_off(self):
+        raw = ("Now I have enough information to write the brief. "
+               "Let me compile it.\n\n## What this is\nA thing.\n")
+        assert brief_mod.strip_preamble(raw).startswith("## What this is")
+
+    def test_a_bogus_title_above_the_sections_is_dropped(self):
+        raw = "# PROJECT BRIEF\n\n## Stack\nPython\n"
+        assert brief_mod.strip_preamble(raw).startswith("## Stack")
+
+    def test_unheaded_text_is_left_alone(self):
+        assert brief_mod.strip_preamble("just prose") == "just prose"
+
+    def test_falls_back_to_the_first_heading_when_no_section_matches(self):
+        raw = "chatter\n\n## Something Else\nbody\n"
+        assert brief_mod.strip_preamble(raw).startswith("## Something Else")
+
+    def test_run_init_applies_it(self, repo, cfg):
+        res = _run(repo, cfg, "Let me compile it.\n\n## Layout\nsrc/ owns it\n")
+        assert res.text.startswith("## Layout")

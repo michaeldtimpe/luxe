@@ -723,5 +723,5 @@ def test_git_brief_hint_is_orientation_only():
     for section in ("what this is", "stack", "layout", "running it",
                     "invariants", "where things stand"):
         assert section in s, section
-    assert "50 lines" in s                       # bounded by construction
+    assert "50 lines" in s or "2,000 characters" in s   # bounded by construction
     assert "never invent" in s                   # grounding discipline

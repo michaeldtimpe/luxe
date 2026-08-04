@@ -363,6 +363,30 @@ worse), and Python recovers/packages the findings deterministically
 exploring") were REFUTED — do not try to prompt-discipline conclusion; improve the
 deterministic recovery instead.
 
+## Tool-call taxonomy — evidence before hardening (2026-08-04)
+
+`scripts/toolcall_taxonomy.py` mines `~/.luxe/{runs,sessions}` (read-only) for
+tool-call failure classes: schema rejects, unknown-tool dispatches, duplicate
+storms, silent text-fallback drops, empty responses, aborts, turn errors.
+Evidence bar: **≥5 occurrences across ≥2 distinct sessions** in the window.
+
+```bash
+uv run python scripts/toolcall_taxonomy.py --days 45 --context-days 400 \
+    --out acceptance/toolcall_taxonomy_2026_08/REPORT.md
+```
+
+The 2026-08-04 run: **no class cleared the bar, so no hardening shipped** —
+`agents/loop.py` and `tools/base.py` are untouched. Verdicts per candidate in
+`acceptance/toolcall_taxonomy_2026_08/C2-VERDICTS.md`; the silent
+text-fallback drop (the highest-expected-value candidate on paper) is
+**refuted at 0 occurrences in both windows**. The actionable finding is that
+tool RESULTS, text-fallback drops, and backend retry reasons are **never
+persisted**, so three classes can only be approximated — closing that is a
+bench-visible change and a user decision, not a drive-by. Run it under
+`uv run` (it reads the live tool registry; plain `python3` degrades to a
+static snapshot and says so). See `lessons.md` 2026-08-04 for why the
+hand-written tool list had to go.
+
 ## Architecture: SpecDD Lever 2 `.sdd` chain
 
 Every directory of consequence has a `<dir>/<dir>.sdd` contract listing

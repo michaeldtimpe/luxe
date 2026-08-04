@@ -15,6 +15,7 @@ report format and somewhere to save it.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +38,33 @@ class BriefResult:
     truncated: bool = False
     used_cached_survey: bool = False
     error: str = ""
+
+
+#: The sections GIT_BRIEF_HINT asks for, in order. Used to find where the
+#: brief actually starts.
+_SECTIONS = ("what this is", "stack", "layout", "running it",
+             "invariants", "where things stand")
+_HEADING_RE = re.compile(r"^(#{1,4})\s+(.+?)\s*$", re.MULTILINE)
+
+
+def strip_preamble(text: str) -> str:
+    """Drop any leading monologue before the brief's first real section.
+
+    Same lesson as `deep._heuristic_findings` (CLAUDE.md): the champion will
+    not be prompted out of narrating ("Now I have enough information to write
+    the brief. Let me compile it.") — recover deterministically in Python
+    instead. Slices from the first heading whose text matches a requested
+    section, else from the first heading, else leaves the text alone.
+    """
+    body = (text or "").strip()
+    first_any = None
+    for m in _HEADING_RE.finditer(body):
+        title = m.group(2).strip().lower().lstrip("*# ").rstrip("*")
+        if first_any is None:
+            first_any = m.start()
+        if any(title.startswith(s) for s in _SECTIONS):
+            return body[m.start():].strip()
+    return body[first_any:].strip() if first_any else body
 
 
 def cap_brief(text: str, *, limit: int = MAX_BRIEF_CHARS) -> tuple[str, bool]:
@@ -177,7 +205,7 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
         return BriefResult(ok=False, repo_root=target,
                            error="the model produced no brief — retry, or "
                                  "check `luxe ready`")
-    body, truncated = cap_brief(text)
+    body, truncated = cap_brief(strip_preamble(text))
 
     if dry_run:
         return BriefResult(ok=True, repo_root=target, text=body,
