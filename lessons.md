@@ -30,6 +30,30 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-03] brew upgrade under a running oMLX = every HF operation dies with bare `[Errno 2]`
+
+**What happened**: `luxe pull mlx-community/GLM-4.5-Air-4bit` failed instantly
+(`[Errno 2] No such file or directory` at 0 bytes), as did the oMLX admin HF
+search (502). The server was otherwise healthy — catalog listing and chat
+turns worked, which made the downloader look broken rather than the process.
+
+**Root cause**: `brew upgrade omlx` (0.5.3 → 0.5.5, 13:41 that day) deleted
+the old Cellar tree while the launchd service kept running the 0.5.3 process
+(`lsof -p <pid>` showed open files under `Cellar/omlx/0.5.3/`). Already-loaded
+code kept working, but the first HTTPS attempt lazily opens the certifi CA
+bundle from the now-deleted site-packages path → `FileNotFoundError` on every
+`HfApi` call. brew does not restart a running service on upgrade, and the
+error message never mentions a path, so nothing points at the stale process.
+
+**Fix / takeaway**: `brew services restart omlx` — everything worked
+immediately. Takeaway: an oMLX "network" failure with `[Errno 2]` (a *file*
+errno) is the stale-process signature; check
+`lsof -p <omlx pid> | grep Cellar` against the installed version before
+debugging the network. Applies to any brew-managed long-running service.
+
+**Affected files**: none in-repo (host state). Diagnosed via
+`~/.omlx/logs/server.log` + `/opt/homebrew/var/log/omlx.log`.
+
 ### [2026-08-03] Two sessions built the same feature; the autostash nearly shipped conflict markers
 
 **What happened**: two things, one root.
