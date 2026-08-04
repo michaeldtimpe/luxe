@@ -62,9 +62,15 @@ never touches this module.
   also persist a kind="error" transcript record (rendered by `/export`,
   ignored by resume pairing)
 - `luxe smoke` (chat/smoke.py) is the aliveness drill: manifest resolved,
-  weights real on disk, endpoint up, catalog complete, one real generation +
-  one tool call on main, one generation on the fallback (exercises the swap).
+  weights real on disk, endpoint up, oMLX build not stale, catalog complete,
+  one real generation + one tool call on main, one generation on the fallback
+  (exercises the swap).
   Minutes, not a bench; exit 0/1; run it after provisioning and on a schedule.
+  The `oMLX build` step (`luxe.staleproc`, shared with `/doctor` — same
+  invariants, see the `/doctor` bullet) is diagnostic and WARN-only: it must
+  never flip the exit code on its own, because its job is to EXPLAIN the turn
+  failures below it, not to add a new way for a working host to go red. It is
+  positioned directly after `endpoint` for that reason.
   `--code` / `--chat` run the AGENTIC drills instead (combinable): real
   run_single turns against a planted scratch git repo — --code plants a
   one-line bug + failing test and verifies the fix DETERMINISTICALLY (pytest
@@ -362,10 +368,22 @@ never touches this module.
   and defaults to the files THIS session wrote (ledger `files`), falling back to
   the working tree with the scope named — it diffs against HEAD so staged edits
   show, reports untracked files as new, and survives a repo with no commits.
-  `/doctor` returns ordered `Check`s (endpoint → key → model → weights →
-  manifest → disk → update → index → freshness → tree → mode → TUI); every
+  `/doctor` returns ordered `Check`s (endpoint → build → key → model → weights
+  → manifest → disk → update → index → freshness → tree → mode → TUI); every
   WARN/FAIL carries the fix, an unreachable endpoint is a FAIL not an
-  exception, and nothing it calls may raise. The `update` check is the ONE
+  exception, and nothing it calls may raise. The `build` check
+  (`luxe.staleproc`, shared with `luxe smoke`) sits directly under the endpoint
+  because it EXPLAINS the checks below it: a server left running across a
+  `brew upgrade` executes from a deleted Cellar tree, passes health and
+  catalog, then fails the next LAZY import with an error naming whatever
+  module it reached for — certifi's CA bundle as `[Errno 2]` (2026-08-03), a
+  transformers submodule as `ModuleNotFoundError` (2026-08-04, where the
+  installed venv demonstrably had it). It is WARN, never FAIL: a stale process
+  may still be serving everything asked of it, and the real checks fail on
+  their own if it is not. LOCAL endpoints only (a remote host's process table
+  is its own doctor's problem) and offline-pure (pgrep/lsof/stat). An
+  INCONCLUSIVE verdict — service not running, not brew-installed, lsof mute —
+  prints NOTHING rather than a clean bill of health. The `update` check is the ONE
   doctor line allowed to touch the network (a ≤4s `git fetch` on the luxe
   source repo via `buildinfo.fetch_origin`; behind → WARN "`luxe update`");
   offline degrades to a quiet OK "unchecked" — doctor runs during outages by
