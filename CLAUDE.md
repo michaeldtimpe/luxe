@@ -75,6 +75,16 @@ when reached for — availability over capability. Concretely:
   HF-cache-wipe signature — a listed model the server can't load),
   `luxe pull <name> --remove` deletes but refuses manifest models sans
   --force.
+- **`luxe ready`** (alias `luxe doctor`) is the point-in-time host preflight
+  (seconds, no model): `/doctor`'s checks against a stand-in session, printed
+  through the SHARED renderer `chat.inspection.render_doctor`, then a verdict
+  — exit 0 on ok/warn, 1 on any FAIL, 2 on a bad `--backend`. Offline-safe
+  (doctor's one ≤4s `update` fetch degrades quietly). Every `Check.fix` is a
+  runnable command. **`luxe outage` / `/outage`** print `OUTAGE.md`, the
+  ≤120-line offline emergency card (one reader, `luxe.outage.load_card`; a
+  test asserts every `luxe <sub>` it names is a registered command, so it
+  can't rot). There is deliberately **no scheduled/cron/launchd/alerting
+  counterpart** — user decision; don't add one.
 - **`luxe smoke`** is the aliveness drill (minutes): manifest → weights →
   endpoint → catalog → one real turn + tool call on main → one turn on
   fallback. Run it after provisioning and on a schedule; exit 0 = ready.

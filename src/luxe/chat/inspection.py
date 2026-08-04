@@ -336,6 +336,50 @@ def _add_web_check(doc, session) -> None:
     doc.add("web", state, " · ".join(bits), fix)
 
 
+def render_doctor(doc: Doctor, console, *, title: str = "Doctor") -> str:
+    """Print `doc` as the glyph table + `→ fix` lines and return the verdict key.
+
+    Single-sourced so `/doctor` (in-session) and `luxe ready` (host-level,
+    no REPL) print IDENTICALLY — two renderers would drift, and the whole
+    point of `ready` is that the operator sees the same table under pressure
+    that they see in a session.
+    """
+    glyphs = {OK: "[green]✓[/]", WARN: "[yellow]![/]", FAIL: "[red]✗[/]"}
+    width = max((len(c.name) for c in doc.checks), default=0)
+    console.print(f"[bold]{title}[/]")
+    for c in doc.checks:
+        console.print(f"  {glyphs.get(c.state, '·')} "
+                      f"[dim]{c.name.ljust(width)}[/]  {c.detail}")
+        if c.fix and c.state != OK:
+            console.print(f"    [dim]→ {c.fix}[/]")
+    return doc.worst
+
+
+def hostwide_view(doc: Doctor) -> Doctor:
+    """Restate the SESSION-scoped checks for a host-level run (`luxe ready`).
+
+    `ready` builds a stand-in session (write/bash/web off, no index) purely so
+    `run_doctor` can be reused verbatim. Left alone, those lines would report
+    facts about the stand-in and read as claims about the session the user is
+    about to start — "read-only", "search index not built" — which `ready`
+    knows nothing about. Restate them as the startup defaults and drop their
+    fix lines so they can never colour the verdict. Mutates and returns `doc`.
+    """
+    restated = {
+        "mode": ("n/a outside a session (chat starts read-only · bash "
+                 "allowlisted; `luxe code` and `--dev` start with write on)"),
+        "web": "n/a outside a session (chat starts with web off)",
+        "search index": ("not built (`luxe ready` doesn't index; chat builds "
+                         "it at startup)"),
+    }
+    for c in doc.checks:
+        if c.name in restated:
+            c.state = OK
+            c.detail = restated[c.name]
+            c.fix = ""
+    return doc
+
+
 def run_doctor(session, slots, repo_path: str) -> Doctor:
     """Preflight the things that silently break a chat session.
 
@@ -372,7 +416,8 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
 
     if not getattr(backend, "api_key", ""):
         doc.add("API key", WARN, "no key resolved for this endpoint",
-                "set OMLX_API_KEY (see ~/.luxe/secrets.env)")
+                "`echo 'OMLX_API_KEY=<key>' >> ~/.luxe/secrets.env` "
+                "(or export it in this shell)")
     else:
         doc.add("API key", OK, "present")
 
@@ -395,17 +440,19 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
                 pass
         if org.kind == "network":
             doc.add("weights", WARN, f"{org.glyph} {org.detail}",
-                    "loading streams them over the network — expect a slow "
-                    "first turn")
+                    f"`luxe pull {model}` to copy them to local disk "
+                    "(loading over the network makes the first turn slow)")
         elif org.kind == "remote":
             doc.add("weights", WARN, f"{org.glyph} served by {org.detail}",
-                    "prompts and weights cross the network")
+                    f"`luxe pull {model}` here, then `--backend local`, if "
+                    "prompts should not cross the network")
         elif org.kind == "local":
             doc.add("weights", OK, f"{org.glyph} local disk")
         else:
             doc.add("weights", WARN, "location unreported by oMLX")
     else:
-        doc.add("chat model", WARN, f"{model} (unverified — endpoint down)")
+        doc.add("chat model", WARN, f"{model} (unverified — endpoint down)",
+                "fix the endpoint above first, then re-run")
 
     # Host manifest (fallback kit): the declared main/fallback pair for this
     # machine, and whether its weights are actually on disk. Config-only plus
@@ -417,7 +464,8 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
         free = shutil.disk_usage(Path.home()).free
         if free < _MIN_FREE_GB * 1024**3:
             doc.add("disk", WARN, f"{human_bytes(free)} free",
-                    f"a weight swap wants ~{_MIN_FREE_GB} GB of headroom")
+                    "`luxe pull --list` then `luxe pull <model> --remove` an "
+                    f"unused model (a swap wants ~{_MIN_FREE_GB} GB of headroom)")
         else:
             doc.add("disk", OK, f"{human_bytes(free)} free")
     except OSError as e:
@@ -468,7 +516,8 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
 
         if index is None:
             doc.add("search index", WARN, "not built",
-                    "restart chat in the repo you want indexed")
+                    "`/index` in chat, or start with "
+                    "`luxe chat --repo <path>`")
         else:
             doc.add("search index", OK, f"{len(getattr(index, 'paths', []))} files")
         if is_git_repo(repo_path):
@@ -478,7 +527,7 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
                     and not indexed.startswith(head):
                 doc.add("index freshness", WARN,
                         f"indexed at {indexed}, HEAD is now {head}",
-                        "restart chat to reindex")
+                        "`/index` to reindex (or restart chat)")
             else:
                 doc.add("index freshness", OK, head or "(no commits)")
             diffs, err = session_diff(repo_path)
@@ -490,8 +539,9 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
             else:
                 doc.add("working tree", OK, "clean")
         else:
-            doc.add("git", WARN, "not a git repo",
-                    "`/diff` and git tools won't work here")
+            doc.add("git", WARN, "not a git repo — `/diff` and git tools "
+                                 "won't work here",
+                    f"`git -C {repo_path} init` if it should be one")
     else:
         doc.add("repo", WARN, "no repo path for this session")
 

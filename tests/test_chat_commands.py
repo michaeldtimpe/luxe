@@ -1019,3 +1019,88 @@ class TestFullCommand:
     def test_full_with_no_turns(self, ctx):
         assert cmd.dispatch("/full", ctx).handled
         assert "No answer to expand" in _text(ctx)
+
+
+class TestCommandSurfaceParity:
+    """The drift killer. `_build_handlers()` and `_HELP_ROWS` are two
+    independent lists; nothing but this test stops a shipped command from
+    being invisible in `/help`, or a help row from naming a command that
+    doesn't exist."""
+
+    def test_every_handler_is_documented_or_declared_hidden(self):
+        handlers = set(cmd._build_handlers())
+        documented = {row[0].split()[0] for row in cmd._HELP_ROWS}
+        undocumented = sorted(handlers - documented - cmd._HIDDEN_COMMANDS)
+        assert undocumented == [], (
+            f"commands missing from /help: {undocumented} — add a _HELP_ROWS "
+            "row, or declare it in _HIDDEN_COMMANDS if hiding is the intent")
+
+    def test_every_help_row_names_a_real_command(self):
+        handlers = set(cmd._build_handlers())
+        for name, _args, _desc in cmd._HELP_ROWS:
+            assert name.split()[0] in handlers, f"/help lists {name}, which has no handler"
+
+    def test_hidden_allowlist_has_no_stale_entries(self):
+        handlers = set(cmd._build_handlers())
+        stale = sorted(cmd._HIDDEN_COMMANDS - handlers)
+        assert stale == [], f"_HIDDEN_COMMANDS names dead commands: {stale}"
+
+
+class TestUnknownCommandSuggestion:
+    def test_typo_suggests_the_nearest_command(self, ctx):
+        cmd.dispatch("/wrte", ctx)
+        out = _text(ctx)
+        assert "Unknown command /wrte" in out and "/write" in out
+
+    def test_nonsense_still_falls_back_to_help(self, ctx):
+        cmd.dispatch("/zzzzqqqq", ctx)
+        out = _text(ctx)
+        assert "Unknown command" in out and "/help" in out
+        assert "Did you mean" not in out
+
+
+class TestOutageInSession:
+    def test_outage_prints_the_card(self, ctx):
+        assert cmd.dispatch("/outage", ctx).handled
+        out = _text(ctx)
+        assert "luxe ready" in out and "OUTAGE" in out
+
+
+class TestGateHints:
+    """Every user-visible refusal names its unlock (chat-only surfaces)."""
+
+    def test_tools_says_mcp_attaches_at_startup_when_none_are_attached(self, ctx):
+        assert cmd.dispatch("/tools", ctx).handled
+        out = _text(ctx)
+        assert "MCP" in out and "--mcp" in out and "STARTUP" in out.upper()
+
+    def test_explicit_model_id_not_in_the_catalog_is_explained(self, ctx, monkeypatch):
+        monkeypatch.setattr(type(ctx.slots.backend), "list_models",
+                            lambda self: ["Champ", "Other"])
+        cmd.dispatch("/model chat NotServed", ctx)
+        out = _text(ctx)
+        assert "isn't in this endpoint's catalog" in out and "/pull" in out
+
+    def test_hidden_but_served_model_says_hidden_not_unknown(self, ctx, monkeypatch):
+        monkeypatch.setattr(type(ctx.slots.backend), "list_models",
+                            lambda self: ["Champ", "SecretModel"])
+        ctx.slots.cfg.visible_models = ["Champ"]
+        cmd.dispatch("/model chat SecretModel", ctx)
+        out = _text(ctx)
+        assert "visible_models" in out and "using it anyway" in out
+
+    def test_attach_over_total_cap_names_the_way_out(self, ctx, tmp_path):
+        big = tmp_path / "big.txt"
+        big.write_text("x" * (cmd.ATTACH_MAX_FILE_BYTES))
+        # Fill the turn budget, then overflow it.
+        for _ in range(cmd.ATTACH_MAX_TOTAL_BYTES // cmd.ATTACH_MAX_FILE_BYTES + 1):
+            cmd.dispatch(f"/attach {big}", ctx)
+        out = _text(ctx)
+        assert "cap reached" in out and "one-shot" in out
+
+    def test_attach_binary_refusal_names_the_alternative(self, ctx, tmp_path):
+        blob = tmp_path / "b.bin"
+        blob.write_bytes(b"\x00\x01\x02" * 100)
+        cmd.dispatch(f"/attach {blob}", ctx)
+        out = _text(ctx)
+        assert "looks binary" in out and "read_file" in out

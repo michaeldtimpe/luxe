@@ -100,8 +100,27 @@ luxe pr     <run-id> [--push-only]              # resume a partially-completed P
 luxe runs   list | luxe runs gc                 # housekeeping
 luxe unload [--except <model-id>]               # free oMLX RAM (auto-runs after maintain)
 luxe serve  [--transport stdio|sse] [--unsafe]  # MCP server (read-only by default)
+luxe ready  [--backend <name>] [--repo <path>]  # "can I work right now?" host preflight
+luxe outage [--plain]                           # print the offline emergency card
 luxe check                                      # oMLX + models + gh auth
 ```
+
+### `luxe ready` / `luxe outage` — the anti-fumble pair
+
+`luxe ready` (alias `luxe doctor`) is the point-in-time host preflight: the
+same table `/doctor` prints inside a session — endpoint, oMLX build, key,
+model, weights, manifest, disk, update, git — rendered by the same code, with
+a verdict and an exit code (0 = READY, warnings included; 1 = something is
+broken). Seconds, no model loaded, and offline-safe: the ≤4s `update` fetch is
+the only network call and degrades quietly. Every `✗`/`!` carries a runnable
+`→ fix`.
+
+`luxe outage` prints [`OUTAGE.md`](OUTAGE.md), the ≤120-line offline emergency
+card: what to run when Anthropic is down, the gate table (`/write` `/bash`
+`/web` `/ctx`), the per-host model cheat sheet, recovery commands, and where
+the forensics live. It needs no config, no model, and no network — `/outage`
+prints the same card inside a session, and `luxe ready` points at it when it
+says NOT READY.
 
 Examples:
 
@@ -575,6 +594,8 @@ luxe smoke --chat --code --model GLM-4.5-Air-4bit
 
 Escalation ladder when something feels off:
 
+0. `luxe ready` (a second, no model) — is the host even set up? Every red line
+   carries a runnable fix; `luxe outage` is the offline card it points at.
 1. `luxe smoke` (seconds) — is the host alive at all?
 2. `luxe smoke --chat --code` (a minute) — does the agentic pipeline work?
 3. **Headless scripted session** — reproduce anything a REPL session does:
