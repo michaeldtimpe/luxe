@@ -4165,3 +4165,39 @@ investigation on the wrong layer; state the observable instead ("native
 tool_calls empty; content non-empty").
 
 **Affected files**: `src/luxe/backend.py`, `tests/test_backend_recovery.py`.
+
+### [2026-08-04] A hand-maintained tool list gave the tool-call taxonomy a wrong denominator
+
+**What happened**: The C1 mining script for the operability cycle classified a
+dispatched tool name as a hallucination when it wasn't in a `KNOWN_TOOLS`
+constant written from memory. First run: **342 "unknown tool" dispatches
+across 68 sessions** — comfortably over the evidence bar, and enough to
+justify shipping a hardening change to `agents/loop.py`. The top three values
+were `cve_lookup` ×210, `foo` ×66, and `git_show` ×34. `cve_lookup` and
+`git_show` are **real luxe tools**; `foo` came from the chunk-conclude A/B
+replay harness, which dispatches synthetic names by construction. The true
+figure was **21 across 13 sessions** — below the bar. The number that would
+have justified the code was 94% artefact.
+
+**Root cause**: Two independent errors that compounded. (1) The known-tool set
+was transcribed by hand rather than read from the registry, and it invented
+plausible-sounding names (`run_tests`, `git_status`, `apply_patch`) while
+omitting three real ones. (2) Bench apparatus runs were mixed into a corpus
+that was supposed to measure agent behaviour. Neither error is visible in the
+output — a wrong denominator produces a confident, well-formatted, entirely
+wrong table.
+
+**Fix / takeaway**: The script now reads the surface from the LIVE registry
+(`_build_full_tool_surface` over every task type) with the static snapshot as
+a labelled fallback, prints its provenance in the corpus table, and excludes
+apparatus run-id prefixes by default (`--include-apparatus` restores them). A
+test asserts the fallback snapshot still matches the live set, so it cannot go
+stale silently. **General principle: when a mining script's output decides
+whether code ships, the ground-truth set it classifies against must be
+derived, not remembered — and it must state where it came from in the report
+it generates.** The corollary bit too: model output is not trustworthy as
+display data (one mined name was `list_dir` followed by ~400 newlines, which
+rendered as a page of blank lines and silently broke the markdown table).
+
+**Affected files**: `scripts/toolcall_taxonomy.py`,
+`tests/test_toolcall_taxonomy.py`, `acceptance/toolcall_taxonomy_2026_08/`.
