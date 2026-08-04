@@ -88,6 +88,22 @@ class CancelToken:
 # Args most worth surfacing first when summarizing a tool call.
 _SALIENT_ARGS = ("path", "file", "query", "pattern", "symbol", "command", "message")
 
+# GLM-family responses occasionally arrive with the whole reasoning block left
+# in `content` — no opening tag, a bare closing `</think>` mid-text — when the
+# model skips the opening tag and the server-side splitter therefore can't
+# separate reasoning from the answer (measured ~11% of capacity-model turns,
+# 2026-08-03 drills; the champion's reasoning is always split server-side).
+# Chat-only display/transcript hygiene: drop everything through the FIRST
+# closing tag. Text without the marker is returned untouched, so this is a
+# no-op for well-formed responses.
+_LEAKED_THINK_RE = re.compile(r"^\s*(?:<think>)?.*?</think>\s*", re.DOTALL)
+
+
+def strip_leaked_reasoning(text: str) -> str:
+    if "</think>" not in text:
+        return text
+    return _LEAKED_THINK_RE.sub("", text, count=1)
+
 
 def summarize_args(args: dict[str, Any], *, max_len: int = 60) -> str:
     if not args:

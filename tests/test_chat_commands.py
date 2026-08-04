@@ -236,6 +236,24 @@ def test_model_numbered_picker(ctx, monkeypatch):
     assert ctx.slots.model_for("chat") == "M-b"
 
 
+def test_model_all_pins_every_slot(ctx):
+    """`/model all <id>` — one command pins chat+plan+code, because freeform
+    turns are keyword-routed to a slot and pinning only `chat` still lets a
+    code-flavored message land on the champion."""
+    cmd.dispatch("/model all Big-Model", ctx)
+    assert {ctx.slots.model_for(s) for s in ("chat", "plan", "code")} == {"Big-Model"}
+    assert "chat·plan·code" in _text(ctx)
+
+
+def test_model_all_numbered_and_bare(ctx, monkeypatch):
+    monkeypatch.setattr(ctx.slots, "available_models", lambda: ["M-a", "M-b"])
+    cmd.dispatch("/model all 2", ctx)
+    assert {ctx.slots.model_for(s) for s in ("chat", "plan", "code")} == {"M-b"}
+    cmd.dispatch("/model all", ctx)               # bare: shows all three slots
+    out = _text(ctx)
+    assert out.count("M-b") >= 3
+
+
 def test_model_picker_out_of_range(ctx, monkeypatch):
     monkeypatch.setattr(ctx.slots, "available_models", lambda: ["M-a"])
     cmd.dispatch("/model chat 9", ctx)

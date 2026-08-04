@@ -37,6 +37,7 @@ from luxe.chat.render import (
     raise_if_cancelled,
     render_final,
     render_footer,
+    strip_leaked_reasoning,
 )
 from luxe.chat import status as status_mod
 from luxe.chat.session import (
@@ -723,6 +724,10 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
     assistant_text = (result.final_text if result else "") or ""
     if not assistant_text and interrupted:
         assistant_text = partial_text or ""
+    # Chat-only hygiene (the benchmark path never runs through here): drop a
+    # leaked reasoning block so transcripts, session memory, and the rendered
+    # answer all carry the real reply — see render.strip_leaked_reasoning.
+    assistant_text = strip_leaked_reasoning(assistant_text)
     observed = len(prep.observed_calls)
     tool_calls_total = result.tool_calls_total if result else observed
     session_store.append_turn(

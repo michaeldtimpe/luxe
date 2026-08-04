@@ -171,10 +171,13 @@ _READONLY_DROP = _DRILL_TOOL_DROP | {"write_file", "edit_file", "bash"}
 
 
 def _resolve_drill_backend(cfg, backend_name: str | None,
-                           base_url: str | None):
+                           base_url: str | None,
+                           model_override: str | None = None):
     """(Backend, model, entry) for a drill. The model comes from the manifest
     of the host the URL POINTS AT — a drill against the m5 must run an m5
-    model (it serves the 6-bit pair, not this host's 4-bit pair)."""
+    model (it serves the 6-bit pair, not this host's 4-bit pair).
+    `model_override` (`--model`) drills a specific cached model instead —
+    e.g. the m5 capacity model, which is a `keep:`, never a `main`."""
     from urllib.parse import urlparse
 
     from luxe.chat.origin import endpoint_is_local
@@ -189,7 +192,10 @@ def _resolve_drill_backend(cfg, backend_name: str | None,
     from luxe.secrets import resolve_api_key
 
     manifest = cfg.host_manifest(host) if host else None
-    model = manifest.main if manifest else cfg.model_for_slot("code")
+    if model_override:
+        model = model_override
+    else:
+        model = manifest.main if manifest else cfg.model_for_slot("code")
     backend = Backend(base_url=url, model=model,
                       api_key=resolve_api_key(entry.api_key_env),
                       **entry.backend_kwargs())
@@ -260,14 +266,15 @@ def _run_drill_turn(backend, role, goal: str, task_type: str, repo, report,
 
 
 def run_code_drill(cfg, *, backend_name: str | None = None,
-                   base_url: str | None = None) -> SmokeReport:
+                   base_url: str | None = None,
+                   model: str | None = None) -> SmokeReport:
     """--code: plant a one-line bug + failing test, let the model fix it,
     verify with pytest + git diff OURSELVES (deterministic, model-free)."""
     import subprocess
     import sys
 
     report = SmokeReport()
-    backend, model = _resolve_drill_backend(cfg, backend_name, base_url)
+    backend, model = _resolve_drill_backend(cfg, backend_name, base_url, model)
     repo = _make_drill_repo("code", {"calc.py": _DRILL_CALC_BUGGY,
                                      "test_calc.py": _DRILL_TEST})
     report.add("drill repo", "pass", str(repo))
@@ -311,11 +318,12 @@ def run_code_drill(cfg, *, backend_name: str | None = None,
 
 
 def run_chat_drill(cfg, *, backend_name: str | None = None,
-                   base_url: str | None = None) -> SmokeReport:
+                   base_url: str | None = None,
+                   model: str | None = None) -> SmokeReport:
     """--chat: read-only conversational turn that must READ a file to answer
     (the magic word exists only in the repo, never in the prompt)."""
     report = SmokeReport()
-    backend, model = _resolve_drill_backend(cfg, backend_name, base_url)
+    backend, model = _resolve_drill_backend(cfg, backend_name, base_url, model)
     repo = _make_drill_repo("chat", {"notes.txt": _DRILL_NOTES})
     report.add("drill repo", "pass", str(repo))
 

@@ -77,7 +77,11 @@ never touches this module.
   removed on success; a remote `--backend` drill never unloads that server's
   models
 - Slot routing is visible: the render footer shows the fired slot + model every
-  turn; `/use <slot>` and `/model <slot> <id>` are explicit user overrides
+  turn; `/use <slot>` and `/model <slot> <id>` are explicit user overrides.
+  `/model all <n|id>` (2026-08-03) pins every slot at once — the supported way
+  to run a whole session on one non-default model (e.g. the m5 capacity
+  model), since keyword slot-routing otherwise lets a code-flavored message
+  land on an unpinned slot's model
 - EVERY freeform interactive turn uses the CONVERSATIONAL persona:
   `prepare_turn` swaps the role's `system_prompt_id`/`task_prompt_id` to the
   registry variant `chat_conversational` (and clears the task overlay) so chat

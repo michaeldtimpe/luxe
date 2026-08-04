@@ -529,6 +529,11 @@ luxe smoke --chat --code      # agentic drills, in a planted scratch git repo:
                               # Scratch repo kept on failure (path printed).
 
 luxe smoke --code --backend m5   # drill a REMOTE host's manifest model from here
+
+luxe smoke --chat --code --model GLM-4.5-Air-4bit
+                              # drill a specific cached model instead of the
+                              # manifest main (e.g. the m5 capacity model —
+                              # a keep:, never a main). --chat/--code only.
 ```
 
 Escalation ladder when something feels off:
