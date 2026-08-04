@@ -1606,6 +1606,54 @@ def ready_cmd(config_path: str | None, backend_name: str | None, repo: str):
     sys.exit(0)
 
 
+@main.command(name="init")
+@click.argument("path", default=".")
+@click.option("--config", "config_path", default=None,
+              help="Config YAML (default: configs/chat.yaml)")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the brief instead of writing it.")
+@click.option("--keep-loaded", is_flag=True, default=False,
+              help="Leave the model resident afterwards.")
+def init_cmd(path: str, config_path: str | None, dry_run: bool,
+             keep_loaded: bool):
+    """Draft this repo's orientation brief into `.luxe/memory.md`.
+
+    One read-only pass over the repo (health + map + framing files) produces a
+    ≤50-line project brief — what this is, stack, layout, how to run and test
+    it, invariants and gotchas — written into a fenced `luxe:brief` block.
+    Everything you write in that file yourself is preserved; re-running
+    replaces only the block. From then on, every `luxe chat` / `luxe code`
+    session in this repo starts already oriented.
+    """
+    from luxe.gitkit import brief as brief_mod
+
+    cfg = load_config(config_path or _default_chat_config())
+    result = brief_mod.run_init(path, cfg, console=console, dry_run=dry_run)
+    if not result.ok:
+        console.print(f"[red]✗ {result.error}[/]")
+        sys.exit(1)
+
+    if not keep_loaded:
+        try:
+            from luxe.backend import Backend
+            Backend(base_url=cfg.omlx_base_url, model="").unload_all_loaded()
+        except Exception:
+            pass
+
+    if dry_run:
+        from rich.markdown import Markdown
+        console.print(Markdown(result.text))
+        console.print("[dim]· --dry-run: nothing written[/]")
+        sys.exit(0)
+    console.print(f"[green]✓[/] brief → {result.written} "
+                  f"[dim]({len(result.text)} chars"
+                  f"{', truncated' if result.truncated else ''})[/]")
+    console.print("[dim]  injected as <project_memory> in every session here; "
+                  "edit the file freely — re-running replaces only the fenced "
+                  "block[/]")
+    sys.exit(0)
+
+
 @main.command(name="outage")
 @click.option("--plain", is_flag=True, default=False,
               help="Print the raw markdown (no Rich rendering).")

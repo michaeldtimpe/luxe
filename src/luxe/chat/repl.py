@@ -396,6 +396,11 @@ def run_chat_repl(
                 session_store.append_turn(session.session_id, "error",
                                           text=exc_line)
     finally:
+        # Session working notes — BEFORE the unload, while the backend is
+        # still usable. Never raises, never retries, silent on failure
+        # (chat/notes.py): quitting must not be held hostage by a nicety.
+        from luxe.chat import notes as notes_mod
+        notes_mod.run_session_notes(session, slots, cfg, console)
         if not keep_loaded:
             # WS3: show the unload is happening BEFORE the blocking call (it can
             # take a few seconds) so quitting doesn't look like a hang.

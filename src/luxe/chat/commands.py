@@ -89,6 +89,8 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/attach", "<path> [...]", "attach file contents to the NEXT turn (one-shot)"),
     ("/sys", "[add <rule>|list|clear]", "manage session-scoped system constraints"),
     ("/memory", "list|add|promote|forget|edit", "manage project memory"),
+    ("/init", "[--dry-run]", "draft this repo's brief into .luxe/memory.md"),
+    ("/note", "", "bank session working notes into .luxe/memory.md now"),
     ("/gitaudit", "", "audit this repo: orientation + bugs/security + structural advice"),
     ("/gitchange", "", "produce an apply-ready structural change plan for this repo"),
     ("/compare", "<task>", "run two configs side-by-side"),
@@ -176,6 +178,8 @@ def _build_handlers() -> dict:
         "/index": _index_cmd,
         "/doctor": _doctor,
         "/outage": _outage,
+        "/init": _init,
+        "/note": _note,
         "/diff": _diff,
         "/export": _export,
         "/full": _full,
@@ -1686,6 +1690,58 @@ def _git_analysis(kind: str, ctx: CommandContext,
         ctx.console.print("[yellow]git analysis unavailable.[/]")
         return CommandResult(handled=True)
     ctx.on_git_analysis(kind, deep)
+    return CommandResult(handled=True)
+
+
+def _init(args, ctx: CommandContext) -> CommandResult:
+    """Draft this repo's orientation brief into `.luxe/memory.md`.
+
+    Same engine as `luxe init` (gitkit/brief.py) against the SESSION's repo
+    and endpoint. Read-only by construction — the one file it writes is
+    luxe's own state file, and only the fenced `luxe:brief` block inside it
+    (see chat.sdd)."""
+    from luxe.gitkit import brief as brief_mod
+
+    if not ctx.session.repo_path or ctx.session.project_kind == "none":
+        ctx.console.print("[yellow]No project bound to this session — "
+                          "`/project <path>` first, or run `luxe init <path>` "
+                          "from the CLI.[/]")
+        return CommandResult(handled=True)
+    dry = "--dry-run" in args
+    try:
+        backend = ctx.slots.backend_for("chat")
+    except Exception:
+        backend = None
+    result = brief_mod.run_init(ctx.session.repo_path, ctx.slots.cfg,
+                                console=ctx.console, dry_run=dry,
+                                backend=backend)
+    if not result.ok:
+        ctx.console.print(f"[red]✗ {result.error}[/]")
+        return CommandResult(handled=True)
+    if dry:
+        from rich.markdown import Markdown
+        ctx.console.print(Markdown(result.text))
+        ctx.console.print("[dim]· --dry-run: nothing written[/]")
+        return CommandResult(handled=True)
+    ctx.console.print(f"[green]✓[/] brief → {result.written} "
+                      f"[dim]({len(result.text)} chars"
+                      f"{', truncated' if result.truncated else ''}; injected "
+                      "as <project_memory> from the next turn)[/]")
+    return CommandResult(handled=True)
+
+
+def _note(args, ctx: CommandContext) -> CommandResult:
+    """Distil this session into working notes in `.luxe/memory.md` now.
+
+    The same distillation that runs on `/quit`, on demand — so a long session
+    can bank what it learned before it ends. Explicit invocation is consent:
+    it ignores the `notes:` config toggle and the turn-count floor."""
+    from luxe.chat import notes as notes_mod
+
+    res = notes_mod.run_session_notes(ctx.session, ctx.slots, ctx.slots.cfg,
+                                      ctx.console, on_demand=True)
+    if res.written is None and res.skipped and "no project" not in res.skipped:
+        ctx.console.print(f"[yellow]· no session notes written ({res.skipped})[/]")
     return CommandResult(handled=True)
 
 

@@ -166,6 +166,80 @@ def forget_fact(repo_root: str | Path, fact_id: str) -> bool:
     return True
 
 
+# --- machine-managed fenced blocks in .luxe/memory.md -----------------------
+#
+# `memory.md` is a USER file that luxe is allowed to add to, never to own. Two
+# machine-managed regions live inside it, each delimited by an HTML comment
+# pair: `luxe:brief` (the `luxe init` project brief) and `luxe:notes` (session
+# working notes). The markers are LOAD-BEARING — every writer re-reads the
+# file, replaces only the region between its own markers, and appends at the
+# END when the region is absent, so hand-written text above (the curated,
+# highest-authority part) survives byte-for-byte.
+
+_HEADER = ("<!-- luxe project memory. Hand-written notes are highest priority "
+           "and are never touched by luxe; the fenced luxe:* blocks below are "
+           "machine-managed. -->\n")
+
+
+def block_markers(name: str) -> tuple[str, str]:
+    """(begin-prefix, end-marker) for a machine-managed block."""
+    return f"<!-- luxe:{name} begin", f"<!-- luxe:{name} end -->"
+
+
+def _block_span(text: str, name: str) -> tuple[int, int] | None:
+    """(start, end) character span of the whole block including markers, or None."""
+    begin_pre, end_marker = block_markers(name)
+    start = text.find(begin_pre)
+    if start == -1:
+        return None
+    end = text.find(end_marker, start)
+    if end == -1:
+        return None
+    return start, end + len(end_marker)
+
+
+def read_block(text: str, name: str) -> str | None:
+    """The BODY of a machine-managed block (markers and their lines stripped),
+    or None when the block isn't present."""
+    span = _block_span(text, name)
+    if span is None:
+        return None
+    inner = text[span[0]:span[1]]
+    lines = inner.splitlines()
+    return "\n".join(lines[1:-1]).strip()
+
+
+def splice_block(repo_root: str | Path, name: str, body: str, *,
+                 stamp: str = "") -> Path:
+    """Write `body` into the `luxe:<name>` block of `<repo>/.luxe/memory.md`.
+
+    Replaces the block in place if it exists, else APPENDS it at end of file —
+    curated text stays first, which is also `render_block`'s truncation
+    priority. Everything outside the block is preserved byte-for-byte. Creates
+    the file (with a one-line header comment) when absent. Never touches
+    `facts.jsonl`. Returns the path written.
+    """
+    path = repo_memory_file(repo_root)
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    begin_pre, end_marker = block_markers(name)
+    begin = f"{begin_pre}{(' ' + stamp) if stamp else ''} -->"
+    block = f"{begin}\n{body.strip()}\n{end_marker}"
+
+    span = _block_span(existing, name)
+    if span is not None:
+        new = existing[:span[0]] + block + existing[span[1]:]
+    else:
+        head = existing if existing else _HEADER
+        sep = "" if head.endswith("\n\n") else ("\n" if head.endswith("\n") else "\n\n")
+        new = f"{head}{sep}\n{block}\n"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".md.tmp")
+    tmp.write_text(new, encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
 def render_block(memory: ProjectMemory, *, max_chars: int = 4000) -> str:
     """Render the `<project_memory>` context block, or "" when empty.
 

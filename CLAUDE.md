@@ -302,6 +302,21 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
   incl. luxe-vs-bare substrate ablation), blind + vote.
 - **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
   memory (repo `.luxe/memory.md`); must NOT read `~/.claude/` or repo `CLAUDE.md`.
+  - **`.luxe/memory.md` now carries two MACHINE-MANAGED fenced blocks** whose
+    markers are load-bearing (2026-08-04): `luxe:brief` (written by `luxe init`
+    / `/init` — one read-only gitkit pass with `GIT_BRIEF_HINT`, orientation
+    only, capped at 2,000 chars in Python) and `luxe:notes` (written by
+    `chat/notes.py` at session end and by `/note` — one non-agentic
+    `backend.chat` over the deterministic fold, 900 chars/entry, rolling
+    window of 5 entries / 1,500 chars). `memory.project.splice_block` is the
+    ONLY writer: it re-reads, replaces just its own block, appends at EOF when
+    absent, and preserves every other byte — **user-curated text must survive,
+    and tests prove it**. `facts.jsonl` is never touched. Notes failure is a
+    SILENT skip with no retry and must never block exit; writing this file
+    from a read-only session is sanctioned (luxe's own state file,
+    orchestrator-side Python, same precedent as `store.mirror_to_repo`) — do
+    not "fix" it as a gate bypass. Config: `notes: true|false` in
+    `configs/chat.yaml` (default true; `/note` ignores it).
 - **`backend.py` streaming** is gated (`stream`/`on_token`). As of 2026-06-01 the
   loop wires it CHAT-ONLY: `run_single`/`run_agent` take an `on_token` that, when
   set (interactive chat live tail), makes `backend.chat` stream. Benchmark/maintain

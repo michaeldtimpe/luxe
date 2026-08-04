@@ -387,6 +387,29 @@ READ_ONLY_CHAT_HINT = (
 )
 
 
+# Session working notes (chat-only, chat/notes.py). ONE non-agentic
+# `backend.chat` call over the folded conversation at session end. The output
+# is spliced into `.luxe/memory.md` and injected into every LATER session in
+# this repo, so it must be a handover note between two working sessions — not
+# a summary of the conversation, and never advice.
+SESSION_NOTES_HINT = (
+    "You are writing WORKING NOTES at the end of a coding session, for "
+    "whoever picks this project up next — possibly you, days later, with no "
+    "memory of it. The conversation transcript follows.\n\n"
+    "Output ONLY 3 to 6 markdown bullets, no heading, no preamble, under 900 "
+    "characters total, covering in this order:\n"
+    "- what was actually DONE or CHANGED (name the files and symbols)\n"
+    "- what was TRIED and did NOT work, and why — this is the most valuable "
+    "line, because it is what a future session would otherwise repeat\n"
+    "- what is left OPEN: unfinished threads, decisions deferred, known "
+    "breakage\n\n"
+    "Rules: report only what the transcript actually shows — if the session "
+    "changed nothing, say that in one bullet. No advice, no next-step "
+    "suggestions, no praise, no restating the user's questions. Past tense, "
+    "specific, terse."
+)
+
+
 NO_PROJECT_CHAT_HINT = (
     "This chat session is not attached to a codebase: it started in a directory "
     "that is not a project, so there is no repository index. `bm25_search` and "
@@ -539,6 +562,43 @@ GIT_SURVEY_HINT = (
     "secrets, persistence, external calls); and where the highest RISK or "
     "refactor surface likely sits. Be specific and cite file paths. Keep it "
     "tight — this is a map, not a report."
+)
+
+# `luxe init` — the per-repo ORIENTATION brief written into `.luxe/memory.md`.
+# Grounded in the same survey inputs as GIT_SURVEY_HINT (repo health + repo map
+# + framing files) but with a different job: this text is injected into EVERY
+# future chat turn as <project_memory>, so it must be short, durable, and free
+# of findings. An audit belongs in `luxe gitaudit`, which has a report format
+# and a place to save it; a brief that drifts into risks would spend the
+# memory budget on the thing that goes stale fastest.
+GIT_BRIEF_HINT = (
+    "Write a PROJECT BRIEF for the repository in the current working "
+    "directory: the orientation a new contributor needs before their first "
+    "task. It will be injected as durable project memory into every future "
+    "session, so it must stay short and stable.\n\n"
+    "Read the framing files listed below (entrypoints, build/CI, config, "
+    "docs) plus anything they clearly point to, and use the injected "
+    "<repo_health> and <repo_map> data. Do NOT read every file. Do NOT write "
+    "or modify anything.\n\n"
+    "Output ONLY the brief as markdown — no preamble, no closing summary, at "
+    "most 50 lines — using exactly these sections, each omitted if you have "
+    "nothing grounded to say:\n"
+    "  ## What this is — one or two sentences: purpose and users.\n"
+    "  ## Stack — languages, frameworks, package manager, runtime.\n"
+    "  ## Layout — the top-level modules/directories that matter and what "
+    "each OWNS. One line each, cite the path.\n"
+    "  ## Running it — how to install, run, and test. Cite the real commands "
+    "from the build/CI/docs files; if you cannot find them, say so rather "
+    "than guessing.\n"
+    "  ## Invariants & gotchas — the rules a newcomer would break: "
+    "conventions the code enforces, things that look wrong but are "
+    "deliberate, known sharp edges. Ground every one in a file.\n"
+    "  ## Where things stand — current branch/version and what the recent "
+    "commits are working on.\n\n"
+    "NO findings, NO risk audit, NO refactor advice, NO severity ratings — "
+    "orientation only; `luxe gitaudit` owns analysis. State only what the "
+    "repository actually shows you; never invent a command, a file, or a "
+    "convention."
 )
 
 # Stage 2 — per-chunk analysis. Per-kind goal in the SAME markdown report shape
