@@ -30,6 +30,56 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-04] the stale-oMLX bug recurred the next day, wearing a different mask: `No module named 'transformers.models.qwen3_vl'`
+
+**What happened**: `luxe smoke` on m5 went NOT READY on one line — `fallback
+turn — Qwen3.6-27B-6bit: oMLX returned 409: VLM load failed: No module named
+'transformers.models.qwen3_vl'; LLM fallback also failed: No module named
+'transformers.models.qwen3_5'`. Everything else was green: manifest, all three
+weight sets, endpoint, catalog, main turn, tool call. It reads as a missing
+dependency in oMLX's python environment, and the obvious move is to go
+upgrade `transformers`.
+
+**That would have been wrong.** The INSTALLED oMLX venv already had it:
+`/opt/homebrew/Cellar/omlx/0.5.7/libexec` carried transformers 5.12.1, whose
+`models/` directory contains both `qwen3_vl` and `qwen3_5`. The import error
+was coming from a *different tree*.
+
+**Root cause**: exactly the 2026-08-03 entry below, one day later. A
+`brew upgrade omlx` (0.5.5 → 0.5.7) at 06:42 deleted the 0.5.5 Cellar tree
+while launchd kept running the 0.5.5 process (started 22:39 the previous
+night). `lsof -p 76834 | grep -o "Cellar/omlx/[0-9.]*"` → `0.5.5`; the only
+tree on disk → `0.5.7`. The running process was importing from a deleted
+site-packages whose older transformers predates those model modules. Same
+mechanism, new symptom: last time the lazy import was certifi's CA bundle and
+the error was `[Errno 2]`; this time it is a transformers submodule and the
+error is `ModuleNotFoundError`.
+
+m1 had the same condition simultaneously and nobody had noticed — running
+0.5.4 against an installed 0.5.7, three versions stale.
+
+**Fix**: `brew services restart omlx` on both. m5 → READY (8s), m1 → READY
+(19s), fallback turns included.
+
+**Takeaway — generalise the signature**. The previous entry's rule was too
+narrow: it said an `[Errno 2]` is the tell. The real rule is that **any
+"impossible" import or file error from a brew-managed long-running service is
+the stale-process signature**, whatever the errno. A dependency the installed
+venv demonstrably has, that the running process cannot import, means the
+running process is not using the installed venv. Before installing or
+upgrading anything to satisfy such an error, run:
+
+    lsof -p $(pgrep -f omlx-server | head -1) | grep -o "Cellar/omlx/[0-9.]*" | sort -u
+    ls -d /opt/homebrew/Cellar/omlx/*/
+
+A mismatch means restart the service, not fix the dependency. Worth checking
+the whole fleet at once — this recurrence was silent on m1 until someone
+looked, and a stale process on the fallback host quietly breaks the
+loud-auto-degrade path the fallback kit exists to provide.
+
+**Affected files**: none in-repo (host state). Diagnosed via
+`/opt/homebrew/var/log/omlx.log` + `lsof`.
+
 ### [2026-08-03] brew upgrade under a running oMLX = every HF operation dies with bare `[Errno 2]`
 
 **What happened**: `luxe pull mlx-community/GLM-4.5-Air-4bit` failed instantly
