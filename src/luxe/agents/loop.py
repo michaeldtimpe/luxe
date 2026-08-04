@@ -95,8 +95,15 @@ OnToolEvent = Callable[[ToolCall], None]
 def _parse_text_tool_calls(
     text: str,
     known_names: set[str],
+    drops: list[str] | None = None,
 ) -> list[ToolCallResponse]:
-    """Recover tool calls from text when model doesn't use structured output."""
+    """Recover tool calls from text when model doesn't use structured output.
+
+    A well-formed candidate whose name is outside `known_names` is dropped —
+    the caller gets no call and the model gets no tool message, so nothing
+    downstream records that it happened. Pass `drops` to collect those names
+    (taxonomy 2026-08-04: this was an unmeasurable failure class).
+    """
     calls: list[ToolCallResponse] = []
 
     # Qwen/Hermes: <tool_call>{"name":...,"arguments":...}</tool_call>
@@ -110,6 +117,8 @@ def _parse_text_tool_calls(
             if name in known_names:
                 calls.append(ToolCallResponse(id="", name=name, arguments=args))
                 return calls  # first only
+            if drops is not None and name and name not in drops:
+                drops.append(name)
         except (json.JSONDecodeError, KeyError):
             continue
 
@@ -136,6 +145,8 @@ def _parse_text_tool_calls(
             if name in known_names:
                 calls.append(ToolCallResponse(id="", name=name, arguments=args))
                 return calls
+            if drops is not None and name and name not in drops:
+                drops.append(name)
         except (json.JSONDecodeError, KeyError):
             continue
 
@@ -1309,7 +1320,20 @@ def run_agent(
 
         tool_calls = resp.tool_calls
         if not tool_calls and resp.text and tool_defs:
-            tool_calls = _parse_text_tool_calls(resp.text, known_names)
+            text_drops: list[str] = []
+            tool_calls = _parse_text_tool_calls(resp.text, known_names,
+                                                drops=text_drops)
+            if text_drops:
+                logger.warning(
+                    "text-fallback dropped unknown tool call(s): %s",
+                    [d[:80] for d in text_drops])
+                if log_calls:
+                    append_event(
+                        run_id, "textfallback_drop",
+                        phase=phase, step=step,
+                        names=[d[:80] for d in text_drops],
+                        recovered=bool(tool_calls),
+                    )
 
         if not tool_calls:
             # SpecDD Lever 1 min_tool_calls gate: before declaring the run
@@ -1406,6 +1430,12 @@ def run_agent(
                 err = validate_args(tool_def_map[tc.name], tc.arguments)
                 if err:
                     result.schema_rejects += 1
+                    if log_calls:
+                        append_event(
+                            run_id, "tool_reject",
+                            phase=phase, step=step, name=tc.name,
+                            reason="schema", message=str(err)[:300],
+                        )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id or f"call_{step}",
@@ -1576,6 +1606,13 @@ def run_agent(
                          tc.name, getattr(executed, "wall_s", 0.0) or 0.0,
                          (getattr(executed, "error", None) or "")[:200] or None,
                          getattr(executed, "bytes_out", 0) or 0)
+            if (log_calls and executed.error
+                    and executed.error.startswith("Unknown tool")):
+                append_event(
+                    run_id, "tool_reject",
+                    phase=phase, step=step, name=tc.name,
+                    reason="unknown_tool", message=executed.error[:300],
+                )
             result.tool_calls.append(executed)
             # SpecDD Lever 1: track every successfully-dispatched call (name,
             # args) for the spec validator. Skip error and schema-reject

@@ -195,9 +195,16 @@ def collect(luxe_root: Path, cutoff: float, *,
                          else ", ".join(APPARATUS_PREFIXES)}
 
     # --- runs/<run_id>/events.jsonl -----------------------------------------
+    # As of 2026-08-04 the loop emits DIRECT events for three classes that
+    # previously needed proxies: `tool_reject` (reason=schema|unknown_tool)
+    # and `textfallback_drop`. Direct events are preferred; the legacy
+    # proxies still run for older records but are suppressed wherever a
+    # direct event already covered the same call, so mixed corpora never
+    # double-count.
     runs_root = luxe_root / "runs"
     tool_calls_by_run: dict[str, int] = collections.Counter()
     run_seen_ts: dict[str, float] = {}
+    direct_drop_runs: set[str] = set()
     for run_dir in _walk_dirs(runs_root):
         events = run_dir / "events.jsonl"
         if not events.is_file():
@@ -209,6 +216,9 @@ def collect(luxe_root: Path, cutoff: float, *,
         session = _session_of(run_id)
         dups = 0
         in_window = False
+        direct_schema = 0
+        direct_unknown: set[tuple] = set()
+        heur_unknown: list[tuple] = []
         for rec in _iter_jsonl(events):
             ts = float(rec.get("ts") or 0.0)
             if ts < cutoff:
@@ -224,18 +234,48 @@ def collect(luxe_root: Path, cutoff: float, *,
                     dups += 1
                 if name and name not in tools \
                         and not name.startswith(MCP_PREFIX):
-                    b["unknown_tool_name"].hit(
-                        session, f"{run_id} step {rec.get('step')}: {name!r}",
+                    heur_unknown.append(
+                        (rec.get("step"), name,
+                         f"{run_id} step {rec.get('step')}: {name!r}"))
+            elif kind == "tool_reject":
+                reason = rec.get("reason") or ""
+                name = (rec.get("name") or "").strip() or "(unnamed)"
+                if reason == "schema":
+                    direct_schema += 1
+                    b["schema_reject"].hit(
+                        session,
+                        f"{run_id} step {rec.get('step')}: {name!r}: "
+                        f"{(rec.get('message') or '')[:60]} (direct)",
                         key=name)
+                elif reason == "unknown_tool":
+                    direct_unknown.add((rec.get("step"), name))
+                    b["unknown_tool_name"].hit(
+                        session,
+                        f"{run_id} step {rec.get('step')}: {name!r} (direct)",
+                        key=name)
+            elif kind == "textfallback_drop":
+                direct_drop_runs.add(run_id)
+                for nm in (rec.get("names") or ["(unnamed)"]):
+                    b["textfallback_drop"].hit(
+                        session,
+                        f"{run_id} step {rec.get('step')}: {str(nm)!r} (direct)",
+                        key=str(nm))
             elif kind == "single_mode_done":
                 stats["runs_completed"] += 1
-                rejects = int(rec.get("schema_rejects") or 0)
+                # Direct per-call `tool_reject` events already counted their
+                # share of this run's total; only the remainder (legacy runs
+                # or pre-2026-08-04 records) lands via the old per-run proxy.
+                rejects = max(
+                    0, int(rec.get("schema_rejects") or 0) - direct_schema)
                 for _ in range(rejects):
                     b["schema_reject"].hit(session, f"{run_id}: {rejects} reject(s)")
                 if rec.get("aborted"):
                     reason = rec.get("abort_reason") or "(unreported)"
                     b["aborted_run"].hit(session, f"{run_id}: {reason}",
                                          key=str(reason))
+        for step_, name_, example in heur_unknown:
+            if (step_, name_) not in direct_unknown:
+                b["unknown_tool_name"].hit(session, example, key=name_)
         if in_window:
             stats["runs_in_window"] += 1
             if dups >= 3:
@@ -265,7 +305,8 @@ def collect(luxe_root: Path, cutoff: float, *,
                         f"{run_id}: steps={rec.get('steps')} "
                         f"tools={rec.get('tool_calls')}")
                 if _TOOL_CALL_TAG_RE.search(text) \
-                        and not tool_calls_by_run.get(run_id):
+                        and not tool_calls_by_run.get(run_id) \
+                        and run_id not in direct_drop_runs:
                     b["textfallback_drop"].hit(
                         session, f"{run_id}: <tool_call> in prose, 0 tool events")
             elif kind == "error":
@@ -289,29 +330,35 @@ def collect(luxe_root: Path, cutoff: float, *,
     if stats["debug_log_lines"] == 0 or b["backend_retry"].count == 0:
         b["backend_retry"].measurable = False
         b["backend_retry"].why_unmeasurable = (
-            "retry decisions reach `on_retry`, which the chat front-ends do "
-            "not route to a logger — debug.log carries session/turn/tool lines "
-            "only. Nothing is persisted to count. Fix the RECORDS before "
-            "reasoning about this class.")
+            "no retry decision lines found in any debug.log in the window. "
+            "Sessions BEFORE 2026-08-04 never logged stream-path retries "
+            "(the stream branch skipped the non-stream path's "
+            "logger.warning); sessions after do, so a zero here on a "
+            "post-2026-08-04 corpus is a genuinely quiet window, while a "
+            "zero on an older corpus is a records gap.")
     stats["_meta"] = meta  # type: ignore[assignment]
     return b, stats
 
 
 _UNMEASURABLE_NOTES = {
     "unknown_tool_name": (
-        "Approximated by the DISPATCHED NAME, not by the result string: tool "
-        "results are not persisted anywhere, so `\"Unknown tool: X\"` cannot "
-        "be counted directly. A name outside KNOWN_TOOLS is the closest "
-        "faithful proxy, and it undercounts nothing (the loop logs the event "
-        "before dispatch)."),
+        "Records from 2026-08-04 on carry a direct `tool_reject` event "
+        "(reason=unknown_tool) with the result string — marked `(direct)` in "
+        "the examples. Older records are approximated by the DISPATCHED NAME "
+        "(a name outside KNOWN_TOOLS); calls covered by a direct event are "
+        "excluded from the proxy so nothing double-counts."),
     "schema_reject": (
-        "Counted from `single_mode_done.schema_rejects` — a per-run TOTAL. "
-        "The offending tool, key, and message are not persisted, so a "
-        "per-tool breakdown is not available without a new event."),
+        "Records from 2026-08-04 on carry a direct per-call `tool_reject` "
+        "event (reason=schema) with tool name + message — marked `(direct)`. "
+        "Older records only have `single_mode_done.schema_rejects`, a per-run "
+        "TOTAL with no per-tool breakdown; the proxy counts only the "
+        "remainder not covered by direct events."),
     "textfallback_drop": (
-        "Proxy, as designed: `_parse_text_tool_calls` drops silently and logs "
-        "nothing, so the only visible trace is a literal `<tool_call>` "
-        "surviving into the assistant's prose with no tool event that turn."),
+        "Records from 2026-08-04 on carry a direct `textfallback_drop` event "
+        "with the dropped name(s) — marked `(direct)`. Older records fall "
+        "back to the proxy (a literal `<tool_call>` surviving into the "
+        "assistant's prose with no tool event that run), suppressed for runs "
+        "that already produced a direct event."),
 }
 
 
@@ -404,17 +451,17 @@ def render(buckets: dict, stats: collections.Counter, *, days: int,
          "code on the benchmark path. The measurement gaps below are the "
          "actionable finding instead."),
         "",
-        "### What the records cannot tell us (the real gap)",
+        "### Record coverage (measurement gaps closed 2026-08-04)",
         "",
-        "- Tool RESULTS are never persisted, so `\"Unknown tool: X\"`, "
-        "`\"Schema error: …\"`, and every other rejection string can only be "
-        "approximated. A `tool_reject` event carrying `{name, reason, "
-        "message}` would make all three classes directly countable.",
-        "- `_parse_text_tool_calls` drops unknown-named candidates with no "
-        "log line and no event; a run where it fires is indistinguishable "
-        "from one where the model simply wrote prose.",
-        "- Backend retry decisions are handed to `on_retry` and dropped by "
-        "the chat front-ends; nothing reaches debug.log.",
+        "- `tool_reject` events (`{name, reason, message}`) now land in "
+        "events.jsonl for schema rejects and unknown-tool dispatches; "
+        "examples marked `(direct)` came from them. Records BEFORE "
+        "2026-08-04 are still approximated by the legacy proxies.",
+        "- `_parse_text_tool_calls` drops now emit a `textfallback_drop` "
+        "event (and a debug.log warning) with the dropped names.",
+        "- Backend retry decisions on the stream path (chat) now log the "
+        "same `decision=` line as the non-stream path, so they reach "
+        "debug.log wherever a session log handler is installed.",
         "",
     ]
     return "\n".join(lines) + "\n"

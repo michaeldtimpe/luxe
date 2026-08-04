@@ -107,6 +107,23 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   adaptive policy off, the predicate is a no-op (sustained_low_trend = 0). This is a
   documented coupling, not a bug.
 
+### Tool-call telemetry events (pinned 2026-08-04, additive-only)
+
+- `tool_reject` (reason=schema|unknown_tool, name + message) and
+  `textfallback_drop` (names + recovered) land in events.jsonl, gated by
+  `log_calls` like every other event. They are TELEMETRY: they must never
+  add/remove/alter a `messages` entry, change dispatch, or gate control flow.
+  The 2026-08 taxonomy refuted every hardening candidate, so observation
+  shipped without behavior change — keep it that way unless a future
+  evidence-cleared cycle says otherwise.
+- `_parse_text_tool_calls(drops=)` collects dropped candidate names
+  (deduplicated — the `<tool_call>` block and the bare-JSON scanner see the
+  same candidate); the default `drops=None` call is byte-identical to the
+  pre-2026-08-04 signature.
+- `scripts/toolcall_taxonomy.py` prefers these direct events and suppresses
+  its legacy proxies per-call/per-run; if either event's fields change,
+  update the script's suppression paths in the same commit.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —

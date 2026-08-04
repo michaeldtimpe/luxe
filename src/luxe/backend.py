@@ -510,6 +510,11 @@ class Backend:
                             max_attempts=self.max_attempts,
                         )
                         last_decision = decision
+                        logger.warning(
+                            "backend %s status=%d body=%r decision=%s",
+                            self.model, resp.status_code, resp.text[:200],
+                            decision,
+                        )
                         if not decision.retry:
                             raise BackendError(
                                 f"oMLX returned {resp.status_code}: {resp.text[:200]} "
@@ -625,6 +630,10 @@ class Backend:
                     max_attempts=self.max_attempts,
                 )
                 last_decision = decision
+                logger.warning(
+                    "backend %s exception=%s decision=%s",
+                    self.model, type(exc).__name__, decision,
+                )
                 if not decision.retry:
                     raise BackendError(
                         f"oMLX stream failed: {type(exc).__name__}: {exc} ({decision.reason})"
