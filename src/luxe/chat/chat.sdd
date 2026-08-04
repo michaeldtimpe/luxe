@@ -360,6 +360,34 @@ never touches this module.
   (8000) / `LUXE_INDEX_MAX_MB` (96). Truncation is never silent: startup names
   the cap, what the model can no longer see, and both escapes. Chat-only — the
   builders' no-`files` path is the unchanged unbounded walk the benchmarks use.
+- SESSION WORKING NOTES (`chat/notes.py`, 2026-08-04): luxe remembers what it
+  did. On session end — the `finally` of BOTH front-ends, BEFORE the model
+  unload so the backend is still usable — and on demand via `/note`, ONE
+  non-agentic `backend.chat` call (never `run_single`; no tools are needed)
+  distils the DETERMINISTIC FOLD of the conversation (`chat/summarize.py`,
+  never the raw transcript) into 3–6 bullets using the registry's
+  `SESSION_NOTES_HINT`, and splices them into the `luxe:notes` block of
+  `<repo>/.luxe/memory.md`. Caps and window are enforced in PYTHON, never by
+  the prompt: 900 chars/entry, newest-first, newest 5 entries / 1,500 chars
+  total, oldest dropped on write. Skips when: no project attached, fewer than
+  2 answered turns, or `notes: false` in chat.yaml — `/note` bypasses the
+  last two, since asking for it IS the consent. FAILURE IS A SILENT SKIP with
+  NO RETRY and it must never block exit: the guard catches `BaseException`
+  (Ctrl-C mid-call is a `KeyboardInterrupt`, anyio cancels are worse) and
+  only `SystemExit` propagates. One line is printed when written, naming the
+  disable switch. Writing `.luxe/memory.md` from a READ-ONLY session is
+  SANCTIONED and must not be "fixed" later as a gate bypass: it is luxe's own
+  state file, not the user's code, and the write is orchestrator-side Python
+  rather than an agent tool — same precedent as `gitkit.store.mirror_to_repo`
+  and `luxe init`'s brief. Benchmark/maintain never import this module.
+- `/init` (and `luxe init`) drafts the repo's ORIENTATION BRIEF into the
+  `luxe:brief` block of `.luxe/memory.md` — one read-only gitkit pass
+  (`gitkit/brief.py`, `GIT_BRIEF_HINT`; see gitkit.sdd). In-session it reuses
+  the session's live backend so a `--backend m5` session doesn't silently
+  drift to the local endpoint. `--dry-run` prints instead of writing.
+  Together with notes, `.luxe/memory.md` now carries TWO machine-managed
+  fenced blocks whose markers are load-bearing (memory.sdd); everything else
+  in that file is the user's and survives byte-for-byte.
 - The COMMAND SURFACE IS PARITY-CHECKED (2026-08-04). `_build_handlers()` and
   `_HELP_ROWS` are two independent lists, so `tests/test_chat_commands.py`
   asserts handlers ≡ help-row names ∪ `_HIDDEN_COMMANDS` — a declared

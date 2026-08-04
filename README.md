@@ -100,6 +100,7 @@ luxe pr     <run-id> [--push-only]              # resume a partially-completed P
 luxe runs   list | luxe runs gc                 # housekeeping
 luxe unload [--except <model-id>]               # free oMLX RAM (auto-runs after maintain)
 luxe serve  [--transport stdio|sse] [--unsafe]  # MCP server (read-only by default)
+luxe init   [<path>] [--dry-run]                # draft this repo's brief into .luxe/memory.md
 luxe ready  [--backend <name>] [--repo <path>]  # "can I work right now?" host preflight
 luxe outage [--plain]                           # print the offline emergency card
 luxe check                                      # oMLX + models + gh auth
@@ -203,6 +204,19 @@ override with `LUXE_HOME`):
 
 `/help` lists them all. Beyond the slot/model/context controls (`/model`, `/use`,
 `/ctx`, `/write`, `/bash`, `/sys`, `/memory`, `/resume`, `/clear`):
+
+**Project memory (`luxe init` + session notes).** `luxe init` (or `/init`)
+makes one read-only pass over a repo and writes a ≤50-line orientation brief —
+what this is, stack, layout, how to run and test it, invariants and gotchas —
+into a fenced `luxe:brief` block in `<repo>/.luxe/memory.md`. Every later
+`luxe chat` / `luxe code` session there starts already oriented, because that
+file is injected as `<project_memory>`. When a session with a project ends,
+luxe distils 3–6 bullets — what was done, what was tried and failed, what is
+open — into a second `luxe:notes` block, newest first, keeping the last 5
+entries; `/note` banks them mid-session, and `notes: false` in `configs/chat.yaml`
+turns the automatic write off. **Anything you write in `memory.md` yourself is
+preserved byte-for-byte** — luxe only ever replaces the region between its own
+markers, so the file stays yours to curate and commit.
 
 **Startup flags** (so autonomous `/goal` users don't have to type REPL commands
 first): `luxe chat --verbose diff|full`, `--show-reasoning`, `--no-terse`,

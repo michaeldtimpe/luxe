@@ -47,6 +47,26 @@ in the front-end. Survey map + chunk plan persist per repo under
   > plain Python, NEVER via an agent tool, touching ONLY the `.luxe/gitkit/`
   > sidecar (never source). Mirrors the `.luxe/memory.md` precedent. Best-effort:
   > a filesystem error is swallowed, never aborting the analysis.
+- `luxe init` / `/init` (`brief.py`, 2026-08-04) is the THIRD read-only
+  surface: ONE `run_single` pass with `GIT_BRIEF_HINT`, grounded in the same
+  inputs as the deep survey (repo health + `<repo_map>` + framing files) —
+  or, when a FRESH deep-map cache exists for this HEAD, in its
+  `survey_notes` for free. Output is ORIENTATION ONLY (what this is, stack,
+  layout, running it, invariants, where things stand). No findings, no
+  severities, no refactor advice: the brief is injected into EVERY future
+  chat turn as `<project_memory>`, and an audit there would spend the memory
+  budget on the thing that goes stale fastest — `gitaudit` owns analysis and
+  has somewhere to save it.
+  > [!IMPORTANT]
+  > It writes ONE thing: the `luxe:brief` fenced block in
+  > `<repo>/.luxe/memory.md`, via `memory.project.splice_block` (plain
+  > Python, orchestrator-side, never an agent tool) — the same sanctioned
+  > repo-`.luxe/` precedent as `store.mirror_to_repo`. Everything outside
+  > that block is preserved byte-for-byte, `facts.jsonl` is never touched,
+  > and the brief is capped at 2,000 chars DETERMINISTICALLY (`cap_brief`) —
+  > a length instruction in a prompt is not a cap. `--dry-run` prints instead
+  > of writing. The subject resolves exactly as a chat session's does
+  > (walk up to the git/marker root; `$HOME` and above are never a project).
 - The `gitchange` ANALYSIS is read-only like `gitaudit` (runs through
   `make_read_only_role`; emits a structured `plan-<head>.json` + the markdown report,
   both under `~/.luxe/reports/` + mirrored; never edits source).
@@ -168,6 +188,7 @@ in the front-end. Survey map + chunk plan persist per repo under
   `GIT_CHANGE_SYNTH_HINT`, `GIT_CHANGE_EXTRACT_HINT`, `GIT_DEEP_FORMAT_HINT`,
   `GIT_DEEP_REDUCE_HINT`; diff: `GIT_AUDIT_DIFF_HINT` /
   `GIT_AUDIT_DIFF_CHUNK_HINT` / `GIT_AUDIT_DIFF_SYNTH_HINT` — markdown chunk
-  contract, never JSON-only; apply: `GIT_APPLY_STEP_HINT`). `plan.py`/`apply.py`/
+  contract, never JSON-only; apply: `GIT_APPLY_STEP_HINT`; brief:
+  `GIT_BRIEF_HINT`). `plan.py`/`apply.py`/
   `diffscope.py` hold only orchestration + deterministic data shaping
   (parse/normalize/render, git ops, the keep/discard gate, hunk-overlap priors).

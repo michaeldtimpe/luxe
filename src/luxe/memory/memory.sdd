@@ -21,6 +21,18 @@ prompt registry and from the deterministic benchmark path.
   - `~/.luxe/memory/<project_hash>/facts.jsonl` — auto-captured, `confidence: auto`,
     NEVER injected until promoted to `confidence: manual`
   - `project_hash = sha256(abspath(repo_root))[:12]`
+- `.luxe/memory.md` holds MACHINE-MANAGED FENCED BLOCKS alongside the user's
+  own text (2026-08-04). The markers are LOAD-BEARING: `<!-- luxe:<name>
+  begin … -->` … `<!-- luxe:<name> end -->`, currently `luxe:brief` (written
+  by `luxe init`, gitkit/brief.py) and `luxe:notes` (written by session
+  distillation, chat/notes.py). `splice_block` is the ONLY writer and the
+  contract is absolute: RE-READ the file, replace only the region between
+  that block's own markers, APPEND at end of file when absent (curated text
+  therefore stays first — which is also `render_block`'s truncation
+  priority), preserve every other byte, write via a temp file + rename, and
+  never touch `facts.jsonl`. Callers cap their own payload in Python before
+  splicing; a length instruction in a prompt is not a cap. The file remains
+  the USER's — luxe adds to it, never owns it
 - Memory is injected ONLY as the `<project_memory>` block inside `run_single`'s
   `extra_context`, NEVER by editing `PROMPT_REGISTRY` or the `system_prompt`
 - `run_single`'s `extra_context` defaults to "" → byte-identical to legacy when

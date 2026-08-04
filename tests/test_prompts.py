@@ -707,3 +707,21 @@ def test_git_change_hints_emit_v1_schema_and_markdown_chunks():
     c = prompts.GIT_CHANGE_CHUNK_HINT.lower()
     assert "# change plan" in c and "not json" in c      # markdown, not JSON
     assert "gitplan/v1" in prompts.GIT_CHANGE_EXTRACT_HINT
+
+
+def test_git_brief_hint_is_orientation_only():
+    """`luxe init`'s brief is injected into EVERY future turn as project
+    memory, so it must stay orientation — an audit there would spend the
+    memory budget on the thing that goes stale fastest (gitaudit owns
+    analysis)."""
+    from luxe.agents.prompts import GIT_BRIEF_HINT
+    s = GIT_BRIEF_HINT.lower()
+    assert "project brief" in s
+    assert "do not write" in s                  # read-only pass
+    assert "no findings" in s and "no risk audit" in s
+    # the six sections the writer packages deterministically around
+    for section in ("what this is", "stack", "layout", "running it",
+                    "invariants", "where things stand"):
+        assert section in s, section
+    assert "50 lines" in s                       # bounded by construction
+    assert "never invent" in s                   # grounding discipline

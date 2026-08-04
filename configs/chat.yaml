@@ -38,6 +38,14 @@ profile:
   memory_budget_gb: 48
   peak_model_gb: 30.0
 
+# Session working notes (chat-only): when a session with a project attached
+# ends, distil 3-6 bullets of what was done / what failed / what's open into
+# the `luxe:notes` block of <repo>/.luxe/memory.md, so the NEXT session in
+# that repo starts knowing. Rolling window of 5 entries; one extra model call
+# per session, at the end. `/note` banks them on demand regardless of this
+# setting. Set false to turn the automatic write off.
+notes: true
+
 # Per-host model manifests (2026-07-30 fallback-kit pivot): each fleet host
 # declares its interactive main + fallback pair, keyed by short hostname.
 # `main` drives every slot by default; `fallback` is what the session

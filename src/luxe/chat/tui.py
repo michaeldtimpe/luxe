@@ -923,6 +923,13 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
     try:
         app.run()
     finally:
+        # Session working notes — BEFORE the unload (the backend must still be
+        # usable) and AFTER the app has released the screen, so its one line
+        # lands on the real terminal rather than a torn-down alternate screen.
+        # Never raises, never retries (chat/notes.py).
+        from luxe.chat import notes as notes_mod
+        from rich.console import Console as _Console
+        notes_mod.run_session_notes(session, slots, cfg, _Console())
         if not keep_loaded:
             try:
                 slots.unload_all()

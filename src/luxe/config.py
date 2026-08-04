@@ -219,6 +219,11 @@ class PipelineConfig(BaseModel):
     # without error — `/doctor` and `luxe smoke` assert the resolved manifest
     # to close that hole.
     hosts: dict[str, HostManifest] = Field(default_factory=dict)
+    # Chat-only: distil a few bullets of session working notes into
+    # `<repo>/.luxe/memory.md` when a session with a project ends
+    # (chat/notes.py). `/note` works regardless — an explicit invocation is
+    # consent. Benchmark/maintain never read it.
+    notes: bool = True
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:
