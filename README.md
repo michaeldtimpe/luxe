@@ -345,9 +345,11 @@ attaches it unless you ask.
 The job it exists for: a PDF that refuses to be printed, edited, or filled
 because it carries owner-password permission flags. That restriction is a
 flag, not encryption of the content, and `pdf_unlock` clears it with
-`qpdf --decrypt` — then sets the form's `NeedAppearances` and drops any
-usage-rights signature, which is what actually lets a viewer fill *and save*
-the form. A PDF with a real open (user) password is a different thing: pass
+`qpdf --decrypt`. Three separate things stop a viewer letting you fill and
+save such a form, and decrypting only clears the first, so `pdf_unlock` also
+drops the "Reader-enabled" usage-rights signature (`/Perms`) and any XFA
+layer, then sets `NeedAppearances` so typed values actually render. A PDF
+with a real open (user) password is a different thing: pass
 `password` if you know it, and if you don't, the tool says so rather than
 pretending.
 
