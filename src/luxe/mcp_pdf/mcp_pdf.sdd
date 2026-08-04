@@ -1,0 +1,57 @@
+# mcp_pdf
+
+Contract for the opt-in PDF tool server (`luxe-pdf-mcp`). This package is a
+CAPABILITY MODULE: it is reachable only from `luxe chat` / `luxe code` when
+the user attaches it (`--mcp pdf`), and it is invisible to the
+benchmark/maintain path.
+
+The module exists for one recurring real-world job: a PDF that a viewer
+refuses to let you print, edit, or fill even though you are entitled to do
+so — the owner-password/permission-flag restriction that government and
+institutional forms ship with. `pdf_unlock` clears it with `qpdf --decrypt`
+and then makes the form actually fillable (NeedAppearances + dropped usage
+rights). Everything else in the module is the surrounding workflow:
+inspect, extract, fill, overlay, convert, print.
+
+## Must
+- Keep `ops.py` free of MCP imports: every operation is a plain function
+  taking and returning JSON-safe values, so `tests/test_mcp_pdf.py` can
+  exercise the whole surface with no server running
+- Take explicit input/output paths on every operation. When `output` is
+  omitted, derive a SIBLING of the input named `<stem>-<op><suffix>`
+- Never write over the input path. `_resolve_out` raises when the resolved
+  output equals the input, and refuses an existing output unless the caller
+  passes `overwrite=True`
+- Raise `PdfToolError` with a remedy in the text — what to install
+  (`brew install qpdf poppler`), what to sync (`uv sync --extra pdf`), or
+  what to toggle (`/write`) — matching luxe's self-explaining-failure
+  convention. A bare `FileNotFoundError` from a missing CLI is a bug
+- Fail honestly on a user (open) password we were not given: say the file
+  needs the password and stop. Never attempt recovery of an unknown password
+- Refuse to print to a label printer (name matching `*QL*` / `*label*`)
+  unless the caller passes `allow_label=True`; the default target is a
+  document printer
+- Declare mutating tools in the server's `gate_tools` so `luxe chat`
+  withholds them until `/write`: everything that writes a file or spools a
+  job. `pdf_info` / `pdf_text` / `pdf_form_fields` / `pdf_printers` are
+  read-only and always available
+
+## Must not
+- Add anything here to `luxe.tools.TOOL_FNS`, `run_single`'s default tool
+  list, or any benchmark config — a reproducible benchmark must not grow a
+  dependency on local PDF binaries or a printer
+- Enable the server by default. `configs/mcp.yaml` `client.servers` stays
+  `[]`; the repo ships a COMMENTED example stanza only
+- Make `pypdf` / `reportlab` / `pillow` base dependencies. They live in the
+  `[pdf]` optional extra; importing this package without them must produce
+  the install remedy, not a traceback at import time
+- Shell out through a shell string. Every subprocess call is an argv list
+  with `shell=False`
+- Crack, brute-force, or work around a user (open) password
+
+## Owns
+- src/luxe/mcp_pdf/**
+- tests/test_mcp_pdf.py
+
+## Forbids
+- src/luxe/mcp_pdf/**/prompts.py

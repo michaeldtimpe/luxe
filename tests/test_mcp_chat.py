@@ -148,3 +148,43 @@ def test_mcptools_registry_roundtrip():
     finally:
         mcptools.clear()
     assert mcptools.active() is None
+
+
+def test_stdio_command_and_args_expand_home(tmp_path):
+    """One relays.yaml is shared across hosts whose $HOME differs, so a stdio
+    entry must be able to say `~/Downloads/luxe/.venv/bin/luxe-pdf-mcp`."""
+    import os
+    from luxe.mcp.client import load_mcp_config
+
+    cfg_path = tmp_path / "servers.yaml"
+    cfg_path.write_text(
+        "client:\n"
+        "  servers:\n"
+        "    - name: pdf\n"
+        "      transport: stdio\n"
+        "      command: ~/Downloads/luxe/.venv/bin/luxe-pdf-mcp\n"
+        "      args: ['-m', '~/src/thing']\n"
+    )
+    server = load_mcp_config(cfg_path).servers[0]
+    home = os.path.expanduser("~")
+    assert server.command == f"{home}/Downloads/luxe/.venv/bin/luxe-pdf-mcp"
+    assert "~" not in server.command
+    # only a leading ~ expands; plain words and flags are untouched
+    assert server.args == ["-m", f"{home}/src/thing"]
+
+
+def test_bare_command_is_unchanged(tmp_path):
+    from luxe.mcp.client import load_mcp_config
+
+    cfg_path = tmp_path / "servers.yaml"
+    cfg_path.write_text(
+        "client:\n"
+        "  servers:\n"
+        "    - name: git\n"
+        "      transport: stdio\n"
+        "      command: uvx\n"
+        "      args: ['mcp-server-git', '--repository', '.']\n"
+    )
+    server = load_mcp_config(cfg_path).servers[0]
+    assert server.command == "uvx"
+    assert server.args == ["mcp-server-git", "--repository", "."]
