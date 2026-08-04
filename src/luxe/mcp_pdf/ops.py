@@ -356,7 +356,19 @@ def pdf_unlock(path: str, output: str | None = None, password: str = "",
 
 
 def _make_form_fillable(pdf: Path) -> list[str]:
-    """Set NeedAppearances and drop usage-rights /Perms, in place on `pdf`.
+    """Make a decrypted form actually fillable, in place on `pdf`.
+
+    Three separate things stop a viewer letting you fill and save a form, and
+    `qpdf --decrypt` only clears the first:
+
+      1. the permission flags (done by the caller),
+      2. a "Reader-enabled" usage-rights signature (`/Perms`, often `/UR3`)
+         that says only Adobe's own reader may edit this,
+      3. an XFA layer, which non-Adobe viewers handle poorly or not at all —
+         dropping it falls back to the ordinary AcroForm widgets.
+
+    `NeedAppearances` then forces the viewer to render typed values, which it
+    otherwise may not do for fields that ship without appearance streams.
 
     `pdf` here is always a freshly written OUTPUT file, never a caller's
     input — the no-overwrite rule is enforced by `_resolve_out` upstream.
@@ -368,6 +380,10 @@ def _make_form_fillable(pdf: Path) -> list[str]:
     root = writer._root_object  # noqa: SLF001 - pypdf's only catalog handle
     acro = root.get("/AcroForm")
     if acro is not None:
+        acro_obj = acro.get_object()
+        if "/XFA" in acro_obj:
+            del acro_obj["/XFA"]
+            fixes.append("dropped XFA layer (falls back to AcroForm widgets)")
         writer.set_need_appearances_writer(True)
         fixes.append("NeedAppearances=true")
     if "/Perms" in root:

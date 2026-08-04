@@ -459,3 +459,31 @@ def test_default_mcp_config_ships_no_servers():
     from luxe.mcp.client import default_mcp_config_path
     raw = yaml.safe_load(default_mcp_config_path().read_text())
     assert raw["client"]["servers"] == []
+
+
+@needs_qpdf
+def test_pdf_unlock_strips_xfa_and_usage_rights(tmp_path: Path, form: Path):
+    """The three things that stop a viewer filling a form: permission flags,
+    a Reader-enabled usage-rights signature, and an XFA layer."""
+    import pypdf
+    # plant /Perms and an /XFA layer on the form, then restrict it
+    rigged = tmp_path / "rigged.pdf"
+    reader = pypdf.PdfReader(str(form))
+    writer = pypdf.PdfWriter(clone_from=reader)
+    root = writer._root_object
+    root[pypdf.generic.NameObject("/Perms")] = pypdf.generic.DictionaryObject()
+    acro = root["/AcroForm"].get_object()
+    acro[pypdf.generic.NameObject("/XFA")] = pypdf.generic.ArrayObject()
+    with open(rigged, "wb") as fh:
+        writer.write(fh)
+    assert ops.pdf_info(str(rigged))["form_type"] == "XFA"
+
+    locked = _restrict(rigged, tmp_path / "rigged-locked.pdf")
+    res = ops.pdf_unlock(str(locked))
+    fixes = " ".join(res["form_fixes"])
+    assert "XFA" in fixes
+    assert "/Perms" in fixes
+    assert "NeedAppearances" in fixes
+    # XFA gone means the plain AcroForm widgets are what a viewer now uses
+    assert ops.pdf_info(res["output"])["form_type"] == "AcroForm"
+    assert ops.pdf_form_fields(res["output"])["count"] == 3
