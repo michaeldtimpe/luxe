@@ -46,6 +46,37 @@ MIN_TURNS = 2
 
 _ENTRY_RE = re.compile(r"^### ", re.MULTILINE)
 _TRUNC = " …[truncated]"
+#: A top-level bullet — column 0, `-` or `*`. Deliberately NOT indented ones:
+#: the champion's reasoning trace nests its bullets under numbered headers,
+#: so anchoring at column 0 separates the answer from the thinking.
+_BULLET_RE = re.compile(r"^[-*]\s+\S")
+
+
+def extract_bullets(text: str) -> str:
+    """Recover the bullet list from a reply that narrated its way there.
+
+    The champion will not be prompted out of emitting a "thinking process"
+    before it complies — the same finding that drove `deep._heuristic_findings`
+    and `brief.strip_preamble` (CLAUDE.md). So take the LAST contiguous run of
+    column-0 bullets, which is the answer, and drop everything above it. Falls
+    back to the whole text when there are no bullets at all, so a model that
+    simply answered in prose is not silently blanked.
+    """
+    lines = (text or "").strip().splitlines()
+    blocks: list[list[str]] = []
+    cur: list[str] = []
+    for line in lines:
+        if _BULLET_RE.match(line):
+            cur.append(line.rstrip())
+        elif cur and line.strip() and line.startswith((" ", "\t")):
+            cur.append(line.rstrip())      # a wrapped continuation line
+        else:
+            if cur:
+                blocks.append(cur)
+            cur = []
+    if cur:
+        blocks.append(cur)
+    return "\n".join(blocks[-1]).strip() if blocks else (text or "").strip()
 
 
 @dataclass
@@ -107,8 +138,14 @@ def distil(session, backend) -> str:
         {"role": "user",
          "content": f"<session_transcript>\n{body}\n</session_transcript>"},
     ]
-    resp = backend.chat(messages, max_tokens=512, temperature=0.2)
-    return (getattr(resp, "content", "") or "").strip()
+    # 1024, not 512: a reasoning model spends its first few hundred tokens
+    # narrating, and the Python cap below bounds what actually gets written.
+    resp = backend.chat(messages, max_tokens=1024, temperature=0.2)
+    # `ChatResponse.text` — NOT `.content`. Reading the wrong attribute here
+    # produced a distillation that silently did nothing on every real session
+    # while the unit tests passed against a stub that had the wrong shape
+    # (caught by a live drill, 2026-08-04).
+    return extract_bullets((getattr(resp, "text", "") or "").strip())
 
 
 def _entries(block: str | None) -> list[str]:
@@ -161,6 +198,9 @@ def run_session_notes(session, slots, cfg, console, *,
         backend = slots.backend_for("chat")
         bullets = distil(session, backend)
         if not bullets:
+            # Logged, not silent: an empty distillation used to be
+            # indistinguishable from the feature not running at all.
+            logger.info("session notes: model returned nothing")
             return NotesResult(skipped="the model produced nothing")
         path = write_notes(session.repo_path, bullets, session.session_id)
     except SystemExit:

@@ -4201,3 +4201,46 @@ rendered as a page of blank lines and silently broke the markdown table).
 
 **Affected files**: `scripts/toolcall_taxonomy.py`,
 `tests/test_toolcall_taxonomy.py`, `acceptance/toolcall_taxonomy_2026_08/`.
+
+### [2026-08-04] Two features shipped green tests and did nothing live — a stub with the wrong shape, and a model that narrates
+
+**What happened**: The operability cycle's session-notes distillation
+(`chat/notes.py`) had 23 passing unit tests and wrote **nothing at all** on
+every real session. Silently: no error, no log line, no user-visible
+difference from the feature being turned off. A live scripted drill
+(`printf '…\n/quit\n' | luxe chat --repo <scratch>`) caught it. The first fix
+revealed a second bug behind it: the model's reply was its own *reasoning
+trace* ("Here's a thinking process: 1. **Analyze User Input** …"), which got
+written into project memory verbatim and injected into every later session.
+The sibling feature (`luxe init`'s project brief) had the same second
+problem — a live `--dry-run` showed "Now I have enough information to write
+the brief. Let me compile it." as the first line of the brief.
+
+**Root cause**: (1) `distil` read `resp.content`; `backend.ChatResponse`
+exposes `.text`. The test's hand-rolled `_Resp` stub was written from the
+same wrong assumption, so the tests confirmed the bug instead of catching it —
+a stub is only evidence if its shape is the real type's. (2) The champion
+emits a chain-of-thought preamble before complying with a format instruction.
+This is already documented for gitkit chunks (memory
+`project_gitaudit_conclude_experiment`: prevention prompts were REFUTED,
+deterministic recovery is the fix) — but the lesson was recorded per-feature
+rather than as a rule, so two new features re-learned it.
+
+**Fix / takeaway**: `distil` reads `.text` and the test fakes now construct the
+REAL `ChatResponse`, with a test asserting it has no `.content` attribute so
+the contract can't drift back. Both features gained deterministic recovery —
+`notes.extract_bullets` (last contiguous run of column-0 bullets; the trace's
+bullets are indented under numbered headers, so column 0 separates answer from
+thinking) and `brief.strip_preamble` (slice from the first requested section
+heading). **Two principles: a test double must be the real type, or built from
+it — a stub written from the same misreading as the code under test proves
+nothing. And ANY new feature that asks this champion for a formatted reply
+needs a Python recovery step from day one; treat "the model will emit exactly
+this shape" as a known-false assumption, not a thing to verify later.**
+A third, cheaper one: a feature whose failure mode is a silent skip must LOG
+the skip — the empty-distillation branch returned without logging, which is
+why the outage lasted until someone diffed a scratch repo by hand.
+
+**Affected files**: `src/luxe/chat/notes.py`, `src/luxe/gitkit/brief.py`,
+`src/luxe/agents/prompts.py`, `tests/test_chat_notes.py`,
+`tests/test_gitkit_brief.py`.
