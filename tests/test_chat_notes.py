@@ -156,7 +156,7 @@ class TestRollingWindow:
         assert out.startswith("### new")
 
     def test_entry_is_capped(self, repo):
-        b = _Backend(content="z" * 5000)
+        b = _Backend(content="- " + "z" * 5000)
         res = notes_mod.run_session_notes(_session(repo), _Slots(b, _cfg()),
                                           _cfg(), _console())
         block = project_mem.read_block(res.written.read_text(), "notes")
@@ -325,9 +325,13 @@ class TestBulletRecovery:
         text = "- a bullet that\n  wraps onto a second line\n- another"
         assert notes_mod.extract_bullets(text) == text
 
-    def test_prose_only_replies_are_not_blanked(self):
-        assert notes_mod.extract_bullets("just prose, no bullets") == \
-            "just prose, no bullets"
+    def test_a_reply_with_no_bullets_yields_nothing(self):
+        """Writing a chain-of-thought dump into permanent project memory is
+        worse than writing nothing — it is injected into every later session
+        in the repo."""
+        assert notes_mod.extract_bullets("just prose, no bullets") == ""
+        assert notes_mod.extract_bullets(
+            "Here's a thinking process:\n\n1. **Analyze**\n   - nested\n") == ""
 
     def test_distil_applies_it(self, repo):
         from luxe.backend import ChatResponse

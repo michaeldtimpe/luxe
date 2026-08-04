@@ -4241,6 +4241,17 @@ A third, cheaper one: a feature whose failure mode is a silent skip must LOG
 the skip — the empty-distillation branch returned without logging, which is
 why the outage lasted until someone diffed a scratch repo by hand.
 
+**The recovery's own fallback was the next trap.** `extract_bullets` first
+fell back to the raw text when it found no bullets, on the reasoning that a
+prose reply shouldn't be blanked. But "no bullets" is exactly what a reply
+that is *all* trace looks like when the token budget cuts it off mid-thought —
+so the fallback wrote the chain-of-thought dump into `.luxe/memory.md`
+anyway, from where it is injected into every later session in that repo. The
+rule is now: no bullets recovered ⇒ write NOTHING (and log it), plus enough
+`max_tokens` headroom (2048) that the answer survives the narration. When a
+recovery step guards a durable, auto-injected artefact, its fallback must be
+"write nothing", never "write whatever we got".
+
 **Affected files**: `src/luxe/chat/notes.py`, `src/luxe/gitkit/brief.py`,
 `src/luxe/agents/prompts.py`, `tests/test_chat_notes.py`,
 `tests/test_gitkit_brief.py`.
