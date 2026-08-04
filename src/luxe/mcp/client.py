@@ -100,6 +100,22 @@ def _interp_env(value: str) -> str:
     return out
 
 
+def _expand_path(value: str) -> str:
+    """Expand `~` and `${VAR}` in a stdio command / argument.
+
+    One config file is often shared across hosts whose $HOME differs (the
+    account name is not the same everywhere), so a server entry has to be
+    able to say `~/Downloads/luxe/.venv/bin/luxe-pdf-mcp`. Only leading `~`
+    is expanded — a bare word like `uvx` or a flag is returned untouched, so
+    entries written before this existed parse identically.
+    """
+    import os
+    out = _interp_env(value)
+    if out.startswith("~"):
+        out = os.path.expanduser(out)
+    return out
+
+
 def load_mcp_config(path: str | Path | None = None) -> MCPClientConfig:
     p = Path(path) if path else default_mcp_config_path()
     if not p.is_file():
@@ -111,8 +127,8 @@ def load_mcp_config(path: str | Path | None = None) -> MCPClientConfig:
         servers.append(MCPServerConfig(
             name=str(s.get("name", "")),
             transport=str(s.get("transport", "stdio")),
-            command=str(s.get("command", "")),
-            args=[str(a) for a in s.get("args", [])],
+            command=_expand_path(str(s.get("command", ""))),
+            args=[_expand_path(str(a)) for a in s.get("args", [])],
             env={k: _interp_env(str(v)) for k, v in (s.get("env") or {}).items()},
             timeout_s=float(s.get("timeout_s", 30.0)),
             enabled_for=[str(x) for x in s.get("enabled_for", [])],

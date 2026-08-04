@@ -34,6 +34,21 @@ client:
   #   timeout_s: 30
   #   enabled_for: [chat, maintain, review]
   #   max_calls_per_session: 50
+  # - name: pdf                        # the in-repo PDF module (src/luxe/mcp_pdf/)
+  #   transport: stdio                 # install first: uv sync --extra pdf
+  #   command: ~/Downloads/luxe/.venv/bin/luxe-pdf-mcp   # `~` expands per host
+  #   timeout_s: 120                   # rasterising a long PDF is not instant
+  #   max_calls_per_session: 100
+  #   gate_tools:                      # everything that writes a file or prints
+  #     - pdf_unlock
+  #     - pdf_fill
+  #     - pdf_overlay
+  #     - pdf_print
+  #     - pdf_merge
+  #     - pdf_split
+  #     - pdf_rotate
+  #     - pdf_to_images
+  #     - images_to_pdf
   # - name: ops                        # remote MCP endpoint (chat: `luxe chat --mcp ops`)
   #   transport: streamable_http
   #   url: "https://example.internal/mcp"

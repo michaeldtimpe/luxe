@@ -336,6 +336,40 @@ SIGKILL on close.
 `LUXE_MCP_TOKEN`). Per-tool rate limits. Audit log at
 `~/.luxe/mcp_audit.jsonl` with secrets redacted.
 
+### PDF module (opt-in)
+
+`src/luxe/mcp_pdf/` ships an in-repo stdio MCP server, `luxe-pdf-mcp`, for
+working with PDFs from a chat session. It is **off by default** — nothing
+attaches it unless you ask.
+
+The job it exists for: a PDF that refuses to be printed, edited, or filled
+because it carries owner-password permission flags. That restriction is a
+flag, not encryption of the content, and `pdf_unlock` clears it with
+`qpdf --decrypt` — then sets the form's `NeedAppearances` and drops any
+usage-rights signature, which is what actually lets a viewer fill *and save*
+the form. A PDF with a real open (user) password is a different thing: pass
+`password` if you know it, and if you don't, the tool says so rather than
+pretending.
+
+```bash
+uv sync --extra pdf                 # pypdf + reportlab + pillow
+brew install qpdf poppler           # qpdf, pdftotext, pdftoppm
+luxe chat --mcp pdf --mcp-config <config with a pdf entry>
+```
+
+`configs/mcp.yaml` carries a commented `pdf` stanza to copy. Tools arrive
+namespaced `mcp__pdf__<tool>`:
+
+| read-only | mutating (needs `/write`) |
+|---|---|
+| `pdf_info`, `pdf_text`, `pdf_form_fields`, `pdf_printers` | `pdf_unlock`, `pdf_fill`, `pdf_overlay`, `pdf_merge`, `pdf_split`, `pdf_rotate`, `pdf_to_images`, `images_to_pdf`, `pdf_print` |
+
+Every tool takes explicit paths, writes a new `<name>-<op>.pdf` sibling by
+default, and never modifies its input. `pdf_print` refuses label printers
+unless you pass `allow_label=true`, and `dry_run=true` shows the exact `lp`
+command without spooling. None of this is on the benchmark tool surface —
+`configs/mcp.yaml` `client.servers` stays `[]`.
+
 ## Benchmarks
 
 Three benches live in `benchmarks/`. Use them in this order:
@@ -477,7 +511,8 @@ luxe/
 │   ├── spec_validator.py       # spec-vs-diff per-requirement validator
 │   ├── agents/                 # loop.py, single.py, prompts.py (registry)
 │   ├── tools/                  # fs (write/edit + Forbids gate), git, shell, analysis, cve_lookup
-│   └── mcp/                    # client, server, bridge
+│   ├── mcp/                    # client, server, bridge
+│   └── mcp_pdf/                # opt-in PDF module (luxe-pdf-mcp), [pdf] extra
 ├── benchmarks/
 │   ├── maintain_suite/         # 10-fixture acceptance harness + variants
 │   ├── swebench/               # SWE-bench Verified n=75 A/B

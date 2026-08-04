@@ -55,9 +55,17 @@ chat = ["prompt_toolkit>=3.0", "textual>=0.74,<2.0"]
 # installable on every fleet host without it. Plain web_fetch (httpx +
 # stdlib extraction) works with none of this; only JS-rendered pages need it.
 web = ["playwright>=1.40"]
+# The opt-in PDF capability module (`src/luxe/mcp_pdf/`, server `luxe-pdf-mcp`).
+# NOT a base dep and not in [chat]: the module is only reachable when a chat
+# session attaches it with `--mcp`, and the benchmark path must never grow a
+# dependency on PDF libraries or local print queues. The CLI half (qpdf,
+# poppler's pdftotext/pdftoppm, CUPS lp) is not pip-installable — the tools
+# name the `brew install` when one is missing.
+pdf = ["pypdf>=5.0", "reportlab>=4.0", "pillow>=10.0"]
 
 [project.scripts]
 luxe = "luxe.cli:main"
+luxe-pdf-mcp = "luxe.mcp_pdf.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/luxe"]
