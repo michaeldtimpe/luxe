@@ -281,6 +281,32 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
         doc.add("host manifest", WARN, f"check errored: {e}")
 
 
+def _add_stale_check(doc, base_url: str) -> None:
+    """Report whether the local oMLX is running the Cellar tree brew installed.
+
+    A stale process is a WARN, not a FAIL: it may still be serving everything
+    asked of it, and smoke/doctor's real checks will fail on their own if it
+    is not. The value here is that when they DO fail, the cause is already on
+    screen instead of costing another half hour. Never raises — doctor runs
+    during outages.
+    """
+    try:
+        from luxe.chat.origin import endpoint_is_local
+        if not endpoint_is_local(base_url):
+            return          # a remote host's process table is its own problem
+        from luxe.staleproc import check_omlx
+
+        check = check_omlx()
+        if not check.conclusive:
+            return          # not running / not brew-installed — other checks own that
+        if check.stale:
+            doc.add("oMLX build", WARN, check.detail, check.fix)
+        else:
+            doc.add("oMLX build", OK, check.detail)
+    except Exception as e:
+        doc.add("oMLX build", OK, f"unchecked ({e})")
+
+
 def _add_web_check(doc, session) -> None:
     """Report the /web surface. Never networked — the offline-purity contract
     allows exactly one networked doctor line (`update`), and doctor runs during
@@ -335,6 +361,14 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
         else:
             doc.add("oMLX endpoint", FAIL, f"{name} {base_url} not responding",
                     "`brew services restart omlx`, or `/backend <other>`")
+
+    # Stale-process check. Placed directly under the endpoint because it
+    # EXPLAINS the checks below it: a server running a Cellar tree brew
+    # deleted answers health and lists its catalog, then fails the next lazy
+    # import with an error naming whatever module it happened to reach for
+    # (lessons.md 2026-08-03 and 2026-08-04). Local endpoints only, and
+    # offline-pure — pgrep/lsof/stat, no network.
+    _add_stale_check(doc, base_url)
 
     if not getattr(backend, "api_key", ""):
         doc.add("API key", WARN, "no key resolved for this endpoint",

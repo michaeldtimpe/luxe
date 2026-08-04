@@ -449,6 +449,28 @@ def run_smoke(cfg, *, base_url: str | None = None,
         return report
     report.add("endpoint", "pass", url)
 
+    # 3b. Is that endpoint the build brew installed? A server left running
+    #     across a `brew upgrade` executes from a deleted Cellar tree: it
+    #     passes health and catalog, then fails the next lazy import with an
+    #     error naming whatever module it reached for. On 2026-08-04 that was
+    #     `No module named 'transformers.models.qwen3_vl'` on the fallback
+    #     turn below — which reads as a missing dependency even though the
+    #     installed venv had it. WARN, not FAIL: a stale process may still be
+    #     serving fine, and the real turns below fail on their own if it is
+    #     not. This line exists so that when they do, the cause is already on
+    #     screen. Local endpoints only (lessons.md 2026-08-03/04).
+    if endpoint_is_local(url):
+        try:
+            from luxe.staleproc import check_omlx
+            stale = check_omlx()
+            if stale.conclusive and stale.stale:
+                report.add("oMLX build", "warn",
+                           f"{stale.detail} — {stale.fix}")
+            elif stale.conclusive:
+                report.add("oMLX build", "pass", stale.detail)
+        except Exception as e:
+            report.add("oMLX build", "warn", f"unchecked ({e})")
+
     # 4. Catalog.
     try:
         served = set(backend.list_models())
