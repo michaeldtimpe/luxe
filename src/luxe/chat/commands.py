@@ -68,6 +68,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/project", "[path]", "show, attach, or switch the project (re-indexes)"),
     ("/index", "[path]", "build the code-search index for here (or <path>)"),
     ("/doctor", "", "preflight this session: endpoint, model, index, disk, git"),
+    ("/outage", "", "print the offline emergency card (OUTAGE.md)"),
     ("/net", "[host]", "layered network report: DNS/TCP/TLS/HTTP + backends"),
     ("/planeproxy", "[status|doctor]", "diagnose the planeproxy SSH tunnel (read-only)"),
     ("/diff", "[--full] [--all]", "what this session changed (git-backed)"),
@@ -96,6 +97,21 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/clear", "", "start a fresh conversation"),
     ("/quit", "", "exit (Ctrl-D also works)"),
 ]
+
+# Handlers deliberately absent from `/help`: short aliases and back-compat
+# names. DECLARED, not accidental — `tests/test_chat_commands.py` asserts
+# `_build_handlers()` keys ≡ the `_HELP_ROWS` names ∪ this set, so a new
+# command that never made it into the help table fails the suite instead of
+# shipping invisible. Add a name here only when hiding it is the intent.
+_HIDDEN_COMMANDS: frozenset[str] = frozenset({
+    "/exit", "/q",                                    # quit aliases
+    "/pp",                                            # /planeproxy
+    "/git-audit", "/gaudit",                          # /gitaudit spellings
+    "/git-change", "/gchange",                        # /gitchange spellings
+    # pre-2026-06-07 gitkit names, kept working
+    "/gitsummary", "/gsum", "/gitreview", "/grev",
+    "/gitrefactor", "/gref", "/gitplan", "/gplan",
+})
 
 
 def is_command(line: str) -> bool:
@@ -133,7 +149,14 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
     args = parts[1:]
     fn = _handlers().get(cmd)
     if fn is None:
-        ctx.console.print(f"[yellow]Unknown command {cmd}. Try /help.[/]")
+        # Under pressure a typo costs a round trip through /help. Name the
+        # nearest command instead (difflib, stdlib) before falling back.
+        import difflib
+
+        near = difflib.get_close_matches(cmd, list(_handlers()), n=2, cutoff=0.6)
+        hint = f" Did you mean {' or '.join(near)}?" if near else ""
+        ctx.console.print(f"[yellow]Unknown command {cmd}.{hint} "
+                          "Try /help.[/]")
         return CommandResult(handled=True)
     return fn(args, ctx)
 
@@ -152,6 +175,7 @@ def _build_handlers() -> dict:
         "/project": _project,
         "/index": _index_cmd,
         "/doctor": _doctor,
+        "/outage": _outage,
         "/diff": _diff,
         "/export": _export,
         "/full": _full,
@@ -207,6 +231,33 @@ def _help(args, ctx: CommandContext) -> CommandResult:
         table.add_row(sig, escape(desc))
     ctx.console.print(table)
     return CommandResult(handled=True)
+
+
+def _warn_model_not_offered(ctx: CommandContext, model_id: str) -> None:
+    """Explain an explicit `/model <slot> <id>` the picker didn't list.
+
+    Three states, three different unlocks: hidden by the `visible_models:`
+    roster (allowed — this is how the m5 capacity model is selected), served
+    by nothing here (needs a pull), or simply unverifiable because oMLX is
+    down. Silence used to defer all three to a swap failure a turn later.
+    Never raises — this is advisory only, the override is set regardless.
+    """
+    try:
+        offered = ctx.slots.available_models()
+        if not offered or model_id in offered:
+            return
+        served = set(ctx.slots.backend.list_models())
+    except Exception:
+        return
+    if model_id in served:
+        ctx.console.print(
+            f"  [dim]· {model_id} is served here but hidden from the picker "
+            "by `visible_models:` in configs/chat.yaml — using it anyway[/]")
+    else:
+        ctx.console.print(
+            f"  [yellow]· {model_id} isn't in this endpoint's catalog[/] "
+            f"[dim]— `/pull {model_id} --yes` to fetch it, or `/model` for "
+            "the list. The next turn will fail until it resolves.[/]")
 
 
 def _model(args, ctx: CommandContext) -> CommandResult:
@@ -286,6 +337,14 @@ def _model(args, ctx: CommandContext) -> CommandResult:
         model_id = avail[idx - 1]
     else:
         model_id = sel
+    # An explicit id the picker doesn't offer has TWO very different causes,
+    # and "unknown model" would be wrong for one of them: the server may well
+    # serve it while `visible_models:` hides it from the roster (a supported
+    # thing to ask for — the m5 capacity model is reached exactly this way).
+    # Say which, and name the unlock, instead of failing at swap time.
+    if not sel.isdigit():
+        _warn_model_not_offered(ctx, model_id)
+
     targets = tuple(_SLOTS) if slot == "all" else (slot,)
     for s in targets:
         ctx.slots.set_override(s, model_id)
@@ -353,6 +412,13 @@ def _backend(args, ctx: CommandContext) -> CommandResult:
     except BackendError as e:
         ctx.console.print(f"[red]✗ {e}[/] [dim](staying on "
                           f"{ctx.slots.backend_name})[/]")
+        # Name the unlock: an unreachable REMOTE entry is almost always the
+        # link or the key, and both are one command away.
+        entry = entries[name]
+        key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
+        ctx.console.print(f"  [dim]→ `/net` to diagnose the link; a remote "
+                          f"entry also needs ${key_env} set (and "
+                          "`/planeproxy` up, if it rides the tunnel)[/]")
         return CommandResult(handled=True)
     entry = entries[name]
     ctx.console.print(f"[green]✓[/] backend → [cyan]{name}[/] "
@@ -686,6 +752,14 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
                 if s.get("down"):
                     ctx.console.print(f"  [yellow]⚠ server {s['name']} DOWN[/] "
                                       f"[dim]— {s['down_reason']}[/]")
+    else:
+        # Say it out loud. There is NO way to attach a server mid-session, so
+        # a user telling the model "use the kappa relay" in a plain session
+        # would otherwise get an unexplained "I have no such tool".
+        ctx.console.print("[bold]MCP tools[/] [dim](none)[/]")
+        ctx.console.print("  [dim]MCP servers attach at STARTUP only — restart "
+                          "with `luxe chat --mcp <name>` (servers come from "
+                          "`--mcp-config`, default configs/mcp.yaml)[/]")
     return CommandResult(handled=True)
 
 
@@ -889,15 +963,9 @@ def _doctor(args, ctx: CommandContext) -> CommandResult:
     from luxe.chat import inspection
 
     doc = inspection.run_doctor(ctx.session, ctx.slots, ctx.session.repo_path)
-    glyphs = {inspection.OK: "[green]✓[/]", inspection.WARN: "[yellow]![/]",
-              inspection.FAIL: "[red]✗[/]"}
-    width = max((len(c.name) for c in doc.checks), default=0)
-    ctx.console.print("[bold]Doctor[/]")
-    for c in doc.checks:
-        line = f"  {glyphs.get(c.state, '·')} [dim]{c.name.ljust(width)}[/]  {c.detail}"
-        ctx.console.print(line)
-        if c.fix and c.state != inspection.OK:
-            ctx.console.print(f"    [dim]→ {c.fix}[/]")
+    # Rendering is shared with `luxe ready` (inspection.render_doctor) so the
+    # in-session and host-level tables can never drift apart.
+    inspection.render_doctor(doc, ctx.console)
     verdict = {inspection.OK: "[green]all clear[/]",
                inspection.WARN: "[yellow]usable, with caveats above[/]",
                inspection.FAIL: "[red]something is broken — fix the ✗ first[/]"}
@@ -1025,6 +1093,25 @@ def _full(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print("[yellow]No answer to expand yet.[/]")
         return CommandResult(handled=True)
     ctx.console.print(build_final_renderable(text, mode="full"))
+    return CommandResult(handled=True)
+
+
+def _outage(args, ctx: CommandContext) -> CommandResult:
+    """Print the offline emergency card (OUTAGE.md) into the session.
+
+    Same bytes as `luxe outage` — one reader (`luxe.outage.load_card`), zero
+    network, zero model. The point is that the card is reachable from INSIDE
+    a session too, when the operator is already in the tool and can't
+    remember the flag they need."""
+    from rich.markdown import Markdown
+
+    from luxe.outage import load_card
+
+    text = load_card()
+    try:
+        ctx.console.print(Markdown(text))
+    except Exception:            # never let rendering hide the card
+        ctx.console.print(text)
     return CommandResult(handled=True)
 
 
@@ -1411,7 +1498,9 @@ def _attach(args, ctx: CommandContext) -> CommandResult:
             ctx.console.print(f"[yellow]✗ {raw}: {e}[/]")
             continue
         if b"\0" in data[:_BINARY_SNIFF_BYTES]:
-            ctx.console.print(f"[yellow]✗ {raw}: looks binary — refused[/]")
+            ctx.console.print(f"[yellow]✗ {raw}: looks binary — refused[/] "
+                              "[dim](ask the model to read it instead — it "
+                              "has read_file/bash)[/]")
             continue
         text = data.decode("utf-8", errors="replace")
         truncated = False
@@ -1423,7 +1512,9 @@ def _attach(args, ctx: CommandContext) -> CommandResult:
         if total + len(text) > ATTACH_MAX_TOTAL_BYTES:
             ctx.console.print(
                 f"[yellow]✗ {raw}: skipped — {ATTACH_MAX_TOTAL_BYTES // 1024}KB "
-                f"total attachment cap reached[/]")
+                f"total attachment cap reached[/] [dim](attachments are "
+                "one-shot: send this turn, then `/attach` it on the next — or "
+                "just name the path and let the model read it)[/]")
             continue
         total += len(text)
         att = {

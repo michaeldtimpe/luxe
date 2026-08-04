@@ -47,6 +47,20 @@ auto-memory.
   `~/.omlx/models/`, resolving symlinks AND Synology `XSym` stubs
 - `oMLX` `idle_timeout_seconds: 1800` (null keeps models resident forever)
 - `--keep-loaded` for bench mode (post-run unload fires by default)
+- The anti-fumble surfaces are POINT-IN-TIME and USER-INVOKED (2026-08-04):
+  `luxe ready` (alias `luxe doctor`) answers "can I work right now?" in
+  seconds with no model — it reuses `/doctor`'s checks verbatim against a
+  stand-in session and prints them through the SHARED renderer
+  (`chat.inspection.render_doctor`), so the in-session and host-level tables
+  can never drift; `luxe outage` / `/outage` print `OUTAGE.md`, the offline
+  emergency card, through one reader (`luxe.outage.load_card`) that imports
+  nothing networked. Exit codes match `smoke` (0 ok/warn, 1 on any FAIL, 2 on
+  a bad `--backend`). `ready` inherits doctor's offline-purity contract: the
+  ≤4s `update` fetch stays the ONLY networked line and degrades quietly, so a
+  verdict is always reachable with the link down. Every `Check.fix` is a
+  RUNNABLE command wherever one exists — a dead-end warning during an outage
+  is the failure this exists to prevent. There is deliberately NO scheduled,
+  cron, launchd, or alerting counterpart: user decision, do not add one.
 
 ## Must not
 - No cloud provider backends (Anthropic/OpenAI/Gemini) — MLX/oMLX endpoints only

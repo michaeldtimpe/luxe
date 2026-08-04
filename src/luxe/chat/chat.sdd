@@ -360,8 +360,39 @@ never touches this module.
   (8000) / `LUXE_INDEX_MAX_MB` (96). Truncation is never silent: startup names
   the cap, what the model can no longer see, and both escapes. Chat-only — the
   builders' no-`files` path is the unchanged unbounded walk the benchmarks use.
+- The COMMAND SURFACE IS PARITY-CHECKED (2026-08-04). `_build_handlers()` and
+  `_HELP_ROWS` are two independent lists, so `tests/test_chat_commands.py`
+  asserts handlers ≡ help-row names ∪ `_HIDDEN_COMMANDS` — a declared
+  allowlist of short/back-compat aliases. A new command that never reached
+  `/help` fails the suite instead of shipping invisible; hiding one is a
+  one-line declaration, never an accident. `dispatch` on an unknown `/foo`
+  names the nearest handler (`difflib.get_close_matches`) before falling back
+  to "Try /help": under pressure a typo must not cost a round trip.
+- EVERY user-visible refusal names its UNLOCK — the `restricted_hint` pattern
+  generalised (2026-08-04 audit). Already-good: restricted bash, read-only
+  writes, `/web` off, no-project, gitkit-no-repo, no-tool-support model,
+  `/pull` preview → `--yes`. Fixed in the audit: `/attach` binary + turn-cap
+  refusals point at the model's own read tools / the next turn; `/model <slot>
+  <explicit-id>` distinguishes "hidden by `visible_models:`" (supported — this
+  is how the m5 capacity model is selected) from "not in this catalog"
+  (`/pull`) instead of deferring both to a swap failure a turn later;
+  `/backend` health-fail names `/net`, the entry's `api_key_env`, and
+  `/planeproxy`; `/tools` states that MCP servers attach at STARTUP ONLY when
+  none are attached, since there is no mid-session way to add one. These are
+  CHAT-ONLY console strings — benchmark-path error text is untouched.
+- `/outage` prints `OUTAGE.md` (the offline emergency card) into the session,
+  through the same `luxe.outage.load_card` reader as `luxe outage`. Zero
+  network, zero model, zero config: it is the surface that has to work when
+  nothing else does. The card's `luxe <sub>` references are asserted against
+  the registered CLI commands by a test, so it can't rot.
 - `/export`, `/diff`, `/doctor` live in `chat/inspection.py` — logic as testable
-  functions, rendering in `commands.py`. All three are READ-ONLY. `/export`
+  functions, rendering in `commands.py`. All three are READ-ONLY. `/doctor`'s
+  RENDERING is `inspection.render_doctor(doc, console, title=…)`, shared with
+  `luxe ready` (luxe.sdd) — two renderers would drift, and the point of
+  `ready` is that the operator sees the same table outside a session that
+  they see in one. `inspection.hostwide_view` restates the session-scoped
+  lines (`mode`, `web`, `search index`) for the host-level caller so a
+  stand-in session's state is never reported as the user's. `/export`
   renders the PERSISTED transcript (so it works after `/resume` and captures
   interrupted turns) and summarises attachments instead of inlining them;
   default destination is `<session dir>/transcript.md`. `/diff` is git-backed

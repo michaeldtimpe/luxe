@@ -1231,6 +1231,9 @@ apply_aliases(main, {
     "gitrefactor": "gitaudit", "git-refactor": "gitaudit", "gref": "gitaudit",
     "git-change": "gitchange", "gchange": "gitchange",
     "gitplan": "gitchange", "git-plan": "gitchange", "gplan": "gitchange",
+    # `luxe doctor` is the name people reach for under pressure; `ready` is
+    # the canonical one (it answers "can I work right now?").
+    "doctor": "ready",
 })
 
 
@@ -1535,6 +1538,92 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
     verdict = ("[red]NOT READY[/]" if failed else "[green]READY[/]")
     console.print(f"[bold]{verdict}[/] [dim]({time.time() - t0:.0f}s)[/]")
     sys.exit(1 if failed else 0)
+
+
+def build_ready_doctor(cfg, repo_path: str):
+    """Build the host-level `Doctor` for `luxe ready` — no REPL, no model.
+
+    Reuses `/doctor`'s checks verbatim against a stand-in session so the two
+    surfaces can never disagree; `hostwide_view` then restates the lines that
+    only mean something inside a session. Split out of `ready_cmd` so tests can
+    assert render parity with `/doctor` on the same inputs.
+    """
+    from luxe.chat import inspection
+    from luxe.chat import project as project_mod
+    from luxe.chat.session import ChatSession
+    from luxe.chat.slots import SlotManager
+
+    project = project_mod.resolve(repo_path)
+    session = ChatSession(repo_path=project.root, project_kind=project.kind)
+    doc = inspection.run_doctor(session, SlotManager(cfg), project.root)
+    return inspection.hostwide_view(doc)
+
+
+@main.command(name="ready")
+@click.option("--config", "config_path", default=None,
+              help="Config YAML (default: configs/chat.yaml)")
+@click.option("--backend", "backend_name", default=None,
+              help="Check this configured backends: entry (e.g. m5) instead "
+                   "of the default one.")
+@click.option("--repo", default=".",
+              help="Directory to judge the project checks against (default: cwd)")
+def ready_cmd(config_path: str | None, backend_name: str | None, repo: str):
+    """Can I work right now? Point-in-time host preflight — seconds, no model.
+
+    The same table `/doctor` prints inside a session: endpoint, oMLX build,
+    key, model, weights, manifest, disk, update, git. Exit 0 = ready (warnings
+    included), exit 1 = something is broken. Every ✗/! line carries a
+    runnable fix. Offline-safe: the ≤4s `update` fetch is the only network
+    call and degrades quietly.
+    """
+    from luxe.chat import inspection
+
+    t0 = time.time()
+    cfg = load_config(config_path or _default_chat_config())
+    if backend_name:
+        entries = cfg.backend_entries()
+        if backend_name not in entries:
+            console.print(f"[red]✗ Unknown backend {backend_name!r}. "
+                          f"Configured: {', '.join(entries)}.[/]")
+            sys.exit(2)
+        cfg.backends = {k: v.model_copy(update={"default": k == backend_name})
+                        for k, v in entries.items()}
+
+    doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
+    worst = inspection.render_doctor(doc, console, title="luxe ready")
+
+    if worst == inspection.FAIL:
+        console.print(f"[bold][red]NOT READY[/][/] "
+                      f"[dim]({time.time() - t0:.0f}s)[/] — fix the ✗ lines "
+                      "above")
+        console.print("[dim]offline emergency card: `luxe outage`[/]")
+        sys.exit(1)
+    label = ("[green]READY[/]" if worst == inspection.OK
+             else "[yellow]READY (warnings)[/]")
+    console.print(f"[bold]{label}[/] [dim]({time.time() - t0:.0f}s)[/]")
+    console.print("[dim]full generation drill: `luxe smoke` · agentic drill: "
+                  "`luxe smoke --chat --code`[/]")
+    sys.exit(0)
+
+
+@main.command(name="outage")
+@click.option("--plain", is_flag=True, default=False,
+              help="Print the raw markdown (no Rich rendering).")
+def outage_cmd(plain: bool):
+    """Print the offline emergency card (OUTAGE.md).
+
+    Zero network, zero model, no config: it works with oMLX stopped and the
+    link down. `luxe ready` points here when it says NOT READY.
+    """
+    from luxe.outage import load_card
+
+    text = load_card()
+    if plain or not console.is_terminal:
+        click.echo(text)
+    else:
+        from rich.markdown import Markdown
+        console.print(Markdown(text))
+    sys.exit(0)
 
 
 @main.command(name="net")
