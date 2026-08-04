@@ -26,9 +26,12 @@ def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
 
 
-class _Resp:
-    def __init__(self, content):
-        self.content = content
+def _resp(text: str):
+    """The REAL response type. A hand-rolled stub with a `.content` attribute
+    is what let `distil` read the wrong field and silently do nothing on every
+    live session while these tests stayed green (2026-08-04)."""
+    from luxe.backend import ChatResponse
+    return ChatResponse(text=text)
 
 
 class _Backend:
@@ -42,7 +45,7 @@ class _Backend:
         self.calls.append(messages)
         if self.raises is not None:
             raise self.raises
-        return _Resp(self.content)
+        return _resp(self.content)
 
 
 class _Slots:
@@ -266,3 +269,72 @@ class TestInjection:
                                            _cfg()), _cfg(), _console())
         block = project_mem.render_block(project_mem.load_memory(repo))
         assert "shipped the parser" in block
+
+
+class TestBackendContract:
+    """Pin the response contract itself — the stub-shape bug above cost a
+    whole feature silently."""
+
+    def test_distil_reads_the_real_chatresponse_field(self, repo):
+        from luxe.backend import ChatResponse
+
+        class B:
+            def chat(self, messages, **kw):
+                return ChatResponse(text="- a real bullet")
+
+        assert notes_mod.distil(_session(repo), B()) == "- a real bullet"
+
+    def test_chatresponse_has_no_content_field(self):
+        """If this ever fails, `distil` needs revisiting — not this test."""
+        from luxe.backend import ChatResponse
+        assert not hasattr(ChatResponse(), "content")
+        assert hasattr(ChatResponse(), "text")
+
+
+class TestBulletRecovery:
+    """The champion narrates a "thinking process" before complying. Recover
+    the answer deterministically instead of prompting harder (CLAUDE.md)."""
+
+    _TRACE = """Here's a thinking process:
+
+1.  **Analyze User Input:**
+   - The user provided a short transcript.
+   - No code was written.
+
+2.  **Apply Constraints:**
+   - Output ONLY 3 to 6 markdown bullets.
+   - Under 900 characters total.
+
+- Read `calc.py`; nothing was changed this session.
+- Discussed that `add` would concatenate if `b` were a string.
+- Open: no test covers the string case.
+"""
+
+    def test_the_reasoning_trace_is_dropped(self):
+        out = notes_mod.extract_bullets(self._TRACE)
+        assert out.startswith("- Read `calc.py`")
+        assert "thinking process" not in out
+        assert "Apply Constraints" not in out
+        assert out.count("\n") == 2
+
+    def test_a_clean_reply_is_untouched(self):
+        clean = "- one\n- two\n- three"
+        assert notes_mod.extract_bullets(clean) == clean
+
+    def test_wrapped_continuation_lines_are_kept(self):
+        text = "- a bullet that\n  wraps onto a second line\n- another"
+        assert notes_mod.extract_bullets(text) == text
+
+    def test_prose_only_replies_are_not_blanked(self):
+        assert notes_mod.extract_bullets("just prose, no bullets") == \
+            "just prose, no bullets"
+
+    def test_distil_applies_it(self, repo):
+        from luxe.backend import ChatResponse
+
+        class B:
+            def chat(self, messages, **kw):
+                return ChatResponse(text=TestBulletRecovery._TRACE)
+
+        out = notes_mod.distil(_session(repo), B())
+        assert out.startswith("- Read `calc.py`") and "thinking" not in out

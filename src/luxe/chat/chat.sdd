@@ -366,7 +366,11 @@ never touches this module.
   non-agentic `backend.chat` call (never `run_single`; no tools are needed)
   distils the DETERMINISTIC FOLD of the conversation (`chat/summarize.py`,
   never the raw transcript) into 3–6 bullets using the registry's
-  `SESSION_NOTES_HINT`, and splices them into the `luxe:notes` block of
+  `SESSION_NOTES_HINT`, RECOVERS the bullet list from the reply in Python
+  (`extract_bullets` — the last contiguous run of COLUMN-0 bullets; the
+  champion narrates a "thinking process" first and will not be prompted out
+  of it, same finding as `deep._heuristic_findings` and
+  `brief.strip_preamble`), and splices them into the `luxe:notes` block of
   `<repo>/.luxe/memory.md`. Caps and window are enforced in PYTHON, never by
   the prompt: 900 chars/entry, newest-first, newest 5 entries / 1,500 chars
   total, oldest dropped on write. Skips when: no project attached, fewer than
