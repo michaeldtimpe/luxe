@@ -342,6 +342,42 @@ def run_chat_drill(cfg, *, backend_name: str | None = None,
     return report
 
 
+def check_expected_model(cfg, expected: str, *,
+                         base_url: str | None = None,
+                         backend_name: str | None = None) -> tuple[bool, str]:
+    """Identity preflight: does the target endpoint serve a model whose id
+    contains `expected` (case-insensitive)?
+
+    Ported from micro-mind's `bench-run --expect-model` (lessons.md
+    2026-08-03): a health check on a port is not an identity check — a
+    stale server answered four different "candidate" bake-off runs with
+    byte-identical traces from the wrong model. For n-rep acceptance
+    nights the same trap silently invalidates every rep, so the preflight
+    is one command: `luxe smoke --expect-model <substr> …` before the run.
+
+    Returns (ok, detail) — never raises; an unreachable endpoint is a
+    failure here (unlike micro-mind, luxe never spawns its own server, so
+    "nothing listening" cannot resolve to the right model later).
+    """
+    from luxe.secrets import resolve_api_key
+
+    entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
+    url = base_url or entry.base_url
+    backend = Backend(base_url=url, model="",
+                      api_key=resolve_api_key(entry.api_key_env),
+                      **entry.backend_kwargs())
+    try:
+        served = backend.list_models()
+    except Exception as e:  # noqa: BLE001 — preflight must report, not raise
+        return False, f"endpoint {url} unreachable for identity check: {e}"
+    hits = [m for m in served if expected.lower() in m.lower()]
+    if hits:
+        return True, f"{url} serves {hits[0]}"
+    return False, (f"{url} serves {served or ['<nothing>']} — no id contains "
+                   f"{expected!r}. A stale or wrong server is answering; "
+                   "kill it or fix the backend url.")
+
+
 def run_smoke(cfg, *, base_url: str | None = None,
               skip_fallback: bool = False,
               skip_tools: bool = False) -> SmokeReport:
