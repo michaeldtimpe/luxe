@@ -18,6 +18,17 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   reintroduce a local definition — the 2026-05-26 extraction copied instead of
   moving and the two sets silently coexisted until 2026-08-04
 - Mode B write-pressure injection (v1.4.1) is opt-in via `LUXE_WRITE_PRESSURE=1`
+- Every `LUXE_*` switch `run_agent` obeys is read in `agents/flags.py`
+  (`RunFlags.from_env`), once, at the top of the run — NOT with an
+  `os.environ.get` in the body. `run_agent` assigns each field to the local
+  name it always used, so the extraction changed no behaviour: same defaults,
+  same "only the exact string 1" / "only the exact string 0" asymmetries, same
+  silent fallback for every malformed value. A new switch adds a field there
+  plus a row in `tests/test_run_flags.py`, and a test asserts the loop's body
+  contains no `os.environ` access. Three reads deliberately stay outside:
+  `LUXE_TOKEN_LOG_INTERVAL` (loop.py module constant, read at import),
+  `LUXE_LOAD_PRIORS` (cohort_priors) and `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`
+  (guardrails) — those belong to their own modules' contracts
 - SpecDD Lever 2 chain block (`_build_sdd_block`) is appended after the variant's `task_prefix`
 
 ### Reflection / verify stage invariants (Track 1, pinned 2026-05-24)

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -16,7 +15,6 @@ from typing import Any, Callable
 
 from luxe.agents.cohort_priors import load_prior_from_env
 from luxe.agents.convergence import (
-    _DEFAULT_MAX_DELTA,
     _INTENSITY_NEUTRAL,
     apply_slew_rate,
     bias_to_modulation,
@@ -72,6 +70,7 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _WRITE_PRESSURE_MIN_TOOLS,
     _v1105_synthesis_looping_signature,
 )
+from luxe.agents.flags import RunFlags
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import (
@@ -313,13 +312,18 @@ def run_agent(
 
     result = AgentResult()
     t0 = time.monotonic()
+    # Every LUXE_* switch this run obeys, read once, here (agents/flags.py).
+    # Same variables, same defaults, same malformed-value fallbacks as the
+    # sixteen scattered os.environ.get() calls this replaced; each is still
+    # assigned to the local name the body below uses.
+    flags = RunFlags.from_env()
     # v1.10.1 — log_calls default-on when run_id is set. Earlier policy
     # was opt-in via LUXE_LOG_TOOL_CALLS=1, which silently degraded the
     # v1.10 production taxonomy (intervention fires + tool_calls invisible)
     # for any run that didn't have the env exported. Default-on closes
     # the footgun the v1.10 audit caught. Opt out via LUXE_SUPPRESS_TOOL_LOG=1
     # (ablation parity for legacy callers).
-    log_calls = bool(run_id) and os.environ.get("LUXE_SUPPRESS_TOOL_LOG") != "1"
+    log_calls = bool(run_id) and not flags.suppress_tool_log
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -333,9 +337,9 @@ def run_agent(
     seen_calls: set[str] = set()
     consecutive_repeat_steps = 0
     next_token_log_threshold = _TOKEN_LOG_INTERVAL  # 0 = disabled
-    write_pressure_enabled = os.environ.get("LUXE_WRITE_PRESSURE") == "1"
+    write_pressure_enabled = flags.write_pressure
     write_pressure_fired = False
-    early_bail_enabled = os.environ.get("LUXE_EARLY_BAIL") == "1"
+    early_bail_enabled = flags.early_bail
     early_bail_fired = False
     early_bail_step: int | None = None  # v1.9: needed by post-bail rescue gate
     # Refined port (2026-05-26 edit-quality investigation, project_track0_*) —
@@ -348,12 +352,12 @@ def run_agent(
     # wrong_target migrations from baseline empty_patch). This flag tests whether
     # keeping the high-convergence imperative recovers the watchdog cleanly.
     # Default OFF (byte-identical with baseline).
-    early_bail_commit_only = os.environ.get("LUXE_EARLY_BAIL_COMMIT_ONLY") == "1"
-    prose_burst_enabled = os.environ.get("LUXE_PROSE_BURST") == "1"
+    early_bail_commit_only = flags.early_bail_commit_only
+    prose_burst_enabled = flags.prose_burst
     prose_burst_fired = False
     # v1.9 — LUXE_ACTION_DENSITY_GATE (staged escalation second-stage rescue
     # after early_bail stalls). See _ACTION_DENSITY_GATE_* constants above.
-    action_density_gate_enabled = os.environ.get("LUXE_ACTION_DENSITY_GATE") == "1"
+    action_density_gate_enabled = flags.action_density_gate
     action_density_gate_fired = False
     # v1.10 — conditional intervention stacking via convergence score.
     # When enabled:
@@ -365,7 +369,7 @@ def run_agent(
     #     (model has converged on its own; rescue would interrupt)
     # Off by default; adapter wires it on for SWE-bench. Falls back to
     # v1.9 semantics (no convergence-based gating) when disabled.
-    convergence_gate_enabled = os.environ.get("LUXE_CONVERGENCE_GATE") == "1"
+    convergence_gate_enabled = flags.convergence_gate
     # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
     # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
     # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
@@ -374,29 +378,13 @@ def run_agent(
     # healed (matplotlib-25775, pylint-6528). Set LUXE_TIERED_COMPACT=0 to
     # disable for ablation; any other value (or unset) keeps it ON. Default
     # phase_thresholds come from TieredCompact._DEFAULT_PHASE_THRESHOLDS.
-    tiered_compact_enabled = os.environ.get("LUXE_TIERED_COMPACT", "1") != "0"
-    # Override the default compact_threshold (0.75) for stress-testing. Lower
-    # values force compaction to fire at lower context pressure — useful for
-    # surfacing the lever's behavior on workloads that rarely hit the default
-    # trigger. Out-of-band values (<=0 or >=1) silently fall back to default.
-    try:
-        _tc_threshold = float(os.environ.get("LUXE_TIERED_COMPACT_THRESHOLD", "0.75"))
-        if not (0.0 < _tc_threshold < 1.0):
-            _tc_threshold = 0.75
-    except ValueError:
-        _tc_threshold = 0.75
-    # Per-phase override: comma-separated "p1,p2,p3" (e.g., "0.50,0.85,0.95").
-    # When set + valid, overrides the single-threshold knob. Mirrors forge's
-    # TieredCompact.phase_thresholds. Malformed values silently fall back.
-    _tc_phase_thresholds: tuple[float, float, float] | None = None
-    _phase_raw = os.environ.get("LUXE_TIERED_COMPACT_PHASE_THRESHOLDS", "")
-    if _phase_raw:
-        try:
-            _parts = [float(x.strip()) for x in _phase_raw.split(",")]
-            if len(_parts) == 3 and all(0.0 < p < 1.0 for p in _parts):
-                _tc_phase_thresholds = (_parts[0], _parts[1], _parts[2])
-        except ValueError:
-            pass
+    tiered_compact_enabled = flags.tiered_compact
+    # LUXE_TIERED_COMPACT_THRESHOLD overrides the default trigger (0.75) for
+    # stress-testing; LUXE_TIERED_COMPACT_PHASE_THRESHOLDS ("p1,p2,p3") beats
+    # it when valid, mirroring forge's TieredCompact.phase_thresholds. Both
+    # parse (and silently fall back) in RunFlags.from_env.
+    _tc_threshold = flags.tiered_compact_threshold
+    _tc_phase_thresholds = flags.tiered_compact_phase_thresholds
     _tiered_compactor: TieredCompact | None = (
         TieredCompact(
             compact_threshold=_tc_threshold,
@@ -413,7 +401,7 @@ def run_agent(
     # the model can call respond(message=...) to exit the loop, gated by
     # 4 watchdogs (compaction-phantom, early-respond, no-writes-late,
     # passive-surrender). See src/luxe/tools/respond.py + tools.sdd.
-    respond_terminal_enabled = os.environ.get("LUXE_RESPOND_TERMINAL") == "1"
+    respond_terminal_enabled = flags.respond_terminal
     first_write_step: int | None = None
     last_write_step: int | None = None
     respond_terminated = False
@@ -424,19 +412,13 @@ def run_agent(
     # archetype-probe testing). Disable-equivalence invariant: when
     # LUXE_ADAPTIVE_POLICY=0 (or unset), zero adaptive_state events are
     # emitted and zero new state is computed — v1.10.5 byte-identical.
-    adaptive_policy_enabled = os.environ.get("LUXE_ADAPTIVE_POLICY") == "1"
+    adaptive_policy_enabled = flags.adaptive_policy
     # Per-signal ablation toggles (default ON when adaptive_policy_enabled).
-    adaptive_no_write_enabled = os.environ.get("LUXE_ADAPTIVE_NO_WRITE", "1") == "1"
-    adaptive_score_trend_enabled = os.environ.get("LUXE_ADAPTIVE_SCORE_TREND", "1") == "1"
+    adaptive_no_write_enabled = flags.adaptive_no_write
+    adaptive_score_trend_enabled = flags.adaptive_score_trend
     # v1.11 Phase 3a — slew-rate limit; agents.sdd-pinned default 0.3.
     # Bounds per-step intensity-modifier change. Override for ablation.
-    try:
-        adaptive_max_delta = float(
-            os.environ.get("LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP", "")
-            or _DEFAULT_MAX_DELTA
-        )
-    except ValueError:
-        adaptive_max_delta = _DEFAULT_MAX_DELTA
+    adaptive_max_delta = flags.adaptive_max_delta
     # Modulation state per intervention kind; starts neutral (1.0 = no change).
     # Updated each step (slew-rate-limited) when adaptive_policy_enabled.
     # v1.11 status: ALL THREE modulations are computed + emitted for
@@ -479,8 +461,7 @@ def run_agent(
     # sphinx-10435 needs, while keeping suppression silent enough on
     # subsequent events to avoid the v1.10.1 wasted-runway shape that
     # broke matplotlib-14623.
-    _band_response = os.environ.get(
-        "LUXE_EARLY_BAIL_BAND_RESPONSE", "breadth_probe_hybrid")
+    _band_response = flags.early_bail_band_response
     suppression_count_in_trajectory = 0
     breadth_probe_fire_count = 0
     # v1.9 — convergence proxy. Track read_file call signatures so the gate
