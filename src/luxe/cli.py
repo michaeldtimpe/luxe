@@ -551,9 +551,9 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
               help="Skip `uv sync` after pulling (code only, no dep changes).")
 def update_cmd(no_sync: bool):
     """Update THIS host's luxe checkout: fetch → rebase onto origin/main →
-    `uv sync --extra chat`. Says what's incoming before touching anything;
-    no-op (and says so) when already current. Targets the luxe source repo
-    regardless of where you run it."""
+    `uv sync` with the canonical extras (chat+dev+analyzers+web). Says what's
+    incoming before touching anything; no-op (and says so) when already
+    current. Targets the luxe source repo regardless of where you run it."""
     import subprocess as sp
 
     from luxe import buildinfo
@@ -593,10 +593,14 @@ def update_cmd(no_sync: bool):
     if not no_sync:
         # chat = TUI; dev = pytest (the --code drill runs it via the venv
         # python, so it's a RUNTIME need on every host); analyzers = the
-        # lint/typecheck/security tools shell-outs. A bare `--extra chat`
-        # sync pruned dev from the m1 and broke the drill (2026-07-30).
-        extras = ["--extra", "chat", "--extra", "dev", "--extra", "analyzers"]
-        with console.status("[dim]uv sync (chat+dev+analyzers)…[/]"):
+        # lint/typecheck/security tools shell-outs; web = playwright, after
+        # the 2026-08-05 fleet deployment of web_page/render — every sync
+        # WITHOUT it pruned the package and silently withheld the tools
+        # (same failure shape as the 2026-07-30 dev prune that broke the
+        # drill). The Chromium download stays per-host and outside the venv.
+        extras = ["--extra", "chat", "--extra", "dev", "--extra", "analyzers",
+                  "--extra", "web"]
+        with console.status("[dim]uv sync (chat+dev+analyzers+web)…[/]"):
             try:
                 synced = sp.run(["uv", "sync", *extras],
                                 cwd=str(root), capture_output=True, text=True,
@@ -606,7 +610,7 @@ def update_cmd(no_sync: bool):
         if synced is None:
             console.print("[yellow]⚠ uv not on PATH — run "
                           "`uv sync --extra chat --extra dev --extra "
-                          "analyzers` in the repo yourself[/]")
+                          "analyzers --extra web` in the repo yourself[/]")
         elif synced.returncode != 0:
             console.print(f"[yellow]⚠ uv sync failed:[/]\n"
                           f"[dim]{synced.stderr.strip()[-500:]}[/]")

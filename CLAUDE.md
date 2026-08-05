@@ -102,7 +102,8 @@ when reached for — availability over capability. Concretely:
   chat/debuglog.py) and failed turns persist kind="error" transcript records —
   post-outage diagnosis must not depend on what the TUI happened to show.
 - **`luxe update`** (wrapper `luxe-update`) is the one-word host update:
-  fetch → show incoming → rebase onto origin/main → `uv sync --extra chat`;
+  fetch → show incoming → rebase onto origin/main → `uv sync --extra chat
+  --extra dev --extra analyzers --extra web` (the canonical host sync);
   no-op when current. `/doctor`'s `update` check is the only networked doctor
   line (≤4s fetch; offline = quiet OK, never a warning — doctor runs during
   outages). Startup banners stay offline-pure (local refs only).
