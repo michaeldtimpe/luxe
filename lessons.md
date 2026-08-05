@@ -30,6 +30,84 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-05] the guardrails "lift" was a copy, not a move — and nothing could tell us for ten weeks
+
+**What happened**: the 2026-08-04 refactor survey found that `agents/loop.py`
+and `agents/guardrails.py` both defined the same 28 module-level constants —
+byte-identical by AST comparison — plus one verbatim function
+(`_v1105_synthesis_looping_signature`). The 2026-05-26 commit `4581d38`
+("lift loop.py guards into guardrails.py") had copied the definitions into
+their new home without deleting the originals. Two sources of truth for every
+guard threshold and nudge message sat in the tree for ten weeks; anyone
+retuning a threshold in one file would have silently changed only half the
+system (the running guards read guardrails' copies; several of loop's copies
+were referenced by nothing in loop.py at all).
+
+**Root cause**: the tests kept the corpses alive and green. Four test files
+imported the constants `from luxe.agents.loop`, so deleting loop's copies
+would have failed the suite at the moment of the original extraction — and
+instead of re-pointing the imports (or re-exporting), the extraction left
+both copies in place. Nothing in the suite asserted the two homes agreed, so
+no signal existed that could ever catch a future divergence.
+
+**Fix / takeaway**: refactor commit `6b5f106` deleted loop's copies and
+re-exports from guardrails for the test imports; `tests/test_guardrails_identity.py`
+now asserts `loop.X is guardrails.X` for every name (identity, not equality —
+a third copy can't sneak back) and that loop *defines* none of them. The
+general principle: **an extraction is not done until the old definitions are
+deleted, and test imports of the old path are the precise mechanism that
+turns "move" into "copy"**. When extracting, grep the tests for imports of
+the old home first; if they exist, the extraction must end with either
+re-pointed imports or an explicit re-export — and if two homes must coexist
+even briefly, pin them with an identity test the same day.
+
+**Affected files**: `src/luxe/agents/loop.py`, `src/luxe/agents/guardrails.py`,
+`tests/test_guardrails_identity.py` (new); the four `tests/test_loop_*.py`
+importers (unchanged, by design).
+
+### [2026-08-05] dedup estimates from a structural survey collapse on contact with actual contracts
+
+**What happened**: the consolidation-refactor plan was built from a thorough
+read-only survey (AST + grep, file:line anchors for every claim). Execution
+found **seven of the plan's ground-truth anchors wrong** — not line-number
+drift, but wrong conclusions about sameness: the two git wrappers claimed to
+share "the exact `(ok, out)` contract" differed in three user-visible ways
+(arg passing, not-found/timeout strings, stderr-vs-stdout fallback); only 4
+of "13 duplicated `Usage:` strings" could actually come from the help table
+(the other nine are subcommand-specific); `pull` was "implemented twice" only
+up to source resolution (−15 lines recoverable, not the estimated −120); and
+the plan's `cli.py ≈ 900` target was arithmetically unreachable from its own
+item list. The predicted "net −600 lines" came out as +507 (+42 AST
+statements of real code).
+
+**Root cause**: structural similarity reads as duplication from the outside,
+but the *contract* — exact error strings, consent flows, output formats,
+fallback policies — is where twins turn out fraternal. A survey that never
+executes the code can verify that two functions look alike, not that their
+observable behavior is interchangeable. Line-count deltas inherit every one
+of those over-estimates, so a net-deletion target is the wrong success metric
+for a behavior-preserving pass.
+
+**Fix / takeaway**: the plan's discipline held precisely because it assumed
+its own fallibility: byte-identical behavior was the hard rule, targets were
+explicitly "targets, not gates", and the **stop-and-record rule** (reality
+contradicts an anchor → keep behavior, record the discrepancy, don't
+improvise a bigger change) converted every wrong anchor into a report line
+instead of a regression. The verification harness is what made a 2,600-line
+relocation provable: golden-request snapshots, `--help` byte-parity against
+an origin/main worktree, pinned-unmodified test files, and differential
+checks (old-vs-new rendered through a real console with ANSI on; RunFlags
+transcribed and fuzzed over 196 environments). For future consolidation
+cycles: **measure success in sources of truth removed and cycles broken, not
+lines deleted; write the plan's numeric estimates as upper bounds; and budget
+for the executor to correctly skip items** — a skipped merge whose targets
+genuinely differ is the system working, not a shortfall.
+
+**Affected files**: plan/report at `~/Downloads/luxe-refactor-{plan,REPORT}.md`
+(outside the repo); the discrepancies are recorded in the report §2; skip
+rationales now live in `chat/chat.sdd` (usage-strings rule, pull-divergence
+note) so they aren't re-attempted.
+
 ### [2026-08-04] the stale-oMLX bug recurred the next day, wearing a different mask: `No module named 'transformers.models.qwen3_vl'`
 
 **What happened**: `luxe smoke` on m5 went NOT READY on one line — `fallback
