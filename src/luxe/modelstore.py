@@ -587,6 +587,32 @@ class OmlxAdmin:
 # --- orchestration ----------------------------------------------------------
 
 
+def resolve_pull_sources(ref: str, *, admin: OmlxAdmin | None = None,
+                         from_path: str = "",
+                         include_mounts: bool = True) -> list[ModelSource]:
+    """The source list a PULL should offer for `ref`, cheapest first.
+
+    Single entry point for both pull surfaces — `luxe pull` (cli) and `/pull`
+    (chat.cmd_models) — so the two can never disagree about where a given ref
+    comes from. `tests/test_modelstore.py` pins that agreement.
+
+    `from_path` pins one explicit directory (a mounted volume, an export)
+    instead of searching. An empty list then means "that directory is not an
+    MLX model"; with no `from_path` it means "nowhere to pull this from". The
+    two are different errors and each surface words them its own way, so the
+    caller decides which it is from its own `from_path` — this function does
+    not print or raise.
+    """
+    name = store_name_for(ref)
+    if from_path:
+        src = _resolve_hf_snapshot(Path(from_path).expanduser())
+        if src is None:
+            return []
+        return [ModelSource(kind="mount", ref=str(src), name=name,
+                            size_bytes=dir_size(src), note="--from")]
+    return resolve_sources(ref, admin=admin, include_mounts=include_mounts)
+
+
 def resolve_sources(ref: str, *, admin: OmlxAdmin | None = None,
                     mount_roots: Iterable[str] | None = None,
                     include_mounts: bool = True) -> list[ModelSource]:

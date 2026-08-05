@@ -908,25 +908,22 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 sys.exit(2)
 
             name = ms.store_name_for(ref)
-            if from_path:
-                src = ms._resolve_hf_snapshot(Path(from_path).expanduser())
-                if src is None:
+            if not from_path and not force_hf:
+                console.print("[dim]· scanning mounted volumes…[/]")
+            sources = ms.resolve_pull_sources(
+                ref, admin=admin, from_path=from_path,
+                include_mounts=not force_hf)
+            if not sources:
+                # With --from the only empty case is "not a model directory";
+                # without it, nothing anywhere has these weights.
+                if from_path:
                     console.print(f"[red]✗ {from_path} is not an MLX model "
                                   "directory (needs config.json + weights).[/]")
-                    sys.exit(2)
-                sources = [ms.ModelSource(kind="mount", ref=str(src), name=name,
-                                          size_bytes=ms.dir_size(src),
-                                          note="--from")]
-            else:
-                if not force_hf:
-                    console.print("[dim]· scanning mounted volumes…[/]")
-                sources = ms.resolve_sources(ref, admin=admin,
-                                             include_mounts=not force_hf)
-            if not sources:
-                console.print(
-                    f"[red]✗ Nowhere to pull {ref!r} from.[/] Not on a mounted "
-                    "volume, and an HF fetch needs a full repo id "
-                    "(`org/Model`). Try `luxe pull --search <query>`.")
+                else:
+                    console.print(
+                        f"[red]✗ Nowhere to pull {ref!r} from.[/] Not on a mounted "
+                        "volume, and an HF fetch needs a full repo id "
+                        "(`org/Model`). Try `luxe pull --search <query>`.")
                 sys.exit(2)
 
             chosen = sources[0]

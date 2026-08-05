@@ -386,6 +386,81 @@ class TestResolveSources:
         assert srcs[0].name == "Champ"
 
 
+class TestPullSourceParity:
+    """`luxe pull` and `/pull` must resolve the SAME sources for the same ref.
+
+    They diverged by construction before 2026-08-04: each surface had its own
+    copy of the resolve step (the `--from` branch, the mount-vs-HF fallback),
+    so a fix to one silently left the other behind. Both now call
+    `resolve_pull_sources`, and these tests pin both halves of that: the
+    function behaves like the code it replaced, and each surface actually
+    routes through it.
+    """
+
+    def test_matches_resolve_sources_when_no_from_path(self, tmp_path, monkeypatch):
+        _model_dir(tmp_path / "Champ")
+        monkeypatch.setattr(ms, "network_mounts",
+                            lambda: [(str(tmp_path), "smbfs", "//kappa/m")])
+        direct = ms.resolve_sources("mlx-community/Champ", admin=None)
+        viapull = ms.resolve_pull_sources("mlx-community/Champ", admin=None)
+        assert [(s.kind, s.ref, s.name) for s in viapull] == \
+               [(s.kind, s.ref, s.name) for s in direct]
+
+    def test_from_path_pins_one_mount_source(self, tmp_path):
+        src = _model_dir(tmp_path / "Champ-6bit")
+        srcs = ms.resolve_pull_sources("Champ-6bit", from_path=str(src))
+        assert [s.kind for s in srcs] == ["mount"]
+        assert srcs[0].ref == str(src) and srcs[0].note == "--from"
+
+    def test_from_path_that_is_not_a_model_resolves_to_nothing(self, tmp_path):
+        (tmp_path / "empty").mkdir()
+        assert ms.resolve_pull_sources("X", from_path=str(tmp_path / "empty")) == []
+
+    def test_include_mounts_false_skips_the_scan(self, tmp_path, monkeypatch):
+        _model_dir(tmp_path / "Champ")
+        monkeypatch.setattr(ms, "network_mounts",
+                            lambda: [(str(tmp_path), "smbfs", "//kappa/m")])
+        srcs = ms.resolve_pull_sources("org/Champ", include_mounts=False)
+        assert [s.kind for s in srcs] == ["hf"]
+
+    def test_both_surfaces_call_it_with_the_same_arguments(self, monkeypatch):
+        """The CLI and the chat command are driven with equivalent input and
+        must reach `resolve_pull_sources` with the same ref and flags."""
+        from click.testing import CliRunner
+        from rich.console import Console
+
+        from luxe import cli as cli_mod
+        from luxe.chat import cmd_models
+
+        seen: list[tuple] = []
+
+        def _spy(ref, *, admin=None, from_path="", include_mounts=True):
+            seen.append((ref, from_path, include_mounts))
+            return []                       # both surfaces then bail cleanly
+
+        monkeypatch.setattr(ms, "resolve_pull_sources", _spy)
+
+        class _Admin:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        monkeypatch.setattr(ms, "OmlxAdmin", lambda **kw: _Admin())
+
+        CliRunner().invoke(cli_mod.main, ["pull", "org/Champ-6bit"])
+
+        class _Session:
+            pass
+
+        class _Slots:
+            backend = type("B", (), {"base_url": "", "api_key": ""})()
+
+        ctx = cmd_models.CommandContext(console=Console(), session=_Session(),
+                                        slots=_Slots())
+        cmd_models._pull(["org/Champ-6bit"], ctx)
+
+        assert len(seen) == 2, seen
+        assert seen[0] == seen[1] == ("org/Champ-6bit", "", True)
+
+
 # --- Synology XSym stubs ----------------------------------------------------
 
 
