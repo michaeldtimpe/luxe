@@ -569,6 +569,10 @@ never touches this module.
   history rewrite/branch delete unless the user explicitly asked. Read-only
   or non-git sessions never see it; the mutually-exclusive branch with
   READ_ONLY_CHAT_HINT lives in `session.build_extra_context`
+- Chat bash also allows `gh` (tools.sdd `_CHAT_EXTRA_ALLOW`, 2026-08-05) so
+  PR/checks/issue work doesn't require `/bash` unrestricted; the hint extends
+  the explicit-ask rule to gh's remote mutations (view freely; never
+  create/merge/close via gh unasked)
 - `/ctx <tier>` sets a per-session `num_ctx` override (small/medium/large/xlarge);
   it is CHAT-ONLY and always clamped to the role's `num_ctx_max` (config) so a
   request can never exceed what the box/model holds. `num_ctx_max: 0` (default)
