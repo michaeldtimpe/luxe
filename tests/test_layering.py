@@ -116,32 +116,35 @@ def test_agents_never_imports_chat():
         "agents/ reaches into chat/: " + "; ".join(offenders))
 
 
-@pytest.mark.parametrize("forbidden", ["luxe.chat.render", "luxe.cli"])
+@pytest.mark.parametrize("forbidden", ["luxe.chat", "luxe.cli"])
 def test_gitkit_has_no_cycle_dodging_local_imports(forbidden: str):
-    """gitkit used to import `chat.render` (cancellation, truncation) and
-    `cli` (language detection) from inside function bodies purely to keep the
-    cycle invisible. Both now live in neutral modules and are imported at the
-    top of the file, where a reader and a linter can see them."""
+    """gitkit used to import `chat.render` (cancellation, truncation),
+    `chat.project` (brief's subject resolution) and `cli` (language
+    detection) from inside function bodies purely to keep the cycle
+    invisible. All now live in neutral modules and are imported at the top
+    of the file, where a reader and a linter can see them. Tightened
+    2026-08-05 (deferred #5): the whole `luxe.chat` prefix is forbidden,
+    not just the modules that happened to be imported before."""
     offenders: list[str] = []
     for path in _py_files():
         rel = _rel(path)
         if not rel.startswith("gitkit/"):
             continue
         for fn, mod in _function_local_imports(_parse(path)):
-            if mod == forbidden:
-                offenders.append(f"{rel}::{fn}")
+            if mod == forbidden or mod.startswith(forbidden + "."):
+                offenders.append(f"{rel}::{fn} ({mod})")
     assert not offenders, (
         f"gitkit still imports {forbidden} inside a function: "
         + "; ".join(offenders)
-        + ". Import from luxe.cancel / luxe.textfmt / luxe.repo_index at "
-          "module level instead."
+        + ". Import from luxe.cancel / luxe.textfmt / luxe.repo_index / "
+          "luxe.project at module level instead."
     )
 
 
 def test_the_neutral_modules_import_nothing_from_chat_or_cli():
-    """The whole point of `luxe/{mounts,cancel,textfmt}.py` is that they sit
-    below both. If one grows an upward import the cycle is back."""
-    for name in ("mounts.py", "cancel.py", "textfmt.py"):
+    """The whole point of `luxe/{mounts,cancel,textfmt,project}.py` is that
+    they sit below both. If one grows an upward import the cycle is back."""
+    for name in ("mounts.py", "cancel.py", "textfmt.py", "project.py"):
         tree = _parse(SRC / name)
         mods = [m for m in _module_level_imports(tree)] + [
             m for _fn, m in _function_local_imports(tree)]

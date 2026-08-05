@@ -749,7 +749,7 @@ def build_ready_doctor(cfg, repo_path: str):
     assert render parity with `/doctor` on the same inputs.
     """
     from luxe.chat import inspection
-    from luxe.chat import project as project_mod
+    from luxe import project as project_mod
     from luxe.chat.session import ChatSession
     from luxe.chat.slots import SlotManager
 

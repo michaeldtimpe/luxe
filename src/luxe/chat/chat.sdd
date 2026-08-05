@@ -350,7 +350,10 @@ never touches this module.
   guard, one extra. The allowlist LAYERS on the IP-class egress guard and
   does not replace it — an allowlist says nothing about where a name
   resolves, so it cannot stop the tailnet/CGNAT case on its own.
-- A session can start ANYWHERE (2026-07-30). `chat/project.py` resolves the
+- A session can start ANYWHERE (2026-07-30). `luxe/project.py` (moved out of
+  chat/ 2026-08-05, deferred #5 — gitkit's brief needs the same resolution and
+  the old home forced a gitkit→chat import; `chat/project.py` remains as a
+  re-export shim for the historical import path) resolves the
   subject once at startup: **git** (cwd is in a work tree → the project is the
   GIT ROOT, so a subdir session sees the whole repo), **dir** (no git but a
   marker: pyproject.toml/package.json/…), or **none**. `$HOME` and any directory

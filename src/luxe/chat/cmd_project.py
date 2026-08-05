@@ -23,7 +23,7 @@ def _project(args, ctx: CommandContext) -> CommandResult:
     A session started outside a project is a normal way to use luxe — this is
     how you give it a codebase without restarting.
     """
-    from luxe.chat import project as project_mod
+    from luxe import project as project_mod
     from luxe.chat import repl as repl_mod
 
     if not args:

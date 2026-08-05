@@ -223,7 +223,7 @@ def _run_interactive(
     # What is this session about? A git root above cwd, a marker-bearing
     # directory, or nothing at all (chat from anywhere). `--repo` given
     # explicitly is honoured as-is; the default "." resolves upward.
-    from luxe.chat import project as project_mod
+    from luxe import project as project_mod
 
     # ALWAYS resolve upward, flag or not: the `luxe-chat` wrapper passes
     # `--repo "$PWD"` on every invocation, so treating an explicit --repo as
