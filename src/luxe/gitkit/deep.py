@@ -43,6 +43,7 @@ from typing import Any
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.context import estimate_tokens
+from luxe.fswalk import iter_pruned
 from luxe.textfmt import truncate_for_display
 from luxe.repo_index import (
     _DEFAULT_EXCLUDES,
@@ -275,27 +276,23 @@ def enumerate_files(target: str | Path, summary, *,
     excludes = excludes if excludes is not None else _DEFAULT_EXCLUDES
     recent = _norm_recent(summary)
     recs: list[FileRec] = []
-    for cur, dirs, fnames in os.walk(root):
-        dirs[:] = [d for d in dirs
-                   if d not in excludes and not d.startswith(".") or d == ".github"]
-        for fname in fnames:
-            p = Path(cur) / fname
-            lang = _detect_language(p.suffix)
-            if lang is None:
-                continue
-            try:
-                size = p.stat().st_size
-            except OSError as e:
-                if log:
-                    log(f"skipping unreadable file {p}: {e}")
-                continue
-            rel = str(p.relative_to(root)).replace(os.sep, "/")
-            top = rel.split("/", 1)[0] if "/" in rel else "."
-            recs.append(FileRec(
-                rel=rel, language=lang, loc=_count_lines(p), bytes=size,
-                tokens=max(1, size // _CHARS_PER_TOKEN), top_dir=top,
-                priority=_file_priority(rel, recent),
-            ))
+    for p in iter_pruned(root, excludes=excludes):
+        lang = _detect_language(p.suffix)
+        if lang is None:
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError as e:
+            if log:
+                log(f"skipping unreadable file {p}: {e}")
+            continue
+        rel = str(p.relative_to(root)).replace(os.sep, "/")
+        top = rel.split("/", 1)[0] if "/" in rel else "."
+        recs.append(FileRec(
+            rel=rel, language=lang, loc=_count_lines(p), bytes=size,
+            tokens=max(1, size // _CHARS_PER_TOKEN), top_dir=top,
+            priority=_file_priority(rel, recent),
+        ))
     return recs
 
 
@@ -363,14 +360,10 @@ def framing_files(target: str | Path, *, limit: int = 40) -> list[str]:
     auth/config/routing/entrypoints). Returns POSIX relative paths, capped."""
     root = Path(target).resolve()
     found: list[str] = []
-    for cur, dirs, fnames in os.walk(root):
-        dirs[:] = [d for d in dirs
-                   if d not in _DEFAULT_EXCLUDES and not d.startswith(".")
-                   or d == ".github"]
-        for fname in fnames:
-            rel = str((Path(cur) / fname).relative_to(root)).replace(os.sep, "/")
-            if _FRAMING_RE.search(rel):
-                found.append(rel)
+    for p in iter_pruned(root, excludes=_DEFAULT_EXCLUDES):
+        rel = str(p.relative_to(root)).replace(os.sep, "/")
+        if _FRAMING_RE.search(rel):
+            found.append(rel)
     found.sort()
     return found[:limit]
 

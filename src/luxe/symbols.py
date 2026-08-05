@@ -17,9 +17,8 @@ on a Java repo gets a clear "fall back to BM25" note rather than silent zero.
 
 from __future__ import annotations
 
-from luxe.fswalk import INDEX_EXCLUDE_DIRS
+from luxe.fswalk import INDEX_EXCLUDE_DIRS, iter_pruned_files
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -232,19 +231,9 @@ def _symbol_candidates(root: Path, files: list[Path] | None,
     if files is not None:
         yield from files
         return
-    for cur, dirs, names in os.walk(root):
-        dirs[:] = [d for d in dirs
-                   if d not in excludes and not d.startswith(".") or d == ".github"]
-        for fname in names:
-            p = Path(cur) / fname
-            if _detect_language(p.suffix) is None:
-                continue
-            try:
-                if p.stat().st_size > max_file_bytes:
-                    continue
-            except OSError:
-                continue
-            yield p
+    yield from iter_pruned_files(
+        root, excludes=excludes, max_file_bytes=max_file_bytes,
+        accept=lambda p: _detect_language(p.suffix) is not None)
 
 
 # --- tool surface ----------------------------------------------------------

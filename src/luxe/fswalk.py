@@ -230,3 +230,59 @@ def iter_files(
             if name_filter is not None and not name_filter(name):
                 continue
             yield Path(cur) / name
+
+
+# --- the index walkers' shared traversal -----------------------------------
+
+def iter_pruned(root: str | Path, *,
+                excludes: set[str] | frozenset[str],
+                keep: tuple[str, ...] = (".github",)):
+    """Every file under `root`, pruning `excludes` and dot-directories.
+
+    The traversal the five index/analysis walkers had a copy of each (bm25
+    search, symbol extraction, the repo summary, gitkit's file enumeration and
+    its framing-file picker). Yields `Path`s in `os.walk` order, so callers
+    that depended on that order still get it.
+
+    The prune predicate is reproduced EXACTLY, quirk included::
+
+        d not in excludes and not d.startswith(".") or d in keep
+
+    `and` binds tighter than `or`, so this reads `(not-excluded AND
+    not-a-dotdir) OR is-a-keep-dir` — which means a directory named in `keep`
+    survives even if it is ALSO in `excludes`. That is very probably not what
+    whoever wrote it meant, and it is the behavior five subsystems have today.
+    Changing it is an evidence-gated decision, not a refactor; see the
+    2026-08-04 consolidation report's deferred list.
+
+    Unlike `iter_files`, this does NOT swallow OSError from the walk itself —
+    it is for repo roots the caller already resolved, not user-chosen trees.
+    """
+    for cur, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs
+                   if d not in excludes and not d.startswith(".") or d in keep]
+        for fname in names:
+            yield Path(cur) / fname
+
+
+def iter_pruned_files(root: str | Path, *,
+                      excludes: set[str] | frozenset[str],
+                      accept: "Callable[[Path], bool]",
+                      max_file_bytes: int,
+                      keep: tuple[str, ...] = (".github",)):
+    """`iter_pruned` plus the accept-then-size filter the two INDEX builders
+    share. A file that cannot be stat'd is skipped, same as a too-large one.
+
+    The repo summary and gitkit's enumerator do not use this: they need the
+    size they just read, and gitkit logs the unreadable ones rather than
+    dropping them silently.
+    """
+    for p in iter_pruned(root, excludes=excludes, keep=keep):
+        if not accept(p):
+            continue
+        try:
+            if p.stat().st_size > max_file_bytes:
+                continue
+        except OSError:
+            continue
+        yield p

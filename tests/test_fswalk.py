@@ -14,7 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from luxe.fswalk import DEFAULT_SKIP_DIRS, iter_files, scan_source_files
+from luxe.fswalk import (
+    DEFAULT_SKIP_DIRS,
+    INDEX_EXCLUDE_DIRS,
+    iter_files,
+    iter_pruned,
+    iter_pruned_files,
+    scan_source_files,
+)
 from luxe.spec_resolver import find_all_sdd
 
 
@@ -267,3 +274,108 @@ class TestScanSourceFiles:
         _touch(tmp_path / "a.py")
         scan = scan_source_files(tmp_path, extensions=_EXT, use_git=False)
         assert scan.seconds >= 0.0
+
+
+# --- the index walkers' shared traversal ------------------------------------
+
+
+def _legacy_walk(root, excludes):
+    """The prune loop as it was written, verbatim, in search.py / symbols.py /
+    repo_index.py / gitkit.deep (×2) before 2026-08-04. The oracle these tests
+    compare against — copied here so `iter_pruned` can never drift from what
+    the five call sites did without a test going red."""
+    out = []
+    for cur, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs
+                   if d not in excludes and not d.startswith(".") or d == ".github"]
+        for fname in names:
+            out.append(Path(cur) / fname)
+    return out
+
+
+def _fixture_tree(root: Path) -> None:
+    """A tree with one of everything the predicate discriminates on."""
+    _touch(root / "top.py")
+    _touch(root / "src" / "app.py")
+    _touch(root / "src" / "deep" / "mod.py")
+    _touch(root / ".hidden" / "secret.py")          # dotdir  → pruned
+    _touch(root / ".github" / "workflows" / "ci.yml")   # dotdir → KEPT
+    _touch(root / "node_modules" / "pkg" / "i.js")  # excluded → pruned
+    _touch(root / "build" / "out.py")               # excluded → pruned
+    _touch(root / "docs" / "readme.md")
+    (root / "big.py").write_text("x" * 5000)
+
+
+class TestIterPruned:
+    def test_matches_the_legacy_walk_exactly(self, tmp_path):
+        _fixture_tree(tmp_path)
+        assert sorted(iter_pruned(tmp_path, excludes=INDEX_EXCLUDE_DIRS)) == \
+               sorted(_legacy_walk(tmp_path, INDEX_EXCLUDE_DIRS))
+
+    def test_yields_in_os_walk_order(self, tmp_path):
+        """Not just the same set — the same ORDER. bm25 document ids and the
+        repo summary's top-dir counts are built by appending as we go."""
+        _fixture_tree(tmp_path)
+        assert list(iter_pruned(tmp_path, excludes=INDEX_EXCLUDE_DIRS)) == \
+               _legacy_walk(tmp_path, INDEX_EXCLUDE_DIRS)
+
+    def test_the_hand_computed_result(self, tmp_path):
+        """Spelled out, so this test still means something if the oracle above
+        is ever edited: dotdirs and excludes are pruned, `.github` survives."""
+        _fixture_tree(tmp_path)
+        rel = sorted(str(p.relative_to(tmp_path)).replace(os.sep, "/")
+                     for p in iter_pruned(tmp_path, excludes=INDEX_EXCLUDE_DIRS))
+        assert rel == [
+            ".github/workflows/ci.yml",
+            "big.py",
+            "docs/readme.md",
+            "src/app.py",
+            "src/deep/mod.py",
+            "top.py",
+        ]
+
+    def test_a_keep_dir_survives_being_excluded_too(self, tmp_path):
+        """The `(A and B) or C` precedence quirk, pinned rather than fixed.
+
+        `.github` is in `keep`, so the `or` re-admits it even when the caller
+        ALSO lists it as an exclude. Almost certainly not what was intended;
+        it is what five subsystems have done for months. Changing it is an
+        evidence-gated decision, not a refactor — see the deferred list.
+        """
+        _touch(tmp_path / ".github" / "ci.yml")
+        excludes = set(INDEX_EXCLUDE_DIRS) | {".github"}
+        assert [p.name for p in iter_pruned(tmp_path, excludes=excludes)] == ["ci.yml"]
+        # ... and the legacy loop agreed
+        assert _legacy_walk(tmp_path, excludes) == list(
+            iter_pruned(tmp_path, excludes=excludes))
+
+    def test_keep_is_overridable(self, tmp_path):
+        _touch(tmp_path / ".github" / "ci.yml")
+        _touch(tmp_path / "a.py")
+        assert [p.name for p in
+                iter_pruned(tmp_path, excludes=INDEX_EXCLUDE_DIRS, keep=())] == ["a.py"]
+
+
+class TestIterPrunedFiles:
+    def test_applies_accept_then_the_size_cap(self, tmp_path):
+        _fixture_tree(tmp_path)
+        got = sorted(p.name for p in iter_pruned_files(
+            tmp_path, excludes=INDEX_EXCLUDE_DIRS,
+            accept=lambda p: p.suffix == ".py", max_file_bytes=1000))
+        assert got == ["app.py", "mod.py", "top.py"]   # big.py over the cap
+
+    def test_an_unstattable_file_is_skipped_not_raised(self, tmp_path, monkeypatch):
+        _touch(tmp_path / "a.py")
+        _touch(tmp_path / "b.py")
+        real = Path.stat
+
+        def _boom(self, *a, **k):
+            if self.name == "b.py":
+                raise OSError(errno.EIO, "gone")
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(Path, "stat", _boom)
+        got = [p.name for p in iter_pruned_files(
+            tmp_path, excludes=INDEX_EXCLUDE_DIRS,
+            accept=lambda p: True, max_file_bytes=10_000)]
+        assert got == ["a.py"]
