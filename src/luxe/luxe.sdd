@@ -117,11 +117,12 @@ auto-memory.
 - Hand-roll the index walkers' prune loop. `luxe.fswalk.iter_pruned` (and
   `iter_pruned_files`, which adds the shared accept-then-size filter) is the
   one traversal for bm25 search, symbol extraction, the repo summary, and
-  gitkit's two enumerators. Its predicate carries a PRECEDENCE QUIRK —
-  `d not in excludes and not d.startswith(".") or d in keep` means a `keep`
-  dir survives even when excluded — which is pinned by
-  `tests/test_fswalk.py`, not fixed: five subsystems depend on today's
-  behaviour and changing it needs evidence, not a refactor
+  gitkit's two enumerators. Semantics (fixed 2026-08-05, evidence-gated):
+  `excludes` always wins; `keep` only rescues dot-directories that are not
+  excluded. The original five call sites' precedence quirk (a `keep` dir
+  surviving its own exclusion) was closed after a sweep showed no caller
+  can reach the divergent input; `tests/test_fswalk.py` pins the intended
+  semantics and documents the one legacy divergence
 - Promote configs from `configs/_archive/` (reference-only; not the champion)
 
 ## Owns
