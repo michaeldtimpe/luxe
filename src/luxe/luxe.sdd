@@ -88,6 +88,14 @@ auto-memory.
   path RAISES, indistinguishable from a missing git binary); the two are not
   interchangeable and each caller keeps the form it had. Error POLICY stays at
   the call site: the wordings differ per subsystem and are user-visible
+- The `luxe maintain` PIPELINE lives in `luxe/maintain.py`
+  (`maintain_pipeline`), not in `cli.py`; `cli.maintain` is a Click shell that
+  forwards its eleven parameters unchanged. Both benchmark adapters spawn
+  `python -m luxe.cli maintain`, so the command name, arguments, and option
+  surface are frozen — check `luxe maintain --help` against the previous
+  revision before shipping a change there. `maintain.py` imports `cli` only
+  INSIDE the function (`_resolve_repo`, `_infer_task_type`); `cli` imports it
+  at module level
 - `~/.luxe` is spelled ONCE, in `luxe/paths.py` (`luxe_home()`), and resolved
   per call so a test that moves `$HOME` is obeyed. Deliberately NOT
   configurable — every one of those paths is also written down in OUTAGE.md
