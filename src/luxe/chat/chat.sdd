@@ -392,6 +392,34 @@ never touches this module.
   Together with notes, `.luxe/memory.md` now carries TWO machine-managed
   fenced blocks whose markers are load-bearing (memory.sdd); everything else
   in that file is the user's and survives byte-for-byte.
+- The command HANDLERS live in six `chat/cmd_*.py` group modules (2026-08-04
+  split, behavior unchanged): `cmd_models` (`/model` `/backend` `/pull`
+  `/unload`), `cmd_diag` (`/status` `/tools` `/doctor` `/outage` `/net`
+  `/planeproxy`), `cmd_transcript` (`/diff` `/export` `/full` `/copy`),
+  `cmd_agentic` (`/goal` `/plan` `/attach` `/sys`), `cmd_project` (`/project`
+  `/index` `/init` `/note` `/memory` `/gitaudit` `/gitchange` `/compare`), and
+  `cmd_toggles` (`/theme` `/use` `/ctx` + the on/off switches). `commands.py`
+  keeps the CONTRACT — `CommandResult`/`CommandContext`, `_HELP_ROWS`,
+  `_HIDDEN_COMMANDS`, `is_command`, `dispatch`, `_build_handlers`, `_usage`,
+  and the four handlers that belong to the dispatcher itself (`/help`
+  `/retry` `/resume` `/clear` `/quit`). Direction is one-way: group modules
+  import `commands`, and `_build_handlers` imports THEM function-locally, so
+  the registry stays lazy and the import graph acyclic. A new command adds a
+  handler to a group module and a row to `_HELP_ROWS` — nothing else.
+- `cmd_toggles._toggle(attr, name, …)` builds the pure bool-toggle handlers
+  (`/write` `/bash` `/reasoning` `/terse` `/compact`) from their differing
+  words. Styles are PER-COMMAND parameters, not a convention (`/terse` is
+  green when ON because terse is the safe default). `/web` and `/debug` are
+  deliberately NOT built from it — one prints a per-provider report, the
+  other drives two fields off a compound predicate.
+- `commands._usage(ctx, "/cmd")` prints a usage line from `_HELP_ROWS` so the
+  help table and the error can't drift. It applies only where the whole usage
+  IS the table's args cell (`/plan` `/attach` `/planeproxy` `/compare`); the
+  subcommand-specific lines (`/sys add <rule>`, `/memory promote <id>`,
+  `/goal <objective>  ·  /goal stop`, `/pull --search <query>`,
+  `/use chat|plan|code`, `/verbose … (current: X)`) say more than the table
+  can and stay hand-written. Do not force them through the helper — the
+  output would change.
 - The COMMAND SURFACE IS PARITY-CHECKED (2026-08-04). `_build_handlers()` and
   `_HELP_ROWS` are two independent lists, so `tests/test_chat_commands.py`
   asserts handlers ≡ help-row names ∪ `_HIDDEN_COMMANDS` — a declared
