@@ -106,6 +106,14 @@ auto-memory.
 - Walk a user-chosen root with `Path.rglob`/`Path.glob` — pathlib swallows only
   `PermissionError`, so an unreachable network-backed dir (`OSError(ETIMEDOUT)`)
   crashes the caller. Use `luxe.fswalk.iter_files` (2026-07-29 chat crash)
+- Hand-roll the index walkers' prune loop. `luxe.fswalk.iter_pruned` (and
+  `iter_pruned_files`, which adds the shared accept-then-size filter) is the
+  one traversal for bm25 search, symbol extraction, the repo summary, and
+  gitkit's two enumerators. Its predicate carries a PRECEDENCE QUIRK —
+  `d not in excludes and not d.startswith(".") or d in keep` means a `keep`
+  dir survives even when excluded — which is pinned by
+  `tests/test_fswalk.py`, not fixed: five subsystems depend on today's
+  behaviour and changing it needs evidence, not a refactor
 - Promote configs from `configs/_archive/` (reference-only; not the champion)
 
 ## Owns

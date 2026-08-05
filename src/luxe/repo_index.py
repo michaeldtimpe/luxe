@@ -11,7 +11,7 @@ Output is a single ~2k-token block:
 
 from __future__ import annotations
 
-from luxe.fswalk import INDEX_EXCLUDE_DIRS
+from luxe.fswalk import INDEX_EXCLUDE_DIRS, iter_pruned
 
 import os
 import subprocess
@@ -168,23 +168,20 @@ def build_repo_summary(
     files: list[FileInfo] = []
     top_dir_counts: dict[str, int] = {}
 
-    for cur, dirs, fs in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in excludes and not d.startswith(".") or d in {".github"}]
-        for fname in fs:
-            p = Path(cur) / fname
-            lang = _detect_language(p.suffix)
-            if lang is None:
-                continue
-            try:
-                size = p.stat().st_size
-            except OSError:
-                continue
-            loc = _count_lines(p)
-            rel = str(p.relative_to(root))
-            files.append(FileInfo(rel_path=rel, language=lang, loc=loc, bytes=size))
-            # Top-dir bucket: first segment of relative path (or "." for root files)
-            top = rel.split(os.sep, 1)[0] if os.sep in rel else "."
-            top_dir_counts[top] = top_dir_counts.get(top, 0) + 1
+    for p in iter_pruned(root, excludes=excludes):
+        lang = _detect_language(p.suffix)
+        if lang is None:
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        loc = _count_lines(p)
+        rel = str(p.relative_to(root))
+        files.append(FileInfo(rel_path=rel, language=lang, loc=loc, bytes=size))
+        # Top-dir bucket: first segment of relative path (or "." for root files)
+        top = rel.split(os.sep, 1)[0] if os.sep in rel else "."
+        top_dir_counts[top] = top_dir_counts.get(top, 0) + 1
 
     summary = RepoSummary()
     summary.file_count = len(files)

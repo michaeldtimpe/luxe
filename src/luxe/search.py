@@ -15,9 +15,8 @@ than 3 chars. Good enough for code identifiers + natural-language queries.
 
 from __future__ import annotations
 
-from luxe.fswalk import INDEX_EXCLUDE_DIRS
+from luxe.fswalk import INDEX_EXCLUDE_DIRS, iter_pruned_files
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,19 +79,9 @@ def _candidates(root: Path, files: list[Path] | None,
             if p.suffix.lower() in extensions:
                 yield p
         return
-    for cur, dirs, names in os.walk(root):
-        dirs[:] = [d for d in dirs
-                   if d not in excludes and not d.startswith(".") or d == ".github"]
-        for fname in names:
-            p = Path(cur) / fname
-            if p.suffix.lower() not in extensions:
-                continue
-            try:
-                if p.stat().st_size > max_file_bytes:
-                    continue
-            except OSError:
-                continue
-            yield p
+    yield from iter_pruned_files(
+        root, excludes=excludes, max_file_bytes=max_file_bytes,
+        accept=lambda p: p.suffix.lower() in extensions)
 
 
 def build_bm25_index(
