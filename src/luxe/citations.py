@@ -53,14 +53,6 @@ class ValidatorEnvelope:
     removed: list[ValidatorRemoved] = field(default_factory=list)
     summary: str = ""
 
-    @property
-    def is_ambiguous(self) -> bool:
-        return self.status == "ambiguous"
-
-    @property
-    def is_cleared(self) -> bool:
-        return self.status == "cleared"
-
 
 _CITATION_RE = re.compile(
     r"`?(?P<path>[\w./_-]+\.[\w]+):(?P<line>\d+)(?:-(?P<line_end>\d+))?`?"
