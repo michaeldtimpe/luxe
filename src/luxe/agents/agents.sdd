@@ -7,6 +7,16 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - All mono prompt strings live in `src/luxe/agents/prompts.py` `PROMPT_REGISTRY`
 - `TaskOverlay` maps `task_type` to `PromptVariant` id; routing goes through `resolve_prompt_ids`
 - `run_agent` (loop.py) owns the inner tool-call loop; `single.py` is the entry
+- `guardrails.py` is the SOLE home of intervention thresholds + nudge bodies
+  (`_WRITE_PRESSURE_*`, `_PROSE_BURST_*`, `_ACTION_DENSITY_GATE_*`,
+  `_EARLY_BAIL_*`, `_HABITUATION_EXIT_*`, `_POST_WRITE_IDLE_MAX`,
+  `_MAX_CONSECUTIVE_REPEAT_STEPS`, `_BREADTH_PROBE_ESCALATION_COUNT`,
+  `_CONVERGENCE_{LOW,HIGH}_THRESHOLD`, `_v1105_synthesis_looping_signature`)
+  together with their calibration rationale. `loop.py` RE-EXPORTS them so the
+  loop test modules' `from luxe.agents.loop import _X` keeps resolving;
+  `tests/test_guardrails_identity.py` pins `loop.X is guardrails.X`. Never
+  reintroduce a local definition — the 2026-05-26 extraction copied instead of
+  moving and the two sets silently coexisted until 2026-08-04
 - Mode B write-pressure injection (v1.4.1) is opt-in via `LUXE_WRITE_PRESSURE=1`
 - SpecDD Lever 2 chain block (`_build_sdd_block`) is appended after the variant's `task_prefix`
 

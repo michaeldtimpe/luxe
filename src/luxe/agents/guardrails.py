@@ -72,8 +72,15 @@ class Decision:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-# Write-pressure guard constants — promoted from loop.py module-level scope so
-# the guard owns its own thresholds. Values unchanged from loop.py v1.4.1.
+# Mid-loop write-pressure thresholds (Mode B fix). Fires once per run when
+# the gate hits: step >= MIN_STEP, tools >= MIN_TOOLS, zero writes, AND
+# either completion >= MIN_TOKENS (prose-heavy trap) or tools >=
+# MAX_TOOLS_BEFORE_FIRE (tool-heavy trap). The dual signal handles models
+# with different output distributions: qwen3.6-35b generates ~9k completion
+# tokens in the v1.4 prose-mode failure, while qwen3-coder-next-80b emits
+# 30 reads with only ~1.5k completion tokens — same read-loop pathology,
+# different surface telemetry. Off by default; enable per-run with
+# LUXE_WRITE_PRESSURE=1 (or via runtime config).
 
 _WRITE_PRESSURE_MIN_TOOLS = 10
 _WRITE_PRESSURE_MIN_TOKENS = 4000
@@ -151,7 +158,21 @@ class WritePressureGuard:
         )
 
 
-# Prose-burst guard constants. Duplicated from loop.py v1.8 Track 1.
+# v1.8 Track 1 — per-step prose-burst detector. Targets the short-trace
+# bailer class identified in the B.1 audit (3/18 v3 empties unreachable by
+# early_bail's step≥4 rule because the model exited at step ≤3 with 8000+
+# completion tokens — prose burst without action). The composite invariant
+# is fired-once at the same checkpoint as early_bail/write_pressure:
+#   step <= _PROSE_BURST_MAX_STEP (4)
+#   AND tool_calls_total == 0
+#   AND writes_seen == 0
+#   AND completion_tokens_delta_last_step >= _PROSE_BURST_MIN_DELTA (1500)
+# 1500 is materially below the observed pathological range (3000-4000/step
+# in the v17 B.5 short-trace cases) so legitimate planning traces have
+# margin. Anti-oscillation: if the model's RESPONSE to the intervention is
+# ALSO a prose burst with zero tool calls, exit cleanly (not aborted) —
+# the trajectory is non-steerable. Off by default; enable with
+# LUXE_PROSE_BURST=1.
 
 _PROSE_BURST_MAX_STEP = 4
 _PROSE_BURST_MIN_DELTA = 1500
@@ -213,7 +234,28 @@ class ProseBurstGuard:
         )
 
 
-# Action-density-gate guard constants. Duplicated from loop.py v1.9.
+# v1.9 — LUXE_ACTION_DENSITY_GATE. Staged-escalation predicate that catches
+# the post-bail short-stall class (model accepted early_bail at step 4 but
+# produced no edit) AND the standalone "diffuse-reconnaissance" class
+# (many tools, many tokens, no commit) that PROSE_BURST's zero-tool-call
+# rule cannot reach. Thresholds derived from
+# scripts/mine_action_density.py over v17 + v18 SWE-bench n=75 traces;
+# see acceptance/v19_mining/THRESHOLD_DECISION.md.
+#
+# Two fire modes:
+#   - standalone: early_bail never fired; gate stands on its own.
+#   - post_bail_rescue: early_bail fired at least MIN_TURNS_AFTER_BAIL
+#     turns ago AND no writes have happened since. Targets confidence-
+#     collapse trajectories where the bail nudge wasn't enough.
+#
+# Convergence proxy (same_file_read_twice) acts as a skip — strong
+# trajectories converge by re-reading the same file (3× the empty-class
+# rate per the v18 distribution), so the gate suppresses itself when
+# convergence is observed. Even without the proxy the chosen thresholds
+# already show 0 careful-strong risk on the historical distribution;
+# the proxy is a safety belt against future drift.
+#
+# Off by default. Enable with LUXE_ACTION_DENSITY_GATE=1.
 
 _ACTION_DENSITY_GATE_MIN_STEP = 6
 _ACTION_DENSITY_GATE_MIN_TOKENS = 1500
@@ -293,10 +335,24 @@ class ActionDensityGateGuard:
         )
 
 
-# Habituation-exit guard constant. Duplicated from loop.py v1.10.1.
+# v1.10.1 — habituation clean-exit predicate threshold. Calibrated against
+# sympy-13031 trace evidence (the founding instance): all three distinct
+# interventions fired by step 15, zero writes through step 30+. The
+# trajectory is intervention-resistant — burning the remaining max_steps
+# yields no further information. Exit at step ≥20 to give the model 5+
+# steps after the typical third-intervention step before terminating.
 
 _HABITUATION_EXIT_MIN_STEP = 20
 _HABITUATION_EXIT_MIN_KINDS = 3
+
+# v1.10.2 — post-exploratory escalation was implemented and tested but
+# REMOVED before ship. The n=4 probe revealed it regressed
+# matplotlib-14623 (cascading through 3 interventions into
+# habituation_exit) while rescuing pylint-6528. Single-mechanism
+# escalation can't satisfy both at this convergence-score band.
+# v1.10.3 needs trajectory-shape signals (e.g. post-bail tool_call
+# rate, fraction of grep vs read in the rescue window) not a single
+# step-based predicate. See lessons.md 2026-05-15 entry.
 
 
 class HabituationExitGuard:
@@ -340,7 +396,16 @@ class HabituationExitGuard:
         }
 
 
-# Post-write-idle-exit guard constant. Duplicated from loop.py.
+# Post-write drift detector. Once at least one write has succeeded, any
+# run of non-write tool calls that each return zero bytes (or hit the
+# dedup short-circuit) signals "diff already produced, model is spinning
+# on verification without new information." Exit cleanly at this many
+# back-to-back idle calls so the harness still commits/pushes the work
+# without burning the full max_steps budget.
+# Observed pattern (qwen3-coder-next-80b, 2026-05-10 m5max_moe bake-off):
+# edit_file (step 1) → git_diff 972B (step 2) → lint 0B → bash 0B →
+# git_diff 0B (dup) → bash 0B (dup×2 → stuck_no_output bailout). Diff
+# was already correct from step 1; steps 3–11 produced no new signal.
 _POST_WRITE_IDLE_MAX = 3
 
 
@@ -373,7 +438,7 @@ class PostWriteIdleExitGuard:
         }
 
 
-# Consecutive-repeat guard constant. Duplicated from loop.py.
+# Consecutive-repeat guard constant.
 _MAX_CONSECUTIVE_REPEAT_STEPS = 2
 
 
@@ -405,7 +470,17 @@ class ConsecutiveRepeatGuard:
         }
 
 
-# Early-bail guard constants + messages. Duplicated from loop.py v1.7+.
+# Early-bail intervention (v1.7 priority #1). Fires once per run when the
+# agent has read enough to plan but hasn't written. Targets SWE-bench's
+# "no_abort, zero writes" empty_patch class: 10 of 18 v3 paired-mechanism
+# empties showed model clean-exiting with 8000+ completion tokens but no
+# edits (long-trace bailers: psf-requests-6028, pydata-xarray-2905/6938,
+# django-11734, mpl-13989, sphinx-10435, sphinx-10614 partial). Distinct
+# from WRITE_PRESSURE (which fires later, on prose-mode trap with 10+ tool
+# calls). Trace audit 2026-05-11: step >= 4 with reads >= 4 catches 7 of
+# 10 no_abort cases + intercepts 3 stuck_loop and 1 max_steps cases BEFORE
+# their terminal detectors fire. Off by default; enable with
+# LUXE_EARLY_BAIL=1.
 
 _EARLY_BAIL_MIN_STEP = 4
 _EARLY_BAIL_MIN_READS = 4
@@ -419,6 +494,14 @@ _EARLY_BAIL_MESSAGE = (
     "do not continue reading."
 )
 
+# v1.8 Track 3 — no-abstain variant for tasks where the bug is known to
+# exist (SWE-bench: every instance has a definitional bug + gold patch).
+# Removes the "explicitly state correct" escape valve that caused 3
+# wrong_target/wrong_location → empty_patch regressions in v17 B.5.
+# Activated via env var LUXE_EARLY_BAIL_MODE=no_abstain or by passing
+# `early_bail_message=` to run_agent. SWE-bench adapter sets the env var
+# before invoking the luxe maintain subprocess; maintain_suite gets the
+# default message (abstain is sometimes legitimate there).
 _EARLY_BAIL_MESSAGE_NO_ABSTAIN = (
     "Mid-loop notice: you have explored the repository but haven't proposed "
     "any edits yet. The fix exists in this repository. Choose the single "
@@ -427,6 +510,34 @@ _EARLY_BAIL_MESSAGE_NO_ABSTAIN = (
     "an edit based on what you've already learned."
 )
 
+# v1.9 — soft-anchor variant. The v18 no_abstain text swapped v17's 3
+# wrong→empty regressions for 2 strong→empty confidence-collapse bails
+# (sphinx-10435, sympy-13031). Per acceptance/v18_taxonomy: both v18
+# regressions had v17=STRONG_GOLD_MATCH under the default message — the
+# trajectory had a viable target before no_abstain pushed the planner
+# into stall.
+#
+# v1.10 wording iteration: dropped "rather than continuing broad
+# exploration" trailer. v1.9 ARM 1 evidence showed Qwen3.6-35B-A3B-6bit
+# interpreted the comparative ("rather than … exploration") as "wrap up
+# now" — sphinx-10435 rep_2 terminated at step 6 with 832 tokens and 0
+# writes after early_bail at step 4. Positive imperative ending
+# preserves the commitment lever without the implicit "stop reading"
+# signal.
+#
+# Design intent:
+#   - Selection heuristic ("highest-probability … even if uncertain")
+#     gives the planner permission to commit under uncertainty — the
+#     decision-commitment lever no_abstain lacked.
+#   - No abstain valve — keeps the v17 wrong→empty class closed.
+#   - No declarative "fix exists" framing — no_abstain's existence
+#     claim may have triggered the confidence collapse; soft-anchor
+#     reframes as "commit to your best read".
+#   - Multi-hunk friendly — "location" (not "single file / single
+#     hunk") preserves focus without overconstraining legitimate
+#     multi-hunk fixes.
+#   - Positive imperative ending — closing with the action verb, not
+#     a contrast against exploration.
 _EARLY_BAIL_MESSAGE_SOFT_ANCHOR = (
     "Mid-loop notice: you have explored the repository but haven't proposed "
     "any edits yet. Based on what you've already read, choose the "
@@ -435,6 +546,13 @@ _EARLY_BAIL_MESSAGE_SOFT_ANCHOR = (
     "best candidate."
 )
 
+# v1.10 — commit-imperative variant fired by the conditional-stacking
+# gate when convergence_score >= HIGH (model has identified a target
+# and rereads/grep-localizes/preview-before-write are all signaling
+# it's ready to commit). Tighter than soft-anchor; positive imperative,
+# narrow concrete next-step framing, zero mention of exploration.
+# The v1.9 lesson: avoid "rather than X" comparative phrases — they
+# read as "wrap up now" on Qwen3.6-35B-A3B-6bit.
 _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE = (
     "Mid-loop notice: your read pattern indicates you have identified "
     "the likely target. Commit to the most promising file and attempt "
@@ -442,6 +560,36 @@ _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE = (
     "`edit_file` now."
 )
 
+# v1.10.1 introduced an exploratory-support variant for the score<LOW band
+# (replacing v1.10's silent suppression). v1.10.2 added diversity gating
+# inside it. v1.10.3 reverted both back to silent suppression after the
+# 3-rep variance baseline showed non-Pareto regression at the band level
+# (pylint-6528 empty in 2/3 reps under the exploratory variant; see
+# project_v1102_variance_baseline.md). Constant + dict entry removed
+# with the dispatcher revert. Old event logs still carry
+# msg_variant="exploratory" / "soft_anchor_low_diversity_fallback";
+# outcomes.py preserves their CONFIDENCE_COLLAPSE classification for
+# back-compat analysis.
+
+# v1.10.4 — breadth_probe variant for the score<LOW band. Replaces
+# v1.10.3's blanket silent-suppression with a hybrid first-event +
+# count-based escalation rule. The v1.10.3 3-rep cohort-shift audit
+# (project_v1103_hold_finding.md, audit_v1103_suppression.py) showed
+# that 50% of HARMFUL trajectories under blanket silent-suppression
+# had n_suppressions == 1 — the sphinx-10435 archetype (1 supp →
+# soft_anchor at step 5 → empty_patch). Blanket silent removed the
+# only nudge the trajectory needed.
+#
+# Design constraints (per memory):
+#   - NO "rather than X" framing — reads as wrap-up (feedback memory).
+#   - NO "keep reading more files" instruction — v1.10.1 wasted-runway
+#     shape that broke matplotlib-14623.
+#   - NO "commit now" / "edit now" wording — that's soft_anchor's role
+#     in the mid band; firing it here would collapse trajectories that
+#     haven't yet converged on a target.
+#   - Short, neutral, conditional — offers two branches without
+#     forcing one. Acknowledges the diffuse-recon state without
+#     prescribing a single action.
 _EARLY_BAIL_MESSAGE_BREADTH_PROBE = (
     "Mid-loop status: your read pattern is broad without a clear "
     "hypothesis converging. If you have a candidate bug location, "
@@ -458,12 +606,80 @@ _EARLY_BAIL_MESSAGE_MODES: dict[str, str] = {
     "breadth_probe": _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
 }
 
+# v1.10.4 — escalation count for the breadth_probe hybrid. After this
+# many cumulative silent suppressions on a single trajectory, re-fire
+# the breadth_probe message as a safety-net escalation. Catches the
+# extreme-tail HARMFUL cases (matplotlib-25775: 7 suppressions before
+# soft_anchor at step 11). N=3 fires the escalation at the 3rd
+# suppression event in the trajectory; the first event already fired
+# breadth_probe (per the hybrid first-event rule), so the 2nd and any
+# steps after the 3rd remain silent. Derived from the
+# audit_v1103_suppression.py HARMFUL count distribution: median
+# n_suppressions == 2; 80% of HARMFUL had n_suppressions in {1, 2, 3}.
 _BREADTH_PROBE_ESCALATION_COUNT = 3
 
+# v1.10 — convergence-score thresholds for conditional intervention
+# stacking. Picked to span the natural score range for the
+# Qwen3.6-35B-A3B-6bit champion on SWE-bench:
+#
+#   - All-distinct paths, no greps, no edits → score = 0.00  → SUPPRESS
+#   - 5 reads w/ 1 reread, low entropy           → score ≈ 0.18  → MID
+#   - 4 reads of same file, no other signals     → score = 0.44  → HIGH
+#   - Strong: reread + localized grep + preview  → score ≈ 0.75  → HIGH
+#
+# Below LOW: diffuse-recon; commitment-style interventions hurt
+#            exploratory recovery paths (v1.9 ARM 1 lost matplotlib-25775,
+#            requests-5414 to this pattern). Suppress.
+# LOW ≤ score < HIGH: standard band; soft-anchor wording fires.
+# Score ≥ HIGH: model has identified a target via repeated reads /
+#            localized greps / preview-before-write. Fire tighter
+#            commit_imperative variant; suppress the action-density
+#            gate (model is converging on its own; rescue would interrupt).
+#
+# These are starting thresholds — v1.10 Item 2 includes a re-mining
+# pass against v19 traces to refine them; see
+# acceptance/v110_mining/THRESHOLD_DECISION.md.
 _CONVERGENCE_LOW_THRESHOLD = 0.10
 _CONVERGENCE_HIGH_THRESHOLD = 0.40
 
 
+# v1.10.5c — first-event breadth_probe gating predicate (REFINED again).
+#
+# History:
+#   v1.10.5a (initial): (diversity<3 AND bm25==0) — failed; calibrated
+#     from bad audit data. See project_v1105_predicate_probe_failure.md.
+#   v1.10.5b (corrected): NOT (bm25>0 AND grep==0) — fixed sphinx-10323
+#     but broke sympy-12419 (consecutive-repeat-loop death spiral).
+#   v1.10.5c (this iteration, FINAL local-predicate attempt per user
+#     precommit): add distinct_files>=2 clause to separate two
+#     mechanism-distinct failure modes that share the bm25-without-grep
+#     signature.
+#
+# Verified deterministic feature vectors at suppression #1 (step 4):
+#   archetype          bm25  grep  dist_f  desired   reason
+#   sphinx-10435        1     1     1      FIRE      grep present (NOT looping)
+#   matplotlib-14623    1     1     1      FIRE      grep present (NOT looping)
+#   psf-requests-5414   0     0     2      FIRE      no bm25 (NOT looping)
+#   psf-requests-1921   0     1     1      FIRE      grep present
+#   sphinx-10323        1     0     2      SUPPRESS  bm25-without-grep + multi-file
+#                                                    (synthesis-wandering pathology)
+#   sympy-12419         1     0     1      FIRE      bm25-without-grep BUT single-file
+#                                                    (premature-loop-kill pathology;
+#                                                     needs message as loop-state
+#                                                     destabilizer)
+#
+# The breadth_probe message serves TWO distinct jobs:
+#   (1) exploration broadening — directs the model toward case analysis
+#   (2) loop-state destabilization — perturbs policy out of local
+#       attractors before _MAX_CONSECUTIVE_REPEAT_STEPS=2 aborts
+# sphinx-10323 needs suppression of (1) [over-exploration → bad commit].
+# sympy-12419 needs (2) preserved [model gets stuck in 2-call repeat
+# without the perturbation]. distinct_files=2 partitions topology: deeper
+# reading already indicates breadth (suppress); single-file repetition
+# means model still needs external perturbation (fire).
+#
+# Escalation at suppression #_BREADTH_PROBE_ESCALATION_COUNT is NOT
+# gated on this predicate (different failure mode; targets matplotlib-25775).
 def _v1105_synthesis_looping_signature(bm25_count: int,
                                        grep_count: int,
                                        distinct_files: int) -> bool:
