@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from luxe import project as project_mod
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
 from luxe.repo_index import _detect_languages_for_repo
@@ -88,8 +89,6 @@ def resolve_target(path: str | Path) -> tuple[str, str]:
     """(repo_root, error). Same rule as a chat session: walk UP to the git root
     or a marker-bearing directory; `$HOME` and anything above it are never a
     project. A brief needs a subject."""
-    from luxe.chat import project as project_mod
-
     resolved = project_mod.resolve(str(path))
     if not resolved.is_project:
         return "", (f"no project at {resolved.root} — `luxe init` needs a git "
