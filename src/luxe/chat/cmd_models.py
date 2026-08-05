@@ -6,8 +6,6 @@ Split out of `commands.py` 2026-08-04 (behavior unchanged). The dispatcher in
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from luxe.chat import modelcaps
 from luxe.chat import origin as origin_mod
 from luxe.chat.commands import _SLOTS, CommandContext, CommandResult
@@ -252,23 +250,22 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
 
             ref = positional[0] if positional else ms.store_name_for(from_path)
             name = ms.store_name_for(ref)
-            if from_path:
-                src = ms._resolve_hf_snapshot(Path(from_path).expanduser())
-                if src is None:
+            if not from_path:
+                ctx.console.print("[dim]· looking for it (mounts, then HF)…[/]")
+            sources = ms.resolve_pull_sources(
+                ref, admin=admin, from_path=from_path,
+                include_mounts="--hf" not in flags)
+            if not sources:
+                # With --from the only empty case is "not a model directory";
+                # without it, nothing anywhere has these weights.
+                if from_path:
                     ctx.console.print(f"[red]✗ {from_path} is not an MLX model "
                                       "directory (config.json + weights).[/]")
-                    return CommandResult(handled=True)
-                sources = [ms.ModelSource(kind="mount", ref=str(src), name=name,
-                                          size_bytes=ms.dir_size(src), note="--from")]
-            else:
-                ctx.console.print("[dim]· looking for it (mounts, then HF)…[/]")
-                sources = ms.resolve_sources(ref, admin=admin,
-                                             include_mounts="--hf" not in flags)
-            if not sources:
-                ctx.console.print(
-                    f"[red]✗ Nowhere to pull {ref!r} from.[/] [dim]Not on a "
-                    "mounted volume; an HF fetch needs a full `org/Model` id. "
-                    "Try `/pull --search <query>`.[/]")
+                else:
+                    ctx.console.print(
+                        f"[red]✗ Nowhere to pull {ref!r} from.[/] [dim]Not on a "
+                        "mounted volume; an HF fetch needs a full `org/Model` id. "
+                        "Try `/pull --search <query>`.[/]")
                 return CommandResult(handled=True)
 
             chosen = sources[0]

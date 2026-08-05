@@ -281,6 +281,15 @@ never touches this module.
   PREVIEWS source + size, `/pull <ref> --yes` transfers — a slash command has
   no confirmation prompt and a pull can move tens of GB. It is a COMMAND, never
   a tool: the model cannot initiate a download. Same core as `luxe pull`.
+  SOURCE RESOLUTION is literally shared (2026-08-04): both surfaces call
+  `modelstore.resolve_pull_sources(ref, admin=, from_path=, include_mounts=)`
+  and `tests/test_modelstore.py::TestPullSourceParity` asserts they reach it
+  with the same arguments, so the two can never disagree about where a ref
+  comes from. What is NOT shared, deliberately: the consent shape (chat
+  previews then `--yes`; the CLI prompts `click.confirm`), progress rendering
+  (chat prints one line per 10%, the CLI drives a Rich bar), the wording of
+  every message, and the CLI-only `--list`/`--remove`/HF-cache materialize
+  steps. Those are two different UIs, not duplication — do not fold them.
 - Session-shape commands (2026-07-29 `/help` audit): `/theme` switches the
   palette live (previously startup-only, so the shipped default was
   unescapable), `/tools` prints the ACTUAL tool surface for the next turn with
