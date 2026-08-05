@@ -39,6 +39,15 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   `TOOL_FNS["bash"]` can produce) keeps the original `subprocess.run` path
   byte-identically; the timeout is enforced on both paths
 
+- `_CHAT_EXTRA_ALLOW` (2026-08-05, currently `{gh}`) widens the allowlist for
+  CHAT bash only: applied inside `make_bash_fn` (both restricted and
+  unrestricted modes route through it; a no-op in the latter) and advertised
+  by `restricted_bash_def()`. The module defaults — `TOOL_FNS["bash"]`,
+  `tool_defs()`, and the rejection message with `extra_allow` empty — stay
+  byte-identical: a benchmark that can reach GitHub's API is not
+  reproducible, and the default description is golden-pinned. Remote
+  mutations via gh ride GIT_WORKFLOW_HINT's explicit-ask rule
+
 ## Must not
 - Bypass `_safe()` path scoping in any new tool
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)

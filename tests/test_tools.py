@@ -800,3 +800,40 @@ class TestProseAwareWriteFns:
         # path scoping intact
         _, err = fns["write_file"]({"path": "../escape.txt", "content": "x"})
         assert err is not None
+
+
+class TestChatExtraAllow:
+    """`gh` on the CHAT bash allowlist only (2026-08-05). The benchmark
+    default `_bash` and its golden-pinned tool description must not learn
+    about it — a bench that can reach GitHub's API is not reproducible."""
+
+    def test_default_bash_still_rejects_gh(self, tmp_repo: Path):
+        result, err = shell._bash({"command": "gh pr list"})
+        assert result == ""
+        assert err is not None and "allowlist" in err.lower()
+
+    def test_default_rejection_message_is_unchanged(self, tmp_repo: Path):
+        # extra_allow's empty default must not perturb the message the
+        # benchmark model sees (sorted union with the empty set).
+        _, err = shell._bash({"command": "rm -rf /"})
+        assert err == (f"Command 'rm' not in allowlist. "
+                       f"Allowed: {sorted(shell._ALLOWLIST)}")
+
+    def test_chat_bash_lets_gh_through_the_allowlist(self, tmp_repo: Path):
+        # `gh` may or may not be installed here; the contract under test is
+        # only that the ALLOWLIST no longer rejects it in a chat session.
+        fn = shell.make_bash_fn(restricted_hint=True)
+        _, err = fn({"command": "gh --version"})
+        if err is not None:
+            assert "not in allowlist" not in err
+
+    def test_chat_bash_still_rejects_other_binaries(self, tmp_repo: Path):
+        fn = shell.make_bash_fn(restricted_hint=True)
+        _, err = fn({"command": "rm -rf /"})
+        assert err is not None and "not in allowlist" in err
+        assert "gh" in err  # the chat rejection lists the widened allowlist
+
+    def test_restricted_def_advertises_gh_but_default_def_does_not(self):
+        assert "gh" in shell.restricted_bash_def().description.split(", ")
+        default_desc = shell.tool_defs()[0].description
+        assert "gh," not in default_desc and ": gh" not in default_desc

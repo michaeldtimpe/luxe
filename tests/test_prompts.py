@@ -738,3 +738,4 @@ def test_git_workflow_hint_carries_the_git_discipline():
     assert "rebas" in s and "never" in s and "merge commit" in s
     assert "do not push" in s and "explicitly asked" in s
     assert "git status" in s and "git_diff" in s        # inspect before mutate
+    assert "gh" in s and "merge" in s                   # gh: read fine, mutate on ask

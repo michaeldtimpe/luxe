@@ -31,6 +31,14 @@ _ALLOWLIST = frozenset({
     "sed", "sort", "tail", "tree", "wc",
 })
 
+# CHAT-ONLY additions to the allowlist (2026-08-05): applied by `make_bash_fn`
+# and advertised by `restricted_bash_def`, never by the module-level defaults —
+# a benchmark that can reach GitHub's API is no longer reproducible, and the
+# default tool description (which lists _ALLOWLIST) is golden-pinned. `gh`
+# covers the PR/checks/issues half of the git workflow during an outage
+# without requiring /bash unrestricted.
+_CHAT_EXTRA_ALLOW = frozenset({"gh"})
+
 # Tokens that would cause the shell to run additional binaries beyond
 # the one we allowlisted. Detected as standalone tokens after shlex.split,
 # so quoted arguments containing these characters (e.g. a regex pattern)
@@ -133,12 +141,15 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
 
 def _bash(args: dict[str, Any], *, unrestricted: bool = False,
           env: dict[str, str] | None = None,
-          cancel=None) -> tuple[str, str | None]:
+          cancel=None,
+          extra_allow: frozenset[str] = frozenset()) -> tuple[str, str | None]:
     """`env=None` (the default, and the ONLY value the benchmark path ever
     passes) inherits the process environment unchanged — byte-identical
     behaviour. The chat front-end passes an augmented env (see
     make_bash_fn). `cancel=None` (benchmark default) keeps the original
-    subprocess.run path; a token switches to the cancellable Popen runner."""
+    subprocess.run path; a token switches to the cancellable Popen runner.
+    `extra_allow` (empty on the benchmark default, so the rejection message
+    is byte-identical) widens the allowlist for chat sessions only."""
     repo_root = get_repo_root()
     if repo_root is None:
         return "", "Repo root not set"
@@ -155,8 +166,9 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         if err:
             return "", err
         binary = tokens[0]
-        if binary not in _ALLOWLIST:
-            return "", f"Command '{binary}' not in allowlist. Allowed: {sorted(_ALLOWLIST)}"
+        if binary not in _ALLOWLIST and binary not in extra_allow:
+            return "", (f"Command '{binary}' not in allowlist. "
+                        f"Allowed: {sorted(_ALLOWLIST | extra_allow)}")
         timeout = _TIMEOUT
 
     if cancel is not None:
@@ -227,7 +239,10 @@ def make_bash_fn(*, unrestricted: bool = False, restricted_hint: bool = False,
                 on_start(str(args.get("command", "")))
             except Exception:
                 pass
-        out, err = _bash(args, unrestricted=unrestricted, env=env, cancel=cancel)
+        # _CHAT_EXTRA_ALLOW applies to every chat bash (this builder is never
+        # on the benchmark path); it is a no-op in unrestricted mode.
+        out, err = _bash(args, unrestricted=unrestricted, env=env, cancel=cancel,
+                         extra_allow=_CHAT_EXTRA_ALLOW)
         if err and restricted_hint and any(m in err for m in _FLAG_GATED_MARKERS):
             err = ("restricted shell — enable unrestricted dev mode with /bash "
                    "(or start `luxe chat --dev`). Original: " + err)
@@ -242,7 +257,8 @@ def restricted_bash_def() -> ToolDef:
     return ToolDef(
         name="bash",
         description=(
-            f"Run a shell command (allowlisted binaries: {', '.join(sorted(_ALLOWLIST))}; "
+            f"Run a shell command (allowlisted binaries: "
+            f"{', '.join(sorted(_ALLOWLIST | _CHAT_EXTRA_ALLOW))}; "
             "no chains/pipes/redirects). Scoped to repo root. If a command is "
             "rejected for the allowlist or a shell operator, do NOT keep retrying "
             "variants — tell the user to enable unrestricted shell with /bash."

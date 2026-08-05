@@ -451,7 +451,10 @@ GIT_WORKFLOW_HINT = (
     "subjects are concise and imperative. Integrate remote changes by "
     "rebasing (git pull --rebase), never by creating a merge commit. Do NOT "
     "push, force-push, rewrite published history, or delete branches unless "
-    "the user explicitly asked for that operation."
+    "the user explicitly asked for that operation. The gh CLI is also "
+    "available for GitHub work — viewing PRs, checks, and issues is fine, "
+    "but the same rule applies to remote mutations: never create, merge, or "
+    "close a PR or issue via gh unless the user explicitly asked."
 )
 
 
