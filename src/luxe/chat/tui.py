@@ -856,7 +856,7 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
     """Entry point: build the session + app and run it. Mirrors run_chat_repl's
     startup-flag handling so the two front-ends are interchangeable."""
     from luxe.chat.slots import SlotManager
-    from luxe.cli import _infer_task_type
+    from luxe.agents.tasktype import infer_task_type as _infer_task_type
     from luxe.gitkit.health import current_head
     from luxe.memory import project as project_mem
 

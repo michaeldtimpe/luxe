@@ -6,10 +6,10 @@ shell over `maintain_pipeline`; the two benchmark adapters still spawn
 are unchanged.
 
 This is the DETERMINISTIC path (luxe.sdd): no streaming, no chat seams, no
-`on_token`. `_resolve_repo` and `_infer_task_type` are imported from `cli`
-inside the function — `cli` imports this module, so a top-level import back
-would be circular, and the late binding preserves the monkeypatch semantics
-the tests rely on.
+`on_token`. Repo resolution and task-type inference come from their tier
+homes (`luxe.gitclone.resolve_repo`, `luxe.agents.tasktype.infer_task_type`
+— moved out of `cli` 2026-08-05, deferred-list #6), so this module no
+longer imports `cli` at all.
 """
 
 from __future__ import annotations
@@ -22,7 +22,9 @@ from typing import Callable
 import click
 from rich.console import Console
 
+from luxe.agents.tasktype import infer_task_type
 from luxe.config import load_config
+from luxe.gitclone import resolve_repo
 from luxe.pr import diff_against_base as _diff_against_base
 from luxe.repo_index import _detect_languages_for_repo
 
@@ -68,8 +70,6 @@ def maintain_pipeline(
     spec_yaml_path: str | None,
 ) -> None:
     """Body of `luxe maintain` — see `cli.maintain` for the option surface."""
-    from luxe.cli import _infer_task_type, _resolve_repo
-
     from luxe.agents.single import run_single
     from luxe.backend import Backend
     from luxe.citations import lint_report
@@ -78,8 +78,8 @@ def maintain_pipeline(
     from luxe.run_state import RunSpec, append_event, init_run_dir, run_dir
     from luxe.tools.fs import set_repo_root
 
-    repo_path = _resolve_repo(repo)
-    detected_task = task_type or _infer_task_type(goal)
+    repo_path = resolve_repo(repo)
+    detected_task = task_type or infer_task_type(goal)
 
     # SpecDD Lever 1 (v1.4-prep): load spec from --spec-yaml if provided.
     # Failed loads (missing file, malformed YAML, invalid spec) abort the

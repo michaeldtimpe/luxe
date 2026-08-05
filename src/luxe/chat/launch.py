@@ -4,11 +4,13 @@ Lifted verbatim out of `cli.py` 2026-08-04. `cli.chat_cmd` / `cli.code_cmd`
 are thin Click shells over `_run_interactive`; the option list they share lives
 here too, so the two postures cannot drift apart.
 
-The handful of names this reaches back into `cli` for (`_resolve_repo`,
-`_default_chat_config`, `_default_mcp_config_hint`, `_languages_from_paths`)
+The handful of names this reaches back into `cli` for (`_chat_cfg`,
+`_default_mcp_config_hint`, `_languages_from_paths`, `_select_backend`)
 are imported INSIDE `_run_interactive`. `cli` imports this module at module
 level, so a top-level import back would be circular — and the late binding is
 also what keeps `monkeypatch.setattr(cli, ...)` working exactly as before.
+(Repo resolution now comes from `luxe.gitclone.resolve_repo` at module level
+— moved out of `cli` 2026-08-05, deferred-list #6.)
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from rich.console import Console
 
 from luxe import spec_resolver
 from luxe import textfmt
+from luxe.gitclone import resolve_repo
 
 # Own Console instance (cli has its own). Rich resolves `sys.stdout` at write
 # time, so CliRunner capture works the same through either.
@@ -201,7 +204,6 @@ def _run_interactive(
         _chat_cfg,
         _default_mcp_config_hint,
         _languages_from_paths,
-        _resolve_repo,
         _select_backend,
     )
     from luxe.locks import LockHeld, acquire_repo_lock
@@ -209,7 +211,7 @@ def _run_interactive(
 
     theme_name = _resolve_theme_name(theme_name)
 
-    repo_path = _resolve_repo(repo)
+    repo_path = resolve_repo(repo)
     cfg = _chat_cfg(config_path)
 
     # CLI per-slot overrides become an ad-hoc model + slots block so the user

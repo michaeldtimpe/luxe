@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from luxe.paths import luxe_home
 from luxe import gitcmd
 from luxe import textfmt
 from luxe import gitclone
+from luxe.agents.tasktype import infer_task_type
 # Language detection moved to repo_index (the de-facto home for
 # extension→language tables). Re-exported: tests and
 # scripts/chunk_conclude_ab.py import them from `luxe.cli`.
@@ -27,28 +27,10 @@ from luxe.config import load_config
 console = Console()
 
 
-def _resolve_repo(repo: str, *, full_history: bool = False) -> str:
-    """Resolve a repo argument to a local path. Clones if it's a URL.
-
-    `full_history=True` clones with `--filter=blob:none` (full commit history,
-    lazy blobs) so commit-cadence/health analysis is meaningful; the default
-    `--depth=1` shallow clone is fine for code-only analysis.
-    """
-    p = Path(repo).expanduser().resolve()
-    if p.is_dir():
-        return str(p)
-
-    if repo.startswith(("http://", "https://", "git@")):
-        clone_dir = Path(tempfile.mkdtemp(prefix="luxe_"))
-        console.print(f"[dim]Cloning {repo} → {clone_dir}[/]")
-        ok, err = gitclone.clone(repo, clone_dir, full_history=full_history)
-        if not ok:
-            console.print(f"[red]Clone failed:[/] {err}")
-            sys.exit(1)
-        return str(clone_dir)
-
-    console.print(f"[red]Not a directory or repo URL:[/] {repo}")
-    sys.exit(1)
+# Moved to their tier homes 2026-08-05 (deferred-list #6); re-exported here
+# for the tests and any external caller that knows the old private names.
+_resolve_repo = gitclone.resolve_repo
+_infer_task_type = infer_task_type
 
 
 class AliasedGroup(click.Group):
@@ -1312,33 +1294,6 @@ def runs_gc_cmd(days: int, dry_run: bool):
 
 
 
-def _infer_task_type(goal: str) -> str:
-    g = goal.lower()
-    if any(k in g for k in (
-        "implement", "add ", "build", "create", "introduce", "refactor", "rewrite",
-        "optimize", "change", "modify", "delete", "remove", "support", "improve",
-        "tweak", "adjust", "polish", "re-implement", "update", "migrate", "port",
-        "enable", "disable", "clean", "restructure"
-    )):
-        return "implement"
-    if any(k in g for k in (
-        "fix", "bug", "broken", "regression", "patch", "resolve", "correct",
-        "mend", "handle"
-    )):
-        return "bugfix"
-    if any(k in g for k in (
-        "document", "docs", "readme", "docstring", "comment", "documentation",
-        "typehint", "typing", "types"
-    )):
-        return "document"
-    if any(k in g for k in (
-        "update deps", "upgrade", "ci", "config", "dep", "dependency", "docker",
-        "github action", "workflow"
-    )):
-        return "manage"
-    if any(k in g for k in ("summarize", "summary", "explain", "describe")):
-        return "summarize"
-    return "review"
 
 
 @main.command()

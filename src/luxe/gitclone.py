@@ -76,3 +76,40 @@ def clone(url: str, dest: Path | str, *, full_history: bool) -> tuple[bool, str]
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout or "").strip()
     return True, ""
+
+
+def resolve_repo(repo: str, *, full_history: bool = False) -> str:
+    """Resolve a repo argument to a local path. Clones if it's a URL.
+
+    `full_history=True` clones with `--filter=blob:none` (full commit history,
+    lazy blobs) so commit-cadence/health analysis is meaningful; the default
+    `--depth=1` shallow clone is fine for code-only analysis.
+
+    Moved verbatim from `cli._resolve_repo` (2026-08-05, deferred-list #6):
+    repo-or-URL resolution belongs next to the bounded clone it uses, and its
+    old home forced `chat/launch.py` and `maintain.py` to reach back up into
+    `cli`. It keeps its CLI manners — prints via rich and `sys.exit(1)`s on
+    failure — because every caller is a command entry point.
+    """
+    import sys
+    import tempfile
+
+    from rich.console import Console
+
+    console = Console()
+
+    p = Path(repo).expanduser().resolve()
+    if p.is_dir():
+        return str(p)
+
+    if repo.startswith(("http://", "https://", "git@")):
+        clone_dir = Path(tempfile.mkdtemp(prefix="luxe_"))
+        console.print(f"[dim]Cloning {repo} → {clone_dir}[/]")
+        ok, err = clone(repo, clone_dir, full_history=full_history)
+        if not ok:
+            console.print(f"[red]Clone failed:[/] {err}")
+            sys.exit(1)
+        return str(clone_dir)
+
+    console.print(f"[red]Not a directory or repo URL:[/] {repo}")
+    sys.exit(1)
