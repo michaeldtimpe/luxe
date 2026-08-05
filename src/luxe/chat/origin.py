@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 # `modelstore` needs it too and must not import `chat.*`. Re-exported here:
 # `classify_path` below resolves `network_mounts` through THIS module's
 # globals, so the tests that monkeypatch `origin.network_mounts` still work.
+from luxe import textfmt
 from luxe.mounts import (  # noqa: F401  (re-exports)
     NETWORK_FSTYPES,
     network_mounts,
@@ -154,9 +155,7 @@ def classify_path(model_path: str | os.PathLike[str] | None) -> ModelOrigin:
     return ModelOrigin(kind="local", detail=_tildify(text))
 
 
-def _tildify(path: str) -> str:
-    home = str(Path.home())
-    return "~" + path[len(home):] if home and path.startswith(home) else path
+_tildify = textfmt.tilde
 
 
 # --- endpoint-aware resolution ----------------------------------------------

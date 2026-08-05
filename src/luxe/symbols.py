@@ -17,6 +17,8 @@ on a Java repo gets a clear "fall back to BM25" note rather than silent zero.
 
 from __future__ import annotations
 
+from luxe.fswalk import INDEX_EXCLUDE_DIRS
+
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +29,13 @@ from luxe.tools.base import ToolDef, ToolFn
 
 # Languages we support, mapped to the tree-sitter-languages identifier and
 # the source file extensions that route to that parser.
+# NOTE: deliberately DIFFERENT from `repo_index._LANGUAGE_EXTENSIONS` and
+# `repo_index._LANG_BY_EXT`. This table gates TREE-SITTER symbol extraction, so
+# it may only list languages luxe has a working parser for; repo_index's counts
+# every language worth showing in an overview, and _LANG_BY_EXT names only the
+# ones the prompt registry has guidance for. Merging any two of them would
+# silently change behavior in the other's subsystem. See the 2026-08-04
+# consolidation report.
 _LANGUAGE_EXTENSIONS = {
     "python":     [".py"],
     "javascript": [".js", ".jsx", ".mjs", ".cjs"],
@@ -78,9 +87,7 @@ _LANGUAGE_QUERIES: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-_DEFAULT_EXCLUDES = {".git", "node_modules", "__pycache__", ".venv", "venv",
-                     "dist", "build", "target", ".next", ".nuxt",
-                     ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+_DEFAULT_EXCLUDES = INDEX_EXCLUDE_DIRS
 
 SUPPORTED_LANGUAGES = list(_LANGUAGE_EXTENSIONS.keys())
 

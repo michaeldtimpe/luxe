@@ -13,6 +13,8 @@ Design (per plan §5/§8):
 
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import errno
 import fcntl
 import hashlib
@@ -25,7 +27,7 @@ from pathlib import Path
 
 
 def lock_dir() -> Path:
-    return Path.home() / ".luxe" / "locks"
+    return luxe_home() / "locks"
 
 
 def lock_path_for(repo_path: str | Path) -> Path:

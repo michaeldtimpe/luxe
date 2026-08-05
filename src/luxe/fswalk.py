@@ -41,6 +41,16 @@ DEFAULT_SKIP_DIRS = frozenset({
     ".pytest_cache", ".ruff_cache", ".mypy_cache", "site-packages",
 })
 
+# The dirs the three INDEX walkers prune (bm25 search, symbols, repo summary).
+# Deliberately NOT `DEFAULT_SKIP_DIRS`: that set is larger (.hg, .svn, env,
+# .tox, site-packages) and swapping one for the other would change what those
+# three index. Kept as a plain set, and the type matters — the walkers test
+# membership only, but a frozenset here would be a silent API change for
+# anything that copies it.
+INDEX_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
+                      "dist", "build", "target", ".next", ".nuxt",
+                      ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+
 # Pruned ONLY at the top level of the scan root: these are macOS home-directory
 # fixtures, not project directories. `~/Library` alone holds ~488k files here —
 # half the cost of indexing a home directory — and none of it is source the user

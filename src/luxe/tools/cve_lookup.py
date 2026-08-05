@@ -34,10 +34,11 @@ from typing import Any
 
 import httpx
 
+from luxe.paths import luxe_home
 from luxe.tools.base import ToolDef, ToolFn
 
 _OSV_API = "https://api.osv.dev/v1/query"
-_CACHE_DIR = Path.home() / ".luxe" / "cve_cache"
+_CACHE_DIR = luxe_home() / "cve_cache"
 _CACHE_TTL_SEC = 24 * 3600  # 24 hours
 _HTTP_TIMEOUT = 10.0
 _MAX_VULNS_PER_RESPONSE = 30   # truncation cap; keeps token cost bounded

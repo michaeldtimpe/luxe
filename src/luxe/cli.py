@@ -12,7 +12,9 @@ from typing import Callable
 import click
 from rich.console import Console
 
+from luxe.paths import luxe_home
 from luxe import gitcmd
+from luxe import textfmt
 from luxe import gitclone
 # Language detection moved to repo_index (the de-facto home for
 # extension→language tables). Re-exported: tests and
@@ -590,6 +592,53 @@ def code_cmd(**kwargs):
     _run_interactive(require_project=True, start_write=True, **kwargs)
 
 
+def _chat_cfg(config_path: str | None = None):
+    """The chat config: `--config <path>` when given, else configs/chat.yaml.
+
+    One spelling for what was nine copies in this file plus one in
+    chat/launch.py. Resolves `_default_chat_config` through THIS module's
+    globals, which is what the tests that monkeypatch it rely on.
+    """
+    return load_config(config_path or _default_chat_config())
+
+
+def _select_backend(cfg, backend_name: str | None, *,
+                    make_default: bool = True) -> None:
+    """Validate `--backend <name>` against `backends:` and re-flag it default.
+
+    Exits 2, naming every configured entry, on a miss — a typo must not fall
+    through to the default endpoint and look like it worked. `make_default`
+    is False for `luxe smoke`, which validates the name but chooses its
+    endpoint itself.
+    """
+    if not backend_name:
+        return
+    entries = cfg.backend_entries()
+    if backend_name not in entries:
+        console.print(f"[red]✗ Unknown backend {backend_name!r}. "
+                      f"Configured: {', '.join(entries)}.[/]")
+        sys.exit(2)
+    if make_default:
+        cfg.backends = {k: v.model_copy(update={"default": k == backend_name})
+                        for k, v in entries.items()}
+
+
+def _unload_unless(keep_loaded: bool) -> None:
+    """Post-command teardown: free the local oMLX's RAM unless --keep-loaded.
+
+    Best-effort by design — a teardown failure must never mask (or fail) the
+    command whose `finally` this runs in. `maintain` keeps its own copy: it
+    also REPORTS what it unloaded.
+    """
+    if keep_loaded:
+        return
+    from luxe.backend import Backend
+    try:
+        Backend(model="(unload-probe)").unload_all_loaded()
+    except Exception:
+        pass
+
+
 def _default_chat_config() -> str:
     return str(Path(__file__).parent.parent.parent / "configs" / "chat.yaml")
 
@@ -622,7 +671,7 @@ def compare_run_cmd(task, repo, config_path, mode, model_b, prompt_a, prompt_b, 
     from luxe.tools.fs import set_repo_root
 
     repo_path = _resolve_repo(repo)
-    cfg = load_config(config_path or _default_chat_config())
+    cfg = _chat_cfg(config_path)
     set_repo_root(repo_path)
 
     from luxe import search as search_mod
@@ -651,12 +700,7 @@ def compare_run_cmd(task, repo, config_path, mode, model_b, prompt_a, prompt_b, 
     finally:
         search_mod.reset_index()
         symbols_mod.reset_index()
-        if not keep_loaded:
-            from luxe.backend import Backend
-            try:
-                Backend(model="(unload-probe)").unload_all_loaded()
-            except Exception:
-                pass
+        _unload_unless(keep_loaded)
 
 
 @compare_group.command(name="review")
@@ -689,7 +733,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
         repo_path = _resolve_repo(repo, full_history=(kind == "gitaudit"))
     else:
         repo_path = str(Path(repo).expanduser().resolve())
-    cfg = load_config(config_path or _default_chat_config())
+    cfg = _chat_cfg(config_path)
 
     try:
         run_git_report(kind, cfg=cfg, repo_path=repo_path,
@@ -698,12 +742,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                        mirror=mirror, base=base, pr=pr,
                        min_severity=min_severity, no_incremental=no_incremental)
     finally:
-        if not keep_loaded:
-            from luxe.backend import Backend
-            try:
-                Backend(model="(unload-probe)").unload_all_loaded()
-            except Exception:
-                pass
+        _unload_unless(keep_loaded)
 
 
 def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
@@ -716,17 +755,12 @@ def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
         console.print("[red]gitapply does not clone — point it at a local repo path.[/]")
         raise SystemExit(2)
     repo_path = str(Path(repo).expanduser().resolve())
-    cfg = load_config(config_path or _default_chat_config())
+    cfg = _chat_cfg(config_path)
     try:
         rc = apply_mod.run_apply(repo_path=repo_path, cfg=cfg, console=console,
                                  deep=deep, rebuild_map=rebuild_map)
     finally:
-        if not keep_loaded:
-            from luxe.backend import Backend
-            try:
-                Backend(model="(unload-probe)").unload_all_loaded()
-            except Exception:
-                pass
+        _unload_unless(keep_loaded)
     raise SystemExit(rc)
 
 
@@ -1067,11 +1101,10 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
     """
     from luxe.chat.smoke import run_chat_drill, run_code_drill, run_smoke
 
-    cfg = load_config(config_path or _default_chat_config())
-    if backend_name and backend_name not in cfg.backend_entries():
-        console.print(f"[red]✗ Unknown backend {backend_name!r}. "
-                      f"Configured: {', '.join(cfg.backend_entries())}.[/]")
-        sys.exit(2)
+    cfg = _chat_cfg(config_path)
+    # `luxe smoke` picks its own endpoint (--base-url / the manifest), so the
+    # name is validated but never promoted to default.
+    _select_backend(cfg, backend_name, make_default=False)
     t0 = time.time()
     glyphs = {"pass": "[green]✓[/]", "warn": "[yellow]⚠[/]", "fail": "[red]✗[/]"}
 
@@ -1167,15 +1200,8 @@ def ready_cmd(config_path: str | None, backend_name: str | None, repo: str):
     from luxe.chat import inspection
 
     t0 = time.time()
-    cfg = load_config(config_path or _default_chat_config())
-    if backend_name:
-        entries = cfg.backend_entries()
-        if backend_name not in entries:
-            console.print(f"[red]✗ Unknown backend {backend_name!r}. "
-                          f"Configured: {', '.join(entries)}.[/]")
-            sys.exit(2)
-        cfg.backends = {k: v.model_copy(update={"default": k == backend_name})
-                        for k, v in entries.items()}
+    cfg = _chat_cfg(config_path)
+    _select_backend(cfg, backend_name)
 
     doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
     worst = inspection.render_doctor(doc, console, title="luxe ready")
@@ -1215,7 +1241,7 @@ def init_cmd(path: str, config_path: str | None, dry_run: bool,
     """
     from luxe.gitkit import brief as brief_mod
 
-    cfg = load_config(config_path or _default_chat_config())
+    cfg = _chat_cfg(config_path)
     result = brief_mod.run_init(path, cfg, console=console, dry_run=dry_run)
     if not result.ok:
         console.print(f"[red]✗ {result.error}[/]")
@@ -1281,15 +1307,13 @@ def net_cmd(host: str | None, config_path: str | None, watch_s: int):
     from luxe import netdiag
 
     try:
-        cfg = load_config(config_path or _default_chat_config())
+        cfg = _chat_cfg(config_path)
     except Exception:
         cfg = None
     anchor = host or netdiag.ANCHOR_HOST
 
     def _render(report) -> None:
-        for ok, line in netdiag.render_lines(report):
-            glyph = "[green]✓[/]" if ok else "[red]✗[/]"
-            console.print(f"  {glyph} {line}")
+        textfmt.render_ok_lines(console, netdiag.render_lines(report))
         style = "green" if report.ladder.verdict == netdiag.V_OK else "yellow"
         console.print(f"[{style}]verdict: {report.ladder.verdict}[/] — "
                       f"{report.ladder.advice}")
@@ -1302,7 +1326,7 @@ def net_cmd(host: str | None, config_path: str | None, watch_s: int):
     # Watch mode: the question on a bad network is "when does it change?"
     # (session 5bb630813c21: HTTPS silently recovered mid-flight). Quiet
     # while stable; a verdict transition prints + appends to the log.
-    log_path = Path.home() / ".luxe" / "netwatch.log"
+    log_path = luxe_home() / "netwatch.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     last = report.ladder.verdict
     console.print(f"[dim]watching every {watch_s}s — verdict transitions "
@@ -1348,16 +1372,14 @@ def planeproxy_cmd(check: str, as_json: bool):
         import json as json_mod
         click.echo(json_mod.dumps(dataclasses.asdict(report), indent=2))
     else:
-        for ok, line in pp.render_lines(report):
-            glyph = "[green]✓[/]" if ok else "[red]✗[/]"
-            console.print(f"  {glyph} {line}")
+        textfmt.render_ok_lines(console, pp.render_lines(report))
     sys.exit(0 if report.verdict == pp.PP_OK else 1)
 
 
 def _omlx_base_url_from_config() -> str:
     """The chat config's oMLX endpoint, falling back to the local default."""
     try:
-        return load_config(_default_chat_config()).omlx_base_url
+        return _chat_cfg().omlx_base_url
     except Exception:
         return "http://127.0.0.1:8000"
 
@@ -1390,7 +1412,7 @@ def _pull_remove(ref: str, dest_dir, *, force: bool, assume_yes: bool) -> None:
         sys.exit(2)
     name = ms.store_name_for(ref)
     try:
-        manifest = load_config(_default_chat_config()).host_manifest()
+        manifest = _chat_cfg().host_manifest()
     except Exception:
         manifest = None
     if manifest is not None and name in manifest.all_models() and not force:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from luxe import textfmt
 from luxe.chat import modelcaps
 from luxe.chat import origin as origin_mod
 from luxe.chat.commands import CommandContext, CommandResult, _usage
@@ -214,9 +215,7 @@ def _net(args, ctx: CommandContext) -> CommandResult:
     except Exception as e:
         ctx.console.print(f"[red]✗ net report failed: {e}[/]")
         return CommandResult(handled=True)
-    for ok, line in netdiag.render_lines(report):
-        glyph = "[green]✓[/]" if ok else "[red]✗[/]"
-        ctx.console.print(f"  {glyph} {line}")
+    textfmt.render_ok_lines(ctx.console, netdiag.render_lines(report))
     style = "green" if report.ladder.verdict == netdiag.V_OK else "yellow"
     ctx.console.print(f"[{style}]verdict: {report.ladder.verdict}[/] — "
                       f"{report.ladder.advice}")
@@ -242,7 +241,5 @@ def _planeproxy(args, ctx: CommandContext) -> CommandResult:
     except Exception as e:
         ctx.console.print(f"[red]✗ planeproxy report failed: {e}[/]")
         return CommandResult(handled=True)
-    for ok, line in planeproxy.render_lines(report):
-        glyph = "[green]✓[/]" if ok else "[red]✗[/]"
-        ctx.console.print(f"  {glyph} {line}")
+    textfmt.render_ok_lines(ctx.console, planeproxy.render_lines(report))
     return CommandResult(handled=True)

@@ -14,11 +14,12 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from luxe.paths import luxe_home
 from luxe.compare.run_pair import CompareResult, SideResult
 
 
 def compare_root() -> Path:
-    return Path.home() / ".luxe" / "compare"
+    return luxe_home() / "compare"
 
 
 def compare_dir(compare_id: str) -> Path:

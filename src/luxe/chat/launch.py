@@ -16,13 +16,12 @@ from __future__ import annotations
 import os
 import sys
 import time
-from pathlib import Path
 
 import click
 from rich.console import Console
 
 from luxe import spec_resolver
-from luxe.config import load_config
+from luxe import textfmt
 
 # Own Console instance (cli has its own). Rich resolves `sys.stdout` at write
 # time, so CliRunner capture works the same through either.
@@ -86,10 +85,9 @@ def _build_chat_indexes(repo_path: str):
     return bm25, sym_idx, scan
 
 
-def _tilde(path: str) -> str:
-    """Home-relative display path (`~/Downloads/luxe`)."""
-    home = str(Path.home())
-    return "~" + path[len(home):] if home and path.startswith(home) else path
+# Home-relative display path (`~/Downloads/luxe`). Local name kept: `cli`
+# re-exports `_tilde` and the startup messages below read better with it.
+_tilde = textfmt.tilde
 
 
 def _resolve_theme_name(flag: str | None) -> str:
@@ -200,10 +198,11 @@ def _run_interactive(
     from luxe.chat import run_chat_repl
     # Late, and from `cli` on purpose: see the module docstring.
     from luxe.cli import (
-        _default_chat_config,
+        _chat_cfg,
         _default_mcp_config_hint,
         _languages_from_paths,
         _resolve_repo,
+        _select_backend,
     )
     from luxe.locks import LockHeld, acquire_repo_lock
     from luxe.tools.fs import set_repo_root
@@ -211,7 +210,7 @@ def _run_interactive(
     theme_name = _resolve_theme_name(theme_name)
 
     repo_path = _resolve_repo(repo)
-    cfg = load_config(config_path or _default_chat_config())
+    cfg = _chat_cfg(config_path)
 
     # CLI per-slot overrides become an ad-hoc model + slots block so the user
     # can point a slot at any oMLX-loadable model without editing YAML.
@@ -219,16 +218,7 @@ def _run_interactive(
 
     # `--backend <name>` picks the startup endpoint by re-flagging the config's
     # default entry (chat-only; SlotManager reads default_backend_name()).
-    if backend_name:
-        entries = cfg.backend_entries()
-        if backend_name not in entries:
-            console.print(f"[red]✗ Unknown backend {backend_name!r}. "
-                          f"Configured: {', '.join(entries)}.[/]")
-            sys.exit(2)
-        cfg.backends = {
-            k: v.model_copy(update={"default": k == backend_name})
-            for k, v in entries.items()
-        }
+    _select_backend(cfg, backend_name)
 
     # What is this session about? A git root above cwd, a marker-bearing
     # directory, or nothing at all (chat from anywhere). `--repo` given

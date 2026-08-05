@@ -11,6 +11,8 @@ Output is a single ~2k-token block:
 
 from __future__ import annotations
 
+from luxe.fswalk import INDEX_EXCLUDE_DIRS
+
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -44,9 +46,7 @@ _LANGUAGE_EXTENSIONS = {
     "markdown":   [".md", ".markdown"],
 }
 
-_DEFAULT_EXCLUDES = {".git", "node_modules", "__pycache__", ".venv", "venv",
-                     "dist", "build", "target", ".next", ".nuxt",
-                     ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+_DEFAULT_EXCLUDES = INDEX_EXCLUDE_DIRS
 
 
 def _detect_language(suffix: str) -> str | None:

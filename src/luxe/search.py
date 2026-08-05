@@ -15,6 +15,8 @@ than 3 chars. Good enough for code identifiers + natural-language queries.
 
 from __future__ import annotations
 
+from luxe.fswalk import INDEX_EXCLUDE_DIRS
+
 import os
 import re
 from dataclasses import dataclass
@@ -28,9 +30,7 @@ from luxe.tools.base import ToolDef, ToolFn
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]+")
 _CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-_DEFAULT_EXCLUDES = {".git", "node_modules", "__pycache__", ".venv", "venv",
-                     "dist", "build", "target", ".next", ".nuxt",
-                     ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+_DEFAULT_EXCLUDES = INDEX_EXCLUDE_DIRS
 _DEFAULT_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go",
                        ".java", ".cpp", ".cc", ".h", ".hpp", ".rb", ".php",
                        ".kt", ".swift", ".cs", ".md"}

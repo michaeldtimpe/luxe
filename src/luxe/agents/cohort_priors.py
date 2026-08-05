@@ -31,12 +31,14 @@ missing fields produce None where appropriate):
 """
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import json
 import os
 from pathlib import Path
 from typing import Any
 
-DEFAULT_COHORT_HISTORY_DIR = Path.home() / ".luxe" / "cohort-history"
+DEFAULT_COHORT_HISTORY_DIR = luxe_home() / "cohort-history"
 
 _REQUIRED_FIELDS = ("instance_id", "verdict")
 _VALID_VERDICTS = frozenset({
