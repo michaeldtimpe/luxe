@@ -6,6 +6,19 @@ unchanged. The deterministic benchmark path (`luxe maintain`, `benchmarks/`)
 never touches this module.
 
 ## Must
+- `chat/launch.py` owns the STARTUP path of `luxe chat` / `luxe code`
+  (2026-08-04 lift out of cli.py, behavior unchanged): the shared Click option
+  list, `_run_interactive` (resolve project → bounded index → repo lock → MCP
+  → front-end selection → teardown), `_build_chat_indexes` + its
+  `LUXE_INDEX_MAX_*` bounds, `_resolve_theme_name`, `_apply_slot_overrides`.
+  `cli.chat_cmd` / `cli.code_cmd` are two-line shells that differ ONLY in the
+  `require_project` / `start_write` posture, and `cli` re-exports every moved
+  private so `luxe.cli._X` keeps resolving. `cli` imports this module; this
+  module imports `cli` only INSIDE functions (`_resolve_repo`,
+  `_default_chat_config`, `_default_mcp_config_hint`,
+  `_languages_from_paths`) — never at module level, or the two would deadlock
+  on import, and the late binding is what keeps `monkeypatch.setattr(cli, …)`
+  behaving as before
 - Every user turn drives exactly ONE `run_single()` call; conversation state
   lives in `ChatSession`, folded into `goal=` + a tagged `extra_context` block —
   never by forking `run_agent`'s message loop or changing its signature
