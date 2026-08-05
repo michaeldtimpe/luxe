@@ -1,5 +1,39 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-05, close-out) — git/gh workflow surface + interactive browsing
+
+Same-day follow-ons to the refactor cycle (below), all chat-only, goldens
+untouched throughout:
+
+1. **`GIT_WORKFLOW_HINT`** (registry prompt) rides the `<session_mode>` slot
+   when write mode is ON and the project is git — one git command per bash
+   call, inspect before staging, stage explicitly, rebase never merge, no
+   push/force-push/history-rewrite/branch-delete unless explicitly asked.
+   Mutually exclusive with READ_ONLY_CHAT_HINT. The old "write mode injects
+   nothing" test invariant is now scoped to non-git projects.
+2. **`gh` on the chat bash allowlist** (`shell._CHAT_EXTRA_ALLOW`, applied
+   inside `make_bash_fn` only): PR/checks/issue work no longer needs `/bash`
+   unrestricted. Benchmark defaults byte-identical (TestChatExtraAllow pins
+   the fn, the def, and the rejection message); the hint extends the
+   explicit-ask rule to gh's remote mutations.
+3. **Interactive browsing shipped** (`web/page.py`, tool `web_page`,
+   `/web`-gated, withheld when `browser.availability()` says no): persistent
+   page session with open/read/click/type/scroll/back/close; numbered
+   interactable listing so the champion clicks `target="3"` instead of
+   writing CSS; ONE daemon thread owns the sync-Playwright driver (TUI worker
+   threads vary per turn); egress guard re-runs after every action and a
+   violation hard-closes the session; popups closed at birth (identity-
+   guarded — the first cut closed its own page; the live drill caught it);
+   `/web` off closes the session. Live-drilled on m5: example.com → click
+   [0] → iana.org → back → localhost refused → clean close. Tests are fully
+   fake-driver (CI needs no Chromium); playwright was restored to m5's venv
+   via `uv pip install playwright` (the known uv-sync extras prune — fleet
+   hosts without it simply don't get the tool, and `/web` says why).
+4. Also this session: m1 seedkeys verified current (dotfiles `d77b84b`,
+   `seedkeys-env` present, 3 relay tokens); m4 confirmed unreachable/
+   unprovisioned — **user is handling m4 personally**; CI green on all
+   pushes.
+
 ## ⇒ SESSION HANDOFF (2026-08-05) — whole-repo consolidation refactor: 11 items, verified, fleet-deployed
 
 First-ever whole-repo refactor pass (growth since the 2026-07-29 pivot had
@@ -256,7 +290,14 @@ tree). Contracts: `web/web.sdd` (new), chat.sdd, CLAUDE.md, README.
 **Deferred (agreed 2026-08-03, not blocking — do these before extending the
 web surface further):**
 
-1. **Interactive browsing.** `render=true` loads and READS a page; it cannot
+1. ~~**Interactive browsing.**~~ — **DONE 2026-08-05** (`src/luxe/web/page.py`,
+   tool `web_page`; see the 2026-08-05 close-out handoff). The three open
+   questions got the answers this note asked for: a dedicated daemon thread
+   owns the driver (sync Playwright is thread-bound, TUI turns run on varying
+   worker threads); a cancelled turn abandons its wait and the session
+   survives; the egress guard re-runs after EVERY action and a violation
+   hard-closes the session. Original note kept for context:
+   `render=true` loads and READS a page; it cannot
    drive one. Click/type/scroll/wait across a persistent page session needs
    page-lifetime management (who owns the browser between tool calls, when it
    closes, what a cancelled turn does to it) — a materially bigger surface
