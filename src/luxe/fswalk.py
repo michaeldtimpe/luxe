@@ -244,23 +244,21 @@ def iter_pruned(root: str | Path, *,
     its framing-file picker). Yields `Path`s in `os.walk` order, so callers
     that depended on that order still get it.
 
-    The prune predicate is reproduced EXACTLY, quirk included::
-
-        d not in excludes and not d.startswith(".") or d in keep
-
-    `and` binds tighter than `or`, so this reads `(not-excluded AND
-    not-a-dotdir) OR is-a-keep-dir` — which means a directory named in `keep`
-    survives even if it is ALSO in `excludes`. That is very probably not what
-    whoever wrote it meant, and it is the behavior five subsystems have today.
-    Changing it is an evidence-gated decision, not a refactor; see the
-    2026-08-04 consolidation report's deferred list.
+    Semantics: `excludes` always wins; `keep` only rescues dot-directories
+    that are NOT excluded. Until 2026-08-05 the predicate carried the five
+    call sites' shared precedence quirk (`and` binding tighter than `or` let
+    a `keep` entry survive its own exclusion). Fixed once the consolidation
+    made it one expression and a sweep showed no caller can reach the
+    divergent input — every in-tree caller passes `INDEX_EXCLUDE_DIRS` or
+    gitkit's `_DEFAULT_EXCLUDES`, neither of which contains a `keep` entry —
+    so the fix is observably a no-op on all reachable inputs.
 
     Unlike `iter_files`, this does NOT swallow OSError from the walk itself —
     it is for repo roots the caller already resolved, not user-chosen trees.
     """
     for cur, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs
-                   if d not in excludes and not d.startswith(".") or d in keep]
+                   if d not in excludes and (not d.startswith(".") or d in keep)]
         for fname in names:
             yield Path(cur) / fname
 

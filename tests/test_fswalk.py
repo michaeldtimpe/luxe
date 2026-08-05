@@ -334,20 +334,24 @@ class TestIterPruned:
             "top.py",
         ]
 
-    def test_a_keep_dir_survives_being_excluded_too(self, tmp_path):
-        """The `(A and B) or C` precedence quirk, pinned rather than fixed.
+    def test_excludes_beat_the_keep_list(self, tmp_path):
+        """Fixed 2026-08-05: an explicit exclude wins over `keep`.
 
-        `.github` is in `keep`, so the `or` re-admits it even when the caller
-        ALSO lists it as an exclude. Almost certainly not what was intended;
-        it is what five subsystems have done for months. Changing it is an
-        evidence-gated decision, not a refactor — see the deferred list.
+        The five original call sites shared a precedence quirk (`(A and B) or
+        C`) that re-admitted a `keep` dir even when the caller ALSO excluded
+        it. Evidence gate for changing it: no in-tree caller passes a `keep`
+        entry in `excludes` (`INDEX_EXCLUDE_DIRS` and gitkit's
+        `_DEFAULT_EXCLUDES` contain no `.github`), so old and new predicates
+        are identical on every reachable input. This test asserts the
+        intended semantics on the previously-divergent input; the legacy
+        oracle deliberately DISAGREES here and agrees everywhere else (the
+        equivalence tests above cover the reachable inputs).
         """
         _touch(tmp_path / ".github" / "ci.yml")
         excludes = set(INDEX_EXCLUDE_DIRS) | {".github"}
-        assert [p.name for p in iter_pruned(tmp_path, excludes=excludes)] == ["ci.yml"]
-        # ... and the legacy loop agreed
-        assert _legacy_walk(tmp_path, excludes) == list(
-            iter_pruned(tmp_path, excludes=excludes))
+        assert list(iter_pruned(tmp_path, excludes=excludes)) == []
+        # The legacy loop kept ci.yml on this input — the one divergence.
+        assert [p.name for p in _legacy_walk(tmp_path, excludes)] == ["ci.yml"]
 
     def test_keep_is_overridable(self, tmp_path):
         _touch(tmp_path / ".github" / "ci.yml")
