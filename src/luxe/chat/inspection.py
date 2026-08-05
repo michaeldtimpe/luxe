@@ -8,11 +8,11 @@ three are read-only — nothing here mutates a repo or a session.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from luxe import gitcmd
 from luxe.chat import origin as origin_mod
 from luxe.memory import session as session_store
 
@@ -123,14 +123,10 @@ class FileDiff:
         return not (self.added or self.removed or self.untracked)
 
 
-def _git(repo: str | Path, *args: str, timeout: float = 10.0) -> tuple[bool, str]:
-    try:
-        proc = subprocess.run(["git", "-C", str(repo), *args],
-                              capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as e:
-        return False, str(e)
-    return proc.returncode == 0, (proc.stdout if proc.returncode == 0
-                                 else proc.stderr).strip()
+# `luxe.gitcmd.run_ok` IS this function's old body, verbatim — it moved there
+# when the eight git wrappers were consolidated (2026-08-04). Kept as a local
+# name so the six call sites below read the same.
+_git = gitcmd.run_ok
 
 
 def session_diff(repo_path: str, paths: list[str] | None = None

@@ -30,6 +30,7 @@ from dataclasses import dataclass
 # `chat/theme.py`): each span is styled by a theme ROLE (pwd/branch/commit/dirty/
 # label/ctx/model/white_brt/safe/warn/alert), drawn from the terminal ANSI
 # palette so luxe tracks the same iTerm2 profile as the Claude statusline.
+from luxe import gitcmd
 from luxe.chat import theme as theme_mod
 
 # A styled span: (text, ptk_style, rich_style).
@@ -131,8 +132,7 @@ class GitInfo:
 
 def _run_git(repo: str, *args: str) -> subprocess.CompletedProcess | None:
     try:
-        return subprocess.run(["git", "-C", repo, *args],
-                              capture_output=True, text=True, timeout=2)
+        return gitcmd.run(repo, *args, timeout=2)
     except Exception:
         return None
 

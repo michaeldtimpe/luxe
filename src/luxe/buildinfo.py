@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from luxe import gitcmd
 from luxe import __version__
 
 
@@ -20,10 +21,7 @@ def _repo_root() -> Path:
 
 def _git(*args: str) -> str | None:
     try:
-        r = subprocess.run(
-            ["git", "-C", str(_repo_root()), *args],
-            capture_output=True, text=True, timeout=2,
-        )
+        r = gitcmd.run(_repo_root(), *args, timeout=2)
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None

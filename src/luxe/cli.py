@@ -12,6 +12,7 @@ from typing import Callable
 import click
 from rich.console import Console
 
+from luxe import gitcmd
 from luxe import gitclone
 # Language detection moved to repo_index (the de-facto home for
 # extension→language tables). Re-exported: tests and
@@ -984,8 +985,7 @@ def update_cmd(no_sync: bool):
         return
 
     def _git(*args, timeout=120):
-        return sp.run(["git", "-C", str(root), *args],
-                      capture_output=True, text=True, timeout=timeout)
+        return gitcmd.run(root, *args, timeout=timeout)
 
     log = _git("log", "--oneline", "HEAD..origin/main")
     console.print(f"[bold]{behind} commit(s) incoming:[/]")
