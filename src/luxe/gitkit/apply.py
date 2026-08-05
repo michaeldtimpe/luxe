@@ -23,6 +23,7 @@ import sys
 import uuid
 from pathlib import Path
 
+from luxe import gitcmd
 from luxe.agents import prompts
 from luxe.repo_index import _detect_languages_for_repo
 
@@ -31,7 +32,7 @@ _VERIFY_HINTS = ("pytest", "test", "make ", "npm ", "cargo ", "go ", "python",
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True)
+    return gitcmd.run_in(repo, *args)
 
 
 def _current_branch(repo: Path) -> str:

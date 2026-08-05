@@ -16,6 +16,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from luxe import gitcmd
 from luxe.repo_index import build_repo_summary
 
 _GIT_TIMEOUT = 30
@@ -35,10 +36,7 @@ def _run_git(args: list[str], repo_path: str | Path,
     """Run `git <args>` in `repo_path`. Returns (ok, output); ok is False on a
     missing binary, non-zero exit, or timeout (output then carries the reason)."""
     try:
-        proc = subprocess.run(
-            ["git", *args], cwd=str(repo_path),
-            capture_output=True, text=True, timeout=timeout, check=False,
-        )
+        proc = gitcmd.run_in(repo_path, *args, timeout=timeout)
     except FileNotFoundError:
         return False, "git not found"
     except subprocess.TimeoutExpired:

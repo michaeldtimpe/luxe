@@ -20,6 +20,8 @@ directory is not "the project you're in".
 
 from __future__ import annotations
 
+from luxe import gitcmd
+
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,10 +64,7 @@ def _git_root(path: Path) -> str:
     """The work-tree root containing `path`, or "" — asked of git itself, so
     worktrees, submodules, and `.git` files all resolve correctly."""
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10,
-        )
+        proc = gitcmd.run(path, "rev-parse", "--show-toplevel", timeout=10)
     except (OSError, subprocess.SubprocessError):
         return ""
     if proc.returncode != 0:

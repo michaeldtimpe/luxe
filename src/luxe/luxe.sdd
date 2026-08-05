@@ -80,6 +80,14 @@ auto-memory.
   gitkit), `luxe/textfmt.py` (`truncate_for_display`, same), `luxe/gitcmd.py`
   (the git subprocess runner). The upper tier re-exports the name so existing
   imports and monkeypatch targets are unaffected
+- `luxe/gitcmd.py` is the only place that spawns `git`, EXCEPT the
+  benchmark-path call sites that construct argv deliberately (`pr.py`,
+  `citations.py`, `spec_validator.py`, `gitclone.py`, `repo_index.py`,
+  `chat/smoke.py`) — those stay raw, exact flags matter. `run()` is `git -C
+  <repo>` (a bad path is a non-zero exit), `run_in()` is `cwd=<repo>` (a bad
+  path RAISES, indistinguishable from a missing git binary); the two are not
+  interchangeable and each caller keeps the form it had. Error POLICY stays at
+  the call site: the wordings differ per subsystem and are user-visible
 
 ## Must not
 - No cloud provider backends (Anthropic/OpenAI/Gemini) — MLX/oMLX endpoints only
