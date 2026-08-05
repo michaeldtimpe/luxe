@@ -1,5 +1,56 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-05) — whole-repo consolidation refactor: 11 items, verified, fleet-deployed
+
+First-ever whole-repo refactor pass (growth since the 2026-07-29 pivot had
+been +26k/−650 lines, almost purely additive). Cycle shape: survey-anchored
+plan at `~/Downloads/luxe-refactor-plan.md` (verification contract in its §7),
+**Opus 5 executed all 11 items in 11 commits** (`6b5f106…6f7daf6`, one per
+item, rebase-linear), report at `~/Downloads/luxe-refactor-REPORT.md`, then an
+independent verification session re-ran every §7 check. Pushed 2026-08-05;
+m1 + neo updated via `luxe update`; smoke green fleet-wide on the new code —
+m5 kit drill 10/10 READY 6s, m1 kit drill 10/10 READY 17s, neo agentic
+`--chat --code --backend m5` READY 13s. (Reminder: bare `luxe smoke` on neo
+fails `hosts: has no entry` **by design** — 8 GB box, no local oMLX; chat.sdd
+pins it. The agentic drill against m5 is neo's smoke.)
+
+**What improved** — the three hot files went 5,811 → 3,181 lines (−45%):
+`cli.py` 2,234→1,383 · `chat/commands.py` 1,792→333 · `agents/loop.py`
+1,785→1,465. Item by item: guardrail constants single-homed in
+`guardrails.py` (P1.1 — see lessons.md: the May "lift" was a copy, not a
+move); six dead symbols deleted (P1.2); `commands.py` split into six
+`chat/cmd_*.py` group modules behind the existing `_build_handlers()` dict
+(P2.1); chat/code startup → `chat/launch.py` (P2.2); the three import cycles
+broken via neutral `mounts.py`/`cancel.py`/`textfmt.py` — modelstore and
+gitkit no longer reach into chat/cli (P2.3); one `gitcmd.py` git runner, 8
+wrappers migrated, each site's error policy kept (P2.4); `pull` source
+resolution shared between CLI and `/pull` (P2.5); cli idiom helpers +
+`paths.luxe_home()` ×12 (P2.6); the five copied walk predicates →
+`fswalk.iter_pruned` with the `.github` precedence quirk preserved AND
+test-pinned (P3.1); `maintain` body → `src/luxe/maintain.py` (P3.2);
+`RunFlags.from_env()` replaces run_agent's ~16 inline env reads (P3.3).
+
+**Guarantees held**: goldens never regenerated and byte-identical to the
+pre-cycle tree (`test_golden_request.py` run before/after every
+benchmark-path commit); `--help` byte-identical across 24 surfaces vs an
+origin/main worktree; the nine pinned parity/structure test files untouched;
+**+159 tests** (guardrails identity ×32, layering ×6, RunFlags 196-environment
+differential ×111, walk equivalence, pull source parity); suite 2,353 passed
+in 66s.
+
+**The honest measure**: whole-package is **+507 lines, not the plan's −600**
+— deliberate. ~250 lines of threshold-calibration rationale moved into
+guardrails.py *with* their constants (its AST is unchanged — comment-only
+growth), and 14 new modules carry docstrings recording what was deliberately
+NOT merged into them. Real new code = **+42 AST statements**. The cycle
+bought structure — fewer sources of truth, zero cycles, hot files half the
+size — not deletion. 7 of the plan's §0 anchors were wrong (report §2), 4
+sub-parts were skipped because merging would have changed behavior
+(`human_bytes` ladders genuinely differ, etc.), and the report §5 carries a
+9-item deferred list — the `.github` quirk is now a one-line evidence-gated
+fix whenever wanted. Two lessons.md entries (copy-not-move extraction;
+survey estimates vs. actual contracts).
+
 ## ⇒ SESSION HANDOFF (2026-08-03b) — `web_answer` (Brave Answers) + permanent web chip + keys provisioned
 
 Operator session on the m5 box. Three things landed, all chat-only:
