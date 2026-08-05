@@ -47,9 +47,42 @@ bought structure — fewer sources of truth, zero cycles, hot files half the
 size — not deletion. 7 of the plan's §0 anchors were wrong (report §2), 4
 sub-parts were skipped because merging would have changed behavior
 (`human_bytes` ladders genuinely differ, etc.), and the report §5 carries a
-9-item deferred list — the `.github` quirk is now a one-line evidence-gated
-fix whenever wanted. Two lessons.md entries (copy-not-move extraction;
+9-item deferred list. Two lessons.md entries (copy-not-move extraction;
 survey estimates vs. actual contracts).
+
+**Deferred list worked through same-day (2026-08-05), all nine dispositioned:**
+
+- **#1 `.github` precedence quirk — FIXED** (`239c77c`). Evidence gate
+  cleared: every `iter_pruned` caller passes `INDEX_EXCLUDE_DIRS` or
+  gitkit's `_DEFAULT_EXCLUDES`, neither contains a `keep` entry, so no
+  reachable input hits the divergence. `excludes` now beats `keep`; the
+  pinning test flipped to assert the intended semantics and records the
+  one input where the legacy oracle deliberately disagrees; luxe.sdd
+  clause updated.
+- **#5 `chat/project.py` → neutral tier — DONE** (`dddb38b`). Now
+  `luxe/project.py`; `chat/project.py` is a re-export shim; brief.py
+  imports it at module level. `test_layering` tightened exactly as the
+  note proposed: gitkit's function-local-import check now forbids the
+  whole `luxe.chat` prefix, and `project.py` joined the
+  neutral-modules-import-nothing-upward check.
+- **#6 cli back-references — DONE** (`b2a665f`). `_resolve_repo` →
+  `luxe.gitclone.resolve_repo` (verbatim, next to the bounded clone);
+  `_infer_task_type` → `luxe.agents.tasktype.infer_task_type`;
+  maintain.py no longer imports cli at all; launch.py's lazy cli block is
+  down to the four names that legitimately live above it; cli re-exports
+  the old private names. Help byte-parity re-verified across root + 20
+  commands after all three changes.
+- **#4 `human_bytes` ×3 — CLOSED, won't-do.** Call-site evidence:
+  planeproxy formats None-able GB-scale tunnel counters (space-less, no
+  abs()); render formats KB-scale tool-output sizes; modelstore formats
+  weight sizes. Three ladders serve three input domains — merging couples
+  them for ~20 lines and changes at least two outputs.
+- **#2 `run_agent` body, #3 language tables, #7 generated handler
+  registry, #8 pull show/search outputs, #9 raw git call sites — CLOSED,
+  rationale stands as written in the report** (one algorithm; deliberately
+  different tables, now commented; hand-written dict is auditable during
+  an outage; unifying output shapes is a product decision; benchmark-path
+  git flags stay verbatim). Nothing on the list remains open.
 
 ## ⇒ SESSION HANDOFF (2026-08-03b) — `web_answer` (Brave Answers) + permanent web chip + keys provisioned
 
