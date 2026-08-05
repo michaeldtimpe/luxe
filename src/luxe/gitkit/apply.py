@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 
 from luxe.agents import prompts
+from luxe.repo_index import _detect_languages_for_repo
 
 _VERIFY_HINTS = ("pytest", "test", "make ", "npm ", "cargo ", "go ", "python",
                  "bash ", "./", "sh ", "tox", "ruff", "mypy", "jest")
@@ -177,7 +178,6 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
     from luxe.backend import Backend
-    from luxe.cli import _detect_languages_for_repo
     from luxe.tools.fs import get_repo_root, set_repo_root
     if run_single_fn is None:
         from luxe.agents.single import run_single as run_single_fn

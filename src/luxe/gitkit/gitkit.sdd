@@ -158,6 +158,12 @@ in the front-end. Survey map + chunk plan persist per repo under
 - Keep the benchmark/maintain path byte-identical: deep mode is front-end only
   (cli/chat → runner → deep); `single.py`/`loop.py`/benchmarks never reach it.
 
+- Take cancellation, display truncation, and language detection from the
+  NEUTRAL modules (`luxe.cancel`, `luxe.textfmt`, `luxe.repo_index`) at
+  module level. Until 2026-08-04 these came from `chat.render` and `cli` via
+  imports written inside function bodies to hide the cycle;
+  `tests/test_layering.py` now fails if one comes back.
+
 ## Must not
 - Write/edit the target repo, or require write mode — EXCEPT the `gitchange --apply`
   path, which is write-enabled under its six invariants above. Every other path

@@ -14,7 +14,6 @@ import difflib
 import random
 import re
 import time
-from dataclasses import dataclass
 from typing import Any
 
 from rich.console import Console, Group
@@ -24,7 +23,13 @@ from rich.padding import Padding
 from rich.syntax import Syntax
 from rich.text import Text
 
+from luxe.cancel import (  # noqa: F401  (re-exports; neutral home is luxe.cancel)
+    CancelToken,
+    ChatCancelled,
+    raise_if_cancelled,
+)
 from luxe.chat import theme as theme_mod
+from luxe.textfmt import truncate_for_display  # noqa: F401  (re-export)
 from luxe.tools.base import ToolCall
 
 # Shared 6-color palette for the rainbow banner and the prompt arrows. Switched
@@ -71,18 +76,6 @@ def arrow_prompt_markup(lead: str = "luxe", *, rng: random.Random | None = None)
     colors = pick_no_adjacent_repeats(3, rng=rng)
     arrows = "".join(f"[bold {c}]›[/]" for c in colors)
     return f"{lead} {arrows} "
-
-
-class ChatCancelled(KeyboardInterrupt):
-    """Raised at a tool boundary when the user requested cancellation."""
-
-
-@dataclass
-class CancelToken:
-    requested: bool = False
-
-    def reset(self) -> None:
-        self.requested = False
 
 
 # Args most worth surfacing first when summarizing a tool call.
@@ -143,14 +136,6 @@ def format_tool_call(tc: ToolCall) -> str:
     else:
         tail = f"  [{theme_mod.rich('success') or 'green'}]✓[/] [dim]{_human_bytes(tc.bytes_out)}[/]"
     return head + tail
-
-
-def raise_if_cancelled(cancel: CancelToken) -> None:
-    """Raise ChatCancelled if a Ctrl-C has set the token. Shared by the tool
-    boundary and the streaming token callback (B1) so cancellation lands
-    mid-generation, not only between tool calls."""
-    if cancel.requested:
-        raise ChatCancelled()
 
 
 # Generous caps so a write-heavy turn can't lock the terminal. `diff` keeps each
@@ -350,37 +335,6 @@ _RE_BLANK_RUN = re.compile(r"\n[ \t]*\n(?:[ \t]*\n)+")
 _TRUNCATE_LINES = 50
 _COMPACT_LINES = 12
 _TRUNCATE_CHARS = 4000
-
-
-def truncate_for_display(text: str, *, max_lines: int | None,
-                         max_chars: int | None = None) -> tuple[str, int]:
-    """Truncate `text` for on-screen display, returning (shown, hidden_lines).
-
-    Markdown-safe: truncates on raw text lines (before Markdown is evaluated),
-    and if the kept slice leaves a code fence (```) open, appends a closing
-    fence so the rest of the terminal output isn't swallowed. Returns (text, 0)
-    unchanged when it already fits within both caps. Single shared primitive —
-    used by `render_final` (chat) and the gitkit report preview.
-    """
-    text = text or ""
-    lines = text.split("\n")
-    cut = len(lines)
-    if max_lines is not None and len(lines) > max_lines:
-        cut = max_lines
-    if max_chars is not None:
-        total = 0
-        for i, ln in enumerate(lines):
-            total += len(ln) + 1
-            if total > max_chars:
-                cut = min(cut, i)
-                break
-    if cut >= len(lines):
-        return text, 0
-    kept = lines[:cut]
-    hidden = len(lines) - cut
-    if sum(1 for ln in kept if ln.lstrip().startswith("```")) % 2 == 1:
-        kept.append("```")  # close a dangling code fence
-    return "\n".join(kept), hidden
 
 
 def build_final_renderable(text: str, *, mode: str = "truncated"):

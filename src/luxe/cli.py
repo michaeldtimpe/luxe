@@ -13,6 +13,14 @@ import click
 from rich.console import Console
 
 from luxe import gitclone
+# Language detection moved to repo_index (the de-facto home for
+# extension→language tables). Re-exported: tests and
+# scripts/chunk_conclude_ab.py import them from `luxe.cli`.
+from luxe.repo_index import (  # noqa: F401  (re-exports)
+    _LANG_BY_EXT,
+    _detect_languages_for_repo,
+    _languages_from_paths,
+)
 from luxe.config import load_config
 
 console = Console()
@@ -1736,43 +1744,6 @@ def _infer_task_type(goal: str) -> str:
     if any(k in g for k in ("summarize", "summary", "explain", "describe")):
         return "summarize"
     return "review"
-
-
-_LANG_BY_EXT = {
-    ".py": "python", ".js": "javascript", ".ts": "typescript",
-    ".tsx": "typescript", ".jsx": "javascript", ".rs": "rust",
-    ".go": "go",
-}
-
-
-def _languages_from_paths(paths) -> frozenset[str]:
-    """Languages present in an already-enumerated file list — no walk.
-
-    `luxe chat` calls this with the scan it built for the indexes; walking the
-    tree a third time cost ~18s from `$HOME` (measured 2026-07-30), and with
-    weaker pruning than the indexes used.
-    """
-    return frozenset(
-        lang for p in paths
-        if (lang := _LANG_BY_EXT.get(Path(p).suffix.lower())) is not None
-    )
-
-
-def _detect_languages_for_repo(repo_path: str) -> frozenset[str]:
-    """Walk `repo_path` to find which languages it contains.
-
-    Still the walking version for `maintain`/gitkit (unchanged behavior). The
-    chat path uses `_languages_from_paths` instead — see above.
-    """
-    found: set[str] = set()
-    import os as _os
-    for root, dirs, files in _os.walk(Path(repo_path)):
-        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv"}]
-        for f in files:
-            ext = Path(f).suffix.lower()
-            if ext in _LANG_BY_EXT:
-                found.add(_LANG_BY_EXT[ext])
-    return frozenset(found)
 
 
 @main.command()
