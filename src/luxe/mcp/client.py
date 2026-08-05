@@ -168,14 +168,6 @@ def _exc_text(e: BaseException) -> str:
     return str(e) or type(e).__name__
 
 
-class ServerDown(MCPError):
-    pass
-
-
-class HardCapExceeded(MCPError):
-    pass
-
-
 # --- server runtime --------------------------------------------------------
 
 @dataclass

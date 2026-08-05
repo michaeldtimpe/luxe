@@ -14,10 +14,6 @@ from pathlib import Path
 CARD_PATH = Path(__file__).resolve().parent.parent.parent / "OUTAGE.md"
 
 
-def card_path() -> Path:
-    return CARD_PATH
-
-
 def load_card() -> str:
     """The card's text, or a short self-describing fallback if it is missing.
 

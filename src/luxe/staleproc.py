@@ -35,7 +35,6 @@ outages and neither may be taken down by a diagnostic.
 
 from __future__ import annotations
 
-import glob
 import os
 import re
 import shutil
@@ -219,7 +218,3 @@ def check_omlx() -> StaleCheck:
     """The concrete case this exists for. Call only for a LOCAL endpoint — a
     remote host's process table is its own doctor's problem."""
     return check_stale_service("omlx", "omlx-server")
-
-
-def cellar_glob(formula: str) -> list[str]:  # pragma: no cover - debug helper
-    return sorted(glob.glob(f"{_brew_prefix()}/Cellar/{formula}/*/"))
