@@ -69,8 +69,24 @@ auto-memory.
   is the failure this exists to prevent. There is deliberately NO scheduled,
   cron, launchd, or alerting counterpart: user decision, do not add one.
 
+- LAYERING is one-directional and TESTED (`tests/test_layering.py`,
+  2026-08-04). `chat/` is the top tier and may reach down; nothing below it
+  imports `luxe.chat.*` at module level (`cli` is the one sanctioned
+  exception — it is the composition root and sits above chat). `agents/`
+  never imports `chat/` at all. Code that two tiers genuinely share lives in
+  a NEUTRAL root-tier module: `luxe/mounts.py` (the `mount(8)` parse, shared
+  by `chat.origin` and `modelstore`), `luxe/cancel.py`
+  (`CancelToken`/`ChatCancelled`/`raise_if_cancelled`, shared by chat and
+  gitkit), `luxe/textfmt.py` (`truncate_for_display`, same), `luxe/gitcmd.py`
+  (the git subprocess runner). The upper tier re-exports the name so existing
+  imports and monkeypatch targets are unaffected
+
 ## Must not
 - No cloud provider backends (Anthropic/OpenAI/Gemini) — MLX/oMLX endpoints only
+- Break a layering cycle with a FUNCTION-LOCAL import. It hides the cycle from
+  the reader and from every static tool, and it is exactly how the three
+  cycles fixed on 2026-08-04 survived for months. Move the shared piece down
+  to a neutral module instead
 - Read `origin/<branch>` in offline-cache repos (stale-ref trap; use local ref or sidecar regrade)
 - Use MoE Instruct-2507 model family (long-context fabrication, skips optional tool calls)
 - Use `--no-verify`, `--no-gpg-sign`, or other hook-skip flags

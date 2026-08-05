@@ -31,7 +31,7 @@ from typing import Callable, Iterable
 
 import httpx
 
-from luxe.chat.origin import network_mounts
+from luxe.mounts import network_mounts
 from luxe.fswalk import DEFAULT_SKIP_DIRS
 
 # Where oMLX keeps model directories it serves by name.

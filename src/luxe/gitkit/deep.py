@@ -41,7 +41,9 @@ from pathlib import Path
 from typing import Any
 
 from luxe.agents import prompts
+from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.context import estimate_tokens
+from luxe.textfmt import truncate_for_display
 from luxe.repo_index import (
     _DEFAULT_EXCLUDES,
     _count_lines,
@@ -1154,7 +1156,6 @@ def run_deep_report(
     """
     from rich.markdown import Markdown
 
-    from luxe.chat.render import ChatCancelled, raise_if_cancelled, truncate_for_display
     from luxe.gitkit import health, store
     from luxe.gitkit.runner import _activity_callbacks
 

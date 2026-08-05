@@ -20,25 +20,25 @@ failure degrades to `kind="unknown"` and never blocks a turn. Chat-only
 from __future__ import annotations
 
 import os
-import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Filesystem types that mean "the bytes come over the wire".
-NETWORK_FSTYPES = frozenset({
-    "smbfs", "nfs", "afpfs", "cifs", "webdav", "ftp", "sshfs", "osxfuse",
-})
+# The mount(8) parse lives at the root tier (luxe/mounts.py) because
+# `modelstore` needs it too and must not import `chat.*`. Re-exported here:
+# `classify_path` below resolves `network_mounts` through THIS module's
+# globals, so the tests that monkeypatch `origin.network_mounts` still work.
+from luxe.mounts import (  # noqa: F401  (re-exports)
+    NETWORK_FSTYPES,
+    network_mounts,
+    reset_mount_cache,
+)
 
 # Cloud-sync providers materialize placeholder trees under here; reads block on
 # the provider (the ETIMEDOUT that crashed chat came from exactly this path).
 _CLOUD_ROOT = "Library/CloudStorage"
 
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", ""})
-
-_MOUNT_RE = re.compile(r"^(?P<src>.+?) on (?P<mp>.+?) \((?P<opts>[^)]*)\)\s*$")
-
 
 def _elide(path: str, maxlen: int = 72) -> str:
     """Keep a long weight path readable in a one-line notice.
@@ -117,40 +117,6 @@ def endpoint_is_local(base_url: str) -> bool:
 
 
 # --- local filesystem -------------------------------------------------------
-
-_mounts: list[tuple[str, str, str]] | None = None   # (mountpoint, fstype, src)
-
-
-def network_mounts(*, force: bool = False) -> list[tuple[str, str, str]]:
-    """Network mount points on THIS machine, as (mountpoint, fstype, source).
-
-    Parsed from `mount(8)` once per process — there is no stdlib call that
-    reports a filesystem's type, and psutil is not a dependency.
-    """
-    global _mounts
-    if _mounts is not None and not force:
-        return _mounts
-    out: list[tuple[str, str, str]] = []
-    try:
-        proc = subprocess.run(["/sbin/mount"], capture_output=True, text=True,
-                              timeout=5)
-        for line in proc.stdout.splitlines():
-            m = _MOUNT_RE.match(line.strip())
-            if not m:
-                continue
-            fstype = m.group("opts").split(",")[0].strip().lower()
-            if fstype in NETWORK_FSTYPES:
-                out.append((m.group("mp"), fstype, m.group("src")))
-    except (OSError, subprocess.SubprocessError):
-        out = []
-    _mounts = out
-    return out
-
-
-def reset_mount_cache() -> None:
-    global _mounts
-    _mounts = None
-
 
 def classify_path(model_path: str | os.PathLike[str] | None) -> ModelOrigin:
     """Classify a LOCAL-endpoint model path as local vs network-backed.

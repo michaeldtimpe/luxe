@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from luxe.agents import prompts
+from luxe.cancel import ChatCancelled
+from luxe.repo_index import _detect_languages_for_repo
 
 BLOCK_NAME = "brief"
 #: Hard write cap. `render_block`'s whole-memory budget is 4000 chars and
@@ -136,8 +138,6 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
     from luxe.backend import Backend
-    from luxe.chat.render import ChatCancelled
-    from luxe.cli import _detect_languages_for_repo
     from luxe.gitkit.runner import GITKIT_MAX_TOKENS, _activity_callbacks
     from luxe.mcp.server import make_read_only_role
     from luxe.memory import project as project_mem

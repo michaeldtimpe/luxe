@@ -17,6 +17,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# NOTE: deliberately DIFFERENT from `symbols._LANGUAGE_EXTENSIONS` and from
+# `_LANG_BY_EXT` below. This table drives the repo-summary language breakdown
+# (every language worth counting in an overview, including ones luxe cannot
+# parse); `symbols._LANGUAGE_EXTENSIONS` drives tree-sitter symbol extraction
+# and may only list languages with a working parser; `_LANG_BY_EXT` drives the
+# prompt's `languages=` hint and lists only the languages the prompt registry
+# has guidance for. Merging any two of them would silently change behavior in
+# the other's subsystem. See the 2026-08-04 consolidation report.
 _LANGUAGE_EXTENSIONS = {
     "python":     [".py"],
     "javascript": [".js", ".jsx", ".mjs", ".cjs"],
@@ -189,3 +197,44 @@ def build_repo_summary(
     summary.recent_files = _git_recent_files(root)
     summary.symbol_index_coverage = dict(symbol_coverage or {})
     return summary
+
+
+# --- language hint for the prompt (moved out of cli.py 2026-08-04) ----------
+# Smaller and different on purpose from `_LANGUAGE_EXTENSIONS` above: this one
+# feeds `run_single(languages=…)`, so it only names languages the prompt
+# registry has guidance for. `luxe.cli` re-exports all three names.
+_LANG_BY_EXT = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".tsx": "typescript", ".jsx": "javascript", ".rs": "rust",
+    ".go": "go",
+}
+
+
+def _languages_from_paths(paths) -> frozenset[str]:
+    """Languages present in an already-enumerated file list — no walk.
+
+    `luxe chat` calls this with the scan it built for the indexes; walking the
+    tree a third time cost ~18s from `$HOME` (measured 2026-07-30), and with
+    weaker pruning than the indexes used.
+    """
+    return frozenset(
+        lang for p in paths
+        if (lang := _LANG_BY_EXT.get(Path(p).suffix.lower())) is not None
+    )
+
+
+def _detect_languages_for_repo(repo_path: str) -> frozenset[str]:
+    """Walk `repo_path` to find which languages it contains.
+
+    Still the walking version for `maintain`/gitkit (unchanged behavior). The
+    chat path uses `_languages_from_paths` instead — see above.
+    """
+    found: set[str] = set()
+    import os as _os
+    for root, dirs, files in _os.walk(Path(repo_path)):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv"}]
+        for f in files:
+            ext = Path(f).suffix.lower()
+            if ext in _LANG_BY_EXT:
+                found.add(_LANG_BY_EXT[ext])
+    return frozenset(found)

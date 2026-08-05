@@ -15,6 +15,9 @@ from pathlib import Path
 
 from luxe import gitclone
 from luxe.agents import prompts
+from luxe.cancel import ChatCancelled, raise_if_cancelled
+from luxe.repo_index import _detect_languages_for_repo
+from luxe.textfmt import truncate_for_display
 
 # Per-run generation ceiling for the FINAL report (safety margin, not the fix —
 # WS1's prompt discipline keeps reports well under this). The first test hit the
@@ -150,7 +153,6 @@ def _activity_callbacks(update, cancel=None):
     the coalescing/phasing is unit-testable without a TTY."""
     from collections import Counter
 
-    from luxe.chat.render import raise_if_cancelled
 
     counts: Counter = Counter()
     state = {"writing": False}
@@ -241,8 +243,6 @@ def run_git_report(
     from luxe import symbols as symbols_mod
     from luxe.agents.single import run_single
     from luxe.backend import Backend
-    from luxe.chat.render import truncate_for_display
-    from luxe.cli import _detect_languages_for_repo
     from luxe.gitkit import health, store
     from luxe.mcp.server import make_read_only_role
     from luxe.tools.fs import get_repo_root, set_repo_root
@@ -446,7 +446,6 @@ def run_git_report(
         # WS2: phased spinner + coalesced tool counts while the model works
         # (terminal only; gitkit is self-contained, no chat LiveActivity). When a
         # `cancel` token is supplied (interactive TUI), esc/Ctrl-C aborts cleanly.
-        from luxe.chat.render import ChatCancelled
         try:
             if console.is_terminal:
                 with console.status("[dim]gathering context & loading model…[/]",
