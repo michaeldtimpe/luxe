@@ -561,6 +561,14 @@ never touches this module.
 - In read-only mode a lowest-precedence `<session_mode>` block (string =
   `prompts.READ_ONLY_CHAT_HINT`, never inlined here) is injected so the model
   points the user at `/write` instead of claiming luxe can't create/edit files
+- In write mode in a GIT project the same `<session_mode>` slot instead
+  carries `prompts.GIT_WORKFLOW_HINT` (2026-08-05) — the one state where the
+  model can actually run git. It pins the user's discipline: one git command
+  per bash call (the restricted shell rejects chains), inspect before
+  staging, stage explicitly, rebase never merge, and no push/force-push/
+  history rewrite/branch delete unless the user explicitly asked. Read-only
+  or non-git sessions never see it; the mutually-exclusive branch with
+  READ_ONLY_CHAT_HINT lives in `session.build_extra_context`
 - `/ctx <tier>` sets a per-session `num_ctx` override (small/medium/large/xlarge);
   it is CHAT-ONLY and always clamped to the role's `num_ctx_max` (config) so a
   request can never exceed what the box/model holds. `num_ctx_max: 0` (default)

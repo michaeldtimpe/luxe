@@ -725,3 +725,16 @@ def test_git_brief_hint_is_orientation_only():
         assert section in s, section
     assert "50 lines" in s or "2,000 characters" in s   # bounded by construction
     assert "never invent" in s                   # grounding discipline
+
+
+def test_git_workflow_hint_carries_the_git_discipline():
+    """Chat-only <session_mode> hint (write mode + git project — the one
+    state where the model can actually run git). The champion's defaults —
+    command chains, merge pulls, unrequested pushes — are each wrong here,
+    so the discipline rides the prompt, not the model's habits."""
+    from luxe.agents.prompts import GIT_WORKFLOW_HINT
+    s = GIT_WORKFLOW_HINT.lower()
+    assert "one git command" in s                       # restricted shell: no chains
+    assert "rebas" in s and "never" in s and "merge commit" in s
+    assert "do not push" in s and "explicitly asked" in s
+    assert "git status" in s and "git_diff" in s        # inspect before mutate
