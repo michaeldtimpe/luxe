@@ -213,7 +213,7 @@ def run_chat_repl(
     on_project: Callable[[str | None], dict] | None = None,
     project_kind: str = "git",
 ) -> None:
-    from luxe.cli import _infer_task_type  # reuse the maintain heuristic
+    from luxe.agents.tasktype import infer_task_type as _infer_task_type  # the maintain heuristic
 
     infer = infer_task_type or _infer_task_type
 
