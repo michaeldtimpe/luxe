@@ -19,7 +19,6 @@ truncates the bar; the path is shown home-relative but not middle-ellipsised.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import time
@@ -31,6 +30,7 @@ from dataclasses import dataclass
 # label/ctx/model/white_brt/safe/warn/alert), drawn from the terminal ANSI
 # palette so luxe tracks the same iTerm2 profile as the Claude statusline.
 from luxe import gitcmd
+from luxe import textfmt
 from luxe.chat import theme as theme_mod
 
 # A styled span: (text, ptk_style, rich_style).
@@ -273,9 +273,7 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
 
     # home-relative path (theme `pwd` role; elastic: ellipsised before drops)
     if repo:
-        home = os.path.expanduser("~")
-        shown = "~" + repo[len(home):] if home and repo.startswith(home) else repo
-        segs.append(Segment([_S(shown, theme_mod.styles_for("pwd"))],
+        segs.append(Segment([_S(textfmt.tilde(repo), theme_mod.styles_for("pwd"))],
                             priority=2, path=True))
 
     # git (theme-coloured) — slots in after path when inside a repo. When the

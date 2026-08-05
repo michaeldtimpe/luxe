@@ -8,6 +8,8 @@ re-exports it, so existing imports keep working.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def truncate_for_display(text: str, *, max_lines: int | None,
                          max_chars: int | None = None) -> tuple[str, int]:
@@ -38,3 +40,27 @@ def truncate_for_display(text: str, *, max_lines: int | None,
     if sum(1 for ln in kept if ln.lstrip().startswith("```")) % 2 == 1:
         kept.append("```")  # close a dangling code fence
     return "\n".join(kept), hidden
+
+
+def tilde(path: str) -> str:
+    """Home-relative display path (`~/Downloads/luxe`).
+
+    Three copies of these two lines existed (chat launch, chat.origin,
+    chat.status); this is the one. Purely cosmetic — it never touches the
+    filesystem, so a path that does not exist renders the same way.
+    """
+    home = str(Path.home())
+    return "~" + path[len(home):] if home and path.startswith(home) else path
+
+
+def render_ok_lines(console, lines) -> None:
+    """Print `(ok, text)` probe results as `  ✓ text` / `  ✗ text`.
+
+    The shared render for netdiag and planeproxy reports, which each surface
+    on BOTH the CLI (`luxe net`, `luxe planeproxy`) and in a session (`/net`,
+    `/planeproxy`) — four identical loops before 2026-08-04. The probe modules
+    return pure text on purpose and the markup belongs here.
+    """
+    for ok, line in lines:
+        glyph = "[green]✓[/]" if ok else "[red]✗[/]"
+        console.print(f"  {glyph} {line}")

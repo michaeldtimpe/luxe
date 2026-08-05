@@ -12,12 +12,13 @@ import time
 import uuid
 from pathlib import Path
 
+from luxe.paths import luxe_home
 from luxe.memory.project import repo_hash
 
 
 def reports_dir(repo_path: str | Path) -> Path:
     """Return the report directory for a repo (`~/.luxe/reports/<repo_hash>/`)."""
-    return Path.home() / ".luxe" / "reports" / repo_hash(repo_path)
+    return luxe_home() / "reports" / repo_hash(repo_path)
 
 
 def save_report(repo_path: str | Path, kind: str, text: str,

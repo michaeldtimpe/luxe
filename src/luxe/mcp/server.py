@@ -21,6 +21,8 @@ tools call into them so cross-cutting policy is uniform.
 
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import json
 import os
 import time
@@ -35,7 +37,7 @@ import yaml
 # --- audit log -------------------------------------------------------------
 
 def audit_log_path() -> Path:
-    return Path.home() / ".luxe" / "mcp_audit.jsonl"
+    return luxe_home() / "mcp_audit.jsonl"
 
 
 def _redact_args(args: dict[str, Any]) -> dict[str, Any]:

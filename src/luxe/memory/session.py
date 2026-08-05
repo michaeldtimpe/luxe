@@ -12,6 +12,8 @@ while ~/.luxe/runs/<run_id>/events.jsonl stays the agent-internal view.
 
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import json
 import shutil
 import time
@@ -21,7 +23,7 @@ from pathlib import Path
 
 
 def sessions_root() -> Path:
-    return Path.home() / ".luxe" / "sessions"
+    return luxe_home() / "sessions"
 
 
 def session_dir(session_id: str) -> Path:

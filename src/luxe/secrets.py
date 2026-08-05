@@ -18,11 +18,12 @@ sanctioned local locations CLAUDE.md already names.
 
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import os
 import subprocess
-from pathlib import Path
 
-SECRETS_PATH = Path.home() / ".luxe" / "secrets.env"
+SECRETS_PATH = luxe_home() / "secrets.env"
 
 
 def _from_file(name: str) -> str:

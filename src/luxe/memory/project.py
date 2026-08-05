@@ -16,6 +16,8 @@ Code's own project memory).
 
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import hashlib
 import json
 import time
@@ -25,7 +27,7 @@ from pathlib import Path
 
 
 def memory_root() -> Path:
-    return Path.home() / ".luxe" / "memory"
+    return luxe_home() / "memory"
 
 
 def repo_hash(repo_root: str | Path, *, length: int = 16) -> str:

@@ -9,6 +9,8 @@ Layout under ~/.luxe/runs/<run-id>/:
 
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import json
 import time
 import uuid
@@ -17,7 +19,7 @@ from pathlib import Path
 
 
 def runs_root() -> Path:
-    return Path.home() / ".luxe" / "runs"
+    return luxe_home() / "runs"
 
 
 def run_dir(run_id: str) -> Path:

@@ -18,6 +18,8 @@ NOT the memory subsystem and does not inject `~/.claude` content into context
 
 from __future__ import annotations
 
+from luxe.paths import luxe_home
+
 import importlib
 import os
 import re
@@ -216,7 +218,7 @@ def list_palettes() -> list[str]:
 # Persisted palette preference (2026-07-30): `/theme <name>` sticks across
 # sessions. One name in a plain file — NOT the memory subsystem, and read at
 # startup with flag/env taking precedence (cli._resolve_theme_name).
-_PREF_PATH = Path.home() / ".luxe" / "theme"
+_PREF_PATH = luxe_home() / "theme"
 
 
 def save_preference(name: str) -> bool:
