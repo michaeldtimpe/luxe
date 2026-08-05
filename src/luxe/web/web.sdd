@@ -49,6 +49,17 @@ reintroduce any of them.
   loop (tools.sdd)
 - Report emptiness honestly: a page that extracted to almost nothing must say
   so and name the `render=true` retry, not return a blank-looking success
+- Keep the interactive page session (`page.py`, tool `web_page`, 2026-08-05)
+  on ONE dedicated daemon thread that owns the sync-Playwright driver: tool
+  calls post ops and wait with a deadline (TUI turns run on varying worker
+  threads and sync Playwright is thread-bound). One page per process; popups
+  are closed at birth; a caller-deadline miss or an egress violation after
+  ANY action HARD-CLOSES the session (a click can navigate anywhere — the
+  guard re-runs on every hop, and non-public space is a stop, not a detour).
+  `/web` off and interpreter exit close it; a cancelled turn merely abandons
+  its wait and the session survives. Withhold `web_page` when
+  `browser.availability()` says no. Form submissions that log in, purchase,
+  post, or message ride the tool description's explicit-ask rule
 - Withhold `web_search` / `web_answer` entirely when their respective key
   does not resolve. A tool that can only answer "no API key" is worse than
   no tool

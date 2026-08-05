@@ -256,6 +256,9 @@ def _web_mode(args, ctx: CommandContext) -> CommandResult:
 
     ctx.session.web_enabled = not ctx.session.web_enabled
     if not ctx.session.web_enabled:
+        # A live interactive page IS network egress — it dies with the gate.
+        from luxe.web.page import close_session
+        close_session()
         ctx.console.print("web tools: [green]OFF[/] "
                           "[dim](no network egress from tools; /web to enable)[/]")
         return CommandResult(handled=True)
@@ -286,9 +289,13 @@ def _web_mode(args, ctx: CommandContext) -> CommandResult:
     if avail.ok:
         ctx.console.print("  [green]·[/] headless render available "
                           "[dim](render=true)[/]")
+        ctx.console.print("  [green]·[/] web_page available [dim](interactive "
+                          "page session — open/click/type)[/]")
     else:
         ctx.console.print(f"  [yellow]·[/] headless render unavailable [dim]— "
                           f"{avail.reason}; fix: {avail.fix}[/]")
+        ctx.console.print("  [yellow]·[/] web_page withheld [dim]— needs the "
+                          "render fix above[/]")
     return CommandResult(handled=True)
 
 

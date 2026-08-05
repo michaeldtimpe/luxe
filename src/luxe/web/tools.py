@@ -161,14 +161,87 @@ def make_web_answer_tool():
                    parameters=_ANSWER_PARAMS), _fn
 
 
+_PAGE_DESC = (
+    "Drive a persistent interactive page in a headless browser — the acting "
+    "counterpart to web_fetch, which only reads. One page session per chat "
+    "session; every action returns the page's current content plus a numbered "
+    "list of interactable elements. Actions: open (url), read, click "
+    "(target = a number from the listing, or a CSS selector), type (target + "
+    "text, submit=true presses Enter), scroll (direction up/down, for "
+    "lazy-loading pages), back, close. Prefer web_fetch for plain reading — "
+    "it is much faster; use web_page only when you must interact. Only "
+    "public hosts are reachable, and navigating anywhere non-public closes "
+    "the session. NEVER submit forms that log in, purchase, post publicly, "
+    "or send messages unless the user explicitly asked for that action."
+)
+
+_PAGE_PARAMS = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string",
+                   "enum": ["open", "read", "click", "type", "scroll",
+                            "back", "close"],
+                   "description": "What to do with the page."},
+        "url": {"type": "string",
+                "description": "For open: the address to load."},
+        "target": {"type": "string",
+                   "description": "For click/type: an index from the "
+                                  "interactable listing (e.g. \"3\") or a "
+                                  "CSS selector."},
+        "text": {"type": "string", "description": "For type: what to enter."},
+        "submit": {"type": "boolean",
+                   "description": "For type: press Enter afterwards."},
+        "direction": {"type": "string", "enum": ["up", "down"],
+                      "description": "For scroll (default down)."},
+        "max_chars": {"type": "integer",
+                      "description": "Cap on returned content (default 12000)."},
+    },
+    "required": ["action"],
+}
+
+
+def make_web_page_tool():
+    """(ToolDef, ToolFn) for `web_page`. Caller withholds it when rendering
+    is unavailable — an interactive tool that can only say 'no browser' is
+    worse than no tool at all."""
+    from luxe.web import page as page_mod
+
+    def _fn(args: dict) -> tuple[str, str | None]:
+        args = args or {}
+        action = str(args.get("action") or "").strip()
+        if not action:
+            return "", "web_page: `action` is required"
+        if action == "close":
+            page_mod.close_session()
+            return "page session closed", None
+        max_chars = int(args.get("max_chars") or 12_000)
+        try:
+            snap = page_mod.get_session().op(
+                action,
+                url=args.get("url"), target=args.get("target"),
+                text=args.get("text"), submit=bool(args.get("submit")),
+                direction=args.get("direction"),
+            )
+            return page_mod.render_snapshot(snap, max_chars=max_chars), None
+        except WebError as e:
+            return "", str(e)
+        except Exception as e:
+            return "", f"web_page failed: {type(e).__name__}: {e}"
+
+    return ToolDef(name="web_page", description=_PAGE_DESC,
+                   parameters=_PAGE_PARAMS), _fn
+
+
 def web_tools(*, include_search: bool = True) -> tuple[list, dict]:
     """All enabled web tools as (defs, fns) for the extra-tool seam.
 
     `web_search` and `web_answer` are each included only when their OWN key
-    resolves (they are separate subscriptions) — a tool that can only ever
-    return "no API key" is worse than no tool at all.
+    resolves (they are separate subscriptions), and `web_page` only when a
+    browser can actually launch — a tool that can only ever return "no API
+    key" / "no browser" is worse than no tool at all.
     """
     from luxe.web.answers import configured as answers_configured
+    from luxe.web.browser import availability
     from luxe.web.search import configured
 
     defs, fns = [], {}
@@ -181,6 +254,10 @@ def web_tools(*, include_search: bool = True) -> tuple[list, dict]:
         fns[d.name] = f
     if include_search and answers_configured():
         d, f = make_web_answer_tool()
+        defs.append(d)
+        fns[d.name] = f
+    if availability().ok:
+        d, f = make_web_page_tool()
         defs.append(d)
         fns[d.name] = f
     return defs, fns
