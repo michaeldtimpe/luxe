@@ -26,9 +26,14 @@ untouched throughout:
    guarded — the first cut closed its own page; the live drill caught it);
    `/web` off closes the session. Live-drilled on m5: example.com → click
    [0] → iana.org → back → localhost refused → clean close. Tests are fully
-   fake-driver (CI needs no Chromium); playwright was restored to m5's venv
-   via `uv pip install playwright` (the known uv-sync extras prune — fleet
-   hosts without it simply don't get the tool, and `/web` says why).
+   fake-driver (CI needs no Chromium). **Deployed fleet-wide same day**:
+   playwright + Chromium headless shell provisioned on m1 and neo, the same
+   drill green on both, and — after the extras-prune bit one final time
+   (the old `luxe update` code pruned playwright WHILE pulling the fix; the
+   new sync list only applies from the next run) — `web` is now in
+   `luxe update`'s canonical sync (`df4dcbf`, chat+dev+analyzers+web), so
+   the capability survives updates on every host. The Chromium download
+   lives outside the venv and was never at risk.
 4. Also this session: m1 seedkeys verified current (dotfiles `d77b84b`,
    `seedkeys-env` present, 3 relay tokens); m4 confirmed unreachable/
    unprovisioned — **user is handling m4 personally**; CI green on all
