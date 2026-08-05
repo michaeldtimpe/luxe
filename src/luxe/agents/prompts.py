@@ -436,6 +436,25 @@ PLANEPROXY_HINT = (
 )
 
 
+# Chat-only (2026-08-05): injected when the session's project is a git repo
+# AND write mode is on — the only state where the model can actually run git
+# (bash is withheld read-only; `git` is on the restricted allowlist). The
+# discipline rides the prompt because a small model's defaults — command
+# chains, merge pulls, unrequested pushes — are each wrong here.
+GIT_WORKFLOW_HINT = (
+    "This project is a git repository and write mode is on, so git works "
+    "through the bash tool. Git discipline for this session: run ONE git "
+    "command per bash call — the restricted shell rejects `&&`/`;` chains, so "
+    "stage and commit are separate calls. Inspect before you mutate: check "
+    "git status or git_diff first so you know exactly what a commit will "
+    "contain, and stage paths explicitly rather than `git add .`. Commit "
+    "subjects are concise and imperative. Integrate remote changes by "
+    "rebasing (git pull --rebase), never by creating a merge commit. Do NOT "
+    "push, force-push, rewrite published history, or delete branches unless "
+    "the user explicitly asked for that operation."
+)
+
+
 NO_TOOLS_MODEL_HINT = (
     "The model serving this turn cannot call tools: its chat template has no "
     "tool support, so luxe has withheld the tool surface rather than send tools "

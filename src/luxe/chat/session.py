@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from luxe.agents.prompts import (
+    GIT_WORKFLOW_HINT,
     NO_PROJECT_CHAT_HINT,
     NO_TOOLS_MODEL_HINT,
     PLANEPROXY_HINT,
@@ -170,6 +171,11 @@ class ChatSession:
             mode_hints.append(NO_PROJECT_CHAT_HINT)
         if not self.write_enabled:
             mode_hints.append(READ_ONLY_CHAT_HINT)
+        elif self.project_kind == "git":
+            # Write mode in a git repo is the one state where the model can
+            # actually run git; carry the user's workflow discipline (one
+            # command per call, rebase not merge, no unrequested pushes).
+            mode_hints.append(GIT_WORKFLOW_HINT)
         if self.planeproxy_present:
             # This machine runs the user's SSH-tunnel tool: point the model
             # at planeproxy_diag (and its no-CA/no-bypass doctrine) up front.
