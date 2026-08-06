@@ -110,6 +110,29 @@ when reached for — availability over capability. Concretely:
 - gemma is out of the roster (no tool support); the bench apparatus is cold
   storage — capability re-benching only on explicit request.
 
+## Fleet sibling — neo (micro-mind) and where model truth lives
+
+luxe is the living center of the fleet's model/agent work; the sibling repos
+are satellites and their m5 clones go stale (that bit twice — see micro-mind's
+lessons.md 2026-08-03 "stale clone" entry). Current reality, recorded here so
+a luxe session doesn't have to rediscover it:
+
+- **neo** (A18 Pro, 8 GB) runs **micro-mind**, whose champion since the
+  2026-08-03 neo bake-offs is **`Qwen3-4B-Instruct-2507-Q4_K_M`** (GGUF via
+  llama-server, ctx 16384, single-model — no fallback pair). It replaced
+  `qwen25-1.5b-instruct`: the 1.5B's 0% BFCL multi-turn floor is a size
+  artifact (lifts at 3B, closes at 4B), and the 4B is the smallest model
+  that passes luxe's real code drill on that box. Coder variants lost to
+  instruct at every size; 14B is Metal-unrunnable on 8 GB.
+- **neo-llm-bench** is marked *superseded for deployment* — canonical
+  historical record for the sub-2B era; its methodology stays reusable.
+- neo has no `hosts:` entry in chat.yaml **by design** (no local oMLX);
+  bare `luxe smoke` failing there is pinned in chat.sdd. neo's smoke is the
+  agentic drill against m5.
+- When a question touches micro-mind/neo state, trust the checkouts **on
+  neo** (`ssh neo`, `~/Downloads/{micro-mind,neo-llm-bench}`) or a freshly
+  fetched origin/main — never an unfetched m5 clone.
+
 ## Interactive front-end (`luxe chat` / `luxe compare`)
 
 Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`

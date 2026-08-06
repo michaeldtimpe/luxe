@@ -1,5 +1,17 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-08-06) — fleet doc sync: micro-mind's 4B champion recorded here
+
+luxe is the fleet's living project; sibling-repo state is now recorded in
+CLAUDE.md § "Fleet sibling — neo (micro-mind)". Occasion: the m5 clones of
+micro-mind and neo-llm-bench were stale (still 1.5B-era) and misled a
+champion question — both fast-forwarded to origin/main (micro-mind
+`2c141f4`→`32b12e0`, neo-llm-bench `95b7f18d`→`d6f32321`). Facts recorded:
+micro-mind's champion since 2026-08-03 is `Qwen3-4B-Instruct-2507-Q4_K_M`
+(ctx 16384, single-model, llama-server on neo); neo-llm-bench is superseded
+for deployment (canonical sub-2B record). The stale 2026-06-01 neo passage
+below now carries a supersession note. No code changes.
+
 ## ⇒ SESSION HANDOFF (2026-08-05, close-out) — git/gh workflow surface + interactive browsing
 
 Same-day follow-ons to the refactor cycle (below), all chat-only, goldens
@@ -1014,7 +1026,10 @@ which needs the optional `mlx` native module — pre-existing, env-gated).
 **Deployed 2026-06-01** to **m5**, **m1**, and **neo** — `luxe` symlinked into
 `/opt/homebrew/bin` on each (just type `luxe`); `OMLX_API_KEY` added to `~/.zshrc`
 on m1+neo. **m5 + m1** run the 35B champion via oMLX:8000 (model cached, key
-authenticates). **neo runs the micro-mind champion** (`Qwen2.5-1.5B-Instruct-Q8_0`
+authenticates). **neo runs the micro-mind champion** *(superseded 2026-08-03:
+micro-mind's champion is now `Qwen3-4B-Instruct-2507-Q4_K_M`, ctx 16384 — see
+CLAUDE.md § "Fleet sibling — neo"; the rest of this entry describes the 1.5B
+era)* (`Qwen2.5-1.5B-Instruct-Q8_0`
 GGUF — the 35B won't fit neo RAM) via **llama-server on :8080**, NOT oMLX (oMLX
 can't serve GGUF; luxe's Backend is OpenAI-compatible so it points straight at
 :8080). neo's `configs/chat.yaml` is pinned via `git update-index --skip-worktree`
