@@ -1286,6 +1286,30 @@ def _load_variants(path: Path) -> list[Variant]:
     return out
 
 
+def _clear_server_cache() -> None:
+    """Clear oMLX's prompt-cache tiers (hot RAM + SSD) via the admin API.
+
+    The `LUXE_BENCH_COLD_CACHE=1` hook — a port of micro-mind's
+    erase-between-reps determinism fix (its lessons.md 2026-08-06): at
+    temp=0 a cached vs cold prefix takes a different compute path, and the
+    numerical drift can flip near-tie argmax, so accumulated server cache
+    state is a hidden variable across fixtures and reps. Clearing before
+    every fixture makes each run start from identical server state.
+
+    Default OFF: the stock bench keeps oMLX's warm-cache behavior (85.4%
+    measured hit rate) and its request stream stays byte-identical; flip
+    the env only when chasing variance. Raises ModelStoreError on failure —
+    the caller decides loudness (preflight aborts the bench; the per-fixture
+    call surfaces as a fixture error).
+    """
+    from luxe.config import load_config
+    from luxe.modelstore import OmlxAdmin
+
+    cfg = load_config()
+    with OmlxAdmin(base_url=cfg.omlx_base_url) as admin:
+        admin.clear_caches()
+
+
 def main() -> int:
     _ensure_luxe_importable()
     parser = argparse.ArgumentParser(prog="luxe acceptance suite")
@@ -1393,6 +1417,14 @@ def main() -> int:
             print(f"  - {v.variant_id}  ({v.model_id})")
 
     overlay_dir = output / "_overlays" if variants else None
+    # Cold-cache mode preflight: fail the whole bench NOW if the clear
+    # endpoint is broken — a run where some fixtures cleared and some didn't
+    # is mixed-state, worse than either mode.
+    cold_cache = os.environ.get("LUXE_BENCH_COLD_CACHE") == "1"
+    if cold_cache:
+        _clear_server_cache()
+        print("cold-cache: ON — oMLX hot+SSD prompt cache cleared before "
+              "every fixture (LUXE_BENCH_COLD_CACHE=1)")
     # Per-variant aggregation buckets so we can emit a comparison table
     # at the end without re-reading from disk.
     by_variant: dict[str, list[tuple[FixtureResult, Diagnostics]]] = {}
@@ -1430,6 +1462,8 @@ def main() -> int:
                   f"{eta_str}  {tag}{f.id}  [{f.task_type}]  {f.goal[:80]}")
             print(f"      grading: {_describe_outcome(f)}")
             try:
+                if cold_cache:
+                    _clear_server_cache()
                 r, d = run_fixture(
                     f, output, work_dir,
                     force=args.force,
