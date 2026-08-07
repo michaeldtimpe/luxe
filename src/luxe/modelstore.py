@@ -460,8 +460,9 @@ class HFModel:
 class OmlxAdmin:
     """Minimal client for the oMLX admin API (cookie session, not Bearer).
 
-    Only the model-fetch routes are wrapped. Every call raises
-    `ModelStoreError` on failure — callers surface it, never a raw httpx error.
+    Only the model-fetch routes and the prompt-cache clear are wrapped. Every
+    call raises `ModelStoreError` on failure — callers surface it, never a
+    raw httpx error.
     """
 
     def __init__(self, base_url: str = "http://127.0.0.1:8000", api_key: str = "",
@@ -520,6 +521,24 @@ class OmlxAdmin:
             return r.json()
         except (httpx.HTTPError, OSError, ValueError) as e:
             raise ModelStoreError(f"oMLX admin POST {path} failed: {e}") from e
+
+    # -- server prompt cache -------------------------------------------------
+
+    def clear_caches(self) -> dict:
+        """Clear both of oMLX's prompt-cache tiers (hot RAM + SSD blocks).
+
+        Used by the bench's `LUXE_BENCH_COLD_CACHE` mode: at temp=0 a cached
+        vs cold prefix takes a different compute path, and the numerical
+        drift can flip near-tie argmax — accumulated server cache state is a
+        hidden variable across fixtures (the mechanism behind micro-mind's
+        06-edit-file flake, measured 2026-08-06). Clearing both tiers puts
+        the server in the same state before every fixture. Not called from
+        any interactive path — chat wants the cache warm.
+        """
+        return {
+            "hot": self._post("/admin/api/hot-cache/clear"),
+            "ssd": self._post("/admin/api/ssd-cache/clear"),
+        }
 
     # -- model fetch ---------------------------------------------------------
 

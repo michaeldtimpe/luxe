@@ -287,6 +287,30 @@ class TestOmlxAdmin:
         with pytest.raises(ms.ModelStoreError, match="unreachable"):
             a.login()
 
+    def test_clear_caches_hits_both_tiers(self):
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(200, json={"success": True})
+
+        a = _admin(handler)
+        out = a.clear_caches()
+        assert calls == ["/admin/api/login",
+                         "/admin/api/hot-cache/clear",
+                         "/admin/api/ssd-cache/clear"]
+        assert set(out) == {"hot", "ssd"}
+
+    def test_clear_caches_failure_is_a_modelstore_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/admin/api/login":
+                return httpx.Response(200, json={"success": True})
+            return httpx.Response(500, json={"detail": "boom"})
+
+        a = _admin(handler)
+        with pytest.raises(ms.ModelStoreError, match="hot-cache/clear"):
+            a.clear_caches()
+
     def test_search_parses_hits(self):
         def handler(request):
             if request.url.path == "/admin/api/login":
