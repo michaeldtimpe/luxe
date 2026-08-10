@@ -57,9 +57,10 @@ class RunFlags:
     post_write_idle_repeats: bool = False
 
     # Treat a turn truncated at max_tokens with no tool call as recoverable
-    # (nudge + continue) instead of terminal. Opt-in: default OFF keeps the
-    # benchmark path byte-identical. See agents.sdd "Truncated-turn retry".
-    truncated_turn_retry: bool = False
+    # (nudge + continue) instead of terminal. DEFAULT-ON since 2026-08-10:
+    # the A/B took maintain_suite 27/30 -> 30/30 with zero regressions.
+    # Set to "0" to disable for ablation. See agents.sdd "Truncated-turn retry".
+    truncated_turn_retry: bool = True
 
     # Context compaction (default ON since 2026-05-28)
     tiered_compact: bool = True
@@ -126,8 +127,9 @@ class RunFlags:
             post_write_idle_repeats=(
                 e.get("LUXE_POST_WRITE_IDLE_REPEATS") == "1"
             ),
+            # Default ON: only the exact string "0" disables it.
             truncated_turn_retry=(
-                e.get("LUXE_TRUNCATED_TURN_RETRY") == "1"
+                e.get("LUXE_TRUNCATED_TURN_RETRY", "1") != "0"
             ),
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),

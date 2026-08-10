@@ -448,9 +448,32 @@ wall reduction; 2 protected wrong_target instances healed; zero new damages.
 - See `src/luxe/agents/agents.sdd` § "forge-hybrid Phase 2 (A) compaction
   invariants" for the pinned tuning rationale + counter-discipline rules.
 
+## Default-ON: truncated-turn retry
+
+`LUXE_TRUNCATED_TURN_RETRY` defaults to **ON** as of 2026-08-10. A turn that
+hits `max_tokens_per_turn` returns `finish_reason="length"` and, mid-prose,
+carries no tool call. The loop's terminal test (`if not tool_calls:`) never
+consulted `finish_reason`, so a CUT-OFF turn was indistinguishable from a model
+that finished and chose to answer: the run ended `aborted=False` with no diff,
+no gate fired, and the harness recorded a clean completion. The loop now
+replays the cut-off text, nudges, and continues — bounded at 2 retries.
+
+- **Disable for ablation**: `LUXE_TRUNCATED_TURN_RETRY=0` (only the exact
+  string "0"). **If a workload behaves unexpectedly, try this alongside
+  `LUXE_TIERED_COMPACT=0`.**
+- Validated at 3 reps × 10 fixtures × 2 arms: maintain_suite 27/30 → **30/30**,
+  score 111 → 120, zero regressions, +22.5% tokens / +7.8% wall, and 3/3
+  firings on genuine cap hits with none spurious.
+- **The evidence is narrow**: it fired 3 times, all on one fixture — the suite
+  holds exactly one capped-turn `implement` trajectory. No-harm is broad,
+  it-helps is n=1. See `agents.sdd` § "Truncated-turn retry" and
+  `acceptance/truncated_turn_ab_2026_08_10/REPORT.md`.
+- `terminal_turn_truncated` telemetry stays UNGATED — it is the only record
+  distinguishing "finished" from "cut off".
+
 ## Opt-in modes (default off, byte-identical when disabled)
 
-Seven subsystems are gated by env vars and default to **off**. Each has
+Six subsystems are gated by env vars and default to **off**. Each has
 invariants in its `.sdd` you must read before enabling:
 
 - **Reflect / verify stage** (`LUXE_REFLECT=1`) — a separate `backend.chat`
@@ -486,16 +509,6 @@ invariants in its `.sdd` you must read before enabling:
   known abort — m1's code-drill failure was a step-budget problem, fixed
   separately. **UNBENCHED — do not flip the default without a maintain_suite
   run.** See `agents.sdd` § "Post-write idle repeat counting".
-
-- **Truncated-turn retry** (`LUXE_TRUNCATED_TURN_RETRY=1`) — a turn that hits
-  `max_tokens_per_turn` returns `finish_reason="length"`, and mid-prose it has
-  no tool call; the loop's terminal test never consulted `finish_reason`, so a
-  CUT-OFF turn was indistinguishable from a finished one and the run ended
-  clean with no diff. This nudges and continues (bounded at 2). **BENCHED
-  2026-08-10 and it wins** — 27/30 -> 30/30, score 111 -> 120, zero
-  regressions, +22.5% tokens, 3/3 firings genuine. Still default OFF pending
-  the promotion call; see `agents.sdd` § "Truncated-turn retry" and
-  `acceptance/truncated_turn_ab_2026_08_10/REPORT.md`.
 
 If you toggle any of these on, walk the relevant `.sdd` section first —
 unbiased flips can silently change benchmark behavior.
