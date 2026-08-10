@@ -188,6 +188,41 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   read) — maintain_suite fixtures are too small to produce it. Do not re-run
   this suite expecting a different answer.
 
+### Truncated-turn retry (pinned 2026-08-10, opt-in, BENCHED)
+
+- `LUXE_TRUNCATED_TURN_RETRY=1` (`RunFlags.truncated_turn_retry`): when a turn
+  returns `finish_reason == "length"` AND carries no tool call, replay the
+  cut-off text into history, append `_TRUNCATED_TURN_MESSAGE`, and CONTINUE
+  instead of taking the terminal path. Bounded by
+  `_TRUNCATED_TURN_MAX_RETRIES` (2). **Default OFF; byte-identical when unset.**
+- Why: the loop's terminal test is `if not tool_calls:` and it never consulted
+  `finish_reason`, so a turn CUT OFF mid-sentence was indistinguishable from a
+  model that finished and chose to answer. The run ended `aborted=False` with
+  no diff and no gate fired.
+- Founding instance: lpe-rope-calc-implement-strict-flag, 6/6 identical runs,
+  exactly 8,192 completion tokens (the cap), cut off mid-word, scored 1/5 for
+  "produced no diff" while reporting a clean completion. Neither
+  write_pressure (needs >=10 tool calls; had 3) nor prose_burst (needs 0; had
+  3) can see that shape.
+- ONLY `"length"` triggers it. `"stop"` is a model that chose to end, and
+  retrying that would change behaviour on every ordinary completion in the
+  suite; an unknown reason is not evidence of truncation. A truncated turn that
+  DID make a tool call is left alone — it already acted.
+- **A/B verdict (2026-08-10): all four pre-registered criteria met.** 3 reps x
+  10 fixtures x 2 arms: 27/30 -> 30/30, score 111 -> 120, zero regressions,
+  tokens +22.5% / wall +7.8% (ceiling was ~2x), and 3/3 firings landed on
+  genuine cap hits with zero spurious fires. `terminal_turn_truncated` went
+  3 -> 0 while `truncated_turn_retry` went 0 -> 3; all recovered on retry #1.
+  Report: `acceptance/truncated_turn_ab_2026_08_10/REPORT.md`.
+- Caveat on the evidence: the mechanism fired 3 times, all on ONE fixture. The
+  no-harm result is broad (27 untouched runs); the it-helps result is n=1
+  fixture, because the suite contains exactly one capped-turn `implement`
+  trajectory. Wider evidence needs SWE-bench.
+- `terminal_turn_truncated` is UNGATED telemetry (additive-only, per the
+  telemetry section above): it fires in both arms and is the only record that
+  distinguishes "finished" from "cut off". Keep it ungated whatever the
+  default becomes.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —

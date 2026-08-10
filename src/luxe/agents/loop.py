@@ -60,6 +60,9 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _HABITUATION_EXIT_MIN_STEP,
     _MAX_CONSECUTIVE_REPEAT_STEPS,
     _POST_WRITE_IDLE_MAX,
+    _TRUNCATED_TURN_MAX_RETRIES,
+    _TRUNCATED_TURN_MESSAGE,
+    TruncatedTurnGuard,
     _PROSE_BURST_MAX_STEP,
     _PROSE_BURST_MESSAGE,
     _PROSE_BURST_MIN_DELTA,
@@ -371,6 +374,8 @@ def run_agent(
     # v1.9 semantics (no convergence-based gating) when disabled.
     convergence_gate_enabled = flags.convergence_gate
     post_write_idle_repeats = flags.post_write_idle_repeats
+    truncated_turn_retry_enabled = flags.truncated_turn_retry
+    truncated_turn_retries_used = 0
     # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
     # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
     # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
@@ -1017,6 +1022,40 @@ def run_agent(
                     )
 
         if not tool_calls:
+            # Truncated-turn gate (2026-08-10). A response cut off at
+            # max_tokens comes back finish_reason="length"; mid-prose it also
+            # carries no tool calls, and the terminal test below cannot tell
+            # that from a model that finished and chose to answer. Nudge and
+            # continue instead of ending a run that never acted. Bounded, and
+            # a no-op unless the switch is on — see agents.sdd.
+            tt = TruncatedTurnGuard.should_fire(
+                truncated_turn_retry_enabled=truncated_turn_retry_enabled,
+                finish_reason=getattr(resp, "finish_reason", "") or "",
+                has_tool_calls=bool(tool_calls),
+                retries_used=truncated_turn_retries_used,
+            )
+            if tt is not None:
+                # Record the cut-off text before the nudge so the transcript
+                # shows what the model was mid-way through saying.
+                if resp.text:
+                    messages.append({"role": "assistant", "content": resp.text})
+                messages.append({
+                    "role": "user",
+                    "content": _TRUNCATED_TURN_MESSAGE,
+                    "_luxe_nudge": True,
+                    "_luxe_nudge_type": TruncatedTurnGuard.nudge_type,
+                })
+                truncated_turn_retries_used += 1
+                if log_calls:
+                    append_event(
+                        run_id, "truncated_turn_retry",
+                        phase=phase, step=step,
+                        retries_used=truncated_turn_retries_used,
+                        max_retries=_TRUNCATED_TURN_MAX_RETRIES,
+                        completion_tokens=resp.timing.completion_tokens,
+                    )
+                continue
+
             # SpecDD Lever 1 min_tool_calls gate: before declaring the run
             # finished, check whether the spec expects more tool calls than
             # the model has emitted. If so, inject a reprompt and continue
@@ -1046,6 +1085,21 @@ def run_agent(
                     if resp.text:
                         messages.append({"role": "assistant", "content": resp.text})
                     continue
+            # TELEMETRY ONLY — additive, ungated, never touches control flow or
+            # `messages` (agents.sdd "Tool-call telemetry events"). A run that
+            # ends here on finish_reason="length" was CUT OFF mid-answer, not
+            # finished; without this the records cannot tell the two apart,
+            # which is how the strict-flag fixture read as a clean completion
+            # for six identical runs.
+            if log_calls and (getattr(resp, "finish_reason", "") or "") == "length":
+                append_event(
+                    run_id, "terminal_turn_truncated",
+                    phase=phase, step=step,
+                    completion_tokens=resp.timing.completion_tokens,
+                    final_text_chars=len(resp.text or ""),
+                    retry_enabled=truncated_turn_retry_enabled,
+                    retries_used=truncated_turn_retries_used,
+                )
             result.final_text = resp.text
             break
 

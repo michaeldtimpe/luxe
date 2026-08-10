@@ -56,6 +56,11 @@ class RunFlags:
     # otherwise. See agents.sdd "post-write idle repeat counting".
     post_write_idle_repeats: bool = False
 
+    # Treat a turn truncated at max_tokens with no tool call as recoverable
+    # (nudge + continue) instead of terminal. Opt-in: default OFF keeps the
+    # benchmark path byte-identical. See agents.sdd "Truncated-turn retry".
+    truncated_turn_retry: bool = False
+
     # Context compaction (default ON since 2026-05-28)
     tiered_compact: bool = True
     tiered_compact_threshold: float = DEFAULT_TIERED_COMPACT_THRESHOLD
@@ -120,6 +125,9 @@ class RunFlags:
             convergence_gate=e.get("LUXE_CONVERGENCE_GATE") == "1",
             post_write_idle_repeats=(
                 e.get("LUXE_POST_WRITE_IDLE_REPEATS") == "1"
+            ),
+            truncated_turn_retry=(
+                e.get("LUXE_TRUNCATED_TURN_RETRY") == "1"
             ),
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),
