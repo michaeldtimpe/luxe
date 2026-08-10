@@ -71,13 +71,18 @@ acceptance/hygiene_2026_07/*
 # worked to and the REPORT is what the verifying session checked against, so
 # both are the deliverable. Same treatment as the hygiene sweep above.
 #
-# NOT allowlisted: acceptance/mcp_modules_2026_08/. That cycle's own contract
-# says the show and audio modules are private — "no private hostnames, paths,
-# show names, or audio tooling in the public luxe repo" — and its plan/REPORT
-# name the private repo, private project dirs, dotfiles relay config and an
-# ssh passphrase-backup filename. This repo is public, so those two documents
-# stay local under the default acceptance/* ignore. Do not add a negation for
-# them without scrubbing first.
+# mcp_modules_2026_08 ships REDACTED. That cycle's contract requires the show
+# and audio modules stay private ("no private hostnames, paths, show names, or
+# audio tooling in the public luxe repo") and the raw documents name the
+# private repos, project dirs and an ssh key backup. plan.md / REPORT.md are
+# scrubbed to placeholders; the unredacted plan.private.md / REPORT.private.md
+# sit beside them and are held out by the acceptance/* default above — only
+# the two scrubbed names are negated below, so a new *.private.md is ignored
+# by default rather than by an exclusion someone has to remember to add.
+!acceptance/mcp_modules_2026_08/
+acceptance/mcp_modules_2026_08/*
+!acceptance/mcp_modules_2026_08/plan.md
+!acceptance/mcp_modules_2026_08/REPORT.md
 !acceptance/operability_2026_08/
 acceptance/operability_2026_08/*
 !acceptance/operability_2026_08/plan.md
