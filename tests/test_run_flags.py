@@ -33,11 +33,11 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.action_density_gate is False
     assert f.convergence_gate is False
     assert f.post_write_idle_repeats is False
-    assert f.truncated_turn_retry is False
     assert f.respond_terminal is False
     assert f.adaptive_policy is False
     # The three that are NOT off-by-default:
     assert f.tiered_compact is True                       # default-ON 2026-05-28
+    assert f.truncated_turn_retry is True                 # default-ON 2026-08-10
     assert f.adaptive_no_write is True
     assert f.adaptive_score_trend is True
     assert f.tiered_compact_threshold == DEFAULT_TIERED_COMPACT_THRESHOLD
@@ -69,7 +69,6 @@ OPT_IN = [
     ("LUXE_RESPOND_TERMINAL", "respond_terminal"),
     ("LUXE_ADAPTIVE_POLICY", "adaptive_policy"),
     ("LUXE_POST_WRITE_IDLE_REPEATS", "post_write_idle_repeats"),
-    ("LUXE_TRUNCATED_TURN_RETRY", "truncated_turn_retry"),
 ]
 
 
@@ -90,6 +89,17 @@ def test_opt_in_switches_require_exactly_one(var, field, value, expected):
 ])
 def test_tiered_compact_is_on_unless_it_is_exactly_zero(value, expected):
     assert RunFlags.from_env({"LUXE_TIERED_COMPACT": value}).tiered_compact is expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("0", False),          # the ONLY disabling value
+    ("1", True), ("", True), ("no", True), ("false", True),
+])
+def test_truncated_turn_retry_is_on_unless_it_is_exactly_zero(value, expected):
+    # Promoted to default-ON 2026-08-10 after the maintain_suite A/B; it now
+    # follows the tiered_compact spelling, NOT the opt-in "only 1" spelling.
+    got = RunFlags.from_env({"LUXE_TRUNCATED_TURN_RETRY": value})
+    assert got.truncated_turn_retry is expected
 
 
 @pytest.mark.parametrize("field,var", [

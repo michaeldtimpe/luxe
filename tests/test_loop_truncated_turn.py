@@ -17,7 +17,11 @@ Verified against the live endpoint before this was written: oMLX returns
 `finish_reason='length'` when a generation is capped, and `Backend` propagates
 it — so unlike an earlier switch, this one can actually fire.
 
-Default OFF: with the switch unset the loop must behave exactly as before.
+DEFAULT-ON since 2026-08-10, after the maintain_suite A/B took the suite
+27/30 -> 30/30 with zero regressions
+(`acceptance/truncated_turn_ab_2026_08_10/REPORT.md`). The switch now follows
+the tiered_compact spelling: only the exact string "0" disables it, which is
+the ablation path these tests pin.
 """
 
 from __future__ import annotations
@@ -109,24 +113,37 @@ def _nudges(backend) -> list[dict]:
             if m.get("_luxe_nudge_type") == "truncated_turn"]
 
 
-class TestDefaultOffIsUnchanged:
-    def test_truncated_turn_is_terminal_by_default(self, monkeypatch):
+class TestDefaultOn:
+    def test_a_truncated_turn_is_retried_with_no_env_set(self, monkeypatch):
+        """The promoted default: unset means ON."""
         monkeypatch.delenv("LUXE_TRUNCATED_TURN_RETRY", raising=False)
+        backend, result = _run([_truncated(), _edit(), _stopped()])
+        assert len(backend.calls) == 3
+        assert result.tool_calls_total == 1
+        assert len(_nudges(backend)) == 1
+
+    def test_exactly_zero_restores_the_old_terminal_behaviour(self,
+                                                              monkeypatch):
+        """The ablation path. One chat, then the loop ends on the tool-call-
+        free response and the scripted edit is never reached — the pre-fix
+        behaviour, preserved for ablation."""
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "0")
         backend, result = _run([_truncated(), _edit()])
-        # One chat, then the loop ends on the tool-call-free response — the
-        # scripted edit is never reached. This is the pre-fix behaviour.
         assert len(backend.calls) == 1
         assert result.tool_calls_total == 0
         assert _nudges(backend) == []
 
-    @pytest.mark.parametrize("value", ["0", "", "true", "yes", "2", " 1"])
-    def test_only_the_exact_string_one_enables_it(self, monkeypatch, value):
+    @pytest.mark.parametrize("value", ["1", "", "no", "false", "true", "2"])
+    def test_only_the_exact_string_zero_disables_it(self, monkeypatch, value):
         monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", value)
-        backend, _ = _run([_truncated(), _edit()])
-        assert len(backend.calls) == 1
+        backend, _ = _run([_truncated(), _edit(), _stopped()])
+        assert len(backend.calls) == 3, f"{value!r} must not disable the retry"
 
 
 class TestEnabled:
+    """Explicitly set to "1" — same as the default, kept explicit so these
+    stay meaningful if the default ever moves again."""
+
     def test_truncated_turn_is_nudged_and_the_model_can_recover(self,
                                                                 monkeypatch):
         monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "1")

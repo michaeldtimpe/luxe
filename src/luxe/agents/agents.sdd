@@ -188,13 +188,15 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   read) — maintain_suite fixtures are too small to produce it. Do not re-run
   this suite expecting a different answer.
 
-### Truncated-turn retry (pinned 2026-08-10, opt-in, BENCHED)
+### Truncated-turn retry (pinned 2026-08-10, DEFAULT-ON, BENCHED)
 
 - `LUXE_TRUNCATED_TURN_RETRY=1` (`RunFlags.truncated_turn_retry`): when a turn
   returns `finish_reason == "length"` AND carries no tool call, replay the
   cut-off text into history, append `_TRUNCATED_TURN_MESSAGE`, and CONTINUE
   instead of taking the terminal path. Bounded by
-  `_TRUNCATED_TURN_MAX_RETRIES` (2). **Default OFF; byte-identical when unset.**
+  `_TRUNCATED_TURN_MAX_RETRIES` (2). **DEFAULT-ON since 2026-08-10** — only
+  the exact string "0" disables it, the tiered_compact spelling. Set
+  `LUXE_TRUNCATED_TURN_RETRY=0` for ablation.
 - Why: the loop's terminal test is `if not tool_calls:` and it never consulted
   `finish_reason`, so a turn CUT OFF mid-sentence was indistinguishable from a
   model that finished and chose to answer. The run ended `aborted=False` with
@@ -214,10 +216,14 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   genuine cap hits with zero spurious fires. `terminal_turn_truncated` went
   3 -> 0 while `truncated_turn_retry` went 0 -> 3; all recovered on retry #1.
   Report: `acceptance/truncated_turn_ab_2026_08_10/REPORT.md`.
-- Caveat on the evidence: the mechanism fired 3 times, all on ONE fixture. The
-  no-harm result is broad (27 untouched runs); the it-helps result is n=1
-  fixture, because the suite contains exactly one capped-turn `implement`
-  trajectory. Wider evidence needs SWE-bench.
+- Promoted to default-ON on that evidence (user decision, 2026-08-10). Caveat
+  recorded because it governs any future re-tune: the mechanism fired 3 times,
+  all on ONE fixture. The no-harm result is broad (27 untouched runs); the
+  it-helps result is n=1 fixture, because the suite contains exactly one
+  capped-turn `implement` trajectory. **If a workload behaves unexpectedly,
+  `LUXE_TRUNCATED_TURN_RETRY=0` is the first thing to try** — wider evidence
+  than one fixture has never been gathered, and SWE-bench is where it would
+  come from.
 - `terminal_turn_truncated` is UNGATED telemetry (additive-only, per the
   telemetry section above): it fires in both arms and is the only record that
   distinguishes "finished" from "cut off". Keep it ungated whatever the
