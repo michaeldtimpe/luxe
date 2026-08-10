@@ -83,6 +83,12 @@ acceptance/hygiene_2026_07/*
 acceptance/mcp_modules_2026_08/*
 !acceptance/mcp_modules_2026_08/plan.md
 !acceptance/mcp_modules_2026_08/REPORT.md
+# Bench A/B verdicts: the REPORT is the deliverable and agents.sdd cites it by
+# path, so it must exist in the repo. The 60 runs of per-fixture state/result
+# JSON behind it stay ignored — regenerable, and the report carries the numbers.
+!acceptance/pwir_ab_2026_08_10/
+acceptance/pwir_ab_2026_08_10/*
+!acceptance/pwir_ab_2026_08_10/REPORT.md
 !acceptance/operability_2026_08/
 acceptance/operability_2026_08/*
 !acceptance/operability_2026_08/plan.md
