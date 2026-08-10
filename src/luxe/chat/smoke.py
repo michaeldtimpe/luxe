@@ -222,14 +222,15 @@ def _make_drill_repo(kind: str, files: dict[str, str]):
 #: which lands the fix and concludes in 5–6 steps.
 _CODE_DRILL_STEPS = 12
 
-#: Low-bit quants need headroom to CONCLUDE, not to solve. Measured on m1
-#: (2026-08-10, Qwen3.6-35B-A3B-4bit): the correct one-line fix landed at step
-#: 4 — pytest green, exactly the target file changed — and the model then made
-#: seven identical read_file calls straight into the 12-step cap, so the drill
-#: reported `aborted` and never reached its own tests/diff assertions. The 6-bit
-#: on the same host passed in 6 steps. This is the documented "will not
-#: self-package" failure mode (see CLAUDE.md gitkit findings), amplified by the
-#: quant — a conclusion problem, not a capability one, so the fix is headroom.
+#: Low-bit quants need headroom. Measured on m1 (2026-08-10,
+#: Qwen3.6-35B-A3B-4bit) from ~/.luxe/runs/smoke-code/events.jsonl: the run
+#: takes 14 tool calls over 13 steps, because it probes with SEVEN bash calls
+#: before editing at step 9, then verifies with three more. The work is
+#: correct — pytest green, exactly the target file changed — it simply does
+#: not fit in 12 steps, so the drill reported `aborted` and never reached its
+#: own tests/diff assertions. The 6-bit on the same host edits sooner and
+#: passes in 6. A budget problem, not a capability one: 20 leaves the measured
+#: 13 a comfortable margin. Reproducible — 3/3 fail at 12, 2/2 pass at 20.
 _CODE_DRILL_STEPS_LOW_BIT = 20
 
 #: Quant markers that select the larger budget. m1/m4 run 4-bit mains by the

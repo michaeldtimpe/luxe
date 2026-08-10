@@ -156,12 +156,19 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   `_DEDUP_EXEMPT_TOOLS`, so a repeated read returns full content, resets the
   streak, and the guard never arms. `consecutive_repeat` is blind for the same
   reason. The gap is between the guard's stated contract and what it can see.
-- Founding instance — m1, 2026-08-10, Qwen3.6-35B-A3B-4bit, `luxe smoke
-  --code`: correct one-line fix landed at step 4 (pytest green, exactly the
-  target file changed), then seven identical `read_file` calls ran into the
-  12-step cap and the run was reported `aborted`. Reproducible 3/3; the 6-bit
-  on the same host passed in 6 steps; `LUXE_TIERED_COMPACT=0` did not change
-  it, so compaction was a symptom, not the cause.
+- Demonstrated on m1, 2026-08-10, Qwen3.6-35B-A3B-4bit, from
+  `~/.luxe/runs/smoke-code/events.jsonl`: step 1 reads key `f0ee19e9`; after
+  the edit at step 9, step 10 reads the SAME key again, recorded
+  `dup=False` (the exemption) with `bytes=78`. Under the old logic that call
+  RESET the streak; with the switch on it counts, and `post_write_idle_exit`
+  fires on that run where it does not on the identical runs beside it.
+- **This is a latent gap, not the cause of any known abort.** It was found
+  while investigating m1's code-drill failure, but that failure was a step
+  BUDGET problem — seven bash probes before the edit at step 9, 14 calls over
+  13 steps against a 12-step cap — fixed by `_CODE_DRILL_STEPS_LOW_BIT`, not
+  by this switch. An earlier draft of this section attributed a
+  seven-repeated-reads trajectory to m1; that came from misreading a stale
+  run directory and is withdrawn.
 - `call_is_repeat` is captured BEFORE the dedup branch and before
   `seen_calls.add(key)`, so it means "this exact call already ran". It is
   deliberately distinct from `step_had_repeat`, which the dedup exemption
