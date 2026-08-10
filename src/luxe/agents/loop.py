@@ -1354,12 +1354,13 @@ def run_agent(
                     if post_intervention_consecutive_writes > post_intervention_write_burst_max:
                         post_intervention_write_burst_max = post_intervention_consecutive_writes
             elif writes_seen > 0:
-                # A repeat returns content, so without the opt-in it RESETS the
-                # streak and the guard never arms. That is the m1 2026-08-10
-                # shape: edit lands at step 4, then seven identical read_file
-                # calls to the max_steps cap — correct fix on disk, reported
-                # `aborted`. read_file is dedup-exempt, so neither this guard
-                # nor consecutive_repeat could see it.
+                # A repeat returns content, so without the opt-in it RESETS
+                # the streak and the guard never arms. Demonstrated on m1
+                # 2026-08-10 (Qwen3.6-35B-A3B-4bit code drill): step 1 reads
+                # key f0ee19e9; after the edit at step 9, step 10 reads the
+                # SAME key again — dup=False (read_file is dedup-exempt),
+                # bytes=78 — so the streak reset. Neither this guard nor
+                # consecutive_repeat could see it.
                 idle = executed.bytes_out == 0 or executed.error
                 if post_write_idle_repeats and call_is_repeat:
                     idle = True

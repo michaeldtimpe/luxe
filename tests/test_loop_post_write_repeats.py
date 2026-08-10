@@ -6,10 +6,12 @@ that "hit the dedup short-circuit". But `read_file` is in
 resets, and the guard never arms. `consecutive_repeat` is blind to it for the
 same reason — that exemption.
 
-Observed on m1, 2026-08-10 (Qwen3.6-35B-A3B-4bit, `luxe smoke --code`): the
-correct one-line fix landed at step 4, then seven identical `read_file` calls
-ran straight into the 12-step cap. pytest was green and exactly the target file
-had changed, yet the run was reported `aborted`.
+Demonstrated on m1, 2026-08-10 (Qwen3.6-35B-A3B-4bit, `luxe smoke --code`):
+step 1 reads key f0ee19e9; after the edit at step 9, step 10 reads the SAME
+key again, recorded dup=False with bytes=78 — so the streak reset. It is a
+latent gap rather than the cause of that drill's abort, which was a step-budget
+problem fixed separately. The `_m1_shape` fixture below is a MINIMAL
+reproduction of the repeated-read pattern, not a replay of that trajectory.
 
 The switch is opt-in and default OFF. With it unset the loop must behave
 exactly as before — this is the benchmark path, and no maintain_suite run has
@@ -94,7 +96,8 @@ def _read_tool() -> ToolDef:
 
 
 def _m1_shape() -> list[ChatResponse]:
-    """write, then the same file read over and over — the m1 trajectory."""
+    """write, then the same file read repeatedly — minimal repro of the
+    blind spot, NOT a replay of m1 (see the module docstring)."""
     return [
         _write_resp(),
         *[_read_resp("calc.py", f"r{i}") for i in range(6)],
