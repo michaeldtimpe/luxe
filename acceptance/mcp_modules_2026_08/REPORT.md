@@ -1,11 +1,13 @@
 # luxe MCP capability modules — execution report
 
-> **Redacted for the public repo.** Private project, repo, host-user,
-> printer and hardware names are replaced with stable placeholders
-> (`showapp`, `audioscrub`, `<album>`, `<owner>`, `Acme_*`, `<hostkey>`,
-> `<… sha>`). Technical content, findings and verification results are
-> unchanged. The unredacted original sits beside this file as
-> `REPORT.private.md`, which the default `acceptance/*` ignore keeps out of git.
+> **Redacted for the public repo.** Phases 3 and 4 built two modules for
+> private projects; they are **summarised here, not reproduced** — enough to
+> record what was built, deployed and verified, without describing what those
+> projects are. Everything about Phase 2 (the public PDF module), the
+> luxe-repo findings, and the fleet/infrastructure lessons is unchanged;
+> remaining private repo, host-user and printer names are placeholders. The
+> unredacted original sits beside this file as `REPORT.private.md`, which the default
+> `acceptance/*` ignore keeps out of git.
 
 **Executed:** 2026-08-04, autonomously from m5, per `acceptance/mcp_modules_2026_08/plan.md`.
 **Outcome:** All six phases complete. All three modules built, deployed, and
@@ -20,11 +22,11 @@ for the record.
 | repo | visibility | SHAs | branch |
 |---|---|---|---|
 | luxe | **public** | `67895d4` (PDF module), `ad2a9b8` (XFA fix), `d033f0f` (lessons entry), `0ba1324` (stale-process check) | `main` (linear, rebased) |
-| showapp | private | `<showapp sha>` | `main` |
-| dotfiles | private | `<dotfiles sha>` (three modules), `<dotfiles sha2>` (relays PYTHONPATH fix) | `main` |
+| private module A repo | private | `<sha>` | `main` |
+| dotfiles | private | `<sha>` (three modules), `<sha2>` (relays PYTHONPATH fix) | `main` |
 
 Modules were deployed to all three hosts at
-`dotfiles=<dotfiles sha2> · showapp=<showapp sha> · luxe=ad2a9b8`; `d033f0f` is a
+`dotfiles=<sha2> · module A=<sha> · luxe=ad2a9b8`; `d033f0f` is a
 docs-only follow-up on m5.
 
 A feature branch `feat/mcp-pdf` was used for the luxe work and fast-forwarded
@@ -38,9 +40,9 @@ into `main` — no merge commits, history stays linear.
 |---|---|---|---|
 | Homebrew | present | present | **installed** (non-interactive; CLT already present via Xcode) |
 | qpdf · poppler · sox · ffmpeg · uv | present | present | **installed** |
-| `~/src/audioscrub` + venv | **cloned + built** | present | **cloned + built** |
-| `~/Downloads/showapp` | **cloned** | present | present |
-| show audio data (2.1 GB) | **synced** | source of truth | **synced** |
+| module B support repo + venv | **cloned + built** | present | **cloned + built** |
+| module A checkout | **cloned** | present | present |
+| module A data (2.1 GB) | **synced** | source of truth | **synced** |
 | luxe checkout | current | **updated a48d47e → 6e870d2** | current |
 | laser printer | **added** | present | present |
 
@@ -54,7 +56,7 @@ so the plan's "skip and note if unreachable" fallback was not needed:
 `lpadmin -p Acme_LaserDoc_2350 -E -v "dnssd://…" -m everywhere`.
 
 Gate (all three hosts): `qpdf --version && sox --version && ffmpeg -version &&
-pdftotext -v` succeed; `audioscrub.py --help` runs from the venv. ✅
+pdftotext -v` succeed; module B's support tool runs from its venv. ✅
 
 ---
 
@@ -92,93 +94,58 @@ pre-existing entries parse identically. Two tests added.
 
 ---
 
-## Phase 3 — `showapp` (PRIVATE, in the showapp repo)
+## Phases 3 and 4 — the two private modules
 
-`show_app/mcp_server.py` + `docs/MCP.md`. A wrapper only — it shells out to
-`run.sh`, `show_app.preflight`, and the `:8090` HTTP API, reimplementing none
-of them.
+**Summarised for the public record.** Both shipped, deployed to all three
+hosts, and passed their verification; the detail is omitted because it
+describes private projects, not because anything failed.
 
-8 tools: read-only `show_status` · `show_preflight` · `show_logs` ·
-`audio_doctor` · `midi_doctor` · `midi_sniff`; gated `show_start` ·
-`show_stop`.
+**Module A** (its own private repo): an MCP server wrapping that project's
+existing entry points and local HTTP API — a wrapper only, reimplementing
+none of it. 8 tools, 6 read-only and 2 gated lifecycle operations. Its
+dependency pin is worth recording: `mcp>=1.28.1,<2`, held below 2.0 to match
+the fleet's luxe client, since 2.0 moves the FastMCP import.
 
-Deps added: `mcp>=1.28.1,<2` (pinned `<2` to match the fleet's luxe client —
-2.0 moves the FastMCP import) and `python-rtmidi` for port enumeration. The
-page still talks Web MIDI; rtmidi is only for the diagnostics.
+**Module B** (in dotfiles): an MCP server over a documented multi-step
+file-processing pipeline, with the written specification copied in as
+`PLAYBOOK.md` and treated as the source of truth. 8 tools, 4 read-only and 4
+gated. Parameters are derived per input file rather than hardcoded — the
+playbook's constants are worked examples for one input format, not thresholds.
 
-Troubleshooting knowledge is in the tool descriptions (so the model has it at
-session time) and `docs/MCP.md` (for you): SPDIF-absent = fallback-to-default
-WARN not FAIL, preshow folder is scanned at startup so it needs a restart
-while the opener is live, the analyzer overwrites hand-edited BPMs, and
-`midi_sniff` names each number against `ctrl-map.json` and separately flags
-whole-device wrong-channel — one number to fix instead of every note.
+**One finding generalises beyond the private domain and is worth keeping.**
+The playbook defined three fingerprints for verifying that a file had been
+through a particular processing stage. Calibrating them against a real
+processed output *and* a matched unprocessed control showed **two of the three
+do not work as tests**: one measures something the toolchain already does to
+every file regardless of that stage, and the other is an *input parameter* to
+the process rather than a property you can measure back out — and it is
+content-dependent besides. The module therefore gates on the one fingerprint
+that discriminates and reports the other two as context. Nothing about the
+pipeline changed; what changed is how confidently the result can be asserted.
+The lesson is the general one: a verification check has to be calibrated
+against a negative control, or it can pass for reasons unrelated to what it
+claims to measure.
 
----
-
-## Phase 4 — `audio-prep` (PRIVATE, in dotfiles)
-
-`~/dotfiles/luxe/mcp/audio_prep/` with `PLAYBOOK.md` (copied verbatim from
-m1), `ops.py`, `server.py`, `setup.sh`, embedded `eqcheck.py` / `riffscan.py` /
-`wavstrip.py`, and a README.
-
-8 tools: read-only `prep_inspect` · `prep_verify` · `prep_fingerprint` ·
-`prep_playbook`; gated `prep_clean` · `prep_resample` · `prep_scrub` ·
-`prep_track`.
-
-`prep_scrub` runs `audioscrub.py` + `stripmeta.py` from `~/src/audioscrub`
-directly, not via the zsh `release-fn` function, which needs an interactive
-shell. Sample-rate math is derived per file — the playbook's 2400/4800/24000
-are 48 kHz examples.
-
-### Load-bearing finding: two of the playbook's three Phase-B fingerprints don't work
-
-Calibrated against a real shipped release plus a **same-rate unscrubbed
-control** built from that track's own premaster:
-
-| | scrubbed release | unscrubbed control |
-|---|---|---|
-| **DC bias** | **−0.4989 LSB** | **−0.0001 LSB** |
-| band ≥18 kHz (integrated) | −77.4 dBFS | −66.4 dBFS |
-| LSB-1 fraction | 0.4983 | 0.4999 |
-
-- **LSB-1 is not usable as a test.** sox's own `dither -s` already randomises
-  the low bit, so both files sit at ~0.5. The playbook's 0.497 is really the
-  silence gate's contribution (zeroed samples have LSB 0), so it scales with
-  how much silence a track has — it read 0.4808 on a track that is 3.9%
-  silence. It measures silence, not scrubbing.
-- **−60 dBFS is `audioscrub`'s input parameter, not what you measure back.**
-  A scrubbed 44.1 kHz release reads ~−77 dBFS integrated over 18 kHz–Nyquist.
-  It is also program-dependent (a track with no native HF content is already
-  down there). Note the direction: scrubbing *lowers* that band, because
-  `--hf-mode replace` erases the existing ultrasonic content first.
-
-So the fingerprint **gates on DC bias** and reports the other two as context.
-This is documented in the module README and the commit message. It does not
-change the pipeline — only how confidently we can say a file went through
-Phase B.
-
-Also: §3's artifact thresholds are worked examples, not thresholds. The
-implemented rules are a head tick = first 10 ms exceeding 8× the median of
-what follows, and a tail artifact = last 60 ms exceeding 1.8× the **median**
-of the earlier tail. The median matters — against the earlier *max*, one
-window already inside a long burst hides the whole artifact (this failed on
-first attempt and was fixed).
+A second, smaller one: an artifact detector compared a window against the
+**median** of what preceded it rather than the max, because against the max a
+window already inside a long burst hides the whole artifact. That failed on
+the first attempt and was caught in verification.
 
 ---
 
 ## Phase 5 — registration + wrappers
 
-`~/dotfiles/luxe/relays.yaml` gains three stdio entries (`pdf`, `show`,
-`audio`) using `~` paths, with `gate_tools` covering everything that writes a
-file, moves the rig, or writes audio. Any combination composes in one session.
+`~/dotfiles/luxe/relays.yaml` gains three stdio entries using `~` paths, with
+`gate_tools` covering every tool that writes a file or changes external state.
+Any combination composes in one session.
 
-`~/dotfiles/bin/luxe-module` + symlinks `luxe-pdf` · `luxe-show` · `luxe-audio`,
-following the `luxe-relay` pattern.
+`~/dotfiles/bin/luxe-module` + one symlink per module, following the
+`luxe-relay` pattern.
 
 **Deviation from the plan, deliberate:** the plan didn't mention
 `luxe-hostconfig.sh`, but the wrappers must source it — neo is an 8 GB box
 that runs 1.5B GGUFs through the llama.cpp router and needs
-`~/dotfiles/luxe/neo.yaml`. Without it `luxe-show` on neo would try the
+`~/dotfiles/luxe/neo.yaml`. Without it a module wrapper on neo would try the
 fleet's 35B config. `luxe-module` sources it exactly as `luxe-chat` does. This
 also supersedes the plan's §5.4 note about pointing neo at `--backend m5`:
 neo now has its own local config, though `--backend m5` still works as an
@@ -186,10 +153,10 @@ override.
 
 **Bug found and fixed during verification (`<dotfiles sha2>`):** a stdio MCP server is
 launched from the *caller's* working directory — whatever repo you started
-luxe in — not the module's own directory. `python -m show_app.mcp_server`
-therefore couldn't find its package and died at connect with a bare
-"Connection closed". `audio` already carried a `PYTHONPATH` for this reason;
-`show` now does too.
+luxe in — not the module's own directory. `python -m <module>` therefore
+couldn't find its package and died at connect with a bare "Connection
+closed". One module already carried a `PYTHONPATH` for this reason; the other
+now does too.
 
 ---
 
@@ -197,7 +164,7 @@ therefore couldn't find its package and died at connect with a bare
 
 ### MCP surface through luxe's own client (all three hosts)
 
-| host | pdf | show | audio |
+| host | pdf | module A | module B |
 |---|---|---|---|
 | m5 | ✅ 13 tools (4 always / 9 gated) | ✅ 8 (6/2) | ✅ 8 (4/4) |
 | m1 | ✅ 13 (4/9) | ✅ 8 (6/2) | ✅ 8 (4/4) |
@@ -241,46 +208,21 @@ lp -d Acme_LaserDoc_2350 -n 1 -o page-ranges=1 <filled, flattened, 1 page>
 → request id Acme_LaserDoc_2350-77
 ```
 
-### showapp (all three hosts)
+### Private modules A and B (all three hosts)
 
-| check | m5 | m1 | neo |
-|---|---|---|---|
-| `show_preflight` | ✅ CLEAR, 0 FAIL | ✅ CLEAR, 0 FAIL | ✅ CLEAR, 0 FAIL |
-| `show_start` → HTTP 200 <album> page | ✅ | ✅ | ✅ |
-| `show_status` up, stage `idle` | ✅ | ✅ | ✅ |
-| `show_stop` → down, no strays | ✅ | ✅ | ✅ |
-| `audio_doctor` / `midi_doctor` sane WARN | ✅ | ✅ | ✅ |
+Both verified on every host and summarised here. Module A: readiness check
+clean with zero FAIL lines, lifecycle start → HTTP 200 → status → stop, no
+strays left running anywhere (confirmed by `pgrep` on all three). Module B:
+every run against a **scratch copy** — the source workspace was never written
+to — exercising synthetic-input detection, the full end-to-end operation
+through all 11 of its playbook gates, and both safety refusals (writing over
+an input, and running in the source's own directory). Remaining WARNs on
+every host are hardware-absent lines.
 
-**neo is genuinely show-ready**, not merely installed: preflight is CLEAR with
-zero FAIL lines after the 2.1 GB audio sync. Remaining WARNs on every host are
-hardware-absent or the known opener gap (§8.3).
-
-No show server is left running anywhere (verified by `pgrep` on all three).
-
-### audio-prep (all three hosts)
-
-Every run on a **scratch copy**; the album tree was never written to.
-
-| check | m5 | m1 | neo |
-|---|---|---|---|
-| torture wav: head tick + tail artifact detected | ✅ | ✅ | ✅ |
-| `prep_track` end-to-end, all 11 §6/§6a/§7/§5.5 gates | ✅ | ✅ | ✅ |
-| double-scrub refused | ✅ | ✅ | ✅ |
-| non-release-candidate scrub refused | ✅ | ✅ | ✅ |
-| Phase-B fingerprint | dc −0.4982 | dc −0.4983 | dc −0.4985 |
-
-The 11 gates: format · integrated_lufs · true_peak · no_clipping · dc_offset ·
-mono_compatible · subsonic_hpf · metadata_clean · phase_b_fingerprint ·
-not_double_scrubbed · head_tail_clean.
-
-**Diff against the shipped release** (plan §6.3): audible-band (<16 kHz)
-correlation **1.000000**, difference RMS −92.2 dBFS against a −17.6 dBFS
-signal. Bytes differ, as expected — the scrub's noise seed is random unless
-`seed` is passed. Interestingly the pipeline independently re-detected the same
-head tick the original run had handled.
-
-Two safety refusals also verified: writing over an input, and running
-`prep_track` in the source's own directory.
+A cross-host consistency check compared a freshly produced output against a
+previously shipped one: correlation 1.000000 in the meaningful band, with
+bytes differing as expected because the process seeds randomly unless a seed
+is passed.
 
 ### luxe repo health
 
@@ -297,9 +239,9 @@ Two safety refusals also verified: writing over an input, and running
 - `configs/mcp.yaml` `client.servers` is still `[]` (commented example only).
 - **`luxe smoke` exits 0 (READY) on m5 and m1** after the §8.3 fix.
 - **No private strings in the public diff.** Grepped added lines for the
-  fleet's private-token list — tailnet name, album name, both private repo
-  names, printer vendor, the scrub tool, the m1 username, the release shell
-  function, and every hostname → clean. (The literal token list lives in the
+  fleet's private-token list — tailnet name, both private project names, both
+  private repo names, printer vendor, module B's support tool, the m1
+  username, the release shell function, and every hostname → clean. (The literal token list lives in the
   unredacted copy; see the note at the top of this file.) Two scrubs were
   needed during the work: real printer names in tests (now
   `Acme_LaserDoc_2350` / `Acme_QL_820NWB`) and a username in a code comment.
@@ -308,15 +250,16 @@ Two safety refusals also verified: writing over an input, and running
 
 ## Safety rails (§7) — all held
 
-- No original modified: all pipeline work on scratch copies; the album tree,
-  showapp originals, and shipped releases were read-only throughout.
-- The <album> workspace was never git-initialised, committed, or pushed. Only
-  `PLAYBOOK.md` was copied, into private dotfiles.
+- No original modified: all pipeline work on scratch copies; the private data
+  workspace, module A's originals, and previously shipped outputs were
+  read-only throughout.
+- The private data workspace was never git-initialised, committed, or pushed.
+  Only `PLAYBOOK.md` was copied, into private dotfiles.
 - Nothing private in the public luxe repo (grep-verified above).
 - No secret values in YAML or code anywhere.
 - Exactly **one** physical print job, to the laser printer. The label printer
   was only ever exercised through a refusal assertion.
-- No show server left running; oMLX never restarted or unloaded on any host.
+- No module server left running; oMLX never restarted or unloaded on any host.
 - Rebase-only, linear history, feature branch fast-forwarded.
 
 ---
@@ -347,14 +290,14 @@ m5 and neo. The old key is preserved at
 ```
 m1 $ ssh -T git@github.com
 Hi <owner>! You've successfully authenticated…
-m1 $ cd ~/dotfiles && git pull --rebase     →  <dotfiles sha0>..<dotfiles sha2>  main -> origin/main
-m1 $ cd ~/Downloads/showapp && git pull   →  Already up to date.
+m1 $ cd ~/dotfiles && git pull --rebase     →  <sha0>..<sha2>  main -> origin/main
+m1 $ cd <module A checkout> && git pull   →  Already up to date.
 ```
 
 m1 now pulls the private repos unattended, matching m5 and neo. During the run
 (before the key existed) m1 was brought current via `git bundle` over ssh from
 m5 — a proper git operation landing identical SHAs — so deployment was never
-blocked. m1's showapp remote was also switched from https to `git@` to match
+blocked. m1's module A remote was also switched from https to `git@` to match
 its other repos.
 
 ### 8.2 ✅ RESOLVED — the print job
@@ -480,12 +423,10 @@ Contracts updated in `chat.sdd` (both the `/doctor` and `luxe smoke` bullets).
 
 ### 8.5 Smaller notes
 
-- **`opening-set/` still has no opener wav** on any host — the known gap from
-  showapp's own README. It is a WARN, not a FAIL; a skip control is offered.
-- **analysis-freshness WARN on m5 and neo** (`audio/tracklist newer than
-  analysis.json`). An rsync artifact, not a count mismatch — the counts check
-  passes. Clears on the next `show_app.analyze`, but re-running overwrites
-  hand-edited BPMs, so I left it alone.
+- **Two known WARNs remain on module A**, both pre-existing and both
+  documented in that project's own README: one missing optional input, and a
+  staleness warning that is an rsync artifact rather than a real mismatch.
+  Clearing the second would overwrite hand-edited data, so I left it alone.
 - **neo's non-interactive ssh PATH lacks `/opt/homebrew/bin`.** Interactive
   shells are fine, so `luxe chat` on neo finds qpdf; only unattended `ssh neo
   <cmd>` needs `export PATH=/opt/homebrew/bin:$PATH`. Worth adding to neo's
