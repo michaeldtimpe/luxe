@@ -77,7 +77,15 @@ since no firing decision changed. They are substrate noise.
 If the switch is ever to be promoted, it needs a corpus where the pattern is
 present — SWE-bench trajectories or the chat/code drills, not this suite.
 
-## Unrelated finding, worth its own look
+## Unrelated finding — investigated separately
+
+**Diagnosed in `STRICT-FLAG-FINDING.md` (same directory).** Short version:
+the model absorbs the 3-file repo in 3 tool calls, emits a 36,838-char
+planning monologue, hits `max_tokens_per_turn: 8192` exactly, and is cut
+off mid-word. That truncated response has no tool calls, so the loop takes
+its terminal path — `loop.py` never inspects `finish_reason`, so a cut-off
+turn is indistinguishable from a finished one. Original notes follow.
+
 
 `lpe-rope-calc-implement-strict-flag` fails **6/6** (0/3 in both arms), score
 1/5, with the same cause each time:
@@ -89,10 +97,9 @@ diff_produced: false · diff_files: 0 · gates_triggered: []
 
 The model produces no diff at all. No gate fired — it is not a bailout, it
 simply does not write. This is independent of the switch (identical in both
-arms) and predates it. Note the m5max_moe bake-off (2026-05-10) recorded this
-fixture passing on the champion, and it is one of the three `forbids_create`
-opt-ins. Worth investigating separately: either the fixture drifted or the
-substrate did.
+arms) and predates it. The m5max_moe bake-off (2026-05-10) recorded this
+fixture passing on the champion with 15 tool calls and zero final prose; today
+it makes 3 calls and 36,838 chars of it.
 
 Suite state is therefore 27/30 (111/150) on the champion today, versus the
 30/30 (120/150 across three models) recorded at the bake-off.
