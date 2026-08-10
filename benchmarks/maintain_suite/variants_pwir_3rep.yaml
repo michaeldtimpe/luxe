@@ -1,0 +1,53 @@
+# LUXE_POST_WRITE_IDLE_REPEATS A/B — 3 reps per arm (2026-08-10).
+#
+# Question: should the post-write idle guard count a REPEAT call (same tool +
+# same args as an earlier call this run) toward its streak, instead of letting
+# it reset the streak? Shipped in 07105b3 as an opt-in switch, default OFF,
+# explicitly UNBENCHED — this is the run that decides whether the default can
+# move. See agents.sdd "Post-write idle repeat counting".
+#
+# The switch cannot be expressed per-cell: a variant carries only model_label
+# and model_id, and run.py propagates the parent environment
+# (`env = os.environ.copy()`). So the two arms are two INVOCATIONS of this same
+# file with different `--output` and different environments:
+#
+#   # baseline (flag unset)
+#   uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_pwir_3rep.yaml \
+#     --output acceptance/pwir_ab_2026_08_10/baseline/ \
+#     --per-fixture-timeout 1800
+#
+#   # treatment
+#   LUXE_POST_WRITE_IDLE_REPEATS=1 uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_pwir_3rep.yaml \
+#     --output acceptance/pwir_ab_2026_08_10/treatment/ \
+#     --per-fixture-timeout 1800
+#
+# Run them SEQUENTIALLY — two arms at once on one box contend for the same
+# oMLX weights and the wall numbers become meaningless.
+#
+# 3 cells × 10 fixtures × 2 arms = 60 runs. At the m5max_moe avg of 63.4 s per
+# fixture that is ~65 min of generation plus harness overhead.
+#
+# WHY 3 REPS. temp=0 is NOT deterministic on this substrate: four runs of one
+# fixture with identical configs produced {0, 16, 16, 19} patch_lines, and two
+# byte-identical runs 39 s apart differed (memory
+# project_substrate_noise_temp0_not_deterministic). The noise sits on the
+# give-up-vs-commit axis — exactly the axis this switch touches — so a
+# single-rep delta cannot be read. maintain_suite.sdd already requires 3×
+# replication before claiming a regression on borderline fixtures; this
+# applies it to the whole suite.
+#
+# WHAT WOULD PROMOTE THE DEFAULT (decide before looking, per bench-as-truth):
+#   - score not down vs baseline outside the noise band, across reps;
+#   - no NEW failing fixture that passes in every baseline rep;
+#   - post_write_idle_exit firings land on trajectories that had already
+#     produced their diff — a clean exit, not a truncated one. Check each
+#     firing by hand against the local-branch ref (CLAUDE.md rule 3);
+#   - wall/tokens no worse; an earlier clean exit should reduce both.
+# Anything short of that leaves the default OFF and the switch stays opt-in.
+
+variants:
+  - {model_label: pwir-rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: pwir-rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: pwir-rep3, model_id: Qwen3.6-35B-A3B-6bit}

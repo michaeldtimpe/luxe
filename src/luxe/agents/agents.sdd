@@ -175,10 +175,18 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   keeps False for `read_file` — the very tool that created the blind spot.
 - A NOVEL post-write call still resets the streak. Exploration after a write
   must not be cut short; only redundant work counts.
-- **Do not flip this default without a maintain_suite run.** It can only make
-  `post_write_idle_exit` arm where it previously did not, which trades a
-  longer trajectory for an earlier clean exit — plausibly good, unmeasured.
-  Bench-as-truth (CLAUDE.md rule 3) governs the promotion.
+- **BENCHED 2026-08-10 — default STAYS OFF.** 3 reps x 10 fixtures x 2 arms
+  on the champion: 27/30 and 111/150 in BOTH arms, per-fixture scores
+  identical across all six passes, `post_write_idle_exit` 9 in both. The
+  switch is **inert on this suite**, not merely neutral: across 60 runs the
+  max post-write repeats in any single run is 1, against a threshold of 3, so
+  a lone repeat can never arm the guard. The wall/token deltas are substrate
+  noise — no firing decision changed. Report:
+  `acceptance/pwir_ab_2026_08_10/REPORT.md`.
+- Promotion would need a corpus where the pattern actually occurs (SWE-bench
+  trajectories, or the chat/code drills where m1 shows a post-edit repeated
+  read) — maintain_suite fixtures are too small to produce it. Do not re-run
+  this suite expecting a different answer.
 
 ## Must not (reflect)
 
