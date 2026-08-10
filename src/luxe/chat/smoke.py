@@ -218,6 +218,34 @@ def _make_drill_repo(kind: str, files: dict[str, str]):
     return root
 
 
+#: Step budget for the code drill. 12 was calibrated on the 6-bit champion,
+#: which lands the fix and concludes in 5–6 steps.
+_CODE_DRILL_STEPS = 12
+
+#: Low-bit quants need headroom to CONCLUDE, not to solve. Measured on m1
+#: (2026-08-10, Qwen3.6-35B-A3B-4bit): the correct one-line fix landed at step
+#: 4 — pytest green, exactly the target file changed — and the model then made
+#: seven identical read_file calls straight into the 12-step cap, so the drill
+#: reported `aborted` and never reached its own tests/diff assertions. The 6-bit
+#: on the same host passed in 6 steps. This is the documented "will not
+#: self-package" failure mode (see CLAUDE.md gitkit findings), amplified by the
+#: quant — a conclusion problem, not a capability one, so the fix is headroom.
+_CODE_DRILL_STEPS_LOW_BIT = 20
+
+#: Quant markers that select the larger budget. m1/m4 run 4-bit mains by the
+#: 2026-07-30 fallback-kit manifest; 2- and 3-bit are listed so a future
+#: low-bit main is not a silent regression.
+_LOW_BIT_MARKERS = ("-2bit", "-3bit", "-4bit")
+
+
+def _code_drill_steps(model: str) -> int:
+    """Step budget for `model`'s code drill (see the constants above)."""
+    name = (model or "").lower()
+    if any(marker in name for marker in _LOW_BIT_MARKERS):
+        return _CODE_DRILL_STEPS_LOW_BIT
+    return _CODE_DRILL_STEPS
+
+
 def _drill_role(cfg, drop: set[str], max_steps: int):
     role = cfg.role("monolith")
     return role.model_copy(update={
@@ -279,7 +307,9 @@ def run_code_drill(cfg, *, backend_name: str | None = None,
                                      "test_calc.py": _DRILL_TEST})
     report.add("drill repo", "pass", str(repo))
 
-    result = _run_drill_turn(backend, _drill_role(cfg, _DRILL_TOOL_DROP, 12),
+    steps = _code_drill_steps(backend.model)
+    result = _run_drill_turn(backend,
+                             _drill_role(cfg, _DRILL_TOOL_DROP, steps),
                              _CODE_GOAL, "bugfix", repo, report, "code")
     ok = result is not None
     if ok and result.tool_calls_total == 0:

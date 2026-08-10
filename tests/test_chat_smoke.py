@@ -299,3 +299,47 @@ def test_dangling_main_weights_fail_on_local_endpoint(monkeypatch):
     report = smoke_mod.run_smoke(_cfg(), skip_fallback=True, skip_tools=True)
     step = next(s for s in report.steps if s.name == "weights Main-M")
     assert step.state == "fail" and "pull" in step.detail
+
+
+# --- code-drill step budget (2026-08-10) ------------------------------------
+
+class TestCodeDrillStepBudget:
+    """Low-bit quants need headroom to CONCLUDE, not to solve.
+
+    m1 (Qwen3.6-35B-A3B-4bit) landed the correct fix at step 4 of the code
+    drill, then made seven identical read_file calls into the 12-step cap, so
+    the drill reported `aborted` and never ran its own tests/diff assertions.
+    The 6-bit on the same host passed in 6 steps.
+    """
+
+    def test_six_bit_champion_keeps_the_calibrated_budget(self):
+        from luxe.chat.smoke import _CODE_DRILL_STEPS, _code_drill_steps
+        assert _code_drill_steps("Qwen3.6-35B-A3B-6bit") == _CODE_DRILL_STEPS
+
+    def test_four_bit_main_gets_headroom(self):
+        from luxe.chat.smoke import (_CODE_DRILL_STEPS,
+                                     _CODE_DRILL_STEPS_LOW_BIT,
+                                     _code_drill_steps)
+        assert _code_drill_steps("Qwen3.6-35B-A3B-4bit") == _CODE_DRILL_STEPS_LOW_BIT
+        assert _CODE_DRILL_STEPS_LOW_BIT > _CODE_DRILL_STEPS
+
+    @pytest.mark.parametrize("model", [
+        "Qwen3.6-27B-4bit", "GLM-4.5-Air-4bit",
+        "some-model-3bit", "some-model-2bit",
+        "QWEN3.6-35B-A3B-4BIT",          # case-insensitive
+    ])
+    def test_every_low_bit_marker_is_recognised(self, model):
+        from luxe.chat.smoke import _CODE_DRILL_STEPS_LOW_BIT, _code_drill_steps
+        assert _code_drill_steps(model) == _CODE_DRILL_STEPS_LOW_BIT
+
+    @pytest.mark.parametrize("model", [
+        "Qwen3.6-35B-A3B-6bit", "Qwen3.6-27B-6bit", "model-8bit", "bf16-model",
+    ])
+    def test_high_bit_models_are_not_widened(self, model):
+        from luxe.chat.smoke import _CODE_DRILL_STEPS, _code_drill_steps
+        assert _code_drill_steps(model) == _CODE_DRILL_STEPS
+
+    def test_missing_model_name_falls_back_to_the_base_budget(self):
+        from luxe.chat.smoke import _CODE_DRILL_STEPS, _code_drill_steps
+        assert _code_drill_steps("") == _CODE_DRILL_STEPS
+        assert _code_drill_steps(None) == _CODE_DRILL_STEPS

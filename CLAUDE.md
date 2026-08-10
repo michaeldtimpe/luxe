@@ -450,7 +450,7 @@ wall reduction; 2 protected wrong_target instances healed; zero new damages.
 
 ## Opt-in modes (default off, byte-identical when disabled)
 
-Five subsystems are gated by env vars and default to **off**. Each has
+Six subsystems are gated by env vars and default to **off**. Each has
 invariants in its `.sdd` you must read before enabling:
 
 - **Reflect / verify stage** (`LUXE_REFLECT=1`) — a separate `backend.chat`
@@ -475,6 +475,16 @@ invariants in its `.sdd` you must read before enabling:
   infrastructure; locked predicate fired 0/14 at n=14 smoke (too narrow
   for this champion at num_ctx=32768). Implicit dependency on
   `LUXE_ADAPTIVE_POLICY=1` for `score_log` population. Default-OFF.
+
+- **Post-write idle repeat counting** (`LUXE_POST_WRITE_IDLE_REPEATS=1`) — makes
+  a post-write REPEAT call (same tool + args as an earlier call this run) count
+  toward the `post_write_idle` streak instead of resetting it. Closes a blind
+  spot the guard's own docstring claimed to cover: `read_file` is
+  `_DEDUP_EXEMPT`, so a repeated read returns content and resets the streak.
+  Founding instance: m1's 4-bit main landed the correct code-drill fix at step
+  4, then made seven identical reads into the step cap and was reported
+  `aborted`. **UNBENCHED — do not flip the default without a maintain_suite
+  run.** See `agents.sdd` § "Post-write idle repeat counting".
 
 If you toggle any of these on, walk the relevant `.sdd` section first —
 unbiased flips can silently change benchmark behavior.

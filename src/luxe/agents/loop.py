@@ -370,6 +370,7 @@ def run_agent(
     # Off by default; adapter wires it on for SWE-bench. Falls back to
     # v1.9 semantics (no convergence-based gating) when disabled.
     convergence_gate_enabled = flags.convergence_gate
+    post_write_idle_repeats = flags.post_write_idle_repeats
     # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
     # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
     # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
@@ -1137,6 +1138,12 @@ def run_agent(
                     same_file_read_twice_step = step
                 else:
                     read_keys_seen.add(key)
+            # Captured BEFORE the dedup branch and before `seen_calls.add(key)`
+            # further down, so it means "this exact call already ran this run".
+            # Distinct from `step_had_repeat`, which the dedup exemption keeps
+            # False for read_file — the very tool that produced the blind spot
+            # this feeds (see the post-write idle branch below).
+            call_is_repeat = key in seen_calls
             if key in seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
                 step_had_repeat = True
                 content = (
@@ -1347,7 +1354,16 @@ def run_agent(
                     if post_intervention_consecutive_writes > post_intervention_write_burst_max:
                         post_intervention_write_burst_max = post_intervention_consecutive_writes
             elif writes_seen > 0:
-                if executed.bytes_out == 0 or executed.error:
+                # A repeat returns content, so without the opt-in it RESETS the
+                # streak and the guard never arms. That is the m1 2026-08-10
+                # shape: edit lands at step 4, then seven identical read_file
+                # calls to the max_steps cap — correct fix on disk, reported
+                # `aborted`. read_file is dedup-exempt, so neither this guard
+                # nor consecutive_repeat could see it.
+                idle = executed.bytes_out == 0 or executed.error
+                if post_write_idle_repeats and call_is_repeat:
+                    idle = True
+                if idle:
                     post_write_idle_tools += 1
                 else:
                     post_write_idle_tools = 0
