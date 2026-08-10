@@ -1,5 +1,77 @@
 # luxe — session resume document
 
+## ⇒ DEFERRED (2026-08-10) — Muse-Glimmer-30B assessed, BLOCKED upstream; revisit ~2026-09 with Qwen 3.8
+
+`meta-models/Muse-Glimmer-30B` (released 2026-08-10) was assessed as a
+comparison candidate against the champion. **No bench was set up and no code
+was written** — it cannot load on this stack today. Deferred by user decision
+to roughly **2026-09**, to be picked up alongside Qwen 3.8 iteration once both
+are more settled. This is the DeepSeek-V4-Flash pattern (2026-08-03) again:
+weights announced, runtime support unmerged.
+
+**What it is**: dense 27.9B text decoder (52 layers, hidden 6656, GQA 32q/2kv,
+hybrid 3×sliding-2048 + 1×full-NoPE attention) + ~1.9B ViT-G/14 perception
+encoder + GELU projector. 128K trained context, Apache 2.0, knowledge cutoff
+2026-01-04. `model_type: muse_glimmer` (`muse_glimmer_text` /
+`muse_glimmer_vision`), arch `MuseGlimmerForConditionalGeneration`.
+
+**Four blockers, all verified locally rather than from the announcement:**
+
+1. **No MLX runtime support.** `muse_glimmer` is absent from installed
+   `mlx-vlm 0.6.3` / `mlx-lm 0.31.3` (the oMLX 0.5.7 Cellar env), from
+   released `mlx-vlm 0.6.10` (2026-08-04, newest tag `v0.6.10`), and from
+   `mlx-vlm` `main`. Support lives in **open PR Blaizzy/mlx-vlm#1838 "Add
+   Muse Glimmer model support"** (filed 2026-08-10, unmerged). The unblock is
+   a three-link chain: #1838 merges → mlx-vlm releases → Homebrew `omlx`
+   bumps its pinned mlx-vlm. **Watch #1838 — that is the actual signal.**
+2. **The one real MLX conversion is probably miscalibrated, and is the wrong
+   precision.** Only `mlx-community/Muse-Glimmer-30B-4bit` has real bytes
+   (21.3 GB, 4 shards); its README says it was converted with **mlx-vlm
+   0.6.12**, a version that does not exist publicly (dev build off the PR
+   branch). **Open PR #1839 "Preserve embed_norm when quantizing Muse Glimmer
+   embeddings"** means that pre-fix conversion likely drops `embed_norm`.
+   Every other mlx-community variant (**6bit**, 5bit, 8bit, bf16, mxfp4,
+   mxfp8, nvfp4) is an **empty placeholder** — 2 files, `config.json` 404s,
+   0 downloads — consistent with the uploader waiting on #1839. The champion
+   is 6-bit, so the 6-bit repo is the one needed for precision parity; a
+   6-bit-vs-4-bit result would not be interpretable as a model comparison.
+3. **Tool-call format has no parser in oMLX.** The chat template emits XML —
+   `<atem:function_calls>` / `<atem:invoke name="…">` /
+   `<atem:parameter name="…">`. oMLX scans for `[TOOL_CALLS]`, `<tool_call>`,
+   `<|tool_call_start|>`, `<|content_invoke_tool_json|>` — all JSON-shaped —
+   and has per-family parsers under `omlx/patches/` (deepseek_v4, hy_v3,
+   minimax_m3) but nothing for `atem`. Benching anyway would return the XML
+   as ordinary assistant **content**, luxe would see zero `tool_calls`, and
+   the agentic suite would score ~0 on a parser gap rather than on model
+   quality — the silent text-fallback-drop class from the 2026-08-04 taxonomy
+   work. This blocker is independent of blockers 1–2 and does **not** clear
+   when #1838 merges.
+4. **It is a VLM.** `ForConditionalGeneration` + `vision_config` routes it to
+   oMLX's vlm engine — the same slow path CLAUDE.md documents for Qwen3.6
+   that drove the 2026-07-30 m1/m4 manifest flip. A wall-clock/TPS comparison
+   on that engine measures the engine, not the model.
+
+**Rejected today**: GGUF via llama.cpp (day-0 support upstream) is the only
+route that runs *now*, but it is a second inference stack on m5/m1 and does
+not solve blocker 3 — it buys nothing for an agentic bench.
+
+**Policy note**: an explicit user request for a comparison clears the
+single-champion carve-out ("no A/B against another model unless the user
+explicitly asks for a re-bench"). The champion pin is unchanged; nothing was
+promoted, no config was added. When this resumes, follow the § "M5 Max MoE
+bake-off" structure under `acceptance/m5max_moe_<rebench-id>/`.
+
+**Qwen 3.8 status as of 2026-08-10**: 3.8-Max launched API-only 2026-08-03
+(2.4T params / ~95B active / 1M ctx) with open weights promised "within
+days"; nothing on the Qwen HF org yet. It is the likelier near-term candidate
+and should share whatever harness this cycle builds.
+
+**Suggested first move on resume** (not built — deliberately deferred): a
+model-agnostic bake-off **preflight** that refuses to burn a run when the
+arch is unloadable or the tool-call format unparseable. That check would have
+settled all four blockers above in seconds, and Qwen 3.8 needs the identical
+harness.
+
 ## ⇒ SESSION NOTE (2026-08-06) — fleet doc sync: micro-mind's 4B champion recorded here
 
 luxe is the fleet's living project; sibling-repo state is now recorded in
