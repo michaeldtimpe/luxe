@@ -67,6 +67,25 @@ acceptance/hygiene_2026_07/*
 !acceptance/hygiene_2026_07/queue.md
 !acceptance/hygiene_2026_07/drill_log.md
 !acceptance/hygiene_2026_07/REPORT.md
+# Autonomous cycle records (2026-08): the plan is the contract the executor
+# worked to and the REPORT is what the verifying session checked against, so
+# both are the deliverable. Same treatment as the hygiene sweep above.
+#
+# NOT allowlisted: acceptance/mcp_modules_2026_08/. That cycle's own contract
+# says the show and audio modules are private — "no private hostnames, paths,
+# show names, or audio tooling in the public luxe repo" — and its plan/REPORT
+# name the private repo, private project dirs, dotfiles relay config and an
+# ssh passphrase-backup filename. This repo is public, so those two documents
+# stay local under the default acceptance/* ignore. Do not add a negation for
+# them without scrubbing first.
+!acceptance/operability_2026_08/
+acceptance/operability_2026_08/*
+!acceptance/operability_2026_08/plan.md
+!acceptance/operability_2026_08/REPORT.md
+!acceptance/refactor_2026_08/
+acceptance/refactor_2026_08/*
+!acceptance/refactor_2026_08/plan.md
+!acceptance/refactor_2026_08/REPORT.md
 benchmarks/bench_*.json
 benchmarks/small_models_*.json
 
