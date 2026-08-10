@@ -145,6 +145,34 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   its legacy proxies per-call/per-run; if either event's fields change,
   update the script's suppression paths in the same commit.
 
+### Post-write idle repeat counting (pinned 2026-08-10, opt-in, UNBENCHED)
+
+- `LUXE_POST_WRITE_IDLE_REPEATS=1` (`RunFlags.post_write_idle_repeats`) makes a
+  post-write REPEAT call — same tool, same arguments as an earlier call this
+  run — count toward the `post_write_idle_tools` streak instead of resetting
+  it. **Default OFF; with it unset the loop is byte-identical.**
+- Why it exists: `PostWriteIdleExitGuard`'s docstring always claimed it caught
+  non-write calls that "hit the dedup short-circuit", but `read_file` is in
+  `_DEDUP_EXEMPT_TOOLS`, so a repeated read returns full content, resets the
+  streak, and the guard never arms. `consecutive_repeat` is blind for the same
+  reason. The gap is between the guard's stated contract and what it can see.
+- Founding instance — m1, 2026-08-10, Qwen3.6-35B-A3B-4bit, `luxe smoke
+  --code`: correct one-line fix landed at step 4 (pytest green, exactly the
+  target file changed), then seven identical `read_file` calls ran into the
+  12-step cap and the run was reported `aborted`. Reproducible 3/3; the 6-bit
+  on the same host passed in 6 steps; `LUXE_TIERED_COMPACT=0` did not change
+  it, so compaction was a symptom, not the cause.
+- `call_is_repeat` is captured BEFORE the dedup branch and before
+  `seen_calls.add(key)`, so it means "this exact call already ran". It is
+  deliberately distinct from `step_had_repeat`, which the dedup exemption
+  keeps False for `read_file` — the very tool that created the blind spot.
+- A NOVEL post-write call still resets the streak. Exploration after a write
+  must not be cut short; only redundant work counts.
+- **Do not flip this default without a maintain_suite run.** It can only make
+  `post_write_idle_exit` arm where it previously did not, which trades a
+  longer trajectory for an earlier clean exit — plausibly good, unmeasured.
+  Bench-as-truth (CLAUDE.md rule 3) governs the promotion.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —

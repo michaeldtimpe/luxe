@@ -50,6 +50,12 @@ class RunFlags:
     convergence_gate: bool = False
     early_bail_band_response: str = DEFAULT_BAND_RESPONSE
 
+    # Count a post-write REPEAT call (same tool + same args as an earlier call
+    # this run) toward the post-write idle streak. Opt-in: default OFF keeps
+    # the benchmark path byte-identical until a maintain_suite run says
+    # otherwise. See agents.sdd "post-write idle repeat counting".
+    post_write_idle_repeats: bool = False
+
     # Context compaction (default ON since 2026-05-28)
     tiered_compact: bool = True
     tiered_compact_threshold: float = DEFAULT_TIERED_COMPACT_THRESHOLD
@@ -112,6 +118,9 @@ class RunFlags:
             prose_burst=e.get("LUXE_PROSE_BURST") == "1",
             action_density_gate=e.get("LUXE_ACTION_DENSITY_GATE") == "1",
             convergence_gate=e.get("LUXE_CONVERGENCE_GATE") == "1",
+            post_write_idle_repeats=(
+                e.get("LUXE_POST_WRITE_IDLE_REPEATS") == "1"
+            ),
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),
             # Default ON: only the exact string "0" disables it.
