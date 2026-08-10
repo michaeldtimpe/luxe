@@ -438,6 +438,72 @@ class PostWriteIdleExitGuard:
         }
 
 
+# Truncated-turn guard (2026-08-10).
+#
+# A response that hits `max_tokens_per_turn` comes back with
+# `finish_reason == "length"` and, if the model was mid-prose, no tool calls.
+# The loop's terminal test is `if not tool_calls:` — it never consulted
+# finish_reason — so a turn CUT OFF mid-sentence was indistinguishable from a
+# model that finished and chose to answer. The run ended `aborted=False` with
+# no diff and no gate fired.
+#
+# Founding instance: lpe-rope-calc-implement-strict-flag, 2026-08-10, 6/6
+# identical runs. Three tool calls absorbed the whole 3-file repo, then the
+# model produced 36,838 chars of planning monologue, generated exactly 8,192
+# completion tokens (the cap), and was cut off at "construct a `PEInfo".
+# maintain_suite scored it 1/5 for "produced no diff" while reporting a clean
+# completion. Neither write_pressure (needs >=10 tool calls; had 3) nor
+# prose_burst (needs 0 tool calls; had 3) can see this shape.
+#
+# Two nudges, then stop. The nudge is cheap and the failure is recoverable —
+# the model has already done the analysis, it just never emitted the edit — but
+# a model that ignores it twice is not going to act on a third, and each retry
+# costs a full capped turn. Bounded like the min_tool_calls reprompt.
+_TRUNCATED_TURN_MAX_RETRIES = 2
+
+_TRUNCATED_TURN_MESSAGE = (
+    "Your previous response was CUT OFF at the token limit before you "
+    "finished — it was not received as a complete answer, and no tool call "
+    "was made, so nothing has changed on disk yet.\n\n"
+    "Stop planning and act now. Do not restate your analysis, do not "
+    "summarise what you intend to do, and do not reproduce unchanged code. "
+    "Make the edit with a tool call, changing only what the task requires."
+)
+
+
+class TruncatedTurnGuard:
+    """Fires when a turn was truncated at the token cap and made no tool call.
+
+    NOT an exit guard: when it fires the loop appends the nudge and CONTINUES,
+    the same shape as the SpecDD `min_tool_calls` reprompt. Returning None
+    leaves the loop's pre-existing terminal path untouched, which is what keeps
+    this byte-identical while the switch is off.
+    """
+
+    nudge_type = "truncated_turn"
+
+    @staticmethod
+    def should_fire(
+        *,
+        truncated_turn_retry_enabled: bool,
+        finish_reason: str,
+        has_tool_calls: bool,
+        retries_used: int,
+    ) -> Optional[dict[str, Any]]:
+        if not truncated_turn_retry_enabled:
+            return None
+        # Only the cap. "stop" is a model that chose to end; "tool_calls" never
+        # reaches the terminal path. Anything else is left alone deliberately —
+        # an unknown reason is not evidence of truncation.
+        if finish_reason != "length":
+            return None
+        if has_tool_calls:
+            return None
+        if retries_used >= _TRUNCATED_TURN_MAX_RETRIES:
+            return None
+        return {"retries_used": retries_used, "finish_reason": finish_reason}
+
+
 # Consecutive-repeat guard constant.
 _MAX_CONSECUTIVE_REPEAT_STEPS = 2
 

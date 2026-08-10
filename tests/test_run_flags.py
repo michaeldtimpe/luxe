@@ -33,6 +33,7 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.action_density_gate is False
     assert f.convergence_gate is False
     assert f.post_write_idle_repeats is False
+    assert f.truncated_turn_retry is False
     assert f.respond_terminal is False
     assert f.adaptive_policy is False
     # The three that are NOT off-by-default:
@@ -68,6 +69,7 @@ OPT_IN = [
     ("LUXE_RESPOND_TERMINAL", "respond_terminal"),
     ("LUXE_ADAPTIVE_POLICY", "adaptive_policy"),
     ("LUXE_POST_WRITE_IDLE_REPEATS", "post_write_idle_repeats"),
+    ("LUXE_TRUNCATED_TURN_RETRY", "truncated_turn_retry"),
 ]
 
 

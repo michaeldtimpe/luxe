@@ -1,0 +1,59 @@
+# LUXE_TRUNCATED_TURN_RETRY A/B — 3 reps per arm (2026-08-10).
+#
+# Question: when a turn is cut off at `max_tokens_per_turn` and carries no tool
+# call, should the loop nudge and continue instead of treating it as a finished
+# answer? Shipped as an opt-in switch, default OFF. This run decides the
+# default. Diagnosis: acceptance/pwir_ab_2026_08_10/STRICT-FLAG-FINDING.md.
+#
+# PRE-FLIGHT (done before this file was written, and the reason it exists at
+# all — the previous switch benched INERT because nothing checked first):
+#   * oMLX returns finish_reason='length' on a capped generation, and Backend
+#     propagates it. Verified live at max_tokens=16 and 64.
+#   * Single-fixture check on lpe-rope-calc-implement-strict-flag:
+#       flag OFF -> FAIL 1/5, diff=0 files, 8,326 completion tokens
+#       flag ON  -> PASS 4/5, diff=2 files, 149s
+#     4/5 with 2 files is exactly what the 2026-05-10 bake-off scored.
+# So the mechanism fires and recovers the founding instance. This bench is
+# about the PRICE, not about whether it works.
+#
+# Arms are two invocations with different `--output` and environment; a variant
+# carries only model_label/model_id and run.py propagates os.environ. Run them
+# SEQUENTIALLY — concurrent arms contend for the same weights.
+#
+#   uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_truncated_turn_3rep.yaml \
+#     --output acceptance/truncated_turn_ab_2026_08_10/baseline/ \
+#     --per-fixture-timeout 1800
+#
+#   LUXE_TRUNCATED_TURN_RETRY=1 uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_truncated_turn_3rep.yaml \
+#     --output acceptance/truncated_turn_ab_2026_08_10/treatment/ \
+#     --per-fixture-timeout 1800
+#
+# 3 cells x 10 fixtures x 2 arms = 60 runs. Treatment is expected SLOWER: a
+# recovered turn replays its cut-off text into history, and the single-fixture
+# check cost 14x the tokens on that one fixture (22k -> 317k).
+#
+# 3 reps because temp=0 is not deterministic on this substrate
+# (project_substrate_noise_temp0_not_deterministic), and maintain_suite.sdd
+# already requires 3x replication before claiming a regression.
+#
+# PROMOTION CRITERIA (fixed before the run, per bench-as-truth):
+#   1. score UP — at minimum strict-flag moving 1/5 -> 4/5 in every rep, i.e.
+#      111/150 -> ~120/150. A wash means the recovery did not generalise and
+#      the default stays OFF.
+#   2. NO fixture that passes in every baseline rep may fail in any treatment
+#      rep. The nudge injects a message mid-run; a regression here means it
+#      derails otherwise-healthy trajectories, which is disqualifying whatever
+#      the score does.
+#   3. Cost bounded: total tokens must not rise more than ~2x suite-wide. The
+#      retry is rare (7 of 60 runs hit the cap in the prior A/B), so a large
+#      suite-wide rise would mean it is firing where it should not.
+#   4. Every `truncated_turn_retry` firing inspected by hand: it must land on a
+#      turn that really was cut off mid-answer, never on a model that chose to
+#      stop. `terminal_turn_truncated` (ungated telemetry) gives the denominator.
+
+variants:
+  - {model_label: tt-rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: tt-rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: tt-rep3, model_id: Qwen3.6-35B-A3B-6bit}
