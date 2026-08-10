@@ -1,0 +1,60 @@
+# vendor.sdd — third-party patch sources owned by luxe
+
+Contract for `vendor/`. Walk this before editing anything under it.
+
+## Purpose
+
+Sources that luxe authors but that **execute inside someone else's package**.
+Today that is oMLX, which ships as a Homebrew formula with a bundled Python
+env. Its `omlx/patches/` tree is replaced wholesale by `brew upgrade omlx`, so
+anything written only there is lost on the next upgrade. `vendor/` is the
+durable, version-controlled, tested home; installation is a copy.
+
+## Owns
+
+- `vendor/omlx_patches/` — patch packages mirroring oMLX's own
+  `omlx/patches/<name>/` layout, plus `install.py` (copy / `--check` /
+  `--uninstall`, locates oMLX via the `omlx` shebang interpreter).
+- `vendor/omlx_patches/muse_glimmer/` — ATEM tool-call parsing for Meta's
+  Muse Glimmer. Registers `mlx_lm.tool_parsers.muse_glimmer` and teaches
+  parser inference the `<atem:invoke` marker.
+
+## Must
+
+- Keep every patch **upstream-first**: `apply_*()` returns False and changes
+  nothing when the pinned package already provides the feature, so the patch
+  becomes a no-op the day upstream merges.
+- Keep `apply_*()` **idempotent** — re-application is a no-op, not a double
+  wrap. Mark wrapped callables with a `_omlx_<name>` attribute and check it.
+- Patch **every** binding of a wrapped function. `mlx_vlm.tool_parsers` does
+  `from mlx_lm.tokenizer_utils import _infer_tool_parser` at import time and
+  therefore holds its own reference; rebinding only the mlx-lm attribute
+  leaves the VLM path unpatched. VLMs take the mlx-vlm path.
+- Ship tests under `tests/` that import the module by file path. They must run
+  in luxe's venv with **no** oMLX/mlx dependency — that is what keeps the
+  patch verifiable when the target model cannot load.
+- State the patch's scope honestly in its docstring, including what it does
+  **not** fix.
+
+## Must not
+
+- Depend on packages absent from luxe's venv (e.g. `regex`, `jinja2`,
+  `transformers`). Use the stdlib unless a feature genuinely requires more —
+  a dependency here silently narrows where the tests can run.
+- Strip or normalise model-emitted values beyond what the model's own template
+  specifies. Muse Glimmer's template states spaces are *not* stripped and the
+  output is *not* valid XML; stripping corrupts code and diffs, and an XML
+  parser raises on it.
+- Auto-edit large vendor sources. `install.py` copies packages and *prints*
+  the `oq.py` wiring snippet rather than applying it: `oq.py` is ~309 KB, the
+  edit cannot be exercised until the target model loads, and a bad edit breaks
+  the server luxe depends on daily.
+
+## Forbids
+
+- Importing anything from `vendor/` into `src/luxe/`. These run inside oMLX's
+  interpreter, not luxe's; the benchmark and chat paths must not gain a
+  dependency on a patch's presence.
+- Treating an installed patch as load-bearing for any luxe behaviour. Every
+  patch is an optimisation of the *server's* capability. luxe must behave
+  identically whether or not it is installed.

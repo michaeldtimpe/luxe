@@ -35,25 +35,59 @@ encoder + GELU projector. 128K trained context, Apache 2.0, knowledge cutoff
    0 downloads — consistent with the uploader waiting on #1839. The champion
    is 6-bit, so the 6-bit repo is the one needed for precision parity; a
    6-bit-vs-4-bit result would not be interpretable as a model comparison.
-3. **Tool-call format has no parser in oMLX.** The chat template emits XML —
-   `<atem:function_calls>` / `<atem:invoke name="…">` /
-   `<atem:parameter name="…">`. oMLX scans for `[TOOL_CALLS]`, `<tool_call>`,
-   `<|tool_call_start|>`, `<|content_invoke_tool_json|>` — all JSON-shaped —
-   and has per-family parsers under `omlx/patches/` (deepseek_v4, hy_v3,
-   minimax_m3) but nothing for `atem`. Benching anyway would return the XML
-   as ordinary assistant **content**, luxe would see zero `tool_calls`, and
-   the agentic suite would score ~0 on a parser gap rather than on model
-   quality — the silent text-fallback-drop class from the 2026-08-04 taxonomy
-   work. This blocker is independent of blockers 1–2 and does **not** clear
-   when #1838 merges.
+3. **~~Tool-call format has no parser in oMLX.~~ CLOSED 2026-08-10 — see
+   below.** The chat template emits XML — `<atem:function_calls>` /
+   `<atem:invoke name="…">` / `<atem:parameter name="…">`. oMLX scanned only
+   for `[TOOL_CALLS]`, `<tool_call>`, `<|tool_call_start|>`,
+   `<|content_invoke_tool_json|>` — all JSON-shaped — so inference returned
+   `None` and the markup would have come back as ordinary assistant
+   **content**, scoring the agentic suite ~0 on a parser gap rather than on
+   model quality (the silent text-fallback-drop class from the 2026-08-04
+   taxonomy work). This blocker was independent of 1–2 and would **not** have
+   cleared when #1838 merges, which is why it was worth fixing ahead of them.
 4. **It is a VLM.** `ForConditionalGeneration` + `vision_config` routes it to
    oMLX's vlm engine — the same slow path CLAUDE.md documents for Qwen3.6
    that drove the 2026-07-30 m1/m4 manifest flip. A wall-clock/TPS comparison
    on that engine measures the engine, not the model.
 
+**Blocker 3 fixed (2026-08-10)** — `vendor/omlx_patches/muse_glimmer/`, a new
+`vendor/` tree (contract: `vendor/vendor.sdd`) for sources luxe authors that
+run inside *someone else's* package. `brew upgrade omlx` replaces oMLX's
+`patches/` tree wholesale, so the durable home is here and installation is a
+copy: `uv run python vendor/omlx_patches/install.py [--check|--uninstall]`.
+
+- **Parser** registers `mlx_lm.tool_parsers.muse_glimmer` (module-level
+  `tool_call_start`/`tool_call_end` + `parse_tool_call(text, tools)`, returning
+  a list when a block holds several invokes, as gemma4/kimi_k2 do).
+- **Both inference paths are patched.** `mlx_vlm.tool_parsers` binds
+  `_infer_tool_parser` from mlx-lm *at import time*, so rebinding the mlx-lm
+  attribute alone leaves the VLM path — the one Muse Glimmer takes — blind.
+- **Values are never stripped and never XML-parsed.** The template says so
+  itself: *"spaces for string values are not stripped… not expected to be valid
+  XML and is parsed with regular expressions."* Its own worked example spans
+  three lines with embedded quotes. Typing mirrors the emitter (`json.loads`
+  with a raw-string fallback), with the tool schema authoritative for
+  `type: string` so `"1.10"` stays a string.
+- **Verified in oMLX's real env** (no model needed): before, both paths infer
+  `None`; after, both infer `muse_glimmer`, `load_tool_module` resolves,
+  `parse_tool_call` types correctly against a schema, glm47 inference is
+  unregressed, re-apply is a no-op. Plus **18 unit tests** in
+  `tests/test_muse_glimmer_tool_parser.py` that round-trip through a mirror of
+  the template's `render_atem` macro and one verbatim-copied template example.
+  Suite 2394 green.
+- **Not wired into `oq.py`.** The patch is copied but nothing calls it;
+  `install.py` prints the snippet instead of applying it. Wiring gains nothing
+  until #1838 merges (no model can load), `brew upgrade omlx` — the very thing
+  that will deliver #1838 — wipes patch and wiring alike, and a bad edit to a
+  309 KB vendor source breaks the server luxe uses daily. Wire it when the
+  arch lands.
+- **Upstream-first**: `apply_muse_glimmer_patch()` no-ops the day mlx-lm or
+  mlx-vlm ships its own `muse_glimmer` parser.
+
 **Rejected today**: GGUF via llama.cpp (day-0 support upstream) is the only
-route that runs *now*, but it is a second inference stack on m5/m1 and does
-not solve blocker 3 — it buys nothing for an agentic bench.
+route that runs *now*, but it is a second inference stack on m5/m1 and — before
+the patch above — did not solve blocker 3 either; it buys nothing for an
+agentic bench.
 
 **Policy note**: an explicit user request for a comparison clears the
 single-champion carve-out ("no A/B against another model unless the user
