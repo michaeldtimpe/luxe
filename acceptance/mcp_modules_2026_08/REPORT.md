@@ -8,6 +8,12 @@
 > remaining private repo, host-user and printer names are placeholders. The
 > unredacted original sits beside this file as `REPORT.private.md`, which the default
 > `acceptance/*` ignore keeps out of git.
+>
+> **Correction (2026-08-10):** as written this report twice said neo runs
+> 1.5B GGUFs. neo's champion became `Qwen3-4B-Instruct-2507-Q4_K_M` on
+> 2026-08-03 — the day before this run — so 4B was already correct at
+> execution time. Corrected in place; nothing else about those passages
+> changed.
 
 **Executed:** 2026-08-04, autonomously from m5, per `acceptance/mcp_modules_2026_08/plan.md`.
 **Outcome:** All six phases complete. All three modules built, deployed, and
@@ -144,7 +150,7 @@ Any combination composes in one session.
 
 **Deviation from the plan, deliberate:** the plan didn't mention
 `luxe-hostconfig.sh`, but the wrappers must source it — neo is an 8 GB box
-that runs 1.5B GGUFs through the llama.cpp router and needs
+that runs a 4B GGUF through the llama.cpp router and needs
 `~/dotfiles/luxe/neo.yaml`. Without it a module wrapper on neo would try the
 fleet's 35B config. `luxe-module` sources it exactly as `luxe-chat` does. This
 also supersedes the plan's §5.4 note about pointing neo at `--backend m5`:
@@ -354,7 +360,7 @@ ls -d /opt/homebrew/Cellar/omlx/*/             →  0.5.7   (created 06:42)
 installed 0.5.7, three versions stale, with its fallback turn broken too. That
 means the loud-auto-degrade path the fallback kit exists to provide was
 silently unavailable on the primary interactive host. neo runs no oMLX (it
-serves 1.5B GGUFs through the llama.cpp router), so it was unaffected.
+serves a 4B GGUF through the llama.cpp router), so it was unaffected.
 
 **Fix:** `brew services restart omlx` on both.
 
