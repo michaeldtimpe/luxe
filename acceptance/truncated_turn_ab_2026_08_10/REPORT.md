@@ -106,6 +106,32 @@ line), which buys the suite-level fix without changing the interactive path.
 Keep `terminal_turn_truncated` ungated either way. It costs nothing and it is
 the only thing that distinguishes "finished" from "cut off" in the records.
 
+## Confirmation run on the shipped default (2026-08-10, 18:42→19:10)
+
+The default was flipped ON in `2e453eb`. This run re-ran the same 3 reps × 10
+fixtures with **no env overrides at all**, so it exercises the shipped default
+rather than a forced `LUXE_TRUNCATED_TURN_RETRY=1`. That distinction matters:
+it would catch a flip that landed in `flags.py` but never reached the loop,
+which unit tests can miss when wiring changes.
+
+| | A/B treatment (forced =1) | confirmation (shipped default) |
+|---|---|---|
+| passed | 30/30 | **30/30** |
+| score | 120/150 | **120/150** |
+| release gate, all 3 reps | true | true |
+| avg wall | 53.6s | 53.4s |
+| avg tokens | 161,948 | 161,904 |
+| `truncated_turn_retry` firings | 3 | **3** (all retry #1, ct=8192) |
+| `terminal_turn_truncated` | 0 | **0** |
+
+Every fixture 3/3, including `lpe-rope-calc-implement-strict-flag` at
+`[4, 4, 4]`. The two runs agree to within 0.2s of wall and 44 tokens, which is
+also a useful incidental result: this suite reproduces tightly on the champion,
+unlike the SWE-bench fixtures behind the temp=0 non-determinism note.
+
+Output: `acceptance/truncated_turn_confirm_2026_08_10/` (untracked; numbers
+recorded here).
+
 ## Reproduce
 
 ```bash
