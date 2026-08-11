@@ -415,6 +415,91 @@ def _inject_forbids_create_sdd(repo: Path, patterns: list[str]) -> None:
             fh.write(f"\n# luxe synth .sdd (forbids_create injection)\n{entry}\n")
 
 
+# --- branch retention -----------------------------------------------------
+#
+# Every run commits the agent's work to a new branch and nothing ever removed
+# it, in BOTH the workspace clone and the fixture-cache origin it was pushed
+# to. `luxe.pr.plan_branch_name` walks `<prefix>/<task>/<slug>`, `-2` … `-99`
+# and then raises, so a fixture died permanently at ~99 runs on the same goal.
+#
+# That is worse than an outage: A/B arms run sequentially, so the arm running
+# SECOND absorbs the exhaustion and its fixtures score 0 with a PRError the
+# scoreboard renders as an ordinary failure. On 2026-08-10 that manufactured a
+# clean-looking 116-vs-108 "regression" that was pure arm ordering
+# (acceptance/pwir_rerun_2026_08_10/BRANCH-LEAK.md).
+#
+# Deleting the branch right after grading is NOT an option: scripts/
+# regrade_local.py checks out the pushed branch to re-grade, so the recent ones
+# have to survive. Hence a retention window — keep the newest N per goal slug,
+# drop the rest, and say what was dropped (maintain_suite.sdd forbids silent
+# truncation).
+_BRANCH_RETENTION = int(os.environ.get("LUXE_BENCH_BRANCH_RETENTION", "25"))
+
+
+def _prune_old_branches(repo: Path, prefix: str, keep: int,
+                        log_fn=None) -> list[str]:
+    """Drop all but the `keep` newest `<prefix>/*` branches, per goal slug.
+
+    Grouped by slug because the allocator's 99-name budget is per slug, not per
+    repo: 400 branches spread over 20 slugs is fine, 99 on one is fatal.
+    Sorted by committerdate so "newest" means most recently produced.
+    Never touches the checked-out branch (git refuses) or any other prefix.
+    """
+    # keep<=0 is a no-op, not a wipe: a misconfigured retention must not be
+    # the thing that deletes every branch.
+    if keep <= 0 or not Path(repo).is_dir():
+        # A missing cwd makes subprocess raise FileNotFoundError before git
+        # even starts, and housekeeping must never take down a bench run.
+        return []
+    r = subprocess.run(
+        # Trailing slash, NOT `refs/heads/<prefix>/*` — the glob does not
+        # descend and silently matches nothing, which would turn this into a
+        # permanent no-op that still looks like it ran.
+        ["git", "for-each-ref", "--sort=-committerdate",
+         "--format=%(refname:short)", f"refs/heads/{prefix}/"],
+        cwd=repo, capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        return []
+    by_slug: dict[str, list[str]] = {}
+    for name in (x for x in r.stdout.splitlines() if x.strip()):
+        # strip a trailing -<n> so `foo` and `foo-7` share a bucket
+        slug = re.sub(r"-\d+$", "", name)
+        by_slug.setdefault(slug, []).append(name)   # already newest-first
+
+    doomed = [n for names in by_slug.values() for n in names[keep:]]
+    if not doomed:
+        return []
+    deleted: list[str] = []
+    for i in range(0, len(doomed), 200):            # bounded argv
+        chunk = doomed[i:i + 200]
+        d = subprocess.run(["git", "branch", "-D", *chunk], cwd=repo,
+                           capture_output=True, text=True, check=False)
+        if d.returncode == 0:
+            deleted.extend(chunk)
+    if deleted and log_fn:
+        log_fn(f"  pruned {len(deleted)} old {prefix}/* branch(es) in "
+               f"{repo.name} (keeping newest {keep} per slug)")
+    return deleted
+
+
+def _prune_for_fixture(fixture: Fixture, clone: Path, log_fn=print) -> None:
+    """Prune the clone AND the origin it pushes to. Best-effort: a prune
+    failure must never fail a bench run."""
+    try:
+        from luxe.pr import load_pr_config
+        prefix = load_pr_config().branch_prefix
+    except Exception:
+        prefix = "luxe"
+    origin = Path(fixture.repo_url).expanduser() if fixture.repo_url else None
+    for repo in (clone, origin):
+        if repo is None or not repo.is_dir():
+            continue
+        try:
+            _prune_old_branches(repo, prefix, _BRANCH_RETENTION, log_fn)
+        except Exception:
+            pass
+
+
 # --- repo resolution ------------------------------------------------------
 
 def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
@@ -445,6 +530,7 @@ def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
                                        capture_output=True, text=True, check=False)
                     if r.returncode != 0:
                         return None, f"{' '.join(cmd)} failed: {r.stderr.strip()}"
+            _prune_for_fixture(fixture, target)
             _inject_forbids_create_sdd(target, fixture.forbids_create)
             return target, ""
         r = subprocess.run(["git", "clone", "--quiet", fixture.repo_url, str(target)],
@@ -456,6 +542,7 @@ def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
                                 capture_output=True, text=True, check=False)
             if r2.returncode != 0:
                 return None, f"git checkout {fixture.base_sha} failed: {r2.stderr.strip()}"
+        _prune_for_fixture(fixture, target)
         _inject_forbids_create_sdd(target, fixture.forbids_create)
         return target, ""
     return None, "fixture has neither repo_path nor repo_url"

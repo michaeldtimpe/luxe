@@ -9,10 +9,24 @@ single pipeline; new fixtures must declare their per-requirement spec.
 - New fixtures land with a `requirements:` block (SpecDD Lever 1 schema)
 - Bench runs use `--work-dir ~/.luxe/bench-workspace` (variance leak fix)
 - Sidecar regrade via `scripts/regrade_local.py` re-runs the citation linter against `synthesizer.md`
+- Bench runs PRUNE their own branch backlog: `_prune_old_branches` keeps the
+  newest `LUXE_BENCH_BRANCH_RETENTION` (25) `<prefix>/*` branches PER GOAL SLUG
+  in both the workspace clone and the fixture-cache origin, and logs what it
+  dropped. Grouping is per slug because `luxe.pr.plan_branch_name`'s 99-name
+  budget is per slug — a repo-wide cap would still let one hot slug die.
+  Retention, not delete-after-grading: `regrade_local.py` checks the pushed
+  branch out, so recent ones must survive. `keep<=0` is a no-op, never a wipe
 - Borderline document/manage fixtures replicate 3× before claiming a regression
 
 ## Must not
 - Run bench without `--keep-loaded` (post-run unload fires by default)
+- Let the branch backlog grow unpruned. Before 2026-08-11 nothing removed bench
+  branches, so a fixture died permanently at ~99 runs on one goal with
+  `PRError: Cannot find a free branch name`. Because A/B arms run sequentially
+  the arm running SECOND absorbed the exhaustion and its fixtures scored 0,
+  which the scoreboard renders as an ordinary failure — it manufactured a
+  clean-looking 116-vs-108 "regression" that was pure arm ordering. See
+  `acceptance/pwir_rerun_2026_08_10/BRANCH-LEAK.md`
 - Trust `scripts/regrade_local.py` results that read `origin/<branch>` (pre-v1.4.1 bug; fixed but stay alert)
 - Add fixtures without `task_type` in the YAML (cve_lookup gating depends on it)
 
