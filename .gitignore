@@ -91,6 +91,10 @@ acceptance/pwir_ab_2026_08_10/*
 !acceptance/pwir_ab_2026_08_10/REPORT.md
 !acceptance/pwir_ab_2026_08_10/STRICT-FLAG-FINDING.md
 !acceptance/pwir_ab_2026_08_10/SWEBENCH-VENUE-CHECK.md
+!acceptance/pwir_rerun_2026_08_10/
+acceptance/pwir_rerun_2026_08_10/*
+!acceptance/pwir_rerun_2026_08_10/REPORT.md
+!acceptance/pwir_rerun_2026_08_10/BRANCH-LEAK.md
 !acceptance/truncated_turn_ab_2026_08_10/
 acceptance/truncated_turn_ab_2026_08_10/*
 !acceptance/truncated_turn_ab_2026_08_10/REPORT.md

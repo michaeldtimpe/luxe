@@ -196,10 +196,19 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   guard by topping up an existing 2-streak (`baseline_streak=1 →
   treatment_streak=3` in all 9 cases). REPORT.md's claim that it "can never arm
   the guard by itself" was an overstatement of a correct empirical result.
-- Expected effect if re-benched: on the one affected fixture the single write
-  lands at step 9 and ~60 non-productive calls follow, so firing would be a
-  clean exit with the diff already on disk. Judge such a re-bench on wall and
-  tokens, not score.
+- **RE-BENCHED 2026-08-10 and REFUTED.** With opportunity present (3 runs per
+  arm had a streak reaching 3 only when repeats count) the switch changed
+  nothing: 30/30 and 120/150 in BOTH arms, `post_write_idle_exit` 12 in both
+  with an identical per-fixture distribution, wall identical to 0.1s, tokens
+  +0.3%. The predicted wall/token saving did not materialise because in those
+  runs the guard already armed via the zero-byte path. Report:
+  `acceptance/pwir_rerun_2026_08_10/REPORT.md`.
+- Disposition: keep in-tree, default OFF, documented as refuted — same as
+  `LUXE_RESPOND_TERMINAL` and the trajectory-shape suppressor. **Do not
+  re-bench on maintain_suite**; two 3-rep A/Bs from opposite starting
+  conditions (no opportunity, then opportunity) agree. Reviving it needs a
+  workload where post-write repeat streaks reach 3 WITHOUT zero-byte calls
+  already getting there.
 
 ### Truncated-turn retry (pinned 2026-08-10, DEFAULT-ON, BENCHED)
 
