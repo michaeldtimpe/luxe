@@ -504,6 +504,9 @@ invariants in its `.sdd` you must read before enabling:
   toward the `post_write_idle` streak instead of resetting it. Closes a blind
   spot the guard's own docstring claimed to cover: `read_file` is
   `_DEDUP_EXEMPT`, so a repeated read returns content and resets the streak.
+  **REFUTED at n=2 A/Bs (2026-08-10)** — with opportunity present it changed
+  no score, no firing count and no wall; keep default OFF and do not re-bench
+  on maintain_suite.
   Demonstrated on m1 (a post-edit read of an already-read key, `dup=False`,
   78 bytes, which reset the streak). It is a LATENT gap, not the cause of a
   known abort — m1's code-drill failure was a step-budget problem, fixed

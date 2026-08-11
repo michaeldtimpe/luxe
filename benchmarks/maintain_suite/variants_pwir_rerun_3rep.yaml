@@ -1,0 +1,53 @@
+# LUXE_POST_WRITE_IDLE_REPEATS A/B, SECOND RUN — 3 reps per arm (2026-08-10).
+#
+# The first A/B (acceptance/pwir_ab_2026_08_10/REPORT.md) found the switch
+# INERT: across its 60 runs the pattern never reached _POST_WRITE_IDLE_MAX=3,
+# so both arms were behaviourally identical and the default stayed OFF.
+#
+# WHY RE-RUN. An offline replay of 1,369 archived trajectories
+# (SWEBENCH-VENUE-CHECK.md) showed the pattern IS present in current runs:
+# 9 of 154 August maintain_suite runs (5.8%) would change, all on
+# nothing-ever-happens-document-config. SWE-bench, the venue the first report
+# recommended, turned out to be worse (0.8% of 896 runs, 0% in the most recent
+# month), so this suite is the place to settle it. The first A/B's own 60 runs
+# genuinely had zero opportunity (re-verified 0/60) — its verdict was right for
+# its sample, and this is a different sample, not a re-litigation.
+#
+# THE HYPOTHESIS IS NOT "HIGHER SCORE". On the one affected fixture the single
+# write lands at step 9 and ~60 non-productive calls follow, with the 187-line
+# diff already complete before the streak arms. Firing should therefore be a
+# CLEAN exit (post_write_idle_exit sets aborted=False) with the work on disk —
+# saving steps, wall, and prompt tokens on a fixture that ALREADY PASSES 3/3.
+#
+# PROMOTION CRITERIA (fixed before the run):
+#   1. Score UNCHANGED: 120/150 in both arms, every fixture 3/3. A score move
+#      in EITHER direction is the suspicious outcome here, not the win — up
+#      would mean the guard is doing something other than what was diagnosed,
+#      down means it truncates real work.
+#   2. Wall and/or tokens DOWN in treatment, driven by the affected fixture.
+#      This is the actual win condition. No measurable saving = no promotion;
+#      an inert-but-harmless switch is not worth a default change.
+#   3. Firings land only where the diff is already complete. Inspect each
+#      post_write_idle_exit by hand: writes_seen > 0 and no further write would
+#      have followed. A firing before the work is done is disqualifying.
+#   4. No fixture that passes 3/3 in baseline may fail in treatment.
+#
+# Both arms run with the CURRENT substrate, which now has
+# LUXE_TRUNCATED_TURN_RETRY default-ON (2e453eb) — that is deliberate; the
+# question is what this switch adds on top of what ships today.
+#
+#   env -u LUXE_POST_WRITE_IDLE_REPEATS uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_pwir_rerun_3rep.yaml \
+#     --output acceptance/pwir_rerun_2026_08_10/baseline/ --per-fixture-timeout 1800
+#
+#   LUXE_POST_WRITE_IDLE_REPEATS=1 uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_pwir_rerun_3rep.yaml \
+#     --output acceptance/pwir_rerun_2026_08_10/treatment/ --per-fixture-timeout 1800
+#
+# Sequential — concurrent arms contend for the same weights and the wall
+# numbers, which are the measurement this time, become meaningless.
+
+variants:
+  - {model_label: pwir2-rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: pwir2-rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: pwir2-rep3, model_id: Qwen3.6-35B-A3B-6bit}
