@@ -183,10 +183,23 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   a lone repeat can never arm the guard. The wall/token deltas are substrate
   noise — no firing decision changed. Report:
   `acceptance/pwir_ab_2026_08_10/REPORT.md`.
-- Promotion would need a corpus where the pattern actually occurs (SWE-bench
-  trajectories, or the chat/code drills where m1 shows a post-edit repeated
-  read) — maintain_suite fixtures are too small to produce it. Do not re-run
-  this suite expecting a different answer.
+- Venue check done offline against 1,369 archived trajectories, 2026-08-10
+  (`acceptance/pwir_ab_2026_08_10/SWEBENCH-VENUE-CHECK.md`). **SWE-bench is the
+  WRONG venue**: the switch would change 7 of 896 runs (0.8%), and 0 of the 136
+  most recent. An n=75 A/B there would expect under one affected instance.
+- **maintain_suite is now the right venue, and the earlier "do not re-run this
+  suite" note is withdrawn.** 9 of 154 August runs (5.8%) would change, all on
+  `nothing-ever-happens-document-config` — the fixture with documented temp=0
+  variance. The A/B's own 60 runs really did have zero opportunity (re-checked,
+  0/60), so its verdict stands; the pattern shows up in later runs.
+- Careful with the reasoning, not just the verdict: a lone repeat CAN arm the
+  guard by topping up an existing 2-streak (`baseline_streak=1 →
+  treatment_streak=3` in all 9 cases). REPORT.md's claim that it "can never arm
+  the guard by itself" was an overstatement of a correct empirical result.
+- Expected effect if re-benched: on the one affected fixture the single write
+  lands at step 9 and ~60 non-productive calls follow, so firing would be a
+  clean exit with the diff already on disk. Judge such a re-bench on wall and
+  tokens, not score.
 
 ### Truncated-turn retry (pinned 2026-08-10, DEFAULT-ON, BENCHED)
 

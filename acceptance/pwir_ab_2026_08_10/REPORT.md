@@ -49,10 +49,15 @@ same run, after the first write) across all 60 runs:
 | runs containing ≥1 | 12/30 | 13/30 |
 | **max per run** | **1** | **1** |
 
-Every run that has a post-write repeat has **exactly one**. A lone repeat can
-contribute at most 1 to a streak that requires 3, so it can never arm the
-guard by itself — it would need two adjacent 0-byte/error calls, which did not
-co-occur in any of the 60 runs. The identical firing count (9 = 9) confirms
+Every run that has a post-write repeat has **exactly one**, and no run pairs it
+with two adjacent 0-byte/error calls, so none reaches the threshold of 3.
+Re-verified offline afterwards: would-change is **0/60** for this sample.
+
+> **Correction (2026-08-10).** An earlier wording here said a lone repeat "can
+> never arm the guard by itself". That is wrong as a general claim — a repeat
+> topping up an existing 2-streak reaches 3, and that is exactly how the
+> pattern shows up in later August runs. The empirical result for THIS sample
+> (0/60) is unaffected. See `SWEBENCH-VENUE-CHECK.md`. The identical firing count (9 = 9) confirms
 it: the switch never converted a 2-streak into a 3-streak.
 
 That also explains the identical scores. The arms are not "statistically
@@ -75,7 +80,9 @@ since no firing decision changed. They are substrate noise.
   code drill shows a post-edit repeated read; see agents.sdd).
 
 If the switch is ever to be promoted, it needs a corpus where the pattern is
-present — SWE-bench trajectories or the chat/code drills, not this suite.
+present. **That was checked offline on 2026-08-10 and SWE-bench is NOT it**
+(0.8% of 896 runs, 0% in the most recent month) — maintain_suite today is, at
+5.8%. See `SWEBENCH-VENUE-CHECK.md`.
 
 ## Unrelated finding — investigated separately
 
