@@ -91,6 +91,9 @@ acceptance/pwir_ab_2026_08_10/*
 !acceptance/pwir_ab_2026_08_10/REPORT.md
 !acceptance/pwir_ab_2026_08_10/STRICT-FLAG-FINDING.md
 !acceptance/pwir_ab_2026_08_10/SWEBENCH-VENUE-CHECK.md
+!acceptance/baseline_2026_08_11/
+acceptance/baseline_2026_08_11/*
+!acceptance/baseline_2026_08_11/REPORT.md
 !acceptance/pwir_rerun_2026_08_10/
 acceptance/pwir_rerun_2026_08_10/*
 !acceptance/pwir_rerun_2026_08_10/REPORT.md

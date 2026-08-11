@@ -1,0 +1,22 @@
+# Standard 3-rep baseline on the champion. No hypothesis, no arms — this is the
+# "where does the suite actually stand right now" run.
+#
+# 3 reps because temp=0 is not deterministic on this substrate
+# (project_substrate_noise_temp0_not_deterministic) and maintain_suite.sdd
+# requires 3x replication before claiming a regression. Reps also expose
+# fixture-level flakiness that a single pass hides.
+#
+# Run with NO env overrides so it measures the SHIPPED defaults, whatever they
+# currently are — that is the point of a baseline, and it is the check a forced
+# treatment arm cannot make.
+#
+#   uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_baseline_3rep.yaml \
+#     --output acceptance/baseline_<yyyy_mm_dd>/ --per-fixture-timeout 1800
+#
+# ~28 min for 30 runs.
+
+variants:
+  - {model_label: baseline-rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: baseline-rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: baseline-rep3, model_id: Qwen3.6-35B-A3B-6bit}
