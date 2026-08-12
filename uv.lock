@@ -1074,6 +1074,7 @@ chat = [
     { name = "textual" },
 ]
 dev = [
+    { name = "mpmath" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -1101,6 +1102,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "mlx-lm", marker = "extra == 'extended-bench'", specifier = ">=0.31" },
     { name = "mpmath", marker = "extra == 'bfcl'", specifier = ">=1.3" },
+    { name = "mpmath", marker = "extra == 'dev'", specifier = ">=1.3" },
     { name = "mypy", marker = "extra == 'analyzers'", specifier = ">=1.8" },
     { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10.0" },
     { name = "pip-audit", marker = "extra == 'analyzers'", specifier = ">=2.7" },
