@@ -1,7 +1,4 @@
 {
-  "extra_body": {
-    "num_ctx": 32768
-  },
   "max_tokens": 8192,
   "messages": [
     {
@@ -14,6 +11,7 @@
     }
   ],
   "model": "golden-model",
+  "num_ctx": 32768,
   "stream": false,
   "temperature": 0.0,
   "tools": [
