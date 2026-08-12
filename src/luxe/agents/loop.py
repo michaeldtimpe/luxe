@@ -60,7 +60,6 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _HABITUATION_EXIT_MIN_STEP,
     _MAX_CONSECUTIVE_REPEAT_STEPS,
     _POST_WRITE_IDLE_MAX,
-    _TRUNCATED_TURN_MAX_RETRIES,
     _TRUNCATED_TURN_MESSAGE,
     TruncatedTurnGuard,
     _PROSE_BURST_MAX_STEP,
@@ -78,8 +77,11 @@ from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import (
     TieredCompact,
+    calibrated_ctx_limit,
+    calibration_ratio,
     context_pressure,
     elide_old_tool_results,
+    estimate_messages_tokens,
 )
 from luxe.run_state import append_event
 from luxe.spec import Spec
@@ -293,6 +295,7 @@ def run_agent(
     early_bail_message: str | None = None,
     on_token: Callable[[str], None] | None = None,
     on_progress: Callable[[float], None] | None = None,
+    on_notice: Callable[[str], None] | None = None,
 ) -> AgentResult:
     """Run the agent loop: chat → tool calls → dispatch → repeat.
 
@@ -311,10 +314,27 @@ def run_agent(
     code is correct"), which was the source of 3 wrong→empty regressions
     in v1.7's B.5. maintain_suite uses the default (abstain is sometimes
     a legitimate outcome there). Pass None to use the default.
+
+    `on_notice` (2026-08-11) receives one-line, human-facing statements about
+    the loop acting on its own — today, the truncated-turn retry. It exists
+    because that mechanism can spend several minutes of a chat turn (a full
+    capped generation per retry) while the UI shows nothing but a spinner:
+    the only record was `events.jsonl`, which nobody reads mid-turn. Display
+    only. It never influences control flow, is never consulted for a decision,
+    and defaults to None, so the benchmark/maintain path is unchanged.
     """
 
     result = AgentResult()
     t0 = time.monotonic()
+
+    def _notice(text: str) -> None:
+        """Display-only; a broken front-end callback must not kill the run."""
+        if on_notice is None:
+            return
+        try:
+            on_notice(text)
+        except Exception:
+            logger.debug("on_notice raised", exc_info=True)
     # Every LUXE_* switch this run obeys, read once, here (agents/flags.py).
     # Same variables, same defaults, same malformed-value fallbacks as the
     # sixteen scattered os.environ.get() calls this replaced; each is still
@@ -375,7 +395,15 @@ def run_agent(
     convergence_gate_enabled = flags.convergence_gate
     post_write_idle_repeats = flags.post_write_idle_repeats
     truncated_turn_retry_enabled = flags.truncated_turn_retry
+    truncated_turn_max_retries = flags.truncated_turn_max_retries
     truncated_turn_retries_used = 0
+    # Server-truth context calibration (2026-08-11). `estimate_tokens` is
+    # chars//4 and reads ~1.9x low on code + JSON tool payloads, so every
+    # compaction threshold fired at roughly twice the context it named. Each
+    # response's `usage.prompt_tokens` corrects the next step's reading.
+    # 1.0 = uncalibrated, which is both the step-1 state and the ablation.
+    ctx_server_truth_enabled = flags.ctx_server_truth
+    ctx_calibration = 1.0
     # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
     # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
     # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
@@ -537,14 +565,26 @@ def run_agent(
     for step in range(role_cfg.max_steps):
         result.steps = step + 1
 
-        pressure = context_pressure(messages, role_cfg.num_ctx)
+        # The window every pressure consumer divides by this step. From step 2
+        # on it is `num_ctx` shrunk by however far the chars/4 estimate ran
+        # under the server's own `usage.prompt_tokens` last call — see
+        # `calibrated_ctx_limit`. Step 1 has nothing to calibrate against and
+        # uses `num_ctx` raw, which is the historical behaviour.
+        effective_ctx = calibrated_ctx_limit(role_cfg.num_ctx, ctx_calibration)
+
+        pressure = context_pressure(messages, effective_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
         result.final_context_pressure = pressure  # instantaneous; matches token-progress
-        # Per-step ctx forensics (chars/4 ESTIMATE — the server-truth number is
-        # logged by chat's finalize_turn; the two legitimately disagree, the
-        # estimate missing tool schemas). debug.log-only; see logger note at top.
-        logger.debug("step=%d ctx_pressure_est=%.1f%% num_ctx=%d msgs=%d",
-                     step + 1, pressure * 100, role_cfg.num_ctx, len(messages))
+        # Per-step ctx forensics. `est` is the raw chars/4 reading, `cal` the
+        # correction applied; when cal != 1.0 the reported pressure is
+        # server-calibrated and should track chat's finalize_turn number rather
+        # than sitting at half of it. debug.log-only; see logger note at top.
+        logger.debug("step=%d ctx_pressure=%.1f%% (est=%.1f%% cal=%.2fx) "
+                     "num_ctx=%d effective_ctx=%d msgs=%d",
+                     step + 1, pressure * 100,
+                     context_pressure(messages, role_cfg.num_ctx) * 100,
+                     ctx_calibration, role_cfg.num_ctx, effective_ctx,
+                     len(messages))
         if on_progress is not None:
             on_progress(pressure)  # chat-only live ctx% (one source of truth, C2)
 
@@ -945,7 +985,7 @@ def run_agent(
                     )
 
         if tiered_compact_enabled and _tiered_compactor is not None:
-            cr = _tiered_compactor.compact(messages, role_cfg.num_ctx)
+            cr = _tiered_compactor.compact(messages, effective_ctx)
             messages = cr.messages
             if cr.phase_reached > 0:
                 compaction_tool_results_dropped_total += cr.tool_results_dropped
@@ -962,7 +1002,12 @@ def run_agent(
                         tool_results_dropped=cr.tool_results_dropped,
                     )
         else:
-            messages = elide_old_tool_results(messages, role_cfg.num_ctx)
+            messages = elide_old_tool_results(messages, effective_ctx)
+
+        # What we are about to send, measured the same way the calibration
+        # divides it — AFTER compaction, so the ratio describes the request the
+        # server actually answers.
+        est_sent = estimate_messages_tokens(messages)
 
         try:
             resp = backend.chat(
@@ -986,6 +1031,19 @@ def run_agent(
         result.completion_tokens += resp.timing.completion_tokens
         if resp.timing.prompt_tokens:
             result.last_prompt_tokens = resp.timing.prompt_tokens
+
+        # Recalibrate from the response we just got. Re-measured every step
+        # rather than latched once: the mix shifts as tool payloads accumulate,
+        # and a run that starts on prose and ends on JSON should not keep the
+        # first step's ratio. `calibration_ratio` clamps and degrades to 1.0 on
+        # a missing/zero usage report.
+        if ctx_server_truth_enabled:
+            new_cal = calibration_ratio(resp.timing.prompt_tokens, est_sent)
+            if new_cal != ctx_calibration:
+                logger.debug("ctx calibration %.2fx -> %.2fx "
+                             "(server=%d est=%d)", ctx_calibration, new_cal,
+                             resp.timing.prompt_tokens, est_sent)
+            ctx_calibration = new_cal
 
         # Token-interval progress logging — fires when cumulative completion
         # tokens crosses each LUXE_TOKEN_LOG_INTERVAL multiple. Lets us see
@@ -1033,6 +1091,7 @@ def run_agent(
                 finish_reason=getattr(resp, "finish_reason", "") or "",
                 has_tool_calls=bool(tool_calls),
                 retries_used=truncated_turn_retries_used,
+                max_retries=truncated_turn_max_retries,
             )
             if tt is not None:
                 # Record the cut-off text before the nudge so the transcript
@@ -1051,9 +1110,20 @@ def run_agent(
                         run_id, "truncated_turn_retry",
                         phase=phase, step=step,
                         retries_used=truncated_turn_retries_used,
-                        max_retries=_TRUNCATED_TURN_MAX_RETRIES,
+                        max_retries=truncated_turn_max_retries,
                         completion_tokens=resp.timing.completion_tokens,
                     )
+                logger.debug(
+                    "truncated turn retry step=%d retries_used=%d max=%d "
+                    "completion_tokens=%d",
+                    step, truncated_turn_retries_used,
+                    truncated_turn_max_retries, resp.timing.completion_tokens)
+                _notice(
+                    f"answer cut off at the {resp.timing.completion_tokens:,}-token "
+                    f"cap with no tool call — retrying "
+                    f"({truncated_turn_retries_used}/{truncated_turn_max_retries}); "
+                    f"each retry costs another full generation"
+                )
                 continue
 
             # SpecDD Lever 1 min_tool_calls gate: before declaring the run
@@ -1099,6 +1169,16 @@ def run_agent(
                     final_text_chars=len(resp.text or ""),
                     retry_enabled=truncated_turn_retry_enabled,
                     retries_used=truncated_turn_retries_used,
+                )
+            if (getattr(resp, "finish_reason", "") or "") == "length":
+                _notice(
+                    f"answer cut off at the {resp.timing.completion_tokens:,}-token "
+                    f"cap — ending the turn "
+                    + (f"({truncated_turn_retries_used} retr"
+                       + ("y" if truncated_turn_retries_used == 1 else "ies")
+                       + " already used)"
+                       if truncated_turn_retries_used
+                       else "without retrying")
                 )
             result.final_text = resp.text
             break

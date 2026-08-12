@@ -104,6 +104,64 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   iterations are also protected. Compaction operates only on messages indexed
   `[2, eligible_end)`.
 
+### Server-truth context calibration (pinned 2026-08-11, DEFAULT-ON, UNBENCHED)
+
+- `LUXE_CTX_SERVER_TRUTH` (`RunFlags.ctx_server_truth`, default ON; only the
+  exact string "0" disables, the tiered_compact spelling). After each response
+  the loop computes `calibration_ratio(resp.timing.prompt_tokens, est_sent)`
+  and folds it into the DENOMINATOR via `calibrated_ctx_limit` — every
+  consumer (`context_pressure`, `TieredCompact.compact`,
+  `elide_old_tool_results`) divides by `effective_ctx` and inherits the
+  correction without learning about it. **The phase thresholds keep their
+  pinned (0.50, 0.85, 0.95) values** — this changes what the fraction MEANS,
+  never the fraction.
+- Why: `estimate_tokens` is `len(text) // 4`, which runs far low on the code
+  and JSON tool payloads an agent loop actually carries. Measured 2026-08-11:
+  1.84x / 1.92x / 2.24x across three turns of session 0e524f033300, and
+  **2.38x-3.69x** through a live 13-step log-analysis run (a 576 KB file read
+  in windows), where `est=19.8%` against a true `47.3%`. So the phases were
+  firing somewhere near 1.0-1.9x of the real window — phases 2 and 3 could not
+  fire at all before the server rejected the prompt outright. The status bar
+  was corrected to server truth in June (`last_prompt_tokens / num_ctx`); the
+  thresholds were not, and the two have disagreed by 2x+ ever since.
+- The ratio is NOT a constant to hardcode: it drifts within a run (3.69x at
+  step 1 down to 2.38x by step 13 as prose displaces the tool schemas the
+  estimate misses hardest) and varies by workload. That is why it is
+  re-measured every step rather than latched or tabulated.
+- Step 1 is always uncalibrated (nothing to calibrate against) and matches the
+  historical reading exactly. Recalibrated EVERY step rather than latched: the
+  prose/code/JSON mix shifts as tool payloads accumulate.
+- `calibration_ratio` degrades to 1.0 on a missing or zero `prompt_tokens` —
+  a backend reporting no usage falls back to the estimate, never to a wrong
+  number — and is clamped to [0.5, 8.0] so one malformed usage block cannot
+  swing compaction to an extreme.
+- **UNBENCHED, and the specific risk is phase 3.** Measured 2026-08-11 on a
+  synthetic 20-step trajectory at num_ctx=32768: the OLD reading gave 37.7%
+  pressure and fired **phase 0** (nothing compacted); the same messages at the
+  real-world cal=2.4x give 90.6% and fire **phase 2** (tool results dropped,
+  all 20 assistant texts preserved); at the 8.0x clamp ceiling they give 302%
+  and fire **phase 3**, which drops 17 of 20 assistant reasoning messages.
+  Phase 3 is the mode `agents.sdd` already records as destructive (it "DESTROY[s]
+  existing patches"; the phase-1-helps/phase-3-hurts split is the compaction
+  cycle's load-bearing finding), and until now it was effectively DEAD CODE —
+  reaching 0.95 on the estimate required ~228% real context, which the server
+  rejects first. Calibration makes it reachable for the first time.
+- That reads as a hazard and is probably the opposite. A high calibration means
+  the prompt genuinely does not fit: at cal=8 an est of 12,368 is ~98,944 real
+  tokens against a 32,768 window, so the OLD behaviour was to compact nothing
+  and send an overflowing prompt into `validate_context_window`'s HTTP 400 —
+  i.e. a **context_overflow bailout**. Phase 3 dropping reasoning is the
+  correct response to a context that has actually overflowed; failing the
+  request is not. **Testable prediction for the bench run: context_overflow
+  bailouts should DECREASE.** (Suggestive prior: C10's own writeup noted "one
+  recovered context_overflow bailout" as the only delta between two arms that
+  were byte-identical requests — i.e. that recovery was noise, and the class
+  exists in this suite.) Do NOT lower `CALIBRATION_MAX` to suppress phase 3
+  without first checking that number; the clamp exists to bound a malformed
+  usage report, not to keep a legitimate overflow response from firing.
+- `LUXE_CTX_SERVER_TRUTH=0` restores the pre-2026-08-11 behaviour exactly; run
+  maintain_suite before treating the new default as settled.
+
 ### forge-hybrid Phase 3 (B) respond-terminal invariants (pinned 2026-05-28, opt-in)
 
 - **`LUXE_RESPOND_TERMINAL` defaults OFF.** The B1+B2 smoke at n=14 confirmed the
@@ -250,6 +308,33 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   telemetry section above): it fires in both arms and is the only record that
   distinguishes "finished" from "cut off". Keep it ungated whatever the
   default becomes.
+- **The bound is configurable** (2026-08-11):
+  `LUXE_TRUNCATED_TURN_MAX_RETRIES` -> `RunFlags.truncated_turn_max_retries`,
+  default `_TRUNCATED_TURN_MAX_RETRIES` (2, the benched value). Non-negative
+  int; anything malformed degrades silently to the default, like every other
+  knob in `flags.py`. Passed to `TruncatedTurnGuard.should_fire(max_retries=)`
+  and into the `truncated_turn_retry` event, so the records say what bound was
+  in force rather than assuming the constant.
+  `LUXE_TRUNCATED_TURN_MAX_RETRIES=0` is NOT the same as
+  `LUXE_TRUNCATED_TURN_RETRY=0`: the mechanism stays enabled, so
+  `terminal_turn_truncated` still reports `retry_enabled=True` and an ablation
+  stays distinguishable from a tightened leash in the corpus.
+  **Why it exists**: each retry is a full capped generation — ~2.5 min at
+  8,192 tokens on the champion — and in chat the capped turn is frequently the
+  model rambling rather than mid-edit, so the default spends ~8 min before the
+  turn ends. Observed in session 0e524f033300 (2026-08-11), the first sighting
+  of this mechanism outside the bench. Lowering the bound for chat is a
+  judgement call, NOT a benched change: the 30/30 result was measured at 2 and
+  the benchmark/maintain path must keep reading the unset default.
+- `on_notice` (`run_agent`/`run_single`, default `None`) is the DISPLAY-ONLY
+  seam that announces a retry to a front-end. It never influences control
+  flow, is never consulted for a decision, and is wrapped so a raising
+  callback cannot kill a run. Chat wires it; the benchmark/maintain path
+  passes nothing and is unchanged. It exists because the retry was visible
+  only in `events.jsonl` — a file nobody reads mid-turn — while it spent
+  minutes behind a spinner. The terminal `finish_reason == "length"` case
+  notifies too, whatever the switch: a turn reported as an answer when it was
+  actually cut off is the exact confusion this whole mechanism was built for.
 
 ## Must not (reflect)
 

@@ -11,6 +11,7 @@ Plan: ~/.claude/plans/starry-hopping-phoenix.md
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,6 +39,48 @@ def context_pressure(messages: list[dict[str, Any]], ctx_limit: int) -> float:
     if ctx_limit <= 0:
         return 0.0
     return estimate_messages_tokens(messages) / ctx_limit
+
+
+#: Bounds on the server-truth calibration ratio. `estimate_tokens` is chars//4,
+#: which runs ~1.9x low on code + JSON tool payloads and would run HIGH only on
+#: pathological input; the clamp keeps one bad `prompt_tokens` report (a server
+#: counting cached tokens differently, a 0, a malformed usage block) from
+#: swinging compaction to either extreme.
+CALIBRATION_MIN = 0.5
+CALIBRATION_MAX = 8.0
+
+
+def calibration_ratio(actual_prompt_tokens: int, estimated_tokens: int) -> float:
+    """How far `estimate_messages_tokens` undercounts, per the server's own
+    `usage.prompt_tokens` for the request that estimate described.
+
+    Returns 1.0 (no correction) when either side is missing, so a backend that
+    reports no usage degrades to the historical estimate-only behaviour rather
+    than to a wrong number."""
+    if actual_prompt_tokens <= 0 or estimated_tokens <= 0:
+        return 1.0
+    ratio = actual_prompt_tokens / estimated_tokens
+    return min(CALIBRATION_MAX, max(CALIBRATION_MIN, ratio))
+
+
+def calibrated_ctx_limit(ctx_limit: int, calibration: float) -> int:
+    """Fold the calibration into the DENOMINATOR instead of the numerator.
+
+    Every consumer downstream (`context_pressure`, `TieredCompact.compact`,
+    `elide_old_tool_results`) computes `estimate / limit` internally. Shrinking
+    the limit by the same factor the estimate runs low by makes that quotient
+    equal the true `actual_tokens / ctx_limit` without any of them having to
+    learn about calibration. One lever, no duplicated math, and the phase
+    thresholds keep their pinned values.
+
+    Total by construction: a non-finite or non-positive calibration returns the
+    limit unchanged. `calibration_ratio`'s clamp already makes those
+    unreachable from the loop, but this is a public helper and `int(nan)`
+    raises — a pressure calculation must never be the thing that kills a run.
+    """
+    if ctx_limit <= 0 or not math.isfinite(calibration) or calibration <= 0:
+        return ctx_limit
+    return max(1, int(ctx_limit / calibration))
 
 
 def elide_old_tool_results(

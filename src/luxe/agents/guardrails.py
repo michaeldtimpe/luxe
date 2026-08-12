@@ -459,6 +459,10 @@ class PostWriteIdleExitGuard:
 # the model has already done the analysis, it just never emitted the edit — but
 # a model that ignores it twice is not going to act on a third, and each retry
 # costs a full capped turn. Bounded like the min_tool_calls reprompt.
+#: Default bound. Overridable per run via `LUXE_TRUNCATED_TURN_MAX_RETRIES`
+#: (`RunFlags.truncated_turn_max_retries`) — the benched value is 2, and a
+#: chat turn that rambles into the cap costs a full capped generation per
+#: retry, so the knob exists to buy that back without disabling the mechanism.
 _TRUNCATED_TURN_MAX_RETRIES = 2
 
 _TRUNCATED_TURN_MESSAGE = (
@@ -489,6 +493,7 @@ class TruncatedTurnGuard:
         finish_reason: str,
         has_tool_calls: bool,
         retries_used: int,
+        max_retries: int = _TRUNCATED_TURN_MAX_RETRIES,
     ) -> Optional[dict[str, Any]]:
         if not truncated_turn_retry_enabled:
             return None
@@ -499,9 +504,13 @@ class TruncatedTurnGuard:
             return None
         if has_tool_calls:
             return None
-        if retries_used >= _TRUNCATED_TURN_MAX_RETRIES:
+        # max_retries=0 is a supported setting: it never fires, which is the
+        # same behaviour as the switch being off but keeps the ungated
+        # `terminal_turn_truncated` telemetry reading `retry_enabled=True`.
+        if retries_used >= max_retries:
             return None
-        return {"retries_used": retries_used, "finish_reason": finish_reason}
+        return {"retries_used": retries_used, "finish_reason": finish_reason,
+                "max_retries": max_retries}
 
 
 # Consecutive-repeat guard constant.
