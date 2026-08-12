@@ -63,9 +63,23 @@ for good). Six benches ran today (126 model runs), all reports under
    edits (recorded in its report; caveat closed by the settled-tree
    reproduction).
 
-**Open threads, none urgent:** (a) bash head-vs-tail truncation A/B
-(candidate: tail-biased output helps pytest-style tools); (b) grade.py git
-runner hardening; (c) ~~key rotation (above)~~ **DONE same day**: fresh
+**Open threads, none urgent:** (a) ~~bash head-vs-tail truncation A/B~~
+**CLOSED same day, and the A/B was the wrong instrument**: measurement first
+showed 0 of 183 bash calls across six suite passes reach the 8 KB cap (max
+2,230 B) — a treatment arm could never fire — while 205 historical firings
+(all SWE-bench-era) prove the cap matters in practice. Shipped
+`shell._clip_output` (2 KB head + 6 KB tail, announced marker, byte-identical
+under the cap), 9 mechanism tests incl. the pytest-summary founding case, and
+a 3-rep suite confirmation at 30/30 · 120/150 · 45.2s.
+`acceptance/bash_tail_trunc_2026_08_12/REPORT.md`; SWE-bench is the venue
+where the shape could show score effects, noted in tools.sdd; (b) ~~grade.py
+git runner hardening~~ **CLOSED same day**: `GitRunError` from every grading
+diff/grep helper — a failed git (index.lock race, corrupt base_sha, missing
+binary) now lands as an ERRORED fixture via run.py's existing handler
+instead of grading every diff-dependent requirement as "the model changed
+nothing"; `git grep` keeps rc 1 as a real no-match, the vacuous-test
+worktree gate keeps its documented fail-open; 7 regression tests, contract
+pinned in maintain_suite.sdd; (c) ~~key rotation (above)~~ **DONE same day**: fresh
 per-host keys on m5 and m1 (settings.json + secrets.env; old keys verified
 401, new 200, real turns drilled on both), m1+neo `luxe update`d to
 `1fdb92d`, neo's `OMLX_API_KEY_M5` rotated (`ready --backend m5` green) —
@@ -74,8 +88,8 @@ login-Keychain copies could not be rewritten from a non-interactive session
 (`errSecInteractionNotAllowed`) — restore on m5/m1 with
 `security add-generic-password -U -a $(whoami) -s OMLX_API_KEY -w "$(/usr/bin/grep '^OMLX_API_KEY=' ~/.luxe/secrets.env | cut -d= -f2)"`
 in a real terminal (they were already stale-drifted before today; secrets.env
-is what luxe actually resolves; **m1's was restored by hand same day**, m5's
-still pending). **m4 was unreachable** (hostname doesn't resolve) — if it
+is what luxe actually resolves; **both m5's and m1's were restored by hand
+same day** — items verified present, values ACL-protected as they should be). **m4 was unreachable** (hostname doesn't resolve) — if it
 returns, its secrets.env needs the new keys. The `ready --backend` quirk this
 surfaced (stand-in doctor judged the LOCAL manifest against the remote
 catalog) is **FIXED same day**: `luxe ready` now follows the chat.sdd DRILL

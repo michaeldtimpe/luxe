@@ -107,6 +107,9 @@ acceptance/toolbudget_ab_2026_08_12/*
 !acceptance/c10_repeat_penalty_2026_08_12/
 acceptance/c10_repeat_penalty_2026_08_12/*
 !acceptance/c10_repeat_penalty_2026_08_12/REPORT.md
+!acceptance/bash_tail_trunc_2026_08_12/
+acceptance/bash_tail_trunc_2026_08_12/*
+!acceptance/bash_tail_trunc_2026_08_12/REPORT.md
 !acceptance/truncated_turn_ab_2026_08_10/
 acceptance/truncated_turn_ab_2026_08_10/*
 !acceptance/truncated_turn_ab_2026_08_10/REPORT.md
