@@ -178,17 +178,11 @@ def _resolve_drill_backend(cfg, backend_name: str | None,
     model (it serves the 6-bit pair, not this host's 4-bit pair).
     `model_override` (`--model`) drills a specific cached model instead —
     e.g. the m5 capacity model, which is a `keep:`, never a `main`."""
-    from urllib.parse import urlparse
-
-    from luxe.chat.origin import endpoint_is_local
-    from luxe.config import short_hostname
+    from luxe.chat.origin import host_for_endpoint
 
     entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
     url = base_url or entry.base_url
-    if endpoint_is_local(url):
-        host = short_hostname()
-    else:
-        host = (urlparse(url).hostname or "").split(".")[0].lower()
+    host = host_for_endpoint(url)
     from luxe.secrets import resolve_api_key
 
     manifest = cfg.host_manifest(host) if host else None

@@ -477,7 +477,15 @@ never touches this module.
   `ready` is that the operator sees the same table outside a session that
   they see in one. `inspection.hostwide_view` restates the session-scoped
   lines (`mode`, `web`, `search index`) for the host-level caller so a
-  stand-in session's state is never reported as the user's. `/export`
+  stand-in session's state is never reported as the user's. **`luxe ready`
+  follows the DRILL rule, not the session rule (2026-08-12):** its stand-in
+  `SlotManager` gets `manifest_host=origin.host_for_endpoint(active entry
+  url)`, so `ready --backend m5` judges m5's manifest pair against m5's
+  catalog — from m1 it used to judge m1's 4-bit main against m5 and report
+  structurally NOT READY. Local default backend resolves to
+  `short_hostname()`, byte-identical to before. In-session `/doctor` keeps
+  the session rule (it describes THIS session, overrides and all); chat
+  sessions never pass `manifest_host`. `/export`
   renders the PERSISTED transcript (so it works after `/resume` and captures
   interrupted turns) and summarises attachments instead of inlining them;
   default destination is `<session dir>/transcript.md`. `/diff` is git-backed

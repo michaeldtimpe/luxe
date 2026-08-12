@@ -355,6 +355,10 @@ class TestDoctor:
         session, sm, repo = doctor_ctx
         monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
         sm.cfg.hosts = {"here": HostManifest(main="Main-M", fallback="Fb-M")}
+        # The doctor reads the SlotManager's resolved manifest (the object
+        # degrade actually consults), not a fresh cfg lookup — keep the
+        # late-mutated cfg and the manager coherent the way __init__ would.
+        sm.manifest = sm.cfg.host_manifest()
         sm.degraded_from, sm.degraded_to = "Main-M", "Fb-M"
         doc = inspection.run_doctor(session, sm, repo)
         degraded = next(c for c in doc.checks if c.name == "degraded")

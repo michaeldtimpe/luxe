@@ -241,3 +241,79 @@ class TestOutageCard:
         monkeypatch.setattr(outage_mod, "CARD_PATH", Path("/nope/OUTAGE.md"))
         text = outage_mod.load_card()
         assert "luxe ready" in text
+
+
+class TestDrillRuleManifestResolution:
+    """`luxe ready --backend <remote>` judges the ENDPOINT host's manifest.
+
+    The chat.sdd drill rule (2026-08-12): before this, the stand-in doctor
+    resolved models from the LOCAL host's manifest, so from m1 a
+    `ready --backend m5` judged m1's 4-bit main against m5's catalog and was
+    structurally NOT READY even with endpoint and key green.
+    """
+
+    @staticmethod
+    def _fleet_cfg() -> PipelineConfig:
+        from luxe.config import BackendEntry, HostManifest
+        return PipelineConfig(
+            models={"monolith": "Champ"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+            hosts={"here": HostManifest(main="Local-M", fallback="Local-Fb"),
+                   "m5": HostManifest(main="Remote-M", fallback="Remote-Fb")},
+            backends={
+                "local": BackendEntry(base_url="http://127.0.0.1:8000"),
+                "m5": BackendEntry(base_url="http://m5.tailexample.ts.net:8000",
+                                   default=True),
+            },
+        )
+
+    def test_host_for_endpoint_local_resolves_to_this_host(self, monkeypatch):
+        from luxe.chat import origin
+        monkeypatch.setattr("luxe.config.short_hostname", lambda: "here")
+        assert origin.host_for_endpoint("http://127.0.0.1:8000") == "here"
+
+    def test_host_for_endpoint_remote_resolves_to_url_short_host(self):
+        from luxe.chat.origin import host_for_endpoint
+        assert host_for_endpoint("http://m5.tailexample.ts.net:8000") == "m5"
+
+    def test_model_for_slot_manifest_host_selects_that_manifest(self, monkeypatch):
+        monkeypatch.setattr("luxe.config.short_hostname", lambda: "here")
+        cfg = self._fleet_cfg()
+        assert cfg.model_for_slot("chat") == "Local-M"
+        assert cfg.model_for_slot("chat", manifest_host="m5") == "Remote-M"
+
+    def test_slotmanager_manifest_host_governs_manifest_and_models(
+            self, monkeypatch):
+        monkeypatch.setattr("luxe.config.short_hostname", lambda: "here")
+        _use_backend(monkeypatch, models=("Remote-M", "Remote-Fb"))
+        cfg = self._fleet_cfg()
+        sm = slots_mod.SlotManager(cfg, manifest_host="m5")
+        assert sm.manifest is not None and sm.manifest.main == "Remote-M"
+        assert sm.model_for("chat") == "Remote-M"
+        default_sm = slots_mod.SlotManager(cfg)
+        assert default_sm.manifest is not None
+        assert default_sm.manifest.main == "Local-M"
+        assert default_sm.model_for("chat") == "Local-M"
+
+    def test_ready_against_remote_backend_judges_remote_pair(
+            self, tmp_path, monkeypatch):
+        """The founding case: remote main IS served -> no chat-model FAIL."""
+        monkeypatch.setattr("luxe.config.short_hostname", lambda: "here")
+        _use_backend(monkeypatch, models=("Remote-M", "Remote-Fb"))
+        doc = cli.build_ready_doctor(self._fleet_cfg(), str(_repo(tmp_path)))
+        chat_model = next(c for c in doc.checks if c.name == "chat model")
+        assert chat_model.state != inspection.FAIL
+        assert "Remote-M" in chat_model.detail
+        assert not any("Local-M" in (c.detail or "") for c in doc.checks
+                       if c.state == inspection.FAIL)
+
+    def test_ready_against_local_backend_is_byte_identical_to_session_rule(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr("luxe.config.short_hostname", lambda: "here")
+        _use_backend(monkeypatch, models=("Local-M", "Local-Fb"))
+        cfg = self._fleet_cfg()
+        cfg.backends["m5"].default = False
+        cfg.backends["local"].default = True
+        doc = cli.build_ready_doctor(cfg, str(_repo(tmp_path)))
+        chat_model = next(c for c in doc.checks if c.name == "chat model")
+        assert "Local-M" in chat_model.detail

@@ -74,12 +74,14 @@ login-Keychain copies could not be rewritten from a non-interactive session
 (`errSecInteractionNotAllowed`) — restore on m5/m1 with
 `security add-generic-password -U -a $(whoami) -s OMLX_API_KEY -w "$(/usr/bin/grep '^OMLX_API_KEY=' ~/.luxe/secrets.env | cut -d= -f2)"`
 in a real terminal (they were already stale-drifted before today; secrets.env
-is what luxe actually resolves). **m4 was unreachable** (hostname doesn't
-resolve) — if it returns, its secrets.env needs the new keys. Also noted,
-pre-existing: from m1, `luxe ready --backend m5` is structurally NOT READY
-because `host_manifest()` keys on the LOCAL hostname (m1's 4bit main isn't
-in m5's catalog) — auth/endpoint checks pass; semantics question, not a
-rotation issue; (d) chat-side tool-budget
+is what luxe actually resolves; **m1's was restored by hand same day**, m5's
+still pending). **m4 was unreachable** (hostname doesn't resolve) — if it
+returns, its secrets.env needs the new keys. The `ready --backend` quirk this
+surfaced (stand-in doctor judged the LOCAL manifest against the remote
+catalog) is **FIXED same day**: `luxe ready` now follows the chat.sdd DRILL
+rule — `SlotManager(manifest_host=origin.host_for_endpoint(entry url))`, so
+`--backend m5` judges m5's pair; sessions/`/doctor` keep the session rule,
+local `ready` byte-identical. Verified live from m1; (d) chat-side tool-budget
 evidence if anyone wants the chat default flipped too; (e) F14
 degrade-quietly policy review (secrets/staleproc/buildinfo hide
 "tool broken" inside "no result" — deliberate, but now documented).

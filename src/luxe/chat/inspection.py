@@ -226,14 +226,20 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
     """
     try:
         cfg = slots.cfg
-        manifest = cfg.host_manifest()
+        # The SlotManager already resolved WHOSE manifest governs (this host
+        # for sessions; the endpoint's host for `luxe ready --backend <name>`,
+        # the drill rule) — never re-derive locally here, that was the bug
+        # that judged m1's pair against m5's catalog.
+        manifest = getattr(slots, "manifest", None)
         if not getattr(cfg, "hosts", None):
             doc.add("host manifest", OK, "none configured (single-model default)")
             return
         if manifest is None:
             from luxe.config import short_hostname
+            looked_for = (getattr(slots, "_manifest_host", None)
+                          or short_hostname() or "(unknown)")
             doc.add("host manifest", WARN,
-                    f"no hosts: entry matches {short_hostname() or '(unknown)'!r}",
+                    f"no hosts: entry matches {looked_for!r}",
                     "add this host under hosts: in configs/chat.yaml")
             return
         fb = manifest.fallback or "—"
