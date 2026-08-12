@@ -1,5 +1,57 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-12) — five fixes landed + pushed; work moves to m5; one bench debt
+
+Everything from 2026-08-10..12 is committed and pushed (`main`, linear, five
+commits on top of `161075d`). Suite **2639 passed, 7 skipped** on the full
+tree before the split. m1 and m5 are on the same commit; **continue on m5.**
+
+**What landed**
+
+1. `252f12f` **vendor fields go top-level** — `extra_body` is an OpenAI *SDK*
+   convention and luxe posts raw JSON, so `num_ctx` and `repeat_penalty` were
+   never on the wire. C10's repeat_penalty result is **retracted** (inert by
+   construction, not measured). `repeat_penalty` now ships under both
+   spellings. Golden request re-pinned.
+2. `de94e7a` **grep was silently dead in every non-interactive run** — `rg`
+   with no path argument reads *stdin*, and an inherited pipe means EOF → "(no
+   matches)". Benchmarks launched from a script, CI, `luxe smoke`, and the
+   headless `printf … | luxe chat` form were all affected; TTY sessions were
+   fine, which is why it survived. **Any benchmark number produced by a piped
+   run predates working grep.** Same commit: tool limits are announced rather
+   than discovered by failing, and gated write tools say "gated", not
+   "unknown".
+3. `967124d` **server-truth context calibration, DEFAULT-ON** + a bound
+   (`LUXE_TRUNCATED_TURN_MAX_RETRIES`, default 2) and a voice (`on_notice`)
+   for the truncated-turn retry.
+4. `95250f1` **`--ephemeral` / `/ephemeral`** — a session that records
+   nothing. Plus a RAM floor on the `huge` ctx tier.
+5. this commit — docs (`CLAUDE.md`, `lessons.md`, `RESUME.md`).
+
+**The one debt, and it is the obvious first task on m5**
+
+`LUXE_CTX_SERVER_TRUTH=1` is **UNBENCHED**. It corrects a real
+mis-measurement — `estimate_tokens` reads 2-3.7× low on code and tool JSON,
+so compaction phases pinned at 0.50/0.85/0.95 were firing near 1.0-1.9 of the
+real window, and phases 2 and 3 could not fire before the server rejected the
+prompt. But it changes what every threshold *means* on the benchmark path,
+and those thresholds were validated at n=75 under the old reading. Compaction
+now fires earlier (at the context it always claimed). Run maintain_suite
+before treating it as settled:
+
+```sh
+python -m benchmarks.maintain_suite.run --variants <yaml>   # baseline is 30/30
+```
+
+`LUXE_CTX_SERVER_TRUTH=0` restores the old reading exactly, so the A/B is one
+env var. m5 is the 128 GB box, which is why the bench belongs there.
+
+Two smaller open threads, neither urgent: **C10 is answerable for the first
+time** now that the knob reaches the server (still a low-expectation
+direction-finder — champion failures skew termination/long-context, not local
+repetition), and **`LUXE_TOOL_BUDGET_CTX` stays default-OFF** pending its own
+maintain_suite run, since scaling the read cap with ctx scales it *down*.
+
 ## ⇒ DEFERRED (2026-08-10) — Muse-Glimmer-30B assessed, BLOCKED upstream; revisit ~2026-09 with Qwen 3.8
 
 `meta-models/Muse-Glimmer-30B` (released 2026-08-10) was assessed as a
@@ -949,10 +1001,25 @@ messages + `gitkit.sdd`/CLAUDE.md.
   **Follow-up candidate:** raise the champion's default num_ctx for
   long-context workloads 32768 → 49152 where the host allows — needs the
   usual smoke + 3-rep before touching configs.
-- **C10 repeat_penalty 1.05 (2026-06-11): measured NO-OP, closed.** 2 cells ×
-  8 fixtures: 8/8 PASS both, wall 332.3s vs 334.0s, tokens within noise; the
-  only delta is one recovered context_overflow bailout in the rp105 cell. No
-  flip → no 3-rep → do NOT add repeat_penalty to the champion config.
+- **C10 repeat_penalty 1.05 (2026-06-11): result RETRACTED 2026-08-11 — the
+  parameter never reached the server.** The original entry read "measured
+  NO-OP, closed" on 2 cells × 8 fixtures (8/8 PASS both, wall 332.3s vs
+  334.0s, tokens within noise, one recovered context_overflow bailout in the
+  rp105 cell). That no-op was **inert by construction, not measured**:
+  `backend.chat` sent the knob as `extra_body["repeat_penalty"]`, and
+  (a) `extra_body` is an OpenAI *SDK* convention that only works because the
+  SDK flattens it — luxe posts raw JSON, so it went on the wire as a nested
+  field no server reads; and (b) oMLX's field is spelled
+  `repetition_penalty`. Both arms were byte-identical requests. Wire format
+  fixed 2026-08-11 (top-level, both spellings) — see lessons.md and
+  `tests/test_backend_vendor_fields.py`. **Confirmed against the live
+  endpoint, not just by reading source**: at `temperature=0`, the nested form
+  returns output byte-identical to sending no penalty at all, while the
+  top-level form changes the decode. Three requests, ~90s. **The question C10 asked is
+  therefore still open**; re-running it is now possible for the first time,
+  though the original priors still apply (champion failures skew
+  termination/long-context, not local repetition), so it stays a
+  low-expectation direction-finder rather than a queued cycle.
   `acceptance/c10_repeat_penalty/`.
 - **C14 early-bail fire-rate mapping: DEFERRED** (optional multi-overnight;
   C13's offline analysis already answered the gate-split question it was
