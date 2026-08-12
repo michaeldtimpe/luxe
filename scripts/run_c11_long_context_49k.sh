@@ -7,7 +7,7 @@
 # context-limited. Single oMLX server — never overlap with other model work.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-export OMLX_API_KEY=omlx-sdb25582k3mq8pf9
+# API key resolves via luxe.secrets (Keychain OMLX_API_KEY / ~/.luxe/secrets.env) — never hardcode it here.
 mkdir -p acceptance/bfcl/multi_turn_long_context/m1_49k
 echo "=== C11 start $(date) ==="
 PYTHONUNBUFFERED=1 .venv/bin/python -m benchmarks.bfcl.run \
