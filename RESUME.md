@@ -1,5 +1,58 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-12 end-of-day, m5) — fleet drill-green at `b1b44f0`; nothing in flight
+
+State of the world: **m5, m1, and neo are all at `b1b44f0`**, `luxe smoke
+--chat --code` is green on all three (m5: champion, READY 12s · m1: its
+4-bit manifest main, READY 45s · neo: against the m5 backend over the
+tailnet, READY 12s — every drill 0-exit with a real tool-calling chat turn
+and a pytest-verified bug fix). Suite on m5: **2,783 passed / 0 failed**.
+No bench, agent, or migration is in flight; there is no debt gating the
+next session.
+
+**The day's ledger** (`7eaceaa → b1b44f0`, twelve commits — details in the
+two handoffs below and per-commit messages):
+
+1. `LUXE_CTX_SERVER_TRUTH` **benched → HOLD, debt retired** (30/30 ·
+   120/150, −24% tokens, compaction telemetry ties it to the mechanism).
+2. **Tool-surface audit**: the grep-stdin bug was a class; 12 fixes, ~130
+   tests, all findings live-verified first. Deliberate non-fixes recorded.
+3. `LUXE_TOOL_BUDGET_CTX` **wired (was inert-by-construction), preflighted,
+   A/B'd, PROMOTED default-ON on the maintain path** (`=0` opts out; chat
+   stays opt-in; BFCL unwired).
+4. **C10 closed with a live measurement**: repeat_penalty 1.05 is a real
+   no-op; sampling stays temp=0/no-penalty.
+5. **miss_func_49 red fixed durably** (mpmath pinned in `[dev]`; it was the
+   2026-06-03 prune recurring, not a driver bug).
+6. **oMLX key rotation fleet-wide** (per-host keys; old keys 401; Keychain
+   copies restored by hand on both hosts; the leaked June key was already
+   dead everywhere; **m4 unreachable — re-key it if it returns**).
+7. `luxe ready --backend <name>` **follows the drill rule** (judges the
+   ENDPOINT host's manifest; m1→m5 ready is green; sessions untouched).
+8. **Bash 8 KB cap keeps head+tail** — the requested A/B was refused with
+   measurement (0/183 suite calls reach the cap; 205 historical firings all
+   SWE-bench-era) and replaced by mechanism tests + a 3-rep confirmation.
+9. **grade.py git failures are harness ERRORS, never verdicts**
+   (`GitRunError` → fixture ERRORED, separate from FAILED).
+10. **precommit hook hardened**: git's autostash-conflict path exits 0 and
+    silently ate uncommitted work twice today — the hook now pops stranded
+    stashes or BLOCKS the commit with the work intact, and re-stages from a
+    saved patch so hunk-split commits survive. Postmortem in lessons.md:
+    *an exit code is not a postcondition.*
+
+**Standing bench profile** (shipped defaults: `ctx_server_truth=ON`,
+`truncated_turn_retry=ON`, `tiered_compact=ON`, maintain-path
+`tool_budget=ON`): **30/30 · 120/150 · ~45-49s · ~110-117k tokens** —
+same score as the 2026-05 bake-off at roughly two-thirds of last week's
+token cost.
+
+**Open, none urgent:** (a) chat-side tool-budget evidence if the chat
+default should ever flip; (b) F14 degrade-quietly policy review
+(secrets/staleproc/buildinfo); (c) m4 re-keying on return; (d) any future
+SWE-bench run measures the new substrate (bash head+tail clip + read
+budget) — the venue note is in tools.sdd; (e) Muse-Glimmer revisit ~2026-09
+(watch mlx-vlm PR #1838).
+
 ## ⇒ SESSION HANDOFF (2026-08-12 evening, m5) — ctx-truth debt RETIRED · tool surface hardened · tool-budget promoted · C10 closed · suite fully green
 
 All four threads from the morning handoff are closed, plus a full
