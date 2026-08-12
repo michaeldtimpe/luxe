@@ -736,12 +736,19 @@ def build_ready_doctor(cfg, repo_path: str):
     """
     from luxe.chat import inspection
     from luxe import project as project_mod
+    from luxe.chat.origin import host_for_endpoint
     from luxe.chat.session import ChatSession
     from luxe.chat.slots import SlotManager
 
     project = project_mod.resolve(repo_path)
     session = ChatSession(repo_path=project.root, project_kind=project.kind)
-    doc = inspection.run_doctor(session, SlotManager(cfg), project.root)
+    # `luxe ready` is a DRILL, not a session: models and manifest resolve from
+    # the host the active endpoint POINTS AT (chat.sdd drill rule, same as
+    # smoke) — `--backend m5` judges m5's pair against m5's catalog. For the
+    # local default this is short_hostname(), i.e. exactly the session rule.
+    entry = cfg.backend_entry(cfg.default_backend_name())
+    slots = SlotManager(cfg, manifest_host=host_for_endpoint(entry.base_url))
+    doc = inspection.run_doctor(session, slots, project.root)
     return inspection.hostwide_view(doc)
 
 

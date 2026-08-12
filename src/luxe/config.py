@@ -281,19 +281,23 @@ class PipelineConfig(BaseModel):
             return SlotConfig()
         return getattr(self.slots, slot)
 
-    def model_for_slot(self, slot: str) -> str:
+    def model_for_slot(self, slot: str, *, manifest_host: str | None = None) -> str:
         """Resolve a chat slot to a concrete model id.
 
         Resolution order for an unconfigured slot (empty `model_key`):
-        this host's manifest `main` (when a `hosts:` entry matches), else the
+        the manifest `main` (when a `hosts:` entry matches), else the
         `monolith` role's model. An explicit `slots:` entry or CLI/`/model`
         override always wins over the manifest. Chat-only — the benchmark/
         maintain path never calls this, so `hosts:` cannot perturb it.
+
+        `manifest_host` picks WHOSE manifest resolves the default: None (the
+        chat-session rule, chat.sdd — this host's) or an endpoint host (the
+        drill rule — `luxe ready --backend m5` judges m5's pair, not ours).
         """
         sc = self.slot_config(slot)
         if sc.model_key:
             return self.models[sc.model_key]
-        manifest = self.host_manifest()
+        manifest = self.host_manifest(manifest_host)
         if manifest is not None and manifest.main:
             return manifest.main
         return self.models[self.role("monolith").model_key]

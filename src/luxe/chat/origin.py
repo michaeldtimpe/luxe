@@ -117,6 +117,22 @@ def endpoint_is_local(base_url: str) -> bool:
         return False
 
 
+def host_for_endpoint(base_url: str) -> str:
+    """Short hostname of the machine an endpoint URL points at.
+
+    The DRILL rule (chat.sdd): models for a drill resolve from the manifest of
+    the host the ENDPOINT points at — `--backend m5` must judge m5's pair, not
+    this host's. Local endpoints resolve to this machine's short hostname so
+    the default case is unchanged. A bare-IP URL yields its first octet, which
+    matches no `hosts:` key and so degrades to the no-manifest default — same
+    behaviour smoke has always had.
+    """
+    if endpoint_is_local(base_url):
+        from luxe.config import short_hostname
+        return short_hostname()
+    return endpoint_host(base_url).split(".")[0]
+
+
 # --- local filesystem -------------------------------------------------------
 
 def classify_path(model_path: str | os.PathLike[str] | None) -> ModelOrigin:

@@ -39,14 +39,20 @@ class SlotManager:
         cfg: PipelineConfig,
         *,
         on_status=None,
+        manifest_host: str | None = None,
     ) -> None:
         self.cfg = cfg
         self.overrides: dict[str, str] = {}
         self.stats = SwapStats()
         self._on_status = on_status  # callable(str) for swap notices
         # Per-host manifest (chat-only): main/fallback pair for auto-degrade.
-        # None when no `hosts:` entry matches this machine.
-        self.manifest = cfg.host_manifest()
+        # None when no `hosts:` entry matches. `manifest_host` selects WHOSE
+        # manifest governs: None = this machine (the chat-session rule,
+        # chat.sdd) — chat never passes it, so sessions are untouched.
+        # `luxe ready --backend <name>` passes the endpoint's host (the drill
+        # rule, same as smoke) so a remote preflight judges the remote pair.
+        self._manifest_host = manifest_host
+        self.manifest = cfg.host_manifest(manifest_host)
         # Degrade state: when the manifest main can't be served/loaded, every
         # resolution of `main` is rerouted to `degraded_to` and the switch is
         # announced ONCE via on_status. Manual /model overrides still win.
@@ -107,7 +113,7 @@ class SlotManager:
             raise KeyError(f"Unknown slot {slot!r}; expected one of {_SLOTS}.")
         if slot in self.overrides:
             return self.overrides[slot]
-        resolved = self.cfg.model_for_slot(slot)
+        resolved = self.cfg.model_for_slot(slot, manifest_host=self._manifest_host)
         # Auto-degrade reroute (manifest main -> fallback). Explicit /model
         # overrides bypass this on purpose: picking a model by hand is an
         # instruction, not a default to second-guess.
