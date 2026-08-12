@@ -30,6 +30,40 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-12] The auto-rebase hook ate uncommitted work twice — git's autostash-conflict path exits 0
+
+**What happened**: `.claude/hooks/precommit-pull.sh` runs `git pull --rebase
+--autostash` before each commit. When re-applying the autostash CONFLICTS,
+git prints "Applying autostash resulted in conflicts. Your changes are safe
+in the stash." and **exits 0** — the pull "succeeded". The hook's success
+branch re-staged file names (now clean), the commit ran against a tree
+missing the work, and nothing said so. Observed twice the same day: the
+morning's mysterious "stale autostash" residue on m5 (diagnosed then as
+harmless hook leftovers — it was this), and live mid-landing when the
+grade.py hardening vanished into `stash@{0}` and the commit reported
+"nothing to commit". Separately, the hook re-staged by FILE NAME
+(`git add` of the saved list), which stages whole files and silently
+flattened a deliberately hunk-split two-commit landing earlier the same day.
+
+**Root cause**: trusting a child process's exit code as a postcondition.
+The pull's rc says "the pull ran", not "your tree survived it" — the same
+failure-channel-dropped shape as the day's tool-surface audit, one layer up.
+
+**Fix / takeaway**: (1) stash-depth compared across the pull — a stranded
+autostash is popped; if the pop itself conflicts, reset the half-applied
+state (the stash retains everything) and **exit 2 to BLOCK the commit** with
+instructions — interrupting a commit is strictly better than committing
+without the user's work; (2) re-staging now restores the exact staged hunks
+from a saved `git diff --cached --binary` patch, and only when the cycle
+actually disturbed the index (a no-op pull leaves it alone; whole-file
+re-add survives only as the rebase-moved-the-base fallback). Verified with a
+five-scenario live-git harness: split-preservation on no-op pull, stranded
+stash → block with work intact, clean pass-through, offline warn, and a real
+rebase restoring the split on the new base. Principle: **an exit code is not
+a postcondition — check the state you depend on.**
+
+**Affected files**: `.claude/hooks/precommit-pull.sh`.
+
 ### [2026-08-12] The grep-stdin bug was a class, not an instance: one honest-looking symptom, five mechanisms
 
 **What happened**: A full audit of every tool function and all 34 subprocess

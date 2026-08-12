@@ -648,8 +648,12 @@ unbiased flips can silently change benchmark behavior.
    commits, no force-push — admin-bypass only). Integrate remote changes with
    `git fetch` + rebase; never create a merge commit. A committed PreToolUse hook
    (`.claude/hooks/precommit-pull.sh`, wired in `.claude/settings.json`) plus
-   repo-local `pull.rebase`/`rebase.autoStash` auto-rebase before each commit. See
-   `lessons.md` 2026-05-25 + memory `feedback_git_linear_history`.
+   repo-local `pull.rebase`/`rebase.autoStash` auto-rebase before each commit.
+   Hardened 2026-08-12: stranded-autostash guard (a stash-apply conflict exits
+   0 from git and used to silently eat uncommitted work — now popped, or the
+   commit is BLOCKED with the work intact in stash) + hunk-preserving
+   re-staging (saved cached patch, not whole-file re-add). See
+   `lessons.md` 2026-05-25 and 2026-08-12 + memory `feedback_git_linear_history`.
 8. **Never `Path.rglob`/`glob` a user-chosen root.** pathlib swallows only
    `PermissionError`, so an unreachable network dir (`OSError(ETIMEDOUT)` from
    a NAS mount or `~/Library/CloudStorage`) crashes the caller — that killed
