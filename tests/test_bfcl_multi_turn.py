@@ -323,6 +323,9 @@ def test_miss_func_49_known_quirk_reproduced():
     (the model cannot call it early, exactly as the official harness would have it)."""
     p = next(x for x in load_problems("multi_turn_miss_func") if x["id"] == "multi_turn_miss_func_49")
     r = run_problem_multi_turn(_ScriptedBackend([]), p)
+    # Setup failures (e.g. a pruned MathAPI dep) return an empty result; say so here
+    # instead of tripping over an IndexError on the exposure assertions below.
+    assert r.error == ""
     exp = [set(t) for t in r.exposed_tool_names]
     assert "tail" not in exp[1] and "tail" not in exp[0]   # held out before reveal=3
     assert "tail" in exp[3]                                # exposed at the reveal turn
