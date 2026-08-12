@@ -46,6 +46,22 @@ auto-memory.
   scenario the fallback kit exists for). `on_retry` stays callback-only;
   never remove the log lines in favor of it, and keep the two paths' line
   format identical (one parser in `scripts/toolcall_taxonomy.py` covers both)
+- Vendor request fields go at the TOP LEVEL of the chat body, never nested
+  under `extra_body` (2026-08-11). `extra_body` is an OpenAI **SDK**
+  convention — the SDK flattens that dict before sending. `backend.chat`
+  posts raw JSON (`json=body`), so nesting emitted a literal
+  `{"extra_body": {...}}` field that no server reads: `num_ctx` and
+  `repeat_penalty` were both dropped on the wire for the life of the file,
+  and it is why C10 measured a "no-op" (RESUME.md, retracted). Flattening is
+  safe because servers ignore unknown top-level fields (oMLX's
+  `ChatCompletionRequest` declares no `extra` policy → pydantic v2 defaults
+  to "ignore"). `repeat_penalty` is sent under BOTH spellings — llama.cpp
+  wants `repeat_penalty`, oMLX wants `repetition_penalty` — since the fleet
+  runs both and each ignores the other's. Pinned by
+  `tests/test_backend_vendor_fields.py` + the golden request snapshot.
+  Corollary: `num_ctx` reaching the server is NOT evidence the window was
+  negotiated — oMLX has no per-request context knob at any spelling and
+  enforces the model's native length with a 400
 - All mono prompt edits go through `src/luxe/agents/prompts.py` registry
 - Pin `--work-dir ~/.luxe/bench-workspace` for bench runs (random tempdir leaks into prompts)
 - Fetch model weights through oMLX's own downloader (`/admin/api/hf/*`, wrapped by
@@ -98,7 +114,12 @@ auto-memory.
   at module level
 - `~/.luxe` is spelled ONCE, in `luxe/paths.py` (`luxe_home()`), and resolved
   per call so a test that moves `$HOME` is obeyed. Deliberately NOT
-  configurable — every one of those paths is also written down in OUTAGE.md
+  configurable — every one of those paths is also written down in OUTAGE.md.
+  `--ephemeral` therefore SUPPRESSES writes at each site (`luxe.ephemeral`,
+  chat.sdd) rather than relocating the root: redirecting `luxe_home()` would
+  capture the READ paths too (secrets.env, the theme preference), and both
+  `secrets.SECRETS_PATH` and `theme._PREF_PATH` bind it at import time, so a
+  redirect would be honoured or ignored depending on import order
 
 ## Must not
 - No cloud provider backends (Anthropic/OpenAI/Gemini) — MLX/oMLX endpoints only

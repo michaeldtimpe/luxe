@@ -6,6 +6,7 @@ Split out of `commands.py` 2026-08-04 (behavior unchanged).
 from __future__ import annotations
 
 from luxe.chat.commands import CommandContext, CommandResult
+from luxe.ephemeral import is_ephemeral
 
 
 def _diff(args, ctx: CommandContext) -> CommandResult:
@@ -98,6 +99,16 @@ def _export(args, ctx: CommandContext) -> CommandResult:
 
     if not ctx.session.session_id:
         ctx.console.print("[yellow]Nothing to export yet.[/]")
+        return CommandResult(handled=True)
+    # `export_transcript` renders the PERSISTED transcript by contract (that
+    # is what makes it survive /resume), and an ephemeral session has none.
+    # Say which of the two it is — a bare FileNotFoundError here reads like a
+    # bug rather than the mode working as asked.
+    if is_ephemeral():
+        ctx.console.print(
+            "[yellow]· nothing to export: this is an ephemeral session, so no "
+            "transcript was written. Use [/][cyan]/copy[/][yellow] for the "
+            "last answer.[/]")
         return CommandResult(handled=True)
     dest = args[0] if args else None
     try:

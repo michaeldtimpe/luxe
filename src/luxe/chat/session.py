@@ -45,6 +45,44 @@ CTX_TIERS: dict[str, int] = {
 # Suggest bumping the window up once a turn's peak context pressure crosses this.
 CTX_SUGGEST_PRESSURE = 0.85
 
+#: Tiers that need more RAM than a typical dev box has, mapped to the floor
+#: they want. `huge` (256K) is the model's NATIVE limit, not this machine's:
+#: the Qwen3.6 KV cache runs ~80 KiB/token (40 layers x 2 KV heads x 256
+#: head_dim x 2 for K+V x 2 bytes, and turboquant KV is off), so 256K is ~20
+#: GiB of cache on top of 21-28 GB of weights. That clears a 128 GB box and
+#: collides with the 36 GB wired cap on a 64 GB one. `num_ctx_max` is set from
+#: what the MODEL supports; this is what the HOST supports. Measured 2026-08-11.
+CTX_TIER_MIN_RAM_GB: dict[str, int] = {"huge": 96}
+
+
+def host_ram_gb() -> float | None:
+    """Physical RAM in GiB, or None where it can't be determined.
+
+    `sysconf` over `sysctl`: no subprocess, and it answers on both macOS and
+    Linux. None must read as "unknown" at the call site, never as "too small" —
+    a warning nobody can act on is worse than no warning."""
+    import os as _os
+    try:
+        return (_os.sysconf("SC_PAGE_SIZE") * _os.sysconf("SC_PHYS_PAGES")) / 1024 ** 3
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def ctx_tier_ram_warning(tier: str) -> str | None:
+    """Warning text for a tier this host is too small for, else None."""
+    need = CTX_TIER_MIN_RAM_GB.get(tier)
+    if need is None:
+        return None
+    have = host_ram_gb()
+    if have is None or have >= need:
+        return None
+    return (f"{tier} ({CTX_TIERS[tier]:,} tokens) wants a {need}+ GB machine — "
+            f"this host has {have:.0f} GB. The KV cache runs ~80 KiB/token, so "
+            f"a filled window is ~{CTX_TIERS[tier] * 80 / 1024 ** 2:.0f} GiB on "
+            f"top of the weights, past what the GPU memory cap can hold. The "
+            f"window is a ceiling and grows as you use it, so the failure lands "
+            f"mid-session when it fills, not now.")
+
 
 def tier_label(num_ctx: int) -> str:
     """Name for an exact tier value, else `custom(<n>)`."""

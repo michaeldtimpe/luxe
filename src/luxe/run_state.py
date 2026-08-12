@@ -9,6 +9,7 @@ Layout under ~/.luxe/runs/<run-id>/:
 
 from __future__ import annotations
 
+from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 
 import json
@@ -96,6 +97,8 @@ class PRState:
 def init_run_dir(spec: RunSpec) -> Path:
     """Create the run directory and write run.json."""
     rd = run_dir(spec.run_id)
+    if is_ephemeral():
+        return rd
     rd.mkdir(parents=True, exist_ok=True)
     (rd / "run.json").write_text(json.dumps(spec.to_dict(), indent=2))
     return rd
@@ -109,6 +112,8 @@ def load_run_spec(run_id: str) -> RunSpec | None:
 
 
 def save_pr_state(run_id: str, state: PRState) -> None:
+    if is_ephemeral():
+        return
     p = run_dir(run_id) / "pr_state.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(state.to_dict(), indent=2))
@@ -132,7 +137,7 @@ def append_event(run_id: str | None, kind: str, **data) -> None:
     would previously have built a directory literally named "None" and
     written telemetry into it.
     """
-    if not run_id:
+    if not run_id or is_ephemeral():
         return
     p = run_dir(run_id) / "events.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)

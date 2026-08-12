@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from luxe.agents import prompts
+from luxe.ephemeral import is_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,12 @@ def skip_reason(session, cfg, *, on_demand: bool = False) -> str:
     `/note` is an explicit invocation, so it bypasses the config toggle and
     the turn-count floor — the user asking for it IS the consent.
     """
+    # Checked before the on_demand bypass: `/note` being explicit consent to
+    # write does not override a session the user started as write-nothing.
+    # Skipping here also saves the distillation model call, which would
+    # otherwise run and have its output thrown away.
+    if is_ephemeral():
+        return "ephemeral session"
     repo = getattr(session, "repo_path", "") or ""
     if not repo or getattr(session, "project_kind", "none") == "none":
         return "no project attached"

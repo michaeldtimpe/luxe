@@ -42,6 +42,7 @@ from typing import Any
 
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled, raise_if_cancelled
+from luxe.ephemeral import is_ephemeral
 from luxe.context import estimate_tokens
 from luxe.fswalk import iter_pruned
 from luxe.textfmt import truncate_for_display
@@ -681,7 +682,15 @@ class PassTiming:
 
 def _atomic_write_text(path: Path, text: str) -> None:
     """Same-directory tmp + os.replace: a crash mid-write never leaves a torn
-    file — readers see the old content or the new content, nothing between."""
+    file — readers see the old content or the new content, nothing between.
+
+    The single funnel for every `map/` + `notes/` write in deep mode, which is
+    why the ephemeral guard sits here rather than at each of the eight call
+    sites. An ephemeral deep run just loses its incremental cache: the next
+    run re-surveys instead of resuming, which is the documented cost of the
+    mode, not a correctness problem (`--rebuild-map` does the same thing)."""
+    if is_ephemeral():
+        return
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     tmp.write_text(text)
     os.replace(tmp, path)
@@ -1026,6 +1035,8 @@ def _new_work_dir(target: str | Path, kind: str) -> Path:
     from luxe.gitkit import store
     ts = int(time.time())
     d = store.reports_dir(target) / f"{kind}-{ts}-{uuid.uuid4().hex[:6]}.work"
+    if is_ephemeral():
+        return None
     d.mkdir(parents=True, exist_ok=True)
     return d
 

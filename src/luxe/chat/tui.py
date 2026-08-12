@@ -216,8 +216,12 @@ class ChatApp(App):
     ]
 
     def __init__(self, cfg, repo_path, languages, *, session, slots, infer,
-                 keep_loaded=False, resume_session_id=None, on_project=None):
+                 keep_loaded=False, resume_session_id=None, on_project=None,
+                 dbglog=None):
         super().__init__()
+        # `/ephemeral` must detach this before removing the session directory
+        # the handler has debug.log open inside.
+        self._dbglog = dbglog
         self._resume_id = resume_session_id
         self._on_project = on_project
         self.cfg = cfg
@@ -278,6 +282,9 @@ class ChatApp(App):
         log.write("[dim]· scroll: PgUp/PgDn · shift+↑/↓ · Home/End · mouse "
                   "wheel (terminal scrollback can't see the TUI) · "
                   "↑/↓ recall your prior inputs[/]")
+        from luxe import ephemeral
+        if (eph_notice := ephemeral.startup_notice()):
+            log.write(f"[yellow]·[/] [dim]{eph_notice}[/]")
         hint = build_status_hint()
         if hint:
             log.write(f"[yellow][hint][/] [dim]{hint}[/]")
@@ -306,6 +313,7 @@ class ChatApp(App):
             on_compare_review=self._compare_review_hook,
             on_project=self._project_hook,
             status=self.status,
+            session_log=self._dbglog,
         )
         # `--resume <id>`: replay the prior transcript into the RichLog and seed
         # the live session's turns before the first prompt (chat.sdd — resume no
@@ -549,11 +557,17 @@ class ChatApp(App):
         def _on_progress(pressure):
             self._ctx_pressure = pressure  # rendered live by the timer
 
+        def _on_notice(text):
+            # The loop acting on its own (truncated-turn retry). Goes to the
+            # transcript, not the activity line: it must survive the turn, and
+            # a retry silently costs minutes of spinner otherwise.
+            self.call_from_thread(self.write, Text(f"· {text}", style="yellow"))
+
         started = time.time()
         interrupted = False
         result = None
         try:
-            result = prep.call(_on_event, _on_token, _on_progress)
+            result = prep.call(_on_event, _on_token, _on_progress, _on_notice)
         except (ChatCancelled, KeyboardInterrupt):
             interrupted = True
         ended = time.time()
@@ -919,7 +933,8 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
 
     app = ChatApp(cfg, repo_path, languages, session=session, slots=slots,
                   infer=infer, keep_loaded=keep_loaded,
-                  resume_session_id=resume_session_id, on_project=on_project)
+                  resume_session_id=resume_session_id, on_project=on_project,
+                  dbglog=dbglog)
     try:
         app.run()
     finally:

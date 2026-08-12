@@ -21,6 +21,7 @@ tools call into them so cross-cutting policy is uniform.
 
 from __future__ import annotations
 
+from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 
 import json
@@ -56,6 +57,8 @@ def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
 
 def append_audit(tool: str, args: dict[str, Any], outcome: str,
                  detail: str = "") -> None:
+    if is_ephemeral():
+        return
     p = audit_log_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     record = {

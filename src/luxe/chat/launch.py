@@ -22,6 +22,7 @@ import time
 import click
 from rich.console import Console
 
+from luxe import ephemeral as eph
 from luxe import spec_resolver
 from luxe import textfmt
 from luxe.gitclone import resolve_repo
@@ -177,6 +178,12 @@ def _shared_chat_options(f):
         click.option("--mcp-read-only", is_flag=True, default=False,
                      help="Drop `gate_tools`-matching MCP tools entirely — "
                           "inspection surface only, even in write mode."),
+        click.option("--ephemeral", "ephemeral", is_flag=True, default=False,
+                     help="Leave nothing behind: no ~/.luxe/sessions/<id>/ "
+                          "(transcript, debug.log), no run events, no writes "
+                          "to the repo's .luxe/memory.md. Cannot be resumed "
+                          "and has no post-hoc diagnostics. Does NOT affect "
+                          "the write tools — /write still gates those."),
     ]
     for opt in reversed(opts):
         f = opt(f)
@@ -196,6 +203,7 @@ def _run_interactive(
     mcp_servers: tuple[str, ...] = (),
     mcp_config_path: str | None = None,
     mcp_read_only: bool = False,
+    ephemeral: bool = False,
 ):
     """Shared body of `luxe chat` / `luxe code` (posture via the two kwargs)."""
     from luxe.chat import run_chat_repl
@@ -208,6 +216,19 @@ def _run_interactive(
     )
     from luxe.locks import LockHeld, acquire_repo_lock
     from luxe.tools.fs import set_repo_root
+
+    # Ephemeral is switched on BEFORE anything can persist — the session
+    # directory is created during startup, so a later flip would already be
+    # too late. `--resume` needs a transcript on disk, which is precisely what
+    # this mode refuses to produce, so the combination is rejected rather than
+    # silently starting a fresh session under a resumed-looking id.
+    if ephemeral:
+        if resume_session_id:
+            raise click.UsageError(
+                "--ephemeral cannot be combined with --resume: an ephemeral "
+                "session writes no transcript, so there is nothing to resume "
+                "and nothing this session could be resumed from.")
+        eph.enable()
 
     theme_name = _resolve_theme_name(theme_name)
 
