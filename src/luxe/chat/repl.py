@@ -672,8 +672,15 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     # LUXE_TOOL_BUDGET_CTX=1). The fixed 256 KB read cap predates the /ctx
     # tiers and is 480% of the DEFAULT 32K window measured in real tokens, so
     # one oversized read can blow the context in a single call. Set per turn
-    # because `/ctx` moves num_ctx mid-session. Unset = the fixed constants,
-    # which is what benchmark/maintain always get (they never call this).
+    # because `/ctx` moves num_ctx mid-session. Unset = the fixed constants.
+    #
+    # ASYMMETRY, deliberate: the maintain/bench path went DEFAULT-ON on
+    # 2026-08-12 (its own call site in maintain.py, opt out with the exact
+    # string `=0`; see acceptance/toolbudget_ab_2026_08_12/REPORT.md — 30/30
+    # both arms, tokens −3.9%). Chat stays opt-in — the
+    # A/B is maintain_suite evidence only, and chat UX around large files is a
+    # different question. Only the exact string "1" enables it here; do not
+    # "align" this with the bench grammar without chat-side evidence.
     if os.environ.get("LUXE_TOOL_BUDGET_CTX") == "1":
         fs_mod.set_read_budget(fs_mod.budget_for_ctx(role_cfg.num_ctx))
     else:
