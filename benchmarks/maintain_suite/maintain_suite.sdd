@@ -17,6 +17,15 @@ single pipeline; new fixtures must declare their per-requirement spec.
   Retention, not delete-after-grading: `regrade_local.py` checks the pushed
   branch out, so recent ones must survive. `keep<=0` is a no-op, never a wipe
 - Borderline document/manage fixtures replicate 3× before claiming a regression
+- A git failure during GRADING is a harness ERROR, never a verdict
+  (2026-08-12): grade.py's diff/grep helpers raise `GitRunError` instead of
+  returning the empty-diff shape ([] / (0,0) / ""), and run.py's per-fixture
+  handler records the fixture as ERRORED — the scoreboard already separates
+  that from FAILED. Before this, an index.lock race or corrupt base_sha
+  graded every diff-dependent requirement as "the model changed nothing".
+  `git grep` keeps rc 1 as a legitimate no-match (ok_codes=(0,1)); the
+  vacuous-test worktree gate keeps its documented fail-open (it only ever
+  removes points)
 
 ## Must not
 - Run bench without `--keep-loaded` (post-run unload fires by default)

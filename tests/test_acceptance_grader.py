@@ -711,3 +711,59 @@ def test_read_only_task_gates_skip(git_repo: Path):
                       base_sha=new_base)
     gate_names = [g.get("name", g.get("gate", "")) for g in r.gates_triggered]
     assert "destructive_diff" not in gate_names
+
+
+# --- git failure is a harness error, never a verdict (2026-08-12) -----------
+
+
+class TestGitFailureIsAnErrorNotAVerdict:
+    """grade.py's diff helpers must raise GitRunError on a failed git rather
+    than return the empty-diff shape — which graded an index.lock race or a
+    corrupt base_sha as "the model changed nothing" (maintain_suite.sdd)."""
+
+    def test_changed_files_raises_on_bad_sha(self, git_repo: Path):
+        from benchmarks.maintain_suite.grade import GitRunError, _changed_files
+        with pytest.raises(GitRunError, match="exited"):
+            _changed_files(git_repo, "0" * 40)
+
+    def test_shortstat_raises_on_bad_sha(self, git_repo: Path):
+        from benchmarks.maintain_suite.grade import GitRunError
+        with pytest.raises(GitRunError):
+            _diff_shortstat(git_repo, "0" * 40)
+
+    def test_added_text_raises_on_bad_sha(self, git_repo: Path):
+        from benchmarks.maintain_suite.grade import GitRunError
+        with pytest.raises(GitRunError):
+            _diff_added_text(git_repo, "0" * 40, ["src/main.py"])
+
+    def test_added_files_raises_outside_a_repo(self, tmp_path: Path):
+        from benchmarks.maintain_suite.grade import (GitRunError,
+                                                     _added_files_in_diff)
+        with pytest.raises(GitRunError):
+            _added_files_in_diff(tmp_path / "not-a-repo", "HEAD")
+
+    def test_grade_fixture_propagates_instead_of_scoring_zero(
+            self, git_repo: Path):
+        """The founding case end-to-end: grading with a corrupt base_sha must
+        NOT produce a scored FixtureResult full of unmet requirements."""
+        from benchmarks.maintain_suite.grade import GitRunError
+        fx = _f("f", "regex_present", pattern="add")
+        with pytest.raises(GitRunError):
+            grade_fixture(fx, git_repo, pr_url="", pr_opened=False,
+                          citations_unresolved=0, citations_total=0,
+                          base_sha="0" * 40)
+
+    def test_healthy_paths_unchanged(self, git_repo: Path):
+        from benchmarks.maintain_suite.grade import _changed_files
+        base = _base_sha(git_repo)
+        _make_diff(git_repo)
+        assert _changed_files(git_repo, base) == ["src/main.py"]
+        assert _diff_shortstat(git_repo, base)[0] >= 1
+        assert "# noop" in _diff_added_text(git_repo, base, ["src/main.py"])
+
+    def test_empty_diff_is_still_a_legitimate_zero(self, git_repo: Path):
+        """rc 0 with no output = genuinely no changes — not an error."""
+        base = _base_sha(git_repo)
+        from benchmarks.maintain_suite.grade import _changed_files
+        assert _changed_files(git_repo, base) == []
+        assert _diff_shortstat(git_repo, base) == (0, 0)
