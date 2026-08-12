@@ -340,7 +340,14 @@ def test_golden_request_covers_the_load_bearing_fields(tmp_path, monkeypatch):
     assert "src/src.sdd" in body["messages"][1]["content"]
     assert body["temperature"] == 0.0, "champion runs greedy (temp=0)"
     assert body["stream"] is False, "benchmark path must never stream"
-    assert body["extra_body"]["num_ctx"] == 32768
+    # Vendor extensions sit at the TOP LEVEL. They used to be nested under an
+    # "extra_body" key — an OpenAI *SDK* convention that only works because the
+    # SDK flattens it before sending. luxe posts raw JSON, so nested meant no
+    # server ever read them (2026-08-11; see lessons.md).
+    assert body["num_ctx"] == 32768
+    assert "extra_body" not in body, (
+        "num_ctx nested under extra_body is dropped on the wire — see backend.chat"
+    )
     names = {t["function"]["name"] for t in body["tools"]}
     assert {"read_file", "edit_file", "bash", "bm25_search"} <= names
     assert "cve_lookup" not in names, "cve_lookup is gated to task_type=manage"

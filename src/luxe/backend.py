@@ -308,10 +308,32 @@ class Backend:
             # reasoning preamble for thinking models — load-bearing for the reflect
             # verifier, which must emit a parseable verdict, not a CoT trace.
             body["response_format"] = response_format
+        # Vendor extensions go at the TOP LEVEL, not under an "extra_body" key
+        # (2026-08-11). `extra_body` is an OpenAI *SDK* convention: the SDK
+        # flattens that dict into the request body before sending. luxe posts
+        # raw JSON (`json=body` below), so nesting it produced a literal
+        # {"extra_body": {...}} field that no server has ever read — both knobs
+        # below were dropped on the floor for the life of this file. Servers
+        # ignore unknown top-level fields (oMLX's ChatCompletionRequest sets no
+        # `extra` policy, so pydantic v2 defaults to "ignore"), which is what
+        # makes flattening safe rather than a 400.
         if num_ctx is not None:
-            body.setdefault("extra_body", {})["num_ctx"] = num_ctx
+            # NOTE: oMLX has no per-request context knob at ANY spelling — it
+            # enforces `validate_context_window()` against the model's native
+            # length and 400s past it. This field is honoured by Ollama-style
+            # backends and is kept for them; luxe's own `num_ctx` is meaningful
+            # client-side regardless (compaction thresholds, ctx%). Do not read
+            # its presence here as evidence the window was negotiated.
+            body["num_ctx"] = num_ctx
         if repeat_penalty is not None:
-            body.setdefault("extra_body", {})["repeat_penalty"] = repeat_penalty
+            # Two spellings because the fleet runs two servers: llama.cpp
+            # (`repeat_penalty`, neo/micro-mind) and oMLX (`repetition_penalty`
+            # — a real field on its request model). Each ignores the other's.
+            # Sending one spelling is how the C10 experiment came back a
+            # "measured no-op": it was inert by construction. See lessons.md
+            # 2026-08-11.
+            body["repeat_penalty"] = repeat_penalty
+            body["repetition_penalty"] = repeat_penalty
 
         # Opt-in streaming path for the interactive chat front-end. The default
         # (stream=False) leaves the body byte-identical to the legacy request and
