@@ -21,6 +21,7 @@ from luxe.agents.flags import (
     DEFAULT_TIERED_COMPACT_THRESHOLD,
     RunFlags,
 )
+from luxe.agents.guardrails import _TRUNCATED_TURN_MAX_RETRIES
 
 
 def test_empty_environment_gives_the_documented_defaults():
@@ -38,8 +39,10 @@ def test_empty_environment_gives_the_documented_defaults():
     # The three that are NOT off-by-default:
     assert f.tiered_compact is True                       # default-ON 2026-05-28
     assert f.truncated_turn_retry is True                 # default-ON 2026-08-10
+    assert f.ctx_server_truth is True                     # default-ON 2026-08-11
     assert f.adaptive_no_write is True
     assert f.adaptive_score_trend is True
+    assert f.truncated_turn_max_retries == _TRUNCATED_TURN_MAX_RETRIES
     assert f.tiered_compact_threshold == DEFAULT_TIERED_COMPACT_THRESHOLD
     assert f.tiered_compact_phase_thresholds is None
     assert f.adaptive_max_delta == _DEFAULT_MAX_DELTA
@@ -100,6 +103,43 @@ def test_truncated_turn_retry_is_on_unless_it_is_exactly_zero(value, expected):
     # follows the tiered_compact spelling, NOT the opt-in "only 1" spelling.
     got = RunFlags.from_env({"LUXE_TRUNCATED_TURN_RETRY": value})
     assert got.truncated_turn_retry is expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("0", False),          # the ONLY disabling value
+    ("1", True), ("", True), ("no", True), ("false", True),
+])
+def test_ctx_server_truth_is_on_unless_it_is_exactly_zero(value, expected):
+    # Default-ON 2026-08-11: the chars//4 estimate reads ~1.9x low on code +
+    # tool JSON, so compaction fired at roughly double the context it named.
+    got = RunFlags.from_env({"LUXE_CTX_SERVER_TRUTH": value})
+    assert got.ctx_server_truth is expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("0", 0),                                  # never fire, telemetry intact
+    ("1", 1),
+    ("5", 5),
+    (" 3 ", 3),                                # int() tolerates surrounding ws
+    # Everything malformed degrades SILENTLY to the benched default — a sweep
+    # script exporting junk must not change how many retries a run gets.
+    ("", _TRUNCATED_TURN_MAX_RETRIES),
+    ("-1", _TRUNCATED_TURN_MAX_RETRIES),
+    ("two", _TRUNCATED_TURN_MAX_RETRIES),
+    ("1.5", _TRUNCATED_TURN_MAX_RETRIES),
+])
+def test_truncated_turn_max_retries_parsing(value, expected):
+    got = RunFlags.from_env({"LUXE_TRUNCATED_TURN_MAX_RETRIES": value})
+    assert got.truncated_turn_max_retries == expected
+
+
+def test_the_retry_bound_is_independent_of_the_on_off_switch():
+    """Lowering the bound is not the same as ablating the mechanism: the
+    switch stays on, so `terminal_turn_truncated` still records
+    retry_enabled=True and the two states stay distinguishable in the data."""
+    got = RunFlags.from_env({"LUXE_TRUNCATED_TURN_MAX_RETRIES": "0"})
+    assert got.truncated_turn_retry is True
+    assert got.truncated_turn_max_retries == 0
 
 
 @pytest.mark.parametrize("field,var", [

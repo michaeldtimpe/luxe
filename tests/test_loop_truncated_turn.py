@@ -89,13 +89,14 @@ def _tools():
                                 "required": ["path", "old", "new"]})]
 
 
-def _run(scripted):
+def _run(scripted, on_notice=None):
     backend = _ScriptedBackend(list(scripted))
     result = run_agent(
         backend=backend, role_cfg=_role(),
         system_prompt="sys", task_prompt="add a --strict flag",
         tool_defs=_tools(),
         tool_fns={"edit_file": lambda args: ("patched", None)},
+        on_notice=on_notice,
     )
     return backend, result
 
@@ -211,3 +212,103 @@ class TestEnabled:
         backend, result = _run([capped_but_acted, _stopped()])
         assert result.tool_calls_total == 1
         assert _nudges(backend) == []
+
+
+class TestRetryBound:
+    """`LUXE_TRUNCATED_TURN_MAX_RETRIES` (2026-08-11).
+
+    Each retry is a full capped generation — ~2.5 min at 8,192 tokens on the
+    champion. In a chat session the capped turn is often the model rambling
+    rather than mid-edit, so the default 2 can spend ~8 minutes before the
+    turn ends. The knob buys that back without giving up the mechanism (or
+    the telemetry that tells the two apart)."""
+
+    def test_the_bound_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_MAX_RETRIES", "1")
+        backend, _ = _run([_truncated()] * 10)
+        assert len(backend.calls) == 2          # 1 initial + 1 retry
+        assert len(_nudges(backend)) == 1
+
+    def test_zero_never_fires_but_leaves_the_switch_on(self, monkeypatch):
+        """Distinct from LUXE_TRUNCATED_TURN_RETRY=0 in the records: the
+        ungated `terminal_turn_truncated` event still reports the mechanism as
+        enabled, so an ablation and a tightened leash don't look alike."""
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_MAX_RETRIES", "0")
+        backend, _ = _run([_truncated()] * 5)
+        assert len(backend.calls) == 1
+        assert _nudges(backend) == []
+
+    def test_a_raised_bound_is_honoured(self, monkeypatch):
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_MAX_RETRIES", "4")
+        backend, _ = _run([_truncated()] * 10)
+        assert len(backend.calls) == 5
+        assert len(_nudges(backend)) == 4
+
+    def test_a_malformed_bound_keeps_the_benched_default(self, monkeypatch):
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_MAX_RETRIES", "lots")
+        backend, _ = _run([_truncated()] * 10)
+        assert len(backend.calls) == 1 + _TRUNCATED_TURN_MAX_RETRIES
+
+
+class TestNotices:
+    """`on_notice` — the loop says out loud that it is retrying.
+
+    Before this, a retry was visible only in `events.jsonl`, which nobody
+    reads mid-turn: the session showed a spinner and a climbing elapsed
+    counter while the mechanism spent two more full generations. Display
+    only — never consulted for a decision."""
+
+    def test_a_retry_announces_itself(self, monkeypatch):
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "1")
+        seen: list[str] = []
+        _run([_truncated(), _edit(), _stopped()], on_notice=seen.append)
+        assert len(seen) == 1
+        assert "cut off" in seen[0]
+        assert "8,192-token cap" in seen[0]
+        assert "1/2" in seen[0]                 # which retry, and of how many
+
+    def test_each_retry_is_announced_then_the_ending_is_too(self, monkeypatch):
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "1")
+        seen: list[str] = []
+        _run([_truncated()] * 10, on_notice=seen.append)
+        # 2 retries + the terminal "ending the turn" line: the user learns the
+        # turn stopped because it was cut off, not because it finished.
+        assert len(seen) == 3
+        assert "1/2" in seen[0] and "2/2" in seen[1]
+        assert "ending the turn" in seen[2]
+        assert "2 retries already used" in seen[2]
+
+    def test_the_terminal_notice_fires_even_with_retries_disabled(self,
+                                                                  monkeypatch):
+        """The case the whole mechanism exists for: a turn that was CUT OFF and
+        is being reported as an answer. Say so regardless of the switch."""
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "0")
+        seen: list[str] = []
+        _run([_truncated()], on_notice=seen.append)
+        assert len(seen) == 1
+        assert "without retrying" in seen[0]
+
+    def test_an_ordinary_completion_says_nothing(self, monkeypatch):
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "1")
+        seen: list[str] = []
+        _run([_stopped()], on_notice=seen.append)
+        assert seen == []
+
+    def test_a_raising_callback_cannot_kill_the_run(self, monkeypatch):
+        """Display-only means a broken front-end costs the notice, not the
+        turn — the loop owns work the UI does not."""
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "1")
+
+        def _boom(_text):
+            raise RuntimeError("front-end is gone")
+
+        backend, result = _run([_truncated(), _edit(), _stopped()],
+                               on_notice=_boom)
+        assert result.tool_calls_total == 1
+        assert len(_nudges(backend)) == 1
+
+    def test_notices_are_off_by_default(self, monkeypatch):
+        """The benchmark/maintain path passes no callback and is unchanged."""
+        monkeypatch.setenv("LUXE_TRUNCATED_TURN_RETRY", "1")
+        backend, result = _run([_truncated(), _edit(), _stopped()])
+        assert result.tool_calls_total == 1

@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from luxe.agents.convergence import _DEFAULT_MAX_DELTA
+from luxe.agents.guardrails import _TRUNCATED_TURN_MAX_RETRIES
 
 #: Fallback compaction trigger; also the value any out-of-band override
 #: silently degrades to (see `from_env`).
@@ -61,6 +62,19 @@ class RunFlags:
     # the A/B took maintain_suite 27/30 -> 30/30 with zero regressions.
     # Set to "0" to disable for ablation. See agents.sdd "Truncated-turn retry".
     truncated_turn_retry: bool = True
+
+    # How many times that retry may fire in one run. Default 2 is the benched
+    # value; each retry costs a full capped generation, so an interactive
+    # session that wants a shorter leash lowers it rather than disabling the
+    # mechanism. 0 = never fire (telemetry still records the truncation).
+    truncated_turn_max_retries: int = _TRUNCATED_TURN_MAX_RETRIES
+
+    # Calibrate context pressure against the server's own usage.prompt_tokens
+    # instead of trusting the chars//4 estimate. DEFAULT-ON since 2026-08-11:
+    # the estimate reads ~1.9x low on code + tool JSON, so compaction phases
+    # fired at roughly double the context they name. Set to "0" to disable for
+    # ablation. See agents.sdd "Server-truth context calibration".
+    ctx_server_truth: bool = True
 
     # Context compaction (default ON since 2026-05-28)
     tiered_compact: bool = True
@@ -107,6 +121,15 @@ class RunFlags:
             except ValueError:
                 pass
 
+        # Retry bound: a non-negative int, anything else degrades silently to
+        # the benched default (same contract as every other knob here).
+        try:
+            max_tt_retries = int(e.get("LUXE_TRUNCATED_TURN_MAX_RETRIES", ""))
+            if max_tt_retries < 0:
+                max_tt_retries = _TRUNCATED_TURN_MAX_RETRIES
+        except ValueError:
+            max_tt_retries = _TRUNCATED_TURN_MAX_RETRIES
+
         # Empty string means "unset" here, not "zero" — hence the `or`.
         try:
             max_delta = float(
@@ -131,6 +154,9 @@ class RunFlags:
             truncated_turn_retry=(
                 e.get("LUXE_TRUNCATED_TURN_RETRY", "1") != "0"
             ),
+            truncated_turn_max_retries=max_tt_retries,
+            # Default ON: only the exact string "0" disables it.
+            ctx_server_truth=e.get("LUXE_CTX_SERVER_TRUTH", "1") != "0",
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),
             # Default ON: only the exact string "0" disables it.
