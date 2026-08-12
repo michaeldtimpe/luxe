@@ -579,6 +579,60 @@ never touches this module.
   forbids any expansion. Resize is never silent — high context pressure only
   *suggests* the next tier; the user opts in. The benchmark/maintain path never
   reads `num_ctx_max` and is unaffected.
+  **`num_ctx_max` is a MODEL limit; `CTX_TIER_MIN_RAM_GB` is the HOST limit**
+  (2026-08-11). `num_ctx_max: 262144` is Qwen3.6's native
+  `max_position_embeddings`, so the clamp above never fires for `huge` even on
+  a box that cannot hold it: the KV cache is ~80 KiB/token here (40 layers x 2
+  KV heads x 256 head_dim x 2 for K+V x 2 bytes; turboquant KV off), making a
+  filled 256K window ~20 GiB on top of 21-28 GB of weights. `/ctx huge` on a
+  host under 96 GB therefore prints a WARNING and proceeds — MLX grows the KV
+  cache lazily, so the tier is a ceiling and the failure lands mid-session when
+  it fills, not at selection. `host_ram_gb()` returning None means "couldn't
+  tell" and must stay silent; a warning nobody can act on is worse than none.
+  The tier listing marks affected tiers `(needs NGB)`, distinct from `(>max)`.
+- `--ephemeral` / `/ephemeral [on|off]` (2026-08-11, `luxe.ephemeral`) runs a
+  session with every one of luxe's OWN persistence sites suppressed. A
+  process-global, because `append_turn`/`append_event` have dozens of call
+  sites; `--ephemeral --resume` is a UsageError. The suppressed set — keep it
+  complete, an unguarded writer silently breaks the guarantee:
+  `~/.luxe/sessions/<id>/` (meta, transcript, fold, ledger, debug.log),
+  `~/.luxe/runs/<id>/events.jsonl`, `<repo>/.luxe/memory.md` + `facts.jsonl`,
+  `~/.luxe/reports/` + **`<repo>/.luxe/gitkit/`** (`gitkit.store.save_report`
+  / `mirror_to_repo`), gitkit deep's `map/` cache (guarded at the
+  `_atomic_write_text` funnel; the cost is a non-incremental next run, same as
+  `--rebuild-map`), `~/.luxe/cve_cache/`, and `~/.luxe/mcp_audit.jsonl`. The
+  ledger is the sharp one: `update_ledger` is exposed on EVERY chat turn
+  (repl.py), so leaving it unguarded lets any session recreate the directory
+  the mode just declined to make.
+- Boundaries, all contract: READS are untouched (config, secrets, existing
+  project memory); the write TOOLS are unaffected — `/write` still gates them
+  and the agent still edits the user's repo, since this mode is about what
+  luxe RECORDS, never what it was asked to do; the repo LOCK is still taken,
+  being mutual exclusion rather than a session record, and is the ONE
+  surviving artifact. The startup line and `/ephemeral`'s output state both
+  halves — what is suppressed AND that writes still work — plus the loss of
+  post-hoc diagnosis.
+- `/ephemeral` ON mid-session PURGES this session's own
+  `~/.luxe/sessions/<id>/` + `~/.luxe/runs/<id>-*/` (`purge_session`, matched
+  on the `<session_id>-` run-id prefix so a neighbour's data is never in
+  range) and PRINTS every path removed. It must NOT touch
+  `<repo>/.luxe/memory.md` — that file interleaves machine blocks with the
+  user's curated text, and a mode that writes nothing must never become one
+  that deletes hand-written notes; its continued existence is reported
+  instead. Detach the debug-log handler (`CommandContext.session_log`) BEFORE
+  the rmtree: it holds `debug.log` open inside that directory. Turning it OFF
+  resumes writing from the next call; the turns taken while it was on are a
+  permanent hole in the transcript and the command says so.
+- Status bar: an `eph on` chip at priority 1 (protected from the responsive
+  drop, like git/ctx/model), shown ONLY when on — unlike write/bash/web, whose
+  "off" is a safe default worth confirming, this is off in every ordinary
+  session so a permanent `eph off` would be noise.
+- `/note` skips BEFORE its on-demand bypass (explicit consent to write does
+  not override a write-nothing session, and it saves the wasted distil call);
+  `/export` explains itself rather than raising FileNotFoundError from the
+  absent transcript. Redirecting `luxe_home()` at a tmpdir is NOT the
+  implementation: `luxe.sdd` forbids making the root configurable, and it
+  would capture the read paths too.
 - `/bash` toggles unrestricted shell (default OFF = hardened allowlist). When ON
   AND write mode is on, the turn passes `unrestricted_bash_def()` +
   `make_bash_fn(unrestricted=True)` through `run_single`'s extra-tool seam,

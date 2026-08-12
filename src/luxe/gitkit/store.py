@@ -12,6 +12,7 @@ import time
 import uuid
 from pathlib import Path
 
+from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 from luxe.memory.project import repo_hash
 
@@ -22,7 +23,7 @@ def reports_dir(repo_path: str | Path) -> Path:
 
 
 def save_report(repo_path: str | Path, kind: str, text: str,
-                meta: dict | None = None) -> Path:
+                meta: dict | None = None) -> Path | None:
     """Write a gitkit report to disk and return its path.
 
     Args:
@@ -40,6 +41,9 @@ def save_report(repo_path: str | Path, kind: str, text: str,
     """
     meta = dict(meta or {})
     ts = int(time.time())
+    if is_ephemeral():
+        # Ephemeral: the report is returned and rendered, just never filed.
+        return None
     out_dir = reports_dir(repo_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{kind}-{ts}-{uuid.uuid4().hex[:6]}.md"
@@ -113,6 +117,10 @@ def mirror_to_repo(repo_path: str | Path, kind: str, report_text: str,
     the `.luxe/gitkit/` sidecar — never source — mirroring the `.luxe/memory.md`
     precedent. Best-effort: any OS error is swallowed and returns None so a stray
     filesystem failure never aborts the analysis."""
+    if is_ephemeral():
+        # This is the site that literally creates `<repo>/.luxe/` — the exact
+        # thing --ephemeral promises not to do.
+        return None
     try:
         dest = Path(repo_path) / ".luxe" / "gitkit"
         dest.mkdir(parents=True, exist_ok=True)

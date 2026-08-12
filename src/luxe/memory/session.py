@@ -12,6 +12,7 @@ while ~/.luxe/runs/<run_id>/events.jsonl stays the agent-internal view.
 
 from __future__ import annotations
 
+from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 
 import json
@@ -61,6 +62,8 @@ def _meta_path(session_id: str) -> Path:
 
 
 def _write_meta(meta: SessionMeta) -> None:
+    if is_ephemeral():
+        return
     p = _meta_path(meta.session_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
@@ -87,13 +90,18 @@ def new_session(
         backend_name=backend_name,
         base_url=base_url,
     )
-    session_dir(meta.session_id).mkdir(parents=True, exist_ok=True)
-    _write_meta(meta)
+    # Ephemeral sessions still get an id — it keys the in-memory session and
+    # every log line — but nothing lands on disk.
+    if not is_ephemeral():
+        session_dir(meta.session_id).mkdir(parents=True, exist_ok=True)
+        _write_meta(meta)
     return meta
 
 
 def touch(session_id: str) -> None:
     """Bump last_active (called as turns are appended)."""
+    if is_ephemeral():
+        return
     meta = load_meta(session_id)
     if meta is None:
         return
@@ -103,6 +111,8 @@ def touch(session_id: str) -> None:
 
 def append_turn(session_id: str, kind: str, **data) -> None:
     """Append one record to transcript.jsonl. `kind` is user|assistant|tool|event."""
+    if is_ephemeral():
+        return
     p = session_dir(session_id) / "transcript.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     record = {"kind": kind, "ts": time.time(), **data}
@@ -112,6 +122,8 @@ def append_turn(session_id: str, kind: str, **data) -> None:
 
 def append_fold(session_id: str, turn_idx: int, version: str, text: str) -> None:
     """Record the summarizer output that fed turn `turn_idx`'s context."""
+    if is_ephemeral():
+        return
     p = session_dir(session_id) / "fold.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     record = {"turn_idx": turn_idx, "version": version, "ts": time.time(), "text": text}

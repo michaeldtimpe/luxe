@@ -6,10 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from luxe.chat import session as session_mod
 from luxe.chat.session import (
+    CTX_TIER_MIN_RAM_GB,
     CTX_TIERS,
     ChatSession,
     ChatTurn,
+    ctx_tier_ram_warning,
+    host_ram_gb,
     next_tier_up,
     tier_label,
 )
@@ -155,6 +159,61 @@ def test_next_tier_up_respects_ceiling():
     assert next_tier_up(32768, 8192) is None
     # Already at the top tier.
     assert next_tier_up(131072, 131072) is None
+
+
+class TestCtxTierRamWarning:
+    """`/ctx huge` is inside `num_ctx_max` and past what most boxes hold.
+
+    `num_ctx_max: 262144` is the MODEL's native limit (Qwen3.6's
+    `max_position_embeddings`), so the existing clamp never fires for `huge` —
+    it is the HOST that can't hold it. The KV cache is ~80 KiB/token here (40
+    layers x 2 KV heads x 256 head_dim x 2 for K+V x 2 bytes, turboquant KV
+    off), so a filled 256K window is ~20 GiB on top of 21-28 GB of weights:
+    fine on a 128 GB box, past the 36 GB GPU cap on a 64 GB one. Measured
+    2026-08-11."""
+
+    def test_huge_warns_on_a_small_box(self, monkeypatch):
+        monkeypatch.setattr(session_mod, "host_ram_gb", lambda: 64.0)
+        warning = ctx_tier_ram_warning("huge")
+        assert warning is not None
+        assert "96+ GB" in warning
+        assert "64 GB" in warning
+
+    def test_huge_is_silent_on_a_big_box(self, monkeypatch):
+        monkeypatch.setattr(session_mod, "host_ram_gb", lambda: 128.0)
+        assert ctx_tier_ram_warning("huge") is None
+
+    @pytest.mark.parametrize("tier", ["small", "medium", "large", "xlarge"])
+    def test_the_other_tiers_never_warn(self, tier, monkeypatch):
+        """Only `huge` carries a floor; xlarge is BFCL-proven on a 64 GB box."""
+        monkeypatch.setattr(session_mod, "host_ram_gb", lambda: 8.0)
+        assert ctx_tier_ram_warning(tier) is None
+
+    def test_unknown_ram_does_not_warn(self, monkeypatch):
+        """None means "couldn't tell", not "too small" — a warning nobody can
+        act on is worse than none."""
+        monkeypatch.setattr(session_mod, "host_ram_gb", lambda: None)
+        assert ctx_tier_ram_warning("huge") is None
+
+    def test_the_warning_names_the_cache_cost(self, monkeypatch):
+        """It has to say WHY, or the number reads as arbitrary."""
+        monkeypatch.setattr(session_mod, "host_ram_gb", lambda: 64.0)
+        warning = ctx_tier_ram_warning("huge")
+        assert "80 KiB/token" in warning
+        assert "20 GiB" in warning
+
+    def test_it_says_the_failure_is_deferred(self, monkeypatch):
+        """The window is a ceiling and MLX grows the KV cache lazily, so
+        selecting the tier succeeds and the box dies later. Say so."""
+        monkeypatch.setattr(session_mod, "host_ram_gb", lambda: 64.0)
+        assert "mid-session" in ctx_tier_ram_warning("huge")
+
+    def test_every_floor_names_a_real_tier(self):
+        assert set(CTX_TIER_MIN_RAM_GB) <= set(CTX_TIERS)
+
+    def test_host_ram_is_a_positive_number_or_none(self):
+        got = host_ram_gb()
+        assert got is None or got > 0
 
 
 def test_num_ctx_override_defaults_off():

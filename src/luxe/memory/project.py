@@ -16,6 +16,7 @@ Code's own project memory).
 
 from __future__ import annotations
 
+from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 
 import hashlib
@@ -108,6 +109,8 @@ def _read_facts(repo_root: str | Path) -> list[Fact]:
 
 
 def _write_facts(repo_root: str | Path, facts: list[Fact]) -> None:
+    if is_ephemeral():
+        return
     p = _facts_path(repo_root)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".jsonl.tmp")
@@ -220,8 +223,14 @@ def splice_block(repo_root: str | Path, name: str, body: str, *,
     priority. Everything outside the block is preserved byte-for-byte. Creates
     the file (with a one-line header comment) when absent. Never touches
     `facts.jsonl`. Returns the path written.
+
+    Ephemeral sessions skip the write and return the path unwritten — the
+    caller only uses it to report where the note landed, and every caller
+    (session-end notes, `/note`, `/init`) is best-effort by contract.
     """
     path = repo_memory_file(repo_root)
+    if is_ephemeral():
+        return path
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
     begin_pre, end_marker = block_markers(name)
     begin = f"{begin_pre}{(' ' + stamp) if stamp else ''} -->"

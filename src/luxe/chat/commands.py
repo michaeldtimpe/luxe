@@ -43,6 +43,10 @@ class CommandContext:
     # The live status-bar snapshot, so commands that invalidate it can say so
     # (`/clear` must clear ctx%/cache — they describe a conversation that's gone).
     status: object | None = None
+    # This session's debug-log handle (chat/debuglog.SessionLog). `/ephemeral`
+    # needs it: the handler holds debug.log open inside the directory the
+    # command is about to remove, so it must be detached first.
+    session_log: object | None = None
 
 
 # (command, args, description) — rendered into an auto-aligned table by _help()
@@ -72,6 +76,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/write", "", "toggle write tools (default: read-only)"),
     ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
     ("/web", "", "toggle web tools: fetch/render pages + search (default: off)"),
+    ("/ephemeral", "[on|off]", "write nothing to disk: no transcript/log/notes (purges this session's)"),
     ("/verbose", "[diff|full|off]", "show full tool I/O (diffs, file contents, results)"),
     ("/reasoning", "", "toggle live streaming of the model's thinking"),
     ("/debug", "", 'toggle "show everything" (verbose full + reasoning)'),
@@ -194,6 +199,7 @@ def _build_handlers() -> dict:
         "/write": cmd_toggles._write,
         "/bash": cmd_toggles._bash_mode,
         "/web": cmd_toggles._web_mode,
+        "/ephemeral": cmd_toggles._ephemeral,
         "/verbose": cmd_toggles._verbose,
         "/reasoning": cmd_toggles._reasoning,
         "/debug": cmd_toggles._debug,

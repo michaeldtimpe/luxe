@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 
+from luxe.ephemeral import is_ephemeral
 from luxe.memory.session import session_dir
 
 # Keep each list bounded so the injected block can never balloon the prompt —
@@ -103,7 +104,7 @@ def load(session_id: str) -> Ledger:
 
 def save(session_id: str, ledger: Ledger) -> None:
     """Atomically persist the ledger (mirrors memory.session._write_meta)."""
-    if not session_id:
+    if not session_id or is_ephemeral():
         return
     p = _ledger_path(session_id)
     p.parent.mkdir(parents=True, exist_ok=True)

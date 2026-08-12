@@ -9,6 +9,7 @@ same seam via `CancelToken` + `ChatCancelled`.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import signal
 import time
@@ -21,6 +22,7 @@ from rich.live import Live
 from rich.markup import escape as _escape
 from rich.status import Status
 
+from luxe import ephemeral
 from luxe.agents.single import run_single
 from luxe.backend import BackendError
 from luxe.chat import commands as cmd
@@ -57,6 +59,7 @@ from luxe.chat import origin as origin_mod
 from luxe.memory import project as project_mem
 from luxe.memory import session as session_store
 from luxe.state import ledger as ledger_mod
+from luxe.tools import fs as fs_mod
 
 @dataclass
 class TurnOutcome:
@@ -284,6 +287,8 @@ def run_chat_repl(
     # happened" that the screen (especially the TUI) can't provide.
     from luxe.chat import debuglog
     dbglog = debuglog.install(session_store.session_dir(meta.session_id))
+    if (_eph_notice := ephemeral.startup_notice()):
+        console.print(f"[yellow]·[/] [dim]{_eph_notice}[/]")
     logger.info("session %s start · repo=%s · backend=%s (%s) · slots=%s",
                 meta.session_id, repo_path or "(none)", slots.backend_name,
                 slots.backend.base_url, slots.slot_models())
@@ -305,6 +310,7 @@ def run_chat_repl(
         on_git_analysis=_make_git_analysis_hook(console, cfg, session, cancel),
         on_project=_make_project_hook(session, on_project),
         status=status,
+        session_log=dbglog,
     )
 
     if resume_session_id:
@@ -618,6 +624,18 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         # (tools.sdd). Same per-turn seam as the bash swap above.
         from luxe.tools.fs import make_prose_aware_write_fns
         extra_tool_fns.update(make_prose_aware_write_fns())
+    else:
+        # Read-only: the mutation tools are stripped from the DEFS (the model
+        # is not offered them), but a model that calls one anyway used to get
+        # `Unknown tool: edit_file` — which is false. The tool exists and is
+        # gated, and nothing in that message says so or names `/write`, so the
+        # turn just ends with the work undone (observed 2026-08-11, session
+        # 0e524f033300 run -14: a full file body handed to `edit_file`,
+        # rejected as unknown, turn over). Registering a stub FN with no DEF
+        # keeps the tool invisible in the surface while making the rejection
+        # explain itself. Chat-only: the benchmark path passes no extra tools.
+        from luxe.tools.fs import make_write_gated_fns
+        extra_tool_fns.update(make_write_gated_fns())
 
     # Web tools (chat-only, `/web`, default OFF — web.sdd). Independent of
     # write mode: fetching a page mutates nothing locally. `web_search` is
@@ -649,6 +667,17 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         effective_ctx = min(session.num_ctx_override, ctx_ceiling)
         if effective_ctx != role_cfg.num_ctx:
             role_cfg = role_cfg.model_copy(update={"num_ctx": effective_ctx})
+
+    # Ctx-derived tool-output budget (2026-08-12, OPT-IN via
+    # LUXE_TOOL_BUDGET_CTX=1). The fixed 256 KB read cap predates the /ctx
+    # tiers and is 480% of the DEFAULT 32K window measured in real tokens, so
+    # one oversized read can blow the context in a single call. Set per turn
+    # because `/ctx` moves num_ctx mid-session. Unset = the fixed constants,
+    # which is what benchmark/maintain always get (they never call this).
+    if os.environ.get("LUXE_TOOL_BUDGET_CTX") == "1":
+        fs_mod.set_read_budget(fs_mod.budget_for_ctx(role_cfg.num_ctx))
+    else:
+        fs_mod.set_read_budget(None)
 
     extra_context, fold_version = session.build_extra_context(message)
 
@@ -686,13 +715,13 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         if tr is not None:
             test_result[0] = tr
 
-    def _call(on_event, on_token=None, on_progress=None):
+    def _call(on_event, on_token=None, on_progress=None, on_notice=None):
         return run_single(
             backend, role_cfg, goal=message, task_type=task_type,
             languages=languages, extra_tool_defs=extra_tool_defs,
             extra_tool_fns=extra_tool_fns, on_tool_event=on_event,
-            on_token=on_token, on_progress=on_progress, run_id=run_id, phase="chat",
-            extra_context=extra_context,
+            on_token=on_token, on_progress=on_progress, on_notice=on_notice,
+            run_id=run_id, phase="chat", extra_context=extra_context,
         )
 
     return TurnPrep(
@@ -872,7 +901,10 @@ def _run_turn(
                     live_state.ctx_pressure = pressure
                     live_state.has_turn = True
 
-                result = prep.call(_on_event, _on_token, _on_progress)
+                def _on_notice(text):
+                    live.console.print(f"[yellow]· {_escape(text)}[/]")
+
+                result = prep.call(_on_event, _on_token, _on_progress, _on_notice)
                 if session.show_reasoning:
                     reasoner.flush()
         else:
@@ -890,8 +922,11 @@ def _run_turn(
                 if session.show_reasoning:
                     reasoner.feed(delta)
 
+            def _on_notice(text):
+                console.print(f"[yellow]· {_escape(text)}[/]")
+
             with Status("[dim]generating…[/]", console=console, spinner="dots"):
-                result = prep.call(_on_event, _on_token)
+                result = prep.call(_on_event, _on_token, None, _on_notice)
             if session.show_reasoning:
                 reasoner.flush()
     except (ChatCancelled, KeyboardInterrupt):

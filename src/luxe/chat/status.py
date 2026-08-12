@@ -29,6 +29,7 @@ from dataclasses import dataclass
 # `chat/theme.py`): each span is styled by a theme ROLE (pwd/branch/commit/dirty/
 # label/ctx/model/white_brt/safe/warn/alert), drawn from the terminal ANSI
 # palette so luxe tracks the same iTerm2 profile as the Claude statusline.
+from luxe import ephemeral as _ephemeral
 from luxe import gitcmd
 from luxe import textfmt
 from luxe.chat import theme as theme_mod
@@ -332,6 +333,17 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     segs.append(Segment([_S("web ", _DEFAULT),
                          _S("on" if web_on else "off",
                             _on if web_on else _off)], priority=3))
+    # ephemeral — shown ONLY when on, unlike write/bash/web. Those three are
+    # gates whose "off" state is the safe default worth confirming; this one is
+    # off in every ordinary session, so a permanent "eph off" would be pure
+    # noise. When it IS on the user is running without a transcript or debug
+    # log, which they must be able to see at a glance — hence priority 1
+    # (protected from the responsive drop, like git/ctx/model; `fit` drops
+    # HIGHEST priority numbers first) and the warning colour.
+    if _ephemeral.is_ephemeral():
+        segs.append(Segment([_S("eph ", _DEFAULT),
+                             _S("on", theme_mod.styles_for("warning"))],
+                            priority=1))
 
     # backend name — only when the config offers >1 endpoint (multi-backend is
     # the exception, not the rule; single-backend bars stay untouched). Mid

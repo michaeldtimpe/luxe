@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from luxe.ephemeral import is_ephemeral
+
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
@@ -38,6 +40,12 @@ def install(session_dir: str | Path) -> SessionLog:
     """Attach a DEBUG file handler for this session. Never raises."""
     pkg = logging.getLogger("luxe")
     prior = pkg.level
+    # Ephemeral sessions get no debug.log. This is the one suppression with a
+    # real cost — post-hoc diagnosis is exactly what the always-on log exists
+    # for (2026-07-30 fallback-kit pivot) — so `--ephemeral` says so at
+    # startup rather than leaving the absence to be discovered later.
+    if is_ephemeral():
+        return SessionLog(None, prior, None)
     try:
         path = Path(session_dir) / "debug.log"
         handler = logging.FileHandler(path, encoding="utf-8", delay=True)

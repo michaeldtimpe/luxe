@@ -8,10 +8,16 @@ which reproduces their output byte for byte.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 from luxe.chat.commands import _SLOTS, CommandContext, CommandResult
-from luxe.chat.session import CTX_TIERS, tier_label
+from luxe.chat.session import (
+    CTX_TIER_MIN_RAM_GB,
+    CTX_TIERS,
+    ctx_tier_ram_warning,
+    tier_label,
+)
 
 
 def _theme(args, ctx: CommandContext) -> CommandResult:
@@ -121,7 +127,13 @@ def _ctx(args, ctx: CommandContext) -> CommandResult:
     def _tiers_line() -> str:
         bits = []
         for name, n in CTX_TIERS.items():
-            mark = "[dim](>max)[/]" if n > ceiling else ""
+            if n > ceiling:
+                mark = "[dim](>max)[/]"
+            elif ctx_tier_ram_warning(name):
+                # Inside the model's ceiling, past this HOST's RAM.
+                mark = f"[yellow](needs {CTX_TIER_MIN_RAM_GB[name]}GB)[/]"
+            else:
+                mark = ""
             bits.append(f"{name} [dim]{n}[/]{mark}")
         return "  ".join(bits)
 
@@ -145,6 +157,12 @@ def _ctx(args, ctx: CommandContext) -> CommandResult:
     requested = CTX_TIERS[tier]
     ctx.session.num_ctx_override = requested
     eff = min(requested, ceiling)
+    # Host-RAM warning, separate from the num_ctx_max clamp above it: that
+    # ceiling comes from what the MODEL supports, and on this box `huge` is
+    # inside it while being past what the hardware can actually hold.
+    ram_warning = ctx_tier_ram_warning(tier)
+    if ram_warning and eff == requested:
+        ctx.console.print(f"[yellow]⚠[/] {ram_warning}")
     if eff != requested:
         ctx.console.print(
             f"[yellow]✓[/] context → [cyan]{tier}[/] requested ({requested}), "
@@ -242,6 +260,70 @@ _compact_mode = _toggle(
 
 
 _VERBOSE_LEVELS = ("off", "diff", "full")
+
+
+def _ephemeral(args, ctx: CommandContext) -> CommandResult:
+    """Toggle write-nothing mode mid-session (`--ephemeral` at startup).
+
+    Turning it ON has a problem the startup flag does not: the session
+    directory already holds a transcript of everything said so far. Leaving it
+    would be the opposite of what was asked, so this PURGES this session's own
+    `~/.luxe/sessions/<id>/` and `~/.luxe/runs/<id>-*/` and says exactly what
+    it removed. It does NOT touch `<repo>/.luxe/memory.md` — that file mixes
+    machine blocks with the user's own curated text, and a mode that writes
+    nothing must not become one that deletes hand-written notes; anything
+    already spliced there is reported instead.
+
+    Turning it OFF resumes persistence from the next write. The turns that
+    passed while it was on are simply absent — there is no un-forget.
+    """
+    from luxe import ephemeral as eph
+
+    arg = (args[0].lower() if args else "")
+    if arg in ("on", "off"):
+        want = arg == "on"
+    elif arg:
+        ctx.console.print(f"[yellow]Unknown option {arg!r}; expected on|off.[/]")
+        return CommandResult(handled=True)
+    else:
+        want = not eph.is_ephemeral()
+
+    if want == eph.is_ephemeral():
+        state = "ON" if want else "OFF"
+        ctx.console.print(f"[dim]ephemeral is already {state}.[/]")
+        return CommandResult(handled=True)
+
+    if not want:
+        eph.disable()
+        ctx.console.print(
+            "ephemeral: [red]OFF[/] [dim](writes resume from the next turn; "
+            "the turns taken while it was on were never recorded and do not "
+            "come back)[/]")
+        return CommandResult(handled=True)
+
+    # ON: stop the debug log FIRST — the handler holds debug.log open inside
+    # the directory about to be removed.
+    from luxe.chat import debuglog
+    if getattr(ctx, "session_log", None) is not None:
+        debuglog.uninstall(ctx.session_log)
+    eph.enable()
+    removed = eph.purge_session(ctx.session.session_id,
+                                getattr(ctx.session, "repo_path", "") or "")
+    ctx.console.print("ephemeral: [yellow]ON[/] [dim](no transcript, no "
+                      "debug.log, no run events, no project-memory writes; "
+                      "write tools unaffected)[/]")
+    if removed:
+        ctx.console.print(f"[dim]· removed {len(removed)} path(s) this session "
+                          f"had already written:[/]")
+        for p in removed:
+            ctx.console.print(f"[dim]    {p}[/]")
+    repo = getattr(ctx.session, "repo_path", "") or ""
+    if repo and (Path(repo) / ".luxe" / "memory.md").is_file():
+        ctx.console.print(
+            "[yellow]·[/] [dim]note: <repo>/.luxe/memory.md exists and was NOT "
+            "touched — it holds your curated text alongside luxe's blocks. "
+            "No further writes will be made to it.[/]")
+    return CommandResult(handled=True)
 
 
 def _web_mode(args, ctx: CommandContext) -> CommandResult:

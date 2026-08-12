@@ -34,6 +34,7 @@ from typing import Any
 
 import httpx
 
+from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 from luxe.tools.base import ToolDef, ToolFn
 
@@ -66,6 +67,8 @@ def _read_cache(p: Path) -> dict[str, Any] | None:
 
 def _write_cache(p: Path, data: dict[str, Any]) -> None:
     """Best-effort write — we never want a cache write to fail the lookup."""
+    if is_ephemeral():
+        return
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data))
