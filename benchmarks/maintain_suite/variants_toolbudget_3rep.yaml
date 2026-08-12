@@ -1,0 +1,56 @@
+# LUXE_TOOL_BUDGET_CTX A/B — 3 reps per arm (2026-08-12).
+#
+# Question: should the per-tool-result read cap scale with the context
+# window? budget_for_ctx(32768) = 13,653 bytes vs the fixed 256 KB constant —
+# scaling with ctx scales DOWN, forcing windowed reads on files the model
+# used to swallow whole. de94e7a shipped the knob default-OFF pending this
+# run.
+#
+# PRE-FLIGHT (the C10 lesson — verify the knob reaches its target BEFORE
+# benching): set_read_budget had exactly one caller (chat/repl.py), so this
+# A/B was inert by construction until maintain.apply_ctx_read_budget wired
+# the env var into maintain_pipeline (2026-08-12, tools.sdd). Liveness marks:
+# the ON arm must show the "· Tool read budget:" console line and one
+# read_budget_applied event per run; a single-fixture preflight precedes the
+# arm. OPPORTUNITY (measured on the 2026-08-12 ctx-truth corpus, 22 runs):
+# 15/1,794 read_file calls exceed 13,653 bytes (max 50 KB), spread across 6
+# of 10 fixtures — thin but present; if the ON arm shows zero budget
+# refusals, the arm had no opportunity and the A/B is uninterpretable.
+#
+# Arms are two invocations with different --output and environment, run
+# SEQUENTIALLY (same weights):
+#
+#   uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_toolbudget_3rep.yaml \
+#     --output acceptance/toolbudget_ab_2026_08_12/baseline/ \
+#     --per-fixture-timeout 1800
+#
+#   LUXE_TOOL_BUDGET_CTX=1 uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_toolbudget_3rep.yaml \
+#     --output acceptance/toolbudget_ab_2026_08_12/treatment/ \
+#     --per-fixture-timeout 1800
+#
+# The baseline arm doubles as the SETTLED-TREE CONFIRMATION for
+# acceptance/ctx_server_truth_2026_08_12/ (whose reps overlapped working-tree
+# edits): reproducing 30/30 · 120/150 closes that report's caveat 1.
+#
+# PROMOTION CRITERIA (fixed before the run, per bench-as-truth):
+#   1. The default flips ON only if the treatment arm holds 30/30 · 120/150
+#      AND shows real budget-refusal firings (opportunity exercised) AND
+#      tokens/wall do not rise >1.5x — the knob's value is prompt-diet, so a
+#      token INCREASE means windowed re-reads cost more than they save and
+#      the default stays OFF.
+#   2. Any fixture passing all baseline reps and failing any treatment rep =
+#      disqualifying regression; default stays OFF regardless of score.
+#   3. Zero refusal firings in the treatment arm = no opportunity = record
+#      "untestable at this suite's file sizes", default stays OFF, do NOT
+#      re-bench on this suite.
+#
+# 3 reps per arm: temp=0 non-determinism
+# (project_substrate_noise_temp0_not_deterministic) + maintain_suite.sdd 3x
+# replication rule.
+
+variants:
+  - {model_label: tb-rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: tb-rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: tb-rep3, model_id: Qwen3.6-35B-A3B-6bit}
