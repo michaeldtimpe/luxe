@@ -124,9 +124,59 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   constants, which the benchmark/maintain path always gets). The fixed cap
   predates the `/ctx` tiers: in real tokens one max-size read is 480% of the
   DEFAULT 32K window and still 60% of the LARGEST window luxe can open, so
-  scaling it with ctx means scaling it DOWN. Enabling it is a benchmark-path
-  behaviour change (at num_ctx=32768 the whole-file limit becomes ~13 KB) and
-  needs a maintain_suite run
+  scaling it with ctx means scaling it DOWN. This module keeps NO default of
+  its own — the defaults live at the call sites below, and enabling it is a
+  benchmark-path behaviour change (at num_ctx=32768 the whole-file limit
+  becomes ~13 KB), which is why it took a maintain_suite A/B to promote
+
+### `LUXE_TOOL_BUDGET_CTX` wiring (2026-08-12; maintain DEFAULT-ON, chat opt-in)
+
+- **The two paths deliberately disagree about the default, and the grammar
+  encodes which.** MAINTAIN/BENCH is **default ON** since 2026-08-12 —
+  `maintain.apply_ctx_read_budget` reads
+  `os.environ.get("LUXE_TOOL_BUDGET_CTX", "1")` and only the EXACT string
+  `"0"` disables (unset → on; "", "true", "01" → on). That is the same
+  opt-out grammar as `LUXE_TRUNCATED_TURN_RETRY` in `agents/flags.py`, and
+  the two must stay spelled the same way. CHAT (`chat/repl.py`) is **opt-in**:
+  only the exact string `"1"` enables it. Do not "align" the two — the flip
+  rests on maintain_suite evidence and there is NONE for chat
+- Benched before the flip: `acceptance/toolbudget_ab_2026_08_12/REPORT.md`
+  (3 reps × 10 fixtures × 2 arms; both arms 30/30 · 120/150; tokens −3.9%,
+  wall +4.3%; zero fixture regressions; opportunity exercised — 21 baseline
+  over-budget reads vs zero in treatment; `read_budget_applied` in 30/30
+  treatment runs and 0/30 baseline). The shipped default must stay
+  byte-equivalent to that treatment arm: same `budget_for_ctx(num_ctx)` value,
+  same console line, same event — the announce string still reads
+  `LUXE_TOOL_BUDGET_CTX=1` for exactly that reason
+- TWO call sites own the budget, one per path, and they never overlap:
+  `chat/repl.py` sets it PER TURN (`/ctx` moves num_ctx mid-session, so the
+  turn is the only correct scope), and `maintain.apply_ctx_read_budget` sets
+  it ONCE per `maintain_pipeline`, from `cfg.role("monolith").num_ctx` — the
+  same role config the run executes with, never a hardcoded window
+- **BFCL is still UNWIRED and the flag is inert there**: its adapter calls
+  `run_agent` in-process and never passes through `maintain_pipeline`. Wire a
+  call site and preflight it before ever A/B-ing this flag on BFCL
+- The bench wiring exists because the flag was previously **inert by
+  construction on the benchmark path**: `set_read_budget`'s only caller was
+  the chat front-end, so `LUXE_TOOL_BUDGET_CTX=1 python -m
+  benchmarks.maintain_suite.run …` measured a no-op knob. This is the C10
+  trap in `lessons.md` 2026-08-11 — a switch benched before it reached its
+  target. Do not A/B this flag on any path without a call site on it
+- **Off = no call at all**, not `set_read_budget(None)`. The reset is a
+  documented no-op, but "don't touch the module state" is the stronger
+  guarantee: with `=0`, `maintain_pipeline` runs byte-identically to before
+  the wiring existed, and nothing can be re-ordered into a regression later.
+  `read_limit()` stays `_MAX_FILE_SIZE`
+- Chat is unaffected in both directions. `maintain_pipeline` is not on the
+  chat path (chat enters via `chat/launch.py` → `_run_interactive`), and even
+  in a hypothetical shared process `repl.py` re-sets the budget on EVERY turn
+  in BOTH branches, so its value is the one in force when that turn's tools
+  run
+- When ON the run says so — a `read_budget_applied` event in `events.jsonl`
+  (`max_bytes`, `num_ctx`) plus a console line — so a bench arm can be
+  checked for liveness instead of assumed live. Both are emitted ONLY when
+  the switch is on, keeping the `=0` arm's console output and event stream
+  unchanged. Pinned by `tests/test_tool_budget.py`
 
 - `make_write_gated_fns()` (2026-08-11) registers CHAT-ONLY stubs for the
   tools `make_read_only_role` strips, as FNS with NO matching DEFS: the model

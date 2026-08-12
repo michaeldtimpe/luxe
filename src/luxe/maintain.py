@@ -48,6 +48,37 @@ _WRITE_TASKS = {"implement", "bugfix", "document", "manage"}
 _REPROMPT_DOC_ADDITIONS_THRESHOLD = 10
 
 
+def apply_ctx_read_budget(num_ctx: int) -> int | None:
+    """Wire `LUXE_TOOL_BUDGET_CTX` into the benchmark/maintain path.
+
+    The ctx-derived tool-output budget (`tools/fs.py`, 2026-08-12) had exactly
+    one caller — the chat REPL — so setting the env var in front of a
+    maintain_suite run was INERT BY CONSTRUCTION: the flag never reached the
+    path it was supposed to change. This is that reach.
+
+    **Default ON here since 2026-08-12** (`acceptance/toolbudget_ab_2026_08_12/
+    REPORT.md`: 3 reps × 10 fixtures × 2 arms, both arms 30/30 · 120/150,
+    tokens −3.9%, wall +4.3%, zero fixture regressions, opportunity exercised
+    — 21 baseline over-budget reads vs zero in treatment). The opt-out grammar
+    is the one `LUXE_TRUNCATED_TURN_RETRY` uses: only the exact string "0"
+    disables. Unset → ON; "0" → OFF; any other value ("1", "", "true") → ON.
+
+    Returns the applied budget in bytes, or `None` when the switch is off — in
+    which case `set_read_budget` is NOT called at all, so the fixed 256 KB
+    constants stand and the run is byte-identical to one from before this
+    function existed. Chat keeps its own wiring and stays OPT-IN (`=1`) — no
+    chat-side evidence exists; `chat/repl.py` sets the budget per turn, because
+    `/ctx` moves num_ctx mid-session. This function is reached only from
+    `maintain_pipeline`, which chat never enters.
+    """
+    if os.environ.get("LUXE_TOOL_BUDGET_CTX", "1") == "0":
+        return None
+    from luxe.tools.fs import budget_for_ctx, set_read_budget
+    budget = budget_for_ctx(num_ctx)
+    set_read_budget(budget)
+    return budget
+
+
 def _should_reprompt_for_under_engagement(task_type: str, additions: int) -> bool:
     """Reprompt gate: doc tasks with diff additions below threshold.
 
@@ -188,6 +219,26 @@ def maintain_pipeline(
         set_repo_root(repo_path)
         backend = Backend(base_url=cfg.omlx_base_url, model=cfg.model_for_role("monolith"))
         languages = _detect_languages_for_repo(repo_path)
+
+        # Ctx-derived tool-output budget — DEFAULT ON here since 2026-08-12
+        # (benched: acceptance/toolbudget_ab_2026_08_12/REPORT.md). Opt out
+        # with the exact string `LUXE_TOOL_BUDGET_CTX=0`, which restores the
+        # fixed 256 KB constants; off = no call at all, byte-identical run.
+        # On = the budget for the SAME role num_ctx this run executes with.
+        # Announced loudly so a bench run can be checked for liveness
+        # (tools.sdd). The announce line is pinned to the treatment arm's
+        # wording so the shipped default is byte-equivalent to what was
+        # measured with the flag set to "1".
+        _read_budget = apply_ctx_read_budget(cfg.role("monolith").num_ctx)
+        if _read_budget is not None:
+            console.print(
+                f"[yellow]· Tool read budget: {_read_budget:,} bytes[/] "
+                f"[dim](LUXE_TOOL_BUDGET_CTX=1, num_ctx="
+                f"{cfg.role('monolith').num_ctx})[/]"
+            )
+            append_event(spec.run_id, "read_budget_applied",
+                         max_bytes=_read_budget,
+                         num_ctx=cfg.role("monolith").num_ctx)
 
         console.print(f"\n[bold cyan]▶ Mono mode[/]  (model: {cfg.model_for_role('monolith')})")
         single_result = run_single(
