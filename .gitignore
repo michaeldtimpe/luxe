@@ -98,6 +98,15 @@ acceptance/baseline_2026_08_11/*
 acceptance/pwir_rerun_2026_08_10/*
 !acceptance/pwir_rerun_2026_08_10/REPORT.md
 !acceptance/pwir_rerun_2026_08_10/BRANCH-LEAK.md
+!acceptance/ctx_server_truth_2026_08_12/
+acceptance/ctx_server_truth_2026_08_12/*
+!acceptance/ctx_server_truth_2026_08_12/REPORT.md
+!acceptance/toolbudget_ab_2026_08_12/
+acceptance/toolbudget_ab_2026_08_12/*
+!acceptance/toolbudget_ab_2026_08_12/REPORT.md
+!acceptance/c10_repeat_penalty_2026_08_12/
+acceptance/c10_repeat_penalty_2026_08_12/*
+!acceptance/c10_repeat_penalty_2026_08_12/REPORT.md
 !acceptance/truncated_turn_ab_2026_08_10/
 acceptance/truncated_turn_ab_2026_08_10/*
 !acceptance/truncated_turn_ab_2026_08_10/REPORT.md

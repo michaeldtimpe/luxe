@@ -1,0 +1,46 @@
+# LUXE_CTX_SERVER_TRUTH acceptance — 3 reps on shipped defaults (2026-08-12).
+#
+# Question: 967124d shipped server-truth context calibration DEFAULT-ON. It
+# corrects a real mis-measurement (estimate_tokens reads 2-3.7x low on code
+# and tool JSON), but every compaction threshold divides by that estimate and
+# the pinned phases (0.50/0.85/0.95) were validated at n=75 under the OLD
+# reading. Compaction now fires earlier — at the context it always claimed.
+# This run decides whether the default survives.
+#
+# Run with NO env overrides — the treatment IS the shipped default. The
+# comparison baseline is the four exactly-agreeing pre-change references
+# (truncated_turn treatment + confirmation, pwir re-run baseline arm, and
+# acceptance/baseline_2026_08_11): 30/30 · 120/150 · avg wall ~53.4s · avg
+# tokens ~162k.
+#
+# CONFOUND, stated up front: this tree also carries de94e7a (grep no longer
+# reads stdin; tool limits announced on oversized files). A clean hold needs
+# no attribution; ANY deviation does — see criteria 2.
+#
+#   uv run python -m benchmarks.maintain_suite.run --all \
+#     --variants benchmarks/maintain_suite/variants_ctx_server_truth_3rep.yaml \
+#     --output acceptance/ctx_server_truth_2026_08_12/ --per-fixture-timeout 1800
+#
+# ~28 min for 30 runs.
+#
+# PROMOTION CRITERIA (fixed before the run, per bench-as-truth):
+#   1. HOLD = 30/30 passed, 120/150 score, all fixtures [4,4,4]. The debt is
+#      retired and LUXE_CTX_SERVER_TRUTH stays default-ON.
+#   2. Any fixture that passed all reps in baseline_2026_08_11 failing any rep
+#      here -> run a LUXE_CTX_SERVER_TRUTH=0 arm (3 reps, same tree, separate
+#      --output) to attribute: OFF-arm recovers -> the calibration is
+#      implicated, default flips OFF pending retune; OFF-arm also fails -> the
+#      de94e7a tool changes are implicated instead, calibration is clear.
+#   3. Wall/tokens are expected to MOVE (earlier compaction = shorter prompts,
+#      possibly different trajectories). A shift >1.5x suite-wide in either
+#      direction gets hand inspection of compaction telemetry even at 30/30 —
+#      per-phase firing counts vs the n=75 tuning record.
+#
+# 3 reps because temp=0 is not deterministic on this substrate
+# (project_substrate_noise_temp0_not_deterministic) and maintain_suite.sdd
+# requires 3x replication before claiming a regression.
+
+variants:
+  - {model_label: ctx-truth-rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: ctx-truth-rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: ctx-truth-rep3, model_id: Qwen3.6-35B-A3B-6bit}
