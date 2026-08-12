@@ -1,5 +1,75 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-12 evening, m5) — ctx-truth debt RETIRED · tool surface hardened · tool-budget promoted · C10 closed · suite fully green
+
+All four threads from the morning handoff are closed, plus a full
+tool-surface audit that came out of them. Everything below is committed and
+pushed; m5 suite is **2,761 passed, 0 failed** (the miss_func red is gone
+for good). Six benches ran today (126 model runs), all reports under
+`acceptance/`.
+
+1. **`LUXE_CTX_SERVER_TRUTH` is BENCHED — HOLD, debt retired.** 3 reps on
+   shipped defaults: 30/30 · 120/150 (identical to all four pre-change
+   references) at **12% less wall, 24% fewer tokens**. Telemetry shows the
+   mechanism: compaction fires more (111 vs 75) and reaches phase 3 (21 vs
+   6) yet drops <half the tool results — early-and-small replaced
+   late-and-huge. Reproduced on a settled tree same day. Default stays ON;
+   CLAUDE.md gained a "Default-ON: server-truth context calibration"
+   section. `acceptance/ctx_server_truth_2026_08_12/REPORT.md`.
+2. **The grep-stdin bug was a CLASS — audited, 12 fixes shipped.** Full
+   sweep of every tool fn + all 34 subprocess sites: rg error-exits read as
+   "(no matches)" (three lines below the morning's fix), the bash tool
+   handing a piped session's queued user input to the model AS TOOL OUTPUT,
+   crashed linters grading `status:ok`, git-failure-during-grading scoring
+   as "requirement unmet", `git_diff(ref="--output=…")` writing outside the
+   repo from read-only mode, silent 32 KB git truncation, unpinned git
+   config breaking diff parsing, unbounded network git/gh calls, strict
+   decodes discarding output. All fixed byte-identical-on-success, ~130
+   regression tests, all findings verified live before fixes were
+   authorized. lessons.md 2026-08-12 has the full entry. **Deliberately NOT
+   done:** bash 8 KB head-vs-tail truncation (bench-visible → own A/B),
+   secrets/staleproc/buildinfo degrade-quietly excepts (policy), and
+   `benchmarks/maintain_suite/grade.py`'s own git runner (same
+   failure-looks-like-no-diff shape, bench-harness side — open follow-up).
+3. **`LUXE_TOOL_BUDGET_CTX`: wired, preflighted, benched, PROMOTED
+   (maintain path).** It was inert-by-construction on the bench path (only
+   caller: chat repl — the C10 trap). Now `maintain.apply_ctx_read_budget`
+   applies it; A/B (3 reps × 2 arms): 30/30 · 120/150 both, **−4% tokens**,
+   +4% wall, zero regressions, cap airtight, and the expensive strict-flag
+   fixture got 2× faster (smaller truncated-turn replays). Default is now
+   **ON for maintain/bench** (`=0` exact-string opt-out, same grammar as
+   LUXE_TRUNCATED_TURN_RETRY); **chat stays opt-in** (no chat evidence);
+   **BFCL is unwired/inert** (in-process path) — wire + preflight before any
+   BFCL A/B. New standing baseline: **30/30 · 120/150 · ~49s · ~117k
+   tokens**. `acceptance/toolbudget_ab_2026_08_12/REPORT.md`.
+4. **C10 repeat_penalty: closed with a LIVE measurement this time.** Wire
+   plumbing verified first; 2 cells × 8 fixtures: 8/8 both, zero PASS↔FAIL
+   flips → no escalation, sampling stays temp=0/no-penalty.
+   `acceptance/c10_repeat_penalty_2026_08_12/REPORT.md`. While touching the
+   runner: **a live oMLX API key sat hardcoded in three committed scripts**
+   (c10/c11/c12 runners, since 2026-06-11) — scrubbed to comments pointing
+   at luxe.secrets, but the key remains in git history: **rotating it is a
+   user decision, flagged**.
+5. **miss_func_49 red: root cause was NOT the driver** (morning handoff
+   corrected in place): the recurring `mpmath` prune (lessons.md
+   2026-06-03) — the canonical host sync omits `--extra bfcl`, so every
+   `luxe update` re-broke the one host that vendors the data. Durable fix:
+   `mpmath>=1.3` pinned in the `dev` extra + the test now asserts
+   `r.error == ""` first. That lessons entry and the old RESUME gotcha are
+   both marked CLOSED.
+6. Housekeeping: m5's stale `stash@{0}` dropped after verifying all ~21
+   files byte-matched committed upstream versions (pure autostash residue);
+   `acceptance/ctx_server_truth_2026_08_12/` bench overlapped working-tree
+   edits (recorded in its report; caveat closed by the settled-tree
+   reproduction).
+
+**Open threads, none urgent:** (a) bash head-vs-tail truncation A/B
+(candidate: tail-biased output helps pytest-style tools); (b) grade.py git
+runner hardening; (c) key rotation (above); (d) chat-side tool-budget
+evidence if anyone wants the chat default flipped too; (e) F14
+degrade-quietly policy review (secrets/staleproc/buildinfo hide
+"tool broken" inside "no result" — deliberate, but now documented).
+
 ## ⇒ SESSION HANDOFF (2026-08-12) — five fixes landed + pushed; work moves to m5; one bench debt
 
 Everything from 2026-08-10..12 is committed and pushed (`main`, linear, five
@@ -60,7 +130,10 @@ at `161075d`**, verified in a detached worktree, so the five commits above
 are clear of it. It is invisible on m1 because the `miss_func` data is not
 vendored here and the test skips — m5 vendors it, so m5 is where it shows.
 Expect `1 failed, 2643 passed` on m5 vs `2639 passed, 7 skipped` on m1 until
-someone picks it up.
+someone picks it up. **RESOLVED same day — the diagnosis above was wrong:**
+the driver was fine; the red was the recurring `mpmath` prune (lessons.md
+2026-06-03) surfacing as an `IndexError` because the test asserted past a
+setup-error result. See the 2026-08-12 evening handoff.
 
 ## ⇒ DEFERRED (2026-08-10) — Muse-Glimmer-30B assessed, BLOCKED upstream; revisit ~2026-09 with Qwen 3.8
 
@@ -1147,8 +1220,10 @@ plus a planned next step:
    `~/Downloads/gitkit-deep-mode-plan.md`; plan
    `~/.claude/plans/enumerated-squishing-hopcroft.md`.
 
-**Gotcha:** `uv sync` can prune transitive `mpmath` that BFCL's `test_miss_func_49`
-needs — reinstall if it goes red. `uv.lock` is untracked.
+**Gotcha:** ~~`uv sync` can prune transitive `mpmath` that BFCL's `test_miss_func_49`
+needs — reinstall if it goes red. `uv.lock` is untracked.~~ CLOSED 2026-08-12:
+`mpmath>=1.3` is pinned in the `dev` extra (the canonical sync installs it) and
+`uv.lock` is tracked; the prune can't recur.
 
 ---
 

@@ -30,6 +30,52 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-12] The grep-stdin bug was a class, not an instance: one honest-looking symptom, five mechanisms
+
+**What happened**: A full audit of every tool function and all 34 subprocess
+call sites under `src/luxe/`, prompted by the morning's grep-stdin fix,
+found the same symptom — an empty-but-authoritative result — still
+producible by at least four other mechanisms, one of them **three lines
+below the fix**: `_grep` checked stdin but never `proc.returncode`, so an
+invalid regex or an option-shaped pattern ("-i") returned `(no matches)`,
+rc 2 and stderr discarded. Elsewhere: the bash tool inherited stdin on both
+spawn paths (a piped session's queued input was returned to the model AS
+TOOL OUTPUT — verified live — and a TTY session's `cat` burned the full 60s
+budget swallowing keystrokes); a crashed linter graded as
+`{"status":"ok","findings":[]}`; a failed `git diff` during spec grading
+scored as "0 added lines → requirement unmet"; `git_diff(ref="--output=…")`
+wrote a file outside the repo from a read-only tool and reported an empty
+diff.
+
+**Root cause**: Fixing the *cause* (stdin) without auditing the *symptom*
+(empty output presented as a result). Every mechanism shared one shape: a
+child process's failure channel (exit code, stderr, a stolen fd, a strict
+decode) was dropped somewhere between `subprocess.run` and the tool-result
+string, so "the tool failed" and "the tool found nothing" became the same
+message. The model then reasons from "nothing there" — the wrong answer
+wearing the shape of a complete one.
+
+**Fix / takeaway**: 12 fixes shipped same day (rc checks, `stdin=DEVNULL`
+everywhere a model/config command spawns, announced truncation on
+git/analyzer/fallback-grep caps, `--end-of-options` before model-supplied
+refs, `errors="replace"` on decodes, `GitDiffError` so grading records
+git-failure instead of a false verdict, pinned git config for parse sites,
+bounded network git/gh calls). All byte-identical on success paths; ~130
+regression tests. The principle: **when a subprocess feeds a model, the
+failure channel is part of the result contract** — audit by symptom
+(what does the model see on failure?), not by the cause you just fixed.
+Deliberately NOT done: bash's head-vs-tail 8KB truncation (bench-visible
+content change — needs its own A/B) and the degrade-quietly bare-excepts in
+secrets/staleproc/buildinfo (policy, not defect). Known residue:
+`benchmarks/maintain_suite/grade.py` has its own git runner with the
+failure-looks-like-no-diff shape (bench-harness side, flagged for
+follow-up).
+
+**Affected files**: `src/luxe/tools/{fs,shell,git,analysis}.py`,
+`src/luxe/{gitcmd,pr,spec_validator,maintain}.py`, `src/luxe/gitkit/apply.py`,
+`src/luxe/mcp_pdf/ops.py`, `src/luxe/web/page.py`, `tools.sdd`, `luxe.sdd`,
+seven new test files.
+
 ### [2026-08-12] grep answered "(no matches)" for every non-interactive session, and nobody could see it
 
 **What happened**: chasing why a chat session burned a dozen calls grepping a
@@ -872,6 +918,14 @@ pins — `mpmath` is one of them. The test depends on it being importable.
 tool-class suite) fails after an environment change. Until `uv.lock` is tracked or
 `mpmath` is pinned as a direct dep, treat transitive-dependency drift as expected
 after `uv sync`.
+
+**CLOSED 2026-08-12**: it recurred exactly as predicted — the 2026-08-12
+handoff's "m5-only miss_func_49 red" was this, wearing an `IndexError` mask
+(the canonical host sync omits `--extra bfcl`, so every `luxe update`
+re-pruned mpmath on the one host that vendors the data). Durable fix:
+`mpmath>=1.3` pinned in the `dev` extra (which the canonical sync installs),
+and the test now asserts `r.error == ""` first so a setup failure names
+itself instead of IndexErroring three assertions later.
 
 **Affected files**: Environment only (`pyproject.toml` / untracked `uv.lock`); no
 source change.
