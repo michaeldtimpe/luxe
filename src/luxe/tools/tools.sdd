@@ -113,6 +113,19 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   note: state the cut AND the way around it. A result under both caps is
   byte-identical to before
 
+- Bash's 8 KB cap keeps the HEAD and the TAIL (`_clip_output`, 2026-08-12),
+  not the first 8 KB: test runners put the failure summary at the END, so
+  the old form reliably discarded exactly the lines the model needed
+  (pytest's short summary, exit-status context). 2 KB head + 6 KB tail
+  around an announced omission marker, snapped to line boundaries when they
+  exist within the kept budgets; under the cap byte-identical. The shape
+  could not be A/B'd on maintain_suite — 0 of 183 bash calls across six
+  full 2026-08-12 suite passes reach the cap (the 205 historical firings
+  are SWE-bench-era) — so the evidence is `tests/test_bash_truncation.py`
+  plus the same-day 3-rep confirmation run
+  (`acceptance/bash_tail_trunc_2026_08_12/`); SWE-bench is the venue where
+  the shape change could show score effects, if anyone re-benches there
+
 - Listings announce oversized files (`_oversize_note`, 2026-08-12). `list_dir`
   and `glob` annotate any entry `read_file` would refuse, so the model learns
   the limit from the listing instead of from a failed call — bare names meant
