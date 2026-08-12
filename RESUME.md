@@ -52,6 +52,16 @@ direction-finder — champion failures skew termination/long-context, not local
 repetition), and **`LUXE_TOOL_BUDGET_CTX` stays default-OFF** pending its own
 maintain_suite run, since scaling the read cap with ctx scales it *down*.
 
+**One red on m5, PRE-EXISTING — not from any of the above.**
+`tests/test_bfcl_multi_turn.py::test_miss_func_49_known_quirk_reproduced`
+fails there with `IndexError` on `exp[1]` (line 327): the driver returns
+fewer exposed-tool turns than the assertion indexes. It fails **identically
+at `161075d`**, verified in a detached worktree, so the five commits above
+are clear of it. It is invisible on m1 because the `miss_func` data is not
+vendored here and the test skips — m5 vendors it, so m5 is where it shows.
+Expect `1 failed, 2643 passed` on m5 vs `2639 passed, 7 skipped` on m1 until
+someone picks it up.
+
 ## ⇒ DEFERRED (2026-08-10) — Muse-Glimmer-30B assessed, BLOCKED upstream; revisit ~2026-09 with Qwen 3.8
 
 `meta-models/Muse-Glimmer-30B` (released 2026-08-10) was assessed as a
