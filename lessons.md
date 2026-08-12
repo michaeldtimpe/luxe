@@ -30,6 +30,283 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-12] grep answered "(no matches)" for every non-interactive session, and nobody could see it
+
+**What happened**: chasing why a chat session burned a dozen calls grepping a
+log, `grep` turned out to return `(no matches)` for EVERY search whenever
+luxe's stdin was a pipe. `_grep` invokes `rg PATTERN` with no path argument,
+and in that form ripgrep decides between "search the working directory" and
+"read stdin" by inspecting stdin. An inherited open pipe sends it down the
+stdin branch, where it reaches EOF, matches nothing, and exits 1 — which
+`_grep` reports as no matches.
+
+Which sessions have a piped stdin? Every non-interactive one: a benchmark
+launched from a script or `nohup`, CI, `luxe smoke`, and the headless chat
+form the README itself documents (`printf 'msg\n/quit\n' | luxe chat`). An
+interactive TTY session was unaffected.
+
+**Root cause**: a tool whose failure mode is invisible in precisely the
+configuration a human watches. Every hand-check of grep was done by a person
+sitting at a terminal, where it worked. The automated runs — the ones that
+produce the numbers we reason from — silently had one of the six core search
+tools disabled, and "(no matches)" is indistinguishable from a legitimate
+empty result, so nothing in any log, event or transcript looked wrong.
+
+The one-line fix is `stdin=subprocess.DEVNULL`. Appending a `.` search path
+also fixes it but prefixes every result with `./`, changing the output format
+the benchmark and the golden request see.
+
+**Fix / takeaway**: two rules, both general.
+
+**A tool that shells out must control the subprocess's stdin.** Inheriting it
+makes the tool's behaviour depend on how luxe itself was invoked — a coupling
+nobody reading `_grep` would predict, and one that cannot be reproduced by
+running the same function from a terminal.
+
+**Test the configuration you SHIP in, not the one you debug in.** The whole
+class here is behaviour that differs between a TTY and a pipe: the benchmark,
+the smoke drills and CI all run piped, and all of them are the runs whose
+output becomes evidence. A hand-check at a terminal is the one environment
+guaranteed not to reproduce it.
+
+Found alongside a second silence in the same function: `--max-count=150` and a
+`[:32768]` byte slice both reshaped results with no trace, so a model asked to
+count something with 1,286 matches got exactly 150 lines and no reason to
+doubt them. Both are now announced, with the way around them.
+
+**Affected files**: `src/luxe/tools/fs.py`, `src/luxe/tools/tools.sdd`,
+`tests/test_grep_silent_failures.py`.
+
+---
+
+### [2026-08-12] the model learned every limit by failing a call
+
+**What happened**: `list_dir` and `glob` returned bare filenames. Nothing in
+either output said how big a file was, so the only way to discover a file was
+too large to read was to call `read_file` and be refused — one full model
+round-trip per discovery, each one an error the model did not see coming.
+Session 0e524f033300 spent two refused reads on a 442 KB log and then stopped
+using tools altogether; a later probe spent ten calls learning that a 320 KB
+bundle was a single line.
+
+Separately, the 256 KB read cap predates the `/ctx` tiers entirely. Measured
+against the calibrated token rate, ONE max-size read is **480% of the DEFAULT
+32K window** and still **60% of the largest window luxe can open** — so a
+single oversized read could blow the context in one call, and the honest
+answer to "should the cap scale with ctx?" is that it should scale DOWN.
+
+**Root cause**: the limits lived only in the code that enforced them. Every
+one was discoverable by the orchestrator at zero cost — the size is in the
+`stat` that `glob` already performs — and none of it was passed on. The tool
+surface described what the model could ASK for and never what it would GET.
+
+**Fix / takeaway**: listings annotate files past the limit (and only those, so
+a tree with nothing oversized is byte-identical); the read budget is derivable
+from `num_ctx` via `budget_for_ctx()`, opt-in pending a bench run.
+
+The general rule: **the cost of a limit should be paid at discovery time, not
+at failure time.** If the orchestrator can know a call will fail before the
+model makes it, saying so is strictly cheaper than the round-trip — and much
+cheaper than the model's reaction to an unexpected refusal, which in the
+founding case was to abandon tools and answer from memory.
+
+Confirmed live: on the same 442 KB-class log that previously cost two refused
+reads, the annotated listing led straight to a windowed read that worked, with
+zero failed calls.
+
+**Affected files**: `src/luxe/tools/fs.py`, `src/luxe/tools/tools.sdd`,
+`src/luxe/chat/repl.py`, `tests/test_tool_budget.py`.
+
+---
+
+### [2026-08-11] two knobs that were never connected, and an experiment that "measured" one of them
+
+**What happened**: answering a user question about context-window sizing turned
+up that `backend.chat` sent its two vendor parameters as
+
+    body["extra_body"]["num_ctx"] = num_ctx
+    body["extra_body"]["repeat_penalty"] = repeat_penalty
+
+`extra_body` is an OpenAI **SDK** convention — the SDK pops that dict and
+merges it into the request before sending. luxe posts raw JSON (`json=body`),
+so what went on the wire was a literal `{"extra_body": {...}}` field. No server
+has ever read it. Both knobs have been inert for the life of the file.
+
+The expensive part is the second one. **C10 (2026-06-11) A/B'd
+`repeat_penalty: 1.05` over 2 cells × 8 fixtures and recorded "measured NO-OP,
+closed — do NOT add repeat_penalty to the champion config."** The two arms were
+byte-identical requests. The experiment could not have produced any other
+result, and its conclusion went into RESUME.md as a settled finding that closed
+the question. Retracted 2026-08-11.
+
+**Root cause**: three failures compounding.
+(1) A convention borrowed from a library luxe doesn't use. `extra_body` looks
+idiomatic — it *is* idiomatic, in the SDK — and reads as correct to anyone who
+has used the OpenAI client.
+(2) Servers ignore unknown fields by default. oMLX's `ChatCompletionRequest`
+declares no `extra` policy, so pydantic v2 drops unknown keys silently. Nothing
+anywhere errors, warns, or logs. The failure mode of a misplaced parameter is
+indistinguishable from the parameter having no effect — which is exactly the
+hypothesis C10 was testing.
+(3) The golden-request snapshot pinned the body and had `extra_body` in it, so
+the wrong shape was actively protected against drift. A test that pins a format
+cannot tell you the format is wrong.
+
+Compounding it for `repeat_penalty`: the fleet's two servers spell it
+differently (llama.cpp `repeat_penalty`, oMLX `repetition_penalty`), so even
+flattened, one spelling would have reached only one of them.
+
+**Fix / takeaway**: vendor fields go at the top level; `repeat_penalty` is sent
+under both spellings; `luxe.sdd` carries the invariant and
+`tests/test_backend_vendor_fields.py` pins it including the negative
+(`"extra_body" not in body`).
+
+**Demonstrated against the live endpoint** (2026-08-11, not merely inferred
+from reading oMLX's source). Same prompt, `temperature=0`, three requests:
+
+    baseline (no penalty)                    -> output A
+    extra_body: {repeat_penalty: 1.9}        -> output A   (BYTE-IDENTICAL)
+    top-level repeat/repetition_penalty: 1.9 -> output B   (differs)
+
+At temp=0 the decode is deterministic, so identical output is proof the
+parameter had no effect and different output is proof it did. The old form was
+inert; the new form is live. That is the whole of C10 reproduced in three
+requests and about ninety seconds — against sixteen benchmark runs that
+concluded the opposite.
+
+The general principle: **a parameter whose only observable effect is on model
+behaviour needs a wire-level test, not a behavioural one.** The behavioural
+test (C10) had no power to distinguish "this knob does nothing" from "this knob
+went nowhere", and by design it was the experiment least able to notice. Any
+future A/B over a request parameter should first assert the parameter is
+present in the body the server receives — one cheap assertion that would have
+saved 16 benchmark runs and a wrong entry in the project record.
+
+Second takeaway: **"no effect" is the most dangerous experimental result to
+accept**, because it is what every plumbing bug also produces. A null result
+should raise "was the treatment applied?" before it raises "the treatment
+doesn't work". C10's own priors said expectations were low, which made the
+null easy to believe and nobody checked the wire.
+
+**Affected files**: `src/luxe/backend.py`, `src/luxe/luxe.sdd`,
+`tests/test_backend_vendor_fields.py`, `tests/golden/run_single_request.json`,
+`tests/test_golden_request.py`, `RESUME.md` (C10 retraction), `CLAUDE.md`.
+
+---
+
+### [2026-08-11] the context estimate and the status bar disagreed by 2x, and only one of them was fixed
+
+**What happened**: `context_pressure` divides `estimate_messages_tokens` by
+`num_ctx`, and `estimate_tokens` is `len(text) // 4`. On live sessions the
+server's own `usage.prompt_tokens` was consistently ~1.9x higher than that
+estimate: 1.84x, 1.92x, 2.24x across three turns of session 0e524f033300.
+Chars/4 is calibrated for prose; an agent loop carries source code and JSON
+tool arguments, where punctuation density puts real tokens well past a quarter
+of the characters.
+
+Everything downstream divides by that estimate — `TieredCompact`'s phase
+thresholds (0.50 / 0.85 / 0.95), `elide_old_tool_results` (0.70), the ctx%
+suggestion. So the compaction phases were firing somewhere past **1.0-1.9x**
+of the real window. Phases 2 and 3 could not fire at all before the server
+rejected the prompt outright.
+
+A live 13-step run after the fix put the undercount higher still: **2.38x at
+the end, 3.69x at step 1**, with the estimate reading 19.8% against a true
+47.3% — a workload two steps from crossing phase 1, which under the old
+reading it could never have reached. The drift within one run (schemas and
+tool JSON dominate early, prose dilutes them later) is why the ratio is
+re-measured every step instead of latched once or written down as a constant.
+
+**Root cause**: the discrepancy was *known and half-fixed*. In June the status
+bar and `finalize_turn` were switched to server truth
+(`last_prompt_tokens / num_ctx`, RESUME.md item 6) precisely because "estimate
+read a flat ~7%". The loop's own thresholds were left on the estimate, and the
+per-step debug line even carried a comment saying the two "legitimately
+disagree". The disagreement was treated as a display inconsistency to reconcile
+in the UI rather than as evidence that the number driving compaction was wrong.
+
+**Fix / takeaway**: the loop recalibrates every step from the response's
+`prompt_tokens` and folds the ratio into the **denominator**
+(`calibrated_ctx_limit`), so `context_pressure`, `TieredCompact` and
+`elide_old_tool_results` all inherit it without changes and the pinned phase
+thresholds keep their validated values — what changed is what the fraction
+means, not the fraction. Verified against the three recorded turns: the
+calibrated reading reproduces the server percentage exactly (13.5%, 3.6%,
+10.7%).
+
+Takeaway: **when a display is corrected because it was wrong, check what else
+reads the same number.** The June fix identified the bug precisely and applied
+it to the one surface a human was looking at. The surfaces nobody looks at —
+the ones that make decisions — kept the old value for two more months.
+
+Corollary worth remembering: an estimator is calibrated for a workload. Chars/4
+is a prose heuristic living in an agent loop that mostly carries code and JSON,
+and it had never been checked against ground truth that was available in every
+single response.
+
+**Affected files**: `src/luxe/context.py`, `src/luxe/agents/{loop,flags}.py`,
+`src/luxe/agents/agents.sdd`, `tests/test_ctx_server_truth.py`,
+`tests/test_run_flags.py`, `CLAUDE.md`.
+
+---
+
+### [2026-08-11] a tool description promised a capability the tool checked too late to have
+
+**What happened**: a chat turn asked about a 442,195-byte `auth.log`. The model
+called `read_file`, was refused with `File too large (442195 bytes, limit
+262144)`, and retried with `limit: 30` — the exact remedy the tool's own
+description advertises ("Use offset/limit for large files"). It was refused
+again, identically. It then stopped using tools, wrote an analysis from the
+21 KB one grep had returned, and ran into the 8,192-token cap. The
+truncated-turn retry (default-ON since the day before) fired and spent two
+more full capped generations on the same rambling answer. Total: ~412s on one
+turn, of which ~350s was three back-to-back 8,192-token generations, with the
+UI showing nothing but a spinner and a climbing elapsed counter. The user's
+read was "the request timed out"; nothing had timed out.
+
+**Root cause**: three independent things, each individually defensible.
+(1) `_read_file` checked `st_size` against `_MAX_FILE_SIZE` and returned
+BEFORE it ever looked at `offset`/`limit`. The description was not aspirational
+marketing — it was a promise the code structurally could not keep, and the
+model believed it twice. (2) The refusal named a limit and no way forward. A
+model that gets a wall where it expected a window has one move left: answer
+from what it already has. (3) The truncated-turn retry's evidence base is
+`implement` trajectories on maintain_suite, where a capped turn means "cut off
+mid-edit" and replaying it is a rescue. In chat a capped turn frequently means
+"writing too much prose", where replaying it is just more prose — and the
+mechanism had no visible surface at all, so a user watching the session could
+not tell a retry from a hang.
+
+**Fix / takeaway**: the size gate now applies to unwindowed reads only —
+`limit` is served at any size, `_MAX_READ_BYTES` bounds the return, and a
+clipped output carries the `offset=` to resume from. The refusal states the
+call to make next. `LUXE_TRUNCATED_TURN_MAX_RETRIES` bounds the retry cost
+without disabling the mechanism, and a display-only `on_notice` seam makes the
+loop say "cut off at the cap — retrying (1/2)" while it happens.
+
+Three general principles. **A tool description is a contract with the model,
+and the model will hold you to it** — it is not documentation for humans who
+can work around being wrong. **An error message the model cannot act on is a
+dead end that converts a capability gap into a hallucination risk**: the model
+did not stop, it stopped *using tools*, which is worse. And **a mechanism
+benched on one workload will meet another** — the truncated-turn A/B's own
+recorded caveat was "fired 3 times, all on ONE fixture", and the first sighting
+outside the bench found the regime where its assumption inverts. The mechanism
+was not wrong here; it was invisible and unbounded. Fix visibility and cost
+before re-litigating a benched default.
+
+Also fixed in passing: the binary sniff was `path.read_bytes()[:8192]` — the
+whole file, then a slice. Harmless while nothing over 256 KB reached it;
+a live memory bug the moment windowed reads were allowed.
+
+**Affected files**: `src/luxe/tools/fs.py`, `src/luxe/agents/{loop,single,
+flags,guardrails}.py`, `src/luxe/chat/{repl,tui}.py`,
+`tests/test_read_file_large.py`, `tests/test_loop_truncated_turn.py`,
+`tests/test_run_flags.py`, `src/luxe/tools/tools.sdd`,
+`src/luxe/agents/agents.sdd`.
+
+---
+
 ### [2026-08-05] the guardrails "lift" was a copy, not a move — and nothing could tell us for ten weeks
 
 **What happened**: the 2026-08-04 refactor survey found that `agents/loop.py`

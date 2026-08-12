@@ -271,6 +271,23 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     `src/luxe/browser.py` (`browse_navigate`/`browse_read`, `[browser]` extra)
     on 2026-08-03 after the two landed in parallel. Don't add a second stack,
     browser dependency, or gating model.
+  - **`--ephemeral` / `/ephemeral [on|off]` leaves nothing behind**
+    (2026-08-11; `luxe.ephemeral`). Suppresses every luxe write site:
+    `~/.luxe/sessions/<id>/` (transcript, fold, meta, **ledger**, debug.log),
+    `~/.luxe/runs/<id>/events.jsonl`, `<repo>/.luxe/memory.md` +
+    `facts.jsonl`, `~/.luxe/reports/` + **`<repo>/.luxe/gitkit/`**, gitkit
+    deep's `map/` cache, `~/.luxe/cve_cache/`, `~/.luxe/mcp_audit.jsonl`.
+    Keep that list complete — `update_ledger` is exposed on every chat turn,
+    so an unguarded writer silently recreates the session dir.
+    `--ephemeral --resume` is an error. It does **not** touch the write tools
+    (`/write` still gates those, and the agent still edits your repo — this is
+    about what luxe RECORDS); reads are untouched; the repo lock is still
+    taken and is the one surviving artifact. `/ephemeral` ON mid-session
+    purges this session's own dirs and prints what it removed, but never
+    `.luxe/memory.md` (curated text lives there). Status bar shows `eph on`
+    at priority 1 when active. Implemented as per-site suppression, NOT by
+    redirecting `luxe_home()` (luxe.sdd forbids it, and it would capture the
+    read paths).
   - **Read-only default ≠ missing capability.** luxe has the full mutation
     surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
     `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips
@@ -292,7 +309,8 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     arrows; the footer carries `tok/s` and start/end timestamps + elapsed
     (`chat/render.py`).
   - **Status bar** (`chat/status.py`): order `path · git · ctx · cache · start ·
-    last · write · bash · web · slot · model` (`ctx N% <size>` e.g. 128K; `cache`=resident
+    last · write · bash · web · [eph] · slot · model` (`eph on` appears only
+    when `/ephemeral` is active; `ctx N% <size>` e.g. 128K; `cache`=resident
     prompt size — no cross-turn cache; `write`/`bash`/`web` on/off, all three
     always visible; slot+model last).
     The model name carries a PROVENANCE glyph (`chat/origin.py`, 2026-07-29):
@@ -448,6 +466,67 @@ wall reduction; 2 protected wrong_target instances healed; zero new damages.
 - See `src/luxe/agents/agents.sdd` § "forge-hybrid Phase 2 (A) compaction
   invariants" for the pinned tuning rationale + counter-discipline rules.
 
+## Default-ON: server-truth context calibration
+
+`LUXE_CTX_SERVER_TRUTH` defaults to **ON** as of 2026-08-11. `estimate_tokens`
+is `len(text) // 4` — fine for prose, **2-3.7× low** on the code and JSON tool
+payloads an agent loop actually carries (1.84×/1.92×/2.24× across three live
+turns; 2.38-3.69× through a 13-step log-analysis run where `est=19.8%` against
+a true `47.3%`). Every compaction threshold divides by that estimate, so
+phases pinned at 0.50/0.85/0.95 were firing near 1.0-1.9 of the real window —
+phases 2 and 3 could not fire before the server rejected the prompt. The
+loop now recalibrates each step from the response's `usage.prompt_tokens` and
+folds the ratio into the denominator (`calibrated_ctx_limit`), so every
+consumer inherits it and **the pinned thresholds keep their values** — what
+changes is what the fraction means.
+
+- **Disable for ablation**: `LUXE_CTX_SERVER_TRUTH=0` (only the exact string
+  "0") restores the pre-2026-08-11 reading exactly.
+- **UNBENCHED** — compaction now fires earlier on the benchmark path (at the
+  context it always claimed). That's the intended correction, but it changes a
+  default-ON lever validated at n=75 under the old reading. Run maintain_suite
+  before treating it as settled. See `agents.sdd` § "Server-truth context
+  calibration".
+
+## grep was silently dead in every non-interactive run (fixed 2026-08-12)
+
+`_grep` shells to `rg PATTERN` with no path argument. In that form ripgrep
+reads **stdin** when stdin is an inherited pipe — EOF, no matches, exit 1 —
+which luxe reported as `(no matches)`. Silently, for every search, in every
+non-interactive session: benchmarks launched from a script, CI, `luxe smoke`,
+and the headless `printf 'msg\n/quit\n' | luxe chat` form. TTY sessions were
+fine, which is why it survived. Fixed with `stdin=subprocess.DEVNULL` (do NOT
+append a `.` path — it prefixes results with `./` and changes the format the
+golden request pins). **Any benchmark number produced by a piped run predates
+working grep.**
+
+## Tool limits are announced, not discovered by failing
+
+- `list_dir`/`glob` annotate files `read_file` would refuse (`_oversize_note`)
+  — only oversized ones, so ordinary listings stay byte-identical.
+- `grep` reports both its caps (`--max-count=150` per file, 32 KB output).
+- `read_file` states the windowed call to make, and refuses a single
+  over-budget line by naming `grep` instead of looping.
+- **The read cap can scale with ctx** — `budget_for_ctx()` / `set_read_budget()`,
+  `LUXE_TOOL_BUDGET_CTX=1`, **OFF by default**. The fixed 256 KB predates the
+  `/ctx` tiers: in real tokens one max-size read is 480% of the DEFAULT 32K
+  window and 60% of the largest window luxe can open, so scaling with ctx
+  means scaling DOWN (~13 KB at 32768). Enabling it is a benchmark-path change
+  and needs a maintain_suite run.
+
+## Wire format: vendor fields are TOP-LEVEL, never `extra_body`
+
+`extra_body` is an OpenAI **SDK** convention — the SDK flattens it before
+sending. `backend.chat` posts raw JSON, so nesting emitted a literal
+`{"extra_body": {...}}` field no server reads. `num_ctx` and `repeat_penalty`
+were both dropped on the wire for the life of the file; that is why **C10's
+repeat_penalty result is retracted** (inert by construction, not measured —
+RESUME.md). Fixed 2026-08-11: top level, and `repeat_penalty` goes out under
+both spellings (llama.cpp `repeat_penalty` / oMLX `repetition_penalty`).
+Note `num_ctx` reaching the server is **not** evidence the window was
+negotiated — oMLX has no per-request context knob at any spelling and enforces
+the model's native length with a 400.
+
 ## Default-ON: truncated-turn retry
 
 `LUXE_TRUNCATED_TURN_RETRY` defaults to **ON** as of 2026-08-10. A turn that
@@ -461,6 +540,17 @@ replays the cut-off text, nudges, and continues — bounded at 2 retries.
 - **Disable for ablation**: `LUXE_TRUNCATED_TURN_RETRY=0` (only the exact
   string "0"). **If a workload behaves unexpectedly, try this alongside
   `LUXE_TIERED_COMPACT=0`.**
+- **Bound the cost**: `LUXE_TRUNCATED_TURN_MAX_RETRIES=<n>` (default 2, the
+  benched value; malformed degrades silently). Each retry is a full capped
+  generation — ~2.5 min at 8,192 tokens — so a chat turn that rambles into the
+  cap can spend ~8 min before ending. `=0` never fires but leaves the
+  mechanism ON, which keeps `terminal_turn_truncated`'s `retry_enabled=True`
+  and so stays distinguishable from an ablation in the corpus. Bench/maintain
+  must keep the unset default: 30/30 was measured at 2.
+- **It says so out loud now** (2026-08-11): `run_agent`/`run_single` take a
+  display-only `on_notice` callback that chat wires to the transcript, so a
+  retry is visible while it happens instead of only in `events.jsonl`. Default
+  `None` = benchmark path unchanged.
 - Validated at 3 reps × 10 fixtures × 2 arms: maintain_suite 27/30 → **30/30**,
   score 111 → 120, zero regressions, +22.5% tokens / +7.8% wall, and 3/3
   firings on genuine cap hits with none spurious.
