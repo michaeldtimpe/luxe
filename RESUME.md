@@ -65,7 +65,21 @@ for good). Six benches ran today (126 model runs), all reports under
 
 **Open threads, none urgent:** (a) bash head-vs-tail truncation A/B
 (candidate: tail-biased output helps pytest-style tools); (b) grade.py git
-runner hardening; (c) key rotation (above); (d) chat-side tool-budget
+runner hardening; (c) ~~key rotation (above)~~ **DONE same day**: fresh
+per-host keys on m5 and m1 (settings.json + secrets.env; old keys verified
+401, new 200, real turns drilled on both), m1+neo `luxe update`d to
+`1fdb92d`, neo's `OMLX_API_KEY_M5` rotated (`ready --backend m5` green) —
+the June-leaked key was already dead on every reachable host. Residue: the
+login-Keychain copies could not be rewritten from a non-interactive session
+(`errSecInteractionNotAllowed`) — restore on m5/m1 with
+`security add-generic-password -U -a $(whoami) -s OMLX_API_KEY -w "$(/usr/bin/grep '^OMLX_API_KEY=' ~/.luxe/secrets.env | cut -d= -f2)"`
+in a real terminal (they were already stale-drifted before today; secrets.env
+is what luxe actually resolves). **m4 was unreachable** (hostname doesn't
+resolve) — if it returns, its secrets.env needs the new keys. Also noted,
+pre-existing: from m1, `luxe ready --backend m5` is structurally NOT READY
+because `host_manifest()` keys on the LOCAL hostname (m1's 4bit main isn't
+in m5's catalog) — auth/endpoint checks pass; semantics question, not a
+rotation issue; (d) chat-side tool-budget
 evidence if anyone wants the chat default flipped too; (e) F14
 degrade-quietly policy review (secrets/staleproc/buildinfo hide
 "tool broken" inside "no result" — deliberate, but now documented).
