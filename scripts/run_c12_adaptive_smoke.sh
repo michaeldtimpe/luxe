@@ -7,7 +7,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-export OMLX_API_KEY=omlx-sdb25582k3mq8pf9
+# API key resolves via luxe.secrets (Keychain OMLX_API_KEY / ~/.luxe/secrets.env) — never hardcode it here.
 export LUXE_LOG_TOOL_CALLS=1
 
 FIXTURES=(
