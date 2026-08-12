@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import itertools
 import os
 import re
 import subprocess
@@ -14,7 +15,63 @@ from luxe.spec_resolver import resolve_chain
 from luxe.tools.base import ToolDef, ToolFn
 
 _REPO_ROOT: Path | None = None
-_MAX_FILE_SIZE = 256 * 1024  # 256 KB read limit
+_MAX_FILE_SIZE = 256 * 1024  # whole-file read limit (no offset/limit given)
+_MAX_READ_BYTES = 256 * 1024  # ceiling on what ANY single read returns
+
+#: Optional ctx-derived override for the two limits above (2026-08-12).
+#:
+#: The fixed 256 KB predates any of the context tiers and is sized as though
+#: every session ran at 256K. Measured against the calibrated token rate
+#: (~1.67 chars/token on code, see luxe.context), ONE max-size read is:
+#:
+#:     small  8,192 -> 1920%    medium 32,768 -> 480%   (the DEFAULT + bench)
+#:     large 65,536 ->  240%    xlarge 131,072 -> 120%
+#:     huge 262,144 ->   60%
+#:
+#: i.e. there is no tier where it is a sensible single-result size — it is 60%
+#: of the LARGEST window luxe can open. So the answer to "scale it with ctx"
+#: is "yes, downward": budget a result as a fraction of the window instead.
+#:
+#: OPT-IN and OFF by default (`None` = use the constants above), because this
+#: is a benchmark-path behaviour change: at num_ctx=32768 it takes the
+#: whole-file limit from 256 KB to ~13 KB, so files that were read in one call
+#: would start needing windows. Set via `set_read_budget()`; the chat
+#: front-end computes it from the turn's num_ctx when enabled.
+_READ_BUDGET: int | None = None
+
+#: Share of the context window one tool result may occupy, and the floor below
+#: which the budget stops shrinking (a 8K window would otherwise allow ~3 KB,
+#: too small to read an ordinary source file at all).
+READ_BUDGET_FRACTION = 0.25
+READ_BUDGET_FLOOR = 8 * 1024
+#: Characters per real token on code + JSON, from the live calibration
+#: measurements (chars/4 runs ~2.4x low, so 4/2.4).
+_CHARS_PER_TOKEN = 4 / 2.4
+
+
+def budget_for_ctx(num_ctx: int) -> int:
+    """Bytes one tool result may return in a `num_ctx`-token window."""
+    if num_ctx <= 0:
+        return _MAX_FILE_SIZE
+    return max(READ_BUDGET_FLOOR,
+               int(num_ctx * READ_BUDGET_FRACTION * _CHARS_PER_TOKEN))
+
+
+def set_read_budget(max_bytes: int | None) -> None:
+    """Override the read limits for this process. `None` restores the fixed
+    constants, which is what the benchmark/maintain path always uses."""
+    global _READ_BUDGET
+    _READ_BUDGET = max_bytes if (max_bytes is None or max_bytes > 0) else None
+
+
+def read_limit() -> int:
+    """The active whole-file / per-result ceiling."""
+    return _READ_BUDGET if _READ_BUDGET is not None else _MAX_FILE_SIZE
+
+
+#: Above this, don't count lines for the too-large message — the count costs a
+#: full scan and the message is just as actionable without it.
+_LINE_COUNT_MAX_BYTES = 32 * 1024 * 1024
 _MAX_RESULTS = 150
 
 
@@ -241,20 +298,70 @@ def _check_spec_forbids(rel: str, *, creating: bool) -> str | None:
     )
 
 
+def _too_large_message(rel: str, size: int, path: Path) -> str:
+    """The oversized-read rejection, phrased as a next call rather than a wall.
+
+    The bare "File too large (N bytes, limit M)" it replaced named no way
+    forward, and the tool's own description already promises "use offset/limit
+    for large files" — so a model that believed the description retried the
+    same unwindowed read, got the same refusal, and fell back to answering
+    from whatever grep had already returned. Observed on a 442 KB auth.log
+    (session 0e524f033300, 2026-08-11): two rejected reads, then a capped
+    8,192-token monologue. State the window, and the model takes it."""
+    lines_note = ""
+    if size <= _LINE_COUNT_MAX_BYTES:
+        try:
+            with path.open("rb") as fh:
+                n = sum(chunk.count(b"\n") for chunk in iter(lambda: fh.read(1 << 20), b""))
+            lines_note = f", {n:,} lines"
+        except OSError:
+            pass
+    return (
+        f"File too large to read whole ({size:,} bytes, limit "
+        f"{read_limit():,}{lines_note}). Read it in windows instead — this "
+        f"call returns the first 500 lines:\n"
+        f'    read_file(path="{rel}", offset=0, limit=500)\n'
+        f"Advance `offset` by `limit` for each further window. To find "
+        f"specific content without paging the whole file, use "
+        f'grep(pattern="...", path="{rel}").'
+    )
+
+
 def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
     path = _safe(args["path"])
     if not path.is_file():
         return "", f"File not found: {args['path']}"
     size = path.stat().st_size
-    if size > _MAX_FILE_SIZE:
-        return "", f"File too large ({size} bytes, limit {_MAX_FILE_SIZE})"
+    # Both are model-supplied and both feed `itertools.islice`, which REJECTS
+    # negatives with a ValueError — unlike the list slicing this replaced,
+    # where `lines[-1:]` quietly meant "the last line" and `lines[:-5]` meant
+    # "all but the last five". Neither was ever a sensible reading of "start
+    # line" / "max lines", so clamp rather than reproduce them: a negative
+    # offset starts at the top, a negative limit is no limit at all (which on
+    # an oversized file yields the actionable refusal, i.e. "pass a limit").
+    # tools.sdd: a tool returns its errors, it does not raise them.
+    try:
+        offset = max(0, int(args.get("offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    raw_limit = args.get("limit")
+    try:
+        limit = int(raw_limit) if raw_limit else None
+    except (TypeError, ValueError):
+        limit = None
+    if limit is not None and limit < 0:
+        limit = None
+
     # Reject obvious binary files — reading them with errors="replace" returns
     # gigabytes of garbage that pollutes the model's context. Null bytes in
     # the first 8 KB is a strong signal: text formats don't contain them, and
     # PNG/JPG/zip/elf/etc. all do. Lets the model see UTF-8/UTF-16 source
     # files without false positives (those don't have null bytes in code).
+    # Read 8 KB, not the whole file then slice — the windowed path below
+    # accepts files far past _MAX_FILE_SIZE, so this must stay bounded.
     try:
-        head = path.read_bytes()[:8192]
+        with path.open("rb") as fh:
+            head = fh.read(8192)
     except OSError as e:
         return "", str(e)
     if b"\x00" in head:
@@ -263,19 +370,87 @@ def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
             f"first 8 KB. Use ls / file / a hex dumper if you need to "
             "inspect binary content; this tool is for text source only."
         )
+
+    # The size gate applies to UNWINDOWED reads only. A caller that asked for a
+    # window has already bounded what comes back, and `_MAX_READ_BYTES` below
+    # bounds it again regardless of how large `limit` is.
+    if size > read_limit() and limit is None:
+        return "", _too_large_message(args["path"], size, path)
+
+    # Stream the window rather than materialising the file: `limit` is allowed
+    # against arbitrarily large files now, so `read_text()` is no longer safe.
     try:
-        text = path.read_text(errors="replace")
-    except Exception as e:
+        with path.open("r", errors="replace") as fh:
+            for _ in itertools.islice(fh, offset):
+                pass
+            lines = list(itertools.islice(fh, limit)) if limit else fh.readlines()
+    except OSError as e:
         return "", str(e)
-    offset = args.get("offset", 0)
-    limit = args.get("limit")
-    lines = text.splitlines(keepends=True)
-    if offset:
-        lines = lines[offset:]
-    if limit:
-        lines = lines[:limit]
-    numbered = [f"{i + offset + 1}\t{line}" for i, line in enumerate(lines)]
-    return "".join(numbered), None
+
+    numbered: list[str] = []
+    used = 0
+    truncated = False
+    for i, line in enumerate(lines):
+        entry = f"{i + offset + 1}\t{line}"
+        if used + len(entry) > read_limit():
+            truncated = True
+            break
+        numbered.append(entry)
+        used += len(entry)
+    out = "".join(numbered)
+    if truncated and not numbered:
+        # A SINGLE line longer than the whole byte budget — minified JS, a
+        # one-line JSON dump, an embedded base64 blob. Advancing the window
+        # cannot help: any offset/limit lands on the same oversized line, so
+        # the usual "continue with offset=N" advice would send the model round
+        # the identical call forever. Name the real shape of the file instead.
+        return "", (
+            f"Line {offset + 1} of {args['path']} is larger than the "
+            f"{read_limit():,}-byte read budget on its own, so no window "
+            f"can return it — the file is probably minified or single-line. "
+            f'Use grep(pattern="...", path="{args["path"]}") to pull out the '
+            f"parts you need."
+        )
+    if truncated:
+        nxt = offset + len(numbered)
+        # Suggest the window that just FIT rather than echoing the caller's
+        # `limit` back — a model that asked for 10**9 lines gets a usable
+        # number instead of its own absurd one restated as advice.
+        out += (
+            f"\n[truncated at {read_limit():,} bytes — {len(numbered):,} of "
+            f"{len(lines):,} requested lines returned; continue with "
+            f'read_file(path="{args["path"]}", offset={nxt}, '
+            f"limit={max(1, len(numbered))})]\n"
+        )
+    return out, None
+
+
+def _oversize_note(p: Path) -> str:
+    """`" (586 KB — too large to read whole; use limit= or grep)"` for a file
+    `read_file` will refuse, `""` for everything else.
+
+    Listings used to return bare names, so the ONLY way to learn a file was
+    unreadable was to call `read_file` and be refused — one full model
+    round-trip per discovery, and the model then has to decide what to do with
+    a refusal it did not see coming. Session 0e524f033300 (2026-08-11) spent
+    two refused reads on a 442 KB log and then stopped using tools entirely;
+    a later probe spent ten calls learning that a 320 KB bundle was one line.
+    The size was knowable at `glob` time in both cases.
+
+    Deliberately annotates ONLY files past the limit: a tree with nothing
+    oversized produces byte-identical output to before, so the benchmark path
+    is untouched except in exactly the case where the note would have helped.
+    """
+    try:
+        if not p.is_file():
+            return ""
+        size = p.stat().st_size
+    except OSError:
+        return ""
+    if size <= read_limit():
+        return ""
+    return (f"  ({size / 1024:,.0f} KB — too large to read whole; "
+            f"use read_file limit= or grep)")
 
 
 def _list_dir(args: dict[str, Any]) -> tuple[str, str | None]:
@@ -292,7 +467,7 @@ def _list_dir(args: dict[str, Any]) -> tuple[str, str | None]:
     lines = []
     for e in entries[:_MAX_RESULTS]:
         suffix = "/" if e.is_dir() else ""
-        lines.append(f"{e.name}{suffix}")
+        lines.append(f"{e.name}{suffix}{_oversize_note(e)}")
     result = "\n".join(lines)
     if len(entries) > _MAX_RESULTS:
         result += f"\n... ({len(entries) - _MAX_RESULTS} more)"
@@ -304,7 +479,8 @@ def _glob(args: dict[str, Any]) -> tuple[str, str | None]:
         return "", "Repo root not set"
     pattern = args["pattern"]
     matches, stopped = _glob_matches_tolerant(_REPO_ROOT, pattern)
-    lines = [str(m.relative_to(_REPO_ROOT)) for m in matches[:_MAX_RESULTS]]
+    lines = [f"{m.relative_to(_REPO_ROOT)}{_oversize_note(m)}"
+             for m in matches[:_MAX_RESULTS]]
     result = "\n".join(lines)
     if len(matches) > _MAX_RESULTS:
         result += f"\n... ({len(matches) - _MAX_RESULTS} more)"
@@ -336,6 +512,49 @@ def _glob_matches_tolerant(root: Path, pattern: str) -> tuple[list[Path], str]:
     return sorted(out), stopped
 
 
+#: ripgrep's per-file match cap and the byte ceiling on what grep returns.
+_GREP_MAX_COUNT = 150
+_GREP_MAX_BYTES = 32768
+
+
+def _grep_result(stdout: str) -> str:
+    """Grep output, with any truncation SAID OUT LOUD.
+
+    Two caps silently reshaped this result before 2026-08-12: ripgrep's
+    `--max-count` (per file) and a `[:32768]` slice. Neither left a trace, so a
+    model counting occurrences of something with 1,286 matches was handed
+    exactly 150 lines and no reason to doubt them — a wrong answer that looks
+    like a complete one. Announcing the cut is the difference between "the
+    answer is 150" and "at least 150; narrow the search to count".
+    """
+    if not stdout:
+        return "(no matches)"
+    body = stdout[:_GREP_MAX_BYTES]
+    notes = []
+    if len(stdout) > _GREP_MAX_BYTES:
+        body = body[:body.rfind("\n") + 1] or body   # don't end mid-line
+        notes.append(f"output truncated at {_GREP_MAX_BYTES:,} bytes")
+    # `--max-count` is PER FILE, so the cap shows up as any single file
+    # contributing exactly that many lines. Counted over the FULL stdout, not
+    # the byte-truncated body: when the byte cap bites first it can cut the
+    # output below 150 lines per file and hide the fact that ripgrep capped it
+    # too, reporting one truncation while concealing the other.
+    per_file: dict[str, int] = {}
+    for line in stdout.splitlines():
+        per_file[line.split(":", 1)[0]] = per_file.get(line.split(":", 1)[0], 0) + 1
+    capped = [f for f, n in per_file.items() if n >= _GREP_MAX_COUNT]
+    if capped:
+        notes.append(
+            f"{len(capped)} file(s) hit the {_GREP_MAX_COUNT}-match-per-file "
+            f"cap ({', '.join(sorted(capped)[:3])}"
+            f"{'…' if len(capped) > 3 else ''}) — this is NOT the total count"
+        )
+    if notes:
+        body += (f"\n[{'; '.join(notes)}. Narrow with a more specific pattern "
+                 f"or `glob`, or count with bash.]\n")
+    return body
+
+
 def _grep(args: dict[str, Any]) -> tuple[str, str | None]:
     if _REPO_ROOT is None:
         return "", "Repo root not set"
@@ -347,8 +566,20 @@ def _grep(args: dict[str, Any]) -> tuple[str, str | None]:
             cmd.extend(["--glob", file_glob])
         proc = subprocess.run(
             cmd, capture_output=True, text=True, cwd=_REPO_ROOT, timeout=30,
+            # stdin=DEVNULL is LOAD-BEARING (2026-08-12). Invoked with no path
+            # argument, ripgrep decides between "search cwd" and "read stdin"
+            # by inspecting stdin: an inherited OPEN PIPE makes it read that
+            # pipe, hit EOF, and exit 1 with no output — which this function
+            # then reports as "(no matches)". Silently, on every search.
+            # That is the state of every non-interactive luxe: a benchmark
+            # launched from a script, CI, and the headless chat form README
+            # documents (`printf 'msg\n/quit\n' | luxe chat`). Passing an
+            # explicit "." search path would also fix it but prefixes every
+            # result with "./", changing the output format the benchmark and
+            # the golden request see; DEVNULL keeps the format byte-identical.
+            stdin=subprocess.DEVNULL,
         )
-        return proc.stdout[:32768] if proc.stdout else "(no matches)", None
+        return _grep_result(proc.stdout), None
     except FileNotFoundError:
         lines = []
         try:
@@ -400,6 +631,42 @@ def make_prose_aware_write_fns() -> dict[str, ToolFn]:
     def _e(args: dict[str, Any]) -> tuple[str, str | None]:
         return _edit_file(args, prose_exempt=True)
     return {"write_file": _w, "edit_file": _e}
+
+
+#: Tools `make_read_only_role` strips, and what to say when one is called
+#: anyway. Keyed by name so the message can be specific about what the model
+#: was trying to do — "no write tool" and "no shell" need different next steps
+#: from the user.
+_WRITE_GATED_HINTS: dict[str, str] = {
+    "write_file": "create or overwrite files",
+    "edit_file": "modify files",
+    "bash": "run shell commands",
+}
+
+
+def make_write_gated_fns() -> dict[str, ToolFn]:
+    """Chat-only read-only-mode stubs for the stripped mutation tools.
+
+    Registered as FNS with no matching DEFS, so the tools stay absent from the
+    surface the model is offered (`/write` is still the gate) while a
+    hallucinated call gets an error that explains itself instead of
+    `Unknown tool: edit_file` — which is false, and which ended a turn with a
+    fully-written file body discarded (session 0e524f033300 run -14,
+    2026-08-11). Same shape as `make_bash_fn(restricted_hint=True)`: the
+    front-end owns the wording of its own toggles, and the benchmark path,
+    which passes no extra tools, never sees any of it.
+    """
+    def _make(name: str, what: str) -> ToolFn:
+        def _gated(args: dict[str, Any]) -> tuple[str, str | None]:
+            return "", (
+                f"{name} is DISABLED: this session is read-only, so you cannot "
+                f"{what}. The tool exists and works — it is gated, not missing. "
+                f"Nothing was changed on disk. Do not retry this call or look "
+                f"for another way to write; tell the user to run /write to "
+                f"enable write mode, then continue."
+            )
+        return _gated
+    return {name: _make(name, what) for name, what in _WRITE_GATED_HINTS.items()}
 
 
 def _write_file(args: dict[str, Any], *, prose_exempt: bool = False,
@@ -491,6 +758,13 @@ def read_only_defs() -> list[ToolDef]:
     return [
         ToolDef(
             name="read_file",
+            # NOTE: "Use offset/limit for large files" was aspirational until
+            # 2026-08-11 — the size gate rejected the read before offset/limit
+            # were consulted, so a model that believed this description got
+            # refused twice (see tests/test_read_file_large.py). The windowed
+            # path now makes it true. Wording deliberately UNCHANGED: this
+            # description is in every benchmark request body and the golden
+            # snapshot pins it (tests/test_golden_request.py).
             description="Read a file's contents with line numbers. Use offset/limit for large files.",
             parameters={
                 "type": "object",

@@ -39,6 +39,71 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   `TOOL_FNS["bash"]` can produce) keeps the original `subprocess.run` path
   byte-identically; the timeout is enforced on both paths
 
+- `read_file`'s size gate applies to UNWINDOWED reads only (2026-08-11). A
+  call that passes `limit` is served at any file size — `_MAX_FILE_SIZE`
+  (256 KB) bounds what may be read WHOLE, `_MAX_READ_BYTES` bounds what any
+  single call RETURNS, and an output clipped by the latter carries the
+  `offset=` to resume from. The gate used to run before `offset`/`limit` were
+  read, which made the tool's own "use offset/limit for large files"
+  description false and dead-ended the model on a 442 KB log (session
+  0e524f033300; see `tests/test_read_file_large.py` and lessons.md
+  2026-08-11). Two consequences are load-bearing: the refusal message MUST
+  name the windowed call to make next rather than only the limit it hit, and
+  the binary sniff MUST read 8 KB rather than the whole file then slice —
+  windows are now accepted at sizes where that would load the file to decide
+  it was binary. The tool DESCRIPTION is unchanged and golden-pinned
+  (`tests/test_golden_request.py`); this is an error-path + capability fix, so
+  the benchmark request body stays byte-identical
+
+- `_grep` MUST pass `stdin=subprocess.DEVNULL` (2026-08-12). Invoked with no
+  path argument, ripgrep chooses between "search cwd" and "read stdin" by
+  inspecting stdin, and an inherited OPEN PIPE sends it down the stdin branch
+  → EOF → exit 1 → this function reported `(no matches)`. Silently, for every
+  search, in every NON-INTERACTIVE luxe: benchmarks launched from a script,
+  CI, and the headless chat form the README documents. A TTY session was
+  unaffected, which is why it survived — the failure is invisible in exactly
+  the configuration a human watches. Do NOT "fix" it by appending a `.` search
+  path: that prefixes every result with `./`, changing the output format the
+  benchmark and the golden request see. Pinned by
+  `tests/test_grep_silent_failures.py`
+
+- Tool truncation is ANNOUNCED, never silent (2026-08-12). `_grep_result`
+  reports both of grep's caps — ripgrep's per-file `--max-count=150` and the
+  32 KB byte slice — because a model asked to count something with 1,286
+  matches was handed exactly 150 lines and nothing to suggest they were
+  partial: a wrong answer wearing the shape of a complete one. The per-file
+  count is taken over the FULL stdout, not the byte-truncated body, or a byte
+  cut can hide the match cap behind it. Same rule as `read_file`'s window
+  note: state the cut AND the way around it. A result under both caps is
+  byte-identical to before
+
+- Listings announce oversized files (`_oversize_note`, 2026-08-12). `list_dir`
+  and `glob` annotate any entry `read_file` would refuse, so the model learns
+  the limit from the listing instead of from a failed call — bare names meant
+  one round-trip per discovery. Annotates ONLY files past the limit, so a tree
+  with nothing oversized produces byte-identical output
+
+- `read_file`'s limits are overridable per process via `set_read_budget()` /
+  `budget_for_ctx()` (2026-08-12), OFF by default (`None` = the fixed 256 KB
+  constants, which the benchmark/maintain path always gets). The fixed cap
+  predates the `/ctx` tiers: in real tokens one max-size read is 480% of the
+  DEFAULT 32K window and still 60% of the LARGEST window luxe can open, so
+  scaling it with ctx means scaling it DOWN. Enabling it is a benchmark-path
+  behaviour change (at num_ctx=32768 the whole-file limit becomes ~13 KB) and
+  needs a maintain_suite run
+
+- `make_write_gated_fns()` (2026-08-11) registers CHAT-ONLY stubs for the
+  tools `make_read_only_role` strips, as FNS with NO matching DEFS: the model
+  is still not offered them (`/write` remains the gate) but a hallucinated
+  call gets "…is DISABLED … gated, not missing … tell the user to run /write"
+  instead of `Unknown tool: edit_file`, which is false and ended a turn with a
+  composed file body discarded (session 0e524f033300 run -14). Keep the key
+  set equal to `mcp.server._MUTATION_TOOL_NAMES` — a tool stripped without a
+  stub silently regains the wrong message — and keep genuinely unknown names
+  producing the "Unknown tool" prefix, which `loop.py`'s `tool_reject`
+  telemetry keys on. Same precedent as `make_bash_fn(restricted_hint=True)`:
+  the front-end owns the wording of its own toggles
+
 - `_CHAT_EXTRA_ALLOW` (2026-08-05, currently `{gh}`) widens the allowlist for
   CHAT bash only: applied inside `make_bash_fn` (both restricted and
   unrestricted modes route through it; a no-op in the latter) and advertised
