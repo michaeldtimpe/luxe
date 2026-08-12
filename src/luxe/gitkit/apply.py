@@ -104,7 +104,14 @@ def _run_verify(cmd: str, repo: Path, timeout: int) -> tuple[bool | None, str]:
         return None, ""
     try:
         r = subprocess.run(["bash", "-lc", cmd], cwd=str(repo),
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True,
+                           # A verify command that emits one non-UTF-8 byte
+                           # must still yield its tail, and it is run to be
+                           # graded, not talked to: an inherited stdin lets it
+                           # consume the operator's answer to the keep/discard
+                           # prompt (or block on it until the timeout).
+                           errors="replace", stdin=subprocess.DEVNULL,
+                           timeout=timeout)
         return r.returncode == 0, (r.stdout + r.stderr)[-1500:]
     except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)
@@ -237,7 +244,15 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                     continue
                 console.print("[yellow]· aborted — remaining steps not run.[/]")
                 break
-            _adds, _dels, diff = pr.diff_against_base(repo, branch_head)
+            try:
+                _adds, _dels, diff = pr.diff_against_base(repo, branch_head)
+            except pr.GitDiffError as e:
+                # "git broke" is not "the step wrote nothing" — a step whose
+                # result cannot be shown must not be silently skipped past.
+                console.print(f"[red]· could not read the diff for step "
+                              f"{step['id']}: {e}[/]")
+                failed.append(step["id"])
+                continue
             if not diff.strip():
                 console.print("[yellow]· no changes produced — skipping.[/]")
                 skipped.append(step["id"])

@@ -25,7 +25,7 @@ from rich.console import Console
 from luxe.agents.tasktype import infer_task_type
 from luxe.config import load_config
 from luxe.gitclone import resolve_repo
-from luxe.pr import diff_against_base as _diff_against_base
+from luxe.pr import GitDiffError, diff_against_base as _diff_against_base
 from luxe.repo_index import _detect_languages_for_repo
 
 console = Console()
@@ -211,10 +211,17 @@ def maintain_pipeline(
                      final_text_chars=len(single_result.final_text or ""),
                      peak_context_pressure=single_result.peak_context_pressure)
         if detected_task in _WRITE_TASKS:
-            _ds = _diff_against_base(repo_path, prep.base_sha)
-            append_event(spec.run_id, "diff_stat",
-                         checkpoint="after_main_pass",
-                         additions=_ds[0], deletions=_ds[1])
+            # A failed `git diff` is recorded as a failure, never as +0/-0 —
+            # the telemetry would otherwise read as "the agent wrote nothing".
+            try:
+                _ds = _diff_against_base(repo_path, prep.base_sha)
+            except GitDiffError as e:
+                append_event(spec.run_id, "diff_stat_failed",
+                             checkpoint="after_main_pass", error=str(e))
+            else:
+                append_event(spec.run_id, "diff_stat",
+                             checkpoint="after_main_pass",
+                             additions=_ds[0], deletions=_ds[1])
 
         final_report = single_result.final_text or ""
 
@@ -273,24 +280,42 @@ def maintain_pipeline(
             append_event(spec.run_id, "spec_validation",
                          all_satisfied=_spec_validation.all_satisfied,
                          total=len(_spec_validation.results),
+                         error=_spec_validation.error,
                          unsatisfied_ids=[
                              r.requirement.id
                              for r in _spec_validation.unsatisfied
                          ])
+            if _spec_validation.error:
+                # The diff could not be read, so the unmet verdicts are about
+                # git, not about the agent. Reprompting on them would hand the
+                # model a fabricated "requirement unsatisfied" list.
+                console.print(f"[yellow]· spec validation ERROR: "
+                              f"{_spec_validation.error} — reprompt gate "
+                              f"skipped[/]")
 
         # v1.3 directive reprompt path — fires when no spec OR spec is fully
         # satisfied (in which case the gate below short-circuits to no-op
         # before computing diff_text).
-        _reprompt_diff = (
-            _diff_against_base(repo_path, prep.base_sha)
-            if detected_task in _WRITE_TASKS else None
-        )
+        # `None` = "no diff to gate on": for a read-only task there never was
+        # one, and after a GitDiffError there is no honest number to gate on
+        # either — the under-engagement heuristic below must not read a git
+        # failure as 0 added lines and fire a second pass on it.
+        _reprompt_diff = None
+        if detected_task in _WRITE_TASKS:
+            try:
+                _reprompt_diff = _diff_against_base(repo_path, prep.base_sha)
+            except GitDiffError as e:
+                append_event(spec.run_id, "diff_stat_failed",
+                             checkpoint="reprompt_gate", error=str(e))
+                console.print(f"[yellow]· diff unavailable ({e}) — "
+                              f"under-engagement gate skipped[/]")
         # Gate selection:
         #   - If a spec is loaded AND has unsatisfied requirements, use the
         #     SpecDD structured reprompt.
         #   - Else, fall through to v1.3 diff-size heuristic.
         _spec_reprompt_fires = (
             _spec_validation is not None
+            and _spec_validation.error is None
             and not _spec_validation.all_satisfied
         )
         _v1_3_reprompt_fires = (
@@ -398,10 +423,15 @@ def maintain_pipeline(
                          second_pass_tool_calls=second_result.tool_calls_total,
                          second_pass_completion_tokens=second_result.completion_tokens,
                          second_pass_aborted=second_result.aborted)
-            _ds = _diff_against_base(repo_path, prep.base_sha)
-            append_event(spec.run_id, "diff_stat",
-                         checkpoint="after_reprompt_pass",
-                         additions=_ds[0], deletions=_ds[1])
+            try:
+                _ds = _diff_against_base(repo_path, prep.base_sha)
+            except GitDiffError as e:
+                append_event(spec.run_id, "diff_stat_failed",
+                             checkpoint="after_reprompt_pass", error=str(e))
+            else:
+                append_event(spec.run_id, "diff_stat",
+                             checkpoint="after_reprompt_pass",
+                             additions=_ds[0], deletions=_ds[1])
 
         if detected_task in _WRITE_TASKS:
             try:

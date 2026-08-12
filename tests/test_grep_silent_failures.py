@@ -20,6 +20,19 @@ configuration a human watches.
 no trace. Asked to count something with 1,286 matches, the model received
 exactly 150 lines and nothing to suggest they were partial — a wrong answer
 wearing the shape of a complete one.
+
+**3. It reported every FAILURE as "(no matches)" too (2026-08-12, second
+pass).**
+
+ripgrep's exit codes are 0=matched, 1=no matches, 2+=error, and all three
+funnelled into `_grep_result(proc.stdout)` — which sees the empty string an
+error leaves behind and says "(no matches)". Two verified cases: the pattern
+`"(unclosed"` (a regex the model can plainly fix, if it is told) and the
+pattern `"-i"`, which rg consumed as a FLAG because nothing ended its option
+parsing. A timeout, meanwhile, escaped as an exception where tools.sdd says a
+tool returns `(str, str | None)` and never raises. The pure-python fallback
+for rg-less hosts had the ORIGINAL silent-cap bug one file over: it stopped
+dead at 150 results with no note and no byte bound at all.
 """
 
 from __future__ import annotations
@@ -133,3 +146,144 @@ class TestTruncationIsAnnounced:
         got = fs._grep_result(wide)
         assert "output truncated" in got
         assert "cap" in got
+
+
+def _fake_rg(monkeypatch, *, rc: int, stdout: str = "", stderr: str = ""):
+    """Replace the rg call with a fixed CompletedProcess, so the exit-code
+    contract is tested without depending on a ripgrep version's diagnostics."""
+    real = subprocess.run
+
+    def _spy(cmd, **kw):
+        if cmd and cmd[0] == "rg":
+            return subprocess.CompletedProcess(cmd, rc, stdout, stderr)
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(subprocess, "run", _spy)
+
+
+class TestAFailedSearchIsNotNoMatches:
+    def test_exit_2_is_an_error_not_a_result(self, tmp_repo, monkeypatch):
+        _fake_rg(monkeypatch, rc=2, stderr="regex parse error: unclosed group")
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "(unclosed"})
+        assert out == ""
+        assert err and "unclosed group" in err
+
+    def test_the_error_names_the_exit_code_when_rg_says_nothing(self, tmp_repo,
+                                                                monkeypatch):
+        _fake_rg(monkeypatch, rc=3)
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "x"})
+        assert out == ""
+        assert err == "grep failed (rg exit 3)"
+
+    def test_exit_1_still_means_no_matches(self, tmp_repo, monkeypatch):
+        """1 is not an error — the byte-identical path must stay put."""
+        _fake_rg(monkeypatch, rc=1)
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "x"})
+        assert (out, err) == ("(no matches)", None)
+
+    def test_an_unclosed_group_really_does_exit_2(self, tmp_repo):
+        """Unfaked, against the host's real rg: the reported reproduction."""
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "(unclosed"})
+        assert out != "(no matches)"
+        assert err is not None
+
+    def test_a_timeout_comes_back_as_a_tool_error(self, tmp_repo, monkeypatch):
+        """tools.sdd: all tool errors return as a tuple; never raise."""
+        def _boom(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+        monkeypatch.setattr(subprocess, "run", _boom)
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "x"})
+        assert out == ""
+        assert err and "timed out" in err
+
+
+class TestOptionShapedPatterns:
+    def test_a_dash_pattern_is_a_pattern_not_a_flag(self, tmp_repo):
+        """`grep("-i")` returned "(no matches)" for a file that contains it."""
+        (tmp_repo / "flags.txt").write_text("run with -i for insensitive\n")
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "-i"})
+        assert err is None
+        assert "flags.txt" in out
+
+    def test_the_pattern_sits_behind_a_double_dash(self, tmp_repo, monkeypatch):
+        seen = []
+        real = subprocess.run
+
+        def _spy(cmd, **kw):
+            if cmd and cmd[0] == "rg":
+                seen.append(list(cmd))
+            return real(cmd, **kw)
+
+        monkeypatch.setattr(subprocess, "run", _spy)
+        fs.READ_ONLY_FNS["grep"]({"pattern": "greet"})
+        assert seen[0][-2:] == ["--", "greet"]
+
+    def test_the_double_dash_leaves_ordinary_output_byte_identical(self, tmp_repo):
+        """The whole point of `--` over sanitising the pattern: rg treats
+        `-- PATTERN` and `PATTERN` the same, so results don't move."""
+        with_dashdash, _ = fs.READ_ONLY_FNS["grep"]({"pattern": "greet"})
+        raw = subprocess.run(
+            ["rg", "--no-heading", "-n", "--max-count=150", "greet"],
+            capture_output=True, text=True, cwd=tmp_repo,
+            stdin=subprocess.DEVNULL)
+        assert with_dashdash == fs._grep_result(raw.stdout)
+
+    def test_the_glob_filter_still_applies(self, tmp_repo):
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "greet", "glob": "*.md"})
+        assert err is None
+        assert out == "(no matches)"
+
+
+class TestThePurePythonFallbackAnnouncesItsCaps:
+    """Hosts without ripgrep take `_grep_python`. It had the silent-cap bug
+    the rg path was just fixed for."""
+
+    def _no_rg(self, monkeypatch):
+        real = subprocess.run
+
+        def _spy(cmd, **kw):
+            if cmd and cmd[0] == "rg":
+                raise FileNotFoundError("rg")
+            return real(cmd, **kw)
+
+        monkeypatch.setattr(subprocess, "run", _spy)
+
+    def test_it_is_reached_when_rg_is_missing(self, tmp_repo, monkeypatch):
+        self._no_rg(monkeypatch)
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "greet"})
+        assert err is None
+        assert "greet" in out
+
+    def test_hitting_the_result_cap_says_so(self, tmp_repo, monkeypatch):
+        self._no_rg(monkeypatch)
+        (tmp_repo / "big.log").write_text("".join(f"line {i} MATCHME\n"
+                                                  for i in range(500)))
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "MATCHME"})
+        assert err is None
+        assert "NOT the total count" in out
+        assert "Narrow" in out.splitlines()[-1]
+
+    def test_it_is_byte_capped_like_the_rg_path(self, tmp_repo, monkeypatch):
+        self._no_rg(monkeypatch)
+        (tmp_repo / "wide.log").write_text("".join(f"{'x' * 4000} MATCHME\n"
+                                                   for i in range(60)))
+        out, _ = fs.READ_ONLY_FNS["grep"]({"pattern": "MATCHME"})
+        assert len(out) < fs._GREP_MAX_BYTES + 500
+        assert "output truncated" in out
+
+    def test_a_small_result_is_unannotated(self, tmp_repo, monkeypatch):
+        self._no_rg(monkeypatch)
+        out, _ = fs.READ_ONLY_FNS["grep"]({"pattern": "greet"})
+        assert "[" not in out
+
+    def test_no_matches_is_unchanged(self, tmp_repo, monkeypatch):
+        self._no_rg(monkeypatch)
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "zzz-absent-zzz"})
+        assert (out, err) == ("(no matches)", None)
+
+    def test_an_invalid_pattern_is_still_reported(self, tmp_repo, monkeypatch):
+        self._no_rg(monkeypatch)
+        out, err = fs.READ_ONLY_FNS["grep"]({"pattern": "(unclosed"})
+        assert out == ""
+        assert err and "Invalid pattern" in err

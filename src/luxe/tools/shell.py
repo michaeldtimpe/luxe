@@ -111,6 +111,8 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
     proc = subprocess.Popen(
         command, shell=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        errors="replace",   # one bad byte must not discard the whole output
+        stdin=subprocess.DEVNULL,   # see _bash — same reason
         cwd=cwd, env=env, start_new_session=True,
     )
 
@@ -179,6 +181,20 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         proc = subprocess.run(
             command, shell=True,
             capture_output=True, text=True,
+            # A command whose output is not valid UTF-8 (a stray byte in a log,
+            # a binary blob catted by accident) used to raise
+            # UnicodeDecodeError out of subprocess and throw away EVERYTHING it
+            # printed — the model saw a tool error instead of the 8 KB of
+            # perfectly readable text around the bad byte.
+            errors="replace",
+            # stdin=DEVNULL is LOAD-BEARING (2026-08-12), for the same reason
+            # ripgrep needed it in fs.py: the child inherits luxe's stdin. With
+            # a piped parent stdin (a benchmark launched from a script, CI, the
+            # headless `printf … | luxe chat` form) `bash("cat")` returned the
+            # PARENT's queued input as its own output and drained it — the next
+            # REPL read got nothing. Under a TTY the same command blocks until
+            # the timeout. Neither is a shell command's job.
+            stdin=subprocess.DEVNULL,
             cwd=repo_root, timeout=timeout,
             env=env,   # None (bench default) == inherit, unchanged
         )

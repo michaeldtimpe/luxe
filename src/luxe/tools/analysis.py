@@ -51,6 +51,29 @@ def _resolve(tool: str, module: str | None = None,
     return None
 
 
+def _crashed(cmd: list[str], proc: subprocess.CompletedProcess) -> tuple[str, str | None]:
+    """A SUCCESSFUL, machine-readable 'the check did not run' result.
+
+    Same reasoning as `_skipped`, one failure mode over: a linter that exits
+    non-zero having produced nothing parseable did not find zero problems, it
+    fell over (bad config, a repo that doesn't compile, a missing plugin). The
+    old code reported `{"status": "ok", "findings": [], "count": 0}` for that,
+    which reads as "lint passed" — precisely the false signal `_skipped`
+    exists to prevent.
+    """
+    detail = (proc.stderr or proc.stdout or "").strip()
+    payload = {
+        "status": "error",
+        "exit_code": proc.returncode,
+        "stderr": detail[-2000:],
+        "reason": (f"{cmd[0]} exited {proc.returncode} without producing any "
+                   f"findings — the check did NOT pass, it failed to run. "
+                   f"Fix the reported error (often a config or a file the "
+                   f"tool cannot parse) and call this tool again."),
+    }
+    return json.dumps(payload, indent=2), None
+
+
 def _run_tool(cmd: list[str], parse_json: bool = False) -> tuple[str, str | None]:
     repo_root = get_repo_root()
     if repo_root is None:
@@ -58,6 +81,13 @@ def _run_tool(cmd: list[str], parse_json: bool = False) -> tuple[str, str | None
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
+            # A linter that prints a non-UTF-8 byte (a source file in another
+            # encoding quoted back in a diagnostic) must not take its whole
+            # report down with a UnicodeDecodeError.
+            errors="replace",
+            # The analyzers are non-interactive; inheriting luxe's stdin lets
+            # one of them consume input meant for the session (see tools/shell.py).
+            stdin=subprocess.DEVNULL,
             cwd=repo_root, timeout=_TIMEOUT,
         )
         output = proc.stdout or proc.stderr
@@ -65,14 +95,39 @@ def _run_tool(cmd: list[str], parse_json: bool = False) -> tuple[str, str | None
             try:
                 data = json.loads(output)
                 if isinstance(data, list):
+                    if not data and proc.returncode != 0:
+                        # "no findings" and "exited non-zero" cannot both be
+                        # true of a healthy run.
+                        return _crashed(cmd, proc)
+                    total = len(data)
                     data = data[:_MAX_FINDINGS]
+                    payload: dict[str, Any] = {"status": "ok", "findings": data,
+                                               "count": len(data)}
+                    if total > _MAX_FINDINGS:
+                        # Without this the count reads as authoritative: 150
+                        # findings and 1,286 findings were the same result.
+                        payload["truncated"] = True
+                        payload["total"] = total
+                    return json.dumps(payload, indent=2), None
                 return json.dumps({"status": "ok", "findings": data,
                                    "count": len(data)}, indent=2), None
             except json.JSONDecodeError:
-                pass
-        lines = output.strip().splitlines()[:_MAX_FINDINGS]
-        return json.dumps({"status": "ok", "findings": lines,
-                           "count": len(lines)}, indent=2), None
+                # A tool asked for JSON that exits non-zero WITHOUT emitting
+                # any is a tool that crashed; its stderr is a message, not a
+                # findings list.
+                if proc.returncode != 0:
+                    return _crashed(cmd, proc)
+        all_lines = output.strip().splitlines()
+        lines = all_lines[:_MAX_FINDINGS]
+        # A non-zero exit WITH findings is ordinary (mypy exits 1 on type
+        # errors); a non-zero exit with nothing to show is a failure.
+        if proc.returncode != 0 and not lines:
+            return _crashed(cmd, proc)
+        payload = {"status": "ok", "findings": lines, "count": len(lines)}
+        if len(all_lines) > _MAX_FINDINGS:
+            payload["truncated"] = True
+            payload["total"] = len(all_lines)
+        return json.dumps(payload, indent=2), None
     except FileNotFoundError:
         # Resolution should prevent this, but degrade structurally if it slips.
         return _skipped(cmd[0])
