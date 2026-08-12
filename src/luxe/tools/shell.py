@@ -47,7 +47,40 @@ _CHAIN_TOKENS = frozenset({"&&", "||", ";", "|", "&"})
 _REDIRECT_TOKENS = frozenset({">", "<", ">>", "<<", "<<<", "&>", "2>", "2>&1"})
 
 _MAX_OUTPUT = 8192
+#: Head/tail split of the output budget when a command exceeds _MAX_OUTPUT.
+#: The tail gets the larger share: test runners put the failure summary at
+#: the END (pytest's short summary, exit status context), so the old
+#: keep-the-first-8KB form reliably discarded exactly the lines the model
+#: needed (2026-08-12 audit, F12). The head is kept too — first errors and
+#: the command's own echo live there.
+_HEAD_KEEP = 2048
+_TAIL_KEEP = 6144
 _TIMEOUT = 60
+
+
+def _clip_output(output: str) -> str:
+    """Cap tool output at _MAX_OUTPUT, keeping the head AND the tail.
+
+    Under the cap: byte-identical passthrough. Over it: first _HEAD_KEEP and
+    last _TAIL_KEEP bytes (snapped to line boundaries where possible) around
+    an announced omission marker. Bench-inert by measurement, not assumption:
+    zero of 183 bash calls across six full maintain_suite passes (2026-08-12)
+    reach the cap — the 205 historical firings are SWE-bench-era workloads.
+    See acceptance/bash_tail_trunc_2026_08_12/REPORT.md.
+    """
+    if len(output) <= _MAX_OUTPUT:
+        return output
+    head = output[:_HEAD_KEEP]
+    nl = head.rfind("\n")
+    if nl > 0:
+        head = head[:nl + 1]
+    tail = output[-_TAIL_KEEP:]
+    nl = tail.find("\n")
+    if 0 <= nl < len(tail) - 1:
+        tail = tail[nl + 1:]
+    omitted = len(output) - len(head) - len(tail)
+    return (f"{head}... ({omitted:,} bytes omitted — output capped at "
+            f"{_MAX_OUTPUT:,}; head and tail kept)\n{tail}")
 
 
 def _validate_command(command: str) -> tuple[list[str], str | None]:
@@ -126,9 +159,7 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
     while True:
         try:
             stdout, stderr = proc.communicate(timeout=_CANCEL_POLL_S)
-            output = (stdout or "") + (stderr or "")
-            if len(output) > _MAX_OUTPUT:
-                output = output[:_MAX_OUTPUT] + f"\n... (truncated at {_MAX_OUTPUT} bytes)"
+            output = _clip_output((stdout or "") + (stderr or ""))
             return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
         except subprocess.TimeoutExpired:
             if getattr(cancel, "requested", False):
@@ -198,9 +229,7 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
             cwd=repo_root, timeout=timeout,
             env=env,   # None (bench default) == inherit, unchanged
         )
-        output = proc.stdout + proc.stderr
-        if len(output) > _MAX_OUTPUT:
-            output = output[:_MAX_OUTPUT] + f"\n... (truncated at {_MAX_OUTPUT} bytes)"
+        output = _clip_output(proc.stdout + proc.stderr)
         return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
     except subprocess.TimeoutExpired:
         return "", f"Command timed out after {timeout}s"
