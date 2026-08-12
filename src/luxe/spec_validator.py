@@ -28,6 +28,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
 
+from luxe import gitcmd
 from luxe.spec import Requirement, Spec
 
 
@@ -58,10 +59,19 @@ class ValidationResult:
     `results` preserves Spec.requirements order. `all_satisfied` is the
     AND of every requirement; `unsatisfied` filters to the failing ones
     for use in structured reprompts.
+
+    `error` is set (and only set) when the evaluation itself could not be
+    carried out — today, when `git diff` fails so the added lines are UNKNOWN.
+    The diff-kind requirements then report unsatisfied because nothing proved
+    them satisfied, but the verdict is not evidence about the agent's work:
+    callers must branch on `error` before telling anyone a requirement is
+    unmet. `None` on every healthy run, so a caller that ignores it behaves
+    exactly as before.
     """
 
     spec: Spec
     results: list[RequirementResult] = field(default_factory=list)
+    error: str | None = None
 
     @property
     def all_satisfied(self) -> bool:
@@ -102,13 +112,30 @@ def validate(
         r.kind in ("regex_present", "regex_absent")
         for r in spec.requirements
     )
-    added_lines = (
-        _added_lines_from_diff(repo, base_sha) if needs_diff and repo else []
-    )
+    diff_error: str | None = None
+    added_lines: list[tuple[str, str]] = []
+    if needs_diff and repo:
+        got = _added_lines_from_diff(repo, base_sha)
+        if got is None:
+            # `git diff` FAILED — the added lines are unknown. Grading the
+            # diff predicates against [] here is how "the repo's git is
+            # broken" became "every requirement unmet, 0 added lines".
+            diff_error = (f"could not read the diff of {repo} against "
+                          f"{base_sha[:12] or '(no base_sha)'} — git failed")
+        else:
+            added_lines = got
 
     results: list[RequirementResult] = []
     for req in spec.requirements:
-        if req.kind == "regex_present":
+        if req.kind in ("regex_present", "regex_absent") and diff_error:
+            results.append(RequirementResult(
+                requirement=req,
+                satisfied=False,
+                detail=(f"{req.id} NOT EVALUATED — {diff_error}. This is a "
+                        f"validation error, not evidence the requirement is "
+                        f"unmet."),
+            ))
+        elif req.kind == "regex_present":
             results.append(_eval_regex_present(req, added_lines))
         elif req.kind == "regex_absent":
             results.append(_eval_regex_absent(req, added_lines))
@@ -131,13 +158,18 @@ def validate(
                 detail=f"unknown kind {req.kind!r}",
             ))
 
-    return ValidationResult(spec=spec, results=results)
+    return ValidationResult(spec=spec, results=results, error=diff_error)
 
 
 # --- diff parsing ----------------------------------------------------------
 
+#: Wall bound on the two local git calls below. Nothing here talks to a
+#: network, so a minute is already generous; the point is that a wedged git
+#: cannot hold a validation (and therefore a bench fixture) open forever.
+_GIT_TIMEOUT_S = 60.0
 
-def _added_lines_from_diff(repo: Path, base_sha: str) -> list[tuple[str, str]]:
+
+def _added_lines_from_diff(repo: Path, base_sha: str) -> list[tuple[str, str]] | None:
     """Return [(filename, line_body)] for every '+'-prefixed line in the diff.
 
     Untracked files are made visible via `git add -N .` (intent-to-add):
@@ -145,20 +177,32 @@ def _added_lines_from_diff(repo: Path, base_sha: str) -> list[tuple[str, str]]:
     `git diff <base_sha>` until staged. PR cycle's later real `git add .`
     still works correctly. Same fix as cli.py's `_diff_against_base`.
 
-    Returns an empty list when base_sha is unset or the repo has no diff.
+    Returns an empty list when base_sha is unset or the repo has no diff, and
+    **None when git itself failed** — the two used to be the same value, so a
+    broken repo graded as an agent that wrote nothing. The `+++ b/<path>`
+    parsing below is why this call carries `gitcmd.DIFF_PARSE_PINS` and
+    `gitcmd.parse_env()`: host `diff.noprefix`/`diff.external`/`color.ui`
+    settings would each rewrite the text these lines key on.
     """
     if not base_sha:
         return []
 
-    subprocess.run(
-        ["git", "add", "-N", "."],
-        cwd=str(repo), capture_output=True, text=True,
-    )
-    proc = subprocess.run(
-        ["git", "diff", base_sha, "--"],
-        cwd=str(repo), capture_output=True, text=True,
-    )
-    if proc.returncode != 0 or not proc.stdout:
+    common = {"cwd": str(repo), "capture_output": True, "text": True,
+              "errors": "replace", "stdin": subprocess.DEVNULL,
+              "env": gitcmd.parse_env()}
+    try:
+        subprocess.run(["git", *gitcmd.DIFF_PARSE_PINS, "add", "-N", "."],
+                       timeout=_GIT_TIMEOUT_S, **common)
+        proc = subprocess.run(
+            ["git", *gitcmd.DIFF_PARSE_PINS, "diff", "--no-ext-diff",
+             base_sha, "--"],
+            timeout=_GIT_TIMEOUT_S, **common,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    if not proc.stdout:
         return []
 
     out: list[tuple[str, str]] = []
@@ -260,6 +304,12 @@ def _eval_tests_pass(req: Requirement, repo: Path) -> RequirementResult:
             cwd=str(repo),
             capture_output=True,
             text=True,
+            # A test run that prints a non-UTF-8 byte must still yield its tail.
+            errors="replace",
+            # The command is graded, not conversed with: an inherited stdin
+            # lets a prompting test read (and drain) luxe's own input, or block
+            # on it for the full ten minutes.
+            stdin=subprocess.DEVNULL,
             timeout=600.0,
         )
     except subprocess.TimeoutExpired:

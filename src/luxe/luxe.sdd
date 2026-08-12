@@ -104,6 +104,32 @@ auto-memory.
   path RAISES, indistinguishable from a missing git binary); the two are not
   interchangeable and each caller keeps the form it had. Error POLICY stays at
   the call site: the wordings differ per subsystem and are user-visible
+- Every git invocation pins the host config that would corrupt CAPTURED output
+  (2026-08-12): `-c color.ui=false -c core.pager=cat --no-pager` in
+  `gitcmd._CONFIG_PINS`, plus `errors="replace"` decoding. All of it is git's
+  own non-tty default, so a default-config host is byte-identical — but
+  `color.ui=always` in one user's `~/.gitconfig` puts ANSI escapes into text
+  that eight modules PARSE. The two call sites whose output is parsed for
+  GRADING (`pr.diff_against_base`, `spec_validator._added_lines_from_diff`)
+  pin more: `gitcmd.DIFF_PARSE_PINS` adds `diff.noprefix=false` +
+  `diff.mnemonicprefix=false`, the argv carries `--no-ext-diff`, and
+  `gitcmd.parse_env()` adds `GIT_CONFIG_NOSYSTEM=1` + `GIT_TERMINAL_PROMPT=0`
+  (both live in the neutral module, so the two parsers cannot drift).
+  Each of those settings rewrites the `+++ b/<path>` header the two parsers
+  key on, so a host preference would zero a grade silently rather than fail
+  (`tests/test_git_config_pinning.py`)
+- A git FAILURE is never returned as an empty diff (2026-08-12).
+  `pr.diff_against_base` raises `GitDiffError` (it used to return `(0, 0, "")`
+  — the exact value a clean tree gives) and
+  `spec_validator._added_lines_from_diff` returns `None` (it used to return
+  `[]`). Callers must branch: `maintain_pipeline` records a `diff_stat_failed`
+  event and SKIPS both reprompt gates rather than firing a second pass on a
+  fabricated 0-additions; `ValidationResult.error` (None on every healthy run)
+  marks the diff predicates NOT EVALUATED instead of unmet; `gitkit.apply`
+  marks the step failed instead of "no changes produced". Network git/gh calls
+  in `pr.py` go through `_run_net` — `gitclone.clone_env()` + a 120s deadline
+  that surfaces as `rc=124` with a message, because a credential prompt on an
+  inherited stdin has no deadline at all
 - The `luxe maintain` PIPELINE lives in `luxe/maintain.py`
   (`maintain_pipeline`), not in `cli.py`; `cli.maintain` is a Click shell that
   forwards its eleven parameters unchanged. Both benchmark adapters spawn

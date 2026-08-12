@@ -77,10 +77,33 @@ def _require_py(module: str):
         ) from exc
 
 
-def _run(argv: list[str], *, what: str) -> subprocess.CompletedProcess:
+#: Wall bound on every external tool call. qpdf on a malformed file, gs on a
+#: pathological page, and `lp` against a wedged CUPS all block indefinitely,
+#: and an MCP tool that never returns holds the whole session open.
+_RUN_TIMEOUT_S = 60
+#: Rasterizing is the one operation that is legitimately slow (a long document
+#: at high DPI), so it gets its own budget rather than a false timeout.
+_RENDER_TIMEOUT_S = 300
+
+
+def _run(argv: list[str], *, what: str,
+         timeout: float = _RUN_TIMEOUT_S) -> subprocess.CompletedProcess:
     """Run argv (shell=False) and raise PdfToolError with stderr on failure."""
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              # Tool output can carry raw bytes out of a PDF.
+                              errors="replace",
+                              # None of these read input; qpdf and gs PROMPT
+                              # for a password on stdin, which with an
+                              # inherited stdin means eating the session's
+                              # input or hanging until the timeout.
+                              stdin=subprocess.DEVNULL,
+                              timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise PdfToolError(
+            f"{what}: `{argv[0]}` did not finish within {timeout:.0f}s and was "
+            f"killed (a malformed input or a stuck print queue does this)"
+        ) from exc
     except FileNotFoundError as exc:
         raise PdfToolError(
             f"{what}: `{argv[0]}` not found — "
@@ -275,11 +298,23 @@ def pdf_form_fields(path: str, password: str = "") -> dict[str, Any]:
 
 
 def pdf_printers() -> dict[str, Any]:
-    """Configured CUPS destinations plus which one is the default."""
+    """Configured CUPS destinations plus which one is the default.
+
+    `lpstat`'s exit code is consulted: with cupsd down it fails with
+    "Unable to connect to server" and prints nothing, which as a bare
+    `printers: []` reads as "this Mac has no printers configured" — a
+    different problem with a different fix.
+    """
     _require_bin("lpstat")
     printers: list[dict[str, Any]] = []
-    proc = subprocess.run(["lpstat", "-p"], capture_output=True, text=True,
-                          check=False)
+    proc = _lpstat("-p")
+    if proc.returncode != 0:
+        raise PdfToolError(
+            f"`lpstat -p` failed (exit {proc.returncode}): "
+            f"{(proc.stderr or proc.stdout or '').strip()[:300]} — this is a "
+            f"CUPS failure, NOT an empty printer list. Check that the print "
+            f"system is up (`cupsctl` / `lpstat -r`)."
+        )
     for line in (proc.stdout or "").splitlines():
         m = re.match(r"printer (\S+) is (\w+)", line.strip())
         if m:
@@ -289,9 +324,11 @@ def pdf_printers() -> dict[str, Any]:
                 "state": m.group(2),
                 "label_printer": _is_label_printer(name),
             })
+    # `lpstat -d` exits non-zero when there is genuinely no default
+    # destination, so its failure is informational rather than fatal here —
+    # unlike `-p` above, an empty answer is a real possible answer.
     default = ""
-    dproc = subprocess.run(["lpstat", "-d"], capture_output=True, text=True,
-                           check=False)
+    dproc = _lpstat("-d")
     dm = re.search(r"destination:\s*(\S+)", dproc.stdout or "")
     if dm:
         default = dm.group(1)
@@ -301,6 +338,20 @@ def pdf_printers() -> dict[str, Any]:
         "note": ("label printers are refused by pdf_print unless "
                  "allow_label=true"),
     }
+
+
+def _lpstat(flag: str) -> subprocess.CompletedProcess:
+    """`lpstat <flag>`, bounded and non-interactive. Returns the process so the
+    caller decides whether a non-zero exit is fatal (see `pdf_printers`)."""
+    try:
+        return subprocess.run(["lpstat", flag], capture_output=True, text=True,
+                              errors="replace", stdin=subprocess.DEVNULL,
+                              timeout=_RUN_TIMEOUT_S, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise PdfToolError(
+            f"`lpstat {flag}` did not answer within {_RUN_TIMEOUT_S}s — the "
+            f"print system is wedged, not printer-less"
+        ) from exc
 
 
 def _is_label_printer(name: str) -> bool:
@@ -487,7 +538,7 @@ def pdf_to_images(path: str, output_dir: str | None = None, dpi: int = 150,
     if password:
         argv += ["-upw", password]
     argv += [str(src), str(prefix)]
-    _run(argv, what="pdf_to_images")
+    _run(argv, what="pdf_to_images", timeout=_RENDER_TIMEOUT_S)
     ext = "png" if fmt == "png" else "jpg"
     images = sorted(str(p) for p in outdir.glob(f"{src.stem}-*.{ext}"))
     if not images:

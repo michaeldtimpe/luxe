@@ -517,6 +517,19 @@ _GREP_MAX_COUNT = 150
 _GREP_MAX_BYTES = 32768
 
 
+def _grep_notes(body: str, notes: list[str]) -> str:
+    """Append the shared truncation footer to `body`, or return it unchanged.
+
+    One wording for both grep implementations (ripgrep and the pure-python
+    fallback): stating the cut without stating the way around it is the dead
+    end this whole family of fixes is about.
+    """
+    if not notes:
+        return body
+    return body + (f"\n[{'; '.join(notes)}. Narrow with a more specific pattern "
+                   f"or `glob`, or count with bash.]\n")
+
+
 def _grep_result(stdout: str) -> str:
     """Grep output, with any truncation SAID OUT LOUD.
 
@@ -549,10 +562,11 @@ def _grep_result(stdout: str) -> str:
             f"cap ({', '.join(sorted(capped)[:3])}"
             f"{'…' if len(capped) > 3 else ''}) — this is NOT the total count"
         )
-    if notes:
-        body += (f"\n[{'; '.join(notes)}. Narrow with a more specific pattern "
-                 f"or `glob`, or count with bash.]\n")
-    return body
+    return _grep_notes(body, notes)
+
+
+#: Wall bound on the ripgrep call. Named so the timeout error can quote it.
+_GREP_TIMEOUT_S = 30
 
 
 def _grep(args: dict[str, Any]) -> tuple[str, str | None]:
@@ -561,11 +575,19 @@ def _grep(args: dict[str, Any]) -> tuple[str, str | None]:
     pattern = args["pattern"]
     file_glob = args.get("glob", "")
     try:
-        cmd = ["rg", "--no-heading", "-n", "--max-count=150", pattern]
+        cmd = ["rg", "--no-heading", "-n", "--max-count=150"]
         if file_glob:
             cmd.extend(["--glob", file_glob])
+        # "--" ends option parsing (2026-08-12). Without it a pattern that
+        # begins with a dash is consumed by ripgrep as a FLAG: `grep("-i")`
+        # searched for nothing with case-insensitivity turned on and came back
+        # "(no matches)", and `grep("--foo")` would exit 2. rg treats
+        # `-- PATTERN` and `PATTERN` identically otherwise, so results for
+        # every ordinary pattern are byte-identical.
+        cmd.extend(["--", pattern])
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=_REPO_ROOT, timeout=30,
+            cmd, capture_output=True, text=True, cwd=_REPO_ROOT,
+            timeout=_GREP_TIMEOUT_S,
             # stdin=DEVNULL is LOAD-BEARING (2026-08-12). Invoked with no path
             # argument, ripgrep decides between "search cwd" and "read stdin"
             # by inspecting stdin: an inherited OPEN PIPE makes it read that
@@ -579,28 +601,68 @@ def _grep(args: dict[str, Any]) -> tuple[str, str | None]:
             # the golden request see; DEVNULL keeps the format byte-identical.
             stdin=subprocess.DEVNULL,
         )
-        return _grep_result(proc.stdout), None
     except FileNotFoundError:
-        lines = []
-        try:
-            regex = re.compile(pattern)
-        except re.error as e:
-            return "", f"Invalid pattern: {e}"
-        for root, _, files in os.walk(_REPO_ROOT):
-            for f in files:
-                if file_glob and not fnmatch.fnmatch(f, file_glob):
-                    continue
-                fp = Path(root) / f
-                try:
-                    for i, line in enumerate(fp.open(errors="replace"), 1):
-                        if regex.search(line):
-                            rel = fp.relative_to(_REPO_ROOT)
-                            lines.append(f"{rel}:{i}:{line.rstrip()}")
-                            if len(lines) >= _MAX_RESULTS:
-                                return "\n".join(lines), None
-                except (OSError, UnicodeDecodeError):
-                    continue
-        return "\n".join(lines) if lines else "(no matches)", None
+        return _grep_python(pattern, file_glob)
+    except subprocess.TimeoutExpired:
+        # tools.sdd: a tool never raises to the caller. Before this, a search
+        # that outran the bound took the whole turn down with a traceback.
+        return "", (f"grep timed out after {_GREP_TIMEOUT_S}s — narrow it with "
+                    f"`glob` or a more specific pattern")
+    # rg's exit codes are 0=matched, 1=no matches, 2+=error. Everything used to
+    # funnel into _grep_result(stdout), so an ERROR (an unclosed group, an
+    # unreadable path) arrived as the empty string and was reported as
+    # "(no matches)" — a failed search wearing the answer's clothes.
+    if proc.returncode >= 2:
+        return "", (proc.stderr.strip()
+                    or f"grep failed (rg exit {proc.returncode})")
+    return _grep_result(proc.stdout), None
+
+
+def _grep_python(pattern: str, file_glob: str) -> tuple[str, str | None]:
+    """Pure-python grep for hosts without ripgrep — same announced caps.
+
+    It used to stop dead at `_MAX_RESULTS` with no note and no byte bound at
+    all, so on this path the model got a truncated answer that looked complete
+    (the rg path's failure, one file over) and could be handed a multi-megabyte
+    result. Both caps are now stated in the `_grep_result` wording.
+    """
+    lines: list[str] = []
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        return "", f"Invalid pattern: {e}"
+    capped = False
+    for root, _, files in os.walk(_REPO_ROOT):
+        for f in files:
+            if file_glob and not fnmatch.fnmatch(f, file_glob):
+                continue
+            fp = Path(root) / f
+            try:
+                for i, line in enumerate(fp.open(errors="replace"), 1):
+                    if regex.search(line):
+                        rel = fp.relative_to(_REPO_ROOT)
+                        lines.append(f"{rel}:{i}:{line.rstrip()}")
+                        if len(lines) >= _MAX_RESULTS:
+                            capped = True
+                            break
+            except (OSError, UnicodeDecodeError):
+                continue
+            if capped:
+                break
+        if capped:
+            break
+    if not lines:
+        return "(no matches)", None
+    body = "\n".join(lines)
+    notes = []
+    if capped:
+        notes.append(f"stopped at the first {_MAX_RESULTS} matches "
+                     f"— this is NOT the total count")
+    if len(body) > _GREP_MAX_BYTES:
+        body = body[:_GREP_MAX_BYTES]
+        body = body[:body.rfind("\n") + 1] or body   # don't end mid-line
+        notes.append(f"output truncated at {_GREP_MAX_BYTES:,} bytes")
+    return _grep_notes(body, notes), None
 
 
 # Prose extensions the CHAT front-end exempts from the placeholder guard

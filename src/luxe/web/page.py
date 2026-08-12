@@ -335,4 +335,13 @@ def render_snapshot(snap: dict, *, max_chars: int = 12_000) -> str:
             if el.get("href"):
                 desc += f" → {el['href'][:100]}"
             lines.append(desc)
+        if len(snap["interactables"]) >= _MAX_INTERACTABLES:
+            # The enumerator stops at _MAX_INTERACTABLES inside the page's own
+            # JS, so a listing of exactly that length is a listing that may
+            # have been cut — and an uncut listing was the model's only way to
+            # conclude "that control isn't on this page". Same rule as grep and
+            # read_file: say the cut, then say the way around it.
+            lines.append(f"[listing capped at {_MAX_INTERACTABLES} elements — "
+                         f"there may be more; scroll, or use a CSS selector as "
+                         f"`target` instead of an index]")
     return "\n".join(lines)

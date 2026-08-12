@@ -29,6 +29,8 @@ from typing import Any, Callable
 
 import yaml
 
+from luxe import gitcmd
+from luxe.gitclone import clone_env
 from luxe.run_state import (
     PRState,
     RunSpec,
@@ -60,6 +62,18 @@ class DirtyTreeError(PRError):
 
 class NoMutationsError(PRError):
     """Write task produced no diff. Status: failed_no_mutations_produced."""
+
+
+class GitDiffError(PRError):
+    """`git diff` itself failed — the diff is UNKNOWN, not empty.
+
+    Raised by `diff_against_base`, which used to return `(0, 0, "")` for a
+    crashed git exactly as it does for a clean tree. Every caller then read the
+    failure as "the agent wrote nothing": the maintain pipeline recorded
+    additions=0, the under-engagement gate fired a reprompt on a lie, and
+    gitchange's executor announced "no changes produced". A git crash must
+    never be graded as an agent outcome.
+    """
 
 
 # --- config ----------------------------------------------------------------
@@ -126,9 +140,43 @@ def _run(cmd: list[str], cwd: str | Path, env: dict | None = None,
          timeout: float | None = None) -> CmdResult:
     proc = subprocess.run(
         cmd, cwd=str(cwd), env=env, capture_output=True, text=True,
+        # A test suite or a `gh` payload can print a non-UTF-8 byte; decoding
+        # strictly threw the entire captured output away with an exception.
+        errors="replace",
+        # Nothing here is interactive, and inheriting luxe's stdin is how a
+        # credential prompt or a `less` gets to consume it (see tools/shell.py).
+        stdin=subprocess.DEVNULL,
         check=False, timeout=timeout,
     )
     return CmdResult(rc=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+
+
+#: Wall bounds for the two classes of command. NETWORK commands are the ones
+#: that could previously block a whole maintain run forever: with stdin
+#: inherited and no `GIT_TERMINAL_PROMPT=0`, a private remote makes git sit on
+#: a username prompt with no output and no deadline.
+_NET_TIMEOUT_S = 120.0
+_LOCAL_GIT_TIMEOUT_S = 60.0
+
+
+def _run_net(cmd: list[str], cwd: str | Path, *,
+             timeout: float = _NET_TIMEOUT_S) -> CmdResult:
+    """`_run` for a command that talks to the network.
+
+    Adds the non-interactive credential environment (`gitclone.clone_env`:
+    GIT_TERMINAL_PROMPT=0 + GIT_ASKPASS="") and a deadline, and turns the
+    deadline into a FAILED CmdResult rather than an exception — every caller
+    already renders `rc`/`stderr`, and a timeout that surfaces as empty output
+    would be the same silent-failure bug one level up.
+    """
+    try:
+        return _run(cmd, cwd=cwd, env=clone_env(), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return CmdResult(rc=124, stdout="",
+                         stderr=(f"`{' '.join(cmd[:3])}` timed out after "
+                                 f"{timeout:.0f}s (no credential prompt can "
+                                 f"be answered here; check the remote and "
+                                 f"your git credentials)"))
 
 
 # --- preflight -------------------------------------------------------------
@@ -329,8 +377,8 @@ def assert_clean_tree(repo_path: str | Path, *,
 
 
 def detect_base_branch(repo_path: str | Path) -> str:
-    r = _run(["gh", "repo", "view", "--json", "defaultBranch", "-q", ".defaultBranch"],
-             cwd=repo_path)
+    r = _run_net(["gh", "repo", "view", "--json", "defaultBranch",
+                  "-q", ".defaultBranch"], cwd=repo_path)
     if r.ok and r.stdout.strip():
         return r.stdout.strip()
     # Fallback: parse `git symbolic-ref refs/remotes/origin/HEAD`
@@ -350,24 +398,56 @@ def diff_against_base(repo_path: str | Path, base_sha: str) -> tuple[int, int, s
 
     Marks untracked files as intent-to-add (`git add -N`) first so newly created
     files surface in the diff (without this, `git diff <sha>` shows only tracked
-    changes). Shared by the PR cycle (cli.maintain) and gitchange's executor."""
-    subprocess.run(["git", "add", "-N", "."], cwd=str(repo_path),
-                   capture_output=True, text=True)
+    changes). Shared by the PR cycle (cli.maintain) and gitchange's executor.
+
+    Raises `GitDiffError` when git itself fails or times out: "the diff could
+    not be computed" and "the agent changed nothing" are different facts and
+    used to be the same return value.
+    """
+    def _git(*args: str, what: str) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(
+                # Raw argv (exact flags matter here — luxe.sdd), but the
+                # config pins and env come from the shared neutral module so
+                # the two diff PARSERS can't drift apart.
+                ["git", *gitcmd.DIFF_PARSE_PINS, *args], cwd=str(repo_path),
+                capture_output=True, text=True, errors="replace",
+                stdin=subprocess.DEVNULL, env=gitcmd.parse_env(),
+                timeout=_LOCAL_GIT_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise GitDiffError(
+                f"{what} timed out after {_LOCAL_GIT_TIMEOUT_S:.0f}s in {repo_path}"
+            ) from e
+        except OSError as e:
+            raise GitDiffError(f"{what} could not run in {repo_path}: {e}") from e
+
+    # Best-effort: a failed `add -N` only means untracked files stay invisible,
+    # which the diff commands below will report honestly either way.
+    _git("add", "-N", ".", what="git add -N")
     additions = deletions = 0
-    stat = subprocess.run(["git", "diff", "--numstat", base_sha, "--"],
-                          cwd=str(repo_path), capture_output=True, text=True)
-    if stat.returncode == 0:
-        for line in stat.stdout.strip().splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                try:
-                    additions += int(parts[0])
-                    deletions += int(parts[1])
-                except ValueError:
-                    pass
-    patch = subprocess.run(["git", "diff", base_sha, "--"], cwd=str(repo_path),
-                           capture_output=True, text=True)
-    return additions, deletions, (patch.stdout if patch.returncode == 0 else "")
+    stat = _git("diff", "--no-ext-diff", "--numstat", base_sha, "--",
+                what="git diff --numstat")
+    if stat.returncode != 0:
+        raise GitDiffError(
+            f"git diff --numstat {base_sha} failed (exit {stat.returncode}): "
+            f"{stat.stderr.strip()[:300]}"
+        )
+    for line in stat.stdout.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            try:
+                additions += int(parts[0])
+                deletions += int(parts[1])
+            except ValueError:
+                pass
+    patch = _git("diff", "--no-ext-diff", base_sha, "--", what="git diff")
+    if patch.returncode != 0:
+        raise GitDiffError(
+            f"git diff {base_sha} failed (exit {patch.returncode}): "
+            f"{patch.stderr.strip()[:300]}"
+        )
+    return additions, deletions, patch.stdout
 
 
 # --- test detection --------------------------------------------------------
@@ -396,7 +476,8 @@ def _branch_exists_local(repo_path: Path, name: str) -> bool:
 
 
 def _branch_exists_remote(repo_path: Path, name: str) -> bool:
-    r = _run(["git", "ls-remote", "--exit-code", "--heads", "origin", name], cwd=repo_path)
+    r = _run_net(["git", "ls-remote", "--exit-code", "--heads", "origin", name],
+                 cwd=repo_path)
     return r.ok
 
 
@@ -566,7 +647,7 @@ def _do_push(spec: RunSpec, state: PRState) -> None:
     step = state.step("push")
     if step.done:
         return
-    res = _run(["git", "push", "-u", "origin", state.branch_name], cwd=repo)
+    res = _run_net(["git", "push", "-u", "origin", state.branch_name], cwd=repo)
     if not res.ok:
         step.status = "failed"
         step.detail = f"git push failed: {res.stderr.strip()[:500]}"
@@ -652,7 +733,7 @@ def _do_watch_ci(spec: RunSpec, state: PRState, cfg: PRConfig) -> None:
     final_state = "timeout"
     failing_check = ""
     while time.monotonic() < deadline:
-        res = _run(["gh", "pr", "checks", str(state.pr_number)], cwd=repo)
+        res = _run_net(["gh", "pr", "checks", str(state.pr_number)], cwd=repo)
         out = res.stdout
         # gh's `pr checks` returns 0 on green, 8 on pending, non-zero on red
         # depending on version. We grep the output rather than relying on rc.

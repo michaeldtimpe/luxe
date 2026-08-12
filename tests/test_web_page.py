@@ -182,6 +182,27 @@ class TestRendering:
         assert '[1] input(email) "Email address"' in out
         s.close()
 
+    def test_a_full_listing_says_it_may_have_been_cut(self):
+        """`_MAX_INTERACTABLES` is applied inside the page's own JS and was
+        never mentioned in the snapshot, so a listing of exactly 60 elements
+        looked like the whole page — and "that control isn't here" was the
+        conclusion the model could draw from it."""
+        s, fake, *_ = _session()
+        fake.interactables = [
+            {"i": i, "tag": "a", "type": "", "href": f"/{i}", "text": f"link {i}"}
+            for i in range(page_mod._MAX_INTERACTABLES)
+        ]
+        out = page_mod.render_snapshot(s.op("open", url="https://example.com/"))
+        assert f"capped at {page_mod._MAX_INTERACTABLES} elements" in out
+        assert "CSS selector" in out
+        s.close()
+
+    def test_a_short_listing_is_unannotated(self):
+        s, *_ = _session()
+        out = page_mod.render_snapshot(s.op("open", url="https://example.com/"))
+        assert "capped at" not in out
+        s.close()
+
 
 class TestToolSurface:
     def test_web_page_withheld_without_a_browser(self, monkeypatch):

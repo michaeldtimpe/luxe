@@ -67,6 +67,42 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   benchmark and the golden request see. Pinned by
   `tests/test_grep_silent_failures.py`
 
+- A tool's FAILURE is never reported as a RESULT (2026-08-12). The pattern
+  behind four fixes on the same day, all of the same shape — a command failed,
+  the failure produced empty output, and the empty output was rendered as an
+  ordinary answer:
+  * `_grep` mapped every rg exit code through `_grep_result(stdout)`, so an
+    error (exit ≥ 2: an unclosed group, an unreadable path) read as
+    "(no matches)". Exit 1 is no-matches; exit ≥ 2 returns `("", stderr)`.
+  * `_grep` also passes the pattern behind `--`, or a pattern that starts with
+    a dash is consumed as a FLAG (`grep("-i")` found nothing, case-insensitively).
+    rg treats `-- PATTERN` and `PATTERN` identically, so results don't move.
+  * `_grep`'s `TimeoutExpired` is caught — a tool returns `(str, str | None)`
+    and never raises (see Must above); only `FileNotFoundError` was.
+  * `analysis._run_tool` never consulted `returncode`, so a crashed linter
+    returned `{"status":"ok","findings":[],"count":0}` — the "lint passed"
+    misread `_skipped` exists to prevent. `_crashed()` is its sibling: non-zero
+    exit AND nothing parseable (a JSON tool that emitted no JSON, or no output
+    at all) → `status:error` with the exit code and stderr. A non-zero exit
+    WITH findings stays `ok` — that is what mypy does when it works.
+  * `tools/git.py` model-supplied refs go behind `--end-of-options` and
+    `git_log`'s `n` through `int()`: `git_diff(ref="--output=/tmp/x.patch")`
+    made a READ-ONLY tool write a file outside the repo and returned
+    `("", None)`. Ordinary refs/logs/shows are byte-identical (pinned by
+    `tests/test_git_tool_truncation.py`)
+
+- No tool spawn inherits luxe's stdin (2026-08-12). `_grep` was fixed first
+  (below); the rule generalised the same day to `shell._bash` and
+  `shell._run_cancellable`, `analysis._run_tool`, `pr._run`,
+  `spec_validator._eval_tests_pass`, `gitkit.apply._run_verify` and
+  `mcp_pdf.ops`. A child that reads stdin reads LUXE's: with a piped parent
+  (script-launched bench, CI, the headless `printf … | luxe chat` form)
+  `bash("cat")` returned the session's own queued input as tool output AND
+  drained it; under a TTY it blocks for the whole timeout. Every one of those
+  spawns also decodes with `errors="replace"` — one non-UTF-8 byte used to
+  raise `UnicodeDecodeError` and discard the entire captured output
+  (`luxe.fswalk` set the precedent)
+
 - Tool truncation is ANNOUNCED, never silent (2026-08-12). `_grep_result`
   reports both of grep's caps — ripgrep's per-file `--max-count=150` and the
   32 KB byte slice — because a model asked to count something with 1,286
