@@ -561,6 +561,28 @@ replays the cut-off text, nudges, and continues — bounded at 2 retries.
 - `terminal_turn_truncated` telemetry stays UNGATED — it is the only record
   distinguishing "finished" from "cut off".
 
+## Default-ON: server-truth context calibration
+
+`LUXE_CTX_SERVER_TRUTH` defaults to **ON** (shipped 2026-08-12, `967124d`;
+**benched same day — HOLD**). `estimate_tokens` (len//4) reads 2-3.7× low on
+code and tool JSON, so every compaction threshold was firing near 1.0-1.9 of
+the real window and phases 2/3 could never fire before the server rejected
+the prompt. The loop now recalibrates each step from the response's
+`usage.prompt_tokens` and folds the ratio into `calibrated_ctx_limit`; the
+pinned thresholds keep their values, what changes is what the fraction
+means.
+
+- **Benched**: 3 reps × 10 fixtures on shipped defaults = **30/30 · 120/150**
+  (identical to the four pre-change references) at **12% less wall and 24%
+  fewer tokens**; compaction fires more often and reaches phase 3 (21 vs 6
+  firings) yet drops fewer than half the tool results — early-and-small
+  replaced late-and-huge. Reproduced same day on a settled tree. See
+  `acceptance/ctx_server_truth_2026_08_12/REPORT.md`.
+- **Disable for ablation**: `LUXE_CTX_SERVER_TRUTH=0` restores the
+  pre-2026-08-11 estimate reading exactly. If a workload behaves
+  unexpectedly, this joins `LUXE_TIERED_COMPACT=0` and
+  `LUXE_TRUNCATED_TURN_RETRY=0` in the first-things-to-try list.
+
 ## Opt-in modes (default off, byte-identical when disabled)
 
 Six subsystems are gated by env vars and default to **off**. Each has
