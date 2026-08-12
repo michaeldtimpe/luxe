@@ -218,10 +218,8 @@ def _is_source_path(path: str) -> bool:
 
 def _added_files_in_diff(repo_path: Path, base_sha: str) -> list[str]:
     """Return paths of files newly added (status A) in base_sha..HEAD."""
-    rc, out = _run(["git", "diff", "--name-status", base_sha, "HEAD"],
-                   cwd=repo_path)
-    if rc != 0:
-        return []
+    _rc, out = _run_git(["git", "diff", "--name-status", base_sha, "HEAD"],
+                        cwd=repo_path)
     added: list[str] = []
     for line in out.splitlines():
         parts = line.split("\t", 1)
@@ -303,13 +301,16 @@ def check_orphan_file(
         # `git grep -w` does a whole-word match on the stem across tracked
         # source files. If the only match is the new file itself, it's
         # orphan; if zero matches, also orphan.
-        rc, out = _run(
+        # git grep speaks rc 0 = matches, 1 = clean no-match, >=2 = ERROR —
+        # the same exit grammar whose conflation broke the grep tool
+        # (2026-08-12 audit F1). Only rc 1 may mean "orphan".
+        rc, out = _run_git(
             ["git", "grep", "-l", "-w", "--", new_stem,
              "*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs", "*.cjs",
              "*.rs", "*.go", "*.java", "*.kt", "*.swift",
              "*.cpp", "*.cc", "*.cxx", "*.c", "*.h", "*.hpp",
              "*.rb", "*.php", "*.cs", "*.scala"],
-            cwd=repo_path,
+            cwd=repo_path, ok_codes=(0, 1),
         )
         matches: set[str] = set()
         if rc == 0 and out.strip():
@@ -465,6 +466,32 @@ def _run(cmd: list[str], cwd: str | Path | None = None,
         return 127, str(e)
 
 
+class GitRunError(RuntimeError):
+    """A git command the GRADER depends on failed.
+
+    Raised instead of returning an empty-diff-shaped value ([] / (0, 0) / ""),
+    which scored every diff-dependent requirement as "the model changed
+    nothing" — a wrong verdict wearing the shape of a real one (the same
+    failure-looks-like-no-diff class fixed on the tool surface 2026-08-12).
+    run.py's per-fixture handler converts this into an ERRORED fixture, which
+    the scoreboard already distinguishes from FAILED, so an index.lock race, a
+    corrupt base_sha, or a missing git binary can never masquerade as a model
+    regression. maintain_suite.sdd pins this.
+    """
+
+
+def _run_git(cmd: list[str], cwd: str | Path | None = None,
+             timeout: float | None = 60,
+             ok_codes: tuple[int, ...] = (0,)) -> tuple[int, str]:
+    """`_run` for git commands whose failure must never grade as a verdict."""
+    rc, out = _run(cmd, cwd=cwd, timeout=timeout)
+    if rc not in ok_codes:
+        tail = (out or "").strip()[-300:]
+        raise GitRunError(
+            f"{' '.join(cmd)} (cwd={cwd}) exited {rc}: {tail or '<no output>'}")
+    return rc, out
+
+
 # --- expected_outcome checkers ---------------------------------------------
 
 def _check_tests_pass(repo_path: Path, command: str,
@@ -501,9 +528,9 @@ def _check_regex_present(repo_path: Path, pattern: str,
     rx = re.compile(pattern)
 
     if base_sha and changed_files:
-        rc, out = _run(["git", "diff", base_sha, "HEAD", "--",
-                        *changed_files], cwd=repo_path)
-        if rc == 0 and out:
+        _rc, out = _run_git(["git", "diff", base_sha, "HEAD", "--",
+                             *changed_files], cwd=repo_path)
+        if out:
             added_lines: list[tuple[str, str]] = []  # (file, line)
             current_file = ""
             for line in out.splitlines():
@@ -579,9 +606,8 @@ def _check_regex_absent(repo_path: Path, pattern: str,
 
 
 def _changed_files(repo_path: Path, base_sha: str) -> list[str]:
-    rc, out = _run(["git", "diff", "--name-only", base_sha, "HEAD"], cwd=repo_path)
-    if rc != 0:
-        return []
+    _rc, out = _run_git(["git", "diff", "--name-only", base_sha, "HEAD"],
+                        cwd=repo_path)
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
@@ -592,14 +618,15 @@ _SHORTSTAT_DEL_RX = re.compile(r"(\d+) deletions?\(-\)")
 def _diff_shortstat(repo_path: Path, base_sha: str) -> tuple[int, int]:
     """Return (additions, deletions) from `git diff base_sha HEAD --shortstat`.
 
-    Empty diff or git failure → (0, 0). Tolerates --shortstat's omit-when-zero
-    behavior (a pure-add diff has no `deletions(-)` clause and vice versa).
+    Empty diff → (0, 0); a FAILED git raises GitRunError instead of reporting
+    the zero-diff shape. Tolerates --shortstat's omit-when-zero behavior (a
+    pure-add diff has no `deletions(-)` clause and vice versa).
     """
     if not base_sha:
         return 0, 0
-    rc, out = _run(["git", "diff", base_sha, "HEAD", "--shortstat"],
-                   cwd=repo_path)
-    if rc != 0 or not out.strip():
+    _rc, out = _run_git(["git", "diff", base_sha, "HEAD", "--shortstat"],
+                        cwd=repo_path)
+    if not out.strip():
         return 0, 0
     ins = _SHORTSTAT_INS_RX.search(out)
     dels = _SHORTSTAT_DEL_RX.search(out)
@@ -617,9 +644,9 @@ def _diff_added_text(repo_path: Path, base_sha: str,
     """
     if not base_sha or not changed_files:
         return ""
-    rc, out = _run(["git", "diff", base_sha, "HEAD", "--", *changed_files],
-                   cwd=repo_path)
-    if rc != 0 or not out:
+    _rc, out = _run_git(["git", "diff", base_sha, "HEAD", "--", *changed_files],
+                        cwd=repo_path)
+    if not out:
         return ""
     added: list[str] = []
     for line in out.splitlines():
