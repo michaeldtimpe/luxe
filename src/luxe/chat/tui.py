@@ -102,6 +102,10 @@ class ChatInput(Input):
     newest entry. Lines that contained paste chips are not recorded — their
     buffered text is consumed at submit, so recalling the chip would send
     the literal "[pasted N lines]" string.
+
+    Clearing: `clear_input()` is the ctrl+c path (see `ChatApp.action_interrupt`)
+    — it empties the box AND puts history navigation back at rest, because a
+    line the user just threw away is not a draft to arrow back to.
     """
 
     _PASTE_DEDUP_WINDOW_S = 1.5
@@ -141,6 +145,15 @@ class ChatInput(Input):
             self.insert_text_at_cursor(line)
         else:
             self.replace(line, *selection)
+
+    def clear_input(self) -> None:
+        """Empty the box and stop history navigation. Setting `.value` alone
+        would leave `_hist_idx` mid-recall, so the next ↓ would repopulate the
+        line the user just cleared."""
+        self.value = ""
+        self.cursor_position = 0
+        self._hist_idx = None
+        self._draft = ""
 
     # -- input history -------------------------------------------------------
     def history_remember(self, line: str) -> None:
@@ -202,7 +215,7 @@ class ChatApp(App):
     CSS_PATH = "tui.css"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel turn", show=True),
-        Binding("ctrl+c", "cancel", "Cancel turn", show=False, priority=True),
+        Binding("ctrl+c", "interrupt", "Clear input", show=False, priority=True),
         Binding("ctrl+q", "quit_app", "Quit", show=True),
         # Scroll the transcript even while the input holds focus. The TUI runs
         # on the alternate screen, so the TERMINAL/tmux scrollback never sees
@@ -281,7 +294,8 @@ class ChatApp(App):
         # once, with the keys that ARE the scrollback (plus ↑/↓ input history).
         log.write("[dim]· scroll: PgUp/PgDn · shift+↑/↓ · Home/End · mouse "
                   "wheel (terminal scrollback can't see the TUI) · "
-                  "↑/↓ recall your prior inputs[/]")
+                  "↑/↓ recall your prior inputs · ctrl+c clears the input "
+                  "(esc interrupts a turn)[/]")
         from luxe import ephemeral
         if (eph_notice := ephemeral.startup_notice()):
             log.write(f"[yellow]·[/] [dim]{eph_notice}[/]")
@@ -437,6 +451,32 @@ class ChatApp(App):
             self._transcript.scroll_end()
 
     # -- actions ------------------------------------------------------------
+    def action_interrupt(self) -> None:
+        """ctrl+c, Claude-CLI style: cancel a running turn, else clear the input.
+
+        Cancel keeps precedence while a turn is running (or a modal is up), so
+        the key means exactly what it always meant wherever it already meant
+        something; the clear fills the idle case, which used to be a silent
+        no-op. It NEVER quits — ctrl+d on an empty prompt, ctrl+q and `/quit`
+        remain the only exits (deliberate divergence from Claude CLI's
+        double-tap: a mis-aimed ctrl+c must not be able to end a session).
+        """
+        if self._busy or isinstance(self.screen, PromptScreen):
+            self.action_cancel()
+            return
+        inp = self._input
+        if inp is None or (not inp.value and not self._paste_chunks):
+            return
+        # A buffered multi-line paste lives on the APP, not in the input, so
+        # dropping the chip has to drop its text too — otherwise the next
+        # submit resurrects a paste the user just cleared (`_expand_pastes`
+        # appends chunks whose chip is gone).
+        self._paste_chunks = []
+        if isinstance(inp, ChatInput):
+            inp.clear_input()
+        else:
+            inp.value = ""
+
     def action_cancel(self) -> None:
         if self._busy:
             self.cancel.requested = True

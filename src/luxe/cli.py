@@ -978,6 +978,41 @@ def planeproxy_cmd(check: str, as_json: bool):
     sys.exit(0 if report.verdict == pp.PP_OK else 1)
 
 
+@main.command(name="claudecode")
+@click.option("--check", type=click.Choice(["status", "net", "all"]),
+              default="all", help="Which probes to run (default: all)")
+@click.option("--repo", default=None,
+              help="Also inspect this project's .claude/settings*.json")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit the raw report as JSON instead of the rendered lines")
+def claudecode_cmd(check: str, repo: str | None, as_json: bool):
+    """Diagnose Claude Code (the `claude` CLI), read-only.
+
+    Answers the question a luxe fallback session gets asked: which billing
+    path is each running session actually on — Max-subscription login or
+    Platform API key — and what is overriding it (ANTHROPIC_BASE_URL, an
+    `env:` block, an apiKeyHelper, Bedrock/Vertex). Also reports settings-file
+    validity, the install, and metadata for the recent sessions.
+
+    Environment variables are reported by NAME only and Keychain lookups are
+    metadata-only, so no secret is ever exposed; conversation content is never
+    read. Never launches, kills, or reconfigures Claude Code. Exit 0 when
+    healthy, 1 otherwise.
+    """
+    from luxe import claudecode as cc
+
+    report = cc.full_report(check=check, repo_path=repo)
+    if as_json:
+        import dataclasses
+        import json as json_mod
+        # asdict recurses into the netdiag LadderReport too (also a dataclass),
+        # so the ladder rungs survive the JSON form.
+        click.echo(json_mod.dumps(dataclasses.asdict(report), indent=2))
+    else:
+        textfmt.render_ok_lines(console, cc.render_lines(report))
+    sys.exit(0 if report.verdict == cc.CC_OK else 1)
+
+
 def _omlx_base_url_from_config() -> str:
     """The chat config's oMLX endpoint, falling back to the local default."""
     try:

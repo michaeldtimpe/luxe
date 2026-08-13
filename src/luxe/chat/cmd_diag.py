@@ -1,4 +1,5 @@
-"""Read-only diagnostics: `/status` `/tools` `/doctor` `/outage` `/net` `/planeproxy`.
+"""Read-only diagnostics: `/status` `/tools` `/doctor` `/outage` `/net` `/planeproxy`
+`/claude`.
 
 Split out of `commands.py` 2026-08-04 (behavior unchanged). Every command here
 reports state and changes none of it.
@@ -103,6 +104,7 @@ def _tools(args, ctx: CommandContext) -> CommandResult:
         ("update_ledger", "always on"),
         ("net_probe", "always on — bounded network ladder"),
         ("planeproxy_diag", "always on — read-only tunnel diagnosis"),
+        ("claude_code_diag", "always on — read-only Claude Code diagnosis"),
     ):
         # escape(): a note naming an extra like "[web]" is valid Rich markup,
         # and unescaped it renders as "needs  extra" with the name swallowed.
@@ -242,4 +244,29 @@ def _planeproxy(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print(f"[red]✗ planeproxy report failed: {e}[/]")
         return CommandResult(handled=True)
     textfmt.render_ok_lines(ctx.console, planeproxy.render_lines(report))
+    return CommandResult(handled=True)
+
+
+def _claude(args, ctx: CommandContext) -> CommandResult:
+    """Deterministic Claude Code diagnosis (no model in the loop): which
+    billing path each running session is actually on, what would override the
+    next launch, whether the settings files parse, and metadata for the recent
+    sessions. READ-ONLY by contract (chat.sdd): it never launches, kills, or
+    reconfigures Claude Code, reports environment variables by NAME only, and
+    reads no conversation content."""
+    from luxe import claudecode
+
+    check = (args[0].lower() if args else "all")
+    if check not in ("status", "net", "all"):
+        return _usage(ctx, "/claude")
+    ctx.console.print("[dim]probing Claude Code (read-only, bounded)"
+                      + (" — includes a network ladder"
+                         if check in ("net", "all") else "") + "…[/]")
+    try:
+        report = claudecode.full_report(check=check,
+                                        repo_path=ctx.session.repo_path)
+    except Exception as e:
+        ctx.console.print(f"[red]✗ claude report failed: {e}[/]")
+        return CommandResult(handled=True)
+    textfmt.render_ok_lines(ctx.console, claudecode.render_lines(report))
     return CommandResult(handled=True)

@@ -354,7 +354,14 @@ def run_chat_repl(
                 continue
             try:
                 line = reader()
-            except (EOFError, KeyboardInterrupt):
+            except KeyboardInterrupt:
+                # ctrl+c CLEARS the line, it does not quit — same contract as
+                # the TUI's `action_interrupt` (both readers have already
+                # discarded the typed text by the time they raise). ctrl+d
+                # (EOFError) is still the exit, as is `/quit`.
+                console.print()
+                continue
+            except EOFError:
                 console.print()
                 break
             if line is None:
@@ -603,6 +610,16 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     _pp_def, _pp_fn = make_planeproxy_tool()
     extra_tool_defs.append(_pp_def)
     extra_tool_fns["planeproxy_diag"] = _pp_fn
+    # claude_code_diag (2026-08-13): bounded, read-only diagnosis of the user's
+    # OTHER agent. luxe is the fallback dev tool, so "what is wrong with Claude
+    # Code" lands here by construction — and a chat with no instrument could
+    # only guess (a session that had reverted from the Max-plan login to the
+    # Platform API key went undiagnosed). Reports env vars by NAME only and
+    # reads no conversation content (claudecode.py). Same always-on seam.
+    from luxe.claudecode import make_claude_code_tool
+    _cc_def, _cc_fn = make_claude_code_tool()
+    extra_tool_defs.append(_cc_def)
+    extra_tool_fns["claude_code_diag"] = _cc_fn
     if write_on:
         from luxe.tools.shell import (
             make_bash_fn,
