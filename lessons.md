@@ -30,6 +30,98 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-08-13] the fallback host's model server was dead for 8 days, and every layer said it was fine
+
+**What happened**: neo — the fleet's local-fallback box — booted on 2026-08-04
+and its `llama-server` never started. Port 8080 was dark for **8 days 9 hours**.
+Nothing noticed: the plist was present and valid, `luxe` was installed and
+healthy, and the only reason anyone found out is that an unrelated MLX probe
+tried to stop a router that turned out never to have started.
+
+**Root cause**: **macOS Background Task Management**, not launchd and not the
+plist. On macOS 13+ every item in `~/Library/LaunchAgents` carries a
+`disposition` bitfield in `/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v16.btm`,
+and launchd's *login-time* bootstrap skips any item whose **`allowed` bit (2)
+is clear**. Manual `launchctl bootstrap` is **not** gated — which is exactly
+why every hands-on check passed. Measured, with a control in the same
+directory and the same login:
+
+| item | disposition | in `gui/501`? |
+|---|---|---|
+| `com.google.GoogleUpdater.wake` | **11** = enabled·**allowed**·notified | yes (`runs = 151`) |
+| `com.valvesoftware.steamclean` | 9 = enabled·notified | no |
+| `com.micromind.llama-server` | **9** = enabled·notified | **no** |
+
+The record's `modificationDate` is five minutes after the first login
+following the 2026-08-02 plist rewrite: **editing the plist re-registered it
+as a new generation, enabled but pending approval**, macOS posted a
+notification (the `notified` bit is set), and nobody clicked it. Worse, the
+approval is pinned to the executable's code signature
+(`designatedRequirement = cdhash H"2cbf642b…"`), so **rebuilding llama.cpp
+re-arms the same failure**.
+
+**Fix / takeaway**: the honest fix is a one-time GUI approval (System Settings
+→ General → Login Items & Extensions → Allow in the Background) — there is no
+supported CLI for the `allowed` bit, `sfltool` offers only `dumpbtm` and
+`resetbtm`, and neo's FileVault-on/no-auto-login posture means it cannot boot
+unattended anyway. So it is recorded as an open gap with the exact remaining
+step, not papered over with a watchdog. Three general lessons:
+
+1. **"The plist is correct" is not "the service starts at boot."** On modern
+   macOS a LaunchAgent has *two* gates. `launchctl print-disabled` reads the
+   first one and says nothing about the second — checking it and stopping
+   there is how this survived a full diagnosis.
+2. **A hand-run health check cannot detect a login-time failure**, because the
+   act of checking uses the path that still works. The discriminator that
+   settled it was a *control*: another agent in the same directory that DID
+   load.
+3. **Editing a working plist can break it at the next boot only.** The blast
+   radius of a plist edit is one reboot away and invisible until then.
+
+**Affected files**: `~/Library/LaunchAgents/com.micromind.llama-server.plist`
+and `~/dotfiles/luxe/{com.micromind.llama-server.plist,README-neo-router.md}`
+(the plist was untracked until now) on neo; `OUTAGE.md` § 3, `CLAUDE.md`
+§ "Fleet sibling"; full evidence in
+`acceptance/luxe_neo_unification_2026_08/REPORT.md`.
+
+---
+
+### [2026-08-13] the diagnostics were oMLX-shaped, so the one host that isn't oMLX read as broken
+
+**What happened**: neo serves a GGUF through llama.cpp's `llama-server`, not
+oMLX. Its chat path worked perfectly — `luxe smoke --chat --code` passes, tool
+calls round-trip natively — while `luxe ready` printed a standing `!` for a
+missing API key that endpoint does not want, a standing `!` for a weight
+location no llama-server endpoint can report, and a `fix` telling the operator
+to run `brew services start omlx` on a box with no such formula.
+
+**Root cause**: several checks encoded "the server is oMLX" as a fact rather
+than as a property of the endpoint. Each was individually harmless and
+collectively corrosive: on the *fallback* host, in an *outage*, the yellow
+lines that always appear are the ones nobody reads.
+
+**Fix / takeaway**: one optional `engine:` field on a `backends:` entry
+(`omlx` default | `llama-server`), validated at load so a typo raises instead
+of silently restoring the oMLX assumptions. It is **diagnostic-only** by
+contract (chat.sdd): it may change a check's name, severity, or `fix`, and it
+gates `luxe pull`'s refusal — it may never change the request body, the tool
+surface, or model selection, because every supported engine is
+OpenAI-compatible and that is precisely why one client can drive both. The
+general rule: **a check's `fix` string is part of its correctness.** A fix
+that cannot be run is worse than no fix, because it costs the reader the time
+to try it.
+
+Also fixed alongside: `$LUXE_CONFIG`. Per-host configs live out of tree
+(`~/dotfiles/luxe/<host>.yaml`) and only `luxe chat`/`luxe code` had wrappers
+passing `--config` — so bare `luxe ready`, the command you reach for in a
+panic, judged the wrong endpoint on the one host that needed it most.
+
+**Affected files**: `src/luxe/config.py`, `src/luxe/cli.py`,
+`src/luxe/chat/{inspection,origin,modelcaps}.py`, `src/luxe/chat/chat.sdd`,
+`tests/{test_config,test_cli_ready,test_chat_inspection}.py`.
+
+---
+
 ### [2026-08-12] The auto-rebase hook ate uncommitted work twice — git's autostash-conflict path exits 0
 
 **What happened**: `.claude/hooks/precommit-pull.sh` runs `git pull --rebase

@@ -317,3 +317,99 @@ class TestDrillRuleManifestResolution:
         doc = cli.build_ready_doctor(cfg, str(_repo(tmp_path)))
         chat_model = next(c for c in doc.checks if c.name == "chat model")
         assert "Local-M" in chat_model.detail
+
+
+class TestLuxeConfigEnvVar:
+    """`$LUXE_CONFIG` — per-host config discovery for the commands the
+    dotfiles wrappers do NOT cover (2026-08-13, neo).
+
+    `luxe-chat`/`luxe-code` pass `--config ~/dotfiles/luxe/<host>.yaml`; bare
+    `luxe ready` / `luxe smoke` / `luxe pull` had no equivalent and read the
+    fleet config, judging an endpoint the host does not run. `luxe ready` is
+    the command you reach for in a panic, so that gap mattered.
+    """
+
+    def test_unset_keeps_the_in_tree_default(self, monkeypatch):
+        monkeypatch.delenv("LUXE_CONFIG", raising=False)
+        assert cli._default_chat_config().endswith("configs/chat.yaml")
+
+    def test_set_wins_over_the_default(self, monkeypatch, tmp_path):
+        p = tmp_path / "neo.yaml"
+        p.write_text("models: {}\n")
+        monkeypatch.setenv("LUXE_CONFIG", str(p))
+        assert cli._default_chat_config() == str(p)
+
+    def test_a_tilde_path_is_expanded(self, monkeypatch):
+        monkeypatch.setenv("LUXE_CONFIG", "~/dotfiles/luxe/neo.yaml")
+        got = cli._default_chat_config()
+        assert not got.startswith("~") and got.endswith("neo.yaml")
+
+    def test_blank_is_treated_as_unset(self, monkeypatch):
+        monkeypatch.setenv("LUXE_CONFIG", "   ")
+        assert cli._default_chat_config().endswith("configs/chat.yaml")
+
+    def test_an_explicit_config_flag_still_wins(self, monkeypatch, tmp_path):
+        """`--config` is an instruction; the env var is only a default."""
+        env_cfg = tmp_path / "env.yaml"
+        env_cfg.write_text("models: {}\n")
+        flag_cfg = tmp_path / "flag.yaml"
+        flag_cfg.write_text(
+            "models: {monolith: M}\nroles: {monolith: {model_key: monolith}}\n")
+        monkeypatch.setenv("LUXE_CONFIG", str(env_cfg))
+        cfg = cli._chat_cfg(str(flag_cfg))
+        assert cfg.models == {"monolith": "M"}
+
+
+class TestPullRefusesOffOmlx:
+    """`luxe pull` drives oMLX's admin API and the ~/.omlx/models store.
+
+    Against llama-server every admin call 404s, and what surfaced was
+    `oMLX admin login failed: 404` — a message that sends you debugging a key
+    instead of telling you this host provisions weights another way.
+    """
+
+    def _cfg(self, tmp_path, engine: str) -> str:
+        p = tmp_path / f"{engine}.yaml"
+        p.write_text(
+            "models: {monolith: M}\n"
+            "roles: {monolith: {model_key: monolith}}\n"
+            "backends:\n"
+            f"  local: {{base_url: 'http://127.0.0.1:8080', engine: {engine}, "
+            "default: true}\n")
+        # Guard the guard: a typo'd fixture would silently exercise the oMLX
+        # path (the engine probe is deliberately exception-swallowing).
+        from luxe.config import load_config
+        assert load_config(str(p)).backend_entry("local").engine == engine
+        return str(p)
+
+    def test_a_fetch_is_refused_with_the_reason(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path, "llama-server"))
+        res = CliRunner().invoke(cli.main, ["pull", "org/Some-Model"])
+        assert res.exit_code == 2
+        out = res.output.lower()
+        assert "llama-server" in out and "admin" in out
+        assert "login failed" not in out       # not the confusing 404 path
+
+    def test_search_is_refused_too(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path, "llama-server"))
+        res = CliRunner().invoke(cli.main, ["pull", "--search", "qwen"])
+        assert res.exit_code == 2
+
+    def test_remove_still_works_it_is_a_local_store_operation(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path, "llama-server"))
+        res = CliRunner().invoke(cli.main, ["pull", "Nope", "--remove", "-y"])
+        assert res.exit_code != 2 or "cannot fetch" not in res.output
+
+    def test_an_omlx_config_is_not_refused(self, monkeypatch, tmp_path):
+        """Control: the refusal must not fire on the fleet's own engine."""
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path, "omlx"))
+        assert cli._default_engine_from_config() == "omlx"
+
+    def test_an_explicit_base_url_bypasses_the_config_engine(
+            self, monkeypatch, tmp_path):
+        """`--base-url` names an endpoint whose stack luxe was never told."""
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path, "llama-server"))
+        res = CliRunner().invoke(
+            cli.main, ["pull", "--list", "--base-url", "http://127.0.0.1:8000"])
+        assert "cannot fetch weights" not in res.output

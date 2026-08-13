@@ -110,28 +110,63 @@ when reached for — availability over capability. Concretely:
 - gemma is out of the roster (no tool support); the bench apparatus is cold
   storage — capability re-benching only on explicit request.
 
-## Fleet sibling — neo (micro-mind) and where model truth lives
+## Fleet sibling — neo (luxe over llama-server) and where model truth lives
 
 luxe is the living center of the fleet's model/agent work; the sibling repos
 are satellites and their m5 clones go stale (that bit twice — see micro-mind's
 lessons.md 2026-08-03 "stale clone" entry). Current reality, recorded here so
 a luxe session doesn't have to rediscover it:
 
-- **neo** (A18 Pro, 8 GB) runs **micro-mind**, whose champion since the
-  2026-08-03 neo bake-offs is **`Qwen3-4B-Instruct-2507-Q4_K_M`** (GGUF via
-  llama-server, ctx 16384, single-model — no fallback pair). It replaced
-  `qwen25-1.5b-instruct`: the 1.5B's 0% BFCL multi-turn floor is a size
-  artifact (lifts at 3B, closes at 4B), and the 4B is the smallest model
-  that passes luxe's real code drill on that box. Coder variants lost to
-  instruct at every size; 14B is Metal-unrunnable on 8 GB.
-- **neo-llm-bench** is marked *superseded for deployment* — canonical
+- **neo (A18 Pro, 8 GB) runs luxe** as of 2026-08-13. **micro-mind is retired**
+  — superseded for deployment, the same way neo-llm-bench was; its checkout,
+  harness, REPL and bench fixtures stay on neo as the canonical historical
+  record for small-model guard design, and its `lessons.md` is the valuable
+  part. luxe is now the one agent codebase fleet-wide.
+- **neo's ENGINE is unchanged and is not retired**: llama.cpp `llama-server`
+  in router mode (`--models-preset ~/dotfiles/luxe/neo-models.ini`, port 8080,
+  LaunchAgent `com.micromind.llama-server` — the label keeps its lineage on
+  purpose). Champion since the 2026-08-03 neo bake-offs:
+  **`Qwen3-4B-Instruct-2507-Q4_K_M`** (GGUF, ctx 16384, q8 KV, single-model —
+  no fallback pair). It replaced `qwen25-1.5b-instruct`: the 1.5B's 0% BFCL
+  multi-turn floor is a size artifact (lifts at 3B, closes at 4B), and the 4B
+  is the smallest model that passes luxe's real code drill on that box. Coder
+  variants lost to instruct at every size; 14B is Metal-unrunnable on 8 GB.
+  **MLX/oMLX is not an option there** — probed 2026-08-13 and refuted at
+  production context (`acceptance/mlx_neo_probe_2026_08/REPORT.md`).
+- **neo's luxe config is OUT of this repo**: `~/dotfiles/luxe/neo.yaml`
+  (a `hosts.neo` manifest + a `backends.local` entry at 127.0.0.1:8080 with
+  `engine: llama-server`), passed with `--config`. It lives in dotfiles
+  because an earlier deploy edited `configs/chat.yaml` in place and hid it
+  with `git update-index --skip-worktree` — 78 commits of drift. So **neo
+  still has no `hosts:` entry in `configs/chat.yaml`, by design**; the
+  statement in chat.sdd is about this repo's file, not about neo lacking a
+  manifest. Commands other than `luxe chat`/`luxe code` (which the dotfiles
+  wrappers cover) find it via **`$LUXE_CONFIG`**.
+- **`luxe smoke` on neo now PASSES locally** — the old pin ("bare
+  `luxe smoke` fails there; neo's smoke is the agentic drill against m5") is
+  RETIRED. Measured 2026-08-13: `luxe ready` exit 0, `luxe smoke` READY 3s,
+  `luxe smoke --chat --code` READY 38s (code drill 6 steps / 9 tool calls,
+  pytest green, exactly `calc.py` changed). Drilling m5 from neo still works
+  and is still useful; it is no longer the only option.
+- **`engine:` on a `backends:` entry** (`omlx` default | `llama-server`)
+  switches only luxe's oMLX-SPECIFIC diagnostics — endpoint label + fixes,
+  the API-key check, the "weights location unreported" line, the stale-Cellar
+  probe, and `luxe pull`'s refusal. It never changes the request: every
+  supported engine is OpenAI-compatible and the bodies are byte-identical.
+- **neo's boot persistence is a KNOWN OPEN GAP** (2026-08-13): the router's
+  LaunchAgent is blocked from loading at login by macOS **Background Task
+  Management** (`disposition = 9` — enabled but *not allowed*), not by
+  launchd or the plist. It needs a one-time GUI approval in System Settings →
+  General → Login Items & Extensions. Until then, after any reboot:
+  `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.micromind.llama-server.plist`.
+  Full diagnosis: `~/dotfiles/luxe/README-neo-router.md` and
+  `acceptance/luxe_neo_unification_2026_08/REPORT.md`. **Do not add a
+  cron/launchd watchdog** — same standing decision as `luxe ready`'s.
+- **neo-llm-bench** is also marked *superseded for deployment* — canonical
   historical record for the sub-2B era; its methodology stays reusable.
-- neo has no `hosts:` entry in chat.yaml **by design** (no local oMLX);
-  bare `luxe smoke` failing there is pinned in chat.sdd. neo's smoke is the
-  agentic drill against m5.
 - When a question touches micro-mind/neo state, trust the checkouts **on
-  neo** (`ssh neo`, `~/Downloads/{micro-mind,neo-llm-bench}`) or a freshly
-  fetched origin/main — never an unfetched m5 clone.
+  neo** (`ssh neo`, `~/Downloads/{micro-mind,neo-llm-bench,luxe}`) or a
+  freshly fetched origin/main — never an unfetched m5 clone.
 
 ## Interactive front-end (`luxe chat` / `luxe compare`)
 

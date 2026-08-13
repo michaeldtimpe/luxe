@@ -455,3 +455,93 @@ class TestDoctor:
         doc = inspection.run_doctor(session, sm, repo)
         tree = next(c for c in doc.checks if c.name == "working tree")
         assert tree.state == inspection.OK and "1 file(s) changed" in tree.detail
+
+
+class TestDoctorOnALlamaServerEngine:
+    """`backends: {engine: llama-server}` — neo (2026-08-13).
+
+    The chat path is unchanged (every supported engine is OpenAI-compatible);
+    what these pin is that the oMLX-ONLY diagnostics stop lying. Each one is a
+    line that used to be permanently yellow, or a `fix` naming a command the
+    host does not have.
+    """
+
+    @pytest.fixture
+    def llama_ctx(self, tmp_path, monkeypatch):
+        from luxe import buildinfo
+        from luxe.chat import origin as origin_mod
+        from luxe.chat import slots as slots_mod
+        from luxe.config import BackendEntry
+
+        origin_mod.reset_cache()
+        monkeypatch.setattr(origin_mod, "network_mounts", lambda **k: [])
+        monkeypatch.setattr(buildinfo, "fetch_origin", lambda **k: False)
+        cfg = PipelineConfig(
+            models={"monolith": "Champ"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+            backends={"local": BackendEntry(base_url="http://127.0.0.1:8080",
+                                            engine="llama-server",
+                                            default=True)},
+        )
+        # llama-server has no /v1/models/status: no key, no model paths.
+        made = _Backend(key="", paths={}, base_url="http://127.0.0.1:8080")
+        monkeypatch.setattr(slots_mod, "Backend", lambda **k: made)
+        sm = SlotManager(cfg)
+        sm.backend = made
+        repo = _repo(tmp_path)
+        session = ChatSession(repo_path=str(repo))
+        yield session, sm, str(repo)
+        origin_mod.reset_cache()
+
+    def test_endpoint_check_is_named_for_the_engine(self, llama_ctx):
+        session, sm, repo = llama_ctx
+        doc = inspection.run_doctor(session, sm, repo)
+        names = {c.name for c in doc.checks}
+        assert "llama-server endpoint" in names
+        assert "oMLX endpoint" not in names
+
+    def test_dead_endpoint_fix_does_not_mention_brew(self, llama_ctx):
+        session, sm, repo = llama_ctx
+        sm.backend = _Backend(healthy=False, key="",
+                              base_url="http://127.0.0.1:8080")
+        doc = inspection.run_doctor(session, sm, repo)
+        check = next(c for c in doc.checks if c.name == "llama-server endpoint")
+        assert check.state == inspection.FAIL
+        assert "brew" not in check.fix
+        assert "launchctl" in check.fix
+
+    def test_missing_api_key_is_not_a_warning(self, llama_ctx):
+        session, sm, repo = llama_ctx
+        doc = inspection.run_doctor(session, sm, repo)
+        key = next(c for c in doc.checks if c.name == "API key")
+        assert key.state == inspection.OK
+        assert "not required" in key.detail
+        assert key.fix == ""
+
+    def test_unreported_weight_path_is_not_a_warning(self, llama_ctx):
+        session, sm, repo = llama_ctx
+        doc = inspection.run_doctor(session, sm, repo)
+        weights = next(c for c in doc.checks if c.name == "weights")
+        assert weights.state == inspection.OK
+        assert "no model path" in weights.detail
+
+    def test_stale_omlx_build_check_is_skipped(self, llama_ctx, monkeypatch):
+        session, sm, repo = llama_ctx
+        called = []
+        import luxe.staleproc as staleproc
+        monkeypatch.setattr(staleproc, "check_omlx",
+                            lambda: called.append(1) or None)
+        doc = inspection.run_doctor(session, sm, repo)
+        assert called == []
+        assert not [c for c in doc.checks if c.name == "oMLX build"]
+
+    def test_an_omlx_endpoint_keeps_every_old_line(self, doctor_ctx):
+        """The control: nothing above may leak onto the default engine."""
+        session, sm, repo = doctor_ctx
+        sm.backend = _Backend(key="")
+        doc = inspection.run_doctor(session, sm, repo)
+        states = _states(doc)
+        assert "oMLX endpoint" in states
+        key = next(c for c in doc.checks if c.name == "API key")
+        assert key.state == inspection.WARN and "secrets.env" in key.fix
+        assert _states(doc)["weights"] == inspection.WARN

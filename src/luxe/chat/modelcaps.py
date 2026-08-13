@@ -15,6 +15,15 @@ Detection is local-only by design: it inspects the `chat_template` shipped with
 the weights (via oMLX's reported `model_path`). For a remote endpoint the path
 is on the other machine, so capability is UNKNOWN and we assume tools work —
 the previous behaviour, and the champion is what runs there.
+
+Same fail-open answer on a **llama-server** endpoint (neo, 2026-08-13): it has
+no `/v1/models/status`, so `model_paths()` is empty and capability is UNKNOWN.
+That is the right answer there and not merely a lucky one — llama.cpp is
+started with `jinja = true` and applies the GGUF's own template, and neo's
+`Qwen3-4B-Instruct-2507` demonstrably round-trips native `tool_calls`
+(`luxe smoke --chat --code`, 2026-08-13). The gemma failure mode this module
+exists for is an oMLX-silently-drops-`tools` behaviour; llama-server instead
+errors on a template that cannot render them.
 """
 
 from __future__ import annotations
@@ -114,7 +123,7 @@ def for_model(backend, model_id: str) -> ToolCapability:
             paths = getattr(backend, "model_paths", lambda: {})() or {}
             path = paths.get(model_id, "")
             cap = from_template(path) if path else ToolCapability(
-                UNKNOWN, "oMLX did not report a model path")
+                UNKNOWN, "the endpoint reports no model path")
     except Exception:
         cap = ToolCapability(UNKNOWN, "capability probe failed")
     _cache[key] = cap

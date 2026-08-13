@@ -7,11 +7,19 @@ from typing import Any
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+ENGINE_OMLX = "omlx"
+ENGINE_LLAMA_SERVER = "llama-server"
+#: Serving stacks luxe knows how to talk to. Every one of them speaks the
+#: OpenAI-compatible `/v1` surface — which is all the CHAT PATH needs — so this
+#: only ever changes DIAGNOSTICS and provisioning, never how a turn is sent.
+KNOWN_ENGINES = (ENGINE_OMLX, ENGINE_LLAMA_SERVER)
 
 
 class BackendEntry(BaseModel):
-    """One named oMLX endpoint for the interactive `luxe chat` front-end.
+    """One named model endpoint for the interactive `luxe chat` front-end.
 
     Chat-only (like `slots:`): the benchmark/maintain path keeps reading
     `omlx_base_url` and never consults `backends:`. API keys are NEVER stored
@@ -28,9 +36,22 @@ class BackendEntry(BaseModel):
     default, meaning "whatever `Backend` defaults to" — the numbers live in
     `backend.py` alone so a per-endpoint override here can never silently
     drift from the shipped default.
+
+    `engine` names the SERVING STACK behind the URL (2026-08-13, neo). It
+    exists because several of luxe's *diagnostics* are oMLX-specific and lie
+    against anything else: neo (8 GB, A18 Pro) serves a GGUF through
+    llama.cpp's `llama-server`, which needs no API key, exposes no model-path
+    catalog, and has no `brew services` unit or admin download API. Declaring
+    the engine lets `/doctor` / `luxe ready` skip or reword those checks and
+    lets `luxe pull` refuse cleanly, instead of emitting warnings whose fixes
+    do not apply. It does NOT change the request luxe sends: every supported
+    engine is OpenAI-compatible, and the chat/benchmark request bodies are
+    byte-identical across them. Default `omlx` — an entry that does not
+    mention `engine` behaves exactly as it did before this field existed.
     """
 
     base_url: str
+    engine: str = ENGINE_OMLX
     api_key_env: str = "OMLX_API_KEY"
     timeout_s: float = 600.0
     stall_timeout_s: float | None = None
@@ -43,6 +64,37 @@ class BackendEntry(BaseModel):
     # auto-detect: loopback is owned, anything reachable over the network is
     # assumed shared. Set explicitly to override either way.
     shared: bool | None = None
+
+    @field_validator("engine")
+    @classmethod
+    def _known_engine(cls, v: str) -> str:
+        """Reject an unknown engine at LOAD time, not at first diagnostic.
+
+        A typo here would silently restore the oMLX assumptions this field
+        exists to switch off — and it would do it on the fallback host, in an
+        outage, where nobody is reading warnings. Fail loudly instead.
+        """
+        norm = (v or "").strip().lower()
+        if norm not in KNOWN_ENGINES:
+            raise ValueError(
+                f"unknown engine {v!r}; expected one of {', '.join(KNOWN_ENGINES)}")
+        return norm
+
+    def is_omlx(self) -> bool:
+        """True when this endpoint is oMLX — i.e. when the oMLX-only
+        diagnostics (`/v1/models/status` weight paths, the stale-Cellar probe,
+        `brew services`, the `/admin/api/*` downloader) mean anything."""
+        return self.engine == ENGINE_OMLX
+
+    def engine_label(self) -> str:
+        """How to name this endpoint in a check line."""
+        return "oMLX" if self.is_omlx() else self.engine
+
+    def needs_api_key(self) -> bool:
+        """Whether a missing key is worth warning about. llama-server is
+        keyless unless started with `--api-key`, so warning about it there is
+        a permanent false alarm with a fix that does nothing."""
+        return self.is_omlx()
 
     def is_shared(self) -> bool:
         """True when other clients may be using this endpoint.
