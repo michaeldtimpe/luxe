@@ -132,3 +132,7 @@ benchmarks/swebench/subsets/raw/
 # gitreview sweep output (telemetry CSVs + per-repo logs) — generated, local-only
 scripts/out/
 .claude/snapctx/
+!acceptance/luxe_neo_unification_2026_08/
+acceptance/luxe_neo_unification_2026_08/*
+!acceptance/luxe_neo_unification_2026_08/PLAN.md
+!acceptance/luxe_neo_unification_2026_08/REPORT.md
