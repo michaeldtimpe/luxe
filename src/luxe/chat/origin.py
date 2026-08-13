@@ -91,7 +91,11 @@ class ModelOrigin:
         if self.kind == "remote":
             return f"served by a REMOTE host ({self.detail}) — " \
                    "prompts and weights cross the network"
-        return "weight location unknown (oMLX did not report a model path)"
+        # Engine-neutral wording: oMLX reports model paths via
+        # `/v1/models/status`, llama-server (neo) has no such endpoint at all,
+        # so "oMLX did not report" reads as a fault on a host where it is
+        # simply not a thing that exists.
+        return "weight location unknown (the endpoint reports no model path)"
 
 
 # --- endpoint ---------------------------------------------------------------

@@ -39,16 +39,29 @@ gate, not a missing feature — `/write`.
 
 ## 3. Per-host cheat sheet
 
-| host | RAM | interactive main | fallback | also cached |
-|------|-----|------------------|----------|-------------|
-| m5 | 128 GB | `Qwen3.6-35B-A3B-6bit` | `Qwen3.6-27B-6bit` | `GLM-4.5-Air-4bit` |
-| m1 | 64 GB | `Qwen3.6-35B-A3B-4bit` | `Qwen3.6-27B-4bit` | `Qwen3.6-35B-A3B-6bit` (bench champion) |
-| m4 | 48 GB | `Qwen3.6-35B-A3B-4bit` | `Qwen3.6-27B-4bit` | — |
+| host | RAM | engine | interactive main | fallback | also cached |
+|------|-----|--------|------------------|----------|-------------|
+| m5 | 128 GB | oMLX | `Qwen3.6-35B-A3B-6bit` | `Qwen3.6-27B-6bit` | `GLM-4.5-Air-4bit` |
+| m1 | 64 GB | oMLX | `Qwen3.6-35B-A3B-4bit` | `Qwen3.6-27B-4bit` | `Qwen3.6-35B-A3B-6bit` (bench champion) |
+| m4 | 48 GB | oMLX | `Qwen3.6-35B-A3B-4bit` | `Qwen3.6-27B-4bit` | — |
+| neo | 8 GB | llama-server :8080 | `Qwen3-4B-Instruct-2507` | same model, said loudly | — |
 
 - Capacity over speed, m5 only: `/model all GLM-4.5-Air-4bit` (~2× the wall clock).
 - Weak host, strong model: `luxe chat --backend m5` (needs `OMLX_API_KEY_M5` + the tailnet).
 - Main missing or failing? The session auto-degrades to the fallback and says
   so — in the status line, in `/doctor`, and in `debug.log`.
+
+**neo is different on purpose**: 8 GB can't hold an MLX model at production
+context, so it serves a GGUF through llama.cpp. Config lives outside this repo
+(`~/dotfiles/luxe/neo.yaml` — wrappers pass it, `$LUXE_CONFIG` covers the rest).
+No API key, no `brew services`, no `luxe pull`. **Its server does not survive a
+reboot yet** (a macOS Login-Items approval, not luxe — see
+`~/dotfiles/luxe/README-neo-router.md`); after any reboot of neo:
+
+```sh
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.micromind.llama-server.plist
+curl -s localhost:8080/v1/models        # expect Qwen3-4B-Instruct-2507 "loaded"
+```
 
 ## 4. Recovery
 

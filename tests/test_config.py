@@ -365,3 +365,65 @@ def test_dense_m5_yaml_defaults_to_m5_backend():
     assert cfg.backend_entry("local").base_url == "http://127.0.0.1:8000"
     # non-chat paths keep reading omlx_base_url → also m5
     assert cfg.omlx_base_url == cfg.backend_entry("m5").base_url
+
+
+class TestBackendEngine:
+    """`backends: <name>: engine:` — which serving stack is behind the URL.
+
+    Added 2026-08-13 for neo, which serves a GGUF through llama.cpp's
+    `llama-server`. It steers DIAGNOSTICS only; the request luxe sends is
+    identical on every engine.
+    """
+
+    def test_defaults_to_omlx_so_existing_configs_are_unchanged(self):
+        from luxe.config import ENGINE_OMLX, BackendEntry
+        e = BackendEntry(base_url="http://127.0.0.1:8000")
+        assert e.engine == ENGINE_OMLX
+        assert e.is_omlx() and e.needs_api_key()
+        assert e.engine_label() == "oMLX"
+
+    def test_llama_server_switches_the_omlx_only_affordances_off(self):
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url="http://127.0.0.1:8080", engine="llama-server")
+        assert not e.is_omlx()
+        assert not e.needs_api_key()
+        assert e.engine_label() == "llama-server"
+
+    def test_case_and_whitespace_are_normalised(self):
+        from luxe.config import BackendEntry
+        assert BackendEntry(base_url="u", engine="  LLAMA-Server ").engine == \
+            "llama-server"
+
+    def test_an_unknown_engine_is_rejected_at_load(self):
+        from pydantic import ValidationError
+
+        from luxe.config import BackendEntry
+        # A typo must not silently restore the oMLX assumptions — on the
+        # fallback host, in an outage, nobody reads the warnings.
+        with pytest.raises(ValidationError):
+            BackendEntry(base_url="u", engine="llama_server")
+
+    def test_engine_travels_through_a_loaded_yaml(self, tmp_path):
+        from luxe.config import load_config
+        p = tmp_path / "c.yaml"
+        p.write_text(
+            "models: {monolith: M}\n"
+            "roles: {monolith: {model_key: monolith}}\n"
+            "backends:\n"
+            "  local: {base_url: 'http://127.0.0.1:8080', "
+            "engine: llama-server, default: true}\n")
+        cfg = load_config(str(p))
+        assert cfg.backend_entry("local").is_omlx() is False
+
+    def test_a_synthesised_entry_is_omlx(self):
+        """No `backends:` block ⇒ the synthesized 'local' entry, unchanged."""
+        cfg = PipelineConfig(models={"monolith": "M"},
+                             roles={"monolith": RoleConfig(model_key="monolith")})
+        assert cfg.backend_entries()["local"].is_omlx()
+
+    def test_backend_kwargs_is_unaffected_by_engine(self):
+        """Engine must not leak into the wire/timeout surface."""
+        from luxe.config import BackendEntry
+        a = BackendEntry(base_url="u")
+        b = BackendEntry(base_url="u", engine="llama-server")
+        assert a.backend_kwargs() == b.backend_kwargs()

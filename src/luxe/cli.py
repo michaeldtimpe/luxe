@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -201,6 +202,27 @@ def _unload_unless(keep_loaded: bool) -> None:
 
 
 def _default_chat_config() -> str:
+    """The chat config to use when no `--config` was passed.
+
+    `$LUXE_CONFIG` wins over the in-tree default so a host whose engine is not
+    the fleet's can point EVERY command at its own config, not just the two
+    the dotfiles wrappers cover. That gap bit on neo (2026-08-13): `luxe-chat`
+    and `luxe-code` passed `--config ~/dotfiles/luxe/neo.yaml`, but bare
+    `luxe ready` / `luxe smoke` / `luxe pull` still read the fleet config and
+    judged an oMLX endpoint that box does not run — and `luxe ready` is
+    precisely the command reached for in a panic.
+
+    Deliberately an env var and not a path lookup: the per-host configs live
+    OUT of this repo (`~/dotfiles/luxe/<host>.yaml` — see the wrapper's own
+    note on the 2026-08-02 skip-worktree drift), and hardcoding a dotfiles
+    path here would drag a private layout into the public tree. Unset ⇒ the
+    previous behaviour exactly. Chat-config only: the benchmark/maintain
+    config surface (`--variants`, `single_64gb.yaml`) never routes through
+    here.
+    """
+    override = os.environ.get("LUXE_CONFIG", "").strip()
+    if override:
+        return str(Path(override).expanduser())
     return str(Path(__file__).parent.parent.parent / "configs" / "chat.yaml")
 
 
@@ -482,10 +504,18 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
 
     endpoint = base_url or _omlx_base_url_from_config()
     dest_dir = Path(models_dir) if models_dir else ms.DEFAULT_MODELS_DIR
+    # Only the CONFIG can tell us the engine; an explicit --base-url names an
+    # endpoint whose stack luxe was never told, so keep the old assumption.
+    engine = "omlx" if base_url else _default_engine_from_config()
 
     if remove_state:
         _pull_remove(ref, dest_dir, force=force, assume_yes=assume_yes)
         return
+
+    # `--list` and `--remove` are local-store reads and stay available
+    # everywhere; everything past here needs oMLX's admin API.
+    if not list_state:
+        _refuse_pull_on_non_omlx(engine, verb="fetch weights")
 
     with ms.OmlxAdmin(base_url=endpoint) as admin:
         try:
@@ -954,6 +984,42 @@ def _omlx_base_url_from_config() -> str:
         return _chat_cfg().omlx_base_url
     except Exception:
         return "http://127.0.0.1:8000"
+
+
+def _default_engine_from_config() -> str:
+    """Engine of the config's DEFAULT backend entry (`omlx` when unknown)."""
+    from luxe.config import ENGINE_OMLX
+    try:
+        cfg = _chat_cfg()
+        entry = cfg.backend_entry(cfg.default_backend_name())
+        return getattr(entry, "engine", ENGINE_OMLX) or ENGINE_OMLX
+    except Exception:
+        return ENGINE_OMLX
+
+
+def _refuse_pull_on_non_omlx(engine: str, *, verb: str) -> None:
+    """Stop a `luxe pull` subcommand that has no meaning off oMLX.
+
+    `luxe pull` is built on oMLX's admin API (`/admin/api/login`, `/admin/api/hf/*`)
+    and on the `~/.omlx/models` store. Against llama-server every one of those
+    calls 404s, and the failure that surfaces is a confusing
+    "oMLX admin login failed: 404" rather than the true answer, which is that
+    this host provisions weights a different way. Say so, and point at it.
+    """
+    from luxe.config import ENGINE_OMLX
+    if engine == ENGINE_OMLX:
+        return
+    console.print(
+        f"[red]✗ `luxe pull` cannot {verb} on a {engine} endpoint.[/] "
+        f"It drives oMLX's admin API and the ~/.omlx/models store, neither of "
+        f"which {engine} has.")
+    console.print(
+        "[dim]  This host serves GGUF weights named in its llama-server preset "
+        "(neo: `~/dotfiles/luxe/neo-models.ini`). Fetch the file yourself, put "
+        "it where the preset points, and restart the server.[/]\n"
+        "[dim]  `luxe pull --list` and `--remove` still work — they only read "
+        "the local store.[/]")
+    sys.exit(2)
 
 
 def _pull_search(admin, query: str) -> None:

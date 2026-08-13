@@ -47,7 +47,22 @@ never touches this module.
   Fleet 2026-07-30: m5 = 35B-A3B-6bit / 27B-6bit; m1 + m4 = 35B-A3B-4bit /
   27B-4bit (MoE main — Qwen3.6 is multimodal, oMLX serves it on the slow vlm
   engine; dense-27B prefill is ~65 tok/s with no cache reuse, MoE ~10s turns);
-  m1 also keeps the bench champion (keep:). neo (8 GB) has no entry on purpose
+  m1 also keeps the bench champion (keep:). neo (8 GB) has no entry in THIS
+  repo's chat.yaml on purpose — it has one, in `~/dotfiles/luxe/neo.yaml`,
+  because an earlier in-tree deploy hid its edits with `--skip-worktree` and
+  cost 78 commits of drift. Out-of-tree per-host configs reach the commands
+  the dotfiles wrappers don't cover via `$LUXE_CONFIG` (cli.`_default_chat_config`)
+- `engine:` on a BackendEntry (`omlx` default | `llama-server`, validated at
+  load — an unknown value RAISES rather than silently restoring the oMLX
+  assumptions) names the serving stack behind the URL. It is DIAGNOSTIC-ONLY:
+  it may change check names, check severities, `fix` strings, and whether
+  `luxe pull` refuses; it must never change the request body, the tool
+  surface, model selection, or `backend_kwargs()`. Every supported engine is
+  OpenAI-compatible, which is the whole reason one client can drive both.
+  Owns: `BackendEntry.is_omlx/engine_label/needs_api_key`,
+  `inspection.backend_entry_for/_engine_facts`. Introduced 2026-08-13 for neo,
+  whose 8 GB cannot hold an MLX model at production context (probe:
+  `acceptance/mlx_neo_probe_2026_08/REPORT.md`)
 - AUTO-DEGRADE is loud and single-fire: when the manifest main (a) is missing
   from the server catalog at first `backend_for`, (b) fails the post-swap
   thermal_guard, or (c) throws a turn-level BackendError while the endpoint
@@ -83,7 +98,12 @@ never touches this module.
   invariants, see the `/doctor` bullet) is diagnostic and WARN-only: it must
   never flip the exit code on its own, because its job is to EXPLAIN the turn
   failures below it, not to add a new way for a working host to go red. It is
-  positioned directly after `endpoint` for that reason.
+  positioned directly after `endpoint` for that reason. It is SKIPPED entirely
+  on a non-oMLX `engine:` — there is no brew formula to be stale about.
+  neo (2026-08-13): bare `luxe smoke` PASSES there against the local
+  llama-server with `--config ~/dotfiles/luxe/neo.yaml` (or `$LUXE_CONFIG`).
+  The earlier pin that it must fail on neo is retired — it described a host
+  with no manifest, not a property of the drill
   `--code` / `--chat` run the AGENTIC drills instead (combinable): real
   run_single turns against a planted scratch git repo — --code plants a
   one-line bug + failing test and verifies the fix DETERMINISTICALLY (pytest

@@ -274,16 +274,44 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
                 served = set(slots.backend.list_models())
             except Exception:
                 served = set()
+            is_omlx, engine_label = _engine_facts(slots)
+            served_fix = ("restart oMLX after provisioning "
+                          "(`brew services restart omlx`)" if is_omlx else
+                          f"add the model to {engine_label}'s preset and "
+                          "restart it, then re-run")
             for mid in (manifest.main, manifest.fallback):
                 if mid and served and mid not in served:
                     doc.add(f"served:{mid}", WARN, "not in the server catalog",
-                            "restart oMLX after provisioning "
-                            "(`brew services restart omlx`)")
+                            served_fix)
     except Exception as e:
         doc.add("host manifest", WARN, f"check errored: {e}")
 
 
-def _add_stale_check(doc, base_url: str) -> None:
+def backend_entry_for(slots):
+    """The `backends:` entry behind the active endpoint, or None.
+
+    Guarded on purpose: doctor must never raise, and every caller below has a
+    sane oMLX-shaped default for the None case, so a config luxe cannot read
+    degrades to exactly the pre-2026-08-13 behaviour.
+    """
+    try:
+        return slots.cfg.backend_entry(slots.backend_name)
+    except Exception:
+        return None
+
+
+def _engine_facts(slots) -> tuple[bool, str]:
+    """(is_omlx, label) for the active endpoint. Defaults to oMLX."""
+    entry = backend_entry_for(slots)
+    if entry is None:
+        return True, "oMLX"
+    try:
+        return entry.is_omlx(), entry.engine_label()
+    except Exception:
+        return True, "oMLX"
+
+
+def _add_stale_check(doc, base_url: str, *, is_omlx: bool = True) -> None:
     """Report whether the local oMLX is running the Cellar tree brew installed.
 
     A stale process is a WARN, not a FAIL: it may still be serving everything
@@ -292,6 +320,8 @@ def _add_stale_check(doc, base_url: str) -> None:
     screen instead of costing another half hour. Never raises — doctor runs
     during outages.
     """
+    if not is_omlx:
+        return              # nothing brew-installed to be stale about
     try:
         from luxe.chat.origin import endpoint_is_local
         if not endpoint_is_local(base_url):
@@ -395,18 +425,33 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     base_url = getattr(backend, "base_url", "") or "?"
     name = getattr(slots, "backend_name", "?")
 
+    # Which serving stack is behind this URL. oMLX unless `backends:` says
+    # otherwise, so every host but neo is unchanged. It switches only the
+    # DIAGNOSTIC lines below — a fix that reads `brew services start omlx` is
+    # worse than no fix at all on a box with no omlx formula.
+    is_omlx, engine_label = _engine_facts(slots)
+    start_fix = ("start it (`brew services start omlx`) or `/backend <other>`"
+                 if is_omlx else
+                 "start the server (on neo: `launchctl bootstrap gui/$UID "
+                 "~/Library/LaunchAgents/com.micromind.llama-server.plist`), "
+                 "or `/backend <other>`")
+    restart_fix = ("`brew services restart omlx`, or `/backend <other>`"
+                   if is_omlx else
+                   "restart the server (on neo: `launchctl kickstart -k "
+                   "gui/$UID/com.micromind.llama-server`), or `/backend <other>`")
+
     reachable = False
     try:
         reachable = bool(backend.health())
     except Exception as e:
-        doc.add("oMLX endpoint", FAIL, f"{name} {base_url}: {e}",
-                "start it (`brew services start omlx`) or `/backend <other>`")
+        doc.add(f"{engine_label} endpoint", FAIL, f"{name} {base_url}: {e}",
+                start_fix)
     else:
         if reachable:
-            doc.add("oMLX endpoint", OK, f"{name} {base_url}")
+            doc.add(f"{engine_label} endpoint", OK, f"{name} {base_url}")
         else:
-            doc.add("oMLX endpoint", FAIL, f"{name} {base_url} not responding",
-                    "`brew services restart omlx`, or `/backend <other>`")
+            doc.add(f"{engine_label} endpoint", FAIL,
+                    f"{name} {base_url} not responding", restart_fix)
 
     # Stale-process check. Placed directly under the endpoint because it
     # EXPLAINS the checks below it: a server running a Cellar tree brew
@@ -414,14 +459,19 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     # import with an error naming whatever module it happened to reach for
     # (lessons.md 2026-08-03 and 2026-08-04). Local endpoints only, and
     # offline-pure — pgrep/lsof/stat, no network.
-    _add_stale_check(doc, base_url)
+    _add_stale_check(doc, base_url, is_omlx=is_omlx)
 
-    if not getattr(backend, "api_key", ""):
+    if getattr(backend, "api_key", ""):
+        doc.add("API key", OK, "present")
+    elif is_omlx:
         doc.add("API key", WARN, "no key resolved for this endpoint",
                 "`echo 'OMLX_API_KEY=<key>' >> ~/.luxe/secrets.env` "
                 "(or export it in this shell)")
     else:
-        doc.add("API key", OK, "present")
+        # llama-server is keyless unless started with --api-key. A standing
+        # yellow line whose fix changes nothing trains people to ignore the
+        # yellow lines that matter.
+        doc.add("API key", OK, f"not required by {engine_label}")
 
     model = slots.model_for("chat")
     if reachable:
@@ -450,8 +500,14 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
                     "prompts should not cross the network")
         elif org.kind == "local":
             doc.add("weights", OK, f"{org.glyph} local disk")
-        else:
+        elif is_omlx:
             doc.add("weights", WARN, "location unreported by oMLX")
+        else:
+            # llama-server has no `/v1/models/status`, so there is no path to
+            # report and nothing to fix. The manifest `weights:<id>` check
+            # below is the one that actually verifies bytes on disk.
+            doc.add("weights", OK,
+                    f"{engine_label} reports no model path (checked below)")
     else:
         doc.add("chat model", WARN, f"{model} (unverified — endpoint down)",
                 "fix the endpoint above first, then re-run")
