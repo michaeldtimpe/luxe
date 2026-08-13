@@ -523,8 +523,8 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 _pull_search(admin, search_query)
                 return
             if list_state:
-                _pull_list(admin, dest_dir,
-                           endpoint=endpoint, base_url_given=bool(base_url))
+                _pull_list(admin, dest_dir, endpoint=endpoint,
+                           base_url_given=bool(base_url), engine=engine)
                 return
             if not ref:
                 console.print("[yellow]Nothing to do — pass a model "
@@ -1076,7 +1076,7 @@ def _pull_remove(ref: str, dest_dir, *, force: bool, assume_yes: bool) -> None:
 
 
 def _pull_list(admin, dest_dir, *, endpoint: str = "",
-               base_url_given: bool = False) -> None:
+               base_url_given: bool = False, engine: str = "omlx") -> None:
     from luxe.modelstore import (ModelStoreError, human_bytes,
                                  local_model_names, model_state)
 
@@ -1118,6 +1118,15 @@ def _pull_list(admin, dest_dir, *, endpoint: str = "",
                           f"again or `--remove` the stub)[/]")
     if not names:
         console.print("  [dim](none)[/]")
+    from luxe.config import ENGINE_OMLX
+    if engine != ENGINE_OMLX:
+        # There is no download queue to report: this endpoint has no admin
+        # API and luxe never fetches for it. Asking anyway printed
+        # "download queue unavailable: no oMLX API key", which reads as a
+        # broken key on a host that needs none.
+        console.print(f"[dim]· {engine} has no download queue — weights come "
+                      "from its preset file[/]")
+        return
     try:
         tasks = admin.tasks()
     except ModelStoreError as e:

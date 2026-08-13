@@ -413,3 +413,13 @@ class TestPullRefusesOffOmlx:
         res = CliRunner().invoke(
             cli.main, ["pull", "--list", "--base-url", "http://127.0.0.1:8000"])
         assert "cannot fetch weights" not in res.output
+
+    def test_list_does_not_blame_a_missing_key_for_the_download_queue(
+            self, monkeypatch, tmp_path):
+        """`--list` said "download queue unavailable: no oMLX API key" on a
+        host that needs no key. There is simply no queue to report."""
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path, "llama-server"))
+        res = CliRunner().invoke(cli.main, ["pull", "--list"])
+        assert res.exit_code == 0
+        assert "API key" not in res.output
+        assert "no download queue" in res.output
