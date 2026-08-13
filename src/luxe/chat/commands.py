@@ -68,6 +68,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/outage", "", "print the offline emergency card (OUTAGE.md)"),
     ("/net", "[host]", "layered network report: DNS/TCP/TLS/HTTP + backends"),
     ("/planeproxy", "[status|doctor]", "diagnose the planeproxy SSH tunnel (read-only)"),
+    ("/claude", "[status|net|all]", "diagnose Claude Code: billing path, config, sessions"),
     ("/diff", "[--full] [--all]", "what this session changed (git-backed)"),
     ("/export", "[path]", "write the conversation to markdown"),
     ("/full", "", "re-show the last answer without the display cap"),
@@ -106,6 +107,7 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
 _HIDDEN_COMMANDS: frozenset[str] = frozenset({
     "/exit", "/q",                                    # quit aliases
     "/pp",                                            # /planeproxy
+    "/cc", "/claude-code",                            # /claude spellings
     "/git-audit", "/gaudit",                          # /gitaudit spellings
     "/git-change", "/gchange",                        # /gitchange spellings
     # pre-2026-06-07 gitkit names, kept working
@@ -229,6 +231,10 @@ def _build_handlers() -> dict:
         "/planeproxy": cmd_diag._planeproxy,
         # short alias (listed under /planeproxy in /help)
         "/pp": cmd_diag._planeproxy,
+        "/claude": cmd_diag._claude,
+        # short + long aliases (listed under /claude in /help)
+        "/cc": cmd_diag._claude,
+        "/claude-code": cmd_diag._claude,
         "/quit": _quit,
         "/exit": _quit,   # hidden alias (not listed in /help)
         "/q": _quit,      # hidden quick-exit alias

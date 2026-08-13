@@ -139,6 +139,89 @@ def test_action_cancel_sets_token_when_busy(tmp_path):
     asyncio.run(scenario())
 
 
+# --- ctrl+c (2026-08-13): clear the input, Claude-CLI style ------------------
+
+
+def test_ctrl_c_clears_the_input_when_idle(tmp_path):
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input.value = "half-typed question"
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert app._input.value == ""
+            assert app.is_running                  # it must NOT quit
+            assert app.cancel.requested is False   # nothing was cancelled
+    asyncio.run(scenario())
+
+
+def test_ctrl_c_drops_a_pending_paste_chip_and_its_text(tmp_path):
+    """The chip lives in the input but its TEXT lives on the app; clearing one
+    without the other would resurrect the paste at the next submit."""
+    from textual import events
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.focus()
+            app._input._on_paste(events.Paste("a\nb\nc"))
+            await pilot.pause()
+            assert app._paste_chunks                # buffered
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert app._input.value == ""
+            assert app._paste_chunks == []
+    asyncio.run(scenario())
+
+
+def test_ctrl_c_cancels_the_turn_while_busy(tmp_path):
+    """Cancel keeps precedence where the key already had a meaning."""
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._input.value = "typed while running"
+            app._busy = True
+            app.action_interrupt()
+            assert app.cancel.requested is True
+            assert app._input.value == "typed while running"   # not cleared
+    asyncio.run(scenario())
+
+
+def test_ctrl_c_on_empty_input_is_a_noop(tmp_path):
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert app.is_running                  # never quits
+            assert app.cancel.requested is False
+    asyncio.run(scenario())
+
+
+def test_ctrl_c_resets_history_navigation(tmp_path):
+    """A cleared line is not a draft: arrowing down must not repopulate it."""
+    async def scenario():
+        app = _make_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            inp = app._input
+            inp.focus()
+            inp.history_remember("earlier")
+            inp.value = "draft"
+            inp._history_prev()                    # now recalling "earlier"
+            assert inp.value == "earlier"
+            app.action_interrupt()
+            assert inp.value == ""
+            inp._history_next()                    # not navigating any more
+            assert inp.value == ""
+    asyncio.run(scenario())
+
+
 def test_tick_folds_live_ctx_pressure(tmp_path):
     async def scenario():
         app = _make_app(tmp_path)

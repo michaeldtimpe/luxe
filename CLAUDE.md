@@ -263,6 +263,32 @@ Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
     instead of weights); dangling links abort the copy. Copies stage in
     `.<name>.partial` and rename, so an interrupt never leaves a half-model.
     In chat, `/pull <ref>` previews and `/pull <ref> --yes` transfers.
+  - **`/claude` diagnoses Claude Code itself** (2026-08-13;
+    `src/luxe/claudecode.py`, CLI `luxe claudecode`, tool `claude_code_diag`).
+    luxe is the fallback dev tool, so "what is wrong with Claude Code?" arrives
+    here by construction — and a chat with no instrument could only guess (a
+    session had silently reverted from the Max-plan login to the Platform API
+    key). It answers the billing-path question first: which path each RUNNING
+    session is actually on, read from that process's environment, plus what
+    would override the next launch (`ANTHROPIC_BASE_URL`, a settings `env:`
+    block, an `apiKeyHelper`, Bedrock/Vertex). Same three-surface shape as
+    netdiag/planeproxy; `check="status"` is offline, `net` adds the
+    api.anthropic.com ladder. **Three invariants, tested, in chat.sdd Must-not:**
+    env vars are reported by NAME only (the `ps eww` line it parses carries
+    every other variable's VALUE, and a settings `env:` block can hold a key);
+    Keychain lookups are metadata-only, never `-w` except the regex-validated
+    expiry DATE; transcripts are read for METADATA only — never
+    `message.content`, never `~/.claude/CLAUDE.md`. That is the sanctioned
+    boundary for the `~/.claude` prohibition, which is scoped to context/memory
+    (memory.sdd), the same carve-out shape as `chat/theme.py`. It never
+    launches, kills, or reconfigures Claude Code — `claude-plan`/`claude-api`
+    stay with the user.
+  - **ctrl+c CLEARS the prompt, it never quits** (2026-08-13). Busy → cancel
+    the turn (unchanged); idle with text → clear the input, dropping
+    `_paste_chunks` and history navigation with it; idle and empty → nothing.
+    The line REPL matches (`KeyboardInterrupt` at the reader `continue`s).
+    Claude CLI's double-tap-to-exit is deliberately NOT mirrored — user
+    decision; exits stay ctrl+d / ctrl+q / `/quit`.
   - **Session commands added in the 2026-07-29/30 `/help` audit**: `/theme`
     (live palette switch), `/tools` (real tool surface + what read-only gates),
     `/status` (session dump incl. model origin), `/unload` (free RAM without

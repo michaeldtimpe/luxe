@@ -174,6 +174,18 @@ never touches this module.
   instrumented and surfaced; keep chat-slot model resident, group code work
 - The history summarizer (`chat/summarize.py`) is NON-model, deterministic, and
   versioned (`SUMMARIZER_VERSION`); its output is persisted to `fold.jsonl`
+- **ctrl+c CLEARS, it never quits** (2026-08-13). One key, three cases, in
+  precedence order — `tui.ChatApp.action_interrupt`: a turn is running (or a
+  modal is up) → cancel, exactly as before; idle with text in the prompt →
+  clear the input, which MUST also drop `_paste_chunks` (a chip's text lives on
+  the app, so clearing only the box would resurrect the paste at the next
+  submit) and reset history navigation (a discarded line is not a draft to
+  arrow back to); idle and empty → nothing. The line REPL matches: a
+  `KeyboardInterrupt` from the reader `continue`s the loop instead of breaking
+  it — both readers have already discarded the typed text by the time they
+  raise. Exiting stays with ctrl+d on an empty prompt, ctrl+q, and `/quit`.
+  Claude CLI's double-tap-ctrl+c-to-exit is DELIBERATELY not mirrored (user
+  decision): a mis-aimed ctrl+c must not be able to end a session.
 - Cancel during a turn cancels MID-GENERATION: the CancelToken is set (the line
   REPL via a SIGINT handler; the TUI via the `escape`/`ctrl+c` key binding) and
   the streaming `on_token` callback (chat-only, `stream=True`) raises
@@ -357,6 +369,41 @@ never touches this module.
   never a retry, and no surface — advice string, tool description, or prompt
   hint — may ever suggest installing a network's CA certificate or disabling
   certificate verification.
+- Claude Code diagnostics live in `src/luxe/claudecode.py` (2026-08-13), same
+  three-surface shape as netdiag/planeproxy: the `claude_code_diag` tool (rides
+  every chat turn via the extra-tool seam), `/claude [status|net|all]` in chat
+  (aliases `/cc`, `/claude-code`), and `luxe claudecode` CLI. luxe is the
+  fleet's local fallback dev tool, so "what is wrong with Claude Code right
+  now?" arrives here by construction; the module exists because a chat with no
+  instrument could only guess (a session that had silently reverted from the
+  Max-plan login to the Platform API key went undiagnosed, 2026-08-13). It
+  answers ONE question first — WHICH BILLING PATH each running session is
+  actually on, and what is overriding it — then config/process/session state.
+  The classifier is pure and unit-tested; a missing binary is a structured
+  `not-installed` verdict, never an error (analysis.py B3). `check="status"`
+  is offline by contract (no netdiag call at all); `net` adds the bounded
+  api.anthropic.com ladder. Invariants no surface may weaken:
+  - **READ-ONLY.** It never launches, kills, or reconfigures Claude Code and
+    never writes under `~/.claude`. Switching billing path stays with the user
+    (`claude-plan` / `claude-api`), the same consent rule as planeproxy up/down.
+  - **NO SECRET VALUES, EVER.** Environment variables are reported by NAME and
+    presence only — the `ps eww` line the module parses carries the VALUE of
+    every other variable in that process, and a settings `env:` block is a
+    documented place to put an API key. Keychain lookups are metadata-only
+    (`security find-generic-password` WITHOUT `-w`); the sole `-w` read is the
+    ANTHROPIC_API_KEY_EXPIRY *date*, and it is regex-validated as YYYY-MM-DD
+    before it is kept. The approved/rejected key fragments in `~/.claude.json`
+    are COUNTED, never shown. `tests/test_claudecode.py` asserts this.
+  - **NO CONVERSATION CONTENT.** Transcripts under `~/.claude/projects/` are
+    read for METADATA only (timestamp, model, effort, cwd, gitBranch, CLI
+    version, record counts); `message.content` is never accessed and neither is
+    `~/.claude/CLAUDE.md`. This is the sanctioned boundary for the `~/.claude`
+    prohibition, which is scoped to context/memory (memory.sdd) — same
+    carve-out shape as `chat/theme.py` reading the statusline theme name. Reads
+    are byte-capped (tail of each file) so a multi-MB transcript cannot stall
+    the surface.
+  - An environment `ps` will not show is `env_readable=False` — reported as
+    billing path UNKNOWN, never as a clean bill.
 - There is EXACTLY ONE web/browser stack: `src/luxe/web/` (see web.sdd).
   Consolidated 2026-08-03 from two implementations that landed in parallel
   the same week — `src/luxe/browser.py` (`browse_navigate`/`browse_read` over
@@ -843,8 +890,9 @@ never touches this module.
   screen, so the TERMINAL/tmux scrollback never sees transcript history —
   in-app keys are the scrollback: PgUp/PgDn (page), shift+↑/↓ (line),
   Home/End (top/bottom), mouse wheel; the RichLog retains 10000 lines. The
-  startup banner states this once. The persisted transcript (`/export`)
-  remains the full-fidelity record.
+  startup banner states this once — alongside ↑/↓ input recall and ctrl+c
+  clearing the prompt, since none of the three is discoverable on screen. The
+  persisted transcript (`/export`) remains the full-fidelity record.
 
   The line REPL keeps its prior behaviour: a `rich.Live` 3-line `LiveActivity`
   (preview · activity · status) when `console.is_terminal`, else `Status` + line
@@ -859,6 +907,15 @@ never touches this module.
   registry prompt
 - Auto-open PRs from a chat turn (the PR cycle stays in `luxe maintain`/`luxe pr`)
 - Let `configs/chat.yaml` change the behavior of `single_64gb.yaml` / maintain
+- Emit any environment-variable VALUE, Keychain secret, or `env:`-block value
+  from `claudecode.py` — names and presence only, and no `security … -w` beyond
+  the regex-validated expiry DATE (a diagnostic is written to the transcript and
+  read by a model; a leaked value is a credential disclosure, not a display bug)
+- Read Claude Code CONVERSATION content (`message.content` in
+  `~/.claude/projects/**`, or `~/.claude/CLAUDE.md`) — the `~/.claude` carve-out
+  is metadata and configuration only
+- Mutate Claude Code from any luxe surface: no launching, killing, re-auth, or
+  writing under `~/.claude`. Switching billing path is the user's action
 
 ## Owns
 - src/luxe/chat/**

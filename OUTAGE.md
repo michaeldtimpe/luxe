@@ -77,6 +77,7 @@ luxe smoke                       # real generation drill: weights → endpoint �
 luxe smoke --chat --code         # agentic drills in a planted scratch repo
 luxe smoke --backend m5          # drill a remote host's manifest from here
 luxe net                         # DNS → TCP → TLS → HTTP ladder + every backend
+luxe claudecode                  # Anthropic, or your own billing path? plan vs API key
 ```
 
 **Dangling weights** (the HF-cache-wipe signature): the model is listed but the
@@ -104,7 +105,7 @@ printf 'your question\n/quit\n' | luxe chat --repo <dir>
 ```
 
 In-session: `/doctor` (preflight) · `/status` (one-screen dump) · `/tools`
-(the real tool surface + what gates each) · `/net` · `/export` · `/diff`.
+(the real tool surface + what gates each) · `/net` · `/claude` · `/export` · `/diff`.
 
 ## 6. If luxe itself is broken
 
