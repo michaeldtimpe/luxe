@@ -1,5 +1,57 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-13, m5) — micro-mind RETIRED, luxe is the one agent codebase fleet-wide; neo runs it over llama-server
+
+State of the world: **main is at `4d38f8d`** (+ this handoff commit) and the
+fleet consolidation is DONE and deployed. Suite on m5: **2,807 passed /
+2 skipped** (baseline 2,783 + 24 new, 0 removed). neo's luxe checkout is on
+main; `luxe ready` exit 0 all-✓ against its LOCAL llama-server, `luxe smoke
+--chat --code` READY (code drill: pytest green, exactly `calc.py` changed) —
+independently re-verified by the reviewing session, not just by the
+executing agent.
+
+**The day's two acceptance cycles** (both Opus-5-executed, Fable-reviewed,
+plans + reports under `acceptance/`):
+
+1. **MLX-on-neo probe** (`acceptance/mlx_neo_probe_2026_08/REPORT.md`):
+   G-RAM **NOT VIABLE** — `mlx_lm.server` at neo's production 16k context
+   failed 3/3 (two Metal OOMs, one HTTP-200 token salad), peak 7.3/8 GB,
+   +915 MB swap; MLX at HALF context costs more than llama.cpp at full
+   (7.25 vs 6.63 GB system-peak). The failure is the SERVER layer (no KV
+   quant vs the deliberate q8_0 baseline, no context limit, per-token
+   logprobs) — bare MLX completes 15.5k coherently and G-METAL/G-DRILL
+   passed. Verdict recorded in CLAUDE.md: MLX/oMLX is not an option on neo.
+2. **neo unification** (`acceptance/luxe_neo_unification_2026_08/REPORT.md`):
+   **micro-mind retired** (its `d831090` pushed — superseded-for-deployment
+   banner on the neo-llm-bench pattern; engine explicitly excluded; repo
+   stays as the small-model-guard historical record). luxe-on-neo needed
+   almost no new machinery: the `hosts.neo` manifest already lived in
+   `~/dotfiles/luxe/neo.yaml`; what shipped is diagnostics-only `engine:`
+   on `BackendEntry` (`omlx`|`llama-server`, request bodies pinned
+   engine-invariant by test) + `$LUXE_CONFIG` discovery, so `luxe ready`/
+   `smoke`/`pull` stop lying on a non-oMLX endpoint. Dotfiles `586b109`
+   pushed (router plist now TRACKED + README-neo-router.md).
+
+**The boot-gap finding (open, needs the USER, ~1 min):** neo's router
+LaunchAgent was down for 8 days because macOS **Background Task Management**
+holds it at `disposition=9` (enabled, NOT allowed) — launchd's login-time
+bootstrap skips it while manual `launchctl bootstrap` works, which is why
+every hands-on check passed. Diagnosed with a control (GoogleUpdater=11, in
+gui/501; micromind+steamclean=9, absent). **Remaining step: one GUI
+approval** (System Settings → General → Login Items & Extensions → allow
+`llama-server`); after that the disposition must read 11, and an attended
+reboot (FileVault is on) would convert G-BOOT deferred → passed. **Trap:**
+the approval pins the binary's cdhash — ANY llama.cpp rebuild re-arms the
+failure. Documented in CLAUDE.md + lessons.md + dotfiles README. No
+watchdog, per the standing decision.
+
+**Open, none urgent:** (a) neo GUI approval + optional reboot test (above);
+(b) duplicate 2.5 GB GGUF in neo's `~/.omlx/models` — hardlink if space
+ever matters; (c) m4 re-keying + `luxe update` when it returns (unreachable
+since 2026-08-12); (d) `--prefill-step-size` MLX tuning artifacts remain on
+neo if ever wanted; (e) Muse-Glimmer revisit ~2026-09 (mlx-vlm PR #1838).
+Prior standing items unchanged from 2026-08-12 below.
+
 ## ⇒ SESSION HANDOFF (2026-08-12 end-of-day, m5) — fleet drill-green at `b1b44f0`; nothing in flight
 
 State of the world: **m5, m1, and neo are all at `b1b44f0`**, `luxe smoke
