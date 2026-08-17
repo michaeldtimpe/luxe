@@ -16,6 +16,7 @@ from luxe.chat.session import (
     CTX_TIER_MIN_RAM_GB,
     CTX_TIERS,
     ctx_tier_ram_warning,
+    parse_ctx_size,
     tier_label,
 )
 
@@ -118,18 +119,43 @@ def _use(args, ctx: CommandContext) -> CommandResult:
     return CommandResult(handled=True)
 
 
+def _ctx_on_local_ram(ctx: CommandContext) -> bool:
+    """Whether the chat model's KV cache lives in THIS machine's RAM.
+
+    The per-tier RAM warnings (`CTX_TIER_MIN_RAM_GB`) are arithmetic about the
+    local KV cache — ~80 KiB/token of weights-adjacent memory on this box.
+    Against a hosted endpoint they describe hardware that isn't in the loop,
+    so a 1M-token model would be reported as needing a machine the user does
+    not have to reach a window the provider is already serving. Guarded: an
+    origin lookup that fails means "assume local", the pre-2026-08-17 answer.
+    """
+    from luxe.chat import origin as origin_mod
+
+    try:
+        org = origin_mod.cached_origin_for(ctx.slots.backend,
+                                           ctx.slots.model_for("chat"))
+        return org.kind != "remote"
+    except Exception:
+        return True
+
+
 def _ctx(args, ctx: CommandContext) -> CommandResult:
     # Display against the conversational `chat` slot (the default route).
     ceiling = ctx.slots.ctx_ceiling("chat")
-    base = ctx.slots.role_for("chat").num_ctx
+    base = ctx.slots.default_num_ctx("chat")
     active = ctx.session.num_ctx_override or base
+    local_ram = _ctx_on_local_ram(ctx)
+    try:
+        billable = ctx.slots.active_entry().is_billable()
+    except Exception:
+        billable = False
 
     def _tiers_line() -> str:
         bits = []
         for name, n in CTX_TIERS.items():
             if n > ceiling:
                 mark = "[dim](>max)[/]"
-            elif ctx_tier_ram_warning(name):
+            elif local_ram and ctx_tier_ram_warning(name):
                 # Inside the model's ceiling, past this HOST's RAM.
                 mark = f"[yellow](needs {CTX_TIER_MIN_RAM_GB[name]}GB)[/]"
             else:
@@ -144,32 +170,56 @@ def _ctx(args, ctx: CommandContext) -> CommandResult:
             f"context window: [cyan]{tier_label(eff)}[/] [dim]num_ctx {eff}[/]{clamp}"
             f"  [dim]· max {ceiling}[/]")
         ctx.console.print(f"[dim]tiers:[/] {_tiers_line()}")
-        ctx.console.print("[dim]Bigger windows hold more code but cost KV-cache "
-                          "RAM and tokens. Set with /ctx <tier>.[/]")
+        if billable:
+            # The cost framing replaces the RAM framing: nothing here is spent
+            # on this machine's memory, and what the window really buys is how
+            # much history each step carries — which is metered every step.
+            ctx.console.print(
+                "[dim]Bigger windows carry more billable prompt tokens (the "
+                "window sets how much history each step re-sends). Set with "
+                "/ctx <tier> or an absolute size: /ctx 500k, /ctx 1m.[/]")
+        else:
+            ctx.console.print("[dim]Bigger windows hold more code but cost "
+                              "KV-cache RAM and tokens. Set with /ctx <tier> "
+                              "or an absolute size: /ctx 65536, /ctx 128k.[/]")
         return CommandResult(handled=True)
 
     tier = args[0].lower()
-    if tier not in CTX_TIERS:
-        ctx.console.print(f"[yellow]Unknown size {tier!r}; expected "
-                          f"{'|'.join(CTX_TIERS)}.[/]")
-        return CommandResult(handled=True)
+    # A named tier, else an absolute size (`500k`, `1m`, `32768`) — the ladder
+    # tops out at 256K and a hosted model can serve 1M.
+    if tier in CTX_TIERS:
+        requested = CTX_TIERS[tier]
+        label = tier
+    else:
+        requested = parse_ctx_size(tier)
+        if requested is None:
+            ctx.console.print(
+                f"[yellow]Unknown size {tier!r}; expected "
+                f"{'|'.join(CTX_TIERS)}, or a token count like 65536, 500k, "
+                "1m.[/]")
+            return CommandResult(handled=True)
+        label = tier_label(requested)
 
-    requested = CTX_TIERS[tier]
     ctx.session.num_ctx_override = requested
     eff = min(requested, ceiling)
-    # Host-RAM warning, separate from the num_ctx_max clamp above it: that
-    # ceiling comes from what the MODEL supports, and on this box `huge` is
-    # inside it while being past what the hardware can actually hold.
-    ram_warning = ctx_tier_ram_warning(tier)
+    # Host-RAM warning, separate from the ceiling clamp above it: that ceiling
+    # comes from what the MODEL supports, and on this box `huge` is inside it
+    # while being past what the hardware can actually hold. Skipped entirely
+    # when the weights aren't on this machine's RAM.
+    ram_warning = ctx_tier_ram_warning(tier) if local_ram else None
     if ram_warning and eff == requested:
         ctx.console.print(f"[yellow]⚠[/] {ram_warning}")
     if eff != requested:
+        limit_note = ("this model's window as the endpoint reports it"
+                      if ctx.slots.catalog_context_length(
+                          ctx.slots.model_for("chat"))
+                      else "this box's max; raise num_ctx_max in the config "
+                           "to go higher")
         ctx.console.print(
-            f"[yellow]✓[/] context → [cyan]{tier}[/] requested ({requested}), "
-            f"[yellow]clamped to {eff}[/] [dim](this box's max; raise num_ctx_max "
-            f"in the config to go higher)[/]")
+            f"[yellow]✓[/] context → [cyan]{label}[/] requested ({requested}), "
+            f"[yellow]clamped to {eff}[/] [dim]({limit_note})[/]")
     else:
-        ctx.console.print(f"[green]✓[/] context → [cyan]{tier}[/] "
+        ctx.console.print(f"[green]✓[/] context → [cyan]{label}[/] "
                           f"[dim](num_ctx {eff}; applies next turn)[/]")
     return CommandResult(handled=True)
 
@@ -231,13 +281,116 @@ _bash_mode = _toggle(
     after=_bash_note,
 )
 
-# Live streaming of the model's thinking (B2), independent of /verbose.
-_reasoning = _toggle(
+# Live streaming of the model's thinking (B2), independent of /verbose. Now a
+# SUBCOMMAND of `/reasoning` (`show`/`hide`) rather than the bare command — see
+# `_reasoning` below, which grew the effort control in 2026-08-17.
+_reasoning_display = _toggle(
     "show_reasoning", "reasoning",
     on_hint="streams model prose live; responsiveness tracks the backend's "
             "streaming cadence",
     off_hint="hidden",
 )
+
+
+def _reasoning_state(ctx: CommandContext) -> str:
+    """The effort setting in force on the ACTIVE backend.
+
+    Read from the live Backend's `body_extras` — the thing that actually goes
+    on the wire — rather than from a session field that could drift from it.
+    """
+    from luxe.config import REASONING_EFFORTS
+
+    extras = getattr(ctx.slots.backend, "body_extras", None) or {}
+    block = extras.get("reasoning")
+    if not isinstance(block, dict):
+        return "default"
+    if block.get("exclude"):
+        return "off"
+    effort = block.get("effort")
+    return effort if effort in REASONING_EFFORTS else "default"
+
+
+def _reasoning(args, ctx: CommandContext) -> CommandResult:
+    """Reasoning-model controls (chat-only).
+
+    `/reasoning`                    show the effort setting + display state
+    `/reasoning low|medium|high`    how hard the model should think
+    `/reasoning off`                ask the provider not to return reasoning
+    `/reasoning default`            send nothing; the provider decides
+    `/reasoning show|hide`          stream the model's prose live (was the
+                                    bare `/reasoning` toggle)
+
+    Effort is a COST control as much as a quality one: a thinking model bills
+    every reasoning token, and a one-sentence question measured 3,568
+    characters of reasoning against 255 of answer (2026-08-17). It rewrites
+    `body_extras` on the Backend this session owns — chat owns that instance,
+    and the loop's `backend.chat` call site stays frozen.
+    """
+    from luxe.config import REASONING_SETTINGS, reasoning_extras
+
+    if args and args[0].lower() in ("show", "hide"):
+        want = args[0].lower() == "show"
+        if ctx.session.show_reasoning == want:
+            ctx.console.print(f"reasoning display: already "
+                              f"[cyan]{'shown' if want else 'hidden'}[/]")
+            return CommandResult(handled=True)
+        return _reasoning_display([], ctx)
+
+    try:
+        entry = ctx.slots.active_entry()
+        supported = entry is not None and entry.is_openrouter()
+        engine = ctx.slots.engine_label()
+    except Exception:
+        supported, engine = False, "this backend"
+
+    if not args:
+        shown = "shown" if ctx.session.show_reasoning else "hidden"
+        ctx.console.print(
+            f"reasoning: effort [cyan]{_reasoning_state(ctx)}[/] "
+            f"[dim]· live display {shown}[/]")
+        if supported:
+            ctx.console.print("[dim]/reasoning low|medium|high · off (don't "
+                              "return it) · default (provider's own) · "
+                              "show|hide (live display)[/]")
+            ctx.console.print("[dim]Every reasoning token is billed, and it "
+                              "is not part of the answer.[/]")
+        else:
+            ctx.console.print(f"[dim]effort has no effect on {engine} — it is "
+                              "an OpenRouter request field. `show|hide` still "
+                              "works.[/]")
+        return CommandResult(handled=True)
+
+    setting = args[0].lower()
+    if setting not in REASONING_SETTINGS:
+        ctx.console.print(
+            f"[yellow]Unknown reasoning setting {setting!r}; expected "
+            f"{'|'.join(REASONING_SETTINGS)}, or show|hide.[/]")
+        return CommandResult(handled=True)
+    if not supported:
+        # Refuse rather than silently store it: a setting that changes nothing
+        # is worse than a message saying so (chat.sdd — every refusal names
+        # what would work).
+        ctx.console.print(
+            f"[yellow]· reasoning effort has no effect on {engine}[/] "
+            "[dim]— it is an OpenRouter request field. `/backend` to switch, "
+            "or `/reasoning show` to stream what this model does emit.[/]")
+        return CommandResult(handled=True)
+
+    extras = getattr(ctx.slots.backend, "body_extras", None)
+    if extras is None:
+        ctx.console.print("[yellow]This backend can't carry request extras.[/]")
+        return CommandResult(handled=True)
+    block = reasoning_extras(setting)
+    if block is None:
+        extras.pop("reasoning", None)
+    else:
+        extras["reasoning"] = block
+    note = {"off": "the provider won't return reasoning",
+            "default": "the provider's own default applies"}.get(
+                setting, "billed per reasoning token")
+    ctx.console.print(f"[green]✓[/] reasoning effort → [cyan]{setting}[/] "
+                      f"[dim]({note}; applies to the next turn)[/]")
+    return CommandResult(handled=True)
 
 # Terse model output (B2). Default ON; cuts wordy prose to save tokens — hence
 # green for ON and yellow for OFF, the inverse of the other toggles.

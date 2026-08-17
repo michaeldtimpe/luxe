@@ -94,6 +94,17 @@ def test_prepare_turn_assembles_run_single_chat_call(_ctx, monkeypatch):
     assert prep.slot == "chat" and prep.model == "Champ"
 
 
+def _persona_id(model: str) -> str:
+    """The conversational system-prompt id for a turn served by `model`.
+
+    Model-bound since 2026-08-17 (the persona self-identifies as the model,
+    with luxe as the harness), so these assertions read the id through the
+    registry accessor rather than hardcoding a spelling the registry owns.
+    """
+    from luxe.agents.prompts import chat_persona_id
+    return chat_persona_id(model)
+
+
 def test_chat_slot_gets_conversational_persona(_ctx, monkeypatch):
     """A turn routing to the chat slot (e.g. a bare greeting → review) swaps the
     role's prompt ids to the conversational variant so it answers directly
@@ -102,7 +113,7 @@ def test_chat_slot_gets_conversational_persona(_ctx, monkeypatch):
     monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
     assert prep.slot == "chat"
-    assert prep.role_cfg.system_prompt_id == "chat_conversational"
+    assert prep.role_cfg.system_prompt_id == _persona_id(prep.model)
     assert prep.role_cfg.task_prompt_id == "chat_conversational"
 
 
@@ -117,7 +128,7 @@ def test_freeform_codey_message_stays_conversational(_ctx, monkeypatch):
     prep = repl.prepare_turn("add a feature", session, sm, cfg, frozenset(),
                              lambda m: "implement")
     assert prep.slot == "code"     # model routing unchanged
-    assert prep.role_cfg.system_prompt_id == "chat_conversational"
+    assert prep.role_cfg.system_prompt_id == _persona_id(prep.model)
     assert prep.role_cfg.task_prompt_id == "chat_conversational"
     assert prep.role_cfg.task_overlay_id == ""
 
@@ -131,7 +142,7 @@ def test_freeform_turn_clears_config_task_overlay(_ctx, monkeypatch):
     prep = repl.prepare_turn("can you explain how this repo builds?", session,
                              sm, cfg, frozenset(), lambda m: "summarize")
     assert prep.role_cfg.task_overlay_id == ""
-    assert prep.role_cfg.system_prompt_id == "chat_conversational"
+    assert prep.role_cfg.system_prompt_id == _persona_id(prep.model)
 
 
 def test_real_inference_heuristic_no_longer_flips_persona(_ctx, monkeypatch):
@@ -146,7 +157,7 @@ def test_real_inference_heuristic_no_longer_flips_persona(_ctx, monkeypatch):
                 "how do I fix a flat tire?"):
         prep = repl.prepare_turn(msg, session, sm, cfg, frozenset(),
                                  _infer_task_type)
-        assert prep.role_cfg.system_prompt_id == "chat_conversational", msg
+        assert prep.role_cfg.system_prompt_id == _persona_id(prep.model), msg
 
 
 def test_use_pinned_slot_keeps_baseline_persona(_ctx, monkeypatch):
@@ -366,3 +377,37 @@ def test_finalize_turn_keeps_scan_cache_for_ordinary_writes(_ctx, monkeypatch):
                        message="hello", started_at=1.0, ended_at=2.0)
 
     assert dropped == []
+
+
+def test_the_conversational_persona_names_the_model_serving_the_turn(
+        _ctx, monkeypatch):
+    """End-to-end for the 2026-08-17 self-identity change: the id `prepare_turn`
+    puts on the role must resolve to a system prompt that names the routed
+    model, with luxe as the harness around it."""
+    from luxe.agents.prompts import get as get_prompt
+
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(),
+                             lambda m: "review")
+    system = get_prompt(prep.role_cfg.system_prompt_id).system
+    assert system.startswith(f"You are {prep.model}, an AI assistant")
+    assert "through luxe" in system
+    assert "CONVERSATION" in system
+
+
+def test_a_pinned_turn_keeps_the_unparameterised_maintenance_persona(
+        _ctx, monkeypatch):
+    """The identity change is scoped to the conversational persona: an
+    explicit `/use <slot>` task turn still gets the baseline, which names no
+    model and no tool."""
+    from luxe.agents.prompts import get as get_prompt
+
+    cfg, session, sm = _ctx
+    session.pinned_slot = "code"
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    prep = repl.prepare_turn("do the thing", session, sm, cfg, frozenset(),
+                             lambda m: "implement")
+    assert prep.role_cfg.system_prompt_id == "baseline"
+    assert get_prompt("baseline").system.startswith(
+        "You are a code maintenance specialist")

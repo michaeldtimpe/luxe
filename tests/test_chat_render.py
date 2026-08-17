@@ -112,3 +112,69 @@ def test_strip_leaked_reasoning_is_a_noop_without_the_marker():
 
     for text in ("plain reply", "", "code: `<thinking>` isn't the marker"):
         assert strip_leaked_reasoning(text) == text
+
+
+class TestComposeAnswer:
+    """The visible reply is every step's prose, not just the last step's.
+
+    `AgentResult.final_text` is the LAST step's text. A model that speaks
+    before it acts leaves the opening of its answer on an intermediate step,
+    and chat rendered the tail alone — replies literally started mid-thought
+    (session 0eb5998d8825 turn -7: 3 steps, 2 tool calls, the lead-in stranded
+    in step 1). The join is CHAT-ONLY: `final_text` is untouched.
+    """
+
+    def test_step_prose_comes_before_the_final_answer(self):
+        from luxe.chat.render import compose_answer
+        r = AgentResult(step_texts=["Let me check the config."],
+                        final_text="It sets the strict flag.")
+        assert compose_answer(r) == (
+            "Let me check the config.\n\nIt sets the strict flag.")
+
+    def test_multiple_steps_keep_the_order_the_model_produced(self):
+        from luxe.chat.render import compose_answer
+        r = AgentResult(step_texts=["First I'll look.", "Now the tests."],
+                        final_text="All green.")
+        assert compose_answer(r) == (
+            "First I'll look.\n\nNow the tests.\n\nAll green.")
+
+    def test_a_turn_with_no_step_prose_is_unchanged(self):
+        """The overwhelmingly common case must be byte-identical."""
+        from luxe.chat.render import compose_answer
+        assert compose_answer(AgentResult(final_text="just this")) == "just this"
+
+    def test_a_recap_is_not_shown_twice(self):
+        """Models recap themselves; the final answer often repeats the lead-in."""
+        from luxe.chat.render import compose_answer
+        r = AgentResult(step_texts=["Checking the config."],
+                        final_text="Checking the config. It sets the flag.")
+        assert compose_answer(r) == "Checking the config. It sets the flag."
+
+    def test_identical_steps_collapse(self):
+        from luxe.chat.render import compose_answer
+        r = AgentResult(step_texts=["thinking", "thinking"], final_text="done")
+        assert compose_answer(r) == "thinking\n\ndone"
+
+    def test_blank_steps_are_dropped(self):
+        from luxe.chat.render import compose_answer
+        r = AgentResult(step_texts=["", "   \n"], final_text="answer")
+        assert compose_answer(r) == "answer"
+
+    def test_step_prose_survives_an_empty_final_answer(self):
+        """The turn -7 shape at its worst: everything the model said lived in
+        intermediate steps and the last step was silent."""
+        from luxe.chat.render import compose_answer
+        r = AgentResult(step_texts=["Here is what I found."], final_text="")
+        assert compose_answer(r) == "Here is what I found."
+
+    def test_no_result_is_the_empty_string(self):
+        from luxe.chat.render import compose_answer
+        assert compose_answer(None) == ""
+
+    def test_final_text_itself_is_never_mutated(self):
+        """No benchmark grader may see the join."""
+        from luxe.chat.render import compose_answer
+        r = AgentResult(step_texts=["lead-in"], final_text="answer")
+        compose_answer(r)
+        assert r.final_text == "answer"
+        assert r.step_texts == ["lead-in"]

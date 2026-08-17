@@ -98,6 +98,47 @@ def strip_leaked_reasoning(text: str) -> str:
     return _LEAKED_THINK_RE.sub("", text, count=1)
 
 
+def compose_answer(result) -> str:
+    """The full visible reply for a chat turn: acting-step prose, then the
+    final answer.
+
+    `AgentResult.final_text` is only the LAST step's text. A model that says
+    "Let me check the config…" and then calls a tool has put the opening of
+    its answer in an intermediate step, and chat showed the final fragment
+    alone — so replies began mid-thought (session 0eb5998d8825 turn -7:
+    3 steps, 2 tool calls, the lead-in stranded in step 1). Joining them here,
+    in the CHAT layer, fixes the rendered answer and the persisted transcript
+    together while leaving `final_text` — the field every benchmark grader
+    reads — untouched.
+
+    Deduplicated because a model that recaps itself is common. When one chunk
+    contains another the FULLER text wins in the earlier chunk's position: a
+    final answer that restates its own lead-in should appear once, complete,
+    and not be truncated to the fragment that happened to arrive first.
+    """
+    if result is None:
+        return ""
+    final = (getattr(result, "final_text", "") or "")
+    parts: list[str] = []
+    for text in list(getattr(result, "step_texts", []) or []) + [final]:
+        chunk = (text or "").strip()
+        if not chunk:
+            continue
+        superseded = next((i for i, kept in enumerate(parts) if kept in chunk),
+                          None)
+        if superseded is not None:
+            parts[superseded] = chunk
+            continue
+        if any(chunk in kept for kept in parts):
+            continue
+        parts.append(chunk)
+    if not parts:
+        return final
+    # `final` may have been dropped as a duplicate; the remaining order is the
+    # order the model produced it in, which is the order it reads in.
+    return "\n\n".join(parts)
+
+
 def summarize_args(args: dict[str, Any], *, max_len: int = 60) -> str:
     if not args:
         return ""

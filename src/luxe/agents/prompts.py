@@ -66,9 +66,31 @@ _BASELINE_TASK_PREFIX = (
 # now keys on turn KIND: only /plan drafting, autonomous /goal rounds, and
 # explicit `/use <slot>` pins keep _BASELINE_SYSTEM (repl.py).
 # Registry-only per chat.sdd (prompt strings never inline in the chat module).
-_CHAT_SYSTEM = """\
-You are luxe, an AI assistant talking with a developer in an interactive terminal
-session inside their current repository. This is a CONVERSATION, not a batch job.
+#
+# SELF-IDENTITY (2026-08-17, user decision): a chat session reports the MODEL
+# actually serving the turn, with luxe named as the harness around it. The old
+# opening ("You are luxe, an AI assistant…") made every model claim to be the
+# tool, which is wrong in the one place it matters most — a fallback session
+# opened during an outage, where "which model am I talking to?" is the first
+# question. The id is not always knowable (no catalog, a stand-in session, a
+# test), so the identity line is parameterised and the unparameterised form
+# below stays exactly as it was: a blank id degrades to it rather than
+# inventing a name. `_CHAT_SYSTEM_BODY` holds everything the two share.
+_CHAT_IDENTITY_LUXE = (
+    "You are luxe, an AI assistant talking with a developer in an interactive "
+    "terminal\nsession inside their current repository."
+)
+
+
+def _chat_identity_for(model_id: str) -> str:
+    return (
+        f"You are {model_id}, an AI assistant talking with a developer through "
+        "luxe, an\ninteractive terminal session inside their current repository."
+    )
+
+
+_CHAT_SYSTEM_BODY = """\
+ This is a CONVERSATION, not a batch job.
 
 - Reply directly and naturally, matching the length of your answer to the
   question. For greetings, small talk, or questions about you or what you can do,
@@ -83,10 +105,43 @@ session inside their current repository. This is a CONVERSATION, not a batch job
   write mode. For a larger build, point them at /plan (draft first) or /write.
 """
 
+_CHAT_SYSTEM = _CHAT_IDENTITY_LUXE + _CHAT_SYSTEM_BODY
+
 _CHAT_TASK_PREFIX = (
     "Answer the user's message directly. Reach for a tool only if you actually "
     "need to read or change files to respond."
 )
+
+#: Prefix marking a conversational-persona id bound to a specific model
+#: (`chat_conversational@moonshotai/kimi-k3`). Deliberately NOT registered in
+#: PROMPT_REGISTRY: the registry is the bake-off's enumerable surface and its
+#: contents are snapshotted (tests/golden/prompt_registry.json), so one entry
+#: per model id anybody ever chats with would make that snapshot depend on
+#: session history. `get()` renders these on demand instead.
+_CHAT_PERSONA_PREFIX = "chat_conversational@"
+
+
+def chat_system_for(model_id: str) -> str:
+    """The conversational system prompt, self-identified as `model_id`.
+
+    Blank/unknown degrades to the unparameterised wording — a session that
+    cannot name its model must not invent one.
+    """
+    mid = (model_id or "").strip()
+    identity = _chat_identity_for(mid) if mid else _CHAT_IDENTITY_LUXE
+    return identity + _CHAT_SYSTEM_BODY
+
+
+def chat_persona_id(model_id: str) -> str:
+    """Prompt id for the conversational persona bound to `model_id`.
+
+    The chat front-end sets this as the role's `system_prompt_id` for the turn
+    (chat.sdd: prompt STRINGS stay in this registry; the chat module only ever
+    handles ids). A blank id returns the plain `chat_conversational` id, so the
+    no-model path is byte-identical to the pre-2026-08-17 behaviour.
+    """
+    mid = (model_id or "").strip()
+    return f"{_CHAT_PERSONA_PREFIX}{mid}" if mid else "chat_conversational"
 
 # Skeleton-first directive for SoT variant — appended to baseline system.
 _SOT_APPENDIX = """\
@@ -915,6 +970,15 @@ def get(prompt_id: str) -> PromptVariant:
     """Look up a PromptVariant by id. Raises KeyError with a list of
     available ids if the lookup misses — surfaces typos quickly during
     bake-off variant authoring."""
+    if prompt_id.startswith(_CHAT_PERSONA_PREFIX):
+        # Model-bound conversational persona (`chat_persona_id`). Rendered,
+        # not stored: keeping it out of PROMPT_REGISTRY leaves the registry
+        # (and its golden snapshot) a fixed, enumerable set no matter which
+        # models a session happened to talk to.
+        return PromptVariant(
+            system=chat_system_for(prompt_id[len(_CHAT_PERSONA_PREFIX):]),
+            task_prefix=_CHAT_TASK_PREFIX,
+        )
     if prompt_id not in PROMPT_REGISTRY:
         raise KeyError(
             f"unknown prompt_id {prompt_id!r}; "

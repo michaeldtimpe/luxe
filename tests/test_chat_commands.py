@@ -17,7 +17,7 @@ from luxe.memory import project as project_mem
 
 class FakeBackend:
     def __init__(self, base_url="", model="", timeout_s=600.0, api_key="",
-                 body_extras=None, key_fallback=True):
+                 body_extras=None, key_fallback=True, send_num_ctx=True):
         self.base_url = base_url
         self.model = model
         self.timeout_s = timeout_s
@@ -26,6 +26,7 @@ class FakeBackend:
         # (2026-08-17); the double has to accept them to be constructible.
         self.body_extras = dict(body_extras or {})
         self.key_fallback = key_fallback
+        self.send_num_ctx = send_num_ctx
 
     def unload_all_loaded(self, *, except_for=None):
         return {}
@@ -1186,3 +1187,51 @@ def test_usage_is_registered_and_listed_in_help(ctx):
     invisible, and the suite asserts handlers ≡ help rows ∪ hidden."""
     cmd.dispatch("/help", ctx)
     assert "/usage" in _text(ctx)
+
+
+class TestCtxAbsoluteSizes:
+    """`/ctx` takes a raw token count on ANY backend (2026-08-17).
+
+    The named ladder stops at 256K, which was fine while every model was
+    local; a hosted model can serve 1,048,576. Named tiers keep working.
+    """
+
+    def test_a_plain_token_count_is_accepted(self, tmp_path, monkeypatch):
+        c = _ctx_with_ceiling(tmp_path, monkeypatch, num_ctx_max=131072)
+        cmd.dispatch("/ctx 65536", c)
+        assert c.session.num_ctx_override == 65536
+        assert "clamped" not in c._out.getvalue()
+
+    def test_k_and_m_suffixes_are_decimal_and_case_insensitive(self):
+        from luxe.chat.session import parse_ctx_size
+        assert parse_ctx_size("500k") == 500_000
+        assert parse_ctx_size("1M") == 1_000_000
+        assert parse_ctx_size(" 32768 ") == 32768
+        assert parse_ctx_size("1.5k") == 1500
+
+    def test_non_sizes_are_rejected(self):
+        from luxe.chat.session import parse_ctx_size
+        for junk in ("", "  ", "humongous", "-5", "0", "1g", "k", "12kk"):
+            assert parse_ctx_size(junk) is None, junk
+
+    def test_a_named_tier_still_wins_over_the_parser(self, tmp_path, monkeypatch):
+        c = _ctx_with_ceiling(tmp_path, monkeypatch, num_ctx_max=131072)
+        cmd.dispatch("/ctx large", c)
+        assert c.session.num_ctx_override == 65536
+
+    def test_an_absolute_size_over_the_ceiling_still_clamps(
+            self, tmp_path, monkeypatch):
+        c = _ctx_with_ceiling(tmp_path, monkeypatch, num_ctx_max=8192)
+        cmd.dispatch("/ctx 1m", c)
+        assert c.session.num_ctx_override == 1_000_000
+        assert "clamped to 8192" in c._out.getvalue()
+
+    def test_the_unknown_size_message_names_both_forms(self, ctx):
+        cmd.dispatch("/ctx humongous", ctx)
+        out = _text(ctx)
+        assert "Unknown size" in out
+        assert "500k" in out or "65536" in out
+
+    def test_a_local_help_line_still_talks_about_ram(self, ctx):
+        cmd.dispatch("/ctx", ctx)
+        assert "KV-cache" in _text(ctx)

@@ -29,7 +29,7 @@ class FakeBackend:
 
     def __init__(self, base_url="", model="", timeout_s=600.0, api_key="",
                  stall_timeout_s=1800.0, decode_stall_timeout_s=120.0,
-                 body_extras=None, key_fallback=True):
+                 body_extras=None, key_fallback=True, send_num_ctx=True):
         self.base_url = base_url
         self.model = model
         self.timeout_s = timeout_s
@@ -38,6 +38,7 @@ class FakeBackend:
         # like the deadlines above.
         self.body_extras = dict(body_extras or {})
         self.key_fallback = key_fallback
+        self.send_num_ctx = send_num_ctx
         # Mirrors the real Backend signature — the progress deadlines (B6) are
         # forwarded from BackendEntry, so the double has to accept them or the
         # wiring test can't observe what reached the constructor.
@@ -1044,3 +1045,457 @@ class TestEntryDefaultModel:
         c = _ctx(_multi_cfg())
         cmd.dispatch("/backend m5", c)
         assert "default_model" not in c._out.getvalue()
+
+
+# --- cloud-aware context handling ------------------------------------------
+#
+# The live failure (2026-08-17): a session on a 1,048,576-token hosted model
+# ran at the 32K local default, and `/ctx` reported tiers as needing RAM the
+# machine doesn't have — for a window the provider was already serving. Both
+# numbers were about THIS box's KV cache, which is not in the loop there.
+
+K3 = "moonshotai/kimi-k3"
+K3_CTX = 1_048_576
+
+
+def _ctx_catalog() -> list[dict]:
+    return [
+        {"id": K3, "context_length": K3_CTX,
+         "top_provider": {"context_length": 262144},
+         "pricing": {"prompt": "0.0000006", "completion": "0.0000025"},
+         "supported_parameters": ["tools"]},
+        {"id": "org/no-window-stated",
+         "pricing": {"prompt": "0", "completion": "0"}},
+        {"id": "org/provider-only",
+         "top_provider": {"context_length": 200000}},
+    ]
+
+
+def _cloud_ctx_cfg(**entry_kw) -> PipelineConfig:
+    kw = dict(base_url=OR, engine="openrouter", budget_usd=5.0,
+              default_model=K3, visible_models=[K3], default=True)
+    kw.update(entry_kw)
+    return PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith", num_ctx=32768,
+                                      num_ctx_max=262144)},
+        backends={"cloud": BackendEntry(**kw),
+                  "local": BackendEntry(base_url=LOCAL)},
+    )
+
+
+class TestCatalogContextLength:
+    def test_the_catalog_window_becomes_the_ceiling(self):
+        FakeBackend.catalog_records = {OR: _ctx_catalog()}
+        sm = slots_mod.SlotManager(_cloud_ctx_cfg())
+        assert sm.catalog_context_length(K3) == K3_CTX
+        # …and it OUTRANKS the role's num_ctx_max, which is about this box.
+        assert sm.ctx_ceiling("chat") == K3_CTX
+
+    def test_top_provider_is_the_fallback_field(self):
+        FakeBackend.catalog_records = {OR: _ctx_catalog()}
+        sm = slots_mod.SlotManager(_cloud_ctx_cfg(default_model="org/provider-only"))
+        assert sm.catalog_context_length("org/provider-only") == 200000
+
+    def test_a_model_with_no_stated_window_falls_back_to_the_role(self):
+        FakeBackend.catalog_records = {OR: _ctx_catalog()}
+        sm = slots_mod.SlotManager(
+            _cloud_ctx_cfg(default_model="org/no-window-stated"))
+        assert sm.catalog_context_length("org/no-window-stated") == 0
+        assert sm.ctx_ceiling("chat") == 262144        # role num_ctx_max
+
+    def test_a_local_endpoint_never_warms_the_catalog_for_this(self):
+        """`ctx_ceiling` runs every turn; oMLX reports ids only, so the GET
+        could never answer and must not be paid."""
+        FakeBackend.served = {LOCAL: ["Champ"]}
+        cfg = _cloud_ctx_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        sm = slots_mod.SlotManager(cfg)
+        assert sm.ctx_ceiling("chat") == 262144
+        assert FakeBackend.catalog_calls.get(LOCAL) is None
+
+    def test_a_local_endpoint_keeps_the_manifest_cap(self):
+        """Regression guard for the old path: nothing about the new ceiling
+        may bypass the per-model `ctx_max`."""
+        from luxe.config import HostManifest
+        cfg = _cloud_ctx_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        cfg.hosts = {"testhost": HostManifest(main="Champ",
+                                              ctx_max={"Champ": 16384})}
+        sm = slots_mod.SlotManager(cfg, manifest_host="testhost")
+        assert sm.ctx_ceiling("chat") == 16384
+
+    def test_it_degrades_to_zero_when_the_catalog_is_unreachable(self):
+        FakeBackend.catalog_records = {}
+        sm = slots_mod.SlotManager(_cloud_ctx_cfg())
+        assert sm.catalog_context_length(K3) == 0
+        assert sm.ctx_ceiling("chat") == 262144
+
+
+class TestBillableDefaultWindow:
+    def test_a_billable_backend_defaults_to_128k(self):
+        """A cost bound, not a capability one: the window sets how much
+        history each metered step re-sends."""
+        from luxe.chat.session import BILLABLE_DEFAULT_NUM_CTX
+        FakeBackend.catalog_records = {OR: _ctx_catalog()}
+        sm = slots_mod.SlotManager(_cloud_ctx_cfg())
+        assert sm.default_num_ctx("chat") == BILLABLE_DEFAULT_NUM_CTX == 131072
+        assert sm.role_for("chat").num_ctx == 32768      # role untouched
+
+    def test_a_local_backend_keeps_the_roles_window(self):
+        cfg = _cloud_ctx_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        sm = slots_mod.SlotManager(cfg)
+        assert sm.default_num_ctx("chat") == 32768
+
+    def test_the_default_is_clamped_to_a_smaller_ceiling(self):
+        """A billable model with a 64K window must not default above it."""
+        FakeBackend.catalog_records = {OR: [{"id": K3, "context_length": 65536}]}
+        sm = slots_mod.SlotManager(_cloud_ctx_cfg())
+        assert sm.default_num_ctx("chat") == 65536
+
+    def test_a_turn_uses_the_billable_default_without_any_ctx_command(self):
+        """The whole point: no `/ctx` typed, and the turn still runs wide."""
+        from luxe.chat import repl as repl_mod
+
+        FakeBackend.catalog_records = {OR: _ctx_catalog()}
+        FakeBackend.served = {OR: [K3]}
+        cfg = _cloud_ctx_cfg()
+        sm = slots_mod.SlotManager(cfg)
+        session = ChatSession()
+        prep = repl_mod.prepare_turn("hello", session, sm, cfg, frozenset(),
+                                     lambda m: "review")
+        assert prep.role_cfg.num_ctx == 131072
+        assert prep.ctx_ceiling == K3_CTX
+
+    def test_an_explicit_ctx_override_still_wins(self):
+        from luxe.chat import repl as repl_mod
+
+        FakeBackend.catalog_records = {OR: _ctx_catalog()}
+        FakeBackend.served = {OR: [K3]}
+        cfg = _cloud_ctx_cfg()
+        sm = slots_mod.SlotManager(cfg)
+        session = ChatSession(num_ctx_override=500_000)
+        prep = repl_mod.prepare_turn("hello", session, sm, cfg, frozenset(),
+                                     lambda m: "review")
+        assert prep.role_cfg.num_ctx == 500_000
+
+    def test_a_local_turn_is_byte_identical(self):
+        """The control: no override, local backend ⇒ the role's own window,
+        exactly as before this change."""
+        from luxe.chat import repl as repl_mod
+
+        cfg = _cloud_ctx_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        sm = slots_mod.SlotManager(cfg)
+        prep = repl_mod.prepare_turn("hello", ChatSession(), sm, cfg,
+                                     frozenset(), lambda m: "review")
+        assert prep.role_cfg.num_ctx == 32768
+
+
+class TestCtxCommandOnACloudBackend:
+    def _ctx_cloud(self, monkeypatch):
+        from luxe.chat import origin as origin_mod
+        FakeBackend.catalog_records = {OR: _ctx_catalog()}
+        FakeBackend.served = {OR: [K3]}
+        # The model is served by another machine — its KV cache is not ours.
+        monkeypatch.setattr(
+            origin_mod, "cached_origin_for",
+            lambda backend, model: origin_mod.ModelOrigin(kind="remote",
+                                                          model_id=model))
+        return _ctx(_cloud_ctx_cfg())
+
+    def test_every_tier_is_inside_range_on_a_1m_model(self, monkeypatch):
+        c = self._ctx_cloud(monkeypatch)
+        cmd.dispatch("/ctx", c)
+        assert "(>max)" not in c._out.getvalue()
+
+    def test_ram_warnings_are_suppressed_for_remote_weights(self, monkeypatch):
+        """They are local-KV arithmetic; here they would tell the user their
+        machine is too small for a window the provider already serves."""
+        c = self._ctx_cloud(monkeypatch)
+        cmd.dispatch("/ctx", c)
+        out = c._out.getvalue()
+        assert "needs" not in out and "GB" not in out
+
+    def test_the_help_line_talks_about_billing_not_ram(self, monkeypatch):
+        c = self._ctx_cloud(monkeypatch)
+        cmd.dispatch("/ctx", c)
+        out = c._out.getvalue()
+        assert "billable prompt tokens" in out
+        assert "KV-cache" not in out
+
+    def test_it_reports_the_real_max_and_the_billable_default(self, monkeypatch):
+        c = self._ctx_cloud(monkeypatch)
+        cmd.dispatch("/ctx", c)
+        out = c._out.getvalue()
+        assert str(K3_CTX) in out          # · max 1048576
+        assert "131072" in out             # the window in force
+
+    def test_an_absolute_size_inside_the_real_ceiling_is_not_clamped(
+            self, monkeypatch):
+        c = self._ctx_cloud(monkeypatch)
+        cmd.dispatch("/ctx 500k", c)
+        assert c.session.num_ctx_override == 500_000
+        assert "clamped" not in c._out.getvalue()
+
+    def test_past_the_real_ceiling_the_clamp_names_the_endpoint(self, monkeypatch):
+        c = self._ctx_cloud(monkeypatch)
+        cmd.dispatch("/ctx 2m", c)
+        out = c._out.getvalue()
+        assert f"clamped to {K3_CTX}" in out
+        assert "as the endpoint reports it" in out
+        assert "num_ctx_max" not in out    # not this box's config to raise
+
+    def test_the_status_bar_shows_the_effective_window(self, monkeypatch):
+        from luxe.chat import status as status_mod
+        from luxe.chat.status import StatusState
+
+        c = self._ctx_cloud(monkeypatch)
+        c.session.num_ctx_override = 500_000
+        segs = status_mod.fields(c.session, c.slots, "", StatusState())
+        text = " · ".join("".join(t for t, _p, _r in s.spans) for s in segs)
+        assert "488K" in text              # 500000 rendered in the K convention
+
+
+def test_num_ctx_is_not_sent_on_the_openrouter_wire():
+    """An Ollama/oMLX-ism a hosted provider ignores. Declared per ENDPOINT
+    (`backend_kwargs`), not tested for inside the body assembly."""
+    from luxe.config import BackendEntry
+
+    cloud = BackendEntry(base_url=OR, engine="openrouter")
+    assert cloud.backend_kwargs()["send_num_ctx"] is False
+    # every local entry omits the kwarg, so nothing that sent it stops
+    assert "send_num_ctx" not in BackendEntry(base_url=LOCAL).backend_kwargs()
+    assert "send_num_ctx" not in BackendEntry(
+        base_url=LOCAL, engine="llama-server").backend_kwargs()
+
+
+def test_the_backend_honours_send_num_ctx():
+    import json as _json
+
+    import httpx
+
+    from luxe.backend import Backend
+
+    seen: dict = {}
+
+    def _handler(request):
+        seen.update(_json.loads(request.content))
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+
+    def _run(**kw):
+        seen.clear()
+        b = Backend(base_url="http://test", model="m", api_key="k", **kw)
+        b._client = httpx.Client(base_url="http://test",
+                                 transport=httpx.MockTransport(_handler))
+        b.chat([{"role": "user", "content": "hi"}], num_ctx=131072)
+        return dict(seen)
+
+    assert _run()["num_ctx"] == 131072            # default: unchanged
+    assert "num_ctx" not in _run(send_num_ctx=False)
+
+
+# --- /reasoning: effort control on a thinking model ------------------------
+#
+# kimi-k3 is a REASONING model and every reasoning token is billed. A
+# one-sentence question measured 255 characters of answer against 3,568 of
+# reasoning and 792 billed completion tokens (2026-08-17). Effort is therefore
+# a COST control first, and it rides the same declared-body mechanism as
+# everything else on this endpoint.
+
+
+def _reasoning_cfg(effort: str = "low") -> PipelineConfig:
+    return PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        backends={"cloud": BackendEntry(base_url=OR, engine="openrouter",
+                                        reasoning_effort=effort,
+                                        default_model=K3, default=True),
+                  "local": BackendEntry(base_url=LOCAL)},
+    )
+
+
+class TestReasoningEffortConfig:
+    def test_the_entry_renders_it_into_the_declared_body(self):
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url=OR, engine="openrouter",
+                         reasoning_effort="high")
+        assert e.backend_kwargs()["body_extras"]["reasoning"] == {"effort": "high"}
+
+    def test_off_asks_the_provider_not_to_return_it(self):
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url=OR, engine="openrouter",
+                         reasoning_effort="off")
+        assert e.backend_kwargs()["body_extras"]["reasoning"] == {"exclude": True}
+
+    def test_unset_sends_nothing(self):
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url=OR, engine="openrouter")
+        assert "reasoning" not in e.backend_kwargs().get("body_extras", {})
+
+    def test_it_is_confined_to_the_engine_that_reads_it(self):
+        """Posting an unknown vendor field at oMLX buys nothing."""
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url=LOCAL, reasoning_effort="high")
+        assert "body_extras" not in e.backend_kwargs()
+
+    def test_it_merges_beside_the_other_declared_extras(self):
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url=OR, engine="openrouter",
+                         reasoning_effort="low",
+                         body_extras={"usage": {"include": True}})
+        extras = e.backend_kwargs()["body_extras"]
+        assert extras == {"usage": {"include": True},
+                          "reasoning": {"effort": "low"}}
+
+    def test_it_reaches_the_constructed_backend(self):
+        sm = slots_mod.SlotManager(_reasoning_cfg("medium"))
+        assert sm.backend.body_extras["reasoning"] == {"effort": "medium"}
+
+    def test_the_translation_table(self):
+        from luxe.config import reasoning_extras
+        assert reasoning_extras("low") == {"effort": "low"}
+        assert reasoning_extras("HIGH") == {"effort": "high"}
+        assert reasoning_extras("off") == {"exclude": True}
+        assert reasoning_extras("default") is None
+        assert reasoning_extras("") is None
+        assert reasoning_extras("nonsense") is None
+
+    def test_the_shipped_chat_yaml_asks_for_the_cheap_tier(self):
+        from pathlib import Path
+
+        from luxe.config import load_config
+        cfg = load_config(Path(__file__).parents[1] / "configs" / "chat.yaml")
+        e = cfg.backend_entry("openrouter")
+        assert e.reasoning_effort == "low"
+        assert e.backend_kwargs()["body_extras"]["reasoning"] == {"effort": "low"}
+        # local entries are untouched
+        assert cfg.backend_entry("local").reasoning_effort == ""
+
+
+class TestReasoningCommand:
+    def _cloud(self, effort="low"):
+        FakeBackend.served = {OR: [K3]}
+        return _ctx(_reasoning_cfg(effort))
+
+    def test_bare_reasoning_reports_instead_of_toggling(self):
+        """It grew from a bare display toggle into the effort control, so the
+        no-arg form now says what is in force."""
+        c = self._cloud()
+        before = c.session.show_reasoning
+        cmd.dispatch("/reasoning", c)
+        out = c._out.getvalue()
+        assert "effort" in out and "low" in out
+        assert c.session.show_reasoning is before
+
+    def test_setting_an_effort_rewrites_the_live_body(self):
+        c = self._cloud()
+        cmd.dispatch("/reasoning high", c)
+        assert c.slots.backend.body_extras["reasoning"] == {"effort": "high"}
+        assert "high" in c._out.getvalue()
+
+    def test_off_sends_exclude(self):
+        c = self._cloud()
+        cmd.dispatch("/reasoning off", c)
+        assert c.slots.backend.body_extras["reasoning"] == {"exclude": True}
+
+    def test_default_removes_the_field_entirely(self):
+        c = self._cloud()
+        cmd.dispatch("/reasoning default", c)
+        assert "reasoning" not in c.slots.backend.body_extras
+
+    def test_show_and_hide_still_drive_the_live_display(self):
+        c = self._cloud()
+        assert c.session.show_reasoning is False
+        cmd.dispatch("/reasoning show", c)
+        assert c.session.show_reasoning is True
+        cmd.dispatch("/reasoning hide", c)
+        assert c.session.show_reasoning is False
+
+    def test_show_when_already_shown_is_a_no_op(self):
+        c = self._cloud()
+        c.session.show_reasoning = True
+        cmd.dispatch("/reasoning show", c)
+        assert c.session.show_reasoning is True
+        assert "already" in c._out.getvalue()
+
+    def test_an_unknown_setting_changes_nothing(self):
+        c = self._cloud()
+        cmd.dispatch("/reasoning ludicrous", c)
+        assert c.slots.backend.body_extras["reasoning"] == {"effort": "low"}
+        assert "Unknown reasoning setting" in c._out.getvalue()
+
+    def test_effort_is_refused_on_an_engine_that_ignores_it(self):
+        """A setting that changes nothing is worse than a message saying so."""
+        cfg = _reasoning_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        c = _ctx(cfg)
+        cmd.dispatch("/reasoning high", c)
+        out = c._out.getvalue()
+        assert "no effect on oMLX" in out
+        assert "reasoning" not in (c.slots.backend.body_extras or {})
+
+    def test_show_hide_still_work_on_a_local_backend(self):
+        """The display toggle is engine-agnostic — it is about the screen."""
+        cfg = _reasoning_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        c = _ctx(cfg)
+        cmd.dispatch("/reasoning show", c)
+        assert c.session.show_reasoning is True
+
+    def test_the_bare_form_says_so_on_an_unsupported_engine(self):
+        cfg = _reasoning_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        c = _ctx(cfg)
+        cmd.dispatch("/reasoning", c)
+        assert "no effect on oMLX" in c._out.getvalue()
+
+    def test_status_shows_the_effort_where_it_applies(self):
+        c = self._cloud()
+        cmd.dispatch("/reasoning high", c)
+        cmd.dispatch("/status", c)
+        out = c._out.getvalue()
+        assert "reasoning" in out and "effort high" in out
+
+    def test_status_omits_it_on_a_local_backend(self):
+        cfg = _reasoning_cfg()
+        cfg.backends["cloud"].default = False
+        cfg.backends["local"].default = True
+        c = _ctx(cfg)
+        cmd.dispatch("/status", c)
+        assert "effort" not in c._out.getvalue()
+
+
+def test_the_reasoning_block_goes_top_level_on_the_wire():
+    """Vendor fields are TOP-LEVEL, never `extra_body` (2026-08-11)."""
+    import json as _json
+
+    import httpx
+
+    from luxe.backend import Backend
+
+    seen: dict = {}
+
+    def _handler(request):
+        seen.update(_json.loads(request.content))
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+
+    b = Backend(base_url="http://test", model="m", api_key="k",
+                body_extras={"reasoning": {"effort": "low"}})
+    b._client = httpx.Client(base_url="http://test",
+                             transport=httpx.MockTransport(_handler))
+    b.chat([{"role": "user", "content": "hi"}])
+    assert seen["reasoning"] == {"effort": "low"}
+    assert "extra_body" not in seen

@@ -246,8 +246,10 @@ class ChatApp(App):
         self.infer = infer
         self.keep_loaded = keep_loaded
         self.cancel = CancelToken()
+        # Seeded from the window the FIRST turn will use, not the role's — a
+        # billable endpoint starts wider (repl.py has the same seed).
         self.status = StatusState(opened_at=time.time(),
-                                  num_ctx=slots.role_for("chat").num_ctx)
+                                  num_ctx=slots.default_num_ctx("chat"))
         self._busy = False
         self._worker_thread: threading.Thread | None = None
         # live-turn coalescing buffers (written on the worker, read by the timer)
@@ -257,6 +259,7 @@ class ChatApp(App):
         self._ctx_pressure = 0.0          # live context pressure (on_progress)
         self._activity: str | None = None  # gitkit/compare set this for the live line
         self._running_cmd = ""             # bash command currently executing
+        self._reasoning_since = 0.0        # epoch of the current thinking burst
         self._timer = None
         self._queue: list[tuple[str, str]] = []  # type-ahead: (display, message) mid-run
         self._paste_chunks: list[tuple[str, str]] = []  # (chip, full text) pending
@@ -512,6 +515,7 @@ class ChatApp(App):
         self._ctx_pressure = 0.0
         self._activity = None
         self._running_cmd = ""
+        self._reasoning_since = 0.0
 
     def _end_busy(self) -> None:
         self._tick()  # final frame so the last ~100ms isn't clipped
@@ -549,6 +553,13 @@ class ChatApp(App):
             running = self._running_cmd
             if running:
                 tools = (tools + " · " if tools else "") + f"$ {running[:80]}"
+            # Reasoning channel: counts only, never the text (chat.sdd). A
+            # thinking model can be silent for minutes before its first
+            # content token — measured at 10.5 min with nothing on screen.
+            if self._reasoning_since:
+                think_s = max(0.0, time.time() - self._reasoning_since)
+                tools = ((tools + " · " if tools else "")
+                         + f"thinking {think_s:.0f}s")
             body = (f"{elapsed:4.1f}s" + (f" · {tools}" if tools else "")
                     + " · esc to interrupt")
         tail = self._stream[-200:].replace("\n", " ")
@@ -601,6 +612,13 @@ class ChatApp(App):
         def _on_token(delta):
             raise_if_cancelled(self.cancel)
             self._stream += delta
+            self._reasoning_since = 0.0     # answer tokens: it stopped thinking
+
+        def _on_reasoning(delta):
+            # Counter only — the reasoning TEXT never reaches the transcript,
+            # the fold, or (by default) the screen.
+            if not self._reasoning_since:
+                self._reasoning_since = time.time()
 
         def _on_progress(pressure):
             self._ctx_pressure = pressure  # rendered live by the timer
@@ -614,10 +632,18 @@ class ChatApp(App):
         started = time.time()
         interrupted = False
         result = None
+        # Reasoning sink on the Backend instance chat owns; the loop's
+        # `backend.chat` call site is frozen (chat.sdd), so the channel is
+        # wired here and unwired below.
+        turn_backend = self.slots.backend
+        turn_backend.on_reasoning = _on_reasoning
         try:
             result = prep.call(_on_event, _on_token, _on_progress, _on_notice)
         except (ChatCancelled, KeyboardInterrupt):
             interrupted = True
+        finally:
+            turn_backend.on_reasoning = None
+            self._reasoning_since = 0.0
         ended = time.time()
         outcome = _repl.finalize_turn(self.session, prep, result,
                                       interrupted=interrupted, message=message,

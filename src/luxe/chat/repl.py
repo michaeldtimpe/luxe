@@ -25,6 +25,7 @@ from rich.status import Status
 from luxe import ephemeral
 from luxe.agents.single import run_single
 from luxe.backend import BackendError
+from luxe.agents import prompts as prompts_mod
 from luxe.chat import commands as cmd
 from luxe.chat import cost as cost_mod
 from luxe.chat.render import (
@@ -32,6 +33,7 @@ from luxe.chat.render import (
     CancelToken,
     ChatCancelled,
     arrow_prompt_markup,
+    compose_answer,
     format_tool_call,
     format_tool_call_verbose,
     make_tool_event,
@@ -267,9 +269,11 @@ def run_chat_repl(
 
     # Static bottom-toolbar status bar (chat.sdd lightweight variant): refreshed
     # from `status` between turns; the reader pins it under the input line.
-    # Seed num_ctx from the chat slot's role so the bar shows the window size
-    # (`ctx 32K`) immediately — before the first turn measures usage.
-    status = StatusState(opened_at=time.time(), num_ctx=slots.role_for("chat").num_ctx)
+    # Seed num_ctx from the window the FIRST turn will actually use so the bar
+    # shows the right size (`ctx 32K` / `ctx 128K`) immediately — before that
+    # turn measures usage. `default_num_ctx` is the role's window everywhere
+    # but a billable endpoint, which starts wider (chat/session.py).
+    status = StatusState(opened_at=time.time(), num_ctx=slots.default_num_ctx("chat"))
     reader = reader or _default_reader(
         console,
         status_markup_fn=lambda: status_mod.status_markup(session, slots, repo_path, status),
@@ -580,9 +584,15 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     # user-pinned `/use <slot>` turn. The conversational prompt still does
     # real work — it reads/edits via tools when the message calls for it.
     # Prompt ids resolve in the registry (chat.sdd).
+    #
+    # The persona also SELF-IDENTIFIES as the model actually serving the turn
+    # (2026-08-17), with luxe named as the harness — `chat_persona_id` returns
+    # the model-bound id and the string itself stays in the registry (chat.sdd:
+    # no prompt text in this module). An unknown model id returns the plain
+    # `chat_conversational` id, i.e. the previous wording exactly.
     if pinned is None and not plan_mode and not session.goal_active:
         role_cfg = role_cfg.model_copy(update={
-            "system_prompt_id": "chat_conversational",
+            "system_prompt_id": prompts_mod.chat_persona_id(model),
             "task_prompt_id": "chat_conversational",
             "task_overlay_id": "",
         })
@@ -680,9 +690,14 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     # (role's box ceiling ∧ the manifest's per-model cap for the model this
     # turn actually runs) so a tier request can never exceed what this
     # box/model pair can hold — including after an auto-degrade.
+    # The ceiling is now the ENDPOINT's truth when it has one (a hosted model's
+    # catalog `context_length`), else the box's `num_ctx_max` ∧ manifest cap.
+    # The unset-override default also moves on a billable endpoint, where the
+    # window is a cost bound rather than a RAM one (slots.default_num_ctx).
     ctx_ceiling = slots.ctx_ceiling(slot)
-    if session.num_ctx_override:
-        effective_ctx = min(session.num_ctx_override, ctx_ceiling)
+    requested_ctx = session.num_ctx_override or slots.default_num_ctx(slot)
+    if requested_ctx:
+        effective_ctx = min(requested_ctx, ctx_ceiling)
         if effective_ctx != role_cfg.num_ctx:
             role_cfg = role_cfg.model_copy(update={"num_ctx": effective_ctx})
 
@@ -780,7 +795,11 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
         if any(str(p).endswith(".sdd") for p in prep.changed_files):
             spec_resolver.invalidate_scan_cache(session.repo_path or None)
 
-    assistant_text = (result.final_text if result else "") or ""
+    # The visible answer is every step's prose, not just the last step's:
+    # `final_text` alone made replies start mid-thought when the model spoke
+    # before acting (render.compose_answer). Chat-only — `result.final_text`
+    # is unchanged and is still what the benchmark path reads.
+    assistant_text = compose_answer(result) if result else ""
     if not assistant_text and interrupted:
         assistant_text = partial_text or ""
     # Chat-only hygiene (the benchmark path never runs through here): drop a
@@ -874,6 +893,11 @@ def _run_turn(
     console.print(f"[dim]slot: {prep.slot} · model: {prep.model}{bash_note}[/]")
 
     cancel.reset()
+    # Reasoning sink for THIS turn, on the Backend instance chat owns (the
+    # loop's `backend.chat` call site is frozen — chat.sdd). Cleared in the
+    # finally below so nothing outside a live turn can be fed into a UI object
+    # that no longer exists.
+    turn_backend = slots.backend
     prev_handler = None
     try:
         prev_handler = signal.getsignal(signal.SIGINT)
@@ -904,6 +928,10 @@ def _run_turn(
             )
             activity = status_mod.LiveActivity(
                 session, slots, session.repo_path, live_state, started_at)
+            # A reasoning model can think for minutes before its first content
+            # token (measured: 10.5 min with nothing on screen). Feed the
+            # counter, never the text.
+            turn_backend.on_reasoning = activity.on_reasoning
             with Live(activity, console=console, refresh_per_second=10,
                       transient=True) as live:
                 reasoner = _ReasoningStreamer(
@@ -968,6 +996,7 @@ def _run_turn(
         console.print("[yellow]· interrupted — partial turn saved[/]")
     finally:
         ended_at = time.time()
+        turn_backend.on_reasoning = None
         if prev_handler is not None:
             try:
                 signal.signal(signal.SIGINT, prev_handler)

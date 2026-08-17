@@ -59,6 +59,15 @@ class ChatResponse:
     finish_reason: str = ""
     timing: GenerationTiming = field(default_factory=GenerationTiming)
     retries: int = 0
+    # How much REASONING the model emitted alongside (or instead of) `text`.
+    # A count, never the text: reasoning is a separate channel that must not
+    # reach the answer, the transcript, or the history fold (chat.sdd). It is
+    # recorded because "the model produced nothing" and "the model spent 3,568
+    # characters thinking and then said nothing" are different failures, and
+    # the empty-completion guard has to be able to say which one happened
+    # (live evidence 2026-08-17: content=255 chars vs reasoning=3568 on a
+    # one-sentence question, 792 completion tokens billed).
+    reasoning_chars: int = 0
 
 
 # --- Text-channel tool-call recovery -----------------------------------------
@@ -246,6 +255,29 @@ _PROTECTED_BODY_KEYS = frozenset({
 })
 
 
+#: Keys a delta/message may carry the reasoning channel under. OpenRouter and
+#: DeepSeek-style servers use `reasoning`; several OpenAI-compatible proxies
+#: emit `reasoning_content` for the same thing. Both are tolerated because
+#: guessing wrong means a reasoning model looks silent (chat.sdd).
+_REASONING_KEYS = ("reasoning", "reasoning_content")
+
+
+def _reasoning_text(blob: Any) -> str:
+    """The reasoning fragment out of a delta or message object, or "".
+
+    Never raises and never returns a non-str: this feeds a progress clock and
+    a character counter, both of which must survive a provider sending
+    something structured (`reasoning_details` is a list, and is ignored here).
+    """
+    if not isinstance(blob, dict):
+        return ""
+    for key in _REASONING_KEYS:
+        val = blob.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return ""
+
+
 def _usage_cost(usage: dict[str, Any]) -> float | None:
     """USD cost out of an OpenAI-compatible `usage` block, or None.
 
@@ -314,7 +346,27 @@ class Backend:
         # oMLX key must never be sent to another vendor's server because the
         # endpoint's own variable happened to be unset (chat/slots.py).
         key_fallback: bool = True,
+        # Whether `num_ctx` (the Ollama/oMLX window hint) belongs on the wire
+        # for this endpoint. True is the shipped behaviour everywhere it has
+        # ever been sent. Declared False by the chat wiring for endpoints where
+        # the field is meaningless — a hosted provider fixes the window per
+        # model and luxe's `num_ctx` there is pure CLIENT-SIDE accounting
+        # (compaction thresholds, ctx%). This is a per-endpoint declaration
+        # like `body_extras`, not an engine test: `Backend` is never told what
+        # engine it is talking to, and nothing here reads one.
+        send_num_ctx: bool = True,
     ):
+        self.send_num_ctx = send_num_ctx
+        # Live reasoning-channel sink, set by the CHAT front-end on the Backend
+        # instance it owns (chat/slots.py builds it). An INSTANCE attribute
+        # rather than a `chat()` kwarg on purpose: `agents/loop.py`'s
+        # `backend.chat` call site and `run_agent`'s signature are frozen
+        # (chat.sdd Must-not), and a benchmark Backend is constructed without
+        # a front-end, so this stays None there and the deterministic path
+        # never learns the channel exists. Display-only: it receives fragments
+        # so a UI can show "thinking…", and nothing it is handed is ever
+        # returned in `ChatResponse.text`.
+        self.on_reasoning: Callable[[str], None] | None = None
         self.body_extras: dict[str, Any] = dict(body_extras or {})
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -380,7 +432,7 @@ class Backend:
         # ignore unknown top-level fields (oMLX's ChatCompletionRequest sets no
         # `extra` policy, so pydantic v2 defaults to "ignore"), which is what
         # makes flattening safe rather than a 400.
-        if num_ctx is not None:
+        if num_ctx is not None and self.send_num_ctx:
             # NOTE: oMLX has no per-request context knob at ANY spelling — it
             # enforces `validate_context_window()` against the model's native
             # length and 400s past it. This field is honoured by Ollama-style
@@ -489,6 +541,11 @@ class Backend:
                     ))
 
                 text = msg.get("content") or ""
+                # Reasoning is COUNTED, never merged into `text`. On this path
+                # there is nothing live to show, but the count is what lets a
+                # blank answer be reported as "thought and said nothing"
+                # rather than "returned nothing".
+                reasoning_chars = len(_reasoning_text(msg))
                 if not tc_list:
                     # Native channel empty — check the text channel (see
                     # recover_tool_calls_from_text above for why).
@@ -502,6 +559,7 @@ class Backend:
                     finish_reason=choice.get("finish_reason", ""),
                     timing=timing,
                     retries=attempt,
+                    reasoning_chars=reasoning_chars,
                 )
             except (httpx.HTTPError, OSError) as exc:
                 decision = classify_failure(
@@ -590,6 +648,7 @@ class Backend:
             tool_frags: dict[int, dict[str, Any]] = {}
             finish_reason = ""
             usage: dict[str, Any] = {}
+            reasoning_chars = 0
             ttft = 0.0
             started = False
             # Distinct from `started` (which pins ttft to the first *content*
@@ -656,6 +715,20 @@ class Backend:
                             last_progress = time.monotonic()
                         for choice in chunk.get("choices", []):
                             delta = choice.get("delta", {}) or {}
+                            # REASONING CHANNEL. Counts as progress — a
+                            # reasoning model can think for minutes before its
+                            # first content token, and those chunks used to be
+                            # invisible to both clocks, so a working request
+                            # looked like a stall and died as a "timeout".
+                            # It deliberately does NOT set `decoding`: no
+                            # answer token has arrived, so the generous
+                            # pre-first-token bound is still the right one.
+                            think = _reasoning_text(delta)
+                            if think:
+                                reasoning_chars += len(think)
+                                last_progress = time.monotonic()
+                                if self.on_reasoning:
+                                    self.on_reasoning(think)
                             piece = delta.get("content") or ""
                             if piece:
                                 if not started:
@@ -720,6 +793,7 @@ class Backend:
                         cost_usd=_usage_cost(usage),
                     ),
                     retries=attempt,
+                    reasoning_chars=reasoning_chars,
                 )
             except (httpx.HTTPError, OSError) as exc:
                 decision = classify_failure(

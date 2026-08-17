@@ -60,7 +60,9 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _HABITUATION_EXIT_MIN_STEP,
     _MAX_CONSECUTIVE_REPEAT_STEPS,
     _POST_WRITE_IDLE_MAX,
+    _EMPTY_TURN_MESSAGE,
     _TRUNCATED_TURN_MESSAGE,
+    EmptyTurnGuard,
     TruncatedTurnGuard,
     _PROSE_BURST_MAX_STEP,
     _PROSE_BURST_MESSAGE,
@@ -130,6 +132,11 @@ class AgentResult:
     # 0.0 on every local engine, which never reports a cost. Additive reporting
     # field only: no loop logic reads it, so benchmark behavior is untouched.
     cost_usd: float = 0.0
+    # Prose the model emitted on ACTING steps (text alongside tool calls), in
+    # order. Additive reporting field: `final_text` is untouched and no
+    # benchmark grader reads this. The chat layer joins it ahead of the final
+    # answer so a reply stops starting mid-thought (see loop body).
+    step_texts: list[str] = field(default_factory=list)
     wall_s: float = 0.0
     peak_context_pressure: float = 0.0
     final_context_pressure: float = 0.0  # last per-step pressure (matches token-progress)
@@ -402,6 +409,8 @@ def run_agent(
     truncated_turn_retry_enabled = flags.truncated_turn_retry
     truncated_turn_max_retries = flags.truncated_turn_max_retries
     truncated_turn_retries_used = 0
+    empty_turn_retry_enabled = flags.empty_turn_retry
+    empty_turn_retries_used = 0
     # Server-truth context calibration (2026-08-11). `estimate_tokens` is
     # chars//4 and reads ~1.9x low on code + JSON tool payloads, so every
     # compaction threshold fired at roughly twice the context it named. Each
@@ -1136,6 +1145,54 @@ def run_agent(
                 )
                 continue
 
+            # Empty-completion gate (2026-08-17). A turn with no tool call AND
+            # no text satisfies the terminal test above exactly as a real
+            # answer does, so a blank reply was recorded as a finished turn —
+            # no gate, no warning, nothing in the record to tell them apart.
+            # Nudge and continue. Bounded at one retry; ordered AFTER the
+            # truncation gate so a cut-off response is handled by the guard
+            # that owns it rather than spending both budgets on one problem.
+            et = EmptyTurnGuard.should_fire(
+                empty_turn_retry_enabled=empty_turn_retry_enabled,
+                text=resp.text or "",
+                has_tool_calls=bool(tool_calls),
+                finish_reason=getattr(resp, "finish_reason", "") or "",
+                retries_used=empty_turn_retries_used,
+            )
+            if et is not None:
+                messages.append({
+                    "role": "user",
+                    "content": _EMPTY_TURN_MESSAGE,
+                    "_luxe_nudge": True,
+                    "_luxe_nudge_type": EmptyTurnGuard.nudge_type,
+                })
+                empty_turn_retries_used += 1
+                reasoning_chars = getattr(resp, "reasoning_chars", 0)
+                if log_calls:
+                    append_event(
+                        run_id, "empty_turn_retry",
+                        phase=phase, step=step,
+                        retries_used=empty_turn_retries_used,
+                        max_retries=et["max_retries"],
+                        finish_reason=et["finish_reason"],
+                        reasoning_chars=reasoning_chars,
+                    )
+                logger.debug(
+                    "empty turn retry step=%d retries_used=%d "
+                    "finish_reason=%s reasoning_chars=%d",
+                    step, empty_turn_retries_used, et["finish_reason"],
+                    reasoning_chars)
+                # Say WHY when we can: "it thought and said nothing" is a very
+                # different report from "it returned nothing", and the
+                # reasoning-channel count is the only thing that separates them.
+                _notice(
+                    "the model replied with nothing"
+                    + (f" after {reasoning_chars:,} characters of reasoning"
+                       if reasoning_chars else "")
+                    + " — retrying once"
+                )
+                continue
+
             # SpecDD Lever 1 min_tool_calls gate: before declaring the run
             # finished, check whether the spec expects more tool calls than
             # the model has emitted. If so, inject a reprompt and continue
@@ -1179,6 +1236,20 @@ def run_agent(
                     final_text_chars=len(resp.text or ""),
                     retry_enabled=truncated_turn_retry_enabled,
                     retries_used=truncated_turn_retries_used,
+                )
+            # Same reason, the other failure: a run that ends HERE with no text
+            # produced no answer at all. Ungated telemetry — this is the only
+            # record distinguishing "answered" from "said nothing", exactly as
+            # `terminal_turn_truncated` is for "finished" vs "cut off".
+            if log_calls and not (resp.text or "").strip():
+                append_event(
+                    run_id, "terminal_turn_empty",
+                    phase=phase, step=step,
+                    finish_reason=getattr(resp, "finish_reason", "") or "",
+                    reasoning_chars=getattr(resp, "reasoning_chars", 0),
+                    completion_tokens=resp.timing.completion_tokens,
+                    retry_enabled=empty_turn_retry_enabled,
+                    retries_used=empty_turn_retries_used,
                 )
             if (getattr(resp, "finish_reason", "") or "") == "length":
                 _notice(
@@ -1227,6 +1298,16 @@ def run_agent(
             # grader sees zero calls. Continue to next step.
             continue
 
+        # INTERMEDIATE PROSE (2026-08-17). This step is acting, not finishing,
+        # yet models routinely put the lead-in to their answer here ("Let me
+        # check X…", or an opening paragraph) and only the LAST step's text
+        # becomes `final_text`. Chat showed that last fragment alone, so a
+        # reply could start mid-thought (session 0eb5998d8825 turn -7: 3 steps,
+        # 2 tool calls, the answer's opening lived in step 1). Recorded as a
+        # SEPARATE field: `final_text` keeps its exact meaning and no benchmark
+        # grader sees anything new. Only the chat layer reads this.
+        if (resp.text or "").strip():
+            result.step_texts.append(resp.text)
         assistant_msg: dict[str, Any] = {"role": "assistant", "content": resp.text or ""}
         if resp.tool_calls:
             assistant_msg["tool_calls"] = [

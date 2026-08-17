@@ -47,6 +47,12 @@ backends:
     # chat body (never `extra_body` — see backend.py 2026-08-11).
     body_extras:
       usage: {include: true}
+    # Kimi K3 is a REASONING model and every reasoning token is billed: a
+    # one-sentence question measured 255 chars of answer against 3,568 chars
+    # of reasoning, 792 completion tokens (2026-08-17). Interactive chat pays
+    # that in latency AND money, so ask for the cheap tier by default;
+    # `/reasoning high` buys the depth back for a session that needs it.
+    reasoning_effort: low
     # PER-BACKEND roster: the global `visible_models:` below names local MLX
     # weights, and intersecting it with a ~300-model cloud catalog would leave
     # `/model` empty. This is the shortlist; `/model find <text>` searches the

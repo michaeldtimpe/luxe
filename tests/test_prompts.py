@@ -739,3 +739,68 @@ def test_git_workflow_hint_carries_the_git_discipline():
     assert "do not push" in s and "explicitly asked" in s
     assert "git status" in s and "git_diff" in s        # inspect before mutate
     assert "gh" in s and "merge" in s                   # gh: read fine, mutate on ask
+
+
+class TestChatSelfIdentity:
+    """The conversational persona names the MODEL, with luxe as the harness.
+
+    2026-08-17 user decision. The old opening made every model claim to be the
+    tool — wrong exactly where it matters most: a fallback session opened
+    during an outage, where "which model am I actually talking to?" is the
+    first question. The benchmark persona is untouched.
+    """
+
+    def test_a_known_model_is_named_and_luxe_is_the_harness(self):
+        from luxe.agents.prompts import chat_system_for
+        sys = chat_system_for("moonshotai/kimi-k3")
+        assert sys.startswith("You are moonshotai/kimi-k3, an AI assistant")
+        assert "through luxe" in sys
+        assert not sys.startswith("You are luxe")
+
+    def test_a_blank_model_degrades_to_the_previous_wording(self):
+        """A session that cannot name its model must not invent one."""
+        from luxe.agents.prompts import chat_system_for
+        assert chat_system_for("").startswith("You are luxe, an AI assistant")
+        assert chat_system_for("   ") == chat_system_for("")
+        assert chat_system_for(None) == chat_system_for("")
+
+    def test_the_degraded_form_is_the_registry_entry_byte_for_byte(self):
+        from luxe.agents.prompts import chat_system_for
+        assert chat_system_for("") == get("chat_conversational").system
+
+    def test_only_the_identity_line_differs(self):
+        """Everything below the opening is one shared body — a drift there
+        would give two chat sessions different behavioural rules."""
+        from luxe.agents.prompts import chat_system_for
+        named = chat_system_for("some/model")
+        plain = chat_system_for("")
+        tail = "This is a CONVERSATION, not a batch job."
+        assert named[named.index(tail):] == plain[plain.index(tail):]
+
+    def test_the_persona_id_is_model_bound_and_resolves(self):
+        from luxe.agents.prompts import chat_persona_id
+        pid = chat_persona_id("org/some-model")
+        assert pid != "chat_conversational"
+        v = get(pid)
+        assert "You are org/some-model" in v.system
+        assert v.task_prefix == get("chat_conversational").task_prefix
+
+    def test_a_blank_id_returns_the_plain_registry_id(self):
+        from luxe.agents.prompts import chat_persona_id
+        assert chat_persona_id("") == "chat_conversational"
+        assert chat_persona_id(None) == "chat_conversational"
+
+    def test_model_bound_ids_never_enter_the_registry(self):
+        """PROMPT_REGISTRY is the bake-off's enumerable surface and is
+        snapshotted (tests/golden/prompt_registry.json). One entry per model
+        anybody ever chatted with would make that snapshot depend on session
+        history."""
+        from luxe.agents.prompts import chat_persona_id
+        before = set(PROMPT_REGISTRY)
+        get(chat_persona_id("org/brand-new-model"))
+        assert set(PROMPT_REGISTRY) == before
+
+    def test_the_benchmark_persona_is_untouched(self):
+        v = get("baseline")
+        assert v.system.startswith("You are a code maintenance specialist")
+        assert "luxe" not in v.system
