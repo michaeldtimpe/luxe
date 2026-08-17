@@ -1,5 +1,44 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-17, m1) — OpenRouter cloud backend live fleet-wide; K3 reasoning-channel fixes
+
+State of the world: **main is at `2a928fe`** (+ this handoff commit); suite
+**3,061 passed / 7 skipped**; golden benchmark request byte-identical
+throughout. Deployed and startup-smoked on m1, m5, neo (dotfiles `fe7697b`).
+**m4 was unreachable all day** — when it reappears it needs: dotfiles pull,
+`luxe update`, and `OPENROUTER_API_KEY` appended to `~/.luxe/secrets.env`
+(copy from m1's Keychain, service `OPENROUTER_API_KEY`).
+
+What shipped (single-champion carve-out (d), CLAUDE.md; chat-only, opt-in,
+benchmark path reads `omlx_base_url` only):
+
+1. **`engine: openrouter`** (`57aeedc`): BackendEntry grew `visible_models`
+   / `budget_usd` (hard cap, pre-dispatch refusal, `/usage budget`) /
+   `body_extras` (top-level merge, protected keys) / `default_model` /
+   `reasoning_effort`; `key_fallback=False` so an unset key never leaks the
+   fleet oMLX credential; 429 transient, 402 terminal; cost parsed from
+   `usage.cost` on both response paths into the status bar, footers,
+   `/status`, and `/usage` (key balance via `GET /v1/key` — `/v1/credits`
+   403s for inference keys). `/model find <text>` searches the live catalog
+   with per-1M pricing. **`luxe-api`** (dotfiles) = `luxe chat --backend
+   openrouter` from any directory, lands on kimi-k3.
+2. **Reasoning-model support** (`2a928fe`, driven by the first real K3
+   sessions — see lessons.md 2026-08-17): reasoning deltas count as stream
+   progress + live "thinking" indicator; empty-completion retry guard
+   (`LUXE_EMPTY_TURN_RETRY`, default ON, **UNBENCHED on the bench path** —
+   run maintain_suite before treating it settled, ablation flag documented
+   in agents.sdd); `AgentResult.step_texts` + `compose_answer` surface
+   intermediate-step prose; `/reasoning <low|medium|high|off|default>`
+   (shipped default low = ~13× fewer hidden billed tokens); catalog-truth
+   ctx ceiling (K3 = 1M) with billable default 128K and absolute
+   `/ctx 500k|1m`; chat persona now self-reports the serving model
+   ("You are <model> … through luxe") — bench persona untouched.
+
+Open threads: m4 catch-up (above); maintain_suite run to bench
+`LUXE_EMPTY_TURN_RETRY`; persona terseness may deserve a softening pass for
+cloud models now that the full conversation is visible — judge after
+another real discussion session.
+
 ## ⇒ SESSION HANDOFF (2026-08-13, m5) — micro-mind RETIRED, luxe is the one agent codebase fleet-wide; neo runs it over llama-server
 
 State of the world: **main is at `4d38f8d`** (+ this handoff commit) and the
