@@ -31,6 +31,12 @@ class GenerationTiming:
     completion_tokens: int = 0
     total_s: float = 0.0
     time_to_first_token_s: float = 0.0
+    # USD billed for this ONE request, when the server reports it (OpenRouter
+    # puts `cost` inside `usage` once the body declares `usage:{include:true}`).
+    # None on every local engine — "not reported" and "free" are different
+    # facts, and the chat cost surfaces must not render a confident $0.00 for
+    # an endpoint that simply never said.
+    cost_usd: float | None = None
 
     @property
     def decode_tok_per_s(self) -> float:
@@ -177,10 +183,17 @@ def classify_failure(
       - 5xx with empty body during the warmup window (first 5s of a run)
 
     Fail fast on:
-      - 4xx (our request bug, retrying won't help)
+      - 4xx (our request bug, retrying won't help) — EXCEPT 429, see below
       - 5xx with terminal markers (unavailable / crashed / OOM)
       - 5xx with empty body AFTER warmup window (assume terminal)
       - any failure on the last attempt
+
+    429 is the one 4xx that is not our bug (2026-08-17, openrouter): a rate
+    limit is the normal backpressure signal from a metered provider and the
+    same request succeeds moments later, which is exactly what the existing
+    backoff is for. Local engines never emit it, so this cannot perturb them.
+    402 (out of credits) deliberately stays terminal — retrying a request the
+    account cannot pay for burns the retry budget to reach the same answer.
     """
     if attempt + 1 >= max_attempts:
         return RetryDecision(retry=False, reason="exhausted-attempts")
@@ -196,6 +209,9 @@ def classify_failure(
         if exc is not None:
             return RetryDecision(retry=False, reason=f"unknown-error-{type(exc).__name__}")
         return RetryDecision(retry=False, reason="no-status-no-exception")
+
+    if status_code == 429:
+        return RetryDecision(retry=True, reason="429-rate-limited", delay_s=delay)
 
     if 400 <= status_code < 500:
         return RetryDecision(retry=False, reason=f"4xx-{status_code}")
@@ -220,6 +236,33 @@ def classify_failure(
 
 class BackendError(Exception):
     """Raised when the backend gives up after retries."""
+
+
+#: Body fields `body_extras` may never set. Everything luxe assembles from the
+#: role config and the loop's messages is off-limits: a per-endpoint dict is
+#: configuration, and configuration must not be able to rewrite the request.
+_PROTECTED_BODY_KEYS = frozenset({
+    "model", "messages", "tools", "max_tokens", "temperature", "stream",
+})
+
+
+def _usage_cost(usage: dict[str, Any]) -> float | None:
+    """USD cost out of an OpenAI-compatible `usage` block, or None.
+
+    OpenRouter nests it as `usage.cost` (a float) when the request body
+    declared `usage: {"include": true}` — see BackendEntry.body_extras. None
+    means "not reported", which the cost surfaces render as absent rather than
+    as free.
+    """
+    if not isinstance(usage, dict):
+        return None
+    raw = usage.get("cost")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 class Backend:
@@ -256,7 +299,23 @@ class Backend:
         # substitute for either — no finite per-read value survives a trickle.
         stall_timeout_s: float = 1800.0,
         decode_stall_timeout_s: float = 120.0,
+        # --- declared per-endpoint body fields (2026-08-17) -----------------
+        # Vendor extensions this ENDPOINT wants on every chat body, merged at
+        # the top level (never `extra_body` — see the note in `chat` below).
+        # OpenRouter needs `{"usage": {"include": true}}` to report per-request
+        # cost. CONSTRUCTOR-injected rather than a `chat()` kwarg on purpose:
+        # `agents/loop.py`'s call site is frozen (chat.sdd Must-not), and a
+        # Backend built by the benchmark path never receives extras, so
+        # tests/test_golden_request.py stays byte-identical by construction.
+        body_extras: dict[str, Any] | None = None,
+        # Whether an EMPTY `api_key` may fall back to the ambient OMLX_API_KEY
+        # (see below). True keeps the behaviour every local caller has always
+        # had. Callers building a THIRD-PARTY endpoint pass False: the fleet's
+        # oMLX key must never be sent to another vendor's server because the
+        # endpoint's own variable happened to be unset (chat/slots.py).
+        key_fallback: bool = True,
     ):
+        self.body_extras: dict[str, Any] = dict(body_extras or {})
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
@@ -267,7 +326,11 @@ class Backend:
         # keychain (luxe.secrets). Many oMLX deployments require auth;
         # without a key, every chat call 401s — and shells that source
         # secrets.env without exporting used to produce exactly that.
-        if not api_key:
+        # `key_fallback=False` suppresses it: for a third-party endpoint the
+        # right outcome of a missing key is an unauthenticated request that
+        # 401s (and a /doctor FAIL naming the variable), NOT the fleet's oMLX
+        # credential in an Authorization header pointed at someone else's host.
+        if not api_key and key_fallback:
             from luxe.secrets import resolve_api_key
             api_key = resolve_api_key()
         self.api_key = api_key
@@ -334,6 +397,18 @@ class Backend:
             # 2026-08-11.
             body["repeat_penalty"] = repeat_penalty
             body["repetition_penalty"] = repeat_penalty
+        if self.body_extras:
+            # Endpoint-declared vendor fields, same top-level placement and for
+            # the same reason as the two knobs above. Last so an endpoint can
+            # state what it needs without a config file being able to silently
+            # rewrite `model`/`messages`/`tools` — those are asserted below.
+            for key, value in self.body_extras.items():
+                if key in _PROTECTED_BODY_KEYS:
+                    logger.warning(
+                        "body_extras key %r ignored: it would overwrite the "
+                        "request luxe assembled", key)
+                    continue
+                body[key] = value
 
         # Opt-in streaming path for the interactive chat front-end. The default
         # (stream=False) leaves the body byte-identical to the legacy request and
@@ -395,6 +470,7 @@ class Backend:
                     prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0),
                     total_s=wall,
+                    cost_usd=_usage_cost(usage),
                 )
 
                 tc_list: list[ToolCallResponse] = []
@@ -641,6 +717,7 @@ class Backend:
                         completion_tokens=usage.get("completion_tokens", 0),
                         total_s=wall,
                         time_to_first_token_s=ttft,
+                        cost_usd=_usage_cost(usage),
                     ),
                     retries=attempt,
                 )
@@ -684,6 +761,42 @@ class Backend:
         r = self._client.get("/v1/models")
         r.raise_for_status()
         return [m["id"] for m in r.json().get("data", [])]
+
+    def list_models_full(self) -> list[dict[str, Any]]:
+        """The RAW `/v1/models` records, not just their ids.
+
+        `list_models()` discards everything but `id`, which is right for a
+        local server whose catalog is a handful of ids. A cloud catalog
+        carries the two facts a user needs before spending money — `pricing`
+        (per-token USD strings) and `supported_parameters` (does it do
+        `tools`?) — so `/model find` reads them from here. One GET; the caller
+        caches (chat/slots.py).
+        """
+        r = self._client.get("/v1/models")
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        return [m for m in data if isinstance(m, dict)]
+
+    def credits(self) -> dict[str, Any] | None:
+        """This key's spend state from `GET /v1/key`, or None.
+
+        OpenRouter-only surface, called ON DEMAND from `/usage` and nowhere
+        else — an endpoint balance is not something to poll from a render
+        path. `/v1/credits` looks like the obvious route but OpenRouter
+        refuses it for inference keys (403, management keys only — probed
+        live 2026-08-17); `/v1/key` reports the CURRENT key's
+        `limit`/`usage`/`limit_remaining`, which is the number the person
+        holding this key can actually act on. None means "couldn't ask"
+        (offline, no such route, bad key); the caller says so rather than
+        inventing a number.
+        """
+        try:
+            r = self._client.get("/v1/key")
+            r.raise_for_status()
+            data = r.json().get("data")
+        except (httpx.HTTPError, OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     def assert_models_available(self, required: list[str]) -> list[str]:
         """Confirm all required model IDs resolve via /v1/models. Returns missing list."""

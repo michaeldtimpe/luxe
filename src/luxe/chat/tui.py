@@ -28,6 +28,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, RichLog, Static
 
 from luxe.chat import commands as cmd
+from luxe.chat import cost as cost_mod
 from luxe.chat import origin as origin_mod
 from luxe.chat import repl as _repl
 from luxe.chat import status as status_mod
@@ -565,6 +566,13 @@ class ChatApp(App):
         `_tui_run_turn`)."""
         self.call_from_thread(self._reset_gen)
 
+        # HARD spend cap (billable backends only), same rule as the line REPL:
+        # refuse BEFORE dispatch, never mid-turn, and name the raise command.
+        refusal = cost_mod.refusal(self.session, self.slots)
+        if refusal:
+            self.call_from_thread(self.write, f"[red]✗ {refusal}[/]")
+            return _repl.TurnOutcome(crashed=True, final_text=refusal)
+
         def _on_tool_start(command: str) -> None:
             # Worker thread; the UI timer (_tick) reads the plain str — no
             # marshalling needed for a display-only field.
@@ -684,10 +692,15 @@ class ChatApp(App):
         log.write(build_final_renderable(outcome.final_text, mode=mode))
         self._session_in += result.prompt_tokens
         self._session_out += result.completion_tokens
+        # Spend before the footer: the footer's session bits and the status bar
+        # both read the running total this updates.
+        cost_mod.record_turn(self.session, result, self.status)
         footer = (render_footer_text(prep.slot, prep.model, result,
                                      num_ctx=outcome.num_ctx,
                                      ended_at=time.time())
                   + f" · session tok: {self._session_in}+{self._session_out}")
+        if self.session.session_cost_usd > 0:
+            footer += f" · session cost: {cost_mod.fmt(self.session.session_cost_usd)}"
         log.write(Text(footer, style="dim"))
         # update persistent status from the completed turn
         s = self.status

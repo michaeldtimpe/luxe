@@ -32,10 +32,18 @@ def _warn_model_not_offered(ctx: CommandContext, model_id: str) -> None:
             f"  [dim]· {model_id} is served here but hidden from the picker "
             "by `visible_models:` in configs/chat.yaml — using it anyway[/]")
     else:
+        # `/pull` is meaningless where the provider hosts the weights: point at
+        # the catalog search instead, which is how you find a real id there.
+        try:
+            hosted = ctx.slots.active_entry().is_openrouter()
+        except Exception:
+            hosted = False
+        fix = ("`/model find <text>` for the exact id"
+               if hosted else f"`/pull {model_id} --yes` to fetch it")
         ctx.console.print(
             f"  [yellow]· {model_id} isn't in this endpoint's catalog[/] "
-            f"[dim]— `/pull {model_id} --yes` to fetch it, or `/model` for "
-            "the list. The next turn will fail until it resolves.[/]")
+            f"[dim]— {fix}, or `/model` for the list. The next turn will fail "
+            "until it resolves.[/]")
 
 
 def _model(args, ctx: CommandContext) -> CommandResult:
@@ -46,6 +54,7 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     `/model <slot> <n>`     point the slot at the n-th available model
     `/model <slot> <id>`    point the slot at an explicit model id
     `/model all <n|id>`     point ALL slots (chat+plan+code) at one model
+    `/model find <text>`    search the endpoint's FULL catalog (id + price)
 
     `all` exists because freeform turns are keyword-routed to a slot
     (`_infer_task_type`), so pinning only `chat` still lets a "fix…"/"add…"
@@ -89,12 +98,19 @@ def _model(args, ctx: CommandContext) -> CommandResult:
                 ctx.console.print("[dim]  ☁ network volume · ⇅ remote endpoint "
                                   "(unmarked = local disk)[/]")
         else:
-            ctx.console.print("[dim](oMLX unreachable — `/model <slot> <id>` "
-                              "still works)[/]")
+            ctx.console.print(f"[dim]({ctx.slots.engine_label()} unreachable — "
+                              "`/model <slot> <id>` still works)[/]")
+        if ctx.slots.catalog_is_larger_than_roster():
+            ctx.console.print("[dim]· `/model find <text>` searches the full "
+                              "catalog (this list is the shortlist)[/]")
         return CommandResult(handled=True)
     slot = args[0]
+    # `find` is a SEARCH, not a slot: it reads the catalog and selects nothing.
+    if slot == "find":
+        return _model_find(args[1:], ctx)
     if slot not in _SLOTS and slot != "all":
-        ctx.console.print(f"[yellow]Unknown slot {slot!r}; expected chat|plan|code|all.[/]")
+        ctx.console.print(f"[yellow]Unknown slot {slot!r}; expected "
+                          "chat|plan|code|all (or `find <text>`).[/]")
         return CommandResult(handled=True)
     if len(args) < 2:
         for s in (_SLOTS if slot == "all" else (slot,)):
@@ -106,7 +122,8 @@ def _model(args, ctx: CommandContext) -> CommandResult:
         avail = ctx.slots.available_models()
         idx = int(sel)
         if not avail:
-            ctx.console.print("[yellow]No available-model list (oMLX unreachable) "
+            ctx.console.print("[yellow]No available-model list "
+                              f"({ctx.slots.engine_label()} unreachable) "
                               "— pass an explicit id: /model <slot> <id>.[/]")
             return CommandResult(handled=True)
         if not (1 <= idx <= len(avail)):
@@ -144,6 +161,82 @@ def _model(args, ctx: CommandContext) -> CommandResult:
             f"  [yellow]⚠ {model_id} cannot call tools[/] [dim]— {cap.reason}. "
             "luxe will withhold the tool surface on its turns: conversation "
             "only, no reading or editing files.[/]")
+    return CommandResult(handled=True)
+
+
+_FIND_MAX_ROWS = 30
+
+
+def _price_per_1m(raw) -> str:
+    """A `pricing` value (USD PER TOKEN, as a string) rendered per 1M tokens.
+
+    Catalogs quote per-token figures like "0.0000006", which is unreadable and
+    incomparable at a glance; every published price list is per-million. "-"
+    when the field is missing or unparseable — an invented number here is a
+    number someone budgets against.
+    """
+    try:
+        per_1m = float(raw) * 1_000_000
+    except (TypeError, ValueError):
+        return "-"
+    if per_1m <= 0:
+        return "free"
+    if per_1m < 1:
+        return f"${per_1m:.2f}"
+    if per_1m < 100:
+        return f"${per_1m:.2f}"
+    return f"${per_1m:,.0f}"
+
+
+def _model_find(args, ctx: CommandContext) -> CommandResult:
+    """`/model find <text>` — case-insensitive substring search over the FULL
+    live catalog, with per-1M-token prices.
+
+    The roster `/model` prints is a shortlist by design (a cloud catalog is
+    ~300 entries and the config cannot enumerate it). This is how you discover
+    the exact id to pass to `/model all <id>`, which bypasses the roster.
+    """
+    query = " ".join(args).strip().lower()
+    if not query:
+        ctx.console.print("[yellow]Usage: /model find <text>[/]")
+        return CommandResult(handled=True)
+    records = ctx.slots.catalog()
+    if not records:
+        ctx.console.print(f"[yellow]No catalog from {ctx.slots.engine_label()} "
+                          "— endpoint unreachable, or it reports no models.[/]")
+        return CommandResult(handled=True)
+
+    hits = sorted(
+        (r for r in records if query in str(r.get("id", "")).lower()),
+        key=lambda r: str(r.get("id", "")),
+    )
+    if not hits:
+        ctx.console.print(f"[yellow]No model id contains {query!r}[/] "
+                          f"[dim]({len(records)} in this catalog)[/]")
+        return CommandResult(handled=True)
+
+    ctx.console.print(f"[bold]{len(hits)} match{'es' if len(hits) != 1 else ''}[/] "
+                      f"[dim]for {query!r} — prices per 1M tokens (in/out)[/]")
+    for rec in hits[:_FIND_MAX_ROWS]:
+        mid = str(rec.get("id", ""))
+        pricing = rec.get("pricing") if isinstance(rec.get("pricing"), dict) else {}
+        price = ""
+        if pricing:
+            price = (f"  [dim]{_price_per_1m(pricing.get('prompt'))} / "
+                     f"{_price_per_1m(pricing.get('completion'))}[/]")
+        # A model that cannot call tools is a conversation-only model here —
+        # the same thing modelcaps says about gemma locally, read from the
+        # catalog instead of from a chat template.
+        params = rec.get("supported_parameters")
+        no_tools = (isinstance(params, list) and params
+                    and "tools" not in params)
+        warn = "  [yellow]⚠ no tool support[/]" if no_tools else ""
+        ctx.console.print(f"  {mid}{price}{warn}")
+    if len(hits) > _FIND_MAX_ROWS:
+        ctx.console.print(f"[dim]  … {len(hits) - _FIND_MAX_ROWS} more, "
+                          "refine your search[/]")
+    ctx.console.print("[dim]· `/model all <id>` to run the whole session on "
+                      "one of these[/]")
     return CommandResult(handled=True)
 
 
@@ -194,13 +287,35 @@ def _backend(args, ctx: CommandContext) -> CommandResult:
         # link or the key, and both are one command away.
         entry = entries[name]
         key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
-        ctx.console.print(f"  [dim]→ `/net` to diagnose the link; a remote "
-                          f"entry also needs ${key_env} set (and "
-                          "`/planeproxy` up, if it rides the tunnel)[/]")
+        billable = False
+        try:
+            billable = entry.is_billable()
+        except Exception:
+            billable = False
+        if billable:
+            # A cloud endpoint has no tunnel and no local process. The two real
+            # causes are the key and the account balance; `/planeproxy` advice
+            # here would send someone debugging a link that is fine.
+            ctx.console.print(
+                f"  [dim]→ needs ${key_env} set (env or "
+                f"`~/.luxe/secrets.env`); if the key is good, `/usage` shows "
+                "whether the account still has credits[/]")
+        else:
+            ctx.console.print(f"  [dim]→ `/net` to diagnose the link; a remote "
+                              f"entry also needs ${key_env} set (and "
+                              "`/planeproxy` up, if it rides the tunnel)[/]")
         return CommandResult(handled=True)
     entry = entries[name]
     ctx.console.print(f"[green]✓[/] backend → [cyan]{name}[/] "
                       f"[dim]({entry.base_url}; timeout {entry.timeout_s:.0f}s)[/]")
+    # Say when the entry repointed the slots. A backend switch that silently
+    # changes which model answers is the same failure shape auto-degrade
+    # exists to prevent — announce it, and name the way to override it.
+    applied = getattr(ctx.slots, "default_model_applied", "")
+    if applied:
+        ctx.console.print(f"  [dim]· slots → {applied} "
+                          f"(this backend's `default_model:`; "
+                          f"`/model all <id>` to pick another)[/]")
     for slot in dropped:
         ctx.console.print(f"[yellow]· dropped /model override on slot "
                           f"[cyan]{slot}[/] — model not served here[/]")

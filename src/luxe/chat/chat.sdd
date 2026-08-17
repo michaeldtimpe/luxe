@@ -52,17 +52,46 @@ never touches this module.
   because an earlier in-tree deploy hid its edits with `--skip-worktree` and
   cost 78 commits of drift. Out-of-tree per-host configs reach the commands
   the dotfiles wrappers don't cover via `$LUXE_CONFIG` (cli.`_default_chat_config`)
-- `engine:` on a BackendEntry (`omlx` default | `llama-server`, validated at
-  load — an unknown value RAISES rather than silently restoring the oMLX
-  assumptions) names the serving stack behind the URL. It is DIAGNOSTIC-ONLY:
-  it may change check names, check severities, `fix` strings, and whether
-  `luxe pull` refuses; it must never change the request body, the tool
-  surface, model selection, or `backend_kwargs()`. Every supported engine is
-  OpenAI-compatible, which is the whole reason one client can drive both.
-  Owns: `BackendEntry.is_omlx/engine_label/needs_api_key`,
-  `inspection.backend_entry_for/_engine_facts`. Introduced 2026-08-13 for neo,
-  whose 8 GB cannot hold an MLX model at production context (probe:
-  `acceptance/mlx_neo_probe_2026_08/REPORT.md`)
+- `engine:` on a BackendEntry (`omlx` default | `llama-server` | `openrouter`,
+  validated at load — an unknown value RAISES rather than silently restoring
+  the oMLX assumptions) names the serving stack behind the URL. It is
+  DIAGNOSTIC-ONLY with ONE declared exception: it may change check names,
+  check severities, `fix` strings, and whether `luxe pull` refuses, and it may
+  contribute the entry's DECLARED `body_extras` (a per-endpoint dict merged at
+  the TOP LEVEL of the chat body by `backend_kwargs()` — openrouter's
+  `usage: {include: true}`, which is what makes per-turn `cost` come back).
+  It must never change the tool surface or model selection, and `body_extras`
+  is empty for every other entry, so their bodies stay byte-identical. Every
+  supported engine is OpenAI-compatible, which is the whole reason one client
+  can drive all three. Owns: `BackendEntry.is_omlx/is_openrouter/engine_label/
+  needs_api_key/body_extras`, `inspection.backend_entry_for/_engine_facts`.
+  Introduced 2026-08-13 for neo, whose 8 GB cannot hold an MLX model at
+  production context (probe: `acceptance/mlx_neo_probe_2026_08/REPORT.md`)
+- `engine: openrouter` is the CLOUD carve-out (2026-08-17, luxe.sdd): opt-in
+  per session, billable on every token, never a slot default, never a manifest
+  main/fallback, never a bench/`smoke`/`ready` target. Because it is metered it
+  brings three obligations the local engines do not have. (a) COST IS VISIBLE:
+  `GenerationTiming.cost_usd` is parsed from `usage.cost` on BOTH the stream
+  and non-stream paths, summed across every `backend.chat` of a turn into
+  `AgentResult.cost_usd`, and rendered in the status bar (`$0.042`), the
+  footer, `/status`, and `/usage`. (b) SPEND IS BOUNDED: `budget_usd` on the
+  entry is a HARD cap — a turn is refused BEFORE dispatch once the session
+  total reaches it, never interrupted mid-turn, and only `/usage budget <usd>`
+  raises it (deliberate, for this session only). No cap configured = no cap and
+  no cost segment. (c) THE KEY IS FATAL, NOT COSMETIC: `needs_api_key()` is
+  True, so `/doctor` FAILS (not warns) when it is missing, naming the env var
+  and `~/.luxe/secrets.env` — never a value. And a missing key on a BILLABLE
+  entry must never fall back to the ambient `OMLX_API_KEY`: `backend_kwargs()`
+  passes `key_fallback=False`, so the request goes out unauthenticated and
+  401s rather than putting the fleet's local credential in an Authorization
+  header aimed at a third-party host. `/usage` is the only surface that
+  calls `/v1/key` (the current key's own `limit`/`usage` — the account-wide
+  `/v1/credits` route is management-key-only and 403s for inference keys,
+  probed live 2026-08-17), on demand only, degrading quietly offline. 429 is
+  reclassified TRANSIENT in `classify_failure` (rate limits are the normal
+  cloud backpressure signal); 402 stays terminal — retrying while out of
+  credits cannot succeed. Owns: `chat/cost.py`, `cmd_diag._usage_cmd`,
+  `cmd_models._model_find`, `slots.catalog/active_entry/engine_label`
 - AUTO-DEGRADE is loud and single-fire: when the manifest main (a) is missing
   from the server catalog at first `backend_for`, (b) fails the post-swap
   thermal_guard, or (c) throws a turn-level BackendError while the endpoint
@@ -138,11 +167,17 @@ never touches this module.
   surface and does real work when asked. The string lives in the prompt
   registry (never inline in this module)
 - Backend switching is CHAT-ONLY and CONFIG-SOURCED (luxe.sdd carve-out): the
-  `backends:` map (BackendEntry = base_url / api_key_env / timeout_s /
-  stall_timeout_s / decode_stall_timeout_s / shared / default; the last two are the B6
+  `backends:` map (BackendEntry = base_url / engine / api_key_env / timeout_s /
+  stall_timeout_s / decode_stall_timeout_s / shared / default / visible_models /
+  default_model / budget_usd / body_extras; the two stall fields are the B6
   progress deadlines, `None` = inherit Backend's default, forwarded via
   `BackendEntry.backend_kwargs()` which OMITS unset keys rather than passing
-  None)
+  None. `visible_models` is a PER-BACKEND roster that wins over the global
+  `visible_models:` when set — a ~300-model cloud catalog cannot be governed by
+  a fleet-wide list of local ids; `budget_usd` is the openrouter hard cap;
+  `body_extras` is the declared top-level body merge described in the `engine:`
+  bullet above, empty for every local entry; `default_model` is the next
+  bullet)
   is the sole registry of endpoints — `/backend` lists entries (name, base_url,
   health ✓/✗, active marker) and `/backend <name|n>` switches; `--backend
   <name>` picks the startup entry. API keys are NEVER in YAML: `api_key_env`
@@ -162,6 +197,24 @@ never touches this module.
   segment (mid drop-priority) only when >1 backend is configured; configs
   without `backends:` synthesize a single "local" entry and behave identically
   to the single-backend days. Benchmark/maintain read `omlx_base_url` only.
+- `default_model:` on an entry is CONFIG-driven model selection, and the
+  "engine must never change model selection" rule above stands unqualified:
+  the engine field is never consulted for it, two entries on one engine may
+  declare different models, and an entry that omits it (every local one)
+  resolves exactly as before. It exists because slot defaults come from the
+  HOST MANIFEST — this machine's local weight ids — which an endpoint serving
+  someone else's catalog does not have, so a session opening on one sat
+  pointed at a model that server has never heard of until `/model all <id>`
+  was typed. It applies at session start AND on `/backend` switch, to
+  UNPINNED slots only: a runtime `/model` override and a startup
+  `--chat/plan/code-model` flag (or a `slots:` block entry — both arrive as a
+  non-empty `SlotConfig.model_key`) outrank it, because a default must never
+  overwrite something the user actually chose. It is announced on switch,
+  never silent — a backend hop that quietly changes which model answers is
+  the failure shape auto-degrade exists to prevent. Switching AWAY needs no
+  counterpart: `switch_backend`'s existing drop of overrides the new server
+  doesn't serve already returns those slots to the manifest. Owns:
+  `slots._apply_entry_default_model`, `slots.default_model_applied`
 - SINGLE-RESIDENCY POLICY (2026-07-30, user decision): ONE model in RAM per
   host — including the 128 GB m5, whose headroom is reserved for CONTEXT,
   not warm spares. The swap path always unloaded-except-target;
@@ -529,7 +582,12 @@ never touches this module.
   is how the m5 capacity model is selected) from "not in this catalog"
   (`/pull`) instead of deferring both to a swap failure a turn later;
   `/backend` health-fail names `/net`, the entry's `api_key_env`, and
-  `/planeproxy`; `/tools` states that MCP servers attach at STARTUP ONLY when
+  `/planeproxy` — except on a cloud engine, where the tunnel advice is wrong
+  and the two real causes are the key and the account balance, so it names
+  `api_key_env` and `/usage` instead; `/model`'s unreachable line and the
+  `/model find` catalog search are named for the ACTIVE engine
+  (`engine_label()`), never hardcoded "oMLX";
+  `/tools` states that MCP servers attach at STARTUP ONLY when
   none are attached, since there is no mid-session way to add one. These are
   CHAT-ONLY console strings — benchmark-path error text is untouched.
 - `/outage` prints `OUTAGE.md` (the offline emergency card) into the session,

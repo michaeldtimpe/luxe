@@ -427,3 +427,239 @@ class TestBackendEngine:
         a = BackendEntry(base_url="u")
         b = BackendEntry(base_url="u", engine="llama-server")
         assert a.backend_kwargs() == b.backend_kwargs()
+
+
+class TestOpenRouterEngine:
+    """`engine: openrouter` — the CLOUD carve-out (2026-08-17).
+
+    luxe.sdd forbids cloud backends on the benchmark/maintain path and always
+    will; this is the one sanctioned, opt-in, billable exception, scoped to
+    `luxe chat`. What these pin is the shape that makes it safe: a key that is
+    fatal rather than cosmetic, a hard spend cap, a per-backend roster (the
+    global one names local MLX weights and would hide the entire catalog), and
+    declared body extras that reach the wire without touching anyone else's.
+    """
+
+    def test_the_engine_is_known_and_labelled(self):
+        from luxe.config import ENGINE_OPENROUTER, BackendEntry
+        e = BackendEntry(base_url="https://openrouter.ai/api",
+                         engine="openrouter")
+        assert e.engine == ENGINE_OPENROUTER
+        assert e.is_openrouter() and e.is_billable()
+        assert not e.is_omlx()
+        assert e.engine_label() == "OpenRouter"
+
+    def test_the_api_key_is_not_optional_there(self):
+        """llama-server is keyless; OpenRouter 401s every request without one,
+        which is why `/doctor` FAILS rather than warns (chat.sdd)."""
+        from luxe.config import BackendEntry
+        assert BackendEntry(base_url="u", engine="openrouter").needs_api_key()
+        assert not BackendEntry(base_url="u", engine="llama-server").needs_api_key()
+
+    def test_local_engines_are_not_billable(self):
+        from luxe.config import BackendEntry
+        assert not BackendEntry(base_url="u").is_billable()
+        assert not BackendEntry(base_url="u", engine="llama-server").is_billable()
+        assert not BackendEntry(base_url="u").is_openrouter()
+
+    def test_budget_and_extras_default_to_absent(self):
+        """Every pre-existing entry must be untouched by the new fields."""
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url="u")
+        assert e.budget_usd is None
+        assert e.body_extras == {}
+        assert e.visible_models == []
+
+    def test_body_extras_reach_backend_kwargs_only_when_set(self):
+        """Omission is the byte-identity guarantee: a local Backend never gets
+        the kwarg at all, so its request cannot change."""
+        from luxe.config import BackendEntry
+        assert "body_extras" not in BackendEntry(base_url="u").backend_kwargs()
+        e = BackendEntry(base_url="u", engine="openrouter",
+                         body_extras={"usage": {"include": True}})
+        assert e.backend_kwargs()["body_extras"] == {"usage": {"include": True}}
+
+    def test_backend_kwargs_hands_out_a_copy(self):
+        """A caller mutating the kwargs must not rewrite the config object."""
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url="u", engine="openrouter",
+                         body_extras={"usage": {"include": True}})
+        e.backend_kwargs()["body_extras"]["usage"] = "clobbered"
+        assert e.body_extras == {"usage": {"include": True}}
+
+    def test_it_travels_through_a_loaded_yaml(self, tmp_path: Path):
+        from luxe.config import load_config
+        p = tmp_path / "c.yaml"
+        p.write_text(
+            "models: {monolith: M}\n"
+            "roles: {monolith: {model_key: monolith}}\n"
+            "backends:\n"
+            "  openrouter:\n"
+            "    base_url: 'https://openrouter.ai/api'\n"
+            "    engine: openrouter\n"
+            "    api_key_env: OPENROUTER_API_KEY\n"
+            "    budget_usd: 5.0\n"
+            "    body_extras: {usage: {include: true}}\n"
+            "    visible_models: ['moonshotai/kimi-k3']\n")
+        entry = load_config(str(p)).backend_entry("openrouter")
+        assert entry.is_openrouter()
+        assert entry.api_key_env == "OPENROUTER_API_KEY"
+        assert entry.budget_usd == 5.0
+        assert entry.body_extras == {"usage": {"include": True}}
+        assert entry.visible_models == ["moonshotai/kimi-k3"]
+        # keys are env-var NAMES only — never key material in YAML
+        assert "api_key" not in type(entry).model_fields
+
+
+class TestPerBackendVisibleModels:
+    """`visible()` consults the ACTIVE entry's roster before the global one.
+
+    The global `visible_models:` is a list of local MLX weight ids. Applied to
+    a cloud catalog of ~300 third-party ids it matches nothing, so `/model`
+    would offer an empty picker on the one backend where discovery matters.
+    """
+
+    def _cfg(self):
+        return PipelineConfig(
+            models={"monolith": "Champ"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+            visible_models=["Champ", "Other"],
+        )
+
+    def test_the_entry_roster_wins_when_it_has_one(self):
+        from luxe.config import BackendEntry
+        cfg = self._cfg()
+        entry = BackendEntry(base_url="u", engine="openrouter",
+                             visible_models=["org/cloud-a"])
+        served = ["org/cloud-a", "org/cloud-b", "Champ"]
+        assert cfg.visible(served, entry=entry) == ["org/cloud-a"]
+
+    def test_an_entry_without_a_roster_falls_back_to_the_global_one(self):
+        from luxe.config import BackendEntry
+        cfg = self._cfg()
+        entry = BackendEntry(base_url="u")
+        assert cfg.visible(["Champ", "Stale"], entry=entry) == ["Champ"]
+
+    def test_omitting_the_entry_is_the_pre_existing_behaviour(self):
+        cfg = self._cfg()
+        assert cfg.visible(["Champ", "Stale"]) == ["Champ"]
+
+    def test_server_order_is_preserved_under_the_entry_roster(self):
+        """`/model <slot> <n>` indexes must stay stable."""
+        from luxe.config import BackendEntry
+        cfg = self._cfg()
+        entry = BackendEntry(base_url="u", visible_models=["b", "a"])
+        assert cfg.visible(["a", "z", "b"], entry=entry) == ["a", "b"]
+
+
+def test_chat_yaml_ships_the_openrouter_entry():
+    """The shipped entry is the contract: cloud engine, env-named key, a HARD
+    cap, the usage-include body extra (without which no cost comes back), and
+    a per-backend shortlist. Not default — it must stay opt-in."""
+    chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
+    cfg = load_config(chat_cfg)
+    e = cfg.backend_entry("openrouter")
+    assert e.is_openrouter() and e.is_billable()
+    assert e.base_url == "https://openrouter.ai/api"
+    assert e.api_key_env == "OPENROUTER_API_KEY"
+    assert e.budget_usd == 5.00
+    assert e.body_extras == {"usage": {"include": True}}
+    assert e.visible_models          # a shortlist, whatever it holds today
+    assert e.default is False
+    assert cfg.default_backend_name() == "local"
+
+
+class TestAmbientKeyFallbackIsWithheldFromCloudEndpoints:
+    """A missing `OPENROUTER_API_KEY` must not silently promote the fleet's
+    oMLX key into an Authorization header pointed at openrouter.ai.
+
+    `Backend`'s empty-key fallback (env → secrets.env → Keychain, all under
+    OMLX_API_KEY) exists because shells that source secrets.env without
+    exporting produced permanent 401s locally. Applied to a third-party host
+    it is a credential disclosure, so the entry withholds it.
+    """
+
+    def test_a_billable_entry_switches_the_fallback_off(self):
+        from luxe.config import BackendEntry
+        e = BackendEntry(base_url="https://openrouter.ai/api",
+                         engine="openrouter")
+        assert e.backend_kwargs()["key_fallback"] is False
+
+    def test_local_entries_never_mention_it(self):
+        from luxe.config import BackendEntry
+        assert "key_fallback" not in BackendEntry(base_url="u").backend_kwargs()
+        assert "key_fallback" not in BackendEntry(
+            base_url="u", engine="llama-server").backend_kwargs()
+
+    def test_the_backend_honours_it(self, monkeypatch):
+        from luxe.backend import Backend
+        import luxe.secrets as secrets
+
+        monkeypatch.setattr(secrets, "resolve_api_key",
+                            lambda *a, **k: "local-omlx-secret")
+        assert Backend(base_url="http://x").api_key == "local-omlx-secret"
+        assert Backend(base_url="https://openrouter.ai/api",
+                       key_fallback=False).api_key == ""
+
+    def test_an_explicit_key_still_wins_with_the_fallback_off(self):
+        from luxe.backend import Backend
+        b = Backend(base_url="https://openrouter.ai/api", api_key="or-key",
+                    key_fallback=False)
+        assert b.api_key == "or-key"
+
+
+class TestBackendDefaultModel:
+    """`default_model:` — which model an endpoint's unpinned slots resolve to.
+
+    Slot defaults come from the HOST manifest (local weight ids). An endpoint
+    serving somebody else's catalog has none of them, so a session opening
+    there pointed at a model the server has never heard of. The ENTRY names
+    the model; the engine field is never consulted, which is why this does not
+    weaken chat.sdd's "engine must never change model selection".
+    """
+
+    def test_it_defaults_to_empty_so_every_entry_is_unchanged(self):
+        from luxe.config import BackendEntry
+        assert BackendEntry(base_url="u").default_model == ""
+
+    def test_it_parses_from_yaml(self, tmp_path: Path):
+        from luxe.config import load_config
+        p = tmp_path / "c.yaml"
+        p.write_text(
+            "models: {monolith: M}\n"
+            "roles: {monolith: {model_key: monolith}}\n"
+            "backends:\n"
+            "  cloud: {base_url: 'https://x/api', engine: openrouter, "
+            "default_model: 'org/pick-me', default: true}\n"
+            "  local: {base_url: 'http://127.0.0.1:8000'}\n")
+        cfg = load_config(str(p))
+        assert cfg.backend_entry("cloud").default_model == "org/pick-me"
+        assert cfg.backend_entry("local").default_model == ""
+
+    def test_it_is_independent_of_the_engine(self):
+        """Config-driven, not engine-driven: an oMLX entry may declare one and
+        a cloud entry may omit it."""
+        from luxe.config import BackendEntry
+        assert BackendEntry(base_url="u", default_model="X").default_model == "X"
+        assert BackendEntry(base_url="u", engine="openrouter").default_model == ""
+
+    def test_it_stays_out_of_the_wire_surface(self):
+        """Model selection is the slot manager's business — nothing about this
+        may reach `Backend(...)`."""
+        from luxe.config import BackendEntry
+        a = BackendEntry(base_url="u")
+        b = BackendEntry(base_url="u", default_model="org/pick-me")
+        assert a.backend_kwargs() == b.backend_kwargs()
+
+
+def test_chat_yaml_openrouter_declares_its_default_model():
+    """Without it, opening a session on this backend leaves every slot pointed
+    at a local weight id OpenRouter does not serve."""
+    chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
+    cfg = load_config(chat_cfg)
+    e = cfg.backend_entry("openrouter")
+    assert e.default_model
+    assert e.default_model in e.visible_models
+    # local entries keep resolving from the host manifest
+    assert cfg.backend_entry("local").default_model == ""
+    assert cfg.backend_entry("m5").default_model == ""

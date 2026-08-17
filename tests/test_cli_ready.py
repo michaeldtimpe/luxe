@@ -423,3 +423,44 @@ class TestPullRefusesOffOmlx:
         assert res.exit_code == 0
         assert "API key" not in res.output
         assert "no download queue" in res.output
+
+
+class TestPullRefusesOnOpenRouter:
+    """The cloud engine hosts the weights and bills per token — `luxe pull`
+    has nothing to fetch there, and the llama-server message (about a GGUF
+    preset file) would send you looking for a file that does not exist."""
+
+    def _cfg(self, tmp_path) -> str:
+        p = tmp_path / "openrouter.yaml"
+        p.write_text(
+            "models: {monolith: M}\n"
+            "roles: {monolith: {model_key: monolith}}\n"
+            "backends:\n"
+            "  openrouter: {base_url: 'https://openrouter.ai/api', "
+            "engine: openrouter, default: true}\n")
+        from luxe.config import load_config
+        assert load_config(str(p)).backend_entry("openrouter").is_openrouter()
+        return str(p)
+
+    def test_a_fetch_is_refused_with_the_cloud_reason(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path))
+        res = CliRunner().invoke(cli.main, ["pull", "org/Some-Model"])
+        assert res.exit_code == 2
+        out = res.output
+        assert "openrouter" in out.lower()
+        assert "bills per token" in out
+        assert "/model find" in out
+        # the llama-server advice must not leak onto this engine
+        assert "neo-models.ini" not in out
+        assert "login failed" not in out.lower()
+
+    def test_search_is_refused_too(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path))
+        res = CliRunner().invoke(cli.main, ["pull", "--search", "kimi"])
+        assert res.exit_code == 2
+
+    def test_the_local_store_operations_still_work(self, monkeypatch, tmp_path):
+        """`--list`/`--remove` only read this disk — nothing engine-specific."""
+        monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path))
+        res = CliRunner().invoke(cli.main, ["pull", "Nope", "--remove", "-y"])
+        assert res.exit_code != 2 or "cannot fetch" not in res.output

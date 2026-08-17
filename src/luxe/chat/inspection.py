@@ -311,6 +311,19 @@ def _engine_facts(slots) -> tuple[bool, str]:
         return True, "oMLX"
 
 
+def _is_cloud(slots) -> bool:
+    """True when the active endpoint is the billable cloud engine — no local
+    process to start, no weights on this disk, and a key that is fatal rather
+    than cosmetic. Guarded: doctor must never raise."""
+    entry = backend_entry_for(slots)
+    if entry is None:
+        return False
+    try:
+        return bool(entry.is_openrouter())
+    except Exception:
+        return False
+
+
 def _add_stale_check(doc, base_url: str, *, is_omlx: bool = True) -> None:
     """Report whether the local oMLX is running the Cellar tree brew installed.
 
@@ -430,12 +443,22 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     # DIAGNOSTIC lines below — a fix that reads `brew services start omlx` is
     # worse than no fix at all on a box with no omlx formula.
     is_omlx, engine_label = _engine_facts(slots)
-    start_fix = ("start it (`brew services start omlx`) or `/backend <other>`"
+    is_cloud = _is_cloud(slots)
+    entry = backend_entry_for(slots)
+    key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
+    # A cloud endpoint has no local process: "start the server" is the one fix
+    # that cannot possibly apply, and the real causes are the link and the key.
+    cloud_fix = (f"check the network (`/net`) and that ${key_env} is set "
+                 "(env or `~/.luxe/secrets.env`); `/usage` shows whether the "
+                 "account still has credits, `/backend <other>` to run local")
+    start_fix = (cloud_fix if is_cloud else
+                 "start it (`brew services start omlx`) or `/backend <other>`"
                  if is_omlx else
                  "start the server (on neo: `launchctl bootstrap gui/$UID "
                  "~/Library/LaunchAgents/com.micromind.llama-server.plist`), "
                  "or `/backend <other>`")
-    restart_fix = ("`brew services restart omlx`, or `/backend <other>`"
+    restart_fix = (cloud_fix if is_cloud else
+                   "`brew services restart omlx`, or `/backend <other>`"
                    if is_omlx else
                    "restart the server (on neo: `launchctl kickstart -k "
                    "gui/$UID/com.micromind.llama-server`), or `/backend <other>`")
@@ -463,6 +486,13 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
 
     if getattr(backend, "api_key", ""):
         doc.add("API key", OK, "present")
+    elif is_cloud:
+        # FAIL, not WARN: on a cloud endpoint every single request 401s without
+        # it, so this is the whole session, not a caveat. The env var is named;
+        # its VALUE never appears here (chat.sdd Must-not).
+        doc.add("API key", FAIL, f"no {key_env} resolved for this endpoint",
+                f"`echo '{key_env}=<key>' >> ~/.luxe/secrets.env` "
+                "(or export it in this shell), then restart the session")
     elif is_omlx:
         doc.add("API key", WARN, "no key resolved for this endpoint",
                 "`echo 'OMLX_API_KEY=<key>' >> ~/.luxe/secrets.env` "
@@ -490,7 +520,14 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
                 org = origin_mod.origin_for(backend, model)
             except Exception:
                 pass
-        if org.kind == "network":
+        if is_cloud:
+            # Provider-hosted: there is nothing on this disk to check and
+            # nothing to `luxe pull`. The fact worth stating is that the turns
+            # are billed, which no local endpoint has to say.
+            doc.add("weights", OK,
+                    f"provider-hosted by {engine_label} — billable per token",
+                    "")
+        elif org.kind == "network":
             doc.add("weights", WARN, f"{org.glyph} {org.detail}",
                     f"`luxe pull {model}` to copy them to local disk "
                     "(loading over the network makes the first turn slow)")

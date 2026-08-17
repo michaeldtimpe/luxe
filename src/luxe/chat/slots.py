@@ -69,14 +69,23 @@ class SlotManager:
         # ever unload from this set — evicting a model we didn't load means
         # pulling weights out from under whoever did.
         self._loaded_by_us: set[str] = set()
-        # Start resident on the chat slot's model — that's the conversational
-        # default and the model we keep warm.
-        self._resident = self.model_for("chat")
+        # Full `/v1/models` payloads per backend name (`/model find`). One GET
+        # per endpoint per session; a cloud catalog is ~300 records.
+        self._catalog_cache: dict[str, list[dict] | None] = {}
         # Multi-backend (chat-only): build from the config's default backend
         # entry so per-endpoint timeout/api-key settings apply from turn one.
         # Configs without `backends:` synthesize a single "local" entry from
         # omlx_base_url — byte-identical behaviour to the single-backend days.
         self.backend_name = cfg.default_backend_name()
+        # Slots pinned by this endpoint's `default_model:`, reported by the UI
+        # after a `/backend` switch. Resolved BEFORE `_resident` below, which
+        # reads `model_for("chat")` — starting a session on an endpoint that
+        # declares one must not first believe the manifest model is warm there.
+        self.default_model_applied: str = ""
+        self._apply_entry_default_model()
+        # Start resident on the chat slot's model — that's the conversational
+        # default and the model we keep warm.
+        self._resident = self.model_for("chat")
         self.backend = self._build_backend(cfg.backend_entry(self.backend_name))
 
     def _endpoint_is_shared(self) -> bool:
@@ -148,23 +157,130 @@ class SlotManager:
             raise KeyError(f"Unknown slot {slot!r}; expected one of {_SLOTS}.")
         self.overrides[slot] = model_id
 
+    # -- per-endpoint default model (chat-only) ------------------------------
+
+    def _apply_entry_default_model(self) -> list[str]:
+        """Point every UNPINNED slot at the active entry's `default_model:`.
+
+        Slot defaults otherwise come from this HOST's manifest (or the
+        champion), which is a set of local weight ids. On an endpoint serving
+        a different catalog those resolve to nothing, so a session that opened
+        there sat pointed at a model the server has never heard of until the
+        user ran `/model all <id>`. Declaring the model on the ENTRY closes
+        that; it is config-driven selection, not engine-driven — the engine
+        field is not consulted here at all.
+
+        It is a DEFAULT, so it yields to anything the user actually chose:
+
+          - a runtime `/model <slot> <id>` override (a typed instruction), and
+          - a startup `--chat/plan/code-model` flag or a `slots:` block entry,
+            both of which arrive as a non-empty `SlotConfig.model_key`.
+
+        Returns the slots it pinned ([] when the entry declares nothing, which
+        is every local entry — their resolution is untouched).
+        """
+        self.default_model_applied = ""
+        try:
+            model_id = (self.cfg.backend_entry(self.backend_name)
+                        .default_model or "").strip()
+        except Exception:
+            return []
+        if not model_id:
+            return []
+        applied: list[str] = []
+        for slot in _SLOTS:
+            if slot in self.overrides:
+                continue                       # the user already said otherwise
+            try:
+                if self.cfg.slot_config(slot).model_key:
+                    continue                   # --<slot>-model / a `slots:` pin
+            except Exception:
+                continue
+            self.overrides[slot] = model_id
+            applied.append(slot)
+        if applied:
+            self.default_model_applied = model_id
+        return applied
+
     @property
     def resident(self) -> str:
         return self._resident
 
+    def active_entry(self) -> BackendEntry | None:
+        """The `backends:` entry behind the active endpoint, or None.
+
+        Guarded like `inspection.backend_entry_for`: every caller has a sane
+        default for None, so a config luxe cannot read degrades to the
+        pre-multi-engine behaviour instead of raising into a render path.
+        """
+        try:
+            return self.cfg.backend_entry(self.backend_name)
+        except Exception:
+            return None
+
+    def engine_label(self) -> str:
+        """How to name the active endpoint in user-facing text ("oMLX" by
+        default) — so a message never asserts the wrong serving stack."""
+        entry = self.active_entry()
+        try:
+            return entry.engine_label() if entry is not None else "oMLX"
+        except Exception:
+            return "oMLX"
+
     def available_models(self) -> list[str]:
-        """Selectable model ids: what the server serves, filtered to the config's
-        `visible_models` roster.
+        """Selectable model ids: what the server serves, filtered to the roster.
 
         Guarded — returns [] if the server is unreachable so `/model` never
         crashes when oMLX is down. The roster keeps stale bake-off entries and
-        HF-cache aliases out of the picker (chat-only; see config.visible).
+        HF-cache aliases out of the picker (chat-only; see config.visible). The
+        ACTIVE entry's own `visible_models` wins when it has one: a cloud
+        catalog cannot be governed by a list of local weight ids.
         """
         try:
             served = self.backend.list_models()
         except Exception:
             return []
-        return self.cfg.visible(served)
+        return self.cfg.visible(served, entry=self.active_entry())
+
+    def catalog(self) -> list[dict]:
+        """Full `/v1/models` records for the active endpoint, cached.
+
+        `/model find` needs the fields `list_models()` throws away (pricing,
+        supported_parameters) and a cloud catalog is ~300 entries, so the GET
+        is paid once per endpoint per session. Guarded: [] when unreachable.
+        """
+        if self._catalog_cache.get(self.backend_name) is None:
+            try:
+                records = self.backend.list_models_full()
+            except Exception:
+                return []
+            self._catalog_cache[self.backend_name] = records
+            # A catalog that declares `supported_parameters` is a first-party
+            # answer to "can this model call tools?" — better than the
+            # fail-open UNKNOWN a remote endpoint otherwise gets.
+            try:
+                from luxe.chat import modelcaps
+                modelcaps.note_catalog(
+                    getattr(self.backend, "base_url", "") or "", records)
+            except Exception:
+                pass
+        return self._catalog_cache[self.backend_name] or []
+
+    def catalog_is_larger_than_roster(self) -> bool:
+        """True when this endpoint serves more models than `/model` lists.
+
+        Only ever True where a per-backend roster is deliberately hiding a
+        large catalog (the cloud entry) — it uses the ALREADY-FETCHED id list
+        and never triggers the full-catalog GET, so a local `/model` costs the
+        same as it always did.
+        """
+        entry = self.active_entry()
+        if entry is None or not entry.visible_models:
+            return False
+        try:
+            return len(self.backend.list_models()) > len(entry.visible_models)
+        except Exception:
+            return False
 
     # -- backend switching (multi-backend, chat-only) ------------------------
 
@@ -205,6 +321,10 @@ class SlotManager:
             del self.overrides[s]
         self.backend = backend
         self.backend_name = name
+        # Now that the new entry is active, let it name its own default model
+        # for the slots nobody pinned. Runs AFTER the drop above so a surviving
+        # explicit override (one the new server does serve) keeps its slot.
+        self._apply_entry_default_model()
         # Unknown residency on the new server: force the next backend_for() to
         # confirm/load the target there (never unloads the old server) — and
         # re-enforce single-residency on the NEW server's first use.
@@ -227,7 +347,8 @@ class SlotManager:
         other = next((n for n in entries if n != self.backend_name), None)
         if other is None:
             return None
-        return f"{self.backend_name} oMLX unreachable — try /backend {other}"
+        return (f"{self.backend_name} {self.engine_label()} unreachable — "
+                f"try /backend {other}")
 
     # -- auto-degrade (manifest fallback, chat-only) --------------------------
 

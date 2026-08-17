@@ -545,3 +545,100 @@ class TestDoctorOnALlamaServerEngine:
         key = next(c for c in doc.checks if c.name == "API key")
         assert key.state == inspection.WARN and "secrets.env" in key.fix
         assert _states(doc)["weights"] == inspection.WARN
+
+
+class TestDoctorOnAnOpenRouterEngine:
+    """`backends: {engine: openrouter}` — the cloud carve-out (2026-08-17).
+
+    Three lines have to change, and each one used to say something actively
+    wrong on a metered, provider-hosted endpoint: a fix that says "start the
+    server" (there is no local process), a missing key reported as a caveat
+    (it is the whole session — every request 401s), and a weights WARN that
+    tells you to `luxe pull` bytes that will never live on this disk.
+    """
+
+    @pytest.fixture
+    def cloud_ctx(self, tmp_path, monkeypatch):
+        from luxe import buildinfo
+        from luxe.chat import origin as origin_mod
+        from luxe.chat import slots as slots_mod
+        from luxe.config import BackendEntry
+
+        origin_mod.reset_cache()
+        monkeypatch.setattr(origin_mod, "network_mounts", lambda **k: [])
+        monkeypatch.setattr(buildinfo, "fetch_origin", lambda **k: False)
+        cfg = PipelineConfig(
+            models={"monolith": "org/cloud-model"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+            backends={"openrouter": BackendEntry(
+                base_url="https://openrouter.ai/api", engine="openrouter",
+                api_key_env="OPENROUTER_API_KEY", budget_usd=5.0,
+                default=True)},
+        )
+        made = _Backend(models=("org/cloud-model",), paths={},
+                        base_url="https://openrouter.ai/api")
+        monkeypatch.setattr(slots_mod, "Backend", lambda **k: made)
+        sm = SlotManager(cfg)
+        sm.backend = made
+        repo = _repo(tmp_path)
+        session = ChatSession(repo_path=str(repo))
+        yield session, sm, str(repo)
+        origin_mod.reset_cache()
+
+    def test_the_endpoint_check_is_named_for_the_provider(self, cloud_ctx):
+        session, sm, repo = cloud_ctx
+        doc = inspection.run_doctor(session, sm, repo)
+        names = {c.name for c in doc.checks}
+        assert "OpenRouter endpoint" in names
+        assert "oMLX endpoint" not in names
+
+    def test_a_dead_endpoint_never_says_start_the_server(self, cloud_ctx):
+        session, sm, repo = cloud_ctx
+        sm.backend = _Backend(healthy=False,
+                              base_url="https://openrouter.ai/api")
+        doc = inspection.run_doctor(session, sm, repo)
+        check = next(c for c in doc.checks if c.name == "OpenRouter endpoint")
+        assert check.state == inspection.FAIL
+        assert "brew" not in check.fix and "launchctl" not in check.fix
+        assert "OPENROUTER_API_KEY" in check.fix
+
+    def test_a_missing_key_is_a_FAIL_not_a_warning(self, cloud_ctx):
+        session, sm, repo = cloud_ctx
+        sm.backend = _Backend(key="", models=("org/cloud-model",),
+                              base_url="https://openrouter.ai/api")
+        doc = inspection.run_doctor(session, sm, repo)
+        key = next(c for c in doc.checks if c.name == "API key")
+        assert key.state == inspection.FAIL
+        assert doc.worst == inspection.FAIL
+
+    def test_the_key_check_names_the_env_var_and_never_a_value(self, cloud_ctx):
+        """chat.sdd Must-not: names and presence only. A doctor table is
+        written to a transcript and read by a model."""
+        session, sm, repo = cloud_ctx
+        sm.backend = _Backend(key="", models=("org/cloud-model",),
+                              base_url="https://openrouter.ai/api")
+        doc = inspection.run_doctor(session, sm, repo)
+        key = next(c for c in doc.checks if c.name == "API key")
+        assert "OPENROUTER_API_KEY" in key.detail
+        assert "OPENROUTER_API_KEY" in key.fix
+        assert "secrets.env" in key.fix
+        assert "sk-" not in key.fix and "sk-" not in key.detail
+
+    def test_weights_are_provider_hosted_and_say_they_are_billable(self, cloud_ctx):
+        session, sm, repo = cloud_ctx
+        doc = inspection.run_doctor(session, sm, repo)
+        weights = next(c for c in doc.checks if c.name == "weights")
+        assert weights.state == inspection.OK
+        assert "provider-hosted" in weights.detail
+        assert "billable" in weights.detail
+        assert "luxe pull" not in weights.fix
+
+    def test_the_stale_omlx_build_check_is_skipped(self, cloud_ctx, monkeypatch):
+        session, sm, repo = cloud_ctx
+        called = []
+        import luxe.staleproc as staleproc
+        monkeypatch.setattr(staleproc, "check_omlx",
+                            lambda: called.append(1) or None)
+        doc = inspection.run_doctor(session, sm, repo)
+        assert called == []
+        assert not [c for c in doc.checks if c.name == "oMLX build"]

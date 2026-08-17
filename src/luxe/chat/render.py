@@ -392,11 +392,23 @@ def _ctx_fill(result, num_ctx: int) -> float:
     return result.peak_context_pressure
 
 
+def _cost_bit(result) -> str | None:
+    """`cost: $0.0134` for a turn the server actually billed, else None.
+
+    Absent rather than "$0.0000" on every local engine: a turn that reported no
+    cost was not measured as free, it was not measured at all."""
+    from luxe.chat import cost as cost_mod
+
+    usd = float(getattr(result, "cost_usd", 0.0) or 0.0)
+    return f"cost: {cost_mod.fmt(usd)}" if usd > 0 else None
+
+
 def render_footer_text(slot: str, model: str, result, *, num_ctx: int = 0,
                        ended_at: float | None = None) -> str:
     """Plain one-line footer for the TUI transcript (no console required).
     `tok: P+C` is this task's prompt+completion tokens; ctx% is the last step's
-    server-reported fill of the window (`of <size>` when num_ctx is known)."""
+    server-reported fill of the window (`of <size>` when num_ctx is known);
+    `cost:` appears only when the endpoint billed this turn."""
     ctx = f"ctx: {_ctx_fill(result, num_ctx):.0%}"
     if num_ctx:
         ctx += f" of {num_ctx // 1024}K"
@@ -407,6 +419,9 @@ def render_footer_text(slot: str, model: str, result, *, num_ctx: int = 0,
         f"tok: {result.prompt_tokens}+{result.completion_tokens}",
         ctx,
     ]
+    cost = _cost_bit(result)
+    if cost:
+        bits.append(cost)
     if ended_at is not None:
         bits.append(_clock(ended_at))
     return "· " + " · ".join(bits)
@@ -439,6 +454,9 @@ def render_footer(
         f"ctx: {_ctx_fill(result, num_ctx):.0%}"
         + (f" of {num_ctx // 1024}K" if num_ctx else ""),
     ]
+    cost = _cost_bit(result)
+    if cost:
+        bits.append(cost)
     if swap_count:
         bits.append(f"swaps: {swap_count} ({swap_seconds:.0f}s)")
     console.print("[dim]· " + " · ".join(bits) + "[/]")

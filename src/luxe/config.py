@@ -12,10 +12,15 @@ from pydantic import BaseModel, Field, field_validator
 
 ENGINE_OMLX = "omlx"
 ENGINE_LLAMA_SERVER = "llama-server"
+#: Cloud, metered, OpenAI-compatible (2026-08-17). The sanctioned chat-only
+#: carve-out from luxe.sdd's "no cloud provider backends": opt-in per session,
+#: hard-capped by `budget_usd`, never a bench target. See chat.sdd.
+ENGINE_OPENROUTER = "openrouter"
 #: Serving stacks luxe knows how to talk to. Every one of them speaks the
 #: OpenAI-compatible `/v1` surface — which is all the CHAT PATH needs — so this
-#: only ever changes DIAGNOSTICS and provisioning, never how a turn is sent.
-KNOWN_ENGINES = (ENGINE_OMLX, ENGINE_LLAMA_SERVER)
+#: only ever changes DIAGNOSTICS, provisioning, and (openrouter only) the
+#: DECLARED `body_extras` merge; never how a turn is otherwise sent.
+KNOWN_ENGINES = (ENGINE_OMLX, ENGINE_LLAMA_SERVER, ENGINE_OPENROUTER)
 
 
 class BackendEntry(BaseModel):
@@ -64,6 +69,34 @@ class BackendEntry(BaseModel):
     # auto-detect: loopback is owned, anything reachable over the network is
     # assumed shared. Set explicitly to override either way.
     shared: bool | None = None
+    # PER-BACKEND model roster (chat-only). Wins over PipelineConfig's global
+    # `visible_models:` for this endpoint. It exists for the cloud engine: the
+    # global roster is a list of local MLX ids, and applying it to OpenRouter's
+    # ~300-model catalog hides all of it. Empty = fall back to the global
+    # roster, i.e. exactly the pre-2026-08-17 behaviour for every local entry.
+    visible_models: list[str] = Field(default_factory=list)
+    # The model every UNPINNED slot resolves to while this endpoint is active
+    # (chat-only). Exists because slot defaults come from the HOST manifest —
+    # this machine's local weight ids — which an endpoint serving somebody
+    # else's catalog does not have: a session that opened on it would sit
+    # pointed at a model the server has never heard of until the user typed
+    # `/model all <id>`. This is CONFIG-driven selection (the entry names the
+    # model), not engine-driven: two entries on the same engine may declare
+    # different ones, and an entry that omits it selects exactly as before.
+    # It never outranks a user's own choice — see chat/slots.py.
+    default_model: str = ""
+    # HARD spend cap for a session on this endpoint, in USD (chat-only). Only
+    # meaningful on a billable engine. None = no cap AND no cost segment — a
+    # local endpoint should not grow a "$0.00" chip. A turn is refused BEFORE
+    # dispatch once the session's accumulated cost reaches it; `/usage budget
+    # <usd>` raises it for the session. See chat.sdd.
+    budget_usd: float | None = None
+    # Vendor body fields this endpoint DECLARES it wants, merged at the TOP
+    # LEVEL of the chat body (never `extra_body` — see backend.py 2026-08-11).
+    # OpenRouter needs `{"usage": {"include": true}}` to report per-request
+    # cost. Empty for every other entry, and omitted from `backend_kwargs()`
+    # when empty, so their requests stay byte-identical.
+    body_extras: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("engine")
     @classmethod
@@ -86,15 +119,32 @@ class BackendEntry(BaseModel):
         `brew services`, the `/admin/api/*` downloader) mean anything."""
         return self.engine == ENGINE_OMLX
 
+    def is_openrouter(self) -> bool:
+        """True for the cloud carve-out: metered, provider-hosted weights, no
+        local process to start and nothing to `luxe pull`."""
+        return self.engine == ENGINE_OPENROUTER
+
+    def is_billable(self) -> bool:
+        """True when tokens on this endpoint cost money. Drives whether the
+        cost segment/footer/cap exist at all — a local endpoint must not grow
+        a permanent "$0.00" chip."""
+        return self.is_openrouter()
+
     def engine_label(self) -> str:
         """How to name this endpoint in a check line."""
-        return "oMLX" if self.is_omlx() else self.engine
+        if self.is_omlx():
+            return "oMLX"
+        if self.is_openrouter():
+            return "OpenRouter"
+        return self.engine
 
     def needs_api_key(self) -> bool:
-        """Whether a missing key is worth warning about. llama-server is
-        keyless unless started with `--api-key`, so warning about it there is
-        a permanent false alarm with a fix that does nothing."""
-        return self.is_omlx()
+        """Whether a missing key is worth reporting. llama-server is keyless
+        unless started with `--api-key`, so warning about it there is a
+        permanent false alarm with a fix that does nothing. On OpenRouter the
+        key is not cosmetic at all: without it EVERY request 401s, which is
+        why `/doctor` treats a missing one as a FAIL there (chat.sdd)."""
+        return self.is_omlx() or self.is_openrouter()
 
     def is_shared(self) -> bool:
         """True when other clients may be using this endpoint.
@@ -109,18 +159,29 @@ class BackendEntry(BaseModel):
         host = urlparse(self.base_url).hostname or ""
         return host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "")
 
-    def backend_kwargs(self) -> dict[str, float]:
-        """Timeout kwargs for `Backend(...)`, omitting anything unset.
+    def backend_kwargs(self) -> dict[str, Any]:
+        """Constructor kwargs for `Backend(...)`, omitting anything unset.
 
         Omission matters: passing `None` through would override Backend's
         defaults with nothing. An entry that doesn't mention the progress
-        deadlines must behave exactly as it did before they existed.
+        deadlines — or `body_extras` — must behave exactly as it did before
+        they existed, which is what keeps every local endpoint's request
+        byte-identical (tests/test_golden_request.py).
         """
-        kw: dict[str, float] = {"timeout_s": self.timeout_s}
+        kw: dict[str, Any] = {"timeout_s": self.timeout_s}
         if self.stall_timeout_s is not None:
             kw["stall_timeout_s"] = self.stall_timeout_s
         if self.decode_stall_timeout_s is not None:
             kw["decode_stall_timeout_s"] = self.decode_stall_timeout_s
+        if self.body_extras:
+            kw["body_extras"] = dict(self.body_extras)
+        if self.is_billable():
+            # A third-party endpoint must never inherit the fleet's oMLX key
+            # because its own `api_key_env` happened to be unset — that would
+            # put a local credential in an Authorization header pointed at
+            # someone else's server. Omitted (not passed as True) for every
+            # local entry so their Backend construction is untouched.
+            kw["key_fallback"] = False
         return kw
 
 
@@ -286,8 +347,15 @@ class PipelineConfig(BaseModel):
         role_cfg = self.role(role_name)
         return self.models[role_cfg.model_key]
 
-    def visible(self, model_ids: list[str]) -> list[str]:
+    def visible(self, model_ids: list[str], *,
+                entry: "BackendEntry | None" = None) -> list[str]:
         """Filter server-reported model ids to the configured roster.
+
+        `entry` is the ACTIVE backend entry. When it declares its own
+        `visible_models`, that roster wins outright: the global list names
+        local MLX weights, and intersecting it with a cloud catalog of ~300
+        third-party ids leaves nothing selectable. Omitting `entry` (every
+        pre-2026-08-17 caller) keeps the global-roster behaviour exactly.
 
         Server order is preserved so `/model <slot> <n>` indexes stay stable.
         An id in `visible_models` that the server does NOT serve is dropped
@@ -296,6 +364,9 @@ class PipelineConfig(BaseModel):
         a fallback that isn't rostered would be invisible to `/model` and
         `/doctor` exactly when it matters most.
         """
+        if entry is not None and entry.visible_models:
+            allowed_entry = set(entry.visible_models)
+            return [m for m in model_ids if m in allowed_entry]
         if not self.visible_models:
             return list(model_ids)
         allowed = set(self.visible_models)

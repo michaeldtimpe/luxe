@@ -139,6 +139,19 @@ class ChatSession:
     pinned_slot: str | None = None  # set by /use; consumed on the next turn
     num_ctx_override: int | None = None  # set by /ctx; clamped per-turn to num_ctx_max
     turns: list[ChatTurn] = field(default_factory=list)
+
+    # -- spend (billable backends only; chat/cost.py) -------------------------
+    # USD this session has been billed, summed from every turn's
+    # AgentResult.cost_usd. Stays 0.0 on every local engine, which reports no
+    # cost at all — and "no cost reported" must not render as a confident
+    # $0.00, so the cost surfaces key on the backend being billable, not on
+    # this being zero.
+    session_cost_usd: float = 0.0
+    turn_costs: list[float] = field(default_factory=list)
+    # Session-scoped raise of the entry's `budget_usd` hard cap, set by
+    # `/usage budget <usd>`. None = use the configured cap. Never persisted:
+    # raising a spend cap is a decision about THIS session.
+    budget_override_usd: float | None = None
     system_constraints: list[str] = field(default_factory=list)  # set by /sys; injected every turn
     # /attach staging: [{path, content, size, sha256, truncated}] read+capped by
     # the command; injected as <attached_files> into the NEXT turn only

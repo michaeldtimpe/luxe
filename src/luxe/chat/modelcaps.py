@@ -101,6 +101,36 @@ def reset_cache() -> None:
     _cache.clear()
 
 
+def note_catalog(base_url: str, records) -> None:
+    """Learn tool capability from a `/v1/models` payload that declares it.
+
+    Local engines report only ids, so this never fires for them. A cloud
+    catalog states `supported_parameters` per model, which is a FIRST-PARTY
+    answer to the question `from_template` has to infer from weights that
+    aren't on this disk — and there, "remote endpoint, assume tools work" is
+    the fail-open default that would otherwise send a tool surface to a model
+    that silently ignores it. Only ever populates the cache for records that
+    actually carry the field; anything else is left UNKNOWN.
+    """
+    if not base_url or not records:
+        return
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        mid = rec.get("id")
+        params = rec.get("supported_parameters")
+        if not mid or not isinstance(params, list) or not params:
+            continue
+        if "tools" in params:
+            _cache[(base_url, mid)] = ToolCapability(
+                SUPPORTED, "the catalog lists `tools` in supported_parameters")
+        else:
+            _cache[(base_url, mid)] = ToolCapability(
+                UNSUPPORTED,
+                "the provider's catalog does not list `tools` among this "
+                "model's supported_parameters")
+
+
 def for_model(backend, model_id: str) -> ToolCapability:
     """Tool capability of `model_id` on the active endpoint.
 
