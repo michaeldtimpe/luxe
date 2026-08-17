@@ -53,7 +53,16 @@ per session via `/model all GLM-4.5-Air-4bit`, never a slot default, never
 a manifest main/fallback, never on m1/m4 (60 GB doesn't fit), never the
 bench champion. Overnight drill verdict 9/9 at ~2× wall:
 `acceptance/glm_capacity_drills/REPORT.md` (local),
-`scripts/capacity_drills.py` to re-run. Do not extend fan-out beyond these.
+`scripts/capacity_drills.py` to re-run. (d) **The OpenRouter chat backend**
+(2026-08-17): `backends: openrouter` with `engine: openrouter` — a cloud,
+metered endpoint reachable only by opting in per session
+(`luxe chat --backend openrouter`, or `/backend openrouter`). Everything on it
+is billable, so cost is visible in the status bar/footer/`/usage` and bounded
+by a hard `budget_usd` the session refuses to cross. Never a slot default,
+never a host-manifest main/fallback, never a bench/`smoke`/`ready` target, and
+the benchmark path still reads `omlx_base_url` only. Its per-backend
+`visible_models:` is the shortlist; `/model find <text>` searches the live
+catalog. Do not extend fan-out beyond these.
 
 ## Fallback kit (2026-07-30 pivot — read this before touching chat)
 

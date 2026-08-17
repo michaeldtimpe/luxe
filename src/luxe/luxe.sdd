@@ -148,7 +148,15 @@ auto-memory.
   redirect would be honoured or ignored depending on import order
 
 ## Must not
-- No cloud provider backends (Anthropic/OpenAI/Gemini) — MLX/oMLX endpoints only
+- No cloud provider backends on the BENCHMARK/MAINTAIN path — that path reads
+  `omlx_base_url` and talks to MLX/oMLX endpoints only. Reproducibility is the
+  reason: a metered, versionless, remotely-updated endpoint cannot anchor a
+  bake-off. `luxe chat`/`luxe code` gain ONE sanctioned, opt-in, billable
+  exception (2026-08-17): a `backends:` entry with `engine: openrouter`,
+  selected per session with `--backend`/`/backend`. It is never a slot default,
+  never a host-manifest main/fallback, never a bench or `luxe smoke`/`luxe ready`
+  target, and it carries a hard `budget_usd` spend cap the session refuses to
+  cross. Do not add a second cloud engine on this precedent
 - Break a layering cycle with a FUNCTION-LOCAL import. It hides the cycle from
   the reader and from every static tool, and it is exactly how the three
   cycles fixed on 2026-08-04 survived for months. Move the shared piece down

@@ -26,6 +26,7 @@ from luxe import ephemeral
 from luxe.agents.single import run_single
 from luxe.backend import BackendError
 from luxe.chat import commands as cmd
+from luxe.chat import cost as cost_mod
 from luxe.chat.render import (
     ARROW_PALETTE_PTK,
     CancelToken,
@@ -856,6 +857,15 @@ def _run_turn(
         if command:
             console.print(f"[dim]$ {_escape(command)}[/]", highlight=False)
 
+    # HARD spend cap (billable backends only): refuse BEFORE dispatch. Checked
+    # here rather than in `prepare_turn` because a refused turn must not
+    # persist a user record or open a run — nothing about it happened. Marked
+    # `crashed` so the autonomous goal supervisor stops instead of spinning.
+    refusal = cost_mod.refusal(session, slots)
+    if refusal:
+        console.print(f"[red]✗ {_escape(refusal)}[/]")
+        return TurnOutcome(crashed=True, final_text=refusal)
+
     prep = prepare_turn(message, session, slots, cfg, languages, infer,
                         plan_mode=plan_mode, cancel=cancel,
                         on_tool_start=_on_tool_start)
@@ -972,6 +982,9 @@ def _run_turn(
                             partial_text="".join(stream_parts))
 
     if not interrupted and result is not None:
+        # Spend first: the footer and status bar below both read the running
+        # session total, and the cap check on the NEXT turn reads it too.
+        cost_mod.record_turn(session, result, status)
         # WS4 output ladder: full when /verbose full (or /debug), else compact
         # if /compact, else the default truncated preview.
         out_mode = ("full" if session.verbose_level == "full"

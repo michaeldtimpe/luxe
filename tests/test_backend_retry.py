@@ -182,3 +182,50 @@ def test_chat_invokes_on_retry_callback(monkeypatch):
     backend.chat([{"role": "user", "content": "hi"}], on_retry=lambda d, a: seen.append(d))
     assert len(seen) == 1
     assert seen[0].retry
+
+
+# --- 429 is the one 4xx worth retrying (2026-08-17, openrouter) -------------
+
+def test_429_is_transient():
+    """A rate limit is normal backpressure from a metered provider, not a bug
+    in the request — the same call succeeds moments later, which is exactly
+    what the existing backoff is for."""
+    d = classify_failure(status_code=429, body="rate limit exceeded", attempt=0)
+    assert d.retry
+    assert "429" in d.reason
+    assert d.delay_s > 0
+
+
+def test_402_out_of_credits_stays_terminal():
+    """The counter-case. Retrying a request the account cannot pay for burns
+    the retry budget to arrive at the same answer three times."""
+    d = classify_failure(status_code=402, body="insufficient credits", attempt=0)
+    assert not d.retry
+    assert "4xx" in d.reason
+
+
+def test_429_still_stops_on_the_last_attempt():
+    d = classify_failure(status_code=429, body="", attempt=2, max_attempts=3)
+    assert not d.retry
+
+
+def test_chat_retries_a_429_then_succeeds(monkeypatch):
+    monkeypatch.setattr("luxe.backend.time.sleep", lambda s: None)
+    transport = _MockTransport([
+        _err_response(429, '{"error": "rate limit exceeded"}'),
+        _ok_response("worked"),
+    ])
+    backend = _backend(transport, max_attempts=3)
+    resp = backend.chat([{"role": "user", "content": "hi"}])
+    assert resp.text == "worked"
+    assert resp.retries == 1
+    assert transport.calls == 2
+
+
+def test_chat_does_not_retry_a_402(monkeypatch):
+    monkeypatch.setattr("luxe.backend.time.sleep", lambda s: None)
+    transport = _MockTransport([_err_response(402, "insufficient credits")])
+    backend = _backend(transport, max_attempts=3)
+    with pytest.raises(BackendError):
+        backend.chat([{"role": "user", "content": "hi"}])
+    assert transport.calls == 1

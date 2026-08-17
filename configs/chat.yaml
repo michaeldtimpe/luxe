@@ -26,6 +26,39 @@ backends:
     # single-residency eviction here: luxe frees only the models THIS session
     # loaded, never another host's (B5). Set `shared: false` if m5 ever becomes
     # dedicated and you want the RAM reclaimed aggressively again.
+  # CLOUD carve-out (2026-08-17, luxe.sdd + chat.sdd): metered, opt-in per
+  # session (`luxe chat --backend openrouter` / `/backend openrouter`), never a
+  # slot default, never a host-manifest main/fallback, never a bench target.
+  # base_url stops at /api because the client appends /v1/chat/completions.
+  openrouter:
+    base_url: "https://openrouter.ai/api"
+    engine: openrouter
+    # As always, the NAME of the env var — never the key. Resolved through
+    # luxe.secrets (env → ~/.luxe/secrets.env → Keychain).
+    api_key_env: OPENROUTER_API_KEY
+    # Cloud round-trips are minutes at worst, not the ~25min dense prefill m5
+    # can take; the stock 600s read timeout and progress deadlines apply.
+    # HARD session spend cap. The session refuses a turn BEFORE dispatching it
+    # once accumulated cost reaches this; `/usage budget <usd>` raises it for
+    # the session only. Remove the key to run uncapped (and unwatched).
+    budget_usd: 5.00
+    # What makes per-request cost come back: OpenRouter only fills
+    # `usage.cost` when the body asks for it. Merged at the TOP LEVEL of the
+    # chat body (never `extra_body` — see backend.py 2026-08-11).
+    body_extras:
+      usage: {include: true}
+    # PER-BACKEND roster: the global `visible_models:` below names local MLX
+    # weights, and intersecting it with a ~300-model cloud catalog would leave
+    # `/model` empty. This is the shortlist; `/model find <text>` searches the
+    # live catalog and `/model all <exact-id>` pins anything in it.
+    visible_models:
+      - moonshotai/kimi-k3
+    # What every unpinned slot resolves to while this backend is active. Slot
+    # defaults otherwise come from this host's manifest — LOCAL weight ids —
+    # which OpenRouter does not serve, so a session opening here would sit
+    # pointed at a model the provider has never heard of. Yields to `/model`
+    # and to the `--chat/plan/code-model` startup flags.
+    default_model: moonshotai/kimi-k3
 
 # Chat color palette (D2): the default is 'auto' — it tracks your ACTIVE
 # terminal/YASL statusline theme. Resolved as `--theme` flag → LUXE_THEME env →

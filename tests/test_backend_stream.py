@@ -193,3 +193,77 @@ def test_stream_failure_decision_is_logged(caplog):
         with pytest.raises(BackendError):
             backend.chat([{"role": "user", "content": "hi"}], stream=True)
     assert any("decision=" in r.getMessage() for r in caplog.records)
+
+
+# --- per-request cost (2026-08-17, the openrouter carve-out) ---------------
+#
+# A metered endpoint nests the USD it charged inside `usage` once the body
+# declares `usage: {"include": true}` (BackendEntry.body_extras). It has to be
+# parsed on BOTH paths: chat streams, and the benchmark/maintain path does not,
+# so reading it in only one place would make the spend total depend on which
+# front-end happened to run the turn.
+
+
+def test_non_stream_path_parses_cost_from_usage():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "hi", "role": "assistant"},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2,
+                      "cost": 0.00123},
+        })
+
+    resp = _backend(httpx.MockTransport(handler)).chat(
+        [{"role": "user", "content": "hi"}])
+    assert resp.timing.cost_usd == pytest.approx(0.00123)
+
+
+def test_stream_path_parses_cost_from_the_terminal_chunk():
+    body = _sse(
+        {"choices": [{"delta": {"content": "hi"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}],
+         "usage": {"prompt_tokens": 3, "completion_tokens": 4, "cost": 0.0042}},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    resp = _backend(httpx.MockTransport(handler)).chat(
+        [{"role": "user", "content": "hi"}], stream=True)
+    assert resp.timing.cost_usd == pytest.approx(0.0042)
+
+
+def test_a_server_that_reports_no_cost_yields_none_not_zero():
+    """"Free" and "never said" are different facts, and the cost surfaces must
+    not render a confident $0.00 for an endpoint that simply didn't report."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        })
+
+    resp = _backend(httpx.MockTransport(handler)).chat(
+        [{"role": "user", "content": "hi"}])
+    assert resp.timing.cost_usd is None
+
+
+def test_a_string_cost_is_accepted_and_junk_is_not():
+    from luxe.backend import _usage_cost
+    assert _usage_cost({"cost": "0.5"}) == 0.5
+    assert _usage_cost({"cost": None}) is None
+    assert _usage_cost({"cost": "free"}) is None
+    assert _usage_cost({"cost": True}) is None      # bool is not a price
+    assert _usage_cost({}) is None
+    assert _usage_cost(None) is None
+
+
+def test_the_loop_sums_cost_across_a_multi_step_turn():
+    """One turn is many `backend.chat` calls, each separately billed. A cap
+    reading only the last step's cost would undercount by the turn's length."""
+    from luxe.agents.loop import AgentResult
+
+    r = AgentResult()
+    for c in (0.001, 0.002, 0.004):
+        r.cost_usd += c
+    assert r.cost_usd == pytest.approx(0.007)
+    assert AgentResult().cost_usd == 0.0

@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 from luxe import textfmt
+from luxe.chat import cost as cost_mod
 from luxe.chat import modelcaps
 from luxe.chat import origin as origin_mod
 from luxe.chat.commands import CommandContext, CommandResult, _usage
@@ -50,6 +51,14 @@ def _status(args, ctx: CommandContext) -> CommandResult:
         ("turns", str(len(s.turns))),
         ("swaps", f"{sm.stats.count} ({sm.stats.seconds:.0f}s)"),
     ]
+    # Spend — only where tokens are billed (or where something was billed).
+    # A local session must not carry a "$0.00" row it can never move.
+    if cost_mod.is_billable(sm) or cost_mod.spent(s) > 0:
+        cap = cost_mod.cap_usd(s, sm)
+        line = cost_mod.fmt(cost_mod.spent(s))
+        line += (f" of a {cost_mod.fmt(cap)} cap (`/usage` for detail)"
+                 if cap is not None else " (no cap set — `/usage` for detail)")
+        rows.append(("cost", line))
     if s.attachments:
         rows.append(("attached", f"{len(s.attachments)} file(s) for the next turn"))
     try:
@@ -198,6 +207,89 @@ def _outage(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print(Markdown(text))
     except Exception:            # never let rendering hide the card
         ctx.console.print(text)
+    return CommandResult(handled=True)
+
+
+def _usage_cmd(args, ctx: CommandContext) -> CommandResult:
+    """`/usage` — what this session has spent, and what's left.
+
+    `/usage`               per-turn costs, session total, cap headroom, credits
+    `/usage budget <usd>`  raise this session's hard cap (deliberate, one-off)
+
+    Lives here beside `/net` rather than in `/doctor`: the account-credits
+    lookup is a network call, and `/doctor` keeps its offline contract to
+    exactly one line (luxe.sdd). That call happens ONLY when this command is
+    invoked, and a failure degrades to "unreachable" — a cost report has to
+    work in an outage, which is when someone reaches for a cloud fallback.
+    """
+    s, sm = ctx.session, ctx.slots
+
+    if args and args[0].lower() == "budget":
+        if len(args) < 2:
+            ctx.console.print("[yellow]Usage: /usage budget <usd>[/]")
+            return CommandResult(handled=True)
+        try:
+            new_cap = float(args[1].lstrip("$"))
+        except ValueError:
+            ctx.console.print(f"[yellow]Not a dollar amount: {args[1]!r}[/]")
+            return CommandResult(handled=True)
+        if new_cap < 0:
+            ctx.console.print("[yellow]A cap can't be negative.[/]")
+            return CommandResult(handled=True)
+        old = cost_mod.cap_usd(s, sm)
+        s.budget_override_usd = new_cap
+        old_txt = cost_mod.fmt(old) if old is not None else "no cap"
+        ctx.console.print(f"[green]✓[/] spend cap {old_txt} → "
+                          f"[cyan]{cost_mod.fmt(new_cap)}[/] "
+                          "[dim](this session only; not written to config)[/]")
+        return CommandResult(handled=True)
+
+    billable = cost_mod.is_billable(sm)
+    spent = cost_mod.spent(s)
+    ctx.console.print(f"[bold]Usage[/] [dim]— backend {sm.backend_name} "
+                      f"({sm.engine_label()})[/]")
+    if not billable and spent <= 0:
+        # Say it plainly rather than printing a table of zeros: the honest
+        # answer for a local endpoint is that nothing is metered here.
+        ctx.console.print("  [dim]this endpoint is not billed — no per-token "
+                          "cost is reported for it[/]")
+        return CommandResult(handled=True)
+
+    if s.turn_costs:
+        ctx.console.print("[dim]per turn:[/]")
+        for i, c in enumerate(s.turn_costs, 1):
+            ctx.console.print(f"  [cyan]{i:2d}[/] {cost_mod.fmt(c)}")
+    else:
+        ctx.console.print("[dim]· no billed turns yet this session[/]")
+
+    ctx.console.print(f"  [bold]session total[/] {cost_mod.fmt(spent)}")
+    cap = cost_mod.cap_usd(s, sm)
+    if cap is None:
+        ctx.console.print("  [yellow]no spend cap set[/] [dim]— set one with "
+                          "`/usage budget <usd>`, or `budget_usd:` on the "
+                          "backend entry[/]")
+    else:
+        left = cost_mod.remaining_usd(s, sm) or 0.0
+        style = "yellow" if left <= 0 else "dim"
+        ctx.console.print(f"  [bold]cap[/] {cost_mod.fmt(cap)} "
+                          f"[{style}]({cost_mod.fmt(left)} left)[/]")
+        if left <= 0:
+            ctx.console.print("  [yellow]· turns are refused until you raise "
+                              "it: `/usage budget <usd>`[/]")
+
+    limit, used = cost_mod.credits(sm)
+    if limit is None and used is None:
+        ctx.console.print("  [dim]key: unreachable "
+                          "(offline, or this engine has no key-usage API)[/]")
+    else:
+        bits = []
+        if limit is not None:
+            bits.append(f"limit {cost_mod.fmt(limit)}")
+        if used is not None:
+            bits.append(f"used {cost_mod.fmt(used)}")
+        if limit is not None and used is not None:
+            bits.append(f"[bold]remaining {cost_mod.fmt(max(0.0, limit - used))}[/]")
+        ctx.console.print("  [dim]key:[/] " + " · ".join(bits))
     return CommandResult(handled=True)
 
 

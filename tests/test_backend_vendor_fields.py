@@ -95,3 +95,71 @@ class TestUnrelatedFieldsAreUntouched:
     def test_the_rest_of_the_body_is_unchanged(self, field, expected):
         body = _capture(num_ctx=1024, repeat_penalty=1.05)
         assert body[field] == expected
+
+
+def _capture_with_extras(extras, **chat_kwargs) -> dict:
+    """Same as `_capture`, but for a Backend constructed with `body_extras`."""
+    seen: dict = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={
+            "choices": [{"message": {"role": "assistant", "content": "ok"},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+        })
+
+    backend = Backend(base_url="http://test", model="m", api_key="k",
+                      body_extras=extras)
+    backend._client = httpx.Client(
+        base_url="http://test", transport=httpx.MockTransport(_handler))
+    backend.chat([{"role": "user", "content": "hi"}], **chat_kwargs)
+    return seen
+
+
+class TestBodyExtras:
+    """Per-endpoint declared body fields (2026-08-17, the openrouter carve-out).
+
+    Constructor-injected, NOT a `chat()` kwarg: `agents/loop.py`'s call site is
+    frozen (chat.sdd Must-not), and a Backend built by the benchmark path never
+    receives extras — which is what keeps tests/test_golden_request.py green by
+    construction rather than by care.
+    """
+
+    def test_they_are_top_level_fields(self):
+        body = _capture_with_extras({"usage": {"include": True}})
+        assert body["usage"] == {"include": True}
+        assert "extra_body" not in body
+
+    def test_they_are_absent_when_the_endpoint_declares_none(self):
+        """The byte-identity guarantee for every local endpoint."""
+        assert _capture_with_extras(None) == _capture_with_extras({})
+        assert "usage" not in _capture_with_extras(None)
+
+    def test_the_rest_of_the_body_is_unchanged(self):
+        body = _capture_with_extras({"usage": {"include": True}})
+        assert body["model"] == "m"
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert body["temperature"] == 0.2
+        assert body["stream"] is False
+
+    def test_config_cannot_rewrite_what_luxe_assembled(self):
+        """A per-endpoint dict is CONFIGURATION. Letting it set `model` or
+        `messages` would make a YAML file able to silently redirect a turn."""
+        body = _capture_with_extras({
+            "model": "hijacked", "messages": [], "tools": [],
+            "temperature": 9.9, "stream": True, "usage": {"include": True},
+        })
+        assert body["model"] == "m"
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert body["temperature"] == 0.2
+        assert body["stream"] is False
+        assert body["usage"] == {"include": True}   # the legitimate one survives
+
+    def test_the_backend_holds_its_own_copy(self):
+        """Mutating the dict a caller passed must not rewrite the endpoint."""
+        extras = {"usage": {"include": True}}
+        b = Backend(base_url="http://test", model="m", api_key="k",
+                    body_extras=extras)
+        extras["usage"] = "clobbered"
+        assert b.body_extras == {"usage": {"include": True}}

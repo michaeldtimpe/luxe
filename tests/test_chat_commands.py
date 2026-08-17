@@ -16,11 +16,16 @@ from luxe.memory import project as project_mem
 
 
 class FakeBackend:
-    def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
+    def __init__(self, base_url="", model="", timeout_s=600.0, api_key="",
+                 body_extras=None, key_fallback=True):
         self.base_url = base_url
         self.model = model
         self.timeout_s = timeout_s
         self.api_key = api_key
+        # Forwarded from BackendEntry.backend_kwargs() on a billable entry
+        # (2026-08-17); the double has to accept them to be constructible.
+        self.body_extras = dict(body_extras or {})
+        self.key_fallback = key_fallback
 
     def unload_all_loaded(self, *, except_for=None):
         return {}
@@ -1104,3 +1109,80 @@ class TestGateHints:
         cmd.dispatch(f"/attach {blob}", ctx)
         out = _text(ctx)
         assert "looks binary" in out and "read_file" in out
+
+
+class TestSpendCapIsEnforcedBeforeDispatch:
+    """The hard cap has to bite BEFORE the request, in the shared turn path.
+
+    Refusing mid-turn would waste money already spent, and refusing in
+    `prepare_turn` would persist a user record and open a run for a turn that
+    never happened. So `_run_turn` checks first and returns without touching
+    `prepare_turn` at all — which is exactly what these assert.
+    """
+
+    def _cfg(self):
+        from luxe.config import BackendEntry
+        return PipelineConfig(
+            models={"monolith": "org/cloud"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+            backends={"openrouter": BackendEntry(
+                base_url="https://openrouter.ai/api", engine="openrouter",
+                budget_usd=0.10, default=True)},
+        )
+
+    def _run(self, cfg, session, monkeypatch):
+        from luxe.chat import repl as repl_mod
+
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=False, width=120)
+        slots = slots_mod.SlotManager(cfg)
+        called: list = []
+        monkeypatch.setattr(
+            repl_mod, "prepare_turn",
+            lambda *a, **k: called.append(1) or (_ for _ in ()).throw(
+                AssertionError("prepare_turn ran past the cap")))
+        outcome = repl_mod._run_turn(
+            "hello", session, slots, cfg, frozenset(), console,
+            repl_mod.CancelToken(), lambda m: "review")
+        return outcome, out.getvalue(), called
+
+    def test_a_session_at_the_cap_is_refused_and_never_dispatches(
+            self, monkeypatch):
+        cfg = self._cfg()
+        session = ChatSession(session_cost_usd=0.10)
+        outcome, text, called = self._run(cfg, session, monkeypatch)
+        assert called == []
+        assert outcome.crashed is True
+        assert "spend cap reached" in text
+        assert "/usage budget" in text
+
+    def test_a_session_under_the_cap_proceeds_to_dispatch(self, monkeypatch):
+        """The control — without it this suite would pass on a broken check
+        that refused everything."""
+        cfg = self._cfg()
+        session = ChatSession(session_cost_usd=0.05)
+        with pytest.raises(AssertionError, match="past the cap"):
+            self._run(cfg, session, monkeypatch)
+
+    def test_raising_the_cap_unblocks_the_next_turn(self, monkeypatch):
+        cfg = self._cfg()
+        session = ChatSession(session_cost_usd=0.10)
+        session.budget_override_usd = 1.0
+        with pytest.raises(AssertionError, match="past the cap"):
+            self._run(cfg, session, monkeypatch)
+
+    def test_a_local_backend_is_never_capped(self, monkeypatch):
+        cfg = PipelineConfig(
+            models={"monolith": "Champ"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+        )
+        session = ChatSession(session_cost_usd=999.0)
+        with pytest.raises(AssertionError, match="past the cap"):
+            self._run(cfg, session, monkeypatch)
+
+
+def test_usage_is_registered_and_listed_in_help(ctx):
+    """The `/help` audit invariant: a command absent from the table is
+    invisible, and the suite asserts handlers ≡ help rows ∪ hidden."""
+    cmd.dispatch("/help", ctx)
+    assert "/usage" in _text(ctx)

@@ -125,6 +125,11 @@ class AgentResult:
     # reporting field only — no loop logic reads it (compaction/early-bail
     # keep the estimate, so benchmark behavior is untouched).
     last_prompt_tokens: int = 0
+    # USD billed for this whole turn — the SUM of every `backend.chat` the loop
+    # made (a turn is many steps, and each one is separately metered). Stays
+    # 0.0 on every local engine, which never reports a cost. Additive reporting
+    # field only: no loop logic reads it, so benchmark behavior is untouched.
+    cost_usd: float = 0.0
     wall_s: float = 0.0
     peak_context_pressure: float = 0.0
     final_context_pressure: float = 0.0  # last per-step pressure (matches token-progress)
@@ -1031,6 +1036,11 @@ def run_agent(
         result.completion_tokens += resp.timing.completion_tokens
         if resp.timing.prompt_tokens:
             result.last_prompt_tokens = resp.timing.prompt_tokens
+        if resp.timing.cost_usd:
+            # SUM, not last-wins: a multi-step turn bills once per step, and a
+            # cap that only ever saw the final step's cost would undercount by
+            # the length of the turn.
+            result.cost_usd += resp.timing.cost_usd
 
         # Recalibrate from the response we just got. Re-measured every step
         # rather than latched once: the mix shifts as tool payloads accumulate,

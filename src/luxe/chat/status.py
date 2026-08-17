@@ -249,6 +249,10 @@ class StatusState:
     # like a local one. Set by the front-ends; never resolved during a render
     # (the lookup can do HTTP).
     model_origin: str = "unknown"
+    # USD billed this session (chat/cost.py). Rendered only when the ACTIVE
+    # backend is billable OR real cost data has arrived — a local session must
+    # never grow a permanent "$0.00" chip.
+    session_cost_usd: float = 0.0
 
 
 # Model-provenance markers (chat/origin.ModelOrigin.kind). Only a WIRE CROSSING
@@ -263,9 +267,41 @@ def _short_model(model: str) -> str:
     return name if len(name) <= 22 else name[:21] + "…"
 
 
+#: Fraction of the spend cap at which the cost segment turns warn-coloured.
+_COST_WARN_FRACTION = 0.8
+
+
+def _cost_segment(session, slots, state: StatusState) -> "Segment | None":
+    """`$0.0421` — session spend, or None when this session isn't billable.
+
+    Guarded end to end: this runs on the render path (and inside a `rich.Live`
+    tick), so a config luxe cannot read has to mean "no segment", never an
+    exception through the status bar.
+    """
+    from luxe.chat import cost as cost_mod
+
+    try:
+        billable = cost_mod.is_billable(slots)
+        used = cost_mod.spent(session) or float(
+            getattr(state, "session_cost_usd", 0.0) or 0.0)
+        if not billable and used <= 0:
+            return None
+        cap = cost_mod.cap_usd(session, slots)
+    except Exception:
+        return None
+    style = _DEFAULT
+    if cap and used >= cap * _COST_WARN_FRACTION:
+        style = theme_mod.styles_for("warn")
+    text = cost_mod.fmt(used)
+    if cap:
+        text += f"/{cost_mod.fmt(cap)}"
+    return Segment([_S(text, style)], priority=5)
+
+
 def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     """Ordered status segments. THE place to change the bar's format. Order (user
-    spec): path · git · ctx · cache · start · last · write · bash · model.
+    spec): path · git · ctx · cache · [$spend] · start · last · write · bash · model.
+    The `$` segment exists only on a billable backend (chat/cost.py).
     `priority` drives responsive drop order (higher = dropped first); path/git/
     ctx/model are protected (1-2). git keeps the active theme's role colours; the
     rest use the sparing luxe palette (path blue, model yellow, grey labels,
@@ -307,6 +343,14 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     if state.has_turn:
         segs.append(Segment([_S("cache ", _GREY), _S(_human(state.prompt_tokens), _DEFAULT)],
                             priority=8))
+
+    # $ spent this session — only on a BILLABLE backend (or once real cost data
+    # has arrived), mirroring the `backend` segment's gate below. On every local
+    # endpoint this segment does not exist, because "$0.00" would assert a
+    # measurement nothing made. Warn-coloured once the cap is close.
+    _cost_seg = _cost_segment(session, slots, state)
+    if _cost_seg is not None:
+        segs.append(_cost_seg)
 
     # start / last (separate segments, droppable) ------------------------
     if state.opened_at:
