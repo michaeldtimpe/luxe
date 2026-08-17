@@ -4790,3 +4790,43 @@ recovery step guards a durable, auto-injected artefact, its fallback must be
 **Affected files**: `src/luxe/chat/notes.py`, `src/luxe/gitkit/brief.py`,
 `src/luxe/agents/prompts.py`, `tests/test_chat_notes.py`,
 `tests/test_gitkit_brief.py`.
+
+### [2026-08-17] Kimi K3 "went unanswered" — luxe was blind to the reasoning channel
+
+**What happened**: The first real OpenRouter discussion session (kimi-k3,
+`~/.luxe/sessions/0eb5998d8825`) felt mediocre: one turn returned a
+completely EMPTY answer with a normal finish (the user typed "There was no
+response."), another reply started mid-thought, and long turns sat silent
+for minutes (one ran 10.5 min) in a way that read as timeouts. debug.log
+showed zero retries, zero stalls, zero errors — every "failure" was a turn
+luxe considered successful.
+
+**Root cause**: K3 is a reasoning model. A live probe of one small question
+returned `content` = 255 chars and `reasoning` = 3,568 chars (792 completion
+tokens, all billed). luxe read only `content`: (a) a turn whose output
+landed entirely in `reasoning` surfaced as an empty answer and no guard
+fired — the loop's terminal test accepts empty text as "finished"; (b)
+reasoning deltas didn't count as stream progress, so nothing rendered while
+the model thought AND a long enough think would have tripped the 120s
+decode-stall clock as a fake timeout; (c) separately, prose the model wrote
+in intermediate steps alongside tool calls was dropped — only the final
+step's text was rendered/persisted, so replies picked up mid-thought.
+"Mediocre at discussion" was mostly luxe hiding two-thirds of what the
+model said.
+
+**Fix / takeaway**: Shipped in `2a928fe`: reasoning deltas reset the
+progress clock (without promoting to the tight decode bound) and drive a
+dim "thinking Ns" indicator; an empty final completion retries once with a
+nudge (`LUXE_EMPTY_TURN_RETRY`, default ON, `terminal_turn_empty` telemetry
+ungated — reaches the bench path UNBENCHED, same posture truncated-turn
+retry shipped with); `AgentResult.step_texts` + chat-side `compose_answer`
+stitch intermediate prose into the visible and persisted answer;
+`/reasoning <low|medium|high|off>` controls OpenRouter's effort field
+(shipped default low: 58 vs 792 completion tokens on a like-for-like
+question). Principle: before judging a new model class "mediocre" through
+an old harness, diff the RAW response shape against what the harness
+consumes — the model may be performing in a channel the harness discards.
+
+**Affected files**: `src/luxe/backend.py`, `src/luxe/agents/loop.py`,
+`src/luxe/agents/guardrails.py`, `src/luxe/chat/{status,render,repl,tui,
+cmd_toggles}.py`, `configs/chat.yaml`, `agents.sdd`, `chat.sdd`.
