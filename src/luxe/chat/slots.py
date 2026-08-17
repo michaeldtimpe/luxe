@@ -138,12 +138,26 @@ class SlotManager:
         return self.cfg.role(self.cfg.slot_config(slot).role)
 
     def ctx_ceiling(self, slot: str) -> int:
-        """Hard num_ctx ceiling for `/ctx` on this slot: the role's
-        `num_ctx_max` (or its `num_ctx` when no expansion is configured),
-        further clamped by the host manifest's per-MODEL `ctx_max` for the
-        model this slot currently resolves to — overrides and auto-degrade
-        included, so a session that lands on the dense fallback clamps to the
-        dense cap automatically."""
+        """Hard num_ctx ceiling for `/ctx` on this slot.
+
+        Two sources, and the ENDPOINT wins when it has one. If its catalog
+        states a `context_length` for the model this slot resolves to, that IS
+        the ceiling: it is the serving stack's own answer about the model it is
+        running, where `num_ctx_max` and the manifest `ctx_max` are statements
+        about how much KV cache THIS box can hold — meaningless for weights on
+        somebody else's hardware, and wrong by a factor of 32 in practice (a
+        session on a 1,048,576-token hosted model sat clamped at the local
+        32K default, 2026-08-17).
+
+        Otherwise, unchanged: the role's `num_ctx_max` (or its `num_ctx` when
+        no expansion is configured), further clamped by the host manifest's
+        per-MODEL `ctx_max` for the model this slot currently resolves to —
+        overrides and auto-degrade included, so a session that lands on the
+        dense fallback clamps to the dense cap automatically.
+        """
+        served = self.catalog_context_length(self.model_for(slot))
+        if served:
+            return served
         role = self.role_for(slot)
         ceiling = role.num_ctx_max or role.num_ctx
         if self.manifest is not None:
@@ -151,6 +165,67 @@ class SlotManager:
             if cap:
                 ceiling = min(ceiling, cap)
         return ceiling
+
+    def default_num_ctx(self, slot: str) -> int:
+        """The window a turn uses when the user hasn't set one with `/ctx`.
+
+        The role's `num_ctx` everywhere except a BILLABLE endpoint, where it
+        is `BILLABLE_DEFAULT_NUM_CTX` clamped to the ceiling. That is a cost
+        decision, not a capability one — the window governs how much history
+        and tool output compaction carries forward, and carried prompt tokens
+        are what a metered provider charges for on every step (chat/session.py).
+        """
+        from luxe.chat.session import BILLABLE_DEFAULT_NUM_CTX
+
+        role = self.role_for(slot)
+        entry = self.active_entry()
+        try:
+            if entry is None or not entry.is_billable():
+                return role.num_ctx
+        except Exception:
+            return role.num_ctx
+        return min(BILLABLE_DEFAULT_NUM_CTX, self.ctx_ceiling(slot)) or role.num_ctx
+
+    def catalog_context_length(self, model_id: str) -> int:
+        """Window the ENDPOINT reports for `model_id`, or 0 when it doesn't.
+
+        Reads `context_length`, falling back to `top_provider.context_length`
+        (both appear on OpenRouter's `/v1/models` records; a provider-specific
+        figure is the one that binds when the two differ, but the top-level
+        value is the model's and is what the picker quotes).
+
+        Deliberately does NOT warm the catalog on a local endpoint: oMLX and
+        llama-server report ids only, so the GET could never answer, and
+        `ctx_ceiling` runs on every turn. A local endpoint therefore keeps its
+        exact pre-2026-08-17 call pattern, and answers from the cache if some
+        other command (`/model find`) already filled it.
+        """
+        if not model_id:
+            return 0
+        cached = self._catalog_cache.get(self.backend_name)
+        if cached is None:
+            entry = self.active_entry()
+            try:
+                billable = entry is not None and entry.is_billable()
+            except Exception:
+                billable = False
+            if not billable:
+                return 0
+            cached = self.catalog()
+        for rec in cached or []:
+            if not isinstance(rec, dict) or rec.get("id") != model_id:
+                continue
+            top = rec.get("top_provider")
+            for raw in (rec.get("context_length"),
+                        (top or {}).get("context_length")
+                        if isinstance(top, dict) else None):
+                try:
+                    n = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if n > 0:
+                    return n
+        return 0
 
     def set_override(self, slot: str, model_id: str) -> None:
         if slot not in _SLOTS:

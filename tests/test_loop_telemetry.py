@@ -165,3 +165,63 @@ class TestTextfallbackDropEvents:
                            tool_defs=[_read_tool()], tool_fns=_tools())
         assert [k for k, _ in events if k == "textfallback_drop"] == []
         assert result.final_text.startswith("<tool_call>")
+
+
+class TestEmptyAndStepTextRecords(object):
+    """`terminal_turn_empty` + `step_texts` (2026-08-17).
+
+    Both exist because a record could not previously answer two questions:
+    "did the model actually answer?" and "did it say anything before it
+    acted?". Neither touches control flow.
+    """
+
+    def _empty(self, reasoning_chars=0):
+        return ChatResponse(
+            text="", finish_reason="stop", reasoning_chars=reasoning_chars,
+            timing=GenerationTiming(prompt_tokens=10, completion_tokens=792))
+
+    def test_a_terminal_empty_turn_is_recorded(self, events, monkeypatch):
+        """Ungated: it fires in BOTH arms, and with the retry off it is the
+        only trace that the run produced no answer."""
+        monkeypatch.setenv("LUXE_EMPTY_TURN_RETRY", "0")
+        _run(_ScriptedBackend([self._empty(reasoning_chars=3568)]), "r-empty")
+        recs = [f for k, f in events if k == "terminal_turn_empty"]
+        assert len(recs) == 1
+        assert recs[0]["reasoning_chars"] == 3568
+        assert recs[0]["retry_enabled"] is False
+
+    def test_the_retry_fires_its_own_event_before_the_terminal_one(
+            self, events, monkeypatch):
+        monkeypatch.delenv("LUXE_EMPTY_TURN_RETRY", raising=False)
+        backend = _ScriptedBackend([self._empty(), self._empty()])
+        _run(backend, "r-empty2")
+        assert [f for k, f in events if k == "empty_turn_retry"]
+        terminal = [f for k, f in events if k == "terminal_turn_empty"]
+        assert terminal and terminal[-1]["retry_enabled"] is True
+        assert terminal[-1]["retries_used"] == 1
+
+    def test_an_answered_turn_records_neither(self, events):
+        _run(_ScriptedBackend([_resp("here you go")]), "r-ok")
+        assert [k for k, _ in events if k == "terminal_turn_empty"] == []
+        assert [k for k, _ in events if k == "empty_turn_retry"] == []
+
+    def test_acting_step_prose_is_collected_separately(self, events):
+        """The model speaks, then acts, then answers. `final_text` keeps its
+        exact meaning; the lead-in lands in `step_texts` for the chat layer."""
+        backend = _ScriptedBackend([
+            _resp("Let me check the config first.",
+                  tool_calls=[ToolCallResponse(id="1", name="read_file",
+                                               arguments={"path": "a.py"})]),
+            _resp("It sets the flag."),
+        ])
+        result = _run(backend, "r-steps")
+        assert result.step_texts == ["Let me check the config first."]
+        assert result.final_text == "It sets the flag."
+
+    def test_a_silent_acting_step_contributes_nothing(self, events):
+        backend = _ScriptedBackend([
+            _resp("", tool_calls=[ToolCallResponse(id="1", name="read_file",
+                                                   arguments={"path": "a.py"})]),
+            _resp("done"),
+        ])
+        assert _run(backend, "r-silent").step_texts == []

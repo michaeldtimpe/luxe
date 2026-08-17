@@ -336,6 +336,56 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   notifies too, whatever the switch: a turn reported as an answer when it was
   actually cut off is the exact confusion this whole mechanism was built for.
 
+### Empty-completion retry (pinned 2026-08-17, DEFAULT-ON, UNBENCHED)
+
+- `LUXE_EMPTY_TURN_RETRY` (`RunFlags.empty_turn_retry`, DEFAULT-ON; only the
+  exact string "0" disables it, the tiered_compact spelling): when a terminal
+  turn carries NO tool call and NO text, append `_EMPTY_TURN_MESSAGE` and
+  CONTINUE instead of taking the terminal path. Bounded by
+  `_EMPTY_TURN_MAX_RETRIES` (1). Same mechanism, same shape and the same
+  reasoning as truncated-turn retry above — it is deliberately modelled on it.
+- Why: the terminal test is `if not tool_calls:`, and an empty `resp.text`
+  satisfies it exactly as a real answer does. A blank reply was therefore
+  recorded as a finished turn — `aborted=False`, steps=1, no gate, no warning,
+  and nothing in the record separating "answered" from "said nothing".
+- Founding instance: session 0eb5998d8825 turn -5 (2026-08-17), a hosted
+  REASONING model (`moonshotai/kimi-k3`): steps=1, tool_calls=0, normal finish
+  reason, `content` empty — the model spent its budget in the reasoning
+  channel and emitted no content at all. The shape is NOT reasoning-specific
+  (any provider hiccup produces it), so the guard keys on the observable
+  emptiness, never on the model.
+- Whitespace-only counts as empty: a lone newline is not an answer.
+  `finish_reason == "length"` is EXCLUDED — that is truncation, which
+  `TruncatedTurnGuard` owns with its own message and its own larger budget,
+  and it is ordered first so the two never spend both budgets on one response.
+- ONE retry. A model that returns nothing twice will not answer on a third,
+  and each attempt is a full generation.
+- **This reaches the BENCHMARK path, intentionally**, exactly as truncated-turn
+  retry did: a bench run that records an empty answer as a completion is
+  measuring the wrong thing. **UNBENCHED** — no maintain_suite A/B has been
+  run. If a workload behaves unexpectedly, `LUXE_EMPTY_TURN_RETRY=0` joins
+  `LUXE_TIERED_COMPACT=0` and `LUXE_TRUNCATED_TURN_RETRY=0` as a first thing
+  to try.
+- `terminal_turn_empty` is UNGATED telemetry (additive-only): it fires in both
+  arms and is the only record distinguishing an answer from silence. It
+  carries `reasoning_chars`, because "thought for 3,568 characters and said
+  nothing" and "returned nothing" are different failures with different fixes.
+  Keep it ungated whatever the default becomes.
+- `on_notice` announces it live, same seam and same rules as above.
+
+### Intermediate-step prose (`AgentResult.step_texts`, 2026-08-17)
+
+- A step that emits text ALONGSIDE tool calls appends that text to
+  `result.step_texts`. Purely additive reporting, like `last_prompt_tokens`:
+  `final_text` keeps its exact meaning (the LAST step's text), no loop logic
+  reads the new field, and no benchmark grader sees anything new.
+- It exists because models routinely put the opening of their answer on an
+  acting step ("Let me check the config…", or a whole lead-in paragraph) and
+  chat rendered `final_text` alone, so replies began mid-thought (session
+  0eb5998d8825 turn -7: 3 steps, 2 tool calls, the lead-in stranded in step 1).
+  The JOIN is done in the chat layer only (`render.compose_answer`) — do not
+  fold it into `final_text` here, or every grader's input changes.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —

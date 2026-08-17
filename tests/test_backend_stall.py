@@ -297,3 +297,88 @@ def test_http_error_body_still_surfaces():
             b.chat([{"role": "user", "content": "hi"}])
     finally:
         stop()
+
+
+# --- reasoning is progress (2026-08-17) -----------------------------------
+#
+# A thinking model streams `delta.reasoning` before its first content token —
+# measured at 10.5 minutes of it in one live turn. Those chunks reset NEITHER
+# clock, so a working request was indistinguishable from a dead one and died
+# as a "timeout". They must count as progress; they must NOT promote the
+# request to the tight decode bound, because no answer token has arrived yet.
+
+
+def _reasoning_chunk(text: str = "thinking") -> bytes:
+    return _sse({"choices": [{"index": 0, "delta": {"reasoning": text}}]})
+
+
+def test_reasoning_chunks_keep_a_thinking_request_alive():
+    def script(h):
+        h.send_response(200)
+        h.send_header("Content-Type", "text/event-stream")
+        h.end_headers()
+        for _ in range(8):                 # 1.6s of reasoning, 0.2s apart
+            h.wfile.write(_reasoning_chunk())
+            h.wfile.flush()
+            time.sleep(0.2)
+        h.wfile.write(_sse({"choices": [{"index": 0,
+                                         "delta": {"content": "answer"},
+                                         "finish_reason": "stop"}]}))
+        h.wfile.write(b"data: [DONE]\n\n")
+        h.wfile.flush()
+
+    url, stop = _serve(script)
+    try:
+        # A bound SHORTER than the total think time: only per-chunk progress
+        # can carry this request to its answer.
+        out = _run(url, stream=True, stall_timeout_s=1.0)
+    finally:
+        stop()
+    assert out["result"] == "returned", f"a thinking model was killed: {out['result']}"
+
+
+def test_reasoning_does_not_promote_the_request_to_the_decode_bound():
+    """Reasoning must not set `decoding`. A gap longer than the decode bound
+    but shorter than the prefill bound is a model thinking, not a dead one."""
+    def script(h):
+        h.send_response(200)
+        h.send_header("Content-Type", "text/event-stream")
+        h.end_headers()
+        h.wfile.write(_reasoning_chunk())
+        h.wfile.flush()
+        time.sleep(1.2)                    # > decode bound, < prefill bound
+        h.wfile.write(_sse({"choices": [{"index": 0,
+                                         "delta": {"content": "answer"},
+                                         "finish_reason": "stop"}]}))
+        h.wfile.write(b"data: [DONE]\n\n")
+        h.wfile.flush()
+
+    url, stop = _serve(script)
+    try:
+        out = _run(url, stream=True, stall_timeout_s=30.0,
+                   decode_stall_timeout_s=0.5)
+    finally:
+        stop()
+    assert out["result"] == "returned", (
+        f"the tight decode bound was applied while only reasoning had arrived: "
+        f"{out['result']}")
+
+
+def test_a_silent_request_still_dies_even_with_reasoning_enabled():
+    """The no-regression side: nothing above may resurrect the hang B6 killed."""
+    def script(h):
+        h.send_response(200)
+        h.send_header("Content-Type", "text/event-stream")
+        h.end_headers()
+        while True:
+            h.wfile.write(_sse(KEEPALIVE_CHUNK))
+            h.wfile.flush()
+            time.sleep(0.2)
+
+    url, stop = _serve(script)
+    try:
+        out = _run(url, stream=True, stall_timeout_s=1.5)
+    finally:
+        stop()
+    assert isinstance(out["result"], BackendError)
+    assert "stall" in str(out["result"]).lower()

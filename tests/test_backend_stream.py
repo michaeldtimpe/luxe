@@ -267,3 +267,89 @@ def test_the_loop_sums_cost_across_a_multi_step_turn():
         r.cost_usd += c
     assert r.cost_usd == pytest.approx(0.007)
     assert AgentResult().cost_usd == 0.0
+
+
+# --- the reasoning channel (2026-08-17) ------------------------------------
+#
+# A thinking model streams `delta.reasoning` beside its content. Live evidence
+# from session 0eb5998d8825: a one-sentence question came back with message
+# keys [role, content, refusal, reasoning, reasoning_details], content=255
+# chars, reasoning=3568 chars, 792 completion tokens billed.
+
+
+def test_reasoning_deltas_never_enter_the_answer():
+    body = _sse(
+        {"choices": [{"delta": {"reasoning": "let me think about this"}}]},
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}],
+         "usage": {"prompt_tokens": 3, "completion_tokens": 4}},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    tokens: list[str] = []
+    resp = _backend(httpx.MockTransport(handler)).chat(
+        [{"role": "user", "content": "hi"}], stream=True,
+        on_token=tokens.append)
+    assert resp.text == "Hello"
+    assert tokens == ["Hello"]          # on_token is the ANSWER channel only
+    assert resp.reasoning_chars == len("let me think about this")
+
+
+def test_the_reasoning_sink_receives_fragments():
+    body = _sse(
+        {"choices": [{"delta": {"reasoning": "step one"}}]},
+        {"choices": [{"delta": {"reasoning": " step two"}}]},
+        {"choices": [{"delta": {"content": "done"}, "finish_reason": "stop"}]},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    backend = _backend(httpx.MockTransport(handler))
+    seen: list[str] = []
+    backend.on_reasoning = seen.append
+    backend.chat([{"role": "user", "content": "hi"}], stream=True)
+    assert seen == ["step one", " step two"]
+
+
+def test_the_alternate_reasoning_content_spelling_is_tolerated():
+    """Several OpenAI-compatible proxies use `reasoning_content`. Guessing
+    wrong means a reasoning model looks silent."""
+    body = _sse(
+        {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    resp = _backend(httpx.MockTransport(handler)).chat(
+        [{"role": "user", "content": "hi"}], stream=True)
+    assert resp.reasoning_chars == len("thinking")
+    assert resp.text == "hi"
+
+
+def test_the_non_stream_path_counts_reasoning_without_returning_it():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "choices": [{"message": {"role": "assistant", "content": "",
+                                     "reasoning": "x" * 3568},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 792},
+        })
+
+    resp = _backend(httpx.MockTransport(handler)).chat(
+        [{"role": "user", "content": "hi"}])
+    assert resp.text == ""
+    assert resp.reasoning_chars == 3568       # the empty-turn guard's evidence
+
+
+def test_structured_reasoning_details_are_ignored():
+    """`reasoning_details` is a list; the counter must not choke on it."""
+    from luxe.backend import _reasoning_text
+    assert _reasoning_text({"reasoning_details": [{"text": "x"}]}) == ""
+    assert _reasoning_text({"reasoning": ["not", "a", "string"]}) == ""
+    assert _reasoning_text({}) == ""
+    assert _reasoning_text(None) == ""

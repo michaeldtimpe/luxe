@@ -555,6 +555,13 @@ class LiveActivity:
         self.tools = 0
         self.last_tool = ""
         self._stream = ""  # text streamed since the last tool dispatch
+        # Reasoning channel (2026-08-17). COUNTS ONLY, never the text: the
+        # reasoning of a thinking model is not the answer and must not reach
+        # the screen by default, the transcript, or the history fold
+        # (chat.sdd). What it buys is that a 10-minute silence stops looking
+        # like a hang — measured live at 10.5 min with nothing rendered.
+        self.reasoning_chars = 0
+        self._reasoning_since = 0.0
 
     def note(self, tc) -> None:
         self.tools += 1
@@ -564,6 +571,12 @@ class LiveActivity:
     def on_token(self, delta: str) -> None:
         # Keep a bounded rolling buffer of the live generation.
         self._stream = (self._stream + delta)[-2000:]
+        self._reasoning_since = 0.0   # answer tokens: it stopped thinking
+
+    def on_reasoning(self, delta: str) -> None:
+        self.reasoning_chars += len(delta or "")
+        if not self._reasoning_since:
+            self._reasoning_since = time.time()
 
     def __rich__(self):
         from rich.console import Group
@@ -587,6 +600,11 @@ class LiveActivity:
         act.append(f"·{self.tools} tools", style="bright_black")
         if self.last_tool:
             act.append(f" · {self.last_tool}", style="yellow")
+        # Dimmed, and only while it IS thinking — the point is to distinguish a
+        # working request from a dead one, not to narrate.
+        if self._reasoning_since:
+            think_s = max(0.0, time.time() - self._reasoning_since)
+            act.append(f" · thinking {think_s:.0f}s", style="bright_black")
         lines.append(act)
         # 3. status bar
         lines.append(to_rich_text(fit(fields(self.session, self.slots, self.repo,

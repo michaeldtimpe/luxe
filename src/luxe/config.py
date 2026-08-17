@@ -23,6 +23,29 @@ ENGINE_OPENROUTER = "openrouter"
 KNOWN_ENGINES = (ENGINE_OMLX, ENGINE_LLAMA_SERVER, ENGINE_OPENROUTER)
 
 
+#: `/reasoning` settings. "" is "say nothing and let the provider decide",
+#: which is distinct from "off" (ask it not to return reasoning at all).
+REASONING_EFFORTS = ("low", "medium", "high")
+REASONING_SETTINGS = REASONING_EFFORTS + ("off", "default")
+
+
+def reasoning_extras(setting: str) -> dict[str, Any] | None:
+    """The top-level `reasoning` body field for a `/reasoning` setting.
+
+    None means "send nothing" — both for `default` and for anything
+    unrecognised, because a body field a provider rejects is worse than the
+    provider's own default. `off` sends `{"exclude": true}`: the model may
+    still think, but the channel is not returned (and not billed back to the
+    user as visible output).
+    """
+    norm = (setting or "").strip().lower()
+    if norm in REASONING_EFFORTS:
+        return {"effort": norm}
+    if norm == "off":
+        return {"exclude": True}
+    return None
+
+
 class BackendEntry(BaseModel):
     """One named model endpoint for the interactive `luxe chat` front-end.
 
@@ -85,6 +108,14 @@ class BackendEntry(BaseModel):
     # different ones, and an entry that omits it selects exactly as before.
     # It never outranks a user's own choice — see chat/slots.py.
     default_model: str = ""
+    # Default reasoning effort for this endpoint (chat-only): "low" | "medium"
+    # | "high" | "off" | "" (send nothing, i.e. the provider's own default).
+    # A THINKING model bills every reasoning token: a one-sentence question
+    # measured 255 characters of answer against 3,568 of reasoning and 792
+    # billed completion tokens (2026-08-17). For interactive chat that is a
+    # tax on latency and on the bill, so the shipped cloud entry asks for
+    # "low" and `/reasoning high` buys the depth back per session.
+    reasoning_effort: str = ""
     # HARD spend cap for a session on this endpoint, in USD (chat-only). Only
     # meaningful on a billable engine. None = no cap AND no cost segment — a
     # local endpoint should not grow a "$0.00" chip. A turn is refused BEFORE
@@ -173,8 +204,25 @@ class BackendEntry(BaseModel):
             kw["stall_timeout_s"] = self.stall_timeout_s
         if self.decode_stall_timeout_s is not None:
             kw["decode_stall_timeout_s"] = self.decode_stall_timeout_s
-        if self.body_extras:
-            kw["body_extras"] = dict(self.body_extras)
+        extras = dict(self.body_extras)
+        # `reasoning_effort:` is sugar over the same declared-body mechanism —
+        # spelled as its own key because it is the one vendor field a user is
+        # expected to set, and `/reasoning` rewrites it live on the Backend
+        # this builds. Only meaningful where the provider reads it, so it is
+        # confined to the cloud engine rather than posted at oMLX.
+        if self.is_openrouter():
+            reasoning = reasoning_extras(self.reasoning_effort)
+            if reasoning is not None:
+                extras["reasoning"] = reasoning
+        if extras:
+            kw["body_extras"] = extras
+        if self.is_openrouter():
+            # `num_ctx` is an Ollama/oMLX-ism. A hosted provider fixes the
+            # window per model and ignores the field, so sending it is noise
+            # on the wire; luxe's own num_ctx stays meaningful client-side
+            # (compaction thresholds, ctx%). Omitted for every other entry, so
+            # nothing that has ever sent it stops.
+            kw["send_num_ctx"] = False
         if self.is_billable():
             # A third-party endpoint must never inherit the fleet's oMLX key
             # because its own `api_key_env` happened to be unset — that would

@@ -69,6 +69,14 @@ class RunFlags:
     # mechanism. 0 = never fire (telemetry still records the truncation).
     truncated_turn_max_retries: int = _TRUNCATED_TURN_MAX_RETRIES
 
+    # Treat a terminal turn with no tool call AND no text as recoverable
+    # (nudge + continue) instead of a finished answer. DEFAULT-ON since
+    # 2026-08-17: an empty completion was indistinguishable from a real one at
+    # the loop's `if not tool_calls:` test, so a blank reply was recorded as a
+    # clean turn. Set to "0" to disable for ablation. See agents.sdd
+    # "Empty-completion retry".
+    empty_turn_retry: bool = True
+
     # Calibrate context pressure against the server's own usage.prompt_tokens
     # instead of trusting the chars//4 estimate. DEFAULT-ON since 2026-08-11:
     # the estimate reads ~1.9x low on code + tool JSON, so compaction phases
@@ -155,6 +163,8 @@ class RunFlags:
                 e.get("LUXE_TRUNCATED_TURN_RETRY", "1") != "0"
             ),
             truncated_turn_max_retries=max_tt_retries,
+            # Default ON: only the exact string "0" disables it.
+            empty_turn_retry=e.get("LUXE_EMPTY_TURN_RETRY", "1") != "0",
             # Default ON: only the exact string "0" disables it.
             ctx_server_truth=e.get("LUXE_CTX_SERVER_TRUTH", "1") != "0",
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",

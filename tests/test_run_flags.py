@@ -40,6 +40,7 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.tiered_compact is True                       # default-ON 2026-05-28
     assert f.truncated_turn_retry is True                 # default-ON 2026-08-10
     assert f.ctx_server_truth is True                     # default-ON 2026-08-11
+    assert f.empty_turn_retry is True                     # default-ON 2026-08-17
     assert f.adaptive_no_write is True
     assert f.adaptive_score_trend is True
     assert f.truncated_turn_max_retries == _TRUNCATED_TURN_MAX_RETRIES
@@ -289,3 +290,15 @@ def test_loop_preamble_has_no_direct_environ_reads():
         "run_agent reads os.environ directly again — add the switch to "
         "luxe/agents/flags.py instead."
     )
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("0", False),          # the ONLY disabling value
+    ("1", True), ("", True), ("no", True), ("false", True),
+])
+def test_empty_turn_retry_is_on_unless_it_is_exactly_zero(value, expected):
+    # Default-ON from the day it shipped (2026-08-17): a blank reply recorded
+    # as a finished turn is a wrong measurement, not a tuning preference. It
+    # follows the tiered_compact spelling like the other default-ON switches.
+    got = RunFlags.from_env({"LUXE_EMPTY_TURN_RETRY": value})
+    assert got.empty_turn_retry is expected

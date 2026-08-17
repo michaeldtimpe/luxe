@@ -38,7 +38,9 @@ never touches this module.
   cost differs ~3× across the Qwen3.6 family: dense 64 KB/token vs MoE 20);
   `SlotManager.ctx_ceiling` returns min(role num_ctx_max, the cap for the
   model the slot CURRENTLY resolves to — overrides and auto-degrade
-  included), and `prepare_turn` clamps `/ctx` overrides through it every
+  included) whenever the ENDPOINT does not report the model's window itself
+  (see the `/ctx` bullet: a catalog `context_length` outranks both, because
+  these two caps describe this box's RAM), and `prepare_turn` clamps `/ctx` overrides through it every
   turn, so a session degraded to the dense fallback shrinks to the dense cap
   on its next turn. Also: all three sets are expected locally cached on that host.
   `luxe pull` provisions, `/doctor` + `luxe smoke` verify (including the
@@ -197,6 +199,56 @@ never touches this module.
   segment (mid drop-priority) only when >1 backend is configured; configs
   without `backends:` synthesize a single "local" entry and behave identically
   to the single-backend days. Benchmark/maintain read `omlx_base_url` only.
+- THE REASONING CHANNEL IS NOT THE ANSWER (2026-08-17). A thinking model
+  streams `delta.reasoning` (or `delta.reasoning_content` — both tolerated,
+  `backend._REASONING_KEYS`) beside its content. Three rules, all load-bearing:
+  (1) IT COUNTS AS PROGRESS. Reasoning deltas reset the stall clock in
+  `_chat_stream`. They did not, so a model thinking for minutes before its
+  first content token looked identical to a dead request and would eventually
+  die as a "timeout" (measured: one turn thought for 10.5 min). They
+  deliberately do NOT set `decoding`, because no answer token has arrived and
+  the generous pre-first-token bound is still the correct one.
+  (2) THE TEXT NEVER LANDS. It is never appended to `ChatResponse.text`, never
+  written to the transcript, never entered into the history fold, and not
+  shown on screen by default. Only a CHARACTER COUNT survives
+  (`ChatResponse.reasoning_chars`), because "thought for 3,568 characters and
+  said nothing" and "returned nothing" are different failures — that count is
+  what `terminal_turn_empty` reports and what the empty-turn notice says out
+  loud. `/reasoning show` is the opt-in display, unchanged in spirit from the
+  old bare toggle.
+  (3) THE LIVE SINK IS AN INSTANCE ATTRIBUTE, NOT A SIGNATURE.
+  `Backend.on_reasoning` is set by the front-end on the Backend chat owns, for
+  the duration of one turn, and cleared in a `finally`. `agents/loop.py`'s
+  `backend.chat` call site and `run_agent`'s signature stay frozen, and a
+  benchmark Backend — built without a front-end — never has it set, so the
+  deterministic path never learns the channel exists. Front-ends render a
+  dimmed `thinking Ns` on the live activity line and nothing else.
+- `/reasoning` (chat-only) is BOTH the effort control and the display toggle:
+  `low|medium|high` · `off` (`reasoning:{exclude:true}` — don't return it) ·
+  `default` (send nothing) · `show|hide` (the old bare toggle, which is why
+  bare `/reasoning` now REPORTS instead of toggling). Effort is a COST control
+  first: every reasoning token is billed and none of it is the answer (255
+  chars of answer against 3,568 of reasoning on a one-sentence question,
+  2026-08-17), so the shipped openrouter entry declares `reasoning_effort:
+  low` and a session buys depth back per-session. It is plumbed through the
+  SAME declared-body mechanism as everything else — `BackendEntry` renders it
+  into `body_extras` via `config.reasoning_extras`, and the command rewrites
+  `body_extras["reasoning"]` on the live Backend (chat owns that instance;
+  the frozen call site is untouched). Confined to the openrouter engine at
+  both ends: `backend_kwargs()` only emits it there, and the command REFUSES
+  elsewhere with the reason rather than storing a setting that changes
+  nothing. `/status` shows it wherever it applies.
+- CHAT SHOWS EVERY STEP'S PROSE, not just the last one's
+  (`render.compose_answer`, 2026-08-17). `AgentResult.final_text` is the LAST
+  step's text; a model that speaks before it acts leaves the opening of its
+  answer on an intermediate step, and chat rendered the tail alone — replies
+  literally started mid-thought (session 0eb5998d8825 turn -7). The chat layer
+  joins `step_texts` ahead of `final_text` with paragraph breaks, dropping any
+  chunk already contained in another (models recap themselves), and
+  `finalize_turn` uses the composed text for the RENDERED answer, the
+  persisted transcript, and the in-memory history alike — one string, so what
+  is shown and what is remembered cannot diverge. `final_text` itself is
+  untouched: the join is chat-only and no grader sees it.
 - `default_model:` on an entry is CONFIG-driven model selection, and the
   "engine must never change model selection" rule above stands unqualified:
   the engine field is never consulted for it, two entries on one engine may
@@ -706,12 +758,42 @@ never touches this module.
   PR/checks/issue work doesn't require `/bash` unrestricted; the hint extends
   the explicit-ask rule to gh's remote mutations (view freely; never
   create/merge/close via gh unasked)
-- `/ctx <tier>` sets a per-session `num_ctx` override (small/medium/large/xlarge);
-  it is CHAT-ONLY and always clamped to the role's `num_ctx_max` (config) so a
-  request can never exceed what the box/model holds. `num_ctx_max: 0` (default)
-  forbids any expansion. Resize is never silent — high context pressure only
-  *suggests* the next tier; the user opts in. The benchmark/maintain path never
-  reads `num_ctx_max` and is unaffected.
+- `/ctx <tier|size>` sets a per-session `num_ctx` override; it is CHAT-ONLY
+  and always clamped to `SlotManager.ctx_ceiling`, so a request can never
+  exceed what the box/model pair holds. `num_ctx_max: 0` (default) forbids any
+  expansion. Resize is never silent — high context pressure only *suggests*
+  the next tier; the user opts in. The benchmark/maintain path never reads
+  `num_ctx_max` and is unaffected. Three amendments (2026-08-17, after a
+  session ran a 1,048,576-token hosted model at the 32K local default):
+  (a) THE CEILING IS THE ENDPOINT'S TRUTH WHEN IT HAS ONE. If the active
+  backend's catalog states a `context_length` for the model a slot resolves to
+  (`slots.catalog_context_length`; `top_provider.context_length` is the
+  fallback field), that IS the ceiling and `num_ctx_max`/manifest `ctx_max` do
+  not apply — those are statements about how much KV cache THIS box can hold,
+  which says nothing about weights on somebody else's hardware. A local
+  endpoint is unchanged and pays no extra call: the lookup only warms the
+  catalog on a billable entry, since oMLX/llama-server report ids only and
+  could never answer.
+  (b) THE DEFAULT WINDOW ON A BILLABLE ENDPOINT IS `BILLABLE_DEFAULT_NUM_CTX`
+  (131072), not the role's `num_ctx` (`slots.default_num_ctx`). A cost bound,
+  not a capability one: the window sets how much history and tool output
+  compaction carries forward, and carried prompt tokens are re-billed on every
+  step of every turn. `/ctx`'s help line says so on such a backend instead of
+  the KV-cache-RAM framing, which is spent on nobody's machine there.
+  (c) `/ctx` TAKES ABSOLUTE SIZES on any backend — `500k`, `1m`, `32768`,
+  case-insensitive, decimal multipliers (`session.parse_ctx_size`) — because
+  the named ladder stops at 256K. Named tiers keep working, and the clamp
+  message names which limit bound the request.
+  The per-tier RAM warnings are SUPPRESSED when the model's origin is
+  `remote`: they are local-KV arithmetic and would tell a user their machine
+  is too small for a window the provider is already serving.
+  Related, and NOT an engine conditional: `num_ctx` is omitted from the
+  REQUEST BODY on the openrouter engine (`BackendEntry.backend_kwargs()` →
+  `Backend(send_num_ctx=False)`, declared per endpoint exactly like
+  `body_extras`). It is an Ollama/oMLX-ism a hosted provider ignores; luxe's
+  own num_ctx stays fully meaningful client-side (compaction thresholds,
+  ctx%). Every other entry omits the kwarg, so nothing that has ever sent the
+  field stops — the golden request is untouched.
   **`num_ctx_max` is a MODEL limit; `CTX_TIER_MIN_RAM_GB` is the HOST limit**
   (2026-08-11). `num_ctx_max: 262144` is Qwen3.6's native
   `max_position_embeddings`, so the clamp above never fires for `huge` even on

@@ -14,6 +14,7 @@ LAST-seen text is the ask, not a fact dump.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from luxe.agents.prompts import (
@@ -44,6 +45,36 @@ CTX_TIERS: dict[str, int] = {
 
 # Suggest bumping the window up once a turn's peak context pressure crosses this.
 CTX_SUGGEST_PRESSURE = 0.85
+
+#: Default effective window on a BILLABLE endpoint (2026-08-17, user decision).
+#: Not a capability limit — a cost bound. A hosted model may offer a 1M window,
+#: and the window is what decides how much conversation + tool output
+#: compaction lets a session carry forward; carried prompt tokens are exactly
+#: what a metered provider bills, on every step of every turn. So a cloud
+#: session starts at 128K (roomy — 4x the local default) and goes higher only
+#: when the user asks with `/ctx`. Local endpoints keep the role's `num_ctx`.
+BILLABLE_DEFAULT_NUM_CTX = 131072
+
+#: Absolute `/ctx` arguments: `1m`, `500k`, `32768` (case-insensitive).
+_CTX_SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([km]?)$")
+
+
+def parse_ctx_size(text: str) -> int | None:
+    """A `/ctx` argument as a token count, or None when it isn't one.
+
+    Named tiers are resolved by the caller against `CTX_TIERS`; this covers
+    the absolute form, which exists because the tier ladder tops out at 256K
+    and a hosted model can offer 1M. `k`/`m` are the decimal multipliers the
+    provider catalogs quote in, NOT the binary ones `_ctx_size()` renders with
+    — `/ctx 1m` asks for 1,000,000 and the ceiling clamp then reports what it
+    actually got. Zero and negatives are not sizes.
+    """
+    m = _CTX_SIZE_RE.match((text or "").strip().lower())
+    if not m:
+        return None
+    value = float(m.group(1)) * {"": 1, "k": 1_000, "m": 1_000_000}[m.group(2)]
+    n = int(value)
+    return n if n > 0 else None
 
 #: Tiers that need more RAM than a typical dev box has, mapped to the floor
 #: they want. `huge` (256K) is the model's NATIVE limit, not this machine's:

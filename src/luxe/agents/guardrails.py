@@ -513,6 +513,73 @@ class TruncatedTurnGuard:
                 "max_retries": max_retries}
 
 
+# --- Empty-completion retry (2026-08-17) ------------------------------------
+#
+# A turn can end with NOTHING: no tool call, no text, a normal finish reason.
+# The loop's terminal test is `if not tool_calls:`, and an empty `resp.text`
+# satisfies it exactly as a real answer does — so the run recorded a blank
+# assistant message and stopped, with no gate, no warning, and no way to tell
+# it from a model that answered. Observed live on a REASONING model
+# (2026-08-17, session 0eb5998d8825 turn -5: steps=1, tool_calls=0,
+# finish_reason normal, content ""), where the model spent its budget in the
+# reasoning channel and emitted no content at all. That shape is not specific
+# to reasoning models — any provider hiccup can produce it — which is why the
+# guard keys on the OBSERVABLE emptiness and not on the model.
+#
+# Same mechanism as TruncatedTurnGuard: nudge and CONTINUE, never a new exit.
+# One retry only: a model that returns nothing twice is not going to answer on
+# a third, and each attempt is a full generation.
+_EMPTY_TURN_MAX_RETRIES = 1
+
+_EMPTY_TURN_MESSAGE = (
+    "Your last reply was EMPTY — no text and no tool call reached the user, "
+    "so from their side nothing happened.\n\n"
+    "Answer the user in plain text now. If you were thinking, put the "
+    "conclusion in your reply; internal reasoning is not delivered."
+)
+
+
+class EmptyTurnGuard:
+    """Fires when a terminal turn carried no tool call and no text.
+
+    NOT an exit guard — when it fires the loop appends the nudge and CONTINUES,
+    the same shape as `TruncatedTurnGuard`. Returning None leaves the loop's
+    terminal path exactly as it was, which is what makes the switch-off case
+    byte-identical.
+
+    `finish_reason == "length"` is excluded deliberately: that is truncation,
+    which `TruncatedTurnGuard` owns and handles with its own message and its
+    own (larger) retry budget. Two guards firing on one response would spend
+    both budgets on the same problem.
+    """
+
+    nudge_type = "empty_turn"
+
+    @staticmethod
+    def should_fire(
+        *,
+        empty_turn_retry_enabled: bool,
+        text: str,
+        has_tool_calls: bool,
+        finish_reason: str,
+        retries_used: int,
+        max_retries: int = _EMPTY_TURN_MAX_RETRIES,
+    ) -> Optional[dict[str, Any]]:
+        if not empty_turn_retry_enabled:
+            return None
+        if has_tool_calls:
+            return None
+        # Whitespace-only is empty: a lone "\n" is not an answer either.
+        if (text or "").strip():
+            return None
+        if finish_reason == "length":
+            return None
+        if retries_used >= max_retries:
+            return None
+        return {"retries_used": retries_used, "max_retries": max_retries,
+                "finish_reason": finish_reason}
+
+
 # Consecutive-repeat guard constant.
 _MAX_CONSECUTIVE_REPEAT_STEPS = 2
 
