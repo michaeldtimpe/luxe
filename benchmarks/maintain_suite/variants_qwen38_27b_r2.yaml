@@ -1,0 +1,5 @@
+# Qwen3.8-27B bake-off Round 2 — targeted reps, bf16 eliminated in R1
+variants:
+  - {model_label: qwen3.6-27b-6bit-ref, model_id: Qwen3.6-27B-6bit}
+  - {model_label: qwen3.8-27b-4bit, model_id: Qwen3.8-27B-4bit}
+  - {model_label: qwen3.8-27b-8bit, model_id: Qwen3.8-27B-8bit}
