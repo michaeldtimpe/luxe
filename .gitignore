@@ -136,3 +136,7 @@ scripts/out/
 acceptance/luxe_neo_unification_2026_08/*
 !acceptance/luxe_neo_unification_2026_08/PLAN.md
 !acceptance/luxe_neo_unification_2026_08/REPORT.md
+!acceptance/qwen38_27b_r1_2026_08_17/
+acceptance/qwen38_27b_r1_2026_08_17/*
+!acceptance/qwen38_27b_r1_2026_08_17/REPORT.md
+!acceptance/qwen38_27b_run_id_manifest.tsv
