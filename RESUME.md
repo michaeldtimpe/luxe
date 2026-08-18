@@ -1,5 +1,32 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-18, m1) — Qwen3.8-27B elimination bake-off: NOT PROMOTED
+
+Qwen3.8-27B arrived (dense VLM, 262K ctx, hybrid Gated-DeltaNet, reasoning-on
+by default; mlx-community quants via mlx-vlm 0.6.8; **no MoE at runnable
+scale** — only 2.4T-A95B, so the champion was never contested). Overnight
+elimination bench on m5 vs the thick fallback:
+
+- **Verdict: `Qwen3.6-27B-6bit` keeps the fallback slot.** R1 full 4×10
+  (ref / 4bit / 8bit / bf16) + 2 targeted reps of the 6 doc/manage fixtures.
+  Ref 10/10 and 3/3 on the contested cell; Qwen3.8 fails
+  `nothing-ever-happens-document-config` — **4bit 0/3, 8bit 1/3, bf16
+  1800s-timeout** — via write-avoidant exploration (30–48 calls, zero
+  writes, `write_pressure` bounces off the family; ctx peaked 74.6%, no
+  overflow). Wall 2.3–3.8× ref from reasoning verbosity, though 4bit raw
+  decode wins (26–30 vs 16–21 tok/s). See lessons.md 2026-08-18.
+- **Artifacts (m5-local):** `acceptance/qwen38_27b_r1_2026_08_17/REPORT.md`,
+  rep dirs `qwen38_27b_r2_rep{2,3}`, `qwen38_27b_run_id_manifest.tsv`.
+  Variants yamls committed (`benchmarks/maintain_suite/variants_qwen38_27b*.yaml`).
+- **Weights on m5:** 4bit + 8bit kept (8bit = opt-in 262K-ctx session
+  candidate, never a manifest slot); **bf16 removed** (51 GB freed) — a
+  future 6-bit carve needs it re-pulled.
+- **Open:** (a) `bailout_type="context_overflow"` mislabel in
+  `benchmarks/maintain_suite/run.py:866` (string-matches "max steps";
+  needs a rename/split + test); (b) re-open the bake-off only on: official
+  6bit quant, oMLX thinking-off for Qwen3.8, or per-model write-pressure
+  tuning.
+
 ## ⇒ SESSION HANDOFF (2026-08-17, m1) — OpenRouter cloud backend live fleet-wide; K3 reasoning-channel fixes
 
 State of the world: **main is at `2a928fe`** (+ this handoff commit); suite

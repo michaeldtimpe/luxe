@@ -1,0 +1,14 @@
+# Qwen3.8-27B elimination bake-off — 2026-08-17
+# Round 1: 1 rep x 10 fixtures x 4 arms on m5 (M5 Max, 128 GB).
+# Reference arm re-runs the incumbent thick fallback on TODAY!s substrate
+# (server-truth ctx calibration ON; old dense numbers predate it).
+#
+#   .venv/bin/python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_qwen38_27b.yaml \
+#       --output acceptance/qwen38_27b_r1_2026_08_17 \
+#       --per-fixture-timeout 1800 --all
+variants:
+  - {model_label: qwen3.6-27b-6bit-ref, model_id: Qwen3.6-27B-6bit}
+  - {model_label: qwen3.8-27b-4bit, model_id: Qwen3.8-27B-4bit}
+  - {model_label: qwen3.8-27b-8bit, model_id: Qwen3.8-27B-8bit}
+  - {model_label: qwen3.8-27b-bf16, model_id: Qwen3.8-27B-bf16}

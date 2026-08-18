@@ -4830,3 +4830,32 @@ consumes — the model may be performing in a channel the harness discards.
 **Affected files**: `src/luxe/backend.py`, `src/luxe/agents/loop.py`,
 `src/luxe/agents/guardrails.py`, `src/luxe/chat/{status,render,repl,tui,
 cmd_toggles}.py`, `configs/chat.yaml`, `agents.sdd`, `chat.sdd`.
+
+### [2026-08-18] Qwen3.8 bake-off — the write-pressure nudge is champion-calibrated, and two labels lied
+
+**What happened**: The Qwen3.8-27B elimination bench (4 arms × 10 fixtures
++ 2 reps, m5) failed exactly one fixture — `nothing-ever-happens-document-
+config` — but failed it in three differently-labeled ways: the 4bit
+"bailed with context_overflow", the bf16 "ERRORed", and the 8bit flipped
+PASS/FAIL/timeout across reps at temp=0. The incumbent passed 3/3.
+
+**Root cause(s)**: (a) Every Qwen3.8 miss was the same mechanism:
+write-avoidant exploration — 30–48 tool calls, ~35 reads, zero writes,
+death by max-steps or wall cap. The `write_pressure` intervention fired on
+schedule and *bounced off*: its thresholds/wording were tuned (v1.4.1,
+m5max WP tune) against Qwen3.6's response to the nudge, and a different
+family simply doesn't take the hint. (b) The 4bit's `bailout_type=
+"context_overflow"` was false — the classifier (run.py:866) string-matches
+"max steps" in abort_reason; measured peak context pressure was 74.6%,
+compaction never left phase 1. (c) The bf16 "failure" was a speed death,
+not a quality one: it wrote a correct 110-line CONFIG.md and was killed 3s
+past a 1800s timeout sized for quantized decode (~9 tok/s at bf16).
+
+**The lesson**: Interventions that "work" are calibrated to the champion's
+compliance, not to models in general — a bake-off arm that ignores
+`write_pressure` is measuring the tuning, not just the model. And read the
+bailout labels skeptically: one was a string-match artifact and one a
+timeout artifact; the real mechanism only surfaced from events.jsonl +
+per-step forensics. Quant gradient worth remembering: bf16 converges,
+8bit sometimes, 4bit never — quantization amplifies marginal decisiveness
+failures rather than creating them.
