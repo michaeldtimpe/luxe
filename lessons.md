@@ -4859,3 +4859,78 @@ timeout artifact; the real mechanism only surfaced from events.jsonl +
 per-step forensics. Quant gradient worth remembering: bf16 converges,
 8bit sometimes, 4bit never — quantization amplifies marginal decisiveness
 failures rather than creating them.
+
+---
+
+### [2026-08-19] Gemma 4 printed 9/10 — three of those passes left the repo worse, and both graders called them wins
+
+**What happened**: The Gemma 4 bake-off (4 arms × 10 maintain_suite fixtures,
+m5) printed 9/10 for all three candidates against the reference's 10/10, at up
+to **4.7× less wall**. Hand-reading every diff of the MoE arm's nine passes
+against the fixture goal text gave a different answer: **5 REAL, 3 THIN, 1
+VACUOUS**, with **three of the nine leaving the repository worse than
+`base_sha`** — an `ARCHITECTURE.md` replaced by a line-numbered copy of itself
+(+132/−132), a README `## Features` section deleted to make room for the
+requested one (+9/−9), and a `--strict` refactor that silently orphaned
+`scan_lmstudio`'s MLX/HF-format scan branch. `gates_triggered` was **empty on
+all 20 runs**. The verdict is NOT PROMOTED — decided on diffs, not on the
+scoreboard.
+
+**Root cause**: two graders that agree with each other and are wrong together.
+The binary `expected_outcome` grader is a `regex_present` + `min_added_lines`
+check, so re-added original lines satisfy it. The stricter SpecDD
+`requirements:` / `spec_all_satisfied` block — the thing built precisely to be
+harder than the binary — **cannot separate a real fix from a degenerate one
+either**: it marked "documents all 9 `src/` subdirectories" satisfied against a
+file the model had just destroyed (the words were all still there, in the copied
+lines), and it was `true` for both `f: Any` and the reference's `f: BinaryIO` on
+the same typing goal. It was `true` for 8 of the 9 MoE passes, two of them
+destructive. Meanwhile `destructive_diff` needed ≥5.0× deletion/addition ratio,
+and a replace-in-place destruction has ratio 1.0.
+
+**The lesson**: **a printed pass rate is not a result.** This is the 2026-05-02
+`overnight_moe` finding recurring in a new place — that one went 5/20 printed →
+**0/20** on regrade, and the champion was originally selected on the inflated
+number. The 2026-05 fix was to wire the strict gates; this run shows the gates
+and the spec block are *also* only as good as the shapes they were written
+against. Two operational rules follow: (1) a bake-off arm is not evaluated until
+someone has read its diffs — budget the hand-verification pass into the run, not
+after a promotion decision; (2) speed claims decompose. This arm's 4.71× wall
+was **2.79× genuine decode throughput × 1.69× less output**, and it took *more*
+steps (161 vs 112) with **zero** `lint`/`typecheck`/`git_diff`/`glob` calls
+across all ten fixtures against the reference's 19. It was not working faster;
+it was skipping verification, and one `git_diff` would have caught all three
+damaged repos. Recorded on its own terms: on
+`nothing-ever-happens-document-config` the same model beat the champion outright
+(74s vs 490s, 58 env vars documented vs 27, `file:line` refs exact) — a real
+capability signal at n=1, which is why the verdict rests on the other nine
+cells and not on wall time.
+
+**The tool-output echo, and why no substrate guard shipped**: one fixture's new
+file content was `read_file`'s own `cat -n` rendering written back — added lines
+literally `1\t# Architecture`. First of its kind: reproduced **3/3
+byte-identical**, control `Qwen3.6-27B-6bit` **0/3**, and a corpus sweep found
+**0 occurrences in 527 historical fixture agent diffs** across every prior
+model. So it is model-specific to Gemma 4, **not** a luxe substrate bug — the
+tempting `write_file` guard was considered and **deliberately rejected**, since
+`write_file` sits on the benchmark path and the guard would cost a maintain_suite
+validation run to defend against one refuted, unpromoted model. What *did* ship
+is grader-side and pays for itself independently: a `tool_output_echo` detection
+gate plus the `destructive_diff` replace-in-place prongs (`d93f6ba`), calibrated
+at 0 false positives over 500 luxe commits and 273 fixture agent diffs. Those
+gates change bench scores by construction, so a maintain_suite run is owed.
+
+**Methodology notes worth keeping**: (a) sweep a corpus by filtering to
+`write_file`/`edit_file` *arguments* — a raw text search false-positived on 65
+retired swarm-era `worker_*.json` stage files that merely contained `read_file`
+RESULTS; (b) `pr_state.json`'s `branch_name` is unreliable when the agent
+committed via bash itself (`pr.py` then fails `failed_no_mutations_produced` and
+creates no branch), which made two arms look byte-identical because one was
+being diffed against the other's branch — cross-check the commit-step status,
+and recover the true diff from the workspace clone's reflog.
+
+**Affected files**: `benchmarks/maintain_suite/{grade.py,maintain_suite.sdd}`
+(`d93f6ba`); evidence in `acceptance/gemma4_r1_2026_08_19/{STATUS,HAND-VERIFY}.md`,
+repro in `acceptance/echo_repro_2026_08_19/` (m5-local); the `bailout_type=
+"context_overflow"` mislabel at `benchmarks/maintain_suite/run.py:866` is
+unchanged and still open.

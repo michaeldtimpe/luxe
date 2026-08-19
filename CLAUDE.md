@@ -32,6 +32,18 @@ If a re-bench is ever needed, follow `~/Downloads/luxe/RESUME.md` §
 "M5 Max MoE bake-off" structure and produce results under
 `acceptance/m5max_moe_<rebench-id>/`.
 
+**Benched and NOT promoted.** **Gemma 4** (`gemma-4-26b-a4b-it-6bit` MoE +
+`gemma-4-31b-it-{4,6}bit`), 4×10 on m5, 2026-08-19: each printed 9/10 against
+the reference's 10/10 at up to 4.7× less wall, but hand-reading the MoE arm's
+nine passes found 5 REAL / 3 THIN / 1 VACUOUS — **three left the repo worse
+than `base_sha` with `gates_triggered` empty**, and it made zero
+`lint`/`typecheck`/`git_diff` calls on any fixture. Tool calling itself works
+natively (zero `textfallback_drop`/`tool_reject`; the empty-`chat_template`
+and dropped-`tools` blockers are gone) and there is no vlm-engine penalty —
+so the refutation is about verification behavior, not capability plumbing.
+Evidence: `acceptance/gemma4_r1_2026_08_19/HAND-VERIFY.md`, lessons.md
+2026-08-19. Don't re-open without new information.
+
 **Sanctioned exceptions — `luxe chat` slots + per-host manifests.** The
 interactive front-end (`src/luxe/chat/`) has two sanctioned carve-outs from
 single-champion, both scoped to `luxe chat`/`luxe code` and never the
