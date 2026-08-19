@@ -713,6 +713,391 @@ def test_read_only_task_gates_skip(git_repo: Path):
     assert "destructive_diff" not in gate_names
 
 
+# --- replace-in-place destruction + tool_output_echo (2026-08-19) -----------
+#
+# The ratio prong of destructive_diff only ever saw diffs whose deletions
+# dwarfed their additions, so a same-sized overwrite had ratio 1.0 and passed.
+# Both positives below are REAL diffs from the 2026-08-17 bake-off that scored
+# 4/5 with `gates_triggered` empty. The negatives are the shapes that must
+# keep passing: a large legitimate refactor, a reflow, a rename, a move
+# between files, and a doc rewrite that retitles a section.
+
+_PROSE = [
+    "The renderer owns the frame loop and nothing else.",
+    "Each phase publishes its transitions on the EventBus.",
+    "State lives in a single immutable store, patched per tick.",
+    "Input handlers translate raw key codes into intents.",
+    "The AI module scores candidate moves before committing.",
+    "Debug overlays subscribe to the same bus as the renderer.",
+    "Data loaders hydrate the store from static JSON manifests.",
+    "Actions are pure descriptions; reducers apply them.",
+    "The UI layer never reaches into phase internals directly.",
+    "Every subsystem is constructed once at boot and reused.",
+]
+
+
+def _write_commit(repo: Path, rel: str, text: str, msg: str) -> None:
+    target = repo / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", msg], cwd=repo, check=True)
+
+
+def _gate_names(r: FixtureResult) -> list[str]:
+    return [g.get("name", g.get("gate", "")) for g in r.gates_triggered]
+
+
+def _long_doc(n: int = 40) -> str:
+    """A markdown doc with real vocabulary, long enough to clear the
+    30-deletion floor the destructive gate has always used."""
+    lines = ["# Architecture", ""]
+    for i in range(n):
+        lines.append(f"## Module {i}")
+        lines.append(_PROSE[i % len(_PROSE)])
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# --- B. tool_output_echo --
+
+def test_tool_output_echo_blocks_line_numbered_rewrite(git_repo: Path):
+    """neon-rain-document-modules, +132/-132: the model rewrote
+    ARCHITECTURE.md by prefixing every line with `<n>\\t` — read_file's own
+    rendering written back into the file. Ratio 1.0, so the old gate saw
+    nothing and the fixture scored 4/5."""
+    _write_commit(git_repo, "ARCHITECTURE.md", _long_doc(), "seed doc")
+    base = _base_sha(git_repo)
+
+    original = (git_repo / "ARCHITECTURE.md").read_text().splitlines()
+    echoed = "".join(f"{i + 1}\t{line}\n" for i, line in enumerate(original))
+    echoed += "## Subdirectories\ninput, render, state and ai live under src/.\n"
+    _write_commit(git_repo, "ARCHITECTURE.md", echoed, "echo read_file output")
+
+    fix = _f("f-echo", "regex_present", task_type="document",
+             pattern=r"Subdirectories")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed is False
+    assert "tool_output_echo" in _gate_names(r)
+    assert "ARCHITECTURE.md" in r.expected_outcome_detail
+    assert r.score == 2  # PR + citations only
+
+
+def test_tool_output_echo_needs_a_consecutive_run():
+    """A handful of numbered lines is not the signature — read_file emits
+    dozens of strictly consecutive ones. Below the floor, nothing fires."""
+    from benchmarks.maintain_suite.grade import check_tool_output_echo
+
+    short = ["1\tfirst", "2\tsecond", "3\tthird"]
+    assert check_tool_output_echo({"notes.md": (short, [])})[0] is False
+
+    # Numbered but NOT consecutive (an id column, a changelog) — no run.
+    scattered = [f"{i * 7}\tvalue" for i in range(30)]
+    assert check_tool_output_echo({"notes.md": (scattered, [])})[0] is False
+
+    consecutive = [f"{i + 1}\tline {i}" for i in range(12)]
+    fired, detail = check_tool_output_echo({"notes.md": (consecutive, [])})
+    assert fired is True
+    assert "notes.md" in detail
+
+
+def test_tool_output_echo_skips_tab_separated_data():
+    """A .tsv with a sequential id column is the one place `<int><TAB>` runs
+    are normal; the gate must not fail a fixture for adding data."""
+    from benchmarks.maintain_suite.grade import check_tool_output_echo
+
+    rows = [f"{i + 1}\tacme\t{i * 3}" for i in range(40)]
+    assert check_tool_output_echo({"data/rows.tsv": (rows, [])})[0] is False
+    assert check_tool_output_echo({"data/rows.csv": (rows, [])})[0] is False
+    # Same content in a source file still fires.
+    assert check_tool_output_echo({"src/app.py": (rows, [])})[0] is True
+
+
+# --- A. destructive_diff, prong 2: replace-in-place --
+
+def test_replace_in_place_blocks_same_size_overwrite(git_repo: Path):
+    """A 60-line module overwritten with 60 lines of unrelated content:
+    ratio 1.0, so prong 1 is blind. The removed vocabulary is nowhere in the
+    diff, which is the discriminator."""
+    body = "\n".join(
+        f"def parse_manifest_{i}(payload):\n"
+        f"    return payload['records'][{i}]['checksum']"
+        for i in range(30)
+    ) + "\n"
+    _write_commit(git_repo, "src/manifest.py", body, "seed module")
+    base = _base_sha(git_repo)
+
+    replacement = "\n".join(
+        f"def widget_{i}():\n    return 'placeholder value {i}'"
+        for i in range(30)
+    ) + "\ndef new_thing(): return 42\n"
+    _write_commit(git_repo, "src/manifest.py", replacement, "overwrite")
+
+    fix = _f("f-replace", "regex_present", task_type="implement",
+             pattern=r"def new_thing")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed is False
+    assert "destructive_diff" in _gate_names(r)
+    assert "replaced in place" in r.expected_outcome_detail
+
+
+def test_reformat_does_not_trip_replace_in_place(git_repo: Path):
+    """A reflow rewrites every line it touches — the line-level "deleted text
+    not among added text" test we rejected would score this 100% destroyed.
+    The vocabulary is untouched, so the gate must stay silent."""
+    paragraph = " ".join(_PROSE * 6)
+    wrapped = "\n".join(paragraph[i:i + 55] for i in range(0, len(paragraph), 55))
+    _write_commit(git_repo, "NOTES.md", "# Notes\n\n" + wrapped + "\n", "seed")
+    base = _base_sha(git_repo)
+
+    rewrapped = "\n".join(paragraph[i:i + 95]
+                          for i in range(0, len(paragraph), 95))
+    _write_commit(git_repo, "NOTES.md",
+                  "# Notes\n\n" + rewrapped + "\n\nSee src/render for details.\n",
+                  "reflow to 95 cols")
+
+    fix = _f("f-reflow", "regex_present", task_type="document",
+             pattern=r"src/render")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.diff_deletions >= 30, "negative control must clear the volume floor"
+    assert r.expected_outcome_passed is True
+    assert _gate_names(r) == []
+
+
+def test_symbol_rename_does_not_trip_replace_in_place(git_repo: Path):
+    """A mechanical rename touches every line of a large file and retires 30
+    distinct identifiers at once — 0.91 under the distinct-word reading, which
+    is exactly the shape that fools it. The occurrence reading sees 0.33, so
+    the joint criterion stays silent. This is the negative control for the
+    second half of that criterion; delete it and a rename starts failing."""
+    old = "\n".join(
+        f"def compute_energy_{i}(state):\n"
+        f"    return compute_energy_helper(state, {i})"
+        for i in range(30)
+    ) + "\n"
+    _write_commit(git_repo, "src/energy.py", old, "seed")
+    base = _base_sha(git_repo)
+
+    new = old.replace("compute_energy", "calculate_energy")
+    new += "def calculate_energy_total(state): return 0\n"
+    _write_commit(git_repo, "src/energy.py", new, "rename")
+
+    fix = _f("f-rename", "regex_present", task_type="implement",
+             pattern=r"calculate_energy_total")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.diff_deletions >= 30, "negative control must clear the volume floor"
+    assert r.expected_outcome_passed is True
+    assert _gate_names(r) == []
+
+
+def test_move_between_files_does_not_trip_replace_in_place(git_repo: Path):
+    """Extract-a-module: 60 lines leave one file and arrive verbatim in
+    another. Deletions are weighed per file, so this only stays clean because
+    added tokens are pooled across the whole diff."""
+    body = "\n".join(
+        f"def parse_manifest_{i}(payload):\n"
+        f"    return payload['records'][{i}]['checksum']"
+        for i in range(30)
+    ) + "\n"
+    _write_commit(git_repo, "src/big.py", "# header\n" + body, "seed")
+    base = _base_sha(git_repo)
+
+    (git_repo / "src" / "big.py").write_text("# header\nfrom .parsers import *\n")
+    _write_commit(git_repo, "src/parsers.py", body, "extract module")
+
+    fix = _f("f-move", "regex_present", task_type="implement",
+             pattern=r"from \.parsers import")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.diff_deletions >= 30, "negative control must clear the volume floor"
+    assert r.expected_outcome_passed is True
+    assert _gate_names(r) == []
+
+
+def test_lockfile_churn_does_not_trip_replace_in_place(git_repo: Path):
+    """`npm install` rewrites package-lock.json wholesale and its vocabulary is
+    content hashes — the one legitimate diff in the 400-commit calibration that
+    cleared the distinct-word threshold was exactly this shape (a uv.lock
+    bump). Generated files are skipped outright."""
+    old_lock = "\n".join(
+        f'    "sha512-{i:04d}aaaa": {{ "resolved": "https://registry/pkg-{i}" }},'
+        for i in range(60)
+    ) + "\n"
+    _write_commit(git_repo, "package-lock.json", "{\n" + old_lock + "}\n", "seed lock")
+    base = _base_sha(git_repo)
+
+    new_lock = "\n".join(
+        f'    "sha512-{i:04d}zzzz": {{ "resolved": "https://registry/dep-{i}" }},'
+        for i in range(60)
+    ) + "\n"
+    (git_repo / "package-lock.json").write_text("{\n" + new_lock + "}\n")
+    main = git_repo / "src" / "main.py"
+    _write_commit(git_repo, "src/main.py",
+                  main.read_text() + "def health(): return {'status': 'ok'}\n",
+                  "add endpoint + refresh lockfile")
+
+    fix = _f("f-lock", "regex_present", task_type="implement",
+             pattern=r"def health")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.diff_deletions >= 30, "negative control must clear the volume floor"
+    assert r.expected_outcome_passed is True
+    assert _gate_names(r) == []
+
+
+# --- A. destructive_diff, prong 3: markdown section loss --
+
+_README = """# The Game
+
+## Features
+
+- Pick a random movie from the curated list
+- Reroll without reloading the page
+- Remembers the last five picks
+
+## Install
+
+Run `npm install` and then `npm start`.
+"""
+
+
+def test_doc_section_deletion_blocks_document_task(git_repo: Path):
+    """the-game-document-architecture, roughly +9/-9: the model deleted the
+    `## Features` section to make room for `## How It Works`. Ratio 1.0 and
+    far under the 30-deletion floor, so nothing fired and it scored 4/5."""
+    _write_commit(git_repo, "README.md", _README, "seed readme")
+    base = _base_sha(git_repo)
+
+    rewritten = _README.replace(
+        """## Features
+
+- Pick a random movie from the curated list
+- Reroll without reloading the page
+- Remembers the last five picks
+""",
+        """## How It Works
+
+The list is sourced in src/App.jsx and the next pick is chosen by the
+useRandomMovie hook, which draws a fresh index on every reroll.
+""",
+    )
+    _write_commit(git_repo, "README.md", rewritten, "swap section")
+
+    fix = _f("f-section", "regex_present", task_type="document",
+             pattern=r"src/App\.jsx")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed is False
+    assert "destructive_diff" in _gate_names(r)
+    assert "Features" in r.expected_outcome_detail
+
+
+def test_doc_rewrite_that_retitles_a_section_does_not_trip(git_repo: Path):
+    """isomer-document-quickstart shape: the body is rewritten and the heading
+    retitled `Quick Start` -> `Quickstart`. Alnum-squashed heading keys make
+    that a survival, not a loss."""
+    doc = """# Isomer
+
+## Quick Start
+
+1. Copy .env.example to .env and set ISOMER_SECRET
+2. Run docker-compose up
+3. Open the dashboard
+
+## License
+
+MIT
+"""
+    _write_commit(git_repo, "README.md", doc, "seed readme")
+    base = _base_sha(git_repo)
+
+    rewritten = """# Isomer
+
+## Quickstart
+
+Copy `.env.example` to `.env` and set `ISOMER_SECRET`, then bring the stack
+up with `docker-compose up` (see docker-compose.yml). The dashboard answers
+on the default port from app.py once the containers are healthy.
+
+## License
+
+MIT
+"""
+    _write_commit(git_repo, "README.md", rewritten, "expand quickstart")
+
+    fix = _f("f-retitle", "regex_present", task_type="document",
+             pattern=r"docker-compose\.yml")
+    r = grade_fixture(fix, git_repo, pr_url="https://...", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed is True
+    assert _gate_names(r) == []
+
+
+def test_doc_section_loss_needs_a_trade_not_growth():
+    """The failure this prong names is deleting a section to MAKE ROOM. A diff
+    that grows the file well past what it removed delivered documentation and
+    pruned along the way — a weaker signal, and 43% of the doc-section
+    candidates in the 400-commit calibration were exactly that shape
+    (RESUME.md roll-forwards)."""
+    from benchmarks.maintain_suite.grade import check_destructive_deletion
+
+    deleted = ["## Features", "", "- Pick a random movie",
+               "- Reroll without reloading", "- Remembers five picks"]
+    traded = ["## How It Works", "", "The hook redraws on every reroll."]
+    grown = traded + [f"Paragraph {i} of substantial new documentation."
+                      for i in range(12)]
+
+    assert check_destructive_deletion(
+        len(traded), len(deleted), diff_hunks={"README.md": (traded, deleted)},
+        task_type="document")[0] is True
+    assert check_destructive_deletion(
+        len(grown), len(deleted), diff_hunks={"README.md": (grown, deleted)},
+        task_type="document")[0] is False
+
+
+def test_doc_section_loss_scoped_to_document_and_manage():
+    """Prong 3 is deliberately narrow: document/manage fixture goals are
+    additive by construction ("Preserve the existing content"). An
+    implement/bugfix task that drops a stale doc section is not this gate's
+    business."""
+    from benchmarks.maintain_suite.grade import check_destructive_deletion
+
+    hunks = {
+        "README.md": (
+            ["## How It Works", "", "The hook redraws on every reroll."],
+            ["## Features", "", "- Pick a random movie",
+             "- Reroll without reloading", "- Remembers five picks"],
+        )
+    }
+    fired, detail = check_destructive_deletion(
+        3, 5, diff_hunks=hunks, task_type="document")
+    assert fired is True and "Features" in detail
+    assert check_destructive_deletion(
+        3, 5, diff_hunks=hunks, task_type="implement")[0] is False
+
+
+def test_strict_gates_without_hunks_are_unchanged():
+    """`diff_hunks` is optional; a caller that passes only the shortstat gets
+    exactly the pre-2026-08-19 behaviour."""
+    from benchmarks.maintain_suite.grade import apply_strict_gates
+
+    triggered = apply_strict_gates(
+        task_type="document", file_paths=["README.md"],
+        additions=132, deletions=132, diff_added_text="clean prose",
+    )
+    assert triggered == []
+    # And the ratio prong still fires on the shape it always caught.
+    triggered = apply_strict_gates(
+        task_type="implement", file_paths=["src/a.py"],
+        additions=2, deletions=90, diff_added_text="",
+    )
+    assert [name for name, _ in triggered] == ["destructive_diff"]
+
+
 # --- git failure is a harness error, never a verdict (2026-08-12) -----------
 
 
