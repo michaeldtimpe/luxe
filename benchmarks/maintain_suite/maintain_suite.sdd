@@ -17,6 +17,27 @@ single pipeline; new fixtures must declare their per-requirement spec.
   Retention, not delete-after-grading: `regrade_local.py` checks the pushed
   branch out, so recent ones must survive. `keep<=0` is a no-op, never a wipe
 - Borderline document/manage fixtures replicate 3× before claiming a regression
+- `destructive_diff` catches REPLACE-IN-PLACE, not just lopsided churn
+  (2026-08-19): its ratio prong needs deletions >= 5x additions, so a
+  same-sized overwrite has ratio 1.0 and walked through — two 2026-08-17
+  bake-off diffs passed at 4/5 with an empty gate list. Prong 2 fires on a
+  per-file replace band (>= 30 deleted lines, additions 0.5-2x deletions) when
+  BOTH loss readings agree that information left: >= 80% of distinct content
+  words AND >= 60% of word occurrences absent from the whole diff's added
+  lines. Both readings are required because each alone has a shape that fools
+  it — occurrences are propped up by shared keywords, distinct words are
+  retired wholesale by a mechanical rename. Added tokens pool across every
+  file so extract-a-module refactors stay clean; generated/lock files are
+  skipped. Prong 3 (document/manage, markdown) fires on a section heading
+  deleted with >= 3 body lines, not retitled among the added headings, in a
+  file that did not grow past 1.2x what it lost. Thresholds are calibrated
+  against 400 commits of real history — prongs 2 and 3's `_check_*` helpers
+  carry the numbers; DON'T loosen them without re-running that audit
+- `tool_output_echo` is its OWN gate, never folded into `destructive_diff`:
+  >= 10 consecutively numbered `<n>\t` added lines is `read_file`'s rendering
+  (src/luxe/tools/fs.py) written back into a file, and the remediation differs.
+  The information-loss prong structurally cannot see it — a line-numbered copy
+  of a file preserves every word
 - A git failure during GRADING is a harness ERROR, never a verdict
   (2026-08-12): grade.py's diff/grep helpers raise `GitRunError` instead of
   returning the empty-diff shape ([] / (0,0) / ""), and run.py's per-fixture

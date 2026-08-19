@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,109 @@ _DESTRUCTIVE_DELETION_RATIO = 5.0
 # Below this threshold, allow any deletion ratio — small diffs (e.g. removing
 # a 12-line dead function) shouldn't trip the gate.
 _DESTRUCTIVE_MIN_DELETIONS = 30
+
+# --- destructive_diff, prongs 2 and 3 (2026-08-19) -------------------------
+# The ratio prong only sees churn whose deletions DWARF its additions, so a
+# REPLACE-IN-PLACE destruction has ratio 1.0 and walks straight through it.
+# Two such diffs passed at 4/5 with an empty gate list in the 2026-08-17
+# bake-off (neon-rain-document-modules +132/-132; the-game-document-
+# architecture ~+9/-9). Prong 2 therefore asks a different question — not
+# "how lopsided is the churn?" but "did information LEAVE the repo?".
+#
+# Discriminator: token-level information loss. A rename, a reflow, a reindent
+# and a move-to-another-file are all high-churn but PRESERVE the vocabulary of
+# what they touch; a destruction does not. Alternatives considered and
+# rejected:
+#   * absolute deletion volume with a small-net-change window — fires on every
+#     legitimate large refactor (26 of 400 real commits here sit in that
+#     window), which is exactly the false positive that costs more than a
+#     missed detection;
+#   * deleted-LINE-not-present-among-added-lines — a rewrap or a reindent
+#     changes every line it touches, so a pure reformat scores 100% "lost"
+#     (measured: 0.05 under the word readings this ships instead);
+#   * net-change-only heuristics — replace-in-place and reflow are
+#     indistinguishable under them.
+# Loss is read TWICE and both readings must agree, because each one alone has
+# a shape that fools it. Calibrated against 400 commits of this repo's own
+# history, over every per-file candidate in the replace band (>= 30 deleted
+# lines, additions between 0.5x and 2x deletions):
+#
+#   loss reading        legit max   code overwrite   doc overwrite   mass rename
+#   occurrences (bag)   0.58        0.71             0.84            0.33
+#   distinct words      0.57 *      0.94             0.88            0.91
+#
+#   * one legitimate diff read 0.73 on distinct words: a `uv.lock` dependency
+#     bump, whose vocabulary is content hashes. Generated files are skipped
+#     outright — an agent that runs `npm install` must not fail for rewriting
+#     a lockfile — and 0.57 is the max over everything that remains.
+#
+# Occurrence-counting is fooled by shared keywords: `def`, `return`, `import`
+# repeat often enough to prop up the "preserved" side, so a module overwritten
+# with unrelated stubs reads only 0.71 — under any threshold that still clears
+# real refactors. Distinct-word loss is fooled the other way: a mechanical
+# rename of many identifiers retires most of a file's vocabulary at once and
+# reads 0.91, though nothing was destroyed. A genuine replace-in-place is the
+# only shape that fails BOTH, so both must fire.
+#
+# On the 400-commit audit the joint criterion fires ZERO times, and the
+# closest legitimate diff (a RESUME.md restructure: 0.57 / 0.58) gets 71% of
+# the way to the nearer of the two thresholds.
+_DESTRUCTIVE_LOST_VOCAB = 0.80
+_DESTRUCTIVE_LOST_OCCURRENCES = 0.60
+# Absolute floor, in distinct words: a 30-line block of closing braces or
+# boilerplate carries almost no vocabulary and can never fire on rounding.
+_DESTRUCTIVE_MIN_LOST_TOKENS = 20
+# Machine-generated content. Its churn is not the model destroying work, and
+# its vocabulary (hashes, integrity strings) is unique by construction.
+_GENERATED_FILE_NAMES = frozenset({
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json",
+    "uv.lock", "poetry.lock", "pdm.lock", "cargo.lock", "gemfile.lock",
+    "composer.lock", "go.sum", "requirements.lock",
+})
+_GENERATED_SUFFIXES = (".min.js", ".min.css", ".map", ".lock")
+# The band that says "replaced", not "grew" or "pruned". Above 2x the diff is
+# growth; below 0.5x it is a net removal, which is ordinary in reverts,
+# extractions and dead-code deletion (the audit's biggest losses all sit
+# there) and whose extreme end prong 1 already owns.
+_DESTRUCTIVE_MAX_EXPANSION = 2.0
+_DESTRUCTIVE_MIN_REFILL = 0.5
+
+# Prong 3 (document/manage, markdown only): a section heading deleted along
+# with its body, in a file that did NOT grow. Requiring the BODY to go too
+# means a pure retitle can never fire; the retitle escape below means a renamed
+# section doesn't either; and the no-growth cap encodes the actual failure
+# ("deleted the Features section to MAKE ROOM for How It Works") — a diff that
+# grows the file well past what it removed delivered documentation and pruned
+# along the way, which is a weaker signal than a straight trade. On the same
+# 400-commit audit the cap alone dropped 43% of the doc-section candidates,
+# all of them RESUME.md-style roll-forwards, while the real 2026-08-17 failure
+# sits at expansion 1.00. The 13 that still fire on that audit are human doc
+# restructures of this repo's OWN handoff files (RESUME.md, agents.md,
+# README.md) — a population no fixture resembles: every document/manage
+# fixture goal in the suite is additive, and three of them say so in words
+# ("Preserve the existing content; do not replace or restructure the file").
+# That is the scope this prong is defended on; if a legitimate fixture run
+# ever trips it, scope it per-fixture rather than loosening the threshold.
+_MARKDOWN_EXTS = frozenset({".md", ".markdown", ".mdown", ".mkd"})
+_DOC_SECTION_MIN_BODY_LOSS = 3
+_DOC_SECTION_MAX_EXPANSION = 1.2
+_MD_HEADING_RX = re.compile(r"^\s{0,3}(?:#{1,6})\s+(.+?)\s*#*\s*$")
+
+# Content words: >=2 chars, starting with a letter or underscore. Bare numbers
+# and punctuation carry no information for the loss ratio.
+_TOKEN_RX = re.compile(r"[a-z_][a-z0-9_]+")
+
+# --- tool_output_echo ------------------------------------------------------
+# `read_file` renders `f"{i + offset + 1}\t{line}"` (src/luxe/tools/fs.py:394):
+# a bare decimal, one tab, the raw line, numbering strictly consecutive with no
+# padding. A run of that in ADDED lines means a tool result was piped into a
+# writer. 10 consecutive numbered lines is the floor — ordered markdown lists
+# use `1. `, not `1\t`, and a real 10-line consecutive `<int><TAB>` run outside
+# tab-separated data is implausible. Data extensions are skipped outright
+# because a sequential id column is normal there.
+_ECHO_MIN_RUN = 10
+_ECHO_SKIP_EXTS = frozenset({".tsv", ".tab", ".csv", ".psv", ".dat"})
+_NUMBERED_LINE_RX = re.compile(r"^(\d+)\t")
 
 # Role names that the orchestrator uses internally; if any leaks into a path
 # component of a changed file, the model has confused agent role labels with
@@ -75,15 +179,229 @@ _PLACEHOLDER_PATTERNS = [
 ]
 
 
-def check_destructive_deletion(additions: int, deletions: int) -> tuple[bool, str]:
-    """True if the diff is dominated by deletions. Returns (triggered, detail)."""
-    if deletions < _DESTRUCTIVE_MIN_DELETIONS:
+def check_destructive_deletion(
+    additions: int,
+    deletions: int,
+    *,
+    diff_hunks: "dict[str, tuple[list[str], list[str]]] | None" = None,
+    task_type: str = "",
+) -> tuple[bool, str]:
+    """True if the diff destroys existing content. Returns (triggered, detail).
+
+    Three prongs, cheapest first. Prong 1 is the original lopsided-churn test.
+    Prongs 2 and 3 need `diff_hunks` (per-file added/deleted lines); without it
+    they are skipped, so every legacy caller keeps its exact behaviour.
+    """
+    # Prong 1 — lopsided churn: deletions dwarf additions.
+    if deletions >= _DESTRUCTIVE_MIN_DELETIONS:
+        if additions == 0:
+            return True, f"deleted {deletions} lines, added 0"
+        ratio = deletions / max(1, additions)
+        if ratio >= _DESTRUCTIVE_DELETION_RATIO:
+            return True, (f"deleted {deletions}, added {additions} "
+                          f"(ratio {ratio:.1f}× — destructive)")
+
+    if not diff_hunks:
         return False, ""
-    if additions == 0:
-        return True, f"deleted {deletions} lines, added 0"
-    ratio = deletions / max(1, additions)
-    if ratio >= _DESTRUCTIVE_DELETION_RATIO:
-        return True, f"deleted {deletions}, added {additions} (ratio {ratio:.1f}× — destructive)"
+
+    # Prong 2 — replace-in-place: same-sized churn that loses information.
+    ok, detail = _check_replace_in_place(diff_hunks)
+    if ok:
+        return True, detail
+
+    # Prong 3 — a documented markdown section deleted to make room.
+    ok, detail = _check_doc_section_loss(diff_hunks, task_type)
+    if ok:
+        return True, detail
+    return False, ""
+
+
+def _content_tokens(lines: list[str]) -> "Counter[str]":
+    """Multiset of content words in `lines`.
+
+    Words only (>=2 chars, must start with a letter or underscore): bare
+    numbers and punctuation carry no information, so deleting 30 lines of
+    closing braces can never read as information loss, and the line-number
+    prefixes this file's sibling gate hunts for never inflate the added side.
+    """
+    counts: "Counter[str]" = Counter()
+    for line in lines:
+        counts.update(_TOKEN_RX.findall(line.lower()))
+    return counts
+
+
+def _vocabulary(lines: list[str]) -> set[str]:
+    """The DISTINCT content words in `lines` — see the calibration table above
+    for why distinct beats occurrence-counting here."""
+    return set(_content_tokens(lines))
+
+
+def _is_generated(path: str) -> bool:
+    name = Path(path).name.lower()
+    return name in _GENERATED_FILE_NAMES or name.endswith(_GENERATED_SUFFIXES)
+
+
+def _check_replace_in_place(
+    diff_hunks: "dict[str, tuple[list[str], list[str]]]",
+) -> tuple[bool, str]:
+    """Per-file: >= _DESTRUCTIVE_MIN_DELETIONS lines removed, refilled to
+    roughly the same size, and most of the removed vocabulary is nowhere in
+    the diff.
+
+    Added tokens are pooled across EVERY file in the diff while deletions are
+    weighed per file, so extract-a-module refactors (delete here, re-add
+    there) preserve their vocabulary and stay clean.
+    """
+    all_added: list[str] = []
+    for added, _deleted in diff_hunks.values():
+        all_added.extend(added)
+    added_counts = _content_tokens(all_added)
+    added_vocab = set(added_counts)
+
+    for path, (added, deleted) in sorted(diff_hunks.items()):
+        if len(deleted) < _DESTRUCTIVE_MIN_DELETIONS:
+            continue
+        if _is_generated(path):
+            continue
+        if not (_DESTRUCTIVE_MIN_REFILL * len(deleted) <= len(added)
+                <= _DESTRUCTIVE_MAX_EXPANSION * len(deleted)):
+            # Outside the band this is growth or a net removal, not a
+            # replace-in-place.
+            continue
+        deleted_counts = _content_tokens(deleted)
+        deleted_vocab = set(deleted_counts)
+        occurrences = sum(deleted_counts.values())
+        if not deleted_vocab or not occurrences:
+            continue
+        lost_vocab = deleted_vocab - added_vocab
+        if len(lost_vocab) < _DESTRUCTIVE_MIN_LOST_TOKENS:
+            continue
+        vocab_frac = len(lost_vocab) / len(deleted_vocab)
+        occ_frac = sum((deleted_counts - added_counts).values()) / occurrences
+        if (vocab_frac >= _DESTRUCTIVE_LOST_VOCAB
+                and occ_frac >= _DESTRUCTIVE_LOST_OCCURRENCES):
+            return True, (
+                f"{path}: replaced in place (+{len(added)}/-{len(deleted)}) — "
+                f"{len(lost_vocab)} of {len(deleted_vocab)} distinct content "
+                f"words ({vocab_frac:.0%}, {occ_frac:.0%} of occurrences) "
+                f"appear nowhere in the diff's added lines; this removes "
+                f"information rather than reformatting it"
+            )
+    return False, ""
+
+
+def _headings(lines: list[str]) -> list[str]:
+    """ATX markdown heading titles found in `lines`."""
+    out: list[str] = []
+    for line in lines:
+        m = _MD_HEADING_RX.match(line)
+        if m:
+            title = m.group(1).strip()
+            if title:
+                out.append(title)
+    return out
+
+
+def _heading_key(title: str) -> tuple[str, frozenset[str]]:
+    tokens = frozenset(_TOKEN_RX.findall(title.lower()))
+    return "".join(sorted(re.findall(r"[a-z0-9]+", title.lower()))), tokens
+
+
+def _check_doc_section_loss(
+    diff_hunks: "dict[str, tuple[list[str], list[str]]]",
+    task_type: str,
+) -> tuple[bool, str]:
+    """document/manage only: a markdown section heading AND its body deleted.
+
+    `the-game-document-architecture` passed at 4/5 with an empty gate list on
+    a ~+9/-9 diff whose whole content was deleting `## Features` to make room
+    for `## How It Works` — ratio 1.0, far under prong 1's volume floor, and
+    the added prose satisfied the regex grader. Every document/manage fixture
+    goal in this suite is additive ("Preserve the existing content; do not
+    replace or restructure the file"), so losing a documented section is a
+    failure of the task by construction.
+
+    Retitles are NOT losses: a deleted heading survives if an added heading
+    matches it after alnum-squashing ("Quick Start" -> "Quickstart") or shares
+    at least half its words. And the body must go too — a diff that only
+    rewrites heading lines can never trip this.
+    """
+    if task_type not in ("document", "manage"):
+        return False, ""
+    for path, (added, deleted) in sorted(diff_hunks.items()):
+        if Path(path).suffix.lower() not in _MARKDOWN_EXTS:
+            continue
+        deleted_titles = _headings(deleted)
+        if not deleted_titles:
+            continue
+        body_lost = len(deleted) - len(deleted_titles)
+        if body_lost < _DOC_SECTION_MIN_BODY_LOSS:
+            continue
+        if len(added) > _DOC_SECTION_MAX_EXPANSION * len(deleted):
+            # The file grew well past what it lost — documentation was
+            # delivered, not traded away.
+            continue
+        added_keys = [_heading_key(t) for t in _headings(added)]
+        for title in deleted_titles:
+            squashed, tokens = _heading_key(title)
+            survived = False
+            for a_squashed, a_tokens in added_keys:
+                if squashed and squashed == a_squashed:
+                    survived = True
+                    break
+                if tokens and len(tokens & a_tokens) >= len(tokens) / 2:
+                    survived = True
+                    break
+            if not survived:
+                return True, (
+                    f"{path}: section `{title}` deleted with "
+                    f"{body_lost} line(s) of body and not retitled among the "
+                    f"added headings — existing documentation removed"
+                )
+    return False, ""
+
+
+def check_tool_output_echo(
+    diff_hunks: "dict[str, tuple[list[str], list[str]]] | None",
+) -> tuple[bool, str]:
+    r"""True if added lines carry `read_file`'s own line-number rendering.
+
+    `read_file` emits `f"{i + offset + 1}\t{line}"` (src/luxe/tools/fs.py) —
+    a bare decimal, one tab, the raw line, numbering strictly consecutive with
+    no padding. Writing that back into a file is unambiguous corruption:
+    `neon-rain-document-modules` rewrote ARCHITECTURE.md as `1\t# Architecture`,
+    `2\t`, `3\t## Overview`, ... and scored 4/5 with an empty gate list.
+
+    Kept separate from `destructive_diff` because the remediation differs —
+    this one says the model piped a tool result into a writer, not that it
+    deleted work — and because the vocabulary survives the corruption, so the
+    information-loss prong cannot see it.
+    """
+    if not diff_hunks:
+        return False, ""
+    for path, (added, _deleted) in sorted(diff_hunks.items()):
+        if Path(path).suffix.lower() in _ECHO_SKIP_EXTS:
+            # Tab-separated data with a sequential id column is the one place
+            # `<int>\t<text>` runs are normal.
+            continue
+        run = 0
+        best = 0
+        prev: int | None = None
+        for line in added:
+            m = _NUMBERED_LINE_RX.match(line)
+            if m is None:
+                run = 0
+                prev = None
+                continue
+            n = int(m.group(1))
+            run = run + 1 if prev is not None and n == prev + 1 else 1
+            prev = n
+            best = max(best, run)
+        if best >= _ECHO_MIN_RUN:
+            return True, (
+                f"{path}: {best} consecutively numbered `<n>\\t` added lines — "
+                f"read_file's line-number rendering written back into the file"
+            )
     return False, ""
 
 
@@ -334,16 +652,23 @@ def apply_strict_gates(
     additions: int,
     deletions: int,
     diff_added_text: str,
+    diff_hunks: dict[str, tuple[list[str], list[str]]] | None = None,
 ) -> list[tuple[str, str]]:
-    """Run all three gates; return list of (gate_name, detail) for each
-    triggered gate. Empty list = no gates triggered. Read-mode tasks
-    (review, summarize) skip these checks since they shouldn't produce
-    diffs in the first place.
+    """Run every gate; return list of (gate_name, detail) for each triggered
+    gate. Empty list = no gates triggered. Read-mode tasks (review,
+    summarize) skip these checks since they shouldn't produce diffs in the
+    first place.
+
+    `diff_hunks` maps path -> (added_lines, deleted_lines) from `_diff_hunks`.
+    It is optional so a caller with only the shortstat keeps the pre-2026-08-19
+    behaviour exactly; the replace-in-place, doc-section and tool_output_echo
+    checks need it and are skipped without it.
     """
     if task_type not in _WRITE_TASK_TYPES:
         return []
     triggered: list[tuple[str, str]] = []
-    ok, detail = check_destructive_deletion(additions, deletions)
+    ok, detail = check_destructive_deletion(
+        additions, deletions, diff_hunks=diff_hunks, task_type=task_type)
     if ok:
         triggered.append(("destructive_diff", detail))
     ok, detail = check_role_name_leak(file_paths)
@@ -352,6 +677,9 @@ def apply_strict_gates(
     ok, detail = check_placeholder_text(diff_added_text)
     if ok:
         triggered.append(("placeholder_diff", detail))
+    ok, detail = check_tool_output_echo(diff_hunks)
+    if ok:
+        triggered.append(("tool_output_echo", detail))
     return triggered
 
 
@@ -634,6 +962,84 @@ def _diff_shortstat(repo_path: Path, base_sha: str) -> tuple[int, int]:
             int(dels.group(1)) if dels else 0)
 
 
+def _diff_hunks(repo_path: Path, base_sha: str,
+                changed_files: list[str]) -> dict[str, tuple[list[str], list[str]]]:
+    """Parse `git diff base_sha HEAD -- *changed_files` into per-file
+    (added_lines, deleted_lines), leading +/- stripped.
+
+    The shortstat the destructive gate used to run on says only how MUCH
+    changed; the gates added 2026-08-19 need to know WHAT changed (whether the
+    removed vocabulary reappears, whether a heading's body went with it,
+    whether the added lines carry read_file's numbering), and they need it per
+    file so one file's additions can't mask another's destruction.
+
+    `---`/`+++` are only treated as file headers inside a `diff --git` header
+    block, so a deleted markdown rule (`--- foo` arrives as `---- foo`, but
+    `-- foo` arrives as `--- foo`) is never mistaken for one.
+    """
+    if not base_sha or not changed_files:
+        return {}
+    _rc, out = _run_git(["git", "diff", base_sha, "HEAD", "--", *changed_files],
+                        cwd=repo_path)
+    return _parse_diff_hunks(out)
+
+
+def _parse_diff_hunks(out: str) -> dict[str, tuple[list[str], list[str]]]:
+    """The unified-diff parser behind `_diff_hunks`, split out so it can be
+    exercised on diff text from any pair of revisions."""
+    hunks: dict[str, tuple[list[str], list[str]]] = {}
+    if not out:
+        return hunks
+
+    def _slot(path: str) -> tuple[list[str], list[str]]:
+        return hunks.setdefault(path, ([], []))
+
+    current = ""
+    old_path = ""
+    in_header = False
+    for line in out.splitlines():
+        if line.startswith("diff --git "):
+            in_header = True
+            current = ""
+            old_path = ""
+            continue
+        if in_header:
+            if line.startswith("--- "):
+                old_path = line[4:]
+                continue
+            if line.startswith("+++ "):
+                new_path = line[4:]
+                if new_path == "/dev/null":
+                    path = old_path[2:] if old_path.startswith("a/") else old_path
+                else:
+                    path = new_path[2:] if new_path.startswith("b/") else new_path
+                current = path
+                _slot(current)
+                in_header = False
+                continue
+            if line.startswith("@@"):
+                in_header = False
+            else:
+                continue
+        if not current:
+            continue
+        if line.startswith("+"):
+            _slot(current)[0].append(line[1:])
+        elif line.startswith("-"):
+            _slot(current)[1].append(line[1:])
+    return hunks
+
+
+def _added_text_from_hunks(
+    hunks: dict[str, tuple[list[str], list[str]]],
+) -> str:
+    """The `+` lines of a parsed diff, in diff order, as one blob."""
+    added: list[str] = []
+    for _path, (file_added, _deleted) in hunks.items():
+        added.extend(file_added)
+    return "\n".join(added)
+
+
 def _diff_added_text(repo_path: Path, base_sha: str,
                      changed_files: list[str]) -> str:
     """Concatenate the `+` lines of `git diff base_sha HEAD -- *changed_files`.
@@ -642,19 +1048,7 @@ def _diff_added_text(repo_path: Path, base_sha: str,
     content (so pre-existing placeholders elsewhere don't trigger the gate).
     Strips the leading `+` and skips `+++` file-header markers.
     """
-    if not base_sha or not changed_files:
-        return ""
-    _rc, out = _run_git(["git", "diff", base_sha, "HEAD", "--", *changed_files],
-                        cwd=repo_path)
-    if not out:
-        return ""
-    added: list[str] = []
-    for line in out.splitlines():
-        if line.startswith("+++"):
-            continue
-        if line.startswith("+"):
-            added.append(line[1:])
-    return "\n".join(added)
+    return _added_text_from_hunks(_diff_hunks(repo_path, base_sha, changed_files))
 
 
 # --- main entry ------------------------------------------------------------
@@ -703,19 +1097,21 @@ def grade_fixture(
 
     # Strict gates — fire on the diff itself, before outcome credit. A
     # write task that triggers any gate (destructive_diff / role_name_leak /
-    # placeholder_diff) cannot pass; the gate detail becomes the failure
-    # reason. Phase 0 Bug 2: apply_strict_gates was defined but never
+    # placeholder_diff / tool_output_echo) cannot pass; the gate detail
+    # becomes the failure reason. Phase 0 Bug 2: apply_strict_gates was defined but never
     # invoked from grade_fixture, so destructive diffs and placeholder
     # stubs were silently credited.
     gate_block: tuple[str, str] | None = None
     if is_write_task and result.diff_produced:
-        added_text = _diff_added_text(repo_path, base_sha, changed)
+        hunks = _diff_hunks(repo_path, base_sha, changed)
+        added_text = _added_text_from_hunks(hunks)
         triggered = apply_strict_gates(
             task_type=fixture.task_type,
             file_paths=changed,
             additions=result.diff_additions,
             deletions=result.diff_deletions,
             diff_added_text=added_text,
+            diff_hunks=hunks,
         )
         for name, detail in triggered:
             result.gates_triggered.append({"name": name, "detail": detail})
