@@ -2849,7 +2849,7 @@ Reference command (kept for re-run):
 ```bash
 brew services restart omlx && sleep 5 && \
 cd ~/Downloads/luxe && \
-LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 nohup \
+LUXE_LOG_TOOL_CALLS=1 nohup \
   .venv/bin/python -m benchmarks.swebench.run \
     --subset benchmarks/swebench/subsets/v1_baseline_n75.json \
     --output acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/ \
@@ -3183,7 +3183,7 @@ sudo sysctl iogpu.wired_limit_mb=36864
 echo "iogpu.wired_limit_mb=36864" | sudo tee -a /etc/sysctl.conf
 ```
 
-API key for HTTP requests: `export OMLX_API_KEY=omlx-sdb25582k3mq8pf9` (in user's shell init; the bench harness reads it).
+API key for HTTP requests: resolved via `luxe.secrets.resolve_api_key` — env `OMLX_API_KEY` → `~/.luxe/secrets.env` → login Keychain (service `OMLX_API_KEY`); the bench harness reads it automatically, no manual export needed.
 
 **Restart oMLX** any time `settings.json`, `model_settings.json`, or new symlinks land: `brew services restart omlx`.
 
