@@ -1,5 +1,112 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-19, m1) — Gemma 4 bake-off: NOT PROMOTED (refuted on hand-verification)
+
+Gemma 4 arrived with **both historical blockers resolved**: it tool-calls
+natively and correctly — **zero `textfallback_drop`, zero `tool_reject`** across
+the whole matrix, `chat/modelcaps.py` reports SUPPORTED for these builds, and
+oMLX 0.5.7 ships `mlx_lm/tool_parsers/gemma4.py`. So neither the 2026-05-02
+empty-`chat_template` HTTP-400 class nor the 2026-07-30 "oMLX silently drops the
+`tools` array" class applies, and there is **no vlm-engine speed penalty**.
+Overnight elimination bench on m5, 4 arms × 10 maintain_suite fixtures (matrix
+`benchmarks/maintain_suite/variants_gemma4.yaml`, untracked working artifact):
+
+| arm | printed | wall |
+|---|---|---|
+| `gemma-4-26b-a4b-it-6bit` (MoE 26B-A4B) | 9/10 | 6.9 min |
+| `gemma-4-31b-it-4bit` (dense) | 9/10 | 16.5 min |
+| `gemma-4-31b-it-6bit` (dense) | 9/10 | 27.0 min |
+| `Qwen3.6-27B-6bit` (reference) | 10/10 | 32.6 min |
+
+- **Verdict: NOT PROMOTED — refuted on hand-verification, not on the
+  scoreboard.** Every diff of the MoE arm's 9 printed passes was read against
+  the fixture goal text: **5 REAL, 3 THIN, 1 VACUOUS**, and **three of the nine
+  leave the repo worse than `base_sha`** — an `ARCHITECTURE.md` replaced by a
+  line-numbered copy of itself (+132/−132), a README `## Features` section
+  deleted to make room for the requested one (+9/−9), and a `--strict` refactor
+  that orphaned `scan_lmstudio`'s MLX/HF-format branch. `gates_triggered` was
+  **empty on all 20 runs**; `spec_all_satisfied` was `true` on 8 of the 9,
+  including two of the destructive ones.
+- **The speed is real and decomposes badly**: 4.71× total wall = **2.79×
+  genuine decode throughput** (46.4 vs 16.6 tok/s wall, the A3B active-parameter
+  win) × **1.69× less output**. It is not taking fewer steps — **161 completed
+  steps vs the reference's 112**, 25% more prompt tokens, 4/10 bailouts vs 0 —
+  and it made **zero** `lint`/`typecheck`/`git_diff`/`glob` calls across all ten
+  fixtures, against the reference's 19. It is not working faster; it is skipping
+  verification. A single `git_diff` review step would have caught all three
+  damaged repos.
+- **The signature is minimum-pattern-matching output**, three independent
+  instances: a 30-tool-call run with zero edits (all reads, evading the dedup
+  loop guard because each read used a different offset, so `duplicate=False`);
+  a +2-line edit that matched its target regex zero times; and an "add type
+  hints" task answered with `f: Any` where the reference wrote `f: BinaryIO` —
+  both scored `spec_all_satisfied: true`.
+- **One genuine win, recorded on its own terms**: on
+  `nothing-ever-happens-document-config` the MoE beats the champion outright —
+  **74s vs 490s, 58 env vars documented vs 27**, including all 23 `PM_NH_*`
+  strategy overrides the reference omits, with `file:line` refs spot-checked
+  exact against `base_sha`. n=1, against three damaged repos.
+- **Tool-output echo — reproduced 3/3 byte-identical, control 0/3.**
+  `gemma-4-26b-a4b-it-6bit` rewrote `ARCHITECTURE.md` by writing `read_file`'s
+  own `cat -n` rendering back into the file (added lines are literally
+  `1\t# Architecture`); `Qwen3.6-27B-6bit` does a clean +12/−0 addition on the
+  same fixture. A corpus sweep found **0 occurrences in 527 historical fixture
+  agent diffs** across every prior model, so this is **model-specific to Gemma
+  4, not a luxe substrate bug**. A `write_file` guard was considered and
+  **deliberately rejected**: `write_file` is on the benchmark path, so it would
+  cost a maintain_suite validation run to protect against one refuted,
+  unpromoted model. Repro artifacts on m5: `acceptance/echo_repro_2026_08_19/`.
+- **Artifacts**: `acceptance/gemma4_r1_2026_08_19/STATUS.md` (overnight
+  provisioning handoff) and `HAND-VERIFY.md` (verdict + per-fixture table +
+  the speed decomposition) are tracked; the 40 run dirs, `history.jsonl` and the
+  run-id manifest stay m5-local. Weights: 64.7 GB pulled to m5 via
+  `luxe pull --hf`; remove them if the space is wanted.
+
+**Harness defects this run exposed** (the bake-off's most durable output):
+
+1. **`destructive_diff` replace-in-place gap — FIXED, `d93f6ba`.** The gate
+   fired only on ≥30 deletions AND ≥5.0× deletion/addition ratio, so
+   ratio-1.0 destruction walked straight through the gate whose whole job is
+   catching it. Now three prongs plus a separate `tool_output_echo` gate;
+   contract in `benchmarks/maintain_suite/maintain_suite.sdd`. Calibration
+   verified independently: **0 false positives on 500 luxe commits and 273
+   fixture agent diffs**; all 7 prong-3 and all 4 echo firings on the fixture
+   corpus are true positives. **OWED: a bench-as-truth maintain_suite run** —
+   new gates change scores by construction.
+2. **`run.py:866` mislabels max-steps deaths as `bailout_type=
+   "context_overflow"` — STILL OPEN**, unchanged since the 2026-08-18 handoff
+   and confirmed live a second time here: the arm it hit peaked at 56.3%
+   context. It string-matches "max steps" in `abort_reason`; needs a
+   rename/split plus a test.
+3. **Both graders are loose in the same direction.** The binary
+   `expected_outcome` grader is a `regex_present` + `min_added_lines` check,
+   far looser than the fixture goal text — and the stricter SpecDD
+   `requirements:` / `spec_all_satisfied` block **cannot separate a real fix
+   from a degenerate one either** (the `f: Any` vs `f: BinaryIO` case had both
+   `true`; R2 "documents all 9 subdirectories" was credited against a file the
+   model had just destroyed). Only reading diffs works. This extends the
+   existing loose-grader finding (memory `project_loose_grader_audit`).
+4. **`pr_state.json`'s `branch_name` is unreliable when the agent committed via
+   bash itself**: `pr.py`'s commit step then fails
+   `failed_no_mutations_produced` and creates no branch, so two arms can appear
+   byte-identical while one is being diffed against itself. Cross-check the
+   commit-step status before trusting `branch_name` in any regrade; the true
+   diff is the dangling clone commit in the workspace reflog.
+5. **Corpus-sweep methodology**: filter to `write_file`/`edit_file` *arguments*,
+   not raw text search — a naive regex false-positived on 65 files that were
+   legitimate `read_file` RESULTS inside retired swarm-era `worker_*.json`
+   stage files.
+
+**Also this session**: `154d62d` removed a stale hardcoded oMLX key from 6
+occurrences across 5 tracked files, routing them through
+`luxe.secrets.resolve_api_key`. The key was verified stale (401), not the live
+credential; history untouched by design.
+
+**Open**: (a) the owed maintain_suite run for the two new gates; (b)
+`run.py:866`; (c) re-open Gemma 4 only on new evidence — the `document-config`
+enumeration win is the one thread worth pulling, and it is a doc-task capability
+question, not a promotion question.
+
 ## ⇒ SESSION HANDOFF (2026-08-18, m1) — Qwen3.8-27B elimination bake-off: NOT PROMOTED
 
 Qwen3.8-27B arrived (dense VLM, 262K ctx, hybrid Gated-DeltaNet, reasoning-on
