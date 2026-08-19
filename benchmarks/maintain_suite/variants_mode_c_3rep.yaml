@@ -13,7 +13,7 @@
 # is the documented soft spot per feedback_replicate_borderline_fixtures.md.
 #
 # Run:
-#   LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 \
+#   LUXE_LOG_TOOL_CALLS=1 \
 #     .venv/bin/python -m benchmarks.maintain_suite.run \
 #       --variants benchmarks/maintain_suite/variants_mode_c_3rep.yaml \
 #       --id nothing-ever-happens-document-config \

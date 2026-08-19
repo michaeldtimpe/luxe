@@ -479,7 +479,7 @@ target.
 
 ```bash
 brew services restart omlx && sleep 5 && \
-LUXE_LOG_TOOL_CALLS=1 OMLX_API_KEY=omlx-sdb25582k3mq8pf9 \
+LUXE_LOG_TOOL_CALLS=1 \
   .venv/bin/python -m benchmarks.swebench.run \
     --subset benchmarks/swebench/subsets/v1_baseline_n75.json \
     --output acceptance/swebench/post_specdd_v16_creation_only_n75/rep_1/

@@ -25,10 +25,12 @@ import sys
 import time
 from pathlib import Path
 
+from luxe.secrets import resolve_api_key
+
 
 N_REPS = 3
 OUTPUT_ROOT = Path("acceptance/bfcl/diligence_multiple")
-OMLX_API_KEY = "omlx-sdb25582k3mq8pf9"
+OMLX_API_KEY = resolve_api_key()
 
 
 def restart_omlx() -> None:

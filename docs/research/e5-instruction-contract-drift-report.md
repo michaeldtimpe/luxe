@@ -127,7 +127,9 @@ without restatement, mitigated by the "read the relevant `.sdd`" norm.
 
 ### 🟢 D7 (low) — `OMLX_API_KEY` value hardcoded in `CLAUDE.md`
 
-`CLAUDE.md:59` carries the literal API key (`omlx-sdb25582k3mq8pf9`).
+`CLAUDE.md:59` carried the literal API key at the time of this report
+(since removed — resolved via `luxe.secrets` / `~/.luxe/secrets.env` /
+Keychain instead).
 This appears intentional for local-dev convenience and the key is for a
 localhost service (low-impact if leaked locally), but it does mean:
 - The repo carries a credential string;
