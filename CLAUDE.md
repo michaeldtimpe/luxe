@@ -133,320 +133,166 @@ when reached for — availability over capability. Concretely:
 
 ## Fleet sibling — neo (luxe over llama-server) and where model truth lives
 
-luxe is the living center of the fleet's model/agent work; the sibling repos
-are satellites and their m5 clones go stale (that bit twice — see micro-mind's
-lessons.md 2026-08-03 "stale clone" entry). Current reality, recorded here so
-a luxe session doesn't have to rediscover it:
+luxe is the living center of the fleet's model/agent work; sibling repos are
+satellites and **their m5 clones go stale (bit twice).** When a question
+touches micro-mind/neo state, trust the checkouts ON neo (`ssh neo`,
+`~/Downloads/{micro-mind,neo-llm-bench,luxe}`) or a freshly fetched
+`origin/main` — never an unfetched m5 clone. Detail: memory
+`project_micromind_champion_neo.md`, `acceptance/luxe_neo_unification_2026_08/REPORT.md`.
 
-- **neo (A18 Pro, 8 GB) runs luxe** as of 2026-08-13. **micro-mind is retired**
-  — superseded for deployment, the same way neo-llm-bench was; its checkout,
-  harness, REPL and bench fixtures stay on neo as the canonical historical
-  record for small-model guard design, and its `lessons.md` is the valuable
-  part. luxe is now the one agent codebase fleet-wide.
-- **neo's ENGINE is unchanged and is not retired**: llama.cpp `llama-server`
-  in router mode (`--models-preset ~/dotfiles/luxe/neo-models.ini`, port 8080,
-  LaunchAgent `com.micromind.llama-server` — the label keeps its lineage on
-  purpose). Champion since the 2026-08-03 neo bake-offs:
-  **`Qwen3-4B-Instruct-2507-Q4_K_M`** (GGUF, ctx 16384, q8 KV, single-model —
-  no fallback pair). It replaced `qwen25-1.5b-instruct`: the 1.5B's 0% BFCL
-  multi-turn floor is a size artifact (lifts at 3B, closes at 4B), and the 4B
-  is the smallest model that passes luxe's real code drill on that box. Coder
-  variants lost to instruct at every size; 14B is Metal-unrunnable on 8 GB.
-  **MLX/oMLX is not an option there** — probed 2026-08-13 and refuted at
-  production context (`acceptance/mlx_neo_probe_2026_08/REPORT.md`).
-- **neo's luxe config is OUT of this repo**: `~/dotfiles/luxe/neo.yaml`
-  (a `hosts.neo` manifest + a `backends.local` entry at 127.0.0.1:8080 with
-  `engine: llama-server`), passed with `--config`. It lives in dotfiles
-  because an earlier deploy edited `configs/chat.yaml` in place and hid it
-  with `git update-index --skip-worktree` — 78 commits of drift. So **neo
-  still has no `hosts:` entry in `configs/chat.yaml`, by design**; the
-  statement in chat.sdd is about this repo's file, not about neo lacking a
-  manifest. Commands other than `luxe chat`/`luxe code` (which the dotfiles
-  wrappers cover) find it via **`$LUXE_CONFIG`**.
-- **`luxe smoke` on neo now PASSES locally** — the old pin ("bare
-  `luxe smoke` fails there; neo's smoke is the agentic drill against m5") is
-  RETIRED. Measured 2026-08-13: `luxe ready` exit 0, `luxe smoke` READY 3s,
-  `luxe smoke --chat --code` READY 38s (code drill 6 steps / 9 tool calls,
-  pytest green, exactly `calc.py` changed). Drilling m5 from neo still works
-  and is still useful; it is no longer the only option.
+- **neo (A18 Pro, 8 GB) runs luxe** as of 2026-08-13; **micro-mind and
+  neo-llm-bench are retired** (superseded for deployment — their checkouts +
+  `lessons.md` stay on neo as the historical record for small-model work).
+  luxe is the one agent codebase fleet-wide.
+- **neo's ENGINE is not retired:** llama.cpp `llama-server` router mode
+  (`--models-preset ~/dotfiles/luxe/neo-models.ini`, port 8080, LaunchAgent
+  `com.micromind.llama-server`). Champion since the 2026-08-03 bake-offs:
+  **`Qwen3-4B-Instruct-2507-Q4_K_M`** (GGUF, ctx 16384, q8 KV, single-model,
+  no fallback) — smallest model that passes luxe's real code drill on that box
+  (the 1.5B's 0% BFCL multi-turn floor is a size artifact; coder variants lost
+  to instruct at every size; 14B is Metal-unrunnable on 8 GB). **MLX/oMLX is
+  not an option there** (refuted 2026-08-13, `acceptance/mlx_neo_probe_2026_08/`).
+- **neo's luxe config is OUT of this repo:** `~/dotfiles/luxe/neo.yaml`
+  (a `hosts.neo` manifest + `backends.local` at 127.0.0.1:8080,
+  `engine: llama-server`), passed via `--config` / `$LUXE_CONFIG`. So neo has
+  **no `hosts:` entry in `configs/chat.yaml`, by design** (an earlier in-place
+  edit + `--skip-worktree` caused 78 commits of drift); the chat.sdd statement
+  is about this repo's file, not neo lacking a manifest.
 - **`engine:` on a `backends:` entry** (`omlx` default | `llama-server`)
-  switches only luxe's oMLX-SPECIFIC diagnostics — endpoint label + fixes,
-  the API-key check, the "weights location unreported" line, the stale-Cellar
-  probe, and `luxe pull`'s refusal. It never changes the request: every
-  supported engine is OpenAI-compatible and the bodies are byte-identical.
-- **neo's boot persistence is a KNOWN OPEN GAP** (2026-08-13): the router's
-  LaunchAgent is blocked from loading at login by macOS **Background Task
-  Management** (`disposition = 9` — enabled but *not allowed*), not by
-  launchd or the plist. It needs a one-time GUI approval in System Settings →
-  General → Login Items & Extensions. Until then, after any reboot:
+  switches ONLY luxe's oMLX-specific diagnostics (endpoint label/fixes,
+  API-key check, weights-location line, stale-Cellar probe, `luxe pull`'s
+  refusal). The request is byte-identical — every supported engine is
+  OpenAI-compatible.
+- **`luxe smoke` on neo now PASSES locally** (2026-08-13: `ready` exit 0,
+  `smoke` 3s, `smoke --chat --code` 38s). The old "bare smoke fails on neo"
+  pin is RETIRED; drilling m5 from neo still works but is no longer the only
+  option.
+- **Boot persistence is a KNOWN OPEN GAP (2026-08-13):** the LaunchAgent is
+  blocked at login by macOS **Background Task Management** (`disposition = 9`,
+  enabled-but-not-allowed) — needs a one-time GUI approval in System Settings →
+  Login Items & Extensions. Until then, after a reboot:
   `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.micromind.llama-server.plist`.
-  Full diagnosis: `~/dotfiles/luxe/README-neo-router.md` and
-  `acceptance/luxe_neo_unification_2026_08/REPORT.md`. **Do not add a
+  Diagnosis in `~/dotfiles/luxe/README-neo-router.md`. **Do not add a
   cron/launchd watchdog** — same standing decision as `luxe ready`'s.
-- **neo-llm-bench** is also marked *superseded for deployment* — canonical
-  historical record for the sub-2B era; its methodology stays reusable.
-- When a question touches micro-mind/neo state, trust the checkouts **on
-  neo** (`ssh neo`, `~/Downloads/{micro-mind,neo-llm-bench,luxe}`) or a
-  freshly fetched origin/main — never an unfetched m5 clone.
 
 ## Interactive front-end (`luxe chat` / `luxe compare`)
 
 Added 2026-06-01 (additive; benchmark path byte-identical). See `RESUME.md`
-2026-06-01 handoff + memory `project_luxe_chat_interactive_overhaul.md`.
+2026-06-01 handoff, memory `project_luxe_chat_interactive_overhaul.md`, and
+`src/luxe/{chat,compare,memory}/<dir>.sdd` — **walk the relevant `.sdd`
+before editing anything here.** This section lists only the invariants a
+session must not rediscover the hard way; mechanism lives in the `.sdd` + code.
 
 - **`luxe chat`** — REPL. Each turn = one `run_single` call; conversation +
-  project memory inject ONLY via the new `run_single(extra_context="")` seam
+  project memory inject ONLY via the `run_single(extra_context="")` seam
   (default `""` = byte-identical). Read-only tools by default (`/write` toggles).
-  - **Chat is a CONVERSATION by default (2026-07-29 fix).** Every freeform
-    turn gets the `chat_conversational` persona (registry variant; task
-    overlay cleared); the baseline maintenance persona applies only to
-    `/plan` drafting, `/goal` rounds, and `/use <slot>`-pinned turns. Do NOT
-    re-key the persona on the routed slot — slot routing comes from the
-    `_infer_task_type` keyword heuristic and misclassifies ordinary messages
-    ("explain…", "add…", "fix…") as coding tasks; that was the "chats become
-    coding sessions" bug. Slots still pick the MODEL only.
-  - **Multi-backend (chat-only carve-out, luxe.sdd):** `configs/chat.yaml`
-    `backends:` maps names → BackendEntry(base_url, api_key_env, timeout_s,
-    stall_timeout_s, decode_stall_timeout_s, default). `/backend` lists (health ✓/✗, active), `/backend <name|n>`
-    switches (health-checked; drops unresolvable `/model` overrides; never
-    unloads the OLD server), `--backend <name>` picks at startup. Keys come
-    from env vars only (m5 → OMLX_API_KEY_M5) — never YAML. Absent block ⇒ a
-    synthesized "local" entry from `omlx_base_url`; benchmark/maintain read
-    `omlx_base_url` only. m5 entry carries `timeout_s: 2400` (dense turns
-    over Tailscale) — the old hardcoded Backend timeout hack is retired —
-    plus `stall_timeout_s: 2400` (see "Progress deadlines" below).
-    SessionMeta records backend_name/base_url; assistant transcript records
-    are stamped `"backend"`.
-  - **Progress deadlines — a request that stalls must not hang (B6, 2026-07-31).**
-    `httpx.Timeout` is a PER-READ deadline and oMLX emits keepalives on both
-    response paths (`"model":"keepalive"` SSE chunks when streaming; a bare
-    `b' '` every ~10s under chunked encoding when not), so every keepalive
-    resets it and no finite `timeout_s` can bound a request whose generation
-    has stopped — one hung 23 min against a 600s timeout with no error and no
-    log line. `Backend` therefore keeps a SECOND clock on *progress* (content
-    delta / tool-call fragment / usage / finish_reason; keepalives never
-    count): `stall_timeout_s` (1800s) before the first token, where a long
-    prefill is legitimate, and `decode_stall_timeout_s` (120s) once tokens
-    flow, where a gap is unambiguous. A stall raises `httpx.ReadTimeout` so
-    the retry classifier treats it as transient. Overridable per endpoint via
-    `BackendEntry`; unset = inherit Backend's default (the numbers live in
-    `backend.py` alone). **Raising `timeout_s` is not a fix** — it only moves
-    the symptom. This one is NOT chat-only: the non-stream path is the
-    benchmark/maintain path, which could previously wedge on one fixture
-    forever.
-  - **`/attach <path> [...]`** stages file contents ONE-SHOT for the next
-    turn: 48KB/file + 128KB/turn caps, binary refused (null-byte sniff),
-    injected as `<attached_files>` just below `<system_constraints>`, cleared
-    on consumption; kind="attachment" transcript records.
-  - **TUI paste + resume:** multi-line pastes become a `[pasted N lines]`
-    chip expanded at submit (stock Textual Input kept only the first line);
-    `--resume`/`/resume` now work inside the Textual TUI (transcript replays
-    into the RichLog on mount). The `[chat]` extra installs via
-    `uv sync --extra chat` — without it chat falls back to the line REPL.
-  - **Model roster + tool capability** (2026-07-30). `configs/chat.yaml`
-    `visible_models:` is the working set `/model` offers (5 ids on m1/m5);
-    everything else the server holds is hidden. Local weights carry NO glyph
-    now — only ☁ network / ⇅ remote. **`chat/modelcaps.py` detects tool
-    support from the chat template**: gemma-3 has none (system/user/assistant
-    only + an alternation guard) and oMLX *silently drops* the `tools` array
-    for it, so luxe withholds the whole tool surface and tells the model not to
-    fake it. Gemma is therefore selectable (`/model chat gemma-3-27b-it-4bit`)
-    but NOT the default — a default has to be able to read a file.
-  - **Start a session anywhere** (2026-07-30; `chat/project.py`). The subject
-    resolves to **git** (walks UP to the git root — a subdir session gets the
-    whole repo), **dir** (pyproject.toml/package.json/… marker), or **none**.
-    `$HOME` and anything above it never count as the project. `--repo` resolves
-    upward too (the `luxe-chat` wrapper always passes `--repo "$PWD"`).
-    No-project mode: **no index, no repo lock**, read tools still work,
-    `bm25_search`/`find_symbol` withheld from the tool list, prompt carries
-    `NO_PROJECT_CHAT_HINT`, status bar shows `no project`. `/project [path]`
-    attaches or switches mid-session (moves the repo lock, acquiring the new one
-    first); `/index [path]` builds the index where you are. Startup from `$HOME`
-    is now **0.5s**.
-  - **Startup indexing is bounded and single-pass** (2026-07-30). It used to
-    walk the tree THREE times (BM25, symbols, language detection) with no cap:
-    `luxe chat --repo ~` cost **210s of indexing + ~18s of language walking**.
-    Now `cli._build_chat_indexes` runs `fswalk.scan_source_files` once — git
-    `ls-files` when the root is a repo, else a breadth-first walk that prunes
-    `HOME_NOISE_DIRS` (`Library`, …) at depth 1 — and feeds the list to both
-    builders plus `_languages_from_paths`. Caps: `LUXE_INDEX_MAX_FILES` (8000),
-    `LUXE_INDEX_MAX_MB` (96), `LUXE_INDEX_NO_GIT=1` to force the walk.
-    Measured after: **~1s in a repo, ~16s from `$HOME`**. Truncation prints
-    what the model can't see + how to lift it. Benchmark/maintain keep the
-    unbounded walk (builders called without `files=`).
-  - **`/pull` — get model weights** (2026-07-29; `src/luxe/modelstore.py`, CLI
-    `luxe pull`). Mounted volume first (kappa/alpha over SMB — same bytes at LAN
-    speed), else HuggingFace **through oMLX's own downloader**
-    (`/admin/api/hf/*`; cookie session via `/admin/api/login`, Bearer alone is
-    rejected). Never write a second `snapshot_download` — it would race the
-    server over the HF cache. Mount imports resolve symlinks AND Synology
-    `XSym` stubs (1067-byte regular files on SMB — a naive copy imports stubs
-    instead of weights); dangling links abort the copy. Copies stage in
-    `.<name>.partial` and rename, so an interrupt never leaves a half-model.
-    In chat, `/pull <ref>` previews and `/pull <ref> --yes` transfers.
-  - **`/claude` diagnoses Claude Code itself** (2026-08-13;
-    `src/luxe/claudecode.py`, CLI `luxe claudecode`, tool `claude_code_diag`).
-    luxe is the fallback dev tool, so "what is wrong with Claude Code?" arrives
-    here by construction — and a chat with no instrument could only guess (a
-    session had silently reverted from the Max-plan login to the Platform API
-    key). It answers the billing-path question first: which path each RUNNING
-    session is actually on, read from that process's environment, plus what
-    would override the next launch (`ANTHROPIC_BASE_URL`, a settings `env:`
-    block, an `apiKeyHelper`, Bedrock/Vertex). Same three-surface shape as
-    netdiag/planeproxy; `check="status"` is offline, `net` adds the
-    api.anthropic.com ladder. **Three invariants, tested, in chat.sdd Must-not:**
-    env vars are reported by NAME only (the `ps eww` line it parses carries
-    every other variable's VALUE, and a settings `env:` block can hold a key);
-    Keychain lookups are metadata-only, never `-w` except the regex-validated
-    expiry DATE; transcripts are read for METADATA only — never
-    `message.content`, never `~/.claude/CLAUDE.md`. That is the sanctioned
-    boundary for the `~/.claude` prohibition, which is scoped to context/memory
-    (memory.sdd), the same carve-out shape as `chat/theme.py`. It never
-    launches, kills, or reconfigures Claude Code — `claude-plan`/`claude-api`
-    stay with the user.
-  - **ctrl+c CLEARS the prompt, it never quits** (2026-08-13). Busy → cancel
-    the turn (unchanged); idle with text → clear the input, dropping
-    `_paste_chunks` and history navigation with it; idle and empty → nothing.
-    The line REPL matches (`KeyboardInterrupt` at the reader `continue`s).
-    Claude CLI's double-tap-to-exit is deliberately NOT mirrored — user
-    decision; exits stay ctrl+d / ctrl+q / `/quit`.
-  - **Session commands added in the 2026-07-29/30 `/help` audit**: `/theme`
-    (live palette switch), `/tools` (real tool surface + what read-only gates),
-    `/status` (session dump incl. model origin), `/unload` (free RAM without
-    quitting), `/retry` (re-run the last message via `CommandResult.submit`),
-    plus `/export`, `/diff`, `/doctor` — logic in `chat/inspection.py`, all
-    read-only. `/diff` defaults to the files THIS session wrote (ledger),
-    diffs against HEAD, reports untracked as new; `/export` renders the
-    PERSISTED transcript (survives `/resume`) to `<session dir>/transcript.md`;
-    `/doctor` preflights endpoint/key/model/weights/disk/index/git/mode/TUI and
-    prints the fix for every warning.
-  - **MCP tools attach at STARTUP via `--mcp <name>`** (chat-only, repeatable;
-    servers from `--mcp-config <path>`, default `configs/mcp.yaml`). There is no
-    way to attach a server mid-session — a plain `luxe chat` has no MCP surface
-    no matter what the user tells the model. The mage-hands home-lab relays are
-    wired this way through the private dotfiles repo (`~/dotfiles/luxe/relays.yaml`
-    + the `luxe-alpha`/`luxe-kappa`/`luxe-router`/`luxe-all` wrappers); no
-    hostname or token belongs in THIS repo. Tools are namespaced
-    `mcp__<server>__<tool>`; the server's `gate_tools` patterns follow the
-    `/write` gate, `--mcp-read-only` drops them entirely. **Servers are isolated
-    per connection** (2026-07-31): one task + one `AsyncExitStack` each, so a
-    dead server can neither cancel a healthy one nor be reported "up" with no
-    session. Don't reintroduce a shared exit stack, and catch `BaseException`
-    (not `Exception`) at any anyio connect boundary — see `lessons.md`
-    2026-07-31 and the chat.sdd MCP bullet.
-  - **Web tools are `/web`-gated, default OFF** (2026-07-31; `src/luxe/web/`,
-    walk `web/web.sdd` first). `web_fetch` (bounded GET → stdlib HTML→markdown;
-    `render=true` = headless Chromium via the optional `[web]` extra),
-    `web_search` (Brave/Tavily key through luxe.secrets; withheld when no key
-    resolves), and `web_answer` (2026-08-03; Brave Answers — a SEPARATE
-    product/subscription from search: one server-side grounded answer via
-    the OpenAI-compatible /res/v1/chat/completions endpoint, keyed by
-    `BRAVE_ANSWERS_API_KEY`, withheld independently). Gated independently of `/write` — reading a page mutates nothing
-    locally. Chat-only via the extra-tool seam: **never add these to
-    `TOOL_FNS`**, since a benchmark that can reach the live internet is no
-    longer reproducible. The egress guard refuses non-public hosts on every
-    redirect hop; note `ipaddress.is_private` is NOT enough — the tailnet is
-    100.64.0.0/10 (RFC 6598) and reports as non-private, so `is_global` carries
-    the check. `LUXE_WEB_ALLOWLIST` adds an optional fnmatch host allowlist on
-    top (unset = any public host; set = deny-by-default for hosts).
-    **`src/luxe/web/` is the ONLY web/browser stack** — it absorbed
-    `src/luxe/browser.py` (`browse_navigate`/`browse_read`, `[browser]` extra)
-    on 2026-08-03 after the two landed in parallel. Don't add a second stack,
-    browser dependency, or gating model.
-  - **`--ephemeral` / `/ephemeral [on|off]` leaves nothing behind**
-    (2026-08-11; `luxe.ephemeral`). Suppresses every luxe write site:
-    `~/.luxe/sessions/<id>/` (transcript, fold, meta, **ledger**, debug.log),
-    `~/.luxe/runs/<id>/events.jsonl`, `<repo>/.luxe/memory.md` +
-    `facts.jsonl`, `~/.luxe/reports/` + **`<repo>/.luxe/gitkit/`**, gitkit
-    deep's `map/` cache, `~/.luxe/cve_cache/`, `~/.luxe/mcp_audit.jsonl`.
-    Keep that list complete — `update_ledger` is exposed on every chat turn,
-    so an unguarded writer silently recreates the session dir.
-    `--ephemeral --resume` is an error. It does **not** touch the write tools
-    (`/write` still gates those, and the agent still edits your repo — this is
-    about what luxe RECORDS); reads are untouched; the repo lock is still
-    taken and is the one surviving artifact. `/ephemeral` ON mid-session
-    purges this session's own dirs and prints what it removed, but never
-    `.luxe/memory.md` (curated text lives there). Status bar shows `eph on`
-    at priority 1 when active. Implemented as per-site suppression, NOT by
-    redirecting `luxe_home()` (luxe.sdd forbids it, and it would capture the
-    read paths).
-  - **Read-only default ≠ missing capability.** luxe has the full mutation
-    surface — `write_file` (creates parent dirs + files, i.e. scaffolds trees),
-    `edit_file`, `bash` — but `make_read_only_role` (`mcp/server.py`) strips
-    `{write_file, edit_file, bash}` until `/write` flips `session.write_enabled`.
-    A chat agent in read-only mode will *honestly report it has no file-creation
-    tool*; that's the gate, not a gap. The read-only `<session_mode>` hint now
-    tells it to point the user at `/write`. See `lessons.md` 2026-06-01 + memory
-    `feedback_luxe_dev_platform_write_mode`.
-  - **Context window is `/ctx <small|medium|large|xlarge>`** (chat-only),
-    clamped to the role's `num_ctx_max` (`configs/chat.yaml`; `0` = no
-    expansion). NOT dynamic/auto — high pressure only *suggests* the next tier.
-    Benchmark/maintain ignore `num_ctx_max`.
-  - **`/bash` toggles unrestricted shell** (chat-only dev mode; default OFF =
-    hardened allowlist). When ON + write mode, the turn swaps in
-    `make_bash_fn(unrestricted=True)` via `run_single`'s extra-tool seam — any
-    command, chains/pipes/redirects, cwd=repo root but NOT sandboxed. The default
-    `TOOL_FNS["bash"]` and the benchmark path stay allowlisted (`tools.sdd`).
-  - The REPL shows a randomized rainbow banner + per-render color-shifting prompt
-    arrows; the footer carries `tok/s` and start/end timestamps + elapsed
-    (`chat/render.py`).
-  - **Status bar** (`chat/status.py`): order `path · git · ctx · cache · start ·
-    last · write · bash · web · [eph] · slot · model` (`eph on` appears only
-    when `/ephemeral` is active; `ctx N% <size>` e.g. 128K; `cache`=resident
-    prompt size — no cross-turn cache; `write`/`bash`/`web` on/off, all three
-    always visible; slot+model last).
-    The model name carries a PROVENANCE glyph (`chat/origin.py`, 2026-07-29):
-    `⌂` weights on local disk · `☁` network volume / cloud-sync tree · `⇅`
-    remote endpoint (warn-coloured for the last two; no glyph when unknown).
-    Same fact is stated at startup, in `/model`'s listing, and on a weight
-    swap. One cached `/v1/models/status` probe per endpoint, resolved off the
-    render path; failures degrade to `unknown`.
-    Palette: path blue (fixed hex), slot purple, model yellow, state on=green/off=red,
-    ctx/write/bash labels in default fg, grey else; git keeps the theme's role
-    colours. Startup banner minimal (bar shows repo/slot/model/mode). `fields()`
-    (→ `Segment` list with drop-`priority`) is the single source; `fit()` is
-    responsive (drop low-value first → middle-ellipsis path; git/ctx/model
-    protected). Live during a turn via `rich.Live` + `LiveActivity` when
-    `is_terminal` (tool log scrolls above a ticking bar); falls back to line
-    streaming otherwise. Colours follow the user's ACTIVE Claude statusline theme,
-    resolved LIVE by `chat/theme.py` (reads `~/.claude/statusline-theme`, imports
-    the user's yet-another-statusline `themes` module via the `statusline_command.py`
-    symlink, converts each role's ANSI escape → ptk/Rich; ANSI 0-15 stay named so
-    they track the terminal profile, 16-255 fixed). Built-in llmtop fallback if
-    the repo is absent. Theming reads only the name file — NOT the memory
-    subsystem (the `~/.claude` prohibition is scoped to context/memory). **`luxe chat --dev`** starts write+bash ON. Hidden exit
-    aliases: `/exit`, `/q` (both = `/quit`).
-  - **Flag-state failures self-explain.** Defaults are safe (read-only +
-    allowlisted bash) and shown in the banner + chips; in write mode a restricted
-    bash rejection front-loads "enable unrestricted dev mode with /bash" onto the
-    error (`make_bash_fn(restricted_hint=True)`), so the model surfaces the toggle
-    instead of retrying. Genuine errors aren't augmented. Chat-only — benchmark
-    bash untouched.
-- **`luxe compare run/review`** — side-by-side single-task comparison (3 modes,
-  incl. luxe-vs-bare substrate ablation), blind + vote.
-- **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first project
-  memory (repo `.luxe/memory.md`); must NOT read `~/.claude/` or repo `CLAUDE.md`.
-  - **`.luxe/memory.md` now carries two MACHINE-MANAGED fenced blocks** whose
-    markers are load-bearing (2026-08-04): `luxe:brief` (written by `luxe init`
-    / `/init` — one read-only gitkit pass with `GIT_BRIEF_HINT`, orientation
-    only, capped at 2,000 chars in Python) and `luxe:notes` (written by
-    `chat/notes.py` at session end and by `/note` — one non-agentic
-    `backend.chat` over the deterministic fold, 900 chars/entry, rolling
-    window of 5 entries / 1,500 chars). `memory.project.splice_block` is the
-    ONLY writer: it re-reads, replaces just its own block, appends at EOF when
-    absent, and preserves every other byte — **user-curated text must survive,
-    and tests prove it**. `facts.jsonl` is never touched. Notes failure is a
-    SILENT skip with no retry and must never block exit; writing this file
-    from a read-only session is sanctioned (luxe's own state file,
-    orchestrator-side Python, same precedent as `store.mirror_to_repo`) — do
-    not "fix" it as a gate bypass. Config: `notes: true|false` in
-    `configs/chat.yaml` (default true; `/note` ignores it).
-- **`backend.py` streaming** is gated (`stream`/`on_token`). As of 2026-06-01 the
-  loop wires it CHAT-ONLY: `run_single`/`run_agent` take an `on_token` that, when
-  set (interactive chat live tail), makes `backend.chat` stream. Benchmark/maintain
-  pass `on_token=None` → `stream=False` → byte-identical request, deterministic
-  path untouched. Do NOT pass `on_token` from the benchmark/maintain path.
-- New work here walks `src/luxe/{chat,compare,memory}/<dir>.sdd` first.
+- **Conversation by default (2026-07-29 fix).** Freeform turns get the
+  `chat_conversational` persona; the maintenance persona applies only to
+  `/plan`, `/goal`, `/use <slot>`. Do NOT re-key the persona on the routed
+  slot — `_infer_task_type` is a keyword heuristic that misclassifies ordinary
+  messages as coding (the "chats become coding sessions" bug). Slots pick the
+  MODEL only.
+- **Multi-backend (chat-only carve-out, luxe.sdd):** `configs/chat.yaml`
+  `backends:` → BackendEntry; `/backend` lists/switches (health-checked, never
+  unloads the OLD server), `--backend` at startup. Keys from env only (m5 →
+  `OMLX_API_KEY_M5`), never YAML. Absent block ⇒ synthesized `local` from
+  `omlx_base_url`; **benchmark/maintain read `omlx_base_url` only.**
+- **Progress deadlines (B6, 2026-07-31 — NOT chat-only).** oMLX keepalives
+  reset `httpx.Timeout` (a per-read deadline), so no finite `timeout_s` bounds
+  a stalled request. `Backend` keeps a SECOND clock on *progress*:
+  `stall_timeout_s` (1800s) before the first token, `decode_stall_timeout_s`
+  (120s) once tokens flow; keepalives never count. **Raising `timeout_s` is
+  not a fix.** The non-stream path is benchmark/maintain, which could
+  previously wedge forever. Numbers live in `backend.py`.
+- **`/attach <path>`** stages file contents one-shot for the next turn (48KB/
+  file, 128KB/turn, binary refused, injected as `<attached_files>`).
+- **TUI:** multi-line pastes → `[pasted N lines]` chip; `--resume`/`/resume`
+  work inside the TUI. `[chat]` extra (`uv sync --extra chat`); without it,
+  line-REPL fallback.
+- **Model roster + tool capability (2026-07-30).** `visible_models:` is the
+  working set `/model` offers; the rest are hidden. Local weights carry NO
+  glyph (only ☁ network / ⇅ remote). `chat/modelcaps.py` detects tool support
+  from the chat template: gemma-3 has none and oMLX *silently drops* the
+  `tools` array for it, so luxe withholds the tool surface — gemma is
+  selectable but NOT the default (a default must be able to read a file).
+- **Start anywhere (2026-07-30; `chat/project.py`).** Subject resolves to git
+  (walks UP to the git root), dir (marker), or none; `$HOME` and above never
+  count. `--repo` resolves upward too. No-project = no index, no repo lock,
+  read tools work, `bm25_search`/`find_symbol` withheld. `/project` switches,
+  `/index` builds.
+- **Startup indexing is bounded + single-pass (2026-07-30).** `cli._build_chat_indexes`
+  runs `fswalk.scan_source_files` once (was 3 uncapped walks — 210s from `~`).
+  Caps: `LUXE_INDEX_MAX_FILES` (8000), `LUXE_INDEX_MAX_MB` (96),
+  `LUXE_INDEX_NO_GIT=1`. **Benchmark/maintain keep the unbounded walk.**
+- **`/pull` — model weights (2026-07-29; `modelstore.py`, `luxe pull`).**
+  Mounted volume first, else HF **through oMLX's own downloader**
+  (`/admin/api/hf/*`, cookie session). Never write a second `snapshot_download`
+  (races the server over the HF cache). Mount imports resolve symlinks AND
+  Synology `XSym` stubs; dangling links abort; stages in `.partial`. Full
+  detail in memory `project_luxe_model_provenance_and_pull.md`.
+- **`/claude` diagnoses Claude Code itself (2026-08-13; `claudecode.py`,
+  `luxe claudecode`, tool `claude_code_diag`).** Answers which billing path
+  each running session is on. **Three tested invariants (chat.sdd Must-not) —
+  the sanctioned boundary for the `~/.claude` prohibition:** env vars reported
+  by NAME only; Keychain metadata-only, never `-w` except the regex-validated
+  expiry DATE; transcripts read for METADATA only, never `message.content`,
+  never `~/.claude/CLAUDE.md`. Never launches/kills/reconfigures.
+- **ctrl+c CLEARS the prompt, never quits (2026-08-13).** Busy → cancel turn;
+  idle+text → clear input; idle+empty → nothing. Exits stay ctrl+d/ctrl+q/`/quit`.
+- **Read-only session commands (chat/inspection.py):** `/theme` `/tools`
+  `/status` `/unload` `/retry` `/export` `/diff` `/doctor`. `/diff` = files
+  THIS session wrote vs HEAD; `/export` renders the PERSISTED transcript;
+  `/doctor` preflights and prints a fix per warning.
+- **MCP attaches at STARTUP only via `--mcp` (chat-only; `--mcp-config`,
+  default configs/mcp.yaml).** No mid-session attach. Namespaced
+  `mcp__<server>__<tool>`; `gate_tools` follows `/write`; `--mcp-read-only`
+  drops them. **Servers ISOLATED per connection (2026-07-31): one task +
+  `AsyncExitStack` each — don't reintroduce a shared stack; catch
+  `BaseException` at any anyio connect boundary** (lessons.md 2026-07-31,
+  memory `project_luxe_relay_mcp_chat.md`). Relays wired via dotfiles; no
+  hostname/token in this repo.
+- **Web tools `/web`-gated, default OFF (2026-07-31; `src/luxe/web/`, walk
+  web/web.sdd).** `web_fetch`, `web_search` (Brave/Tavily via luxe.secrets),
+  `web_answer` (Brave Answers, a separate product). **NEVER add these to
+  `TOOL_FNS`** (a benchmark reaching the live internet is not reproducible) —
+  chat-only via the extra-tool seam. Egress guard refuses non-public hosts on
+  every redirect hop; `is_private` is NOT enough (tailnet 100.64.0.0/10 reports
+  non-private — use `is_global`). `src/luxe/web/` is the ONLY web/browser stack
+  (absorbed `browser.py` 2026-08-03) — don't add a second.
+- **`--ephemeral` / `/ephemeral` leaves nothing behind (2026-08-11;
+  `luxe.ephemeral`).** Per-site suppression of every luxe write site (sessions,
+  runs, `.luxe/memory.md`+facts, reports, gitkit, caches). **Keep that list
+  complete — `update_ledger` runs every turn and an unguarded writer recreates
+  the session dir.** `--ephemeral --resume` is an error. Does NOT touch the
+  write tools (repo edits still happen; this is about what luxe RECORDS). NOT
+  implemented by redirecting `luxe_home()` (luxe.sdd forbids it).
+- **Read-only default ≠ missing capability.** Full mutation surface
+  (`write_file`/`edit_file`/`bash`) exists; `make_read_only_role` strips it
+  until `/write`. The agent honestly reports the gate.
+- **`/ctx <small|medium|large|xlarge>`** clamped to the role's `num_ctx_max`
+  (`0` = no expansion); NOT dynamic. Benchmark/maintain ignore it.
+- **`/bash` toggles unrestricted shell (chat-only; default OFF = hardened
+  allowlist).** ON + write → `make_bash_fn(unrestricted=True)`. The default
+  `TOOL_FNS["bash"]` and the benchmark path stay allowlisted (tools.sdd).
+- **Status bar (`chat/status.py`):** order `path·git·ctx·cache·start·last·
+  write·bash·web·[eph]·slot·model`. Provenance glyph (`chat/origin.py`): `⌂`
+  local disk · `☁` network/cloud-sync · `⇅` remote. Colours follow the ACTIVE
+  Claude statusline theme via `chat/theme.py`, which reads ONLY
+  `~/.claude/statusline-theme` (the name file — NOT the memory subsystem; the
+  `~/.claude` prohibition is scoped to context/memory). `luxe chat --dev`
+  starts write+bash ON. Hidden exit aliases `/exit`, `/q`.
+- **`luxe compare run/review`** — side-by-side single-task comparison, blind + vote.
+- **`src/luxe/memory/`** — `~/.luxe/sessions/` transcripts + curated-first
+  project memory (`.luxe/memory.md`); must NOT read `~/.claude/` or repo
+  `CLAUDE.md`. Two MACHINE-MANAGED fenced blocks (2026-08-04): `luxe:brief`
+  (`luxe init`/`/init`) and `luxe:notes` (`chat/notes.py`). **`memory.project.splice_block`
+  is the ONLY writer — it replaces just its own block and preserves every other
+  byte (tests prove it); `facts.jsonl` is never touched.** Notes failure is a
+  SILENT skip that must never block exit. Config `notes: true|false`.
+- **`backend.py` streaming is gated.** `run_single`/`run_agent` take an
+  `on_token`; set → stream (chat live tail). **Benchmark/maintain pass
+  `on_token=None` → `stream=False` → byte-identical; never pass `on_token`
+  from that path.**
 
 ## gitkit — repo-analysis (`luxe gitaudit` / `luxe gitchange`)
 
@@ -536,39 +382,17 @@ Read the relevant `.sdd` before editing any file under that subtree.
 `LUXE_TIERED_COMPACT` defaults to **ON** as of 2026-05-28 (forge-hybrid cycle
 closeout, commit `9be486c`). All `run_agent` callers — SWE-bench,
 maintain_suite, BFCL — get 3-phase context compaction at
-`phase_thresholds=(0.50, 0.85, 0.95)`. Validated at n=75 across 2 reps:
-resolves equivalent to baseline within substrate noise band (±2.8); 42-56%
-wall reduction; 2 protected wrong_target instances healed; zero new damages.
+`phase_thresholds=(0.50, 0.85, 0.95)`. Validated at n=75 × 2 reps: resolves
+equivalent to baseline (within noise), ~42-56% wall reduction, zero new
+damages. It is the largest behavior change shipped in 2026-05.
 
-- **Disable for ablation**: `LUXE_TIERED_COMPACT=0`. **If a workload behaves
-  unexpectedly, try this first.** Compaction default-ON is the largest
-  behavior change shipped in 2026-05.
+- **Disable for ablation**: `LUXE_TIERED_COMPACT=0` — the first knob to try
+  when a workload behaves unexpectedly (see the shared ablation list under
+  "server-truth context calibration").
 - **Retune**: `LUXE_TIERED_COMPACT_PHASE_THRESHOLDS="p1,p2,p3"` or
   `LUXE_TIERED_COMPACT_THRESHOLD=<f>` (single-knob, sets all 3 phases).
 - See `src/luxe/agents/agents.sdd` § "forge-hybrid Phase 2 (A) compaction
   invariants" for the pinned tuning rationale + counter-discipline rules.
-
-## Default-ON: server-truth context calibration
-
-`LUXE_CTX_SERVER_TRUTH` defaults to **ON** as of 2026-08-11. `estimate_tokens`
-is `len(text) // 4` — fine for prose, **2-3.7× low** on the code and JSON tool
-payloads an agent loop actually carries (1.84×/1.92×/2.24× across three live
-turns; 2.38-3.69× through a 13-step log-analysis run where `est=19.8%` against
-a true `47.3%`). Every compaction threshold divides by that estimate, so
-phases pinned at 0.50/0.85/0.95 were firing near 1.0-1.9 of the real window —
-phases 2 and 3 could not fire before the server rejected the prompt. The
-loop now recalibrates each step from the response's `usage.prompt_tokens` and
-folds the ratio into the denominator (`calibrated_ctx_limit`), so every
-consumer inherits it and **the pinned thresholds keep their values** — what
-changes is what the fraction means.
-
-- **Disable for ablation**: `LUXE_CTX_SERVER_TRUTH=0` (only the exact string
-  "0") restores the pre-2026-08-11 reading exactly.
-- **UNBENCHED** — compaction now fires earlier on the benchmark path (at the
-  context it always claimed). That's the intended correction, but it changes a
-  default-ON lever validated at n=75 under the old reading. Run maintain_suite
-  before treating it as settled. See `agents.sdd` § "Server-truth context
-  calibration".
 
 ## grep was silently dead in every non-interactive run (fixed 2026-08-12)
 
@@ -620,25 +444,20 @@ no gate fired, and the harness recorded a clean completion. The loop now
 replays the cut-off text, nudges, and continues — bounded at 2 retries.
 
 - **Disable for ablation**: `LUXE_TRUNCATED_TURN_RETRY=0` (only the exact
-  string "0"). **If a workload behaves unexpectedly, try this alongside
-  `LUXE_TIERED_COMPACT=0`.**
+  string "0"). One of the shared first-things-to-try (see calibration below).
 - **Bound the cost**: `LUXE_TRUNCATED_TURN_MAX_RETRIES=<n>` (default 2, the
   benched value; malformed degrades silently). Each retry is a full capped
-  generation — ~2.5 min at 8,192 tokens — so a chat turn that rambles into the
-  cap can spend ~8 min before ending. `=0` never fires but leaves the
-  mechanism ON, which keeps `terminal_turn_truncated`'s `retry_enabled=True`
-  and so stays distinguishable from an ablation in the corpus. Bench/maintain
-  must keep the unset default: 30/30 was measured at 2.
+  generation (~2.5 min at 8,192 tokens), so a rambling chat turn can spend
+  ~8 min before ending. `=0` never fires but leaves the mechanism ON (keeps
+  `retry_enabled=True`, so still distinguishable from an ablation in the
+  corpus). Bench/maintain must keep the unset default.
 - **It says so out loud now** (2026-08-11): `run_agent`/`run_single` take a
-  display-only `on_notice` callback that chat wires to the transcript, so a
-  retry is visible while it happens instead of only in `events.jsonl`. Default
+  display-only `on_notice` callback (chat wires it to the transcript); default
   `None` = benchmark path unchanged.
-- Validated at 3 reps × 10 fixtures × 2 arms: maintain_suite 27/30 → **30/30**,
-  score 111 → 120, zero regressions, +22.5% tokens / +7.8% wall, and 3/3
-  firings on genuine cap hits with none spurious.
-- **The evidence is narrow**: it fired 3 times, all on one fixture — the suite
-  holds exactly one capped-turn `implement` trajectory. No-harm is broad,
-  it-helps is n=1. See `agents.sdd` § "Truncated-turn retry" and
+- **Benched** 3 reps × 10 × 2 arms: 27/30 → **30/30**, zero regressions. But
+  **the evidence is narrow** — it fired 3 times, all on the one capped-turn
+  `implement` fixture the suite holds: no-harm is broad, it-helps is n=1. See
+  `agents.sdd` § "Truncated-turn retry" +
   `acceptance/truncated_turn_ab_2026_08_10/REPORT.md`.
 - `terminal_turn_truncated` telemetry stays UNGATED — it is the only record
   distinguishing "finished" from "cut off".
@@ -654,16 +473,15 @@ the prompt. The loop now recalibrates each step from the response's
 pinned thresholds keep their values, what changes is what the fraction
 means.
 
-- **Benched**: 3 reps × 10 fixtures on shipped defaults = **30/30 · 120/150**
-  (identical to the four pre-change references) at **12% less wall and 24%
-  fewer tokens**; compaction fires more often and reaches phase 3 (21 vs 6
-  firings) yet drops fewer than half the tool results — early-and-small
-  replaced late-and-huge. Reproduced same day on a settled tree. See
+- **Benched** 3 reps × 10 on shipped defaults = **30/30**, identical score to
+  the pre-change references at less wall and fewer tokens; compaction fires
+  more often and reaches phase 3 (early-and-small replaced late-and-huge). See
   `acceptance/ctx_server_truth_2026_08_12/REPORT.md`.
 - **Disable for ablation**: `LUXE_CTX_SERVER_TRUTH=0` restores the
-  pre-2026-08-11 estimate reading exactly. If a workload behaves
-  unexpectedly, this joins `LUXE_TIERED_COMPACT=0` and
-  `LUXE_TRUNCATED_TURN_RETRY=0` in the first-things-to-try list.
+  pre-2026-08-11 estimate reading exactly.
+- **Shared first-things-to-try** when a workload behaves unexpectedly: disable
+  the three default-ON levers — `LUXE_TIERED_COMPACT=0`,
+  `LUXE_TRUNCATED_TURN_RETRY=0`, `LUXE_CTX_SERVER_TRUTH=0`.
 
 ## Opt-in modes (default off, byte-identical when disabled)
 
@@ -680,32 +498,18 @@ invariants in its `.sdd` you must read before enabling:
 - **Cohort priors** (`LUXE_LOAD_PRIORS=1`) — reads
   `~/.luxe/cohort-history/<instance>.json`. **Log-only in v1.11** (does not
   influence intervention intensity); promotion deferred to v1.11.1+.
-- **Respond terminal tool** (`LUXE_RESPOND_TERMINAL=1`) — exposes a
-  `respond(message=...)` tool with 4 watchdog gates (early-respond,
-  no-writes-late, passive-surrender, compaction-phantom). Forge-hybrid
-  Phase 3 (B) infrastructure; champion does not adopt the lever at any
-  tested promotion (n=14 smoke 2026-05-28: 0/14 adoption with or without
-  prompt guidance). Default-OFF; refute documented in `lessons.md`.
+- **Respond terminal tool** (`LUXE_RESPOND_TERMINAL=1`) — a `respond()` tool
+  with 4 watchdog gates. Champion 0/14 adoption (n=14 smoke 2026-05-28, with
+  or without prompt guidance); refute in `lessons.md`.
 - **Trajectory-shape early_bail suppression** (`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1`)
-  — selectively suppresses `early_bail` when the model is in deep
-  localized reading with stable convergence. Forge-hybrid Phase 4 (D)
-  infrastructure; locked predicate fired 0/14 at n=14 smoke (too narrow
-  for this champion at num_ctx=32768). Implicit dependency on
-  `LUXE_ADAPTIVE_POLICY=1` for `score_log` population. Default-OFF.
-
-- **Post-write idle repeat counting** (`LUXE_POST_WRITE_IDLE_REPEATS=1`) — makes
-  a post-write REPEAT call (same tool + args as an earlier call this run) count
-  toward the `post_write_idle` streak instead of resetting it. Closes a blind
-  spot the guard's own docstring claimed to cover: `read_file` is
-  `_DEDUP_EXEMPT`, so a repeated read returns content and resets the streak.
-  **REFUTED at n=2 A/Bs (2026-08-10)** — with opportunity present it changed
-  no score, no firing count and no wall; keep default OFF and do not re-bench
-  on maintain_suite.
-  Demonstrated on m1 (a post-edit read of an already-read key, `dup=False`,
-  78 bytes, which reset the streak). It is a LATENT gap, not the cause of a
-  known abort — m1's code-drill failure was a step-budget problem, fixed
-  separately. **UNBENCHED — do not flip the default without a maintain_suite
-  run.** See `agents.sdd` § "Post-write idle repeat counting".
+  — suppresses `early_bail` during deep localized reading with stable
+  convergence. Fired 0/14 at n=14 (too narrow for this champion at
+  num_ctx=32768); needs `LUXE_ADAPTIVE_POLICY=1` for `score_log`.
+- **Post-write idle repeat counting** (`LUXE_POST_WRITE_IDLE_REPEATS=1`) —
+  counts a repeated post-write call toward the `post_write_idle` streak
+  (closes the `read_file` `_DEDUP_EXEMPT` blind spot). **REFUTED at n=2 A/Bs
+  (2026-08-10): no score, firing, or wall change — keep OFF, do not re-bench.**
+  See `agents.sdd` § "Post-write idle repeat counting".
 
 If you toggle any of these on, walk the relevant `.sdd` section first —
 unbiased flips can silently change benchmark behavior.
