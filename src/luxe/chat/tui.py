@@ -754,6 +754,16 @@ class ChatApp(App):
             if nxt:
                 log.write(f"[dim]· context pressure {result.peak_context_pressure:.0%} "
                           f"— `/ctx {nxt[0]}` gives more headroom[/]")
+        # Mirror the line REPL: a turn the agent loop ABORTED (backend failure
+        # contained into the result rather than raised) is a failed turn and
+        # must look like one — it used to render as a successful empty reply.
+        # Text(), not markup: the reason is an exception string.
+        noted = _repl.note_aborted_turn(self.session, self.slots, result)
+        if noted:
+            reason, hint = noted
+            log.write(Text(f"✗ {reason}", style="red"))
+            if hint:
+                log.write(Text(f"· {hint}", style="yellow"))
 
     # -- command worker -----------------------------------------------------
     @work(thread=True, exclusive=True, group="turn")

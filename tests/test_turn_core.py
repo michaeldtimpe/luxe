@@ -411,3 +411,80 @@ def test_a_pinned_turn_keeps_the_unparameterised_maintenance_persona(
     assert prep.role_cfg.system_prompt_id == "baseline"
     assert get_prompt("baseline").system.startswith(
         "You are a code maintenance specialist")
+
+
+# --- aborted turns are visible failures (2026-08-23) -------------------------
+
+
+class _AbortedResult(_FakeResult):
+    """What `run_single` returns when the loop CONTAINS a backend failure:
+    `aborted`/`abort_reason` set, empty prose, no exception raised."""
+
+    def __init__(self, reason="Backend error: ConnectError: "
+                              "[Errno 61] Connection refused"):
+        super().__init__()
+        self.final_text = ""
+        self.steps = 1
+        self.tool_calls_total = 0
+        self.aborted = True
+        self.abort_reason = reason
+
+
+def _errors(session) -> list:
+    import json
+    tp = session_store.session_dir(session.session_id) / "transcript.jsonl"
+    if not tp.is_file():
+        return []
+    records = [json.loads(ln) for ln in tp.read_text().splitlines()]
+    return [r for r in records if r["kind"] == "error"]
+
+
+def test_aborted_turn_is_reported_and_recorded(_ctx, monkeypatch):
+    """Regression (session 3aabb18b0e07): the endpoint was unreachable behind a
+    dead system proxy, so every turn came back aborted with empty text — and
+    the REPL rendered five SUCCESSFUL blank replies, with not one `error`
+    record in the transcript to say what happened."""
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _AbortedResult())
+    out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
+
+    outcome = repl._run_turn("hi", session, sm, cfg, frozenset(), out,
+                             repl.CancelToken(), lambda m: "review")
+
+    assert not outcome.interrupted
+    printed = out.file.getvalue()
+    assert "Connection refused" in printed          # visible, not silent
+    errs = _errors(session)
+    assert errs and errs[-1]["text"].startswith("Backend error:")
+    assert errs[-1]["model"] == "Champ"
+
+
+def test_healthy_turn_writes_no_error_record(_ctx, monkeypatch):
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
+    repl._run_turn("hi", session, sm, cfg, frozenset(), out,
+                   repl.CancelToken(), lambda m: "review")
+    assert not _errors(session)
+
+
+def test_note_aborted_turn_ignores_a_completed_turn(_ctx):
+    cfg, session, sm = _ctx
+    assert repl.note_aborted_turn(session, sm, _FakeResult()) is None
+    assert not _errors(session)
+
+
+def test_abort_hint_only_offered_for_backend_failures(_ctx, monkeypatch):
+    """`/backend` is the escape hatch for a dead endpoint — pointing at it for
+    'Max steps reached' would name the wrong problem."""
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(sm, "unreachable_hint",
+                        lambda: "local oMLX unreachable — try /backend m5")
+
+    reason, hint = repl.note_aborted_turn(session, sm, _AbortedResult())
+    assert reason.startswith("Backend error:")
+    assert hint == "local oMLX unreachable — try /backend m5"
+
+    _, hint = repl.note_aborted_turn(session, sm,
+                                     _AbortedResult("Max steps reached (30)"))
+    assert hint is None

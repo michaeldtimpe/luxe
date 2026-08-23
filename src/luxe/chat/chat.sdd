@@ -194,8 +194,14 @@ never touches this module.
   "local oMLX unreachable — try /backend m5"). ANY other turn/command
   exception is contained the same way (last traceback line to the transcript,
   full traceback to the logger, session stays up) — a crashed turn is a
-  message, never an exit. Containing only BackendError is what let an
-  `OSError(ETIMEDOUT)` from a repo walk kill the TUI on 2026-07-29. The status bar gains a `backend`
+  message, never an exit. A turn the agent loop ABORTED instead of raising
+  (`AgentResult.aborted`, e.g. a contained backend ConnectError or max steps)
+  gets the SAME treatment in both front-ends — the reason on screen in red
+  plus a kind="error" transcript record (`repl.note_aborted_turn`) — because
+  an aborted turn returns empty text and otherwise renders as a successful
+  blank reply (session 3aabb18b0e07, five of them against a dead proxy).
+  Containing only BackendError is what let an `OSError(ETIMEDOUT)` from a repo
+  walk kill the TUI on 2026-07-29. The status bar gains a `backend`
   segment (mid drop-priority) only when >1 backend is configured; configs
   without `backends:` synthesize a single "local" entry and behave identically
   to the single-backend days. Benchmark/maintain read `omlx_base_url` only.

@@ -31,6 +31,7 @@ from typing import Callable, Iterable
 
 import httpx
 
+from luxe.backend import is_loopback_url
 from luxe.mounts import network_mounts
 from luxe.fswalk import DEFAULT_SKIP_DIRS
 
@@ -470,8 +471,12 @@ class OmlxAdmin:
         self.base_url = base_url.rstrip("/")
         from luxe.secrets import resolve_api_key
         self.api_key = api_key or resolve_api_key()
+        # oMLX admin is a loopback service by default, and a loopback request
+        # must never go through a proxy — see `backend.is_loopback_url` for the
+        # macOS system-proxy trap this closes.
         self._client = httpx.Client(base_url=self.base_url,
-                                    timeout=httpx.Timeout(timeout_s, connect=10.0))
+                                    timeout=httpx.Timeout(timeout_s, connect=10.0),
+                                    trust_env=not is_loopback_url(self.base_url))
         self._logged_in = False
 
     def close(self) -> None:
