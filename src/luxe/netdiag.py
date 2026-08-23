@@ -244,11 +244,18 @@ def probe_endpoint(name: str, base_url: str,
     """One configured oMLX endpoint: GET /health (200 = up)."""
     import httpx
 
+    from luxe.backend import is_loopback_url
+
     url = base_url.rstrip("/") + "/health"
+    # A local endpoint is probed WITHOUT any proxy, so the doctor reports the
+    # endpoint's own health rather than a stale system proxy's (`is_loopback_url`).
+    # The rungs above deliberately keep `trust_env` — they are measuring the
+    # network the environment describes.
+    trust_env = not is_loopback_url(base_url)
 
     def _get():
         try:
-            r = httpx.get(url, timeout=timeout)
+            r = httpx.get(url, timeout=timeout, trust_env=trust_env)
             if r.status_code == 200:
                 return True, "healthy", ""
             return False, "", f"HTTP {r.status_code}"

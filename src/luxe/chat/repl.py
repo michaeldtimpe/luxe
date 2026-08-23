@@ -856,6 +856,35 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
     )
 
 
+def note_aborted_turn(session, slots, result) -> tuple[str, str | None] | None:
+    """Record a turn the agent loop ABORTED without raising, and describe it.
+
+    `agents/loop.py` reports a backend failure by setting `aborted` /
+    `abort_reason` on the result and returning normally — semantics the
+    benchmark, maintain, compare and smoke paths all consume. The interactive
+    front-ends only ever handled `BackendError`, so an aborted turn rendered as
+    a SUCCESSFUL empty reply: session 3aabb18b0e07 (2026-08-23) holds five
+    assistant records with `text: ""` and no error record at all, while every
+    request was dying in a dead system proxy.
+
+    Returns `(message, hint)` for the caller to render in its own idiom, or
+    None when the turn was not aborted. The `kind="error"` transcript record
+    and the log line are written HERE so both front-ends persist them
+    identically.
+    """
+    if not getattr(result, "aborted", False):
+        return None
+    reason = getattr(result, "abort_reason", "") or "the turn aborted without a reason"
+    logger.error("turn aborted: %s", reason)
+    session_store.append_turn(session.session_id, "error",
+                              text=reason, model=slots.backend.model)
+    # The `/backend` escape hatch only speaks to an endpoint failure — offering
+    # it for "Max steps reached (…)" would point at the wrong problem. Keyed on
+    # the reason text the way `agents/outcomes.py` classifies the same field.
+    hint = slots.unreachable_hint() if "backend error" in reason.lower() else None
+    return reason, hint
+
+
 def _run_turn(
     message: str,
     session: ChatSession,
@@ -1064,6 +1093,17 @@ def _run_turn(
         # operator sees decided/done/remaining at a glance.
         if session.verbose_level in ("diff", "full"):
             console.print(ledger_mod.render_rich(ledger_mod.load(session.session_id)))
+
+        # LAST, so it is the line left on screen: a turn the loop aborted is a
+        # FAILED turn, not an empty answer (see `note_aborted_turn`). Rendered
+        # after the footer rather than instead of it — an abort can land after
+        # several good steps, and that partial prose is still worth showing.
+        noted = note_aborted_turn(session, slots, result)
+        if noted:
+            reason, hint = noted
+            console.print(f"[red]✗ {_escape(reason)}[/]")
+            if hint:
+                console.print(f"[yellow]· {hint}[/]")
 
     return outcome
 

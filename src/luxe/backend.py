@@ -13,16 +13,49 @@ Resilience features (rev 2):
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
 
 logger = logging.getLogger(__name__)
+
+
+# Names that mean "this machine" but are not parseable as an address.
+_LOOPBACK_NAMES = frozenset({"localhost", "0.0.0.0"})
+
+
+def is_loopback_url(url: str) -> bool:
+    """True when `url`'s host is this machine (127.0.0.0/8, ::1, localhost).
+
+    Used to build clients with `trust_env=False`. httpx trusts the environment
+    by default, which on macOS means urllib's `getproxies_macosx_sysconf()` —
+    the System Configuration proxy settings — on top of `HTTP(S)_PROXY`. That
+    path silently DROPS the macOS ExceptionsList (httpx/urllib only honour a
+    "no" key, which the macOS reader never returns), so a stale system proxy
+    pointed at a dead port routes even `http://127.0.0.1:8000` into nothing.
+    That is exactly how chat went silent on 2026-08-23 (session 3aabb18b0e07:
+    ConnectError → retries exhausted, empty replies) — on the one day the
+    network was broken and the local assistant was the tool of last resort.
+    A localhost backend has no reason to use a proxy, ever.
+
+    Only positive identification counts: an unparseable/absent host is NOT
+    called loopback, so a non-local endpoint keeps httpx's default and stays
+    routable through planeproxy's env vars when the operator wants that.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    if host in _LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host.endswith(".localhost")
 
 
 @dataclass
@@ -393,6 +426,11 @@ class Backend:
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout_s, connect=30.0),
             headers=headers,
+            # A loopback endpoint gets NO proxy — not the environment's, not
+            # macOS's system one (`is_loopback_url`). Every other base_url
+            # keeps httpx's `trust_env=True` default: remote endpoints are
+            # deliberately routed through planeproxy's env vars sometimes.
+            trust_env=not is_loopback_url(self.base_url),
         )
         self._created_at = time.monotonic()
 

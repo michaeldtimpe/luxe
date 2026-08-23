@@ -703,3 +703,40 @@ def test_status_ctx_pressure_uses_server_truth(tmp_path, monkeypatch):
                 _FakeResult.final_context_pressure)
             assert app._ctx_pressure == pytest.approx(expected)
     asyncio.run(scenario())
+
+
+def test_aborted_turn_renders_as_a_failure(tmp_path, monkeypatch):
+    """Regression (2026-08-23, session 3aabb18b0e07): the agent loop CONTAINS a
+    backend failure into `result.aborted` instead of raising, so the TUI — which
+    only handled BackendError — showed a successful empty reply and wrote no
+    `error` record. Both must now happen, in the TUI as in the line REPL."""
+    import json
+
+    class _Aborted(_FakeResult):
+        final_text = ""
+        aborted = True
+        abort_reason = "Backend error: ConnectError: [Errno 61] Connection refused"
+
+    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _Aborted())
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        written: list = []
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            log = app.query_one("#transcript", RichLog)
+            real_write = log.write
+            log.write = lambda r, *a, **k: (written.append(r),
+                                            real_write(r, *a, **k))[1]
+            app.query_one("#prompt", Input).value = "hi"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.is_running                       # session survived
+            assert any("Connection refused" in str(w) for w in written)
+        tp = session_store.session_dir(app.session.session_id) / "transcript.jsonl"
+        records = [json.loads(ln) for ln in tp.read_text().splitlines()]
+        errors = [r for r in records if r["kind"] == "error"]
+        assert errors and errors[-1]["text"].startswith("Backend error:")
+
+    asyncio.run(scenario())
