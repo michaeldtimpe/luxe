@@ -1,0 +1,74 @@
+# Gemma 4 exploratory bake-off — 2026-08-19
+# Round 1: 1 rep x 10 fixtures x 4 arms on m5 (M5 Max, 128 GB).
+# EXPLORATORY PROBE, NOT A PROMOTION RUN. The single-champion pin
+# (Qwen3.6-35B-A3B-6bit, configs/single_64gb.yaml) is untouched — per
+# CLAUDE.md's single-champion policy this bake-off exists only because the
+# user explicitly asked for a re-bench.
+#
+# Why Gemma now, after being ruled out twice on substrate (not quality):
+#   - 2026-05-02: the April-2026 mlx-community Gemma-4-26B-A4B uploads shipped
+#     an EMPTY chat_template -> HTTP 400 in the chat-driven loop -> dropped
+#     from the roster (lessons.md "[2026-05-02] Phase v1.1 A4-A5").
+#   - gemma-3-27b-it's template has NO tool support at all; src/luxe/chat/
+#     modelcaps.py detects this and withholds the whole tool surface.
+# Both blockers are gone for current Gemma 4: the shipped template is ~17 KB
+# with a real tools block, luxe.chat.modelcaps.from_template returns
+# SUPPORTED on gemma-4-31b-it-4bit and gemma-4-26b-a4b-it-6bit (verified
+# 2026-08-19), and oMLX 0.5.7 on m5 carries a dedicated gemma4 tool parser
+# (mlx_lm/tool_parsers/gemma4.py).
+#
+# Gemma 4 is multimodal (text+image+video->text), so oMLX may route it to
+# the slower vlm engine — the same property that makes dense Qwen3.6-27B
+# prefill at ~65 tok/s and that drove the 2026-07-30 MoE-first manifest flip
+# on m1/m4. Wall-time per fixture is therefore a first-class result here,
+# not a footnote.
+#
+# Schema note: these cells omit `mode:`, matching variants_qwen38_27b.yaml
+# (not variants_m5max_moe.yaml's explicit `mode: mono`). run.py:1355 defaults
+# an absent mode to "mono", and legacy mode: mono|single entries are accepted
+# but ignored (luxe is mono-only as of v1.0, run.py:1348-1350) — so both
+# spellings resolve to the identical agent mode. Matched here for direct
+# comparability against acceptance/qwen38_27b_r1_2026_08_17/REPORT.md.
+#
+# Reference arm re-runs the incumbent thick fallback (Qwen3.6-27B-6bit) on
+# today's substrate, same as the qwen38 precedent.
+#
+# model_id CAVEAT: the model_id strings for arms 2-4 are the EXPECTED oMLX
+# registrations — oMLX derives the id from the HF repo basename, so verify
+# each against `/v1/models` on m5 after the weights are pulled, and correct
+# this file if a registered id differs.
+#
+# Memory peak per cell (weights + KV) against m5's max_model_memory: 96GB:
+#   qwen3.6-27b-6bit-ref      (dense 27B, 6bit):   ~23 GB +  7 GB =  ~30 GB
+#   gemma-4-26b-a4b-it-6bit   (MoE  26B-A4B, 6bit): ~21.6 GB + 7 GB = ~28.6 GB
+#   gemma-4-31b-it-4bit       (dense 31B, 4bit):    ~18.4 GB + 7 GB = ~25.4 GB
+#   gemma-4-31b-it-6bit       (dense 31B, 6bit):    ~26.1 GB + 8 GB = ~34.1 GB
+#
+# Order is deliberate: if the overnight window runs out, arm 4
+# (gemma-4-31b-it-6bit) is the one we can most afford to lose.
+#
+# 4 cells x 10 fixtures = 40 runs. The qwen38 R1 precedent at this exact
+# shape (1 rep x 10 fixtures x 4 arms, --per-fixture-timeout 1800) took
+# ~4h10m wall.
+#
+# Run, ON m5 (OMLX_API_KEY is not exported in m5's ssh/login shells — it
+# lives in the launchd plist and ~/.luxe/secrets.env, so source it first):
+#
+#   cd ~/Downloads/luxe && set -a && . ~/.luxe/secrets.env && set +a
+#   .venv/bin/python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_gemma4.yaml \
+#       --output acceptance/gemma4_r1_2026_08_19 \
+#       --per-fixture-timeout 1800 --all
+variants:
+  - {model_label: qwen3.6-27b-6bit-ref, model_id: Qwen3.6-27B-6bit}
+  - {model_label: gemma-4-26b-a4b-it-6bit, model_id: gemma-4-26b-a4b-it-6bit}
+  - {model_label: gemma-4-31b-it-4bit, model_id: gemma-4-31b-it-4bit}
+  - {model_label: gemma-4-31b-it-6bit, model_id: gemma-4-31b-it-6bit}
+
+# OUTCOME (2026-08-19 bake-off) — NOT PROMOTED, single-champion pin unchanged.
+# Hand-verified 9 printed passes: 5 REAL / 3 THIN / 1 VACUOUS; three of the
+# passes damaged the repo on inspection. Decode throughput genuinely 2.79x
+# the Qwen3.6-27B-6bit reference, but at 161 steps vs 112 and zero
+# verification tool calls — the speed comes from skipping diligence, not from
+# doing the same work faster. Refuted; do not re-open without addressing the
+# verification-skipping pattern first.
