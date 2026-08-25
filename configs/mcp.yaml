@@ -9,7 +9,39 @@
 # from one server.
 
 client:
-  servers: []
+  servers:
+    # codex-one — the 40k 11th-edition dataset (private ~/Downloads/codex-one
+    # repo). THIN wrapper: all query logic lives in that repo's `codexdb`
+    # module (stdlib-only by design — must gain no dependencies). Needs:
+    # dotfiles luxe/mcp/codex_one/setup.sh, and codex-one's own
+    # `python3 codexdb/build.py` to produce build/codex.db.
+    # No gate_tools: every tool is read-only by construction, and gating
+    # would make them unavailable in exactly the read-only sessions they
+    # exist for (luxe's bash tool only registers in write mode).
+    - name: codex_one
+      transport: stdio
+      command: ~/dotfiles/luxe/mcp/codex_one/.venv/bin/python
+      args: ["-m", "codex_one.server"]
+      env:                    # stdio servers inherit the CALLER's cwd, which
+                              # is the user's repo — not the module's own dir
+        PYTHONPATH: "${HOME}/dotfiles/luxe/mcp"
+      timeout_s: 30
+      max_calls_per_session: 100
+
+    # cpa — Marvel Crisis Protocol card/rules data (private
+    # ~/Downloads/crisis-protocol-analysis repo). THIN wrapper around that
+    # repo's cpa.cli; never modifies it. Invoked by direct script path
+    # (not `-m cpa.server`) because this module's own package is also named
+    # `cpa` — `-m` would put dotfiles/luxe/mcp on sys.path first and shadow
+    # the real `cpa` package the server needs to import.
+    # No gate_tools: read-only by construction (the one mutating command,
+    # `cpa build`, is not exposed as a tool).
+    - name: cpa
+      transport: stdio
+      command: ~/dotfiles/luxe/mcp/cpa/.venv/bin/python
+      args: ["~/dotfiles/luxe/mcp/cpa/server.py"]
+      timeout_s: 30
+      max_calls_per_session: 100
   # Example (commented):
   # - name: github
   #   transport: stdio
