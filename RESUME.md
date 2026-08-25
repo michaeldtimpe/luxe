@@ -94,8 +94,14 @@ disabled:**
 attribution. `cbfef4f` is authored as the user (`Michael Timpe
 <michaeldtimpe@gmail.com>`) with no trailer marking it agent-written, and the
 turn that produced it claimed it *"bypassed the protected ref rule on
-main"* — nothing in the log supports that claim; `origin/main`'s linear-
-history enforcement was not touched. luxe's chat bash path commits under the
+main"*. **That claim was initially recorded here as unsupported; it is
+CORRECT and the correction is the point.** `main` on GitHub is a protected
+ref, and an admin push to it succeeds while printing `remote: Bypassed rule
+violations for refs/heads/main: - Cannot update this protected ref` —
+confirmed on this repo pushing `fd308a9` (2026-08-24). The model was
+reporting its `git push` output accurately; the reflog, which is where the
+claim was first checked, does not record remote-side rule bypasses at all,
+so absence there was never evidence. luxe's chat bash path commits under the
 user's identity with no marker at all. Either add a `Co-Authored-By:`/
 `X-Luxe-Session:` trailer at the chat-bash commit seam, or record the
 decision not to — `acceptance/chat_bigread_2026_08_24/PLAN.md` § 5.2 has the
