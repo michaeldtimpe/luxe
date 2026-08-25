@@ -46,6 +46,58 @@ auto-memory.
   scenario the fallback kit exists for). `on_retry` stays callback-only;
   never remove the log lines in favor of it, and keep the two paths' line
   format identical (one parser in `scripts/toolcall_taxonomy.py` covers both)
+- Payload-suspect annotation (pinned 2026-08-24, opt-in, OBSERVE-ONLY,
+  UNBENCHED). `LUXE_PAYLOAD_SUSPECT_RETRY=1` (opt-IN grammar — ONLY the exact
+  string "1", `agents/flags.py`'s spelling for an unbenched lever; read at
+  call time, never cached) makes `classify_failure` SUFFIX its reason with
+  `-payload-suspect` when a transport-level failure follows a prompt that both
+  (a) exceeds `_PAYLOAD_SUSPECT_MIN_CHARS` (65,536 prompt chars ≈ 16k tokens,
+  half the smallest window luxe fields) and (b) is ≥ `_PAYLOAD_SUSPECT_GROWTH`
+  (2.0×) the last request THIS endpoint accepted. **It changes no decision.**
+  Retry, delay, and every branch — 4xx, 429, 5xx-transient, 5xx-terminal,
+  warmup, exhausted-attempts — are byte-identical in both arms; with the lever
+  off nothing is even measured (`prompt_chars` is not called and
+  `Backend._last_accepted_prompt_chars` stays None). Pinned by
+  `tests/test_backend_retry.py::TestEveryExistingDecisionIsUnchanged`, which
+  replays the whole decision table in both arms with growth-shaped sizes
+  attached.
+  - Why observe-only rather than the "at most one retry" the plan proposes
+    (`acceptance/chat_bigread_2026_08_24/PLAN.md` 3.1, which authorises this
+    call): the evidence is ONE session, ONE provider, ONE exception class
+    (`168f1825a1fd`, RemoteProtocolError on openrouter), and REPORT.md's A/B
+    matrix is still PENDING. More decisive: >2× growth over the last accepted
+    request is the ORDINARY shape of an early agent turn — step 1 is
+    system-prompt-and-tool-JSON, step 2 carries the first tool result — so the
+    heuristic's false-positive population is "any turn that read a file and
+    then hit a network blip", which is precisely the outage this tool exists
+    to survive. Cutting the ladder from 3 to 1 there is a worse outcome than
+    the 81.5s of waste it would save.
+  - The state lives on the `Backend` INSTANCE
+    (`_last_accepted_prompt_chars`, updated only on a request the server
+    answered) because "the last request this endpoint took" is a property of
+    the endpoint, and because `agents/loop.py`'s `backend.chat` call site and
+    `run_agent`'s signature are frozen (chat.sdd Must-not) — a parameter could
+    never be threaded from the path where the failure happens. Same precedent
+    as `on_reasoning`/`engine_label`. `classify_failure` itself stays a PURE
+    keyword-only function: the two sizes are optional args, defaulting to
+    None = "not measured", so every direct unit call is unaffected.
+  - Annotation rides `reason`, never a new `RetryDecision` field:
+    `scripts/bigread_drill.py:241` parses the dataclass REPR out of debug.log,
+    and a new field would change every decision's repr on every path including
+    with the lever off. The `transient-<ExcName>` prefix is preserved.
+  - Transport-level failures ONLY. A status-carrying failure was ingested and
+    answered — 4xx (`context_length_exceeded` included) already fails fast and
+    5xx already has a body to classify; a size guess could only add noise.
+    A first-ever request with no accepted baseline is never suspicious: the
+    claim is about GROWTH, and there is none to measure.
+  - **UNBENCHED.** Promotion — to the enforcing form (cap the ladder at one
+    retry, then let the caller shrink) — needs a corpus from this lever: the
+    bar is the taxonomy bar (≥5 occurrences across ≥2 distinct sessions,
+    `scripts/toolcall_taxonomy.py`) PLUS the false-positive count, i.e. how
+    often `-payload-suspect` appears on a retry that then SUCCEEDED. A lever
+    that annotates turns which go on to recover is a lever that would have
+    broken them. Enforcement is also a benchmark-path change (the loop retries
+    on this classification) and needs maintain_suite 3 reps × 10
 - Vendor request fields go at the TOP LEVEL of the chat body, never nested
   under `extra_body` (2026-08-11). `extra_body` is an OpenAI **SDK**
   convention — the SDK flattens that dict before sending. `backend.chat`

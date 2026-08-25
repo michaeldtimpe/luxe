@@ -118,13 +118,33 @@ _HIDDEN_COMMANDS: frozenset[str] = frozenset({
 })
 
 
+def _degrease(line: str) -> str:
+    """Strip a stray leading/trailing backtick-or-two (inline-code paste,
+    e.g. `` `/ctx xlarge` `` copied from docs) plus surrounding whitespace.
+
+    A REAL fenced code block opens with three-or-more backticks
+    (```` ```python ```` or a bare ```` ``` ````) — that is prose the model
+    should see verbatim, not a mis-pasted command, so 3+ leading backticks are
+    left completely untouched (2026-08-24: a leading backtick ate `/ctx
+    xlarge` mid-failure and the turn re-ran at the old window)."""
+    s = line.strip()
+    lead = len(s) - len(s.lstrip("`"))
+    if lead == 0 or lead >= 3:
+        return s
+    s = s[lead:].lstrip()
+    trail = len(s) - len(s.rstrip("`"))
+    if 1 <= trail <= 2:
+        s = s[: len(s) - trail].rstrip()
+    return s
+
+
 def is_command(line: str) -> bool:
     """A leading `/` is a command UNLESS the first token is not a known
     command AND looks like a filesystem path (a second `/`, or it exists on
     disk) — pasting `/Users/me/Downloads` used to error as an unknown
     command with no way to send it (2026-07-31). A path-free unknown token
     (`/writ`) still routes to dispatch so typos get the error, not the model."""
-    s = line.strip()
+    s = _degrease(line)
     if not s.startswith("/"):
         return False
     head = s.split()[0].lower()
@@ -148,7 +168,7 @@ def _handlers() -> dict:
 
 
 def dispatch(line: str, ctx: CommandContext) -> CommandResult:
-    parts = line.strip().split()
+    parts = _degrease(line).split()
     cmd = parts[0].lower()
     args = parts[1:]
     fn = _handlers().get(cmd)

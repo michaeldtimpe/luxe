@@ -130,9 +130,11 @@ def _shared_chat_options(f):
         click.option("--backend", "backend_name", default=None,
                      help="Start on this configured backend (a `backends:` "
                           "entry name, e.g. m5). Chat-only; default = the "
-                          "entry marked default. External backends (e.g. "
-                          "openrouter) default to moonshotai/kimi-k3 when "
-                          "no model is specified."),
+                          "entry marked default. Includes `openrouter`, a "
+                          "cloud, metered, opt-in backend with a hard "
+                          "session budget; its `default_model:` "
+                          "(moonshotai/kimi-k3) applies only when you don't "
+                          "set one."),
         click.option("--chat-model", default=None,
                      help="Override the chat-slot model"),
         click.option("--plan-model", default=None,
@@ -147,8 +149,9 @@ def _shared_chat_options(f):
         click.option("--web", "start_web", is_flag=True, default=False,
                      help="Start with web tools ON (equivalent to /web): "
                           "web_fetch, plus web_search / web_answer when "
-                          "their provider keys are configured. Enables "
-                          "browser-enhanced mode for web interactions."),
+                          "their provider keys are configured, and "
+                          "web_page (interactive open/click/type) when "
+                          "Chromium is installed."),
         click.option("--verbose", "startup_verbose", default=None,
                      type=click.Choice(["off", "diff", "full"]),
                      help="Set tool-output verbosity at startup."),

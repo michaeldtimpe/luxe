@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,6 +64,77 @@ def calibration_ratio(actual_prompt_tokens: int, estimated_tokens: int) -> float
     return min(CALIBRATION_MAX, max(CALIBRATION_MIN, ratio))
 
 
+#: Ratio assumed for prompt material the calibration never saw (2026-08-24,
+#: `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 3). The measured
+#: ratio describes ONE prompt; when the next prompt is 40x larger, all but
+#: ~2% of it is material that sample never covered. The corpus says what that
+#: material costs: the same sessions whose step-1 prompts (system prompt +
+#: tool JSON) measured 2.64x / 2.16x / 1.91x / 1.79x recalibrated to **1.27x
+#: and 1.21x** the moment a prose file landed. So 1.2 is the measured
+#: chars/4-undercount of ordinary body text, cited the same way
+#: `tools.fs._CHARS_PER_TOKEN` cites its own live measurement — NOT a guess
+#: and NOT 1.0. Damping toward 1.0 instead would under-read prose by ~17%,
+#: which is the historical (pre-2026-08-11) failure in miniature.
+#:
+#: It is nonetheless a FREE PARAMETER derived from one markdown-heavy session,
+#: so it is overridable per run (`LUXE_CTX_CAL_UNMEASURED_RATIO`, parsed in
+#: `agents/flags.py`) and the promotion bench sweeps it. A constant benched in
+#: a form that cannot move is the C10 trap (lessons.md 2026-08-11).
+CALIBRATION_UNMEASURED_RATIO = 1.2
+
+
+def damped_calibration(
+    calibration: float,
+    est_at_calibration: int,
+    est_now: int,
+    unmeasured: float = CALIBRATION_UNMEASURED_RATIO,
+) -> float:
+    """Shrink a calibration toward the unmeasured-material ratio in proportion
+    to how much of the CURRENT prompt the calibration sample actually covered.
+
+    `calibration_ratio` measures one request. The loop then applies it to the
+    NEXT request, which may be an order of magnitude larger and made of
+    entirely different material. Real tokens are additive over characters, so
+    the honest reading of a prompt whose composition shifted is a char-weighted
+    blend of the two ratios::
+
+        share    = est_at_calibration / est_now         (the measured share)
+        damped   = R_unmeasured + (calibration - R_unmeasured) * share
+
+    with `R_unmeasured = unmeasured`, defaulting to
+    `CALIBRATION_UNMEASURED_RATIO`. It is a PARAMETER rather than a read of the
+    module constant so the promotion bench can sweep it without editing source
+    — see `RunFlags.ctx_cal_unmeasured_ratio` / `LUXE_CTX_CAL_UNMEASURED_RATIO`.
+    Two properties make it safe rather than merely plausible:
+
+    - **It only ever moves TOWARD 1.0, never past it and never away from it.**
+      The blend is clamped to the interval between `calibration` and 1.0, so an
+      uncalibrated step (1.0) is returned untouched, a backend reporting no
+      usage still degrades to 1.0, and a ratio below 1.0 (the estimate ran
+      HIGH) cannot be inflated by the unmeasured constant.
+    - **The [CALIBRATION_MIN, CALIBRATION_MAX] clamp is preserved by
+      construction** — the result lies between two values that are already
+      inside it.
+
+    Gradual growth is barely touched (share≈0.9 keeps ~90% of the correction),
+    which is the SWE-bench/maintain shape. The 40x single-step jump that
+    reported 102.5% on a request that was ~65% of the window is the shape this
+    exists for.
+
+    Live worked example (session `168f1825a1fd`, 2026-08-24): a 1.88x ratio
+    measured on a ~1,650-token prompt, applied to a 71,616-token estimate,
+    damps to 1.22x — 66% of a 128K window instead of 102.5%.
+    """
+    if est_at_calibration <= 0 or est_now <= 0:
+        return calibration
+    if not math.isfinite(calibration) or calibration <= 0:
+        return calibration
+    share = min(1.0, est_at_calibration / est_now)
+    blended = unmeasured + (calibration - unmeasured) * share
+    lo, hi = (1.0, calibration) if calibration >= 1.0 else (calibration, 1.0)
+    return min(hi, max(lo, blended))
+
+
 def calibrated_ctx_limit(ctx_limit: int, calibration: float) -> int:
     """Fold the calibration into the DENOMINATOR instead of the numerator.
 
@@ -81,6 +153,135 @@ def calibrated_ctx_limit(ctx_limit: int, calibration: float) -> int:
     if ctx_limit <= 0 or not math.isfinite(calibration) or calibration <= 0:
         return ctx_limit
     return max(1, int(ctx_limit / calibration))
+
+
+# ── single-result clamp (LUXE_TOOL_RESULT_CLAMP, 2026-08-24) ────────────
+#
+# `TieredCompact` cannot solve an oversized SINGLE result and must not be
+# asked to. `agents.sdd` pins `messages[0]`/`messages[1]` and the last
+# `keep_recent` assistant iterations as never eligible; at step 3 of a chat
+# turn there are two assistant messages, `_find_eligible_end` returns 2, and
+# the most aggressive phase drops nothing (`acceptance/chat_bigread_2026_08_24/
+# EVIDENCE.md`: phase_reached=3, tokens_before == tokens_after == 71616,
+# tool_results_dropped=0). Relaxing that invariant to reach the offending
+# result would trade a load-bearing protection for a problem that belongs one
+# layer down — at CREATION. So the bound lives here and is applied where the
+# tool result is appended.
+#
+# Mostly redundant with `read_file`'s own `LUXE_TOOL_BUDGET_CTX` budget; the
+# value is `bash`, `grep`, and MCP tools, which have no budget at all.
+
+#: Share of the (calibrated) window one tool result may occupy, and the floor
+#: below which the bound stops shrinking. Deliberately the same 0.25 / 8 KB
+#: pair as `tools.fs.READ_BUDGET_FRACTION` / `READ_BUDGET_FLOOR` so the two
+#: budgets cannot disagree about what "one result" is worth.
+TOOL_RESULT_CLAMP_FRACTION = 0.25
+TOOL_RESULT_CLAMP_FLOOR_CHARS = 8 * 1024
+
+#: `read_file` numbers every line `f"{n}\t{line}"`. Matching it is how the
+#: clamp recovers a resume offset that is TRUE rather than invented.
+_NUMBERED_LINE_RE = re.compile(r"^(\d+)\t")
+
+
+def tool_result_clamp_chars(ctx_limit: int) -> int:
+    """Characters one tool result may contribute to a `ctx_limit`-token window.
+
+    Counted in CHARACTERS, not bytes, because characters are what
+    `estimate_tokens` (chars//4) divides — a character budget is the one that
+    actually bounds the reading every compaction threshold keys on. Hence the
+    `* 4`: it is `estimate_tokens`' own inverse, not a second tokenizer guess.
+
+    Pass the CALIBRATED limit (`calibrated_ctx_limit`) and the bound tightens
+    as the loop learns the real ratio: at cal=2.4x a 32,768-token window
+    yields 13,653 chars, the same number `tools.fs.budget_for_ctx(32768)`
+    reaches from the other direction. Step 1 is uncalibrated, so the first
+    step's bound is the loosest one — by design; there is nothing to correct
+    with yet.
+
+    Returns 0 for a non-positive limit, which every caller reads as "no bound".
+    """
+    if ctx_limit <= 0:
+        return 0
+    return max(TOOL_RESULT_CLAMP_FLOOR_CHARS,
+               int(ctx_limit * TOOL_RESULT_CLAMP_FRACTION * 4))
+
+
+def clamp_tool_result(
+    content: str,
+    *,
+    tool_name: str,
+    max_chars: int,
+    path: str | None = None,
+) -> tuple[str, int]:
+    """Bound one tool result. Returns `(content, chars_dropped)`.
+
+    Identity (and `chars_dropped == 0`) when `max_chars <= 0` or the result
+    already fits — the caller can therefore apply it unconditionally and the
+    disabled path is the untouched string.
+
+    The trailer is honest about which of two situations the model is in:
+
+    - `read_file` output is line-numbered, so a resume offset can be RECOVERED
+      from the last whole line that survived. The trailer then carries the
+      same `continue with read_file(path=…, offset=N, limit=N)` shape
+      `tools.fs` already emits, and the offset is real.
+    - Every other tool — `bash`, `grep`, an MCP call — has no offset to offer.
+      Inventing one would send the model round the identical call forever, so
+      the trailer says what was dropped and that re-running will not recover
+      it. Naming the loss is the point: the alternative is a silently short
+      result the model treats as complete.
+    """
+    if max_chars <= 0 or len(content) <= max_chars:
+        return content, 0
+
+    total = len(content)
+    kept = content[:max_chars]
+    # Never hand back a half-written final line: it reads as data.
+    nl = kept.rfind("\n")
+    if nl > 0:
+        kept = kept[: nl + 1]
+
+    resume = _read_file_resume(kept, path) if tool_name == "read_file" else None
+    dropped = total - len(kept)
+    if resume is not None:
+        offset, limit = resume
+        trailer = (
+            f"\n[truncated at {max_chars:,} chars — {dropped:,} of {total:,} "
+            f"chars dropped before the model saw them; continue with "
+            f'read_file(path="{path}", offset={offset}, limit={limit})]\n'
+        )
+    else:
+        trailer = (
+            f"\n[truncated at {max_chars:,} chars — {dropped:,} of {total:,} "
+            f"chars from {tool_name} were dropped and are NOT recoverable by "
+            f"re-running this call. Narrow it (a more specific pattern, a "
+            f"smaller range, a `| head`) and call again.]\n"
+        )
+    return kept + trailer, dropped
+
+
+def _read_file_resume(kept: str, path: str | None) -> tuple[int, int] | None:
+    """`(offset, limit)` for the `read_file` window that continues `kept`.
+
+    `tools.fs` numbers each line `f"{i + offset + 1}\t{line}"`, so a line
+    LABELLED n is 0-based index n-1 and the next unread line is index n —
+    i.e. `offset=n`. Returns None when `path` is missing or nothing in `kept`
+    carries a line number (an error string, a non-`read_file` shape): no
+    number recovered means no resume offered, never a guessed one.
+    """
+    if not path:
+        return None
+    lines = kept.splitlines()
+    numbered = 0
+    last: int | None = None
+    for line in lines:
+        m = _NUMBERED_LINE_RE.match(line)
+        if m:
+            numbered += 1
+            last = int(m.group(1))
+    if last is None:
+        return None
+    return last, max(1, numbered)
 
 
 def elide_old_tool_results(
@@ -157,6 +358,10 @@ class CompactionResult:
         tokens_after: Estimated token count after compaction.
         tool_results_dropped: Count of tool_result messages truncated or dropped
             (Phase 1 truncations and Phase 2 drops both contribute).
+        eligible_end: The `[2, eligible_end)` boundary the phases operated on,
+            or None when no phase ran (pressure below trigger, or ctx_limit
+            <= 0). `eligible_end == 2` means NOTHING was eligible — the
+            single fact that explains an ineffective fire.
     """
 
     messages: list[dict[str, Any]]
@@ -164,6 +369,29 @@ class CompactionResult:
     tokens_before: int
     tokens_after: int
     tool_results_dropped: int
+    #: Additive 2026-08-24; defaulted so every existing keyword construction
+    #: (including test fakes) keeps working unchanged.
+    eligible_end: int | None = None
+
+    @property
+    def effective(self) -> bool:
+        """Did this call actually shrink the prompt?
+
+        Derived, never stored, so it can't drift from the fields it reads.
+
+        The 2026-08-24 forensics turned on this distinction: a
+        `compaction_phase_reached phase_reached=3` line reads as the most
+        aggressive tier responding to pressure, but the same record carried
+        `tokens_before == tokens_after == 71616` and `tool_results_dropped=0`.
+        Phase 3 fired and achieved NOTHING — `_find_eligible_end` returns 2
+        when fewer than `keep_recent` assistant messages exist, which is every
+        early step of a chat turn. Telemetry that cannot say "this did
+        nothing" is how that hid for months.
+
+        Phase 0 (no phase attempted) is reported False, which is accurate: the
+        loop only emits the event when `phase_reached > 0`.
+        """
+        return self.tokens_after < self.tokens_before or self.tool_results_dropped > 0
 
 
 class TieredCompact:
@@ -279,6 +507,7 @@ class TieredCompact:
                 tokens_before=tokens_before,
                 tokens_after=tokens_after,
                 tool_results_dropped=dropped,
+                eligible_end=eligible_end,
             )
 
         result, dropped = self._phase2(messages, eligible_end)
@@ -290,6 +519,7 @@ class TieredCompact:
                 tokens_before=tokens_before,
                 tokens_after=tokens_after,
                 tool_results_dropped=dropped,
+                eligible_end=eligible_end,
             )
 
         result, dropped = self._phase3(messages, eligible_end)
@@ -300,6 +530,7 @@ class TieredCompact:
             tokens_before=tokens_before,
             tokens_after=tokens_after,
             tool_results_dropped=dropped,
+            eligible_end=eligible_end,
         )
 
     def _phase1(

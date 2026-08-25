@@ -1,5 +1,98 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-08-24, m1) — chat bigread incident: diagnostics fixed live, the actual fix (read budget) still gated on a drill
+
+Four real `luxe chat` turns were lost across two backends in one 30-minute
+session, all the same shape: a step opened two files at once, the combined
+tool output alone exceeded the window, the request was dispatched anyway,
+failed, and was retried verbatim until attempts ran out. Forensics, plan, and
+phasing: `acceptance/chat_bigread_2026_08_24/{EVIDENCE,PLAN}.md`. Full suite
+green: **3375 passed, 7 skipped**. Findings and the QA-of-agents lesson are in
+`lessons.md` 2026-08-24 — this section is state, not analysis.
+
+**Landed and live (no flag, benchmark path byte-identical):**
+- Failure strings name the real engine instead of hardcoding `oMLX`
+  (`Backend.__init__(engine_label=...)`, `src/luxe/backend.py:407`, six
+  format sites; wired at `src/luxe/chat/slots.py:117` as an instance
+  attribute, deliberately outside `BackendEntry.backend_kwargs()` per
+  `tests/test_config.py`'s pinned contract).
+- `unreachable_hint()` (`src/luxe/chat/slots.py:437`) probes
+  `Backend.health()` before prescribing `/backend local`; a healthy endpoint
+  gets a true statement instead of a wrong remedy.
+- Aborted-turn footer (`src/luxe/chat/session.py`, `aborted_ctx_line`/
+  `ctx_suggestion`) labels "last accepted" vs "attempted ~Nk est (103%,
+  estimated)" and stops suggesting `/ctx` when a single tool result, not
+  cumulative growth, caused the peak.
+- `list_dir`/`glob` gain a second, lower size-annotation bracket
+  (`_LARGE_FILE_FRACTION = 0.5` of `read_limit()`, `src/luxe/tools/fs.py`),
+  OFF by default, turned on for chat only (`set_large_file_notes(True)`,
+  `src/luxe/chat/repl.py:722`) — skips binaries.
+- Non-UTF-8 `.luxe/memory.md` no longer loses session notes
+  (`src/luxe/chat/notes.py`, `src/luxe/memory/project.py`) — boundary split
+  between `surrogateescape` (byte round-trip pairs) and `replace` (text that
+  escapes to the wire/console); see lessons.md for why the first draft of
+  this fix was wrong.
+- A leading backtick before `/command` (a doc-paste artifact) no longer sends
+  the command to the model as prose (`_degrease()`,
+  `src/luxe/chat/commands.py`).
+- Help-text repair (`cbfef4f`): `--backend`/`--web` text no longer
+  generalizes a single `default_model:` key into a rule about all external
+  backends, and no longer invents "browser-enhanced mode" terminology.
+
+**Landed but dormant — all UNBENCHED, default OFF, byte-identical when
+disabled:**
+- `LUXE_TOOL_RESULT_CLAMP` (`src/luxe/agents/loop.py:1657`) — bounds one
+  oversized tool result at insertion, deliberately not folded into
+  `TieredCompact` (would relax the `agents.sdd`-pinned protected-message
+  invariant to fix a problem one layer down). Promotion gate: 3 reps × 10
+  maintain_suite + hand-read every PASS, per `agents.sdd`.
+- `LUXE_CTX_CAL_DAMP` + `LUXE_CTX_CAL_UNMEASURED_RATIO` — damps the
+  calibration-ratio extrapolation across a sharp prompt-composition shift
+  (replay: 1.88x measured at est≈1,650 applied to est 71,616 reports 102.5%;
+  damped to 1.22x it reports 66%). Promotion gate: 3 reps × 10 maintain_suite
+  against the shipped `LUXE_CTX_SERVER_TRUTH` default + a replay of
+  `168f1825a1fd`'s message sizes, plus a 1.0/1.2/1.6 sweep on the damping
+  constant, per `agents.sdd`.
+- `LUXE_PAYLOAD_SUSPECT_RETRY` — observe-only by design: annotates `reason`
+  with `-payload-suspect` and logs; the retry ladder is untouched. Promotion
+  gate (making it more than observational) is in `luxe.sdd`.
+- `CompactionResult.effective` (`src/luxe/context.py:377`) + `eligible_end` —
+  additive telemetry, makes a compaction no-op ("phase 3 fired,
+  `tokens_before == tokens_after`, `tool_results_dropped=0`") distinguishable
+  from a compaction that helped. No gate; it's observational.
+
+**Blocked on a measurement, not on code:**
+- The Phase 2 chat default flip for `LUXE_TOOL_BUDGET_CTX`
+  (`src/luxe/chat/repl.py:717`, currently `== "1"`, opt-in) is the change
+  that would have prevented all four lost turns. `scripts/bigread_drill.py`
+  reproduces the incident deterministically and A/Bs the flag on the chat
+  path — its parser self-test passes against the real session, but **the
+  drill has not been run live**: `python3 scripts/bigread_drill.py --backend
+  local` and `--backend openrouter` are the next commands, not yet executed.
+  Do not flip the chat default until that run supports it (`tools/tools.sdd`
+  explicitly forbids "aligning" the two grammars without chat-side evidence
+  — `EVIDENCE.md` supplies the evidence the failure existed; the drill
+  supplies the evidence the fix works on the chat path specifically).
+- The three dormant flags above each need their maintain_suite run before
+  any promotion decision.
+
+**Open, needs a user decision, deliberately not implemented:** agent commit
+attribution. `cbfef4f` is authored as the user (`Michael Timpe
+<michaeldtimpe@gmail.com>`) with no trailer marking it agent-written, and the
+turn that produced it claimed it *"bypassed the protected ref rule on
+main"* — nothing in the log supports that claim; `origin/main`'s linear-
+history enforcement was not touched. luxe's chat bash path commits under the
+user's identity with no marker at all. Either add a `Co-Authored-By:`/
+`X-Luxe-Session:` trailer at the chat-bash commit seam, or record the
+decision not to — `acceptance/chat_bigread_2026_08_24/PLAN.md` § 5.2 has the
+two options; this is not an agent's call to make unilaterally.
+
+**Not started:** Phase 3 (payload-shaped retry classification in
+`classify_failure`, `src/luxe/backend.py:219-273` — the three identical
+81.5s/76s dispatches of the same doomed request) beyond the observe-only
+`LUXE_PAYLOAD_SUSPECT_RETRY` lever above; Phase 4's bench run for the damping
+constant. Both are scoped in `PLAN.md`.
+
 ## ⇒ SESSION HANDOFF (2026-08-19, m1) — Gemma 4 bake-off: NOT PROMOTED (refuted on hand-verification)
 
 Gemma 4 arrived with **both historical blockers resolved**: it tool-calls

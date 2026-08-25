@@ -22,6 +22,11 @@ from luxe.agents.flags import (
     RunFlags,
 )
 from luxe.agents.guardrails import _TRUNCATED_TURN_MAX_RETRIES
+from luxe.context import (
+    CALIBRATION_MAX,
+    CALIBRATION_MIN,
+    CALIBRATION_UNMEASURED_RATIO,
+)
 
 
 def test_empty_environment_gives_the_documented_defaults():
@@ -34,6 +39,9 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.action_density_gate is False
     assert f.convergence_gate is False
     assert f.post_write_idle_repeats is False
+    assert f.ctx_cal_damp is False                        # opt-in 2026-08-24
+    assert f.ctx_cal_unmeasured_ratio == CALIBRATION_UNMEASURED_RATIO
+    assert f.tool_result_clamp is False                   # opt-in 2026-08-24
     assert f.respond_terminal is False
     assert f.adaptive_policy is False
     # The three that are NOT off-by-default:
@@ -73,13 +81,19 @@ OPT_IN = [
     ("LUXE_RESPOND_TERMINAL", "respond_terminal"),
     ("LUXE_ADAPTIVE_POLICY", "adaptive_policy"),
     ("LUXE_POST_WRITE_IDLE_REPEATS", "post_write_idle_repeats"),
+    # 2026-08-24 (acceptance/chat_bigread_2026_08_24). Both deliberately take
+    # the opt-IN grammar, not the default-ON one: neither has a maintain_suite
+    # arm yet, so the benchmark path must be byte-identical until one exists.
+    ("LUXE_CTX_CAL_DAMP", "ctx_cal_damp"),
+    ("LUXE_TOOL_RESULT_CLAMP", "tool_result_clamp"),
 ]
 
 
 @pytest.mark.parametrize("var,field", OPT_IN)
 @pytest.mark.parametrize("value,expected", [
     ("1", True), ("0", False), ("", False), ("true", False),
-    ("yes", False), ("2", False), (" 1", False),
+    ("yes", False), ("2", False), (" 1", False), ("01", False),
+    ("1 ", False), ("TRUE", False), ("on", False),
 ])
 def test_opt_in_switches_require_exactly_one(var, field, value, expected):
     assert getattr(RunFlags.from_env({var: value}), field) is expected
@@ -302,3 +316,43 @@ def test_empty_turn_retry_is_on_unless_it_is_exactly_zero(value, expected):
     # follows the tiered_compact spelling like the other default-ON switches.
     got = RunFlags.from_env({"LUXE_EMPTY_TURN_RETRY": value})
     assert got.empty_turn_retry is expected
+
+
+# --- unmeasured-material ratio (LUXE_CTX_CAL_UNMEASURED_RATIO, 2026-08-24) --
+#
+# `damped_calibration`'s 1.2 is MEASURED, but from one markdown-heavy session.
+# The promotion bench has to sweep it, and a knob benched in a form that cannot
+# move is the C10 trap (lessons.md 2026-08-11). Same grammar and same silent
+# degradation as LUXE_TIERED_COMPACT_THRESHOLD.
+
+@pytest.mark.parametrize("value,expected", [
+    # the arms the promotion gate names
+    ("1.0", 1.0),
+    ("1.2", 1.2),
+    ("1.6", 1.6),
+    ("2.4", 2.4),
+    # the pinned band's own edges are legal
+    (str(CALIBRATION_MIN), CALIBRATION_MIN),
+    (str(CALIBRATION_MAX), CALIBRATION_MAX),
+    # outside [CALIBRATION_MIN, CALIBRATION_MAX] -> the measured default
+    ("0.4", CALIBRATION_UNMEASURED_RATIO),
+    ("9", CALIBRATION_UNMEASURED_RATIO),
+    ("0", CALIBRATION_UNMEASURED_RATIO),
+    ("-1.2", CALIBRATION_UNMEASURED_RATIO),
+    # malformed -> default, never an exception
+    ("high", CALIBRATION_UNMEASURED_RATIO),
+    ("", CALIBRATION_UNMEASURED_RATIO),
+    ("1.2,1.6", CALIBRATION_UNMEASURED_RATIO),
+])
+def test_unmeasured_ratio_parsing(value, expected):
+    got = RunFlags.from_env({"LUXE_CTX_CAL_UNMEASURED_RATIO": value})
+    assert got.ctx_cal_unmeasured_ratio == expected
+
+
+def test_the_ratio_is_independent_of_the_damping_switch():
+    """Setting the sweep value must not turn the lever on: an arm that exports
+    a ratio without exporting LUXE_CTX_CAL_DAMP=1 is a DEFAULT arm, and the
+    bench matrix has to be able to say so."""
+    got = RunFlags.from_env({"LUXE_CTX_CAL_UNMEASURED_RATIO": "1.6"})
+    assert got.ctx_cal_damp is False
+    assert got.ctx_cal_unmeasured_ratio == 1.6

@@ -97,6 +97,45 @@ def test_is_command_pasted_path_is_a_message(tmp_path):
     assert cmd.is_command("/export /tmp/out.md")
 
 
+class TestStrayLeadingCharacter:
+    """2026-08-24: a user pasted `` `/ctx xlarge `` (leading backtick, copied
+    from docs) mid-failure; `startswith("/")` sent it to the model as prose
+    and the turn re-ran at the old window. A stray backtick — leading,
+    trailing, or both — must not eat a command, but a REAL fenced code block
+    (3+ backticks) must never be swallowed as one."""
+
+    @pytest.mark.parametrize("line", [
+        "`/ctx xlarge",
+        "`/ctx xlarge`",
+        " /quit",
+    ])
+    def test_wrapped_or_stray_prefixed_commands_are_recognized(self, line):
+        assert cmd.is_command(line)
+
+    def test_a_real_fence_is_not_swallowed_as_a_command(self):
+        assert not cmd.is_command("```\n/not/a/command\n```")
+        assert not cmd.is_command("```/usr/bin\nsome code\n```")
+
+    def test_a_plain_backtick_message_that_is_not_a_command_is_untouched(self):
+        assert not cmd.is_command("`hello world`")
+        assert not cmd.is_command("`just some inline code`")
+
+    def test_degreased_commands_actually_dispatch(self, ctx):
+        """`is_command` saying yes is only half the fix — `dispatch` has to
+        parse the same normalized line, or the backtick survives into the
+        command name and it errors as unknown instead of running."""
+        res = cmd.dispatch("`/write`", ctx)
+        assert res.handled
+        assert "Unknown command" not in _text(ctx)
+        assert ctx.session.write_enabled is True
+
+    def test_leading_and_trailing_backtick_ctx_command_dispatches(self, tmp_path,
+                                                                    monkeypatch):
+        c = _ctx_with_ceiling(tmp_path, monkeypatch, num_ctx_max=131072)
+        cmd.dispatch("`/ctx xlarge`", c)
+        assert c.session.num_ctx_override == 131072
+
+
 def test_copy_puts_last_answer_on_clipboard(ctx, monkeypatch):
     from luxe.chat.session import ChatTurn
 

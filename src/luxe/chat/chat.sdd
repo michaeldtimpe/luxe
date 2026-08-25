@@ -190,8 +190,26 @@ never touches this module.
   resets the resident model so the next turn re-confirms weights there, and
   NEVER unloads models on the old server (it may be the endpoint that just went
   down). A turn failing with BackendError keeps the REPL/TUI alive and — only
-  when >1 backend is configured — prints the `/backend` escape hatch (e.g.
-  "local oMLX unreachable — try /backend m5"). ANY other turn/command
+  when >1 backend is configured — says something about the endpoint, and
+  `slots.unreachable_hint` PROBES before it says it (2026-08-24): endpoint
+  silent → the `/backend` escape hatch, VERBATIM ("local oMLX unreachable —
+  try /backend m5"), the string the outage path reads; endpoint answering →
+  it says so and prescribes NOTHING, because a switch is not the remedy for a
+  request that failed on a healthy server. The probe is bounded
+  (`_HINT_PROBE_TIMEOUT_S`, `Backend.health(timeout_s=…)`) and fully guarded —
+  anything short of a clean "yes" is treated as unreachable, i.e. the
+  pre-2026-08-24 answer — because a hint must never hang or crash a turn that
+  has already failed. `note_turn_failure` (manifest auto-degrade) still runs
+  FIRST at every call site. What forced this: a turn that died on an oversized
+  payload printed "openrouter OpenRouter unreachable — try /backend local"
+  while OpenRouter was up (turns succeeded on it minutes either side) and the
+  advised `local` had already failed the same way at a smaller window
+  (`acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 2). Relatedly,
+  `Backend` now takes `engine_label` (default `"oMLX"`, so the benchmark path
+  is byte-identical) and `_build_backend` sets it from
+  `BackendEntry.engine_label()` — an INSTANCE attribute like `on_reasoning`,
+  never through `backend_kwargs()`, whose contract is that `engine:` does not
+  touch the wire/timeout surface. ANY other turn/command
   exception is contained the same way (last traceback line to the transcript,
   full traceback to the logger, session stays up) — a crashed turn is a
   message, never an exit. A turn the agent loop ABORTED instead of raising
@@ -335,6 +353,17 @@ never touches this module.
   `reader`/`prompt_user` seam — `console.input` on the line path, a modal on the
   TUI. `_run_plan`/`_run_goal_loop` take injectable `run_turn`/`reader` so the
   supervisor logic is single-sourced.
+- `prepare_turn` is also the sole chat call site for `tools/fs.py`'s two
+  process-global sizing toggles, both set EVERY turn because `/ctx` moves
+  `num_ctx` mid-session and because any other caller in the process may have
+  moved them: `set_read_budget` (opt-in via `LUXE_TOOL_BUDGET_CTX=1`, the exact
+  string — chat's deliberate asymmetry with the bench default, `tools.sdd`) and
+  `set_large_file_notes(True)` (2026-08-24, PLAN.md 1.5 — UNCONDITIONAL, no
+  lever: chat is not a benched path). The bench path stays byte-identical on
+  the second one BY CONSTRUCTION — `tools/fs.py` defaults it OFF and
+  `maintain.py` deliberately has no such call, because the large-but-readable
+  bracket is not benchmark-neutral (fixture-cache binaries sit in its band).
+  Pinned by `tests/test_tool_budget.py::TestChatWiresTheLargeFileNotesOn`.
 - Working-state ledger (`state/ledger.py`, persisted to
   `~/.luxe/sessions/<id>/ledger.json`): a compact
   decided/completed/in_progress/blocked/files record injected as a high-precedence
@@ -768,7 +797,24 @@ never touches this module.
   and always clamped to `SlotManager.ctx_ceiling`, so a request can never
   exceed what the box/model pair holds. `num_ctx_max: 0` (default) forbids any
   expansion. Resize is never silent — high context pressure only *suggests*
-  the next tier; the user opts in. The benchmark/maintain path never reads
+  the next tier; the user opts in, and since 2026-08-24 the suggestion is
+  additionally gated on more window being able to HELP (`session.ctx_suggestion`
+  — a DISPLAY gate: `CTX_SUGGEST_PRESSURE` keeps its 0.85, no compaction
+  threshold moves, nothing dispatched changes). Suppressed when a single tool
+  result is ≥`CTX_SINGLE_RESULT_SHARE` of the window (a read-BUDGET problem —
+  doubling the window doubles what one unbounded read may eat), when the turn
+  aborted for anything the server did not blame on the window (on an abort the
+  peak figure is an extrapolated estimate of a request that was never
+  accepted), and when the next tier's `CTX_TIER_MIN_RAM_GB` floor is past this
+  host — luxe must not RECOMMEND a window it knows will run the box out of
+  memory, though `/ctx huge` typed by hand still warns and proceeds. That RAM
+  floor is a statement about the machine holding the KV cache, so every caller
+  gates it on local weights (`cmd_toggles._ctx_on_local_ram`,
+  `ctx_suggestion(local_weights=…)`). An ABORTED turn also gets
+  `session.aborted_ctx_line`, which names WHICH step each context number
+  describes: the footer's `ctx:` is the last ACCEPTED step, the pressure figure
+  is the step that FAILED, and printed bare they read as a contradiction
+  (`ctx: 2% of 128K` above `context pressure 103%`, EVIDENCE.md finding 4). The benchmark/maintain path never reads
   `num_ctx_max` and is unaffected. Three amendments (2026-08-17, after a
   session ran a 1,048,576-token hosted model at the 32K local default):
   (a) THE CEILING IS THE ENDPOINT'S TRUTH WHEN IT HAS ONE. If the active

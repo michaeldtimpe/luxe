@@ -144,3 +144,8 @@ acceptance/qwen38_27b_r1_2026_08_17/*
 acceptance/gemma4_r1_2026_08_19/*
 !acceptance/gemma4_r1_2026_08_19/STATUS.md
 !acceptance/gemma4_r1_2026_08_19/HAND-VERIFY.md
+!acceptance/chat_bigread_2026_08_24/
+acceptance/chat_bigread_2026_08_24/*
+!acceptance/chat_bigread_2026_08_24/PLAN.md
+!acceptance/chat_bigread_2026_08_24/EVIDENCE.md
+!acceptance/chat_bigread_2026_08_24/REPORT.md

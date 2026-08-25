@@ -259,3 +259,145 @@ def test_live_activity_renders_spinner_and_elapsed(slots):
     Console(file=out, width=200).print(act.__rich__())
     text = out.getvalue()
     assert "tools" in text and "bash" in text
+
+
+# --- aborted-turn context reporting + the /ctx suggestion gate --------------
+#
+# Both land here because both are pure DISPLAY decisions about the two context
+# numbers a finished turn carries. Driver:
+# `acceptance/chat_bigread_2026_08_24/EVIDENCE.md`, findings 4 and 5 — a turn
+# in session 168f1825a1fd that opened a 257,988-byte file and a 23,775-byte one
+# in ONE step, died, and then rendered `ctx: 2% of 128K` directly above
+# `context pressure 103%` followed by an offer of a bigger window.
+
+from dataclasses import dataclass, field as _field
+
+from luxe.chat.session import (
+    CTX_SUGGEST_PRESSURE,
+    aborted_ctx_line,
+    ctx_suggestion,
+    largest_tool_result_tokens,
+    single_result_dominated,
+)
+
+
+@dataclass
+class _Call:
+    bytes_out: int = 0
+
+
+@dataclass
+class _Result:
+    """The reporting surface of AgentResult that these two read."""
+    aborted: bool = False
+    abort_reason: str = ""
+    last_prompt_tokens: int = 0
+    peak_context_pressure: float = 0.0
+    tool_calls: list = _field(default_factory=list)
+
+
+K128 = 131072
+K32 = 32768
+
+
+class TestAbortedTurnContextLine:
+
+    def test_both_numbers_carry_their_qualifier(self):
+        """The exact shape of the 2026-08-24 footer: 3,148 accepted tokens of a
+        128K window beside a 103% peak. Neither number was wrong; printed bare
+        they read as a contradiction."""
+        line = aborted_ctx_line(
+            _Result(aborted=True, last_prompt_tokens=3148,
+                    peak_context_pressure=1.03), K128)
+        assert "last accepted 3.1k/128K" in line
+        assert "attempted" in line and "estimated" in line
+        assert "103%" in line
+        # `peak x num_ctx` is the CALIBRATED token estimate of the step that
+        # failed, not a raw chars/4 count: pressure is measured against
+        # `calibrated_ctx_limit`, so the product lands back in server-truth
+        # tokens. In session 168f1825a1fd that was 71,616 est x 1.88 ~ 135k
+        # against a 128K window — which is precisely why it read 103%.
+        assert "135.0k est" in line
+        # Neither figure may appear naked — each is owned by its qualifier.
+        assert line.index("last accepted") < line.index("3.1k")
+        assert line.index("attempted") < line.index("103%")
+
+    def test_a_turn_that_did_not_abort_gets_no_line(self):
+        assert aborted_ctx_line(
+            _Result(last_prompt_tokens=3148, peak_context_pressure=1.025),
+            K128) is None
+
+    def test_it_degrades_when_a_number_is_missing(self):
+        only_peak = aborted_ctx_line(
+            _Result(aborted=True, peak_context_pressure=0.9), K128)
+        assert "last accepted" not in only_peak and "attempted" in only_peak
+        assert aborted_ctx_line(_Result(aborted=True), K128) is None
+
+    def test_no_window_means_no_fabricated_denominator(self):
+        line = aborted_ctx_line(
+            _Result(aborted=True, last_prompt_tokens=3148,
+                    peak_context_pressure=1.025), 0)
+        assert "/0K" not in line and "0 est" not in line
+        assert "last accepted 3.1k" in line
+
+
+class TestCtxSuggestionGate:
+    """A display gate ONLY: `CTX_SUGGEST_PRESSURE` keeps its value, no
+    compaction threshold moves, nothing dispatched changes."""
+
+    def test_cumulative_growth_still_gets_the_suggestion(self):
+        """The unchanged case — many modest results, real pressure, a window
+        that is genuinely too small."""
+        r = _Result(peak_context_pressure=0.9,
+                    tool_calls=[_Call(bytes_out=4000) for _ in range(20)])
+        assert ctx_suggestion(r, K32, K128) == ("large", 65536)
+
+    def test_below_the_threshold_is_silent(self):
+        assert CTX_SUGGEST_PRESSURE == 0.85          # unchanged by this work
+        r = _Result(peak_context_pressure=0.84)
+        assert ctx_suggestion(r, K32, K128) is None
+
+    def test_one_oversized_tool_result_suppresses_it(self):
+        """`self.md` at 257,988 B on a 128K window: ~64k tokens in ONE result,
+        49% of the window. The next tier up buys that read more room to
+        overflow — it is a read-budget problem, not a window problem."""
+        r = _Result(aborted=True,
+                    abort_reason="Backend error: OpenRouter stream failed",
+                    peak_context_pressure=1.025,
+                    tool_calls=[_Call(bytes_out=385),
+                                _Call(bytes_out=257_988),
+                                _Call(bytes_out=23_775)])
+        assert single_result_dominated(r, K128) is True
+        assert largest_tool_result_tokens(r) == 257_988 // 4
+        assert ctx_suggestion(r, K128, 262144) is None
+
+    def test_it_suppresses_on_a_non_window_abort_even_without_a_big_read(self):
+        r = _Result(aborted=True, abort_reason="Max steps reached (12)",
+                    peak_context_pressure=0.95)
+        assert ctx_suggestion(r, K32, K128) is None
+
+    def test_an_abort_the_server_blamed_on_the_window_still_suggests(self):
+        """The counter-case, so the gate cannot swallow the one abort a bigger
+        window really does fix."""
+        r = _Result(aborted=True, peak_context_pressure=0.99,
+                    abort_reason="Backend error: oMLX returned 400: Prompt too "
+                                 "long: 45264 tokens exceeds max context "
+                                 "window of 32768")
+        assert ctx_suggestion(r, K32, K128) == ("large", 65536)
+
+    def test_no_tier_left_is_silent(self):
+        r = _Result(peak_context_pressure=0.95)
+        assert ctx_suggestion(r, K128, K128) is None
+
+    def test_a_tier_this_host_cannot_hold_is_not_recommended(self, monkeypatch):
+        """`/ctx huge` typed by hand warns and proceeds — an explicit request is
+        an instruction. An unprompted suggestion luxe already knows will run the
+        box out of memory mid-session is just bad advice."""
+        import luxe.chat.session as sess
+
+        monkeypatch.setattr(sess, "host_ram_gb", lambda: 64.0)
+        r = _Result(peak_context_pressure=0.95)
+        assert ctx_suggestion(r, K128, 262144) is None
+        # …and the same host reaches `huge` for weights it is not holding.
+        assert ctx_suggestion(r, K128, 262144,
+                              local_weights=False) == ("huge", 262144)

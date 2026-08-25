@@ -26,6 +26,11 @@ from typing import Mapping
 
 from luxe.agents.convergence import _DEFAULT_MAX_DELTA
 from luxe.agents.guardrails import _TRUNCATED_TURN_MAX_RETRIES
+from luxe.context import (
+    CALIBRATION_MAX,
+    CALIBRATION_MIN,
+    CALIBRATION_UNMEASURED_RATIO,
+)
 
 #: Fallback compaction trigger; also the value any out-of-band override
 #: silently degrades to (see `from_env`).
@@ -84,6 +89,27 @@ class RunFlags:
     # ablation. See agents.sdd "Server-truth context calibration".
     ctx_server_truth: bool = True
 
+    # Damp the server-truth calibration when the prompt has outgrown the
+    # sample the ratio was measured on. Opt-in: default OFF keeps the
+    # benchmark path byte-identical until a maintain_suite run says
+    # otherwise. See agents.sdd "Calibration extrapolation damping".
+    ctx_cal_damp: bool = False
+
+    # The ratio `damped_calibration` assumes for prompt material the live
+    # calibration never saw. 1.2 is MEASURED (two recalibrations in one
+    # markdown-heavy session, EVIDENCE.md finding 3) but it is still a free
+    # parameter derived from one workload, so the promotion bench must be able
+    # to sweep it without editing source — the C10 trap was a knob benched in a
+    # form that could not move. Inert while `ctx_cal_damp` is off.
+    ctx_cal_unmeasured_ratio: float = CALIBRATION_UNMEASURED_RATIO
+
+    # Bound a SINGLE tool result at the moment it is appended to `messages`,
+    # so one oversized `bash`/`grep`/MCP payload cannot blow the window past
+    # anything compaction is allowed to touch. Opt-in: default OFF keeps the
+    # benchmark path byte-identical until a maintain_suite run says
+    # otherwise. See agents.sdd "Single tool-result clamp".
+    tool_result_clamp: bool = False
+
     # Context compaction (default ON since 2026-05-28)
     tiered_compact: bool = True
     tiered_compact_threshold: float = DEFAULT_TIERED_COMPACT_THRESHOLD
@@ -138,6 +164,18 @@ class RunFlags:
         except ValueError:
             max_tt_retries = _TRUNCATED_TURN_MAX_RETRIES
 
+        # Unmeasured-material ratio: same grammar and same silent degradation
+        # as LUXE_TIERED_COMPACT_THRESHOLD above. Out of the pinned
+        # [CALIBRATION_MIN, CALIBRATION_MAX] band or unparseable falls back to
+        # the measured default, so a sweep script exporting junk costs a
+        # default arm rather than a crashed run.
+        try:
+            unmeasured = float(e.get("LUXE_CTX_CAL_UNMEASURED_RATIO", ""))
+            if not (CALIBRATION_MIN <= unmeasured <= CALIBRATION_MAX):
+                unmeasured = CALIBRATION_UNMEASURED_RATIO
+        except ValueError:
+            unmeasured = CALIBRATION_UNMEASURED_RATIO
+
         # Empty string means "unset" here, not "zero" — hence the `or`.
         try:
             max_delta = float(
@@ -167,6 +205,11 @@ class RunFlags:
             empty_turn_retry=e.get("LUXE_EMPTY_TURN_RETRY", "1") != "0",
             # Default ON: only the exact string "0" disables it.
             ctx_server_truth=e.get("LUXE_CTX_SERVER_TRUTH", "1") != "0",
+            # Opt-in: only the exact string "1" enables it.
+            ctx_cal_damp=e.get("LUXE_CTX_CAL_DAMP") == "1",
+            ctx_cal_unmeasured_ratio=unmeasured,
+            # Opt-in: only the exact string "1" enables it.
+            tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),
             # Default ON: only the exact string "0" disables it.

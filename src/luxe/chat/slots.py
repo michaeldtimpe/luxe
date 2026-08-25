@@ -20,6 +20,12 @@ from luxe.config import BackendEntry, PipelineConfig
 
 _SLOTS = ("chat", "plan", "code")
 
+#: Deadline for the liveness probe behind `unreachable_hint` (seconds). Matches
+#: `/doctor`'s ≤4s networked-line convention: this runs on a turn that has
+#: ALREADY failed, in front of a user waiting for an explanation, so a hint
+#: that cannot be produced in a few seconds is not worth producing.
+_HINT_PROBE_TIMEOUT_S = 4.0
+
 
 @dataclass
 class SwapStats:
@@ -108,12 +114,30 @@ class SlotManager:
         OMLX_API_KEY through the same chain."""
         from luxe.secrets import resolve_api_key
 
-        return Backend(
+        backend = Backend(
             base_url=entry.base_url,
             model=self._resident,
             api_key=resolve_api_key(entry.api_key_env),
             **entry.backend_kwargs(),
         )
+        # How a failed request NAMES the stack it was talking to. Set as an
+        # INSTANCE attribute rather than passed as a constructor kwarg — the
+        # same shape `on_reasoning` uses, and for the same reason: it is
+        # display-only, it reaches no request, and a Backend the benchmark
+        # path builds must keep the `"oMLX"` default this never touches
+        # (`backend.py`). Deliberately NOT routed through
+        # `BackendEntry.backend_kwargs()`, whose pinned contract is that the
+        # `engine:` field never changes the wire/timeout surface
+        # (tests/test_config.py) — a label is not the wire.
+        #
+        # Before 2026-08-24 every failure string was hardcoded "oMLX", so a
+        # turn that died on the OpenRouter backend reported "oMLX stream
+        # failed: RemoteProtocolError … (exhausted-attempts)" and pointed the
+        # reader at a local server that was never in the request path (session
+        # 168f1825a1fd; `acceptance/chat_bigread_2026_08_24/EVIDENCE.md`
+        # finding 1).
+        backend.engine_label = entry.engine_label()
+        return backend
 
     # -- resolution ---------------------------------------------------------
 
@@ -414,16 +438,67 @@ class SlotManager:
         return dropped
 
     def unreachable_hint(self) -> str | None:
-        """One-line `/backend` escape hatch for a failed turn — only when the
-        config actually offers an alternative endpoint."""
+        """One line for a failed turn, keyed on whether the ENDPOINT is the
+        thing that failed — or None when the config offers nowhere to go.
+
+        Two outcomes, and the difference is the whole point (2026-08-24):
+
+        * endpoint does not answer  → today's `/backend` escape hatch, VERBATIM.
+          The fleet's outage path reads this string; it must not drift.
+        * endpoint answers          → say so, and do NOT prescribe a switch.
+
+        Before this, ANY turn-level backend error printed the escape hatch as
+        soon as two backends were configured — no probe, no evidence. On
+        2026-08-24 (session 168f1825a1fd) a turn that died on an oversized
+        payload printed "openrouter OpenRouter unreachable — try /backend
+        local" while OpenRouter was demonstrably up (turns succeeded on it at
+        18:42 and 18:45 in the same session), and the `local` it advised has a
+        32K window that had already failed the identical way half an hour
+        earlier. Wrong diagnosis, wrong remedy, both stated confidently. See
+        `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 2.
+
+        The probe runs on the FAILURE path only, is bounded to
+        `_HINT_PROBE_TIMEOUT_S`, and is fully guarded: an endpoint that cannot
+        answer QUICKLY is treated as unreachable, i.e. today's behaviour. A
+        hint must never hang or crash a turn that has already failed.
+        """
         entries = self.cfg.backend_entries()
         if len(entries) < 2:
             return None
         other = next((n for n in entries if n != self.backend_name), None)
         if other is None:
             return None
+        if self._endpoint_answers():
+            return (f"{self.backend_name} {self.engine_label()} answered a "
+                    f"health check — the endpoint is up, so this request "
+                    f"failed on its own (this session's debug.log has the "
+                    f"retry history)")
         return (f"{self.backend_name} {self.engine_label()} unreachable — "
                 f"try /backend {other}")
+
+    def _endpoint_answers(self) -> bool:
+        """Bounded, guarded liveness probe for the ACTIVE endpoint.
+
+        False on anything that is not a clean "yes" — unreachable, slow,
+        raising, or a duck-typed backend that cannot take the bound. False is
+        the pre-2026-08-24 answer, so every degraded case keeps the behaviour
+        the outage path was written against.
+        """
+        probe = getattr(self.backend, "health", None)
+        if probe is None:
+            return False
+        try:
+            return bool(probe(timeout_s=_HINT_PROBE_TIMEOUT_S))
+        except TypeError:
+            # A Backend double predating the bound. Ask it the only way it
+            # knows; it is a test/fake, so there is nothing to hang on.
+            pass
+        except Exception:
+            return False
+        try:
+            return bool(probe())
+        except Exception:
+            return False
 
     # -- auto-degrade (manifest fallback, chat-only) --------------------------
 

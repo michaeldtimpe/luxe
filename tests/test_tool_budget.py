@@ -39,11 +39,24 @@ def set_root(tmp_repo: Path):
     yield
     fs._REPO_ROOT = None
     fs.set_read_budget(None)
+    fs.set_large_file_notes(False)
 
 
 def _oversized(tmp_repo: Path, name: str = "auth.log") -> Path:
     p = tmp_repo / name
     p.write_text("y" * (fs._MAX_FILE_SIZE + 5000))
+    return p
+
+
+def _large_but_readable(tmp_repo: Path, name: str = "self.md",
+                         fraction: float = 0.9) -> Path:
+    """A file past `_LARGE_FILE_FRACTION` of the active `read_limit()` but at
+    or under it — the exact session `168f1825a1fd` shape (257,988 B against a
+    262,144 B cap, `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding
+    6)."""
+    size = int(fs.read_limit() * fraction)
+    p = tmp_repo / name
+    p.write_text("y" * size)
     return p
 
 
@@ -123,6 +136,186 @@ class TestListingsAnnounceOversizedFiles:
         fs.set_read_budget(16)
         out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
         assert "too large" in out
+
+
+class TestLargeButReadableFilesGetANudge:
+    """The second, LOWER threshold added 2026-08-24
+    (`acceptance/chat_bigread_2026_08_24/PLAN.md` 1.5, `EVIDENCE.md` finding
+    6, session `168f1825a1fd`). `_oversize_note` used to fire only past
+    `read_limit()` — the refusal cap — so a 257,988 B file at 0.98x the
+    262,144 B cap listed as a bare name and the model read it whole. This
+    class covers the merely-large bracket: `_LARGE_FILE_FRACTION` (0.5) of
+    whatever `read_limit()` currently is.
+
+    The bracket is gated on `fs.set_large_file_notes()`, DEFAULT OFF, added
+    after coordinator review found the maintain_suite fixture cache holds
+    files in this exact band (`nothing-ever-happens/docs/dashboard.jpg`,
+    `neon-rain/assets/fonts/Finlandica-VariableFont_wght.ttf`) — an
+    unconditional bracket would have changed benchmark-path `list_dir`
+    output with no bench evidence. Every test that expects the new note
+    turns the toggle on explicitly; `set_root`'s teardown resets it."""
+
+    def test_a_file_past_the_large_threshold_but_under_the_cap_gets_a_note(
+        self, tmp_repo
+    ):
+        fs.set_large_file_notes(True)
+        _large_but_readable(tmp_repo)
+        out, err = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        assert err is None
+        line = next(ln for ln in out.splitlines() if ln.startswith("self.md"))
+        assert "large" in line
+        assert "KB" in line
+
+    def test_the_large_note_never_claims_refusal(self, tmp_repo):
+        """Distinct wording is the whole point — a large-but-readable file
+        must not tell the model it will be refused when read_file will
+        happily serve it whole."""
+        fs.set_large_file_notes(True)
+        _large_but_readable(tmp_repo)
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        line = next(ln for ln in out.splitlines() if ln.startswith("self.md"))
+        assert "too large to read whole" not in line
+        assert "large" in line
+
+    def test_the_large_note_still_points_at_limit_and_grep(self, tmp_repo):
+        fs.set_large_file_notes(True)
+        _large_but_readable(tmp_repo)
+        out, _ = fs.READ_ONLY_FNS["glob"]({"pattern": "*.md"})
+        assert "limit=" in out
+        assert "grep" in out
+
+    def test_a_binary_file_in_the_large_band_gets_no_note_at_all(
+        self, tmp_repo
+    ):
+        """A JPEG/font in this size band is read_file-unreadable regardless
+        of size — "consider read_file limit=/grep" would be actively wrong
+        advice, so the toggle-on bracket must skip it rather than reword it."""
+        fs.set_large_file_notes(True)
+        limit = fs.read_limit()
+        size = int(limit * 0.9)
+        p = tmp_repo / "dashboard.jpg"
+        p.write_bytes(b"\xff\xd8\xff\x00" + b"\x00" * (size - 4))
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        line = next(ln for ln in out.splitlines()
+                    if ln.startswith("dashboard.jpg"))
+        assert line == "dashboard.jpg"
+
+    def test_a_file_actually_over_the_cap_keeps_the_refusal_note_verbatim(
+        self, tmp_repo
+    ):
+        """The past-limit bracket must be untouched by this change — pinned
+        already in TestListingsAnnounceOversizedFiles, reasserted here beside
+        the new bracket so the exact string can be compared."""
+        fs.set_large_file_notes(True)
+        _oversized(tmp_repo)
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        line = next(ln for ln in out.splitlines() if ln.startswith("auth.log"))
+        size_kb = (fs._MAX_FILE_SIZE + 5000) / 1024
+        assert line == (
+            f"auth.log  ({size_kb:,.0f} KB — too large to read whole; "
+            f"use read_file limit= or grep)"
+        )
+
+    def test_a_file_well_under_the_large_threshold_stays_bare(self, tmp_repo):
+        fs.set_large_file_notes(True)
+        p = tmp_repo / "small.py"
+        p.write_text("x" * 100)
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        line = next(ln for ln in out.splitlines() if ln.startswith("small.py"))
+        assert line == "small.py"
+
+    @pytest.mark.parametrize("budget", [4096, 16384, fs._MAX_FILE_SIZE])
+    def test_the_two_thresholds_never_contradict_across_budgets(
+        self, tmp_repo, budget
+    ):
+        """For any budget the file is annotated with AT MOST one of the two
+        notes, and which one matches what read_file will actually do — the
+        invariant `_oversize_note`'s docstring claims, and the one
+        test_tool_budget.py:118-125 already pins for the refusal bracket
+        alone. This exercises both brackets together at several budgets so
+        the thresholds are checked never to invert. Toggle ON: this test is
+        specifically about the two brackets' relationship, not the toggle."""
+        fs.set_large_file_notes(True)
+        fs.set_read_budget(budget)
+        limit = fs.read_limit()
+        half = int(limit * fs._LARGE_FILE_FRACTION)
+        sizes = {"under.bin": half - 1, "large.bin": half + 1,
+                  "over.bin": limit + 1}
+        for name, size in sizes.items():
+            (tmp_repo / name).write_bytes(b"z" * size)
+
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        lines = {ln.split("  (")[0]: ln for ln in out.splitlines()}
+
+        assert "large" not in lines["under.bin"]
+        assert "too large" not in lines["under.bin"]
+
+        assert "large" in lines["large.bin"]
+        assert "too large to read whole" not in lines["large.bin"]
+
+        assert "too large to read whole" in lines["over.bin"]
+        # the refusal note must win outright — never both messages at once
+        assert lines["over.bin"].count("large") == 1
+
+
+class TestTheLargeFileToggleDefaultsOff:
+    """Coordinator-review follow-up (2026-08-24): the fraction-of-cap bracket
+    alone is NOT benchmark-path-neutral — the maintain_suite fixture cache
+    holds files between half and the whole of the 262,144 B default cap
+    (`nothing-ever-happens/docs/dashboard.jpg`,
+    `neon-rain/assets/fonts/Finlandica-VariableFont_wght.ttf`), and
+    `nothing-ever-happens` backs doc fixtures whose task lists `docs/`
+    directly. `set_large_file_notes` must default OFF and, off, must leave
+    `_oversize_note` byte-identical to the code before the bracket existed."""
+
+    def test_the_toggle_defaults_off(self):
+        assert fs.large_file_notes_enabled() is False
+
+    def test_toggle_off_a_128_to_256kb_file_is_byte_identical_to_before(
+        self, tmp_repo
+    ):
+        """The exact fixture-cache shape: a file well past half the default
+        256 KB cap but under it. With the toggle at its default (off), this
+        must render exactly like a bare name — no note of either kind."""
+        assert fs.large_file_notes_enabled() is False
+        p = tmp_repo / "dashboard.jpg"
+        p.write_bytes(b"\xff\xd8\xff" + b"z" * (200 * 1024))
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        line = next(ln for ln in out.splitlines()
+                    if ln.startswith("dashboard.jpg"))
+        assert line == "dashboard.jpg"
+
+    def test_toggle_off_glob_is_also_unaffected(self, tmp_repo):
+        p = tmp_repo / "Finlandica-VariableFont_wght.ttf"
+        p.write_bytes(b"z" * (220 * 1024))
+        out, _ = fs.READ_ONLY_FNS["glob"]({"pattern": "*.ttf"})
+        assert "large" not in out
+        assert out.strip() == "Finlandica-VariableFont_wght.ttf"
+
+    @pytest.mark.parametrize("toggle", [False, True])
+    def test_the_refusal_bracket_is_identical_in_both_toggle_states(
+        self, tmp_repo, toggle
+    ):
+        """The toggle governs the large bracket ONLY — a file that
+        `read_file` will actually refuse must get the same verbatim message
+        whether or not large-file notes are enabled."""
+        fs.set_large_file_notes(toggle)
+        _oversized(tmp_repo)
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        line = next(ln for ln in out.splitlines() if ln.startswith("auth.log"))
+        size_kb = (fs._MAX_FILE_SIZE + 5000) / 1024
+        assert line == (
+            f"auth.log  ({size_kb:,.0f} KB — too large to read whole; "
+            f"use read_file limit= or grep)"
+        )
+
+    def test_set_large_file_notes_true_then_false_restores_the_default(
+        self, tmp_repo
+    ):
+        fs.set_large_file_notes(True)
+        assert fs.large_file_notes_enabled() is True
+        fs.set_large_file_notes(False)
+        assert fs.large_file_notes_enabled() is False
 
 
 class TestTheCtxDerivedBudget:
@@ -281,3 +474,64 @@ class TestTheBenchmarkPathCanReachTheSwitch:
 
         assert 'os.environ.get("LUXE_TOOL_BUDGET_CTX") == "1"' in inspect.getsource(repl)
         assert "apply_ctx_read_budget" not in inspect.getsource(repl)
+
+
+class TestChatWiresTheLargeFileNotesOn:
+    """The toggle's call site (2026-08-24, PLAN.md 1.5 + 3.1 follow-up).
+
+    `set_large_file_notes` shipped dormant — default OFF, no caller — because
+    unconditionally it is NOT benchmark-path-neutral (see
+    `TestTheLargeFileToggleDefaultsOff` above for the two fixture-cache files
+    that sit in its band). Chat is not a benched path, so it is ON there, wired
+    in `prepare_turn` beside the read budget: both are process-global module
+    state, and `/ctx` moves `num_ctx` mid-session, so both are re-set per turn.
+    """
+
+    def test_the_module_default_is_still_off(self):
+        """The property the bench path depends on: nothing turns this on
+        unless a caller asks. Kept alongside the wiring test so a future
+        "just default it on" edit fails here first."""
+        assert fs.large_file_notes_enabled() is False
+
+    def test_prepare_turn_enables_it(self):
+        from luxe.chat import repl
+
+        src = inspect.getsource(repl.prepare_turn)
+        assert "fs_mod.set_large_file_notes(True)" in src
+
+    def test_it_sits_with_the_per_turn_read_budget(self):
+        """Same function, same per-turn scope, same reason. If the budget
+        block moves, this must move with it."""
+        from luxe.chat import repl
+
+        src = inspect.getsource(repl.prepare_turn)
+        assert 'os.environ.get("LUXE_TOOL_BUDGET_CTX") == "1"' in src
+        assert "fs_mod.set_large_file_notes(True)" in src
+
+    def test_the_bench_path_has_no_such_call(self):
+        """`maintain.py` deliberately never enables it — that is what keeps
+        the benchmark path byte-identical by construction, rather than by a
+        flag someone could set."""
+        assert "set_large_file_notes" not in inspect.getsource(maintain)
+
+    def test_the_wiring_is_not_gated_on_an_env_var(self):
+        """Chat is unbenched, so this needs no lever. A future flag here would
+        be a promotion decision, not a refactor."""
+        from luxe.chat import repl
+
+        src = inspect.getsource(repl.prepare_turn)
+        line = next(ln for ln in src.splitlines()
+                    if "set_large_file_notes" in ln
+                    and not ln.lstrip().startswith("#"))
+        assert "environ" not in line
+        assert line.strip() == "fs_mod.set_large_file_notes(True)"
+
+    def test_on_the_toggle_annotates_the_incident_shape(self, tmp_repo):
+        """End of the wire: with the toggle in the state chat sets, the file
+        that lost session 168f1825a1fd is no longer a bare name."""
+        fs.set_large_file_notes(True)
+        _large_but_readable(tmp_repo)
+        out, _ = fs.READ_ONLY_FNS["list_dir"]({"path": "."})
+        line = next(ln for ln in out.splitlines() if ln.startswith("self.md"))
+        assert line != "self.md"
+        assert "large" in line

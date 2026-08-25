@@ -4934,3 +4934,147 @@ and recover the true diff from the workspace clone's reflog.
 repro in `acceptance/echo_repro_2026_08_19/` (m5-local); the `bailout_type=
 "context_overflow"` mislabel at `benchmarks/maintain_suite/run.py:866` is
 unchanged and still open.
+
+---
+
+### [2026-08-24] Compaction had been a no-op for the first three steps of every chat turn, and the telemetry said it worked
+
+**What happened**: Four real chat turns were lost in one 30-minute session
+(two backends, `acceptance/chat_bigread_2026_08_24/EVIDENCE.md`), all the same
+shape — a step opened two files at once, the combined tool output alone
+exceeded the window, and the request was dispatched, failed, and retried
+verbatim until attempts ran out. `events.jsonl` for the OpenRouter case reads:
+
+```
+compaction_phase_reached  phase_reached=3  tokens_before=71616  tokens_after=71616  tool_results_dropped=0
+compaction_phase_at_resolve  max_phase_reached=3  tool_results_dropped_total=0  total_tokens_dropped=0  aborted=True
+```
+
+Phase 3 — the most aggressive compaction tier — fired and dropped **nothing**,
+and the event that recorded it looks identical to a phase that worked.
+
+**Root cause**: `TieredCompact._find_eligible_end` (`src/luxe/context.py:454`)
+returns 2 — "nothing eligible, protect the whole thing" — whenever fewer than
+`keep_recent=3` assistant messages exist yet. At step 3 of a chat turn there
+are two. `keep_recent=3` is correctly tuned for the 12–30-step SWE-bench
+trajectories TieredCompact was validated on (n=75×2, RESUME.md 2026-05-28);
+it makes compaction structurally incapable of acting during exactly the
+window where an interactive turn blows its budget — the first few steps.
+**The generalisable lesson: a mechanism that is a no-op under a specific,
+plausible-in-production condition, and whose telemetry does not distinguish
+"fired and did nothing" from "fired and helped," can pass every existing
+bench (SWE-bench, maintain_suite) built on trajectory shapes where the
+condition never arises, and still fail every real occurrence of that
+condition.** Nothing about the SWE-bench/maintain_suite validation was wrong;
+it simply never sampled a 3-step trajectory.
+
+**Compounding cause — a knob default-ON for bench and default-OFF for chat**:
+`LUXE_TOOL_BUDGET_CTX` (the fix that would have prevented all four lost
+turns — `budget_for_ctx()` would have clipped both oversized reads to well
+under window) went default-ON for maintain/bench on 2026-08-12
+(`acceptance/toolbudget_ab_2026_08_12/REPORT.md`) and stayed opt-in for chat
+specifically because, per `tools/tools.sdd`, *"chat UX around large files is
+a different question, and there is no chat-side evidence."* That sentence was
+true when written and stayed true for six weeks with nobody noticing the gap
+was live risk, not caution — the evidence doesn't arrive by waiting, it
+arrives by someone hitting the failure and someone else tracing it. The
+flip is proposed in `acceptance/chat_bigread_2026_08_24/PLAN.md` Phase 2 but
+is **NOT landed**; it is gated on a live drill run (below).
+
+**Misdiagnosis on top of the failure**: the aborted turn told the user two
+false things confidently. (1) `"Backend error: oMLX stream failed:
+RemoteProtocolError"` on a session running `engine: openrouter` —
+`backend.py`'s failure strings hardcoded `"oMLX"` regardless of which stack
+actually failed. (2) The footer's escape hatch said `"OpenRouter unreachable
+— try /backend local"`; OpenRouter was demonstrably reachable (turns
+succeeded minutes earlier in the same session), and `local` has a 32K window
+that had already failed identically in the sibling case. `unreachable_hint()`
+fired on any backend error whenever ≥2 backends were configured and never
+checked reachability. Both are now fixed live (see below) but the pattern is
+worth naming: **a diagnostic that names a plausible-sounding wrong component
+and prescribes a remedy that cannot work is worse than no diagnostic**,
+because it sends the next debugging session in the wrong direction with
+false confidence — this one sent the user to retry the identical failing
+request twice before anyone traced it.
+
+**A fourth, smaller miscalibration**: the pressure estimate that reported
+103% at the moment it mattered was itself wrong. `LUXE_CTX_SERVER_TRUTH`'s
+calibration ratio is measured on the previous response; at step 1 that prompt
+is dominated by the system prompt and tool-call JSON schemas (observed ratios
+1.79–2.64x), and the same sessions recalibrated to 1.21–1.27x once a
+prose-heavy file landed. Applying the step-1 ratio to a 96%-prose request
+over-reported by roughly 1.6x — the true figure was closer to 65% of the
+128K window than the reported 103%. `agents.sdd` already documents that this
+ratio drifts across a trajectory; it does not yet damp an extrapolation
+across a sharp composition shift within one step.
+
+**What shipped live today (no flag, byte-identical on the benchmark path)**:
+engine-labeled failure strings (`Backend.__init__(engine_label=...)`,
+`src/luxe/backend.py:407`, six format sites, wired at
+`src/luxe/chat/slots.py:117` as an instance attribute — deliberately NOT
+through `BackendEntry.backend_kwargs()`, which `tests/test_config.py` pins
+against ever reaching the wire/timeout surface); `unreachable_hint()`
+(`src/luxe/chat/slots.py:437`) now probes `Backend.health()` before
+prescribing a switch; the aborted-turn footer (`src/luxe/chat/session.py`,
+`aborted_ctx_line`/`ctx_suggestion`) labels which number is "last accepted"
+vs "attempted ~Nk est" and stops suggesting `/ctx` when a single tool result,
+not cumulative growth, caused the peak; `list_dir`/`glob` gained a second,
+lower size-annotation bracket (`_LARGE_FILE_FRACTION = 0.5` of
+`read_limit()`, `src/luxe/tools/fs.py`) gated OFF by default and turned on
+for chat only (`set_large_file_notes(True)`, `src/luxe/chat/repl.py:722`) so
+a 257,988 B file at 0.98x the refusal cap no longer lists as a bare name; a
+non-UTF-8 `.luxe/memory.md` no longer silently drops session notes
+(`src/luxe/chat/notes.py`, `src/luxe/memory/project.py` — see the QA note
+below); and a leading backtick before `/command` (a doc-paste artifact) no
+longer sends the command to the model as prose (`_degrease()`,
+`src/luxe/chat/commands.py`).
+
+**Still dormant, all UNBENCHED, all default OFF, byte-identical when
+disabled**: `LUXE_TOOL_RESULT_CLAMP` (`src/luxe/agents/loop.py:1657`) bounds
+one oversized tool result at insertion — deliberately NOT folded into
+`TieredCompact`, because `agents.sdd` pins `messages[0]`/`messages[1]` and
+the last `keep_recent` iterations as never-eligible, and that invariant
+should not be relaxed to fix a problem one layer down; `LUXE_CTX_CAL_DAMP` +
+`LUXE_CTX_CAL_UNMEASURED_RATIO` damp the calibration-ratio extrapolation
+described above; `LUXE_PAYLOAD_SUSPECT_RETRY` is observe-only by design — it
+annotates `reason` with `-payload-suspect` and logs, the retry ladder itself
+is untouched. `CompactionResult.effective` (`src/luxe/context.py:377`,
+derived from `eligible_end`/`tokens_before`/`tokens_after`) makes the no-op
+case named instead of silent, additive to the events. None of the three
+flags has a maintain_suite run; none is a promotion candidate yet.
+`scripts/bigread_drill.py` reproduces the incident deterministically and
+A/Bs `LUXE_TOOL_BUDGET_CTX` on the chat path — its parser self-test passes,
+but the drill has not been RUN against a live backend, so the chat default
+flip described above is written but not exercised.
+
+**QA-of-agents lesson, worth recording on its own**: the two most dangerous
+defects caught while landing this batch were both *unverified
+byte-identical claims*, and both were caught only by tracing where a value
+actually flows, not by reading the diff. (1) The `engine_label` wiring was
+first drafted through `BackendEntry.backend_kwargs()` — the natural-looking
+place — which would have been benchmark-neutral by the letter of "no test
+covers it" but violates the pinned contract the moment a benchmark config
+sets `engine:` on a non-default entry; it had to be re-routed to an instance
+attribute set outside `backend_kwargs()` entirely. (2) The notes/memory
+non-UTF-8 fix was first written as `errors="surrogateescape"` everywhere by
+analogy to `splice_block`'s existing read/write pair — correct on disk,
+but `load_memory`/`_read_facts`'s return values reach the httpx request body
+(`ensure_ascii=False` — a lone surrogate raises `UnicodeEncodeError` there)
+and the console. The fix needed a boundary split: `surrogateescape` only
+where the same function pair both reads and writes the same bytes back
+(`notes.py:205`, `project.py:264`), `replace` everywhere the text escapes the
+module. **A claim of "byte-identical" or "safe" is only as good as having
+traced every consumer of the value, not the producer.**
+
+**Also true and worth separating from the above**: `maintain_suite` has no
+fixture that reproduces the incident's *magnitude*. The only repo file over
+roughly 250 KB in the corpus is already past `read_limit()` and gets refused
+outright, so a green 3×10 run bounds harm at the 4–6x single-step growth the
+existing fixtures produce and says nothing about the 40x this incident hit.
+A fixture at that scale is still missing.
+
+**Affected files**: `src/luxe/backend.py`, `src/luxe/chat/{slots,session,repl,
+notes,commands}.py`, `src/luxe/memory/project.py`, `src/luxe/tools/fs.py`,
+`src/luxe/context.py`, `src/luxe/agents/loop.py`; plan and evidence in
+`acceptance/chat_bigread_2026_08_24/{EVIDENCE,PLAN}.md`;
+`scripts/bigread_drill.py`.

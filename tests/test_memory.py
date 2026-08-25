@@ -109,6 +109,53 @@ def test_render_block_caps_length(repo: Path):
     assert len(block) < 600
 
 
+# --- non-UTF-8 memory.md: must sanitize at the boundary, not just survive ---
+#
+# 2026-08-24: a `.luxe/memory.md` starting with gzip magic (0x1f 0x8b) raised
+# UnicodeDecodeError out of a bare read_text(). Reading it losslessly with
+# errors="surrogateescape" fixes the crash but is NOT enough on its own for
+# `load_memory`/`render_block`: their output escapes this module into a chat
+# request body. httpx encodes JSON bodies with ensure_ascii=False then
+# `.encode("utf-8")` (httpx/_content.py:177-178), which raises
+# UnicodeEncodeError on a lone surrogate — so text handed to a caller must
+# already be valid UTF-8. `load_memory` uses errors="replace" for exactly
+# this reason; these tests pin the property httpx actually needs, not just
+# "it didn't raise on read."
+
+
+def _write_undecodable_memory_md(repo: Path) -> bytes:
+    (repo / ".luxe").mkdir(exist_ok=True)
+    raw = b"\x1f\x8b\x08\x00" + b"not valid utf-8: \xff\xfe\x80\x81" * 4
+    project.repo_memory_file(repo).write_bytes(raw)
+    return raw
+
+
+def test_load_memory_curated_md_is_wire_safe_on_undecodable_bytes(repo: Path):
+    """The exact operation httpx performs on a JSON request body."""
+    _write_undecodable_memory_md(repo)
+    mem = project.load_memory(repo)
+    mem.curated_md.encode("utf-8")            # must not raise
+
+
+def test_render_block_is_wire_safe_on_undecodable_bytes(repo: Path):
+    raw = _write_undecodable_memory_md(repo)
+    mem = project.load_memory(repo)
+    block = project.render_block(mem)
+    block.encode("utf-8")                      # must not raise
+    assert "<project_memory>" in block          # still rendered, not dropped
+
+
+def test_splice_block_still_preserves_undecodable_bytes_on_disk(repo: Path):
+    """The property the read/replace vs read/surrogateescape split has to
+    preserve: splice_block's own round trip stays byte-exact even though
+    load_memory (a different, lossy reader of the same file) does not."""
+    raw = _write_undecodable_memory_md(repo)
+    project.splice_block(repo, "notes", "a fresh note", stamp="")
+    after = project.repo_memory_file(repo).read_bytes()
+    assert after.startswith(raw)
+    assert b"<!-- luxe:notes begin" in after
+
+
 # --- session persistence --------------------------------------------------
 
 
