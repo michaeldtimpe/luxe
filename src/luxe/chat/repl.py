@@ -701,20 +701,31 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         if effective_ctx != role_cfg.num_ctx:
             role_cfg = role_cfg.model_copy(update={"num_ctx": effective_ctx})
 
-    # Ctx-derived tool-output budget (2026-08-12, OPT-IN via
-    # LUXE_TOOL_BUDGET_CTX=1). The fixed 256 KB read cap predates the /ctx
-    # tiers and is 480% of the DEFAULT 32K window measured in real tokens, so
-    # one oversized read can blow the context in a single call. Set per turn
-    # because `/ctx` moves num_ctx mid-session. Unset = the fixed constants.
+    # Ctx-derived tool-output budget. The fixed 256 KB read cap predates the
+    # /ctx tiers and is 480% of the DEFAULT 32K window measured in real tokens,
+    # so one oversized read can blow the context in a single call. Set per turn
+    # because `/ctx` moves num_ctx mid-session (maintain sets it once per
+    # pipeline; the two call sites stay separate).
     #
-    # ASYMMETRY, deliberate: the maintain/bench path went DEFAULT-ON on
-    # 2026-08-12 (its own call site in maintain.py, opt out with the exact
-    # string `=0`; see acceptance/toolbudget_ab_2026_08_12/REPORT.md — 30/30
-    # both arms, tokens −3.9%). Chat stays opt-in — the
-    # A/B is maintain_suite evidence only, and chat UX around large files is a
-    # different question. Only the exact string "1" enables it here; do not
-    # "align" this with the bench grammar without chat-side evidence.
-    if os.environ.get("LUXE_TOOL_BUDGET_CTX") == "1":
+    # DEFAULT-ON for chat since 2026-08-24. It shipped opt-in on 2026-08-12
+    # against a deliberate asymmetry — maintain went default-ON on its own
+    # maintain_suite A/B and chat had NO evidence of its own, so aligning the
+    # grammars was forbidden until chat produced some. It has:
+    # acceptance/chat_bigread_2026_08_24/REPORT.md — planted repo (250,040 B
+    # markdown + 70,028 B source), m1/Qwen3.6-35B-A3B-4bit, both windows, both
+    # arms. OFF hung unrecoverably at 32768 (peak pressure 1064.2%) AND at
+    # 131072 (266.0%) — the drill's own timeout had to kill the process group.
+    # ON completed both (60.0s / 79.9s, peak 50.6% / 39.0%, 2 refused reads per
+    # arm) and the model spent the `offset=` resume the clipped read hands it
+    # (1 and 2 calls) rather than giving up — 3 extra tool calls total, which
+    # answers the plan's worry that a budget turns one fatal turn into three
+    # timid ones. Two real 2026-08-24 incidents (sessions 168f1825a1fd,
+    # eb0b2923a3eb) are the same shape with refused_reads=0.
+    #
+    # Grammar is now the maintain/`LUXE_TRUNCATED_TURN_RETRY` opt-out one,
+    # spelled identically: unset → ON, only the EXACT string "0" disables
+    # ("", "true", "01", " 1" → ON). Off still means the fixed constants.
+    if os.environ.get("LUXE_TOOL_BUDGET_CTX", "1") != "0":
         fs_mod.set_read_budget(fs_mod.budget_for_ctx(role_cfg.num_ctx))
     else:
         fs_mod.set_read_budget(None)

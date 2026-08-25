@@ -59,6 +59,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -173,10 +174,18 @@ def run_drill_turn(repo: Path, *, backend_name: str | None,
                    config_path: str | None, window: int, budget_on: bool,
                    luxe_root: Path, timeout: int = 600,
                    model: str | None = None,
-                   luxe_cmd: str = "luxe") -> str | None:
-    """Drive one headless `luxe chat` turn against `repo`. Returns the new
-    session id, or None if none appeared (e.g. luxe exited before starting
-    one — startup failure)."""
+                   luxe_cmd: str = "luxe") -> tuple[str | None, str]:
+    """Drive one headless `luxe chat` turn against `repo`.
+
+    Returns `(session_id, outcome_hint)`. `session_id` is the new session's
+    id, or None if none appeared (e.g. luxe exited before starting one —
+    startup failure, or the process was killed before it could even create
+    the session dir). `outcome_hint` is `"ran"` (the subprocess exited on
+    its own — the real outcome lives in the log) or `"timeout"` (this
+    function's own `timeout` fired and killed it — a hang IS a valid,
+    expected result for the OFF arm of this drill, not an error: see
+    scripts/bigread_drill.py's module docstring / the 2026-08-24 crash this
+    fixed)."""
     before = _existing_sessions(luxe_root)
     tier = _CTX_TIER_FOR_WINDOW.get(window)
     if tier is None:
@@ -198,17 +207,38 @@ def run_drill_turn(repo: Path, *, backend_name: str | None,
     if model:
         cmd += ["--chat-model", model]
 
-    subprocess.run(cmd, input=stdin_text, text=True, env=env,
-                   capture_output=True, timeout=timeout)
+    # Popen (not subprocess.run) so a timeout leaves us holding the process
+    # object to kill — `subprocess.run(..., timeout=)` only kills the direct
+    # child, not any children IT spawned, and `luxe chat` prefilling 349 KB
+    # of context is exactly the process we most need gone before the next
+    # arm tries to load a model. start_new_session=True + os.killpg matches
+    # tools/shell.py's `_run_cancellable` (the chat-only cancellable bash
+    # runner) — same rationale, same fallback exceptions.
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, env=env,
+        start_new_session=True,
+    )
+    outcome_hint = "ran"
+    try:
+        proc.communicate(input=stdin_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        outcome_hint = "timeout"
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
+        proc.communicate()  # reap; pipes already buffered
+
     after = _existing_sessions(luxe_root)
     new = after - before
     if not new:
-        return None
+        return None, outcome_hint
     # Exactly one turn was driven, so exactly one new session is expected;
     # if the host raced with something else, take the most recently touched.
     if len(new) > 1:
         new = {max(new, key=lambda s: (luxe_root / "sessions" / s).stat().st_mtime)}
-    return next(iter(new))
+    return next(iter(new)), outcome_hint
 
 
 # --- log parsing -------------------------------------------------------------
@@ -434,15 +464,41 @@ def _approx_wall_s(records: list[dict]) -> float | None:
         return None
 
 
+def _has_turn_activity(records: list[dict]) -> bool:
+    """True if `records` contains any loop-level evidence a turn was
+    actually underway (a step line, a tool dispatch, or a tool result) —
+    as opposed to e.g. the lone `session <id> end` INFO line every normal
+    session logs after its last closed turn, which must NOT be mistaken
+    for an incomplete turn."""
+    return any(_STEP_RE.match(rec["msg"]) or _TOOL_DISPATCH_RE.match(rec["msg"])
+              or _TOOL_DONE_RE.match(rec["msg"]) for rec in records)
+
+
 def analyze_session(session_id: str, luxe_root: Path) -> dict[str, dict]:
     log_path = luxe_root / "sessions" / session_id / "debug.log"
     if not log_path.is_file():
         return {}
     text = log_path.read_text(encoding="utf-8", errors="replace")
     records = list(iter_log_records(text))
-    turns, _trailing = split_into_turns(records)
-    return {run_id: analyze_turn(run_id, chunk, luxe_root)
-           for run_id, chunk in turns.items()}
+    turns, trailing = split_into_turns(records)
+    result = {run_id: analyze_turn(run_id, chunk, luxe_root)
+             for run_id, chunk in turns.items()}
+
+    # A turn with no terminal "turn done"/"turn interrupted"/"turn aborted"
+    # line (the process was killed mid-turn — a hang, a crash, whatever)
+    # still logged real tool calls, step ctx_pressure readings, and (via
+    # events.jsonl) compaction events before it went silent. That data is
+    # the finding, not noise to discard because nothing closed the turn —
+    # see the 2026-08-24 bigread_drill crash this fixed (session
+    # a2a182160112: zero completed turns, but a 262,093-byte read_file and
+    # ctx_pressure=1064.2% are sitting right there in the log). run_id
+    # follows the same f"{session_id}-{turn_idx}" scheme chat/repl.py uses
+    # (turn_idx == number of turns that already closed in this session).
+    if trailing and _has_turn_activity(trailing):
+        synth_run_id = f"{session_id}-{len(turns)}"
+        result[synth_run_id] = analyze_turn(synth_run_id,
+                                            {"records": trailing}, luxe_root)
+    return result
 
 
 # --- self-test: prove the parser against the real 2026-08-24 failure -------
@@ -512,6 +568,21 @@ def _fmt_pct(v) -> str:
     return f"{v:.1f}%" if isinstance(v, (int, float)) else "—"
 
 
+def _tool_call_count(d: dict):
+    """`tool_calls` (turn-done) / `observed_tool_calls` (interrupted) come
+    from a terminal log line that a timed-out arm never got to log — fall
+    back to counting the dispatches we DID see (`tool_calls_detail`, built
+    straight from `tool dispatch`/`tool done` lines regardless of how the
+    turn ended) rather than showing a blank for data that is actually
+    sitting right there."""
+    if "tool_calls" in d:
+        return d["tool_calls"]
+    if "observed_tool_calls" in d:
+        return d["observed_tool_calls"]
+    detail_list = d.get("tool_calls_detail") or []
+    return len(detail_list) if detail_list else "—"
+
+
 def _row(arm_label: str, window, detail: dict | None) -> str:
     if detail is None:
         return (f"| {arm_label} | {window} | PENDING | — | — | — | — | — | — | "
@@ -527,8 +598,11 @@ def _row(arm_label: str, window, detail: dict | None) -> str:
                    f"{'no-op' if not effective else 'dropped'} "
                    f"({c.get('tokens_before')}→{c.get('tokens_after')} tok, "
                    f"{c.get('tool_results_dropped')} results)")
-    return (f"| {arm_label} | {window} | {d.get('outcome')} | "
-           f"{d.get('tool_calls', d.get('observed_tool_calls', '—'))} | "
+    outcome = d.get("outcome")
+    if outcome == "timeout":
+        outcome = "**timeout** (killed by drill's own --timeout)"
+    return (f"| {arm_label} | {window} | {outcome} | "
+           f"{_tool_call_count(d)} | "
            f"{_fmt_pct(d.get('peak_est_pct'))} | "
            f"{d.get('refused_reads')} | {d.get('resume_calls')} | "
            f"{_fmt_pct(d.get('wall_s')) if False else d.get('wall_s', '—')} | "
@@ -648,8 +722,23 @@ def render_report(*, matrix: dict, incident_turns: dict, selftest_ok: bool | Non
         off_rows = [matrix.get(("off", w)) for w in WINDOWS]
         on_ok = all(d and d.get("outcome") == "completed" for d in on_rows)
         off_bad = any(d and d.get("outcome") != "completed" for d in off_rows)
+        off_timeouts = [w for w, d in zip(WINDOWS, off_rows)
+                        if d and d.get("outcome") == "timeout"]
         extra_steps = sum((d.get("resume_calls") or 0) for d in on_rows if d)
-        if on_ok and off_bad:
+        if on_ok and off_timeouts:
+            windows_txt = ", ".join(str(w) for w in off_timeouts)
+            verdict = (f"**arm=OFF hung outright at window(s) {windows_txt} — "
+                      "the drill's own timeout had to kill it — while arm=ON "
+                      "completed every window cleanly**, at a cost of "
+                      f"{extra_steps} extra resume call(s) total. This is the "
+                      "strongest possible result for this drill's question: "
+                      "not a slower turn or a retry storm, but a genuine "
+                      "unrecoverable hang that the flag prevents outright. "
+                      "See the real 2026-08-24 incident this reproduced "
+                      "(session `a2a182160112`, forensics mined from the "
+                      "same timed-out-session code path even though it "
+                      "never logged a completed turn).")
+        elif on_ok and off_bad:
             verdict = (f"arm=ON completes both windows where arm=OFF did "
                       f"not, at a cost of {extra_steps} extra resume "
                       "call(s) total across both windows — see the "
@@ -702,10 +791,33 @@ def main(argv=None) -> int:
                     help="Comma-separated num_ctx windows to drill.")
     ap.add_argument("--arms", default=",".join(ARMS),
                     help="Comma-separated arms: off,on")
-    ap.add_argument("--timeout", type=int, default=600,
+    ap.add_argument("--timeout", type=int, default=180,
                     help="Per-turn subprocess timeout, seconds (default "
-                         "600 — an aborted retry-exhaustion turn alone was "
-                         "measured at ~80s; leave headroom).")
+                         "180). This is a fail-fast ceiling, not a patience "
+                         "budget: the 2026-08-24 incident this drill "
+                         "reproduces showed ctx_pressure already 8x over "
+                         "budget 22s into the session, with luxe's own "
+                         "backend.py stall_timeout_s (1800s, before-first-"
+                         "token) nowhere close to firing by the time the "
+                         "original 600s run was killed — a genuine hang "
+                         "doesn't get less hung by waiting longer, so there "
+                         "is no reason to sit through 1800s to confirm one. "
+                         "180s leaves ~60s of headroom over luxe's own "
+                         "decode_stall_timeout_s (120s, once tokens flow), "
+                         "so a turn that starts streaming has room to hit "
+                         "its OWN watchdog and end cleanly before this one "
+                         "fires. Overridable per arm with --timeout-off / "
+                         "--timeout-on if one arm needs more or less room.")
+    ap.add_argument("--timeout-off", type=int, default=None,
+                    help="Override --timeout for arm=off only (the arm "
+                         "expected to hang — lower this to fail faster once "
+                         "you trust the hang reproduces quickly on your "
+                         "host).")
+    ap.add_argument("--timeout-on", type=int, default=None,
+                    help="Override --timeout for arm=on only (the arm "
+                         "expected to complete — raise this if a real "
+                         "budgeted turn legitimately needs more than "
+                         "--timeout on a slower backend/host).")
     ap.add_argument("--out", default=str(DEFAULT_OUT),
                     help="REPORT.md path.")
     args = ap.parse_args(argv)
@@ -753,18 +865,59 @@ def main(argv=None) -> int:
         for arm in arms:
             for window in windows:
                 budget_on = (arm == "on")
-                print(f"[drive] arm={arm} window={window} ...")
+                arm_timeout = (args.timeout_off if arm == "off"
+                              and args.timeout_off is not None else
+                              args.timeout_on if arm == "on"
+                              and args.timeout_on is not None else
+                              args.timeout)
+                print(f"[drive] arm={arm} window={window} "
+                     f"(timeout={arm_timeout}s) ...")
                 t0 = time.monotonic()
-                session_id = run_drill_turn(
-                    scratch_dir, backend_name=args.backend,
-                    config_path=args.config_path, window=window,
-                    budget_on=budget_on, luxe_root=luxe_root,
-                    timeout=args.timeout, model=args.model,
-                    luxe_cmd=args.luxe_cmd)
+                # One arm dying — however it dies — must never abort the
+                # whole matrix; the other three cells are still real data.
+                # subprocess.TimeoutExpired is handled INSIDE run_drill_turn
+                # (it's the expected, measured OFF-arm result: a hang, not
+                # an error — see the module docstring). Anything else
+                # (Popen startup failure, a race on the sessions dir, ...)
+                # is unexpected but must still be recorded and skipped
+                # rather than taking down arms that haven't run yet.
+                try:
+                    session_id, outcome_hint = run_drill_turn(
+                        scratch_dir, backend_name=args.backend,
+                        config_path=args.config_path, window=window,
+                        budget_on=budget_on, luxe_root=luxe_root,
+                        timeout=arm_timeout, model=args.model,
+                        luxe_cmd=args.luxe_cmd)
+                except Exception as exc:  # noqa: BLE001 — see comment above
+                    dt = time.monotonic() - t0
+                    print(f"[drive]   EXCEPTION after {dt:.0f}s: "
+                         f"{exc!r} — recording and continuing.")
+                    matrix[(arm, window)] = {
+                        "outcome": "error", "error_detail": repr(exc),
+                        "tool_calls_detail": [], "retries": [],
+                        "compactions": [],
+                    }
+                    continue
                 dt = time.monotonic() - t0
+                if outcome_hint == "timeout":
+                    print(f"[drive]   TIMED OUT after {dt:.0f}s "
+                         f"(--timeout={arm_timeout}s) — process group "
+                         "killed; this is the expected OFF-arm hang if "
+                         "arm=off, recording as data.")
                 if session_id is None:
                     print(f"[drive]   no new session appeared "
                          f"({dt:.0f}s) — startup failure?")
+                    if outcome_hint == "timeout":
+                        # Killed before it even created a session dir —
+                        # still real: the process hung before startup
+                        # finished. Don't let this render as a blank
+                        # PENDING row.
+                        matrix[(arm, window)] = {
+                            "outcome": "timeout", "tool_calls_detail": [],
+                            "retries": [], "compactions": [],
+                            "note": "no session dir appeared before "
+                                   f"--timeout={arm_timeout}s killed it",
+                        }
                     continue
                 print(f"[drive]   session {session_id} ({dt:.0f}s wall)")
                 turns = analyze_session(session_id, luxe_root)
@@ -774,8 +927,17 @@ def main(argv=None) -> int:
                     continue
                 # One turn was driven; take the (only, or last) one.
                 run_id = sorted(turns)[-1]
-                matrix[(arm, window)] = turns[run_id]
-                matrix[(arm, window)]["session_id"] = session_id
+                detail = turns[run_id]
+                detail["session_id"] = session_id
+                # Only stamp "timeout" over the parser's generic default —
+                # if the log DID close with a real terminal line (a race:
+                # the turn finished right as the timeout fired) trust that
+                # over our own hint.
+                if outcome_hint == "timeout" and detail.get("outcome") == \
+                        "unknown (no terminal log line found)":
+                    detail["outcome"] = "timeout"
+                detail["killed_by_drill_timeout"] = (outcome_hint == "timeout")
+                matrix[(arm, window)] = detail
 
     report = render_report(matrix=matrix, incident_turns=incident_turns,
                            selftest_ok=selftest_ok, plant_sizes=sizes,

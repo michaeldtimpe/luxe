@@ -356,8 +356,12 @@ never touches this module.
 - `prepare_turn` is also the sole chat call site for `tools/fs.py`'s two
   process-global sizing toggles, both set EVERY turn because `/ctx` moves
   `num_ctx` mid-session and because any other caller in the process may have
-  moved them: `set_read_budget` (opt-in via `LUXE_TOOL_BUDGET_CTX=1`, the exact
-  string — chat's deliberate asymmetry with the bench default, `tools.sdd`) and
+  moved them: `set_read_budget` (**DEFAULT-ON since 2026-08-24**, opt out with
+  the exact string `LUXE_TOOL_BUDGET_CTX=0` — the old opt-in asymmetry with the
+  bench default ended on chat's own arm,
+  `acceptance/chat_bigread_2026_08_24/REPORT.md`: OFF hung unrecoverably at
+  both 32768 and 131072, ON completed both and spent the `offset=` resume;
+  `tools.sdd` § wiring) and
   `set_large_file_notes(True)` (2026-08-24, PLAN.md 1.5 — UNCONDITIONAL, no
   lever: chat is not a benched path). The bench path stays byte-identical on
   the second one BY CONSTRUCTION — `tools/fs.py` defaults it OFF and

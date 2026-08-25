@@ -413,12 +413,16 @@ working grep.**
 - `grep` reports both its caps (`--max-count=150` per file, 32 KB output).
 - `read_file` states the windowed call to make, and refuses a single
   over-budget line by naming `grep` instead of looping.
-- **The read cap can scale with ctx** — `budget_for_ctx()` / `set_read_budget()`,
-  `LUXE_TOOL_BUDGET_CTX=1`, **OFF by default**. The fixed 256 KB predates the
-  `/ctx` tiers: in real tokens one max-size read is 480% of the DEFAULT 32K
-  window and 60% of the largest window luxe can open, so scaling with ctx
-  means scaling DOWN (~13 KB at 32768). Enabling it is a benchmark-path change
-  and needs a maintain_suite run.
+- **The read cap scales with ctx** — `budget_for_ctx()` / `set_read_budget()`,
+  **ON by default on BOTH paths**; opt out with the exact string
+  `LUXE_TOOL_BUDGET_CTX=0`. The fixed 256 KB predates the `/ctx` tiers: in real
+  tokens one max-size read is 480% of the DEFAULT 32K window and 60% of the
+  largest window luxe can open, so scaling with ctx means scaling DOWN (~13 KB
+  at 32768). Two call sites, two dated arms: maintain/bench 2026-08-12
+  (`acceptance/toolbudget_ab_2026_08_12/REPORT.md`, once per pipeline), chat
+  2026-08-24 (`acceptance/chat_bigread_2026_08_24/REPORT.md` — OFF hung
+  unrecoverably at both windows, ON completed and used the `offset=` resume;
+  set per turn). Don't merge the call sites; BFCL is still unwired and inert.
 
 ## Wire format: vendor fields are TOP-LEVEL, never `extra_body`
 
