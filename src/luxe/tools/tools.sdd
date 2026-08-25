@@ -142,18 +142,32 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   benchmark-path behaviour change (at num_ctx=32768 the whole-file limit
   becomes ~13 KB), which is why it took a maintain_suite A/B to promote
 
-### `LUXE_TOOL_BUDGET_CTX` wiring (2026-08-12; maintain DEFAULT-ON, chat opt-in)
+### `LUXE_TOOL_BUDGET_CTX` wiring (maintain DEFAULT-ON 2026-08-12; chat DEFAULT-ON 2026-08-24)
 
-- **The two paths deliberately disagree about the default, and the grammar
-  encodes which.** MAINTAIN/BENCH is **default ON** since 2026-08-12 —
-  `maintain.apply_ctx_read_budget` reads
+- **Both paths are default ON, each on its OWN dated evidence, and they share
+  one grammar.** `maintain.apply_ctx_read_budget` (2026-08-12) and
+  `chat/repl.py` (2026-08-24) each read
   `os.environ.get("LUXE_TOOL_BUDGET_CTX", "1")` and only the EXACT string
-  `"0"` disables (unset → on; "", "true", "01" → on). That is the same
-  opt-out grammar as `LUXE_TRUNCATED_TURN_RETRY` in `agents/flags.py`, and
-  the two must stay spelled the same way. CHAT (`chat/repl.py`) is **opt-in**:
-  only the exact string `"1"` enables it. Do not "align" the two — the flip
-  rests on maintain_suite evidence and there is NONE for chat
-- Benched before the flip: `acceptance/toolbudget_ab_2026_08_12/REPORT.md`
+  `"0"` disables (unset → on; "", "true", "01", " 1" → on). That is the same
+  opt-out grammar as `LUXE_TRUNCATED_TURN_RETRY` in `agents/flags.py`, and all
+  three must stay spelled the same way. The paths agreeing is a RESULT, not a
+  refactor: each default rests on its own arm, and neither may be moved on the
+  other's evidence
+- Chat's flip, benched 2026-08-24:
+  `acceptance/chat_bigread_2026_08_24/REPORT.md` (planted repo — 250,040 B
+  markdown + 70,028 B source — m1/Qwen3.6-35B-A3B-4bit, `--backend local`,
+  2 arms × 2 windows). OFF **hung unrecoverably** at 32768 (peak context
+  pressure 1064.2%) and at 131072 (266.0%): the drill's own timeout killed the
+  process group both times. ON completed both windows (60.0s / 79.9s, peak
+  50.6% / 39.0%, 2 refused reads per arm) and the model **used the `offset=`
+  resume** the clipped read hands it (1 / 2 calls) — 3 extra tool calls in
+  total, which is the answer to the standing worry that a budget converts one
+  fatal turn into three timid ones. Same shape in two real 2026-08-24
+  incidents (sessions `168f1825a1fd`, `eb0b2923a3eb`) with `refused_reads=0`.
+  Before this, chat was opt-in precisely because no chat-side arm existed;
+  producing one is what made the alignment legal
+- Maintain's flip, benched 2026-08-12:
+  `acceptance/toolbudget_ab_2026_08_12/REPORT.md`
   (3 reps × 10 fixtures × 2 arms; both arms 30/30 · 120/150; tokens −3.9%,
   wall +4.3%; zero fixture regressions; opportunity exercised — 21 baseline
   over-budget reads vs zero in treatment; `read_budget_applied` in 30/30
@@ -179,12 +193,15 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   documented no-op, but "don't touch the module state" is the stronger
   guarantee: with `=0`, `maintain_pipeline` runs byte-identically to before
   the wiring existed, and nothing can be re-ordered into a regression later.
-  `read_limit()` stays `_MAX_FILE_SIZE`
-- Chat is unaffected in both directions. `maintain_pipeline` is not on the
-  chat path (chat enters via `chat/launch.py` → `_run_interactive`), and even
-  in a hypothetical shared process `repl.py` re-sets the budget on EVERY turn
-  in BOTH branches, so its value is the one in force when that turn's tools
-  run
+  `read_limit()` stays `_MAX_FILE_SIZE`. That rule is the BENCH path's:
+  `chat/repl.py`'s off branch deliberately does call `set_read_budget(None)`,
+  because a chat turn must land on a known limit rather than inherit whatever
+  the process last set
+- The two paths still cannot reach each other. `maintain_pipeline` is not on
+  the chat path (chat enters via `chat/launch.py` → `_run_interactive`), and
+  even in a hypothetical shared process `repl.py` re-sets the budget on EVERY
+  turn in BOTH branches, so its value is the one in force when that turn's
+  tools run
 - When ON the run says so — a `read_budget_applied` event in `events.jsonl`
   (`max_bytes`, `num_ctx`) plus a console line — so a bench arm can be
   checked for liveness instead of assumed live. Both are emitted ONLY when

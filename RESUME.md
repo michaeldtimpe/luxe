@@ -1,6 +1,6 @@
 # luxe — session resume document
 
-## ⇒ SESSION HANDOFF (2026-08-24, m1) — chat bigread incident: diagnostics fixed live, the actual fix (read budget) still gated on a drill
+## ⇒ SESSION HANDOFF (2026-08-24, m1) — chat bigread incident: diagnostics and the read-budget fix both landed; three dormant flags still gated on maintain_suite runs
 
 Four real `luxe chat` turns were lost across two backends in one 30-minute
 session, all the same shape: a step opened two files at once, the combined
@@ -60,19 +60,33 @@ disabled:**
   additive telemetry, makes a compaction no-op ("phase 3 fired,
   `tokens_before == tokens_after`, `tool_results_dropped=0`") distinguishable
   from a compaction that helped. No gate; it's observational.
+- **Phase 2 chat default flip for `LUXE_TOOL_BUDGET_CTX`**
+  (`src/luxe/chat/repl.py:728`,
+  `os.environ.get("LUXE_TOOL_BUDGET_CTX", "1") != "0"`, opt-out) — the
+  change that would have prevented all four lost turns, now landed.
+  `scripts/bigread_drill.py` ran live, `--backend local`, m1,
+  Qwen3.6-35B-A3B-4bit, planted repo (250,040 B markdown + 70,028 B source):
+
+  | arm | window | outcome | peak pressure | refused reads | resume calls |
+  |---|---|---|---|---|---|
+  | off | 32768 | **timeout**, killed | 1064.2% | 0 | 0 |
+  | off | 131072 | **timeout**, killed | 266.0% | 0 | 0 |
+  | on | 32768 | completed, 60.0s | 50.6% | 2 | 1 |
+  | on | 131072 | completed, 79.9s | 39.0% | 2 | 2 |
+
+  Both OFF arms hang unrecoverably at chat's old default; both ON arms
+  complete, and the model uses the `offset=` resume rather than giving up
+  (3 extra tool calls total across both windows) — the plan's explicit
+  worry, answered. Report: `acceptance/chat_bigread_2026_08_24/REPORT.md`.
+  Landed alongside: `tools/tools.sdd` § wiring now records both dated flips
+  (maintain 2026-08-12, chat 2026-08-24); `chat.sdd` and `CLAUDE.md`
+  corrected; `tests/test_tool_budget.py` gained
+  `TestChatDefaultsTheBudgetOn`; a real test-isolation bug fixed in
+  `tests/conftest.py` (fs sizing state is process-global, so a chat-seam
+  test now leaves `read_limit()` moved for the next module). Suite: 3386
+  passed, 7 skipped.
 
 **Blocked on a measurement, not on code:**
-- The Phase 2 chat default flip for `LUXE_TOOL_BUDGET_CTX`
-  (`src/luxe/chat/repl.py:717`, currently `== "1"`, opt-in) is the change
-  that would have prevented all four lost turns. `scripts/bigread_drill.py`
-  reproduces the incident deterministically and A/Bs the flag on the chat
-  path — its parser self-test passes against the real session, but **the
-  drill has not been run live**: `python3 scripts/bigread_drill.py --backend
-  local` and `--backend openrouter` are the next commands, not yet executed.
-  Do not flip the chat default until that run supports it (`tools/tools.sdd`
-  explicitly forbids "aligning" the two grammars without chat-side evidence
-  — `EVIDENCE.md` supplies the evidence the failure existed; the drill
-  supplies the evidence the fix works on the chat path specifically).
 - The three dormant flags above each need their maintain_suite run before
   any promotion decision.
 
@@ -521,7 +535,10 @@ Two smaller open threads, neither urgent: **C10 is answerable for the first
 time** now that the knob reaches the server (still a low-expectation
 direction-finder — champion failures skew termination/long-context, not local
 repetition), and **`LUXE_TOOL_BUDGET_CTX` stays default-OFF** pending its own
-maintain_suite run, since scaling the read cap with ctx scales it *down*.
+maintain_suite run, since scaling the read cap with ctx scales it *down*
+*(superseded 2026-08-12: promoted to default-ON for maintain/benchmark; then
+2026-08-24: default-ON for chat too — see the 2026-08-24 SESSION HANDOFF
+above; the rest of this entry describes the pre-flip era)*.
 
 **One red on m5, PRE-EXISTING — not from any of the above.**
 `tests/test_bfcl_multi_turn.py::test_miss_func_49_known_quirk_reproduced`

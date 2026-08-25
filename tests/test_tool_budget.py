@@ -15,10 +15,11 @@ Two problems, one root cause: the model learned every limit by failing a call.
    LARGEST window luxe can open — so "scale it with ctx" resolves to scaling
    it DOWN, not up. That is a benchmark-path behaviour change, so it shipped
    opt-in — and was PROMOTED to default-ON on the maintain/bench path on
-   2026-08-12 (`acceptance/toolbudget_ab_2026_08_12/REPORT.md`) with `=0` as
-   the exact-string opt-out. `tools/fs.py` itself stays off by default (`None`
-   = the fixed constants); the default lives at the maintain call site, and
-   chat remains opt-in ("1").
+   2026-08-12 (`acceptance/toolbudget_ab_2026_08_12/REPORT.md`) and on the CHAT
+   path on 2026-08-24 (`acceptance/chat_bigread_2026_08_24/REPORT.md`), both
+   with `=0` as the exact-string opt-out. `tools/fs.py` itself stays off by
+   default (`None` = the fixed constants); the defaults live at the two call
+   sites, which stay separate.
 """
 
 from __future__ import annotations
@@ -391,7 +392,8 @@ class TestTheBenchmarkPathCanReachTheSwitch:
     `acceptance/toolbudget_ab_2026_08_12/REPORT.md` (3 reps × 10 fixtures × 2
     arms, 30/30 · 120/150 both, tokens −3.9%, zero regressions). The opt-out
     grammar is `LUXE_TRUNCATED_TURN_RETRY`'s: ONLY the exact string "0"
-    disables. Chat is the deliberate asymmetry and stays opt-in ("1" only).
+    disables. Chat runs the same grammar since 2026-08-24, but off its own
+    evidence and its own call site (see `TestChatDefaultsTheBudgetOn`).
     """
 
     def test_unset_applies_the_ctx_derived_budget(self, monkeypatch):
@@ -430,8 +432,8 @@ class TestTheBenchmarkPathCanReachTheSwitch:
     def test_anything_but_the_exact_string_zero_is_on(self, monkeypatch, value):
         """Same grammar as `LUXE_TRUNCATED_TURN_RETRY` (agents/flags.py): a
         near-miss of the off-switch leaves the default ON rather than silently
-        disabling a benched default. Note this is NOT chat's rule — chat is
-        opt-in and only the exact string "1" enables it there."""
+        disabling a benched default. Chat's call site spells the same rule —
+        pinned separately in `TestChatDefaultsTheBudgetOn`."""
         monkeypatch.setenv("LUXE_TOOL_BUDGET_CTX", value)
         assert maintain.apply_ctx_read_budget(32768) == fs.budget_for_ctx(32768)
         assert fs.read_limit() == fs.budget_for_ctx(32768)
@@ -468,12 +470,137 @@ class TestTheBenchmarkPathCanReachTheSwitch:
 
     def test_chat_keeps_its_own_wiring(self):
         """`repl.py` stays the sole authority for chat turns (it re-sets the
-        budget every turn because `/ctx` moves num_ctx mid-session). The bench
-        call site must not be imported into the chat turn path."""
+        budget every turn because `/ctx` moves num_ctx mid-session). The two
+        paths now spell the SAME opt-out grammar, but they are still two call
+        sites: the bench one must not be imported into the chat turn path, or a
+        chat turn would inherit maintain's once-per-pipeline scope."""
         from luxe.chat import repl
 
-        assert 'os.environ.get("LUXE_TOOL_BUDGET_CTX") == "1"' in inspect.getsource(repl)
+        assert (
+            'os.environ.get("LUXE_TOOL_BUDGET_CTX", "1") != "0"'
+            in inspect.getsource(repl)
+        )
         assert "apply_ctx_read_budget" not in inspect.getsource(repl)
+
+
+class TestChatDefaultsTheBudgetOn:
+    """Chat's flip to default-ON (2026-08-24).
+
+    It shipped opt-in on 2026-08-12 with `tools.sdd` forbidding an "alignment"
+    with the bench grammar until chat produced its own arm. It has one:
+    `acceptance/chat_bigread_2026_08_24/REPORT.md` — planted repo (250,040 B
+    markdown + 70,028 B source), m1/Qwen3.6-35B-A3B-4bit, both arms × 32768 and
+    131072. OFF hung unrecoverably at BOTH windows (peak context pressure
+    1064.2% / 266.0%, process group killed by the drill's timeout); ON
+    completed both (60.0s / 79.9s, peak 50.6% / 39.0%, 2 refused reads each)
+    and the model spent the `offset=` resume the clipped read hands it (1 / 2
+    calls) — 3 extra tool calls total, not a turn traded for three timid ones.
+
+    Behaviour is asserted through `prepare_turn`, chat's real call site, so
+    these pin the shipped path and not a re-implementation of its condition.
+    """
+
+    @pytest.fixture
+    def chat_turn(self, tmp_path, monkeypatch):
+        """Minimal `prepare_turn` harness (mirrors tests/test_turn_core.py):
+        isolated HOME, stubbed Backend, no model or network."""
+        from luxe.chat import repl as repl_mod
+        from luxe.chat import slots as slots_mod
+        from luxe.chat.session import ChatSession
+        from luxe.config import PipelineConfig, RoleConfig
+        from luxe.memory import session as session_store
+
+        class _FakeBackend:
+            def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
+                self.base_url, self.model = base_url, model
+
+            def unload_all_loaded(self, *, except_for=None):
+                return {}
+
+            def thermal_guard(self, *a, **k):
+                return True
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(slots_mod, "Backend", _FakeBackend)
+        repo = tmp_path / "chatrepo"
+        repo.mkdir()
+        cfg = PipelineConfig(
+            models={"monolith": "Champ"},
+            roles={"monolith": RoleConfig(model_key="monolith", num_ctx=32768)},
+        )
+        session = ChatSession(repo_path=str(repo))
+        meta = session_store.new_session(
+            repo_path=str(repo), project_hash="h", slot_models={})
+        session.session_id = meta.session_id
+        sm = slots_mod.SlotManager(cfg)
+
+        def run() -> int:
+            prep = repl_mod.prepare_turn(
+                "hello", session, sm, cfg, frozenset(), lambda m: "review")
+            return prep.role_cfg.num_ctx
+
+        return run
+
+    def test_unset_applies_the_ctx_derived_budget(self, chat_turn, monkeypatch):
+        """The flip: an unset env is now chat's SHIPPED default, and it must be
+        the drill's ON arm — the same budget from the same helper."""
+        monkeypatch.delenv("LUXE_TOOL_BUDGET_CTX", raising=False)
+        num_ctx = chat_turn()
+        assert fs.read_limit() == fs.budget_for_ctx(num_ctx)
+        assert fs.read_limit() < fs._MAX_FILE_SIZE
+
+    def test_unset_is_identical_to_the_drills_explicit_one(
+        self, chat_turn, monkeypatch
+    ):
+        """The drill measured its ON arm with the env var set to "1". The
+        promoted default must be that arm exactly, not a near-miss."""
+        monkeypatch.setenv("LUXE_TOOL_BUDGET_CTX", "1")
+        chat_turn()
+        with_one = fs.read_limit()
+        fs.set_read_budget(None)
+        monkeypatch.delenv("LUXE_TOOL_BUDGET_CTX", raising=False)
+        chat_turn()
+        assert fs.read_limit() == with_one < fs._MAX_FILE_SIZE
+
+    def test_the_exact_string_zero_is_the_only_off_switch(
+        self, chat_turn, monkeypatch
+    ):
+        """`=0` restores the fixed constants — the pre-2026-08-24 behaviour,
+        which is what the OFF arm of the drill ran."""
+        monkeypatch.setenv("LUXE_TOOL_BUDGET_CTX", "0")
+        chat_turn()
+        assert fs.read_limit() == fs._MAX_FILE_SIZE
+
+    @pytest.mark.parametrize("value", ["", "true", "yes", "01", " 1", "00"])
+    def test_anything_but_the_exact_string_zero_is_on(
+        self, chat_turn, monkeypatch, value
+    ):
+        """Same grammar as `maintain.apply_ctx_read_budget` and
+        `LUXE_TRUNCATED_TURN_RETRY`: a near-miss of the off-switch leaves the
+        default ON rather than silently restoring the cap that hung the turn."""
+        monkeypatch.setenv("LUXE_TOOL_BUDGET_CTX", value)
+        num_ctx = chat_turn()
+        assert fs.read_limit() == fs.budget_for_ctx(num_ctx)
+
+    def test_off_still_lands_on_a_known_limit(self, chat_turn, monkeypatch):
+        """Chat's off branch DOES call `set_read_budget(None)` — unlike the
+        bench path's "no call at all" — so a turn can never inherit a budget
+        some other caller in the process left behind."""
+        fs.set_read_budget(4096)
+        monkeypatch.setenv("LUXE_TOOL_BUDGET_CTX", "0")
+        chat_turn()
+        assert fs.read_limit() == fs._MAX_FILE_SIZE
+
+    def test_the_budget_is_re_set_every_turn(self, chat_turn, monkeypatch):
+        """Per-turn scope is the chat-side invariant (`/ctx` moves num_ctx
+        mid-session), and it is what keeps the two call sites independent."""
+        monkeypatch.delenv("LUXE_TOOL_BUDGET_CTX", raising=False)
+        num_ctx = chat_turn()
+        fs.set_read_budget(4096)
+        chat_turn()
+        assert fs.read_limit() == fs.budget_for_ctx(num_ctx)
 
 
 class TestChatWiresTheLargeFileNotesOn:
@@ -505,7 +632,7 @@ class TestChatWiresTheLargeFileNotesOn:
         from luxe.chat import repl
 
         src = inspect.getsource(repl.prepare_turn)
-        assert 'os.environ.get("LUXE_TOOL_BUDGET_CTX") == "1"' in src
+        assert 'os.environ.get("LUXE_TOOL_BUDGET_CTX", "1") != "0"' in src
         assert "fs_mod.set_large_file_notes(True)" in src
 
     def test_the_bench_path_has_no_such_call(self):
