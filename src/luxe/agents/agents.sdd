@@ -103,6 +103,11 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   task) are NEVER eligible for compaction. The last `keep_recent` assistant-message
   iterations are also protected. Compaction operates only on messages indexed
   `[2, eligible_end)`.
+  This is LOAD-BEARING and is not to be relaxed to reach an oversized message:
+  when fewer than `keep_recent` assistant messages exist `_find_eligible_end`
+  returns 2 and every phase is a no-op, which is correct here and is why the
+  2026-08-24 single-result bound lives at CREATION instead — see "Single
+  tool-result clamp" below.
 
 ### Server-truth context calibration (pinned 2026-08-11, DEFAULT-ON, UNBENCHED)
 
@@ -162,6 +167,179 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - `LUXE_CTX_SERVER_TRUTH=0` restores the pre-2026-08-11 behaviour exactly; run
   maintain_suite before treating the new default as settled.
 
+### Single tool-result clamp (pinned 2026-08-24, opt-in, UNBENCHED)
+
+- `LUXE_TOOL_RESULT_CLAMP=1` (`RunFlags.tool_result_clamp`) bounds ONE tool
+  result at the moment `run_agent` appends it to `messages`. **Default OFF;
+  with it unset `clamp_tool_result` is never called and the appended string is
+  the untouched `executed.error or executed.result`** — byte-identical by
+  construction, pinned by
+  `tests/test_loop_context_bounds.py::TestDefaultPathIsUntouched`, which
+  compares the full request sequence across the unset case and every near-miss
+  spelling (`""`, `"0"`, `"true"`, `"01"`, `" 1"`, `"on"`, …).
+- Why it is NOT a `TieredCompact` change. Evidence
+  (`acceptance/chat_bigread_2026_08_24/EVIDENCE.md`, session `168f1825a1fd`):
+  one step read a 257,988 B file and a 23,775 B file; the next request
+  recorded `compaction_phase_reached phase_reached=3 tokens_before=71616
+  tokens_after=71616 tool_results_dropped=0` and the turn was lost. The most
+  aggressive tier fired and dropped nothing because `_find_eligible_end`
+  returns 2 when fewer than `keep_recent=3` assistant messages exist — which
+  is every early step of an interactive turn. **The fix is not to relax the
+  protected-message invariant above.** `messages[0]`/`messages[1]` and the last
+  `keep_recent` assistant iterations stay never-eligible; the bound belongs one
+  layer down, at CREATION. `keep_recent`, the pinned `(0.50, 0.85, 0.95)`
+  thresholds, and `_find_eligible_end`'s semantics are UNCHANGED by this work.
+- **The value is `bash`, `grep`, and MCP tools.** `read_file` already has
+  `LUXE_TOOL_BUDGET_CTX` (`tools.sdd`), which makes the clamp largely redundant
+  there; nothing else in the tool surface has a budget of any kind.
+- Budget: `luxe.context.tool_result_clamp_chars(effective_ctx)` =
+  `max(8 KB, effective_ctx * 0.25 * 4)`. The fraction and floor are
+  DELIBERATELY the same 0.25 / 8 KB pair as `tools.fs.READ_BUDGET_FRACTION` /
+  `READ_BUDGET_FLOOR`, so the two budgets cannot disagree about what one result
+  is worth — passed the CALIBRATED limit at cal=2.4x it lands on
+  `budget_for_ctx(32768) == 13653` exactly. Counted in CHARACTERS because
+  characters are what `estimate_tokens` (chars//4) divides; the `* 4` is that
+  function's own inverse, not a second tokenizer guess.
+- **Known asymmetry with the Phase 2 read budget, and it cuts the wrong way.**
+  This clamp derives its bound from `effective_ctx`, which is uncalibrated at
+  step 1 — so the FIRST step's bound is the loosest one the run will ever have
+  (at cal=1.0 a 32,768-token window allows 32,768 chars; once the loop learns
+  cal≈2.4x the same window allows 13,653). `tools.fs.budget_for_ctx` has no
+  such gap: it works from raw `num_ctx` and folds the measured 2.4x in as a
+  constant, so its bound is the same on every step. **The incident this lever
+  was written for died on an early step**, which is precisely where this lever
+  is weakest — the clamp would have fired on `self.md` at 257,988 B either way,
+  but a result between 13.6 KB and 32.7 KB slips through at step 1 and would
+  not at step 3. Two ways to close it if the bench shows it matters: seed the
+  step-1 calibration from `_CHARS_PER_TOKEN`, or take the bound from
+  `budget_for_ctx(role_cfg.num_ctx)` instead. Neither is done here — closing it
+  by guessing a step-1 ratio is the same error Phase 4 exists to correct, and
+  the choice should be made on bench evidence, not symmetry.
+- **The trailer must never imply a resume that does not exist.** `read_file`
+  output is line-numbered (`f"{i + offset + 1}\t{line}"`), so the offset is
+  RECOVERED from the last whole line that survived and the trailer carries the
+  same `continue with read_file(path=…, offset=N, limit=N)` shape `tools/fs.py`
+  emits. For every other tool — and for `read_file` output with no recoverable
+  line number, or no `path` argument — the trailer says what was dropped and
+  that re-running will not recover it. A guessed offset would send the model
+  round the identical call forever.
+- The two other `role: "tool"` appends in the loop (the schema reject and the
+  dedup short-circuit) are deliberately NOT clamped: neither runs
+  `dispatch_tool`, and both carry loop-authored constants — `validate_args`
+  returns a fixed sentence that never echoes an argument value, and the dedup
+  message is literal. Clamping them could only ever be a no-op on a hot path.
+- `executed.bytes_out`, `ToolCall.result` and the `tool_call` event keep
+  reporting what the TOOL produced. The clamp is about what the CONTEXT
+  carries; conflating the two would make the corpus lie about tool behaviour.
+  What the clamp did is its own record: `tool_result_clamped`
+  (name/max_chars/chars_dropped/bytes_out), gated by `log_calls`.
+- **UNBENCHED.** Promotion needs `python -m benchmarks.maintain_suite.run`
+  3 reps x 10 plus hand-reading every PASS via the local-branch ref
+  (bench-as-truth). The specific risk to watch is the one PLAN.md names: a
+  budget that turns one fatal turn into three timid ones is not a win — check
+  whether the model actually uses the resume offset.
+
+### Calibration extrapolation damping (pinned 2026-08-24, opt-in, UNBENCHED)
+
+- `LUXE_CTX_CAL_DAMP=1` (`RunFlags.ctx_cal_damp`) shrinks the server-truth
+  calibration toward the unmeasured-material ratio in proportion to how much of
+  the CURRENT prompt the calibration sample actually covered. **Default OFF;
+  with it unset `step_calibration is ctx_calibration` at every step**, so
+  `effective_ctx`, the `cal=` debug field, and every downstream consumer read
+  exactly as they did before — byte-identical, pinned by the same
+  `TestDefaultPathIsUntouched` class.
+- The problem it addresses (`EVIDENCE.md` finding 3, session `168f1825a1fd`):
+  the ratio is measured on the PREVIOUS response. At step 1 that prompt is
+  system-prompt-and-tool-JSON, which tokenizes far worse than chars/4 —
+  observed step-1 ratios 2.64x / 2.16x / 1.91x / 1.79x. Applied whole to a next
+  prompt that is 96% prose, where the SAME sessions recalibrated to 1.27x and
+  1.21x, it reported **102.5% pressure on a request that was ~65% of a 128K
+  window**, and the failure was then blamed on the endpoint. The section above
+  already records the drift; what it did not do is bound how far one sample may
+  be extrapolated.
+- Mechanism (`luxe.context.damped_calibration`). Real tokens are additive over
+  characters, so the honest reading of a prompt whose composition shifted is a
+  char-weighted blend::
+
+      share  = est_at_calibration / est_now      (capped at 1.0)
+      damped = R_unmeasured + (calibration - R_unmeasured) * share
+
+  `R_unmeasured` defaults to `CALIBRATION_UNMEASURED_RATIO = 1.2`, the MEASURED
+  chars/4-undercount of ordinary body text from the corpus above (1.27x and
+  1.21x once prose landed), cited the way `tools.fs._CHARS_PER_TOKEN` cites its
+  own live measurement. Damping toward 1.0 instead was considered and rejected:
+  it under-reads prose by ~17%, which is the pre-2026-08-11 failure in
+  miniature.
+- **The constant is a free parameter and is SWEEPABLE**:
+  `LUXE_CTX_CAL_UNMEASURED_RATIO` (`RunFlags.ctx_cal_unmeasured_ratio`), a
+  float on the `LUXE_TIERED_COMPACT_THRESHOLD` grammar — out of the pinned
+  `[CALIBRATION_MIN, CALIBRATION_MAX]` band or unparseable degrades SILENTLY to
+  1.2, so a sweep script exporting junk costs a default arm rather than a
+  crashed run. It reaches `damped_calibration` as a keyword argument, never as
+  a module-constant read, so no arm requires a source edit; and it is inert
+  while `LUXE_CTX_CAL_DAMP` is unset, so an arm that exports only the ratio is
+  a DEFAULT arm and the bench matrix can say so. A knob benched in a form that
+  cannot move is the C10 trap (lessons.md 2026-08-11). The safety properties
+  above hold at every value in the band, including the one that would otherwise
+  inflate an uncalibrated step — tested.
+- Two properties make it safe rather than merely plausible, and both are
+  tested: (a) **it only ever moves TOWARD 1.0, never past it and never away
+  from it** — the blend is clamped to the interval between `calibration` and
+  1.0, so an uncalibrated step stays exactly 1.0, a backend reporting no usage
+  still degrades to 1.0, and a sub-1.0 ratio cannot be inflated by the
+  constant; (b) **the pinned [0.5, 8.0] clamp survives by construction**, since
+  the result lies between two values already inside the band.
+- **The pinned `(0.50, 0.85, 0.95)` thresholds keep their values.** This
+  changes what the fraction MEANS, never the fraction — the same contract the
+  server-truth section states. Step 1 stays uncalibrated. The ratio is still
+  re-measured every step and never latched; `est_at_calibration` records the
+  size of the prompt the live ratio describes and is read only by this lever.
+- Gradual growth is barely touched (share≈0.9 keeps ~90% of the correction),
+  which is the SWE-bench/maintain trajectory shape; the 40x single-step jump is
+  the shape this exists for. Live replay: a 1.88x ratio measured on a
+  ~1,650-token prompt, applied to a 71,616-token estimate, damps to 1.22x —
+  66% of a 128K window instead of 102.5%, and no longer above the phase-3
+  trigger. Pinned in `tests/test_context.py::TestDampedCalibration` and
+  `tests/test_loop_context_bounds.py::TestCalibrationDamping`.
+- It says out loud what it did: a `ctx calibration damped 1.88x -> 1.22x
+  (measured at est=…, prompt now est=…)` debug line, only when the value
+  actually moved. A silent correction is how the last one hid for months.
+- With `LUXE_CTX_SERVER_TRUTH=0` the calibration never leaves 1.0, so damping
+  is inert — the ablation restores the pre-2026-08-11 reading whole regardless
+  of this flag.
+- **UNBENCHED. Promotion needs 3 reps x 10 maintain_suite against the shipped
+  default, SWEEPING the ratio over at least 1.0 / 1.2 / 1.6** so the constant
+  is chosen by evidence rather than inherited from one session.
+- **The mechanism of the risk, not just its direction.** 1.2 is
+  PROSE-DERIVED — two recalibrations in one markdown-heavy session. The
+  dangerous case is a composition shift toward the material chars/4 misses
+  HARDEST: a large JSON tool result, an MCP payload, a minified bundle, a
+  dense source file, where the true unmeasured ratio is nearer 2.4 than 1.2.
+  In that shape the blend UNDER-reads, compaction fires late or not at all, and
+  the server rejects the prompt outright — the exact `context_overflow` failure
+  the server-truth section was written to eliminate, and whose count that
+  section names as its own testable prediction. So the direction of risk is the
+  OPPOSITE of that section's, and **the number to check is the same one:
+  `context_overflow` bailouts must not increase on any swept arm.** A 1.6 arm
+  that beats 1.2 on that count is evidence the constant is prose-biased.
+- **What to check it on, and what maintain_suite does NOT have.** The fixture
+  to watch is one whose SINGLE-STEP growth is JSON or code rather than prose.
+  The suite has partial coverage: `isomer-implement-healthcheck` targets
+  `app.py` at 45,886 B of Python, the `nothing-ever-happens-*` pair sits over a
+  75,538 B `bot/strategy/nothing_happens.py`, and `isomer/data/*.json` holds
+  41,926 B and 89,921 B of JSON — all readable in one call, all landing as
+  roughly 4-6x single-step growth over a maintain step-1 prompt at
+  `num_ctx: 32768`. **The incident's MAGNITUDE is not represented**: nothing in
+  the suite produces the ~40x single-step jump that made the extrapolation
+  error visible, and the one file large enough to (`the-game`'s 316,061 B
+  `previous-versions/movies_storage.json`) is above `read_limit()` (262,144),
+  so `read_file` refuses it and it never lands as a single result at all. Treat
+  that as a FINDING the promotion decision must weigh, not a gap to leave
+  implicit: a green 3x10 bounds the lever's harm at 4-6x growth on code, and
+  says nothing about it at 40x. Evidence at the incident magnitude has to come
+  from a chat-side drill (`acceptance/chat_bigread_2026_08_24/`), the way
+  Phase 2's did.
+
 ### forge-hybrid Phase 3 (B) respond-terminal invariants (pinned 2026-05-28, opt-in)
 
 - **`LUXE_RESPOND_TERMINAL` defaults OFF.** The B1+B2 smoke at n=14 confirmed the
@@ -202,6 +380,20 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - `scripts/toolcall_taxonomy.py` prefers these direct events and suppresses
   its legacy proxies per-call/per-run; if either event's fields change,
   update the script's suppression paths in the same commit.
+- `compaction_phase_reached` gained `effective` and `eligible_end`, and
+  `compaction_phase_at_resolve` gained `ineffective_fires` (2026-08-24, NO
+  flag, same additive-only contract). Existing field names and values are
+  untouched. `CompactionResult.effective` is a derived PROPERTY, not a stored
+  field, so it cannot drift from the counters it reads and adding it changed no
+  constructor call; `eligible_end` is a defaulted field (`None` = no phase
+  ran). Why it exists: a `phase_reached=3` line reads as the most aggressive
+  tier responding to pressure, but the record that lost session
+  `168f1825a1fd`'s turn also carried `tokens_before == tokens_after == 71616`
+  and zero drops. Telemetry that cannot say "this achieved nothing" is how that
+  hid for months. **Checked before landing**: no events.jsonl consumer reads
+  compaction records at all — `scripts/*.py` (taxonomy included),
+  `benchmarks/maintain_suite/run.py` and the test corpus were swept, so there
+  was no field-shape assumption to break.
 
 ### Post-write idle repeat counting (pinned 2026-08-10, opt-in, UNBENCHED)
 

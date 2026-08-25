@@ -97,7 +97,16 @@ def _read_facts(repo_root: str | Path) -> list[Fact]:
     if not p.is_file():
         return []
     out: list[Fact] = []
-    for line in p.read_text().splitlines():
+    # errors="replace" (NOT surrogateescape): these Facts escape this module
+    # into `<project_memory>` (render_block, below) and from there into the
+    # request body of every chat turn. httpx encodes JSON bodies with
+    # ensure_ascii=False (httpx/_content.py:177-178) then `.encode("utf-8")`,
+    # which raises UnicodeEncodeError on a lone surrogate — so text handed to
+    # a caller must already be valid UTF-8, never round-trip-only. A decode
+    # error on the file-level read must not crash the whole read, either —
+    # one bad line already degrades gracefully below (JSONDecodeError,
+    # skipped).
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -123,7 +132,20 @@ def load_memory(repo_root: str | Path) -> ProjectMemory:
     md = ""
     mf = repo_memory_file(repo_root)
     if mf.is_file():
-        md = mf.read_text(encoding="utf-8")
+        # errors="replace" (NOT surrogateescape): `curated_md` escapes this
+        # module — it flows into render_block()'s <project_memory> block,
+        # which becomes `extra_context` on every chat turn (backend.py
+        # dispatch, `json=body`) and is also printed straight to the console
+        # by `/memory` (chat/cmd_project.py). Both destinations require valid
+        # UTF-8: httpx encodes request bodies with ensure_ascii=False then
+        # `.encode("utf-8")` (httpx/_content.py:177-178), which raises
+        # UnicodeEncodeError on a lone surrogate, and so does writing one to
+        # stdout. A stray non-UTF-8 byte (2026-08-24 — a gzip-magic
+        # `.luxe/memory.md`) must not crash session start, so read it lossily
+        # here rather than losslessly — contrast `splice_block` below, whose
+        # read/write pair never leaves this module and keeps surrogateescape
+        # on purpose.
+        md = mf.read_text(encoding="utf-8", errors="replace")
     return ProjectMemory(
         repo_root=str(repo_root),
         curated_md=md,
@@ -231,7 +253,16 @@ def splice_block(repo_root: str | Path, name: str, body: str, *,
     path = repo_memory_file(repo_root)
     if is_ephemeral():
         return path
-    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    # errors="surrogateescape" (read AND write, matched) — deliberately NOT
+    # errors="replace" here, unlike load_memory/_read_facts above. This text
+    # never escapes the function: it is read, spliced, and written straight
+    # back to the SAME file, so byte-exact round-tripping is correct and
+    # required — errors="replace" would instead permanently rewrite an
+    # undecodable byte as literal U+FFFD on the very next splice, corrupting
+    # a file that was merely unusual, not broken. (2026-08-24 — a memory.md
+    # was found starting with gzip magic 0x1f8b.)
+    existing = (path.read_text(encoding="utf-8", errors="surrogateescape")
+                if path.is_file() else "")
     begin_pre, end_marker = block_markers(name)
     begin = f"{begin_pre}{(' ' + stamp) if stamp else ''} -->"
     block = f"{begin}\n{body.strip()}\n{end_marker}"
@@ -246,7 +277,10 @@ def splice_block(repo_root: str | Path, name: str, body: str, *,
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".md.tmp")
-    tmp.write_text(new, encoding="utf-8")
+    # Matches the read's errors= above: encoding surrogate-escaped codepoints
+    # back with "strict" would raise UnicodeEncodeError on the very bytes we
+    # just promised to preserve.
+    tmp.write_text(new, encoding="utf-8", errors="surrogateescape")
     tmp.replace(path)
     return path
 

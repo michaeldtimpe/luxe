@@ -74,6 +74,69 @@ def read_limit() -> int:
 _LINE_COUNT_MAX_BYTES = 32 * 1024 * 1024
 _MAX_RESULTS = 150
 
+#: Second, LOWER threshold for `_oversize_note` (2026-08-24,
+#: `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 6, session
+#: `168f1825a1fd`). `read_limit()` answers "will `read_file` refuse this?" —
+#: a 257,988 B file at 0.98x the 262,144 B cap answered "no", so it listed as
+#: a bare name, the model read it whole (~64k tokens into a 128K window in
+#: one call), opened a second file in the same step, and the turn died. The
+#: useful question at listing time is "will this hurt?", not "will this be
+#: refused?".
+#:
+#: Expressed as a FRACTION of `read_limit()` rather than a second hardcoded
+#: byte count so it tracks whatever `read_limit()` currently is — the fixed
+#: 256 KB constant on the benchmark/maintain path, or a ctx-derived
+#: `budget_for_ctx()` override via `set_read_budget` on a chat turn — and the
+#: two thresholds can never invert (this one is always strictly below the
+#: refusal cap it is a fraction of). One HALF: a single read that alone would
+#: already consume more than half of what any one read is allowed to return
+#: is large enough that a second read in the same step — the exact shape of
+#: the incident, `self.md` + `questions.md` in one turn — risks the window,
+#: even though `read_file` alone would happily serve it.
+_LARGE_FILE_FRACTION = 0.5
+
+#: Process-level toggle for the large-but-readable bracket above, mirroring
+#: the `set_read_budget()`/`read_limit()` seam that already separates chat
+#: from bench in this module. DEFAULT OFF.
+#:
+#: Added 2026-08-24 after coordinator review found the fraction-of-cap
+#: bracket is NOT benchmark-path-neutral in practice: the maintain_suite
+#: fixture cache holds binary files between half and the whole of the
+#: 262,144 B default cap
+#: (`~/.luxe/fixture-cache/nothing-ever-happens/docs/dashboard.jpg`,
+#: `~/.luxe/fixture-cache/neon-rain/assets/fonts/Finlandica-VariableFont_wght.ttf`),
+#: and `nothing-ever-happens` backs doc fixtures whose task lists `docs/`
+#: directly — so an unconditional bracket would change `list_dir`/`glob`
+#: output on the benchmark path with zero bench evidence behind it.
+#: CLAUDE.md requires byte-identical benchmark output absent a promoted
+#: maintain_suite run.
+#:
+#: With this OFF, `_oversize_note` is byte-identical to the code before the
+#: large bracket existed — BY CONSTRUCTION (the check below is a hard early
+#: return), not by fixture luck. The refusal bracket above it is
+#: unconditional and unaffected by this toggle either way.
+#:
+#: Chat owns turning it on, and does: `chat/repl.py`'s `prepare_turn` calls
+#: `set_large_file_notes(True)` per turn, beside the `set_read_budget` block
+#: and for the same reason (`/ctx` moves `num_ctx` mid-session). `maintain.py`
+#: deliberately has no such call, which is what keeps the benchmark path
+#: byte-identical by construction rather than by fixture luck.
+_LARGE_FILE_NOTES: bool = False
+
+
+def set_large_file_notes(enabled: bool) -> None:
+    """Turn the large-but-readable bracket of `_oversize_note` on/off for this
+    process. `False` (default) restores pre-bracket behaviour exactly — the
+    benchmark/maintain path never calls this. Chat's turn-loop is the caller
+    (`chat/repl.py` `prepare_turn`; see the toggle's docstring above)."""
+    global _LARGE_FILE_NOTES
+    _LARGE_FILE_NOTES = bool(enabled)
+
+
+def large_file_notes_enabled() -> bool:
+    """Whether the large-but-readable bracket is active."""
+    return _LARGE_FILE_NOTES
+
 
 # --- write-time honesty guards --------------------------------------------
 # Catch the three failure modes Phase 2 surfaced — placeholder text,
@@ -425,9 +488,28 @@ def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
     return out, None
 
 
+def _looks_binary(p: Path) -> bool:
+    """Same null-byte-in-first-8KB heuristic `read_file` uses to refuse
+    binaries outright (see that function; tools.sdd). Only called from the
+    large bracket of `_oversize_note`, i.e. only for files already past
+    `_LARGE_FILE_FRACTION` of the limit — a small subset of any one listing,
+    not every entry — so the extra 8 KB read stays cheap even with the
+    toggle on. Fails open (`False`, i.e. still annotate) on a read error:
+    an unreadable file isn't established as binary, just unreadable, and
+    `_oversize_note`'s own `stat()` above already tolerates that class of
+    race silently."""
+    try:
+        with p.open("rb") as fh:
+            return b"\x00" in fh.read(8192)
+    except OSError:
+        return False
+
+
 def _oversize_note(p: Path) -> str:
     """`" (586 KB — too large to read whole; use limit= or grep)"` for a file
-    `read_file` will refuse, `""` for everything else.
+    `read_file` will REFUSE outright, `" (200 KB — large; …)"` — distinct
+    wording, never claiming refusal — for a file merely large enough to hurt,
+    `""` for everything else.
 
     Listings used to return bare names, so the ONLY way to learn a file was
     unreadable was to call `read_file` and be refused — one full model
@@ -437,9 +519,31 @@ def _oversize_note(p: Path) -> str:
     a later probe spent ten calls learning that a 320 KB bundle was one line.
     The size was knowable at `glob` time in both cases.
 
-    Deliberately annotates ONLY files past the limit: a tree with nothing
-    oversized produces byte-identical output to before, so the benchmark path
-    is untouched except in exactly the case where the note would have helped.
+    That first threshold (`read_limit()`) answers "will this be refused?", not
+    "will this hurt?" — a file just UNDER the cap sails through `read_file` in
+    one call and can still blow a turn's window on its own. Session
+    `168f1825a1fd` (2026-08-24, `acceptance/chat_bigread_2026_08_24/EVIDENCE.md`
+    finding 6): a 257,988 B file at 0.98x the 262,144 B cap listed as a bare
+    name, the model read it whole, opened a second file in the same step, and
+    the turn died. See `_LARGE_FILE_FRACTION` for the second threshold's
+    derivation.
+
+    Deliberately annotates ONLY files past one of the two thresholds: a tree
+    with nothing large produces byte-identical output to before, so the
+    benchmark path is untouched except in exactly the cases where a note would
+    have helped. The two brackets are mutually exclusive by construction (the
+    large-file check only runs once the refusal check has already said no), so
+    a file is never given both notes, and — because the second threshold is a
+    FRACTION of the first rather than an independent constant — they can never
+    invert at any `read_limit()`/`set_read_budget` value.
+
+    The large bracket is further gated on `_LARGE_FILE_NOTES` (default OFF —
+    see that flag's docstring for why: unconditionally it is NOT
+    benchmark-path-neutral, unlike the refusal bracket) and skips files that
+    sniff as binary the same way `read_file` does — "consider read_file
+    limit= or grep" is actively wrong advice for a JPEG or font file, since
+    `read_file` refuses binaries outright regardless of size and there is no
+    windowed path to point at.
     """
     try:
         if not p.is_file():
@@ -447,10 +551,17 @@ def _oversize_note(p: Path) -> str:
         size = p.stat().st_size
     except OSError:
         return ""
-    if size <= read_limit():
-        return ""
-    return (f"  ({size / 1024:,.0f} KB — too large to read whole; "
-            f"use read_file limit= or grep)")
+    limit = read_limit()
+    if size > limit:
+        return (f"  ({size / 1024:,.0f} KB — too large to read whole; "
+                f"use read_file limit= or grep)")
+    if (_LARGE_FILE_NOTES and size > limit * _LARGE_FILE_FRACTION
+            and not _looks_binary(p)):
+        return (f"  ({size / 1024:,.0f} KB — large; a whole-file read may "
+                f"cost a big share of the context window, especially "
+                f"combined with other reads this step — consider read_file "
+                f"limit= or grep)")
+    return ""
 
 
 def _list_dir(args: dict[str, Any]) -> tuple[str, str | None]:

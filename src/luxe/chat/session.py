@@ -77,7 +77,19 @@ def parse_ctx_size(text: str) -> int | None:
     return n if n > 0 else None
 
 #: Tiers that need more RAM than a typical dev box has, mapped to the floor
-#: they want. `huge` (256K) is the model's NATIVE limit, not this machine's:
+#: they want. THIS IS A STATEMENT ABOUT THE MACHINE HOLDING THE KV CACHE, and
+#: it is meaningful only when that machine is this one. Against a hosted
+#: endpoint the arithmetic below describes hardware that is not in the request
+#: path at all — a provider serving a 1M-token model would be reported as
+#: needing a box the user does not own to reach a window it is already
+#: serving. Every caller must therefore gate it on the weights being local:
+#: `cmd_toggles._ctx_on_local_ram` does that for `/ctx`, and
+#: `ctx_suggestion(..., local_weights=...)` below does it for the automatic
+#: suggestion (2026-08-24; noted in
+#: `acceptance/chat_bigread_2026_08_24/PLAN.md` 1.4 — harmless on a 128 GB box,
+#: wrong reasoning to leave unstated).
+#:
+#: `huge` (256K) is the model's NATIVE limit, not this machine's:
 #: the Qwen3.6 KV cache runs ~80 KiB/token (40 layers x 2 KV heads x 256
 #: head_dim x 2 for K+V x 2 bytes, and turboquant KV is off), so 256K is ~20
 #: GiB of cache on top of 21-28 GB of weights. That clears a 128 GB box and
@@ -130,6 +142,143 @@ def next_tier_up(num_ctx: int, ceiling: int) -> tuple[str, int] | None:
         if n > num_ctx and n <= ceiling:
             return name, n
     return None
+
+
+# --- Is more window actually the answer? (2026-08-24) -----------------------
+#
+# `CTX_SUGGEST_PRESSURE` alone answers "was it tight", never "would a bigger
+# window have helped". On 2026-08-24 (session 168f1825a1fd) a turn opened a
+# 257,988-byte file and a 23,775-byte one in ONE step, the request died, and
+# the footer offered `/ctx huge` — on a 128K window, for a turn where the
+# problem was that a single tool result was ~64k tokens on its own. The next
+# tier up would have bought a larger window for the same unbounded read to
+# overflow. See `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 5.
+#
+# These are DISPLAY gates and nothing else: `CTX_SUGGEST_PRESSURE` keeps its
+# value, no compaction threshold moves, and what gets dispatched is unchanged.
+
+#: A single tool result at or above this share of the window is a read-BUDGET
+#: problem (`LUXE_TOOL_BUDGET_CTX`, `limit=`, `grep`), not a window problem:
+#: doubling the window doubles what one unbounded read is allowed to eat.
+#: 0.25 is deliberately generous — a quarter of the window in one result is
+#: already past anything a healthy multi-step turn produces.
+CTX_SINGLE_RESULT_SHARE = 0.25
+
+#: Abort reasons a bigger window genuinely addresses — the server saying the
+#: prompt did not fit. Everything else (max steps, transport failures, a
+#: cancelled turn) is a different problem wearing the same peak-pressure
+#: number, and on an aborted turn that number is an EXTRAPOLATED estimate of a
+#: request the server never accepted (EVIDENCE.md finding 3: 102.5% reported
+#: on a request that was likely ~65% of the window), which makes it the
+#: weakest possible basis for a recommendation.
+_WINDOW_SHAPED_ABORT = (
+    "context length",
+    "context window",
+    "context_length_exceeded",
+    "maximum context",
+    "prompt too long",
+    "too many tokens",
+)
+
+
+def largest_tool_result_tokens(result) -> int:
+    """Estimated tokens in the single biggest tool result of a turn, 0 if none.
+
+    chars/4 on `ToolCall.bytes_out` — the same estimator the pressure signal
+    uses, so this compares like with like. Reads reporting fields only; no
+    loop state.
+    """
+    best = 0
+    for call in getattr(result, "tool_calls", None) or []:
+        try:
+            b = int(getattr(call, "bytes_out", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        best = max(best, b)
+    return best // 4
+
+
+def single_result_dominated(result, num_ctx: int) -> bool:
+    """True when ONE tool result accounts for `CTX_SINGLE_RESULT_SHARE`+ of
+    the window — the signature of a budget problem, not a window problem."""
+    if num_ctx <= 0:
+        return False
+    return largest_tool_result_tokens(result) >= num_ctx * CTX_SINGLE_RESULT_SHARE
+
+
+def abort_addressable_by_window(result) -> bool:
+    """For an ABORTED turn: did it fail for a reason more window would fix?
+
+    True only when the reason text names a context/window overflow. A turn
+    that did not abort is not this function's business — callers check
+    `aborted` first.
+    """
+    reason = (getattr(result, "abort_reason", "") or "").lower()
+    return any(marker in reason for marker in _WINDOW_SHAPED_ABORT)
+
+
+def ctx_suggestion(result, num_ctx: int, ceiling: int, *,
+                   local_weights: bool = True) -> tuple[str, int] | None:
+    """The `/ctx` tier to offer after a turn, or None to stay quiet.
+
+    `local_weights=False` for a hosted endpoint: `CTX_TIER_MIN_RAM_GB` is
+    about the machine holding the KV cache, and on a cloud backend that is not
+    this one (see its note above). Defaults True — the pre-2026-08-24 answer,
+    and the safe one when the origin lookup cannot tell.
+    """
+    peak = float(getattr(result, "peak_context_pressure", 0.0) or 0.0)
+    if peak < CTX_SUGGEST_PRESSURE:
+        return None
+    if getattr(result, "aborted", False) and not abort_addressable_by_window(result):
+        return None
+    if single_result_dominated(result, num_ctx):
+        return None
+    nxt = next_tier_up(num_ctx, ceiling)
+    if nxt is None:
+        return None
+    if local_weights and ctx_tier_ram_warning(nxt[0]):
+        # Never RECOMMEND a tier this host cannot hold. `/ctx <tier>` typed by
+        # hand still warns and proceeds — an explicit request is an
+        # instruction; an unprompted suggestion that luxe already knows will
+        # run out of memory mid-session is just bad advice.
+        return None
+    return nxt
+
+
+def _fmt_tokens(n: int) -> str:
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
+def aborted_ctx_line(result, num_ctx: int) -> str | None:
+    """One qualified context line for an ABORTED turn, or None.
+
+    The footer's `ctx:` is `last_prompt_tokens` — the last step the server
+    ACCEPTED — while the peak-pressure figure describes the step that FAILED.
+    Printed side by side without qualifiers they read as a contradiction: on
+    2026-08-24 one turn rendered `ctx: 2% of 128K` directly above `context
+    pressure 103%` and neither number was wrong (EVIDENCE.md finding 4). This
+    line names which step each number is about; display only.
+    """
+    if not getattr(result, "aborted", False):
+        return None
+    accepted = int(getattr(result, "last_prompt_tokens", 0) or 0)
+    peak = float(getattr(result, "peak_context_pressure", 0.0) or 0.0)
+    bits: list[str] = []
+    if accepted > 0:
+        window = f"/{num_ctx // 1024}K" if num_ctx > 0 else ""
+        bits.append(f"last accepted {_fmt_tokens(accepted)}{window}")
+    if peak > 0:
+        # `peak x num_ctx` lands back in SERVER-TRUTH tokens, not chars/4:
+        # pressure is measured against `calibrated_ctx_limit` (= num_ctx / the
+        # measured ratio), so the product is est x ratio. In session
+        # 168f1825a1fd that was 71,616 est x 1.88 ~ 135k against a 128K
+        # window — which is exactly why it reported 103%. Still an ESTIMATE of
+        # a request the server never accepted, hence the label.
+        est = f" ~{_fmt_tokens(int(peak * num_ctx))} est" if num_ctx > 0 else ""
+        bits.append(f"attempted{est} ({peak:.0%}, estimated)")
+    if not bits:
+        return None
+    return "context: " + " · ".join(bits)
 
 
 @dataclass

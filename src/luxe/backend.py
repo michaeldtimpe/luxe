@@ -16,6 +16,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -200,9 +201,82 @@ _WARMUP_WINDOW_S = 5.0
 _DEFAULT_MAX_ATTEMPTS = 3
 _DEFAULT_BACKOFF_S = (1.0, 4.0, 16.0)
 
+# --- Payload-suspect annotation (opt-in, OBSERVE-ONLY, UNBENCHED) -----------
+# A transport-level failure that follows a prompt which grew sharply over the
+# last request this endpoint ACCEPTED is suspicious: the same bytes are about
+# to be re-dispatched, and if the size is what killed them the retry ladder is
+# terminal by construction. On 2026-08-24 that cost two turns 81.5s and 76s of
+# wall, three identical billed dispatches each
+# (`acceptance/chat_bigread_2026_08_24/EVIDENCE.md` case 1).
+#
+# The lever ONLY annotates `RetryDecision.reason`; retry and delay are the
+# values the existing rules produce, unchanged. See `luxe.sdd` for why the
+# enforcing version (at most one retry) is a promotion step and not this
+# commit.
+_PAYLOAD_SUSPECT_GROWTH = 2.0
+#: Absolute floor, in prompt CHARACTERS. ~16k tokens at chars/4 — half of the
+#: smallest window luxe fields (32768). Below it, no plausible window is at
+#: risk and a growth ratio means nothing.
+_PAYLOAD_SUSPECT_MIN_CHARS = 65_536
+
+
+def payload_suspect_enabled() -> bool:
+    """Whether payload-suspect annotation is on for this process.
+
+    Opt-IN grammar (`agents/flags.py`'s spelling for a lever that has not been
+    benched): ONLY the exact string "1". Read at call time, never cached, so a
+    test can set it per-case and so a long-lived chat process picks it up.
+    """
+    return os.environ.get("LUXE_PAYLOAD_SUSPECT_RETRY") == "1"
+
+
+def prompt_chars(body: dict[str, Any]) -> int:
+    """Characters of the prompt `body` carries, or 0 if it cannot be measured.
+
+    Characters, not tokens: this is a RATIO test between two requests to the
+    same endpoint, so any monotone measure works and characters need no
+    tokenizer guess. Only `messages` counts — `tools` is a per-role constant
+    that cannot grow mid-turn, and including it would dilute exactly the jump
+    this is looking for.
+
+    Never called unless `payload_suspect_enabled()`, so the default path pays
+    nothing for it.
+    """
+    messages = body.get("messages") or []
+    if not messages:
+        return 0                      # nothing to measure is not a measurement
+    try:
+        return len(json.dumps(messages, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _payload_suspect(request_chars: int | None, last_accepted_chars: int | None) -> bool:
+    """True when this request is big AND grew sharply over the last accepted one.
+
+    Both conditions are required. Growth alone is the normal shape of an early
+    agent turn (step 1 is system-prompt-and-tool-JSON; step 2 carries the first
+    tool result), and size alone is a request the endpoint may be perfectly
+    happy with. A missing baseline is NOT suspicion: with nothing accepted yet
+    there is no growth to claim.
+    """
+    if not payload_suspect_enabled():
+        return False
+    if not request_chars or request_chars < _PAYLOAD_SUSPECT_MIN_CHARS:
+        return False
+    if not last_accepted_chars or last_accepted_chars <= 0:
+        return False
+    return request_chars >= last_accepted_chars * _PAYLOAD_SUSPECT_GROWTH
+
 
 @dataclass
 class RetryDecision:
+    # Do NOT add fields here without checking `scripts/bigread_drill.py:241`,
+    # which parses this dataclass's REPR out of debug.log
+    # (`RetryDecision(retry=…, reason='…', delay_s=…)`). That is why the
+    # payload-suspect lever below annotates `reason` instead of carrying a
+    # flag: a new field changes the repr of every decision on every path,
+    # including with the lever off.
     retry: bool
     reason: str
     delay_s: float = 0.0
@@ -216,6 +290,14 @@ def classify_failure(
     elapsed_since_start_s: float = 0.0,
     attempt: int = 0,
     max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    # Size of THIS request's prompt, and of the last one this endpoint
+    # accepted, in characters (`prompt_chars`). Both default None = "not
+    # measured", which is what every pre-2026-08-24 caller passes and what the
+    # unit tests that call this function directly pass. Read ONLY by the
+    # payload-suspect annotation below, and only when
+    # `LUXE_PAYLOAD_SUSPECT_RETRY=1`; no decision anywhere else consults them.
+    request_chars: int | None = None,
+    last_accepted_chars: int | None = None,
 ) -> RetryDecision:
     """Decide whether to retry based on the failure shape and elapsed time.
 
@@ -236,6 +318,12 @@ def classify_failure(
     backoff is for. Local engines never emit it, so this cannot perturb them.
     402 (out of credits) deliberately stays terminal — retrying a request the
     account cannot pay for burns the retry budget to reach the same answer.
+
+    `request_chars`/`last_accepted_chars` add a NON-BINDING annotation to the
+    transient-transport reason when `LUXE_PAYLOAD_SUSPECT_RETRY=1` (see
+    `_payload_suspect`). Every decision this function returns — retry and
+    delay, on every branch — is what it has always been; the lever changes one
+    string, and only with the env var set.
     """
     if attempt + 1 >= max_attempts:
         return RetryDecision(retry=False, reason="exhausted-attempts")
@@ -244,7 +332,23 @@ def classify_failure(
 
     if isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
                         httpx.NetworkError, httpx.RemoteProtocolError)):
-        return RetryDecision(retry=True, reason=f"transient-{type(exc).__name__}", delay_s=delay)
+        reason = f"transient-{type(exc).__name__}"
+        # Transport-level only, deliberately. A status-carrying failure was
+        # ingested and answered by the server: 4xx (`context_length_exceeded`
+        # among them) already fails fast, and a 5xx already has a body to
+        # classify. Nothing there would be improved by a size guess.
+        if _payload_suspect(request_chars, last_accepted_chars):
+            reason = f"{reason}-payload-suspect"
+            logger.warning(
+                "payload-suspect: %s after prompt grew %.1fx (last accepted "
+                "%d chars, this request %d chars) — retrying anyway "
+                "(observe-only lever)",
+                type(exc).__name__,
+                (request_chars or 0) / max(last_accepted_chars or 1, 1),
+                last_accepted_chars or 0,
+                request_chars or 0,
+            )
+        return RetryDecision(retry=True, reason=reason, delay_s=delay)
 
     if status_code is None:
         # Other RequestError subclasses we don't specifically recognise — treat as terminal.
@@ -388,7 +492,25 @@ class Backend:
         # like `body_extras`, not an engine test: `Backend` is never told what
         # engine it is talking to, and nothing here reads one.
         send_num_ctx: bool = True,
+        # How to NAME this endpoint's serving stack in a user-facing error
+        # ("oMLX" | "OpenRouter" | a raw engine string). Diagnostics only —
+        # nothing on the wire reads it, and `Backend` still learns no engine
+        # BEHAVIOUR from it (chat.sdd: `engine:` is diagnostic-only).
+        #
+        # Exists because every failure string below was hardcoded "oMLX". On
+        # 2026-08-24 a turn on the OpenRouter backend died with
+        # "oMLX stream failed: RemoteProtocolError … (exhausted-attempts)",
+        # naming a serving stack that was not in the request path at all — the
+        # first thing a post-outage reader would chase is a local oMLX that was
+        # perfectly healthy (session 168f1825a1fd; see
+        # `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 1).
+        #
+        # The default is the literal string every message has always carried,
+        # so a Backend built without it — which is every benchmark/maintain
+        # construction (`maintain.py`) — raises byte-identical text.
+        engine_label: str = "oMLX",
     ):
+        self.engine_label = engine_label or "oMLX"
         self.send_num_ctx = send_num_ctx
         # Live reasoning-channel sink, set by the CHAT front-end on the Backend
         # instance it owns (chat/slots.py builds it). An INSTANCE attribute
@@ -433,6 +555,19 @@ class Backend:
             trust_env=not is_loopback_url(self.base_url),
         )
         self._created_at = time.monotonic()
+        # Size (in prompt characters) of the last request THIS endpoint
+        # accepted — the baseline the payload-suspect annotation measures
+        # growth against. Instance state, not a `chat()` kwarg, for three
+        # reasons: (1) "the last request the server took" is a property of the
+        # ENDPOINT, not of any one conversation, and this object is the only
+        # thing that outlives a call while being scoped to one endpoint;
+        # (2) `agents/loop.py`'s `backend.chat` call site and `run_agent`'s
+        # signature are frozen (chat.sdd Must-not), so a parameter could never
+        # be threaded from the path where the failure actually happens;
+        # (3) it follows the precedent already set by `on_reasoning` and
+        # `_created_at`. It stays None on every process that has not set
+        # `LUXE_PAYLOAD_SUSPECT_RETRY=1` — nothing measures it when off.
+        self._last_accepted_prompt_chars: int | None = None
 
     def chat(
         self,
@@ -509,6 +644,10 @@ class Backend:
         attempt = 0
         last_decision: RetryDecision | None = None
         request_t0 = time.monotonic()
+        # Measured once (the body does not change between attempts) and ONLY
+        # when the lever is on, so the default path never serialises the
+        # prompt a second time.
+        req_chars = prompt_chars(body) if payload_suspect_enabled() else None
 
         while attempt < self.max_attempts:
             t0 = time.monotonic()
@@ -542,7 +681,8 @@ class Backend:
                     )
                     if not decision.retry:
                         raise BackendError(
-                            f"oMLX returned {resp.status_code}: {resp.text[:200]} "
+                            f"{self.engine_label} returned {resp.status_code}: "
+                            f"{resp.text[:200]} "
                             f"({decision.reason})"
                         )
                     if on_retry:
@@ -555,6 +695,10 @@ class Backend:
                 choice = data["choices"][0]
                 msg = choice["message"]
                 usage = data.get("usage", {})
+                # The server ingested this prompt and answered it: it becomes
+                # the baseline the next failure's growth is measured against.
+                if req_chars is not None:
+                    self._last_accepted_prompt_chars = req_chars
 
                 timing = GenerationTiming(
                     prompt_tokens=usage.get("prompt_tokens", 0),
@@ -605,6 +749,8 @@ class Backend:
                     elapsed_since_start_s=time.monotonic() - request_t0,
                     attempt=attempt,
                     max_attempts=self.max_attempts,
+                    request_chars=req_chars,
+                    last_accepted_chars=self._last_accepted_prompt_chars,
                 )
                 last_decision = decision
                 logger.warning(
@@ -613,7 +759,8 @@ class Backend:
                 )
                 if not decision.retry:
                     raise BackendError(
-                        f"oMLX call failed: {type(exc).__name__}: {exc} ({decision.reason})"
+                        f"{self.engine_label} call failed: {type(exc).__name__}: "
+                        f"{exc} ({decision.reason})"
                     ) from exc
                 if on_retry:
                     on_retry(decision, attempt)
@@ -622,7 +769,10 @@ class Backend:
 
         # Loop exhausted without success
         reason = last_decision.reason if last_decision else "unknown"
-        raise BackendError(f"oMLX retries exhausted after {self.max_attempts} attempts ({reason})")
+        raise BackendError(
+            f"{self.engine_label} retries exhausted after "
+            f"{self.max_attempts} attempts ({reason})"
+        )
 
     def _read_body_with_progress(self, resp) -> bytes:
         """Accumulate a non-streamed response body, aborting if it stalls.
@@ -679,6 +829,10 @@ class Backend:
         attempt = 0
         last_decision: RetryDecision | None = None
         request_t0 = time.monotonic()
+        # Same measurement as the non-stream path, same guard: only when the
+        # lever is on, once for the whole call. `messages` is untouched by the
+        # stream rewrite above, so the two paths measure the same thing.
+        req_chars = prompt_chars(body) if payload_suspect_enabled() else None
 
         while attempt < self.max_attempts:
             t0 = time.monotonic()
@@ -712,7 +866,8 @@ class Backend:
                         )
                         if not decision.retry:
                             raise BackendError(
-                                f"oMLX returned {resp.status_code}: {resp.text[:200]} "
+                                f"{self.engine_label} returned "
+                                f"{resp.status_code}: {resp.text[:200]} "
                                 f"({decision.reason})"
                             )
                         if on_retry:
@@ -796,6 +951,10 @@ class Backend:
                                 last_progress = time.monotonic()
 
                 wall = time.monotonic() - t0
+                # Stream completed: this prompt was accepted (see the
+                # non-stream path for why acceptance is the baseline).
+                if req_chars is not None:
+                    self._last_accepted_prompt_chars = req_chars
                 tc_list: list[ToolCallResponse] = []
                 for idx in sorted(tool_frags):
                     frag = tool_frags[idx]
@@ -839,6 +998,8 @@ class Backend:
                     elapsed_since_start_s=time.monotonic() - request_t0,
                     attempt=attempt,
                     max_attempts=self.max_attempts,
+                    request_chars=req_chars,
+                    last_accepted_chars=self._last_accepted_prompt_chars,
                 )
                 last_decision = decision
                 logger.warning(
@@ -847,7 +1008,8 @@ class Backend:
                 )
                 if not decision.retry:
                     raise BackendError(
-                        f"oMLX stream failed: {type(exc).__name__}: {exc} ({decision.reason})"
+                        f"{self.engine_label} stream failed: {type(exc).__name__}: "
+                        f"{exc} ({decision.reason})"
                     ) from exc
                 if on_retry:
                     on_retry(decision, attempt)
@@ -856,15 +1018,26 @@ class Backend:
 
         reason = last_decision.reason if last_decision else "unknown"
         raise BackendError(
-            f"oMLX stream retries exhausted after {self.max_attempts} attempts ({reason})"
+            f"{self.engine_label} stream retries exhausted after "
+            f"{self.max_attempts} attempts ({reason})"
         )
 
-    def health(self) -> bool:
+    def health(self, timeout_s: float | None = None) -> bool:
         # OSError as well as httpx.HTTPError: a socket-level ETIMEDOUT (macOS
         # errno 60, e.g. a dropped Tailscale route) is an OSError and must read
         # as "unhealthy", not crash the caller.
+        #
+        # `timeout_s` overrides the client's per-read deadline for THIS probe
+        # only. None (every pre-2026-08-24 caller) keeps the client's own
+        # value, which is sized for GENERATION — 600s locally, 2400s for the
+        # m5 entry. That is the right bound for a chat completion and the wrong
+        # one for a liveness question asked on a failure path: a hung endpoint
+        # that accepts the socket and never answers would hold the probe for
+        # the full read timeout. `chat/slots.unreachable_hint` passes a few
+        # seconds for exactly that reason (EVIDENCE.md finding 2).
         try:
-            r = self._client.get("/v1/models")
+            kw = {} if timeout_s is None else {"timeout": timeout_s}
+            r = self._client.get("/v1/models", **kw)
             return r.status_code == 200
         except (httpx.HTTPError, OSError):
             return False

@@ -49,8 +49,14 @@ class FakeBackend:
         self.unloaded_models: list = []
         self.thermal_calls: list = []
 
-    def health(self):
+    # `timeout_s` mirrors the real Backend (2026-08-24): `unreachable_hint`
+    # asks with a few-second bound so a hung endpoint cannot hold a hint on a
+    # turn that has already failed.
+    def health(self, timeout_s=None):
+        type(self).health_bounds.append(timeout_s)
         return type(self).healthy.get(self.base_url, True)
+
+    health_bounds: list = []
 
     def list_models(self):
         return list(type(self).served.get(self.base_url, []))
@@ -96,6 +102,7 @@ def fake_backend(monkeypatch):
     FakeBackend.catalog_records = {}
     FakeBackend.credit_data = {}
     FakeBackend.catalog_calls = {}
+    FakeBackend.health_bounds = []
     monkeypatch.setattr(slots_mod, "Backend", FakeBackend)
 
 
@@ -241,7 +248,42 @@ def test_switch_resets_resident_and_never_unloads_old_server():
 
 
 def test_hint_names_active_and_alternative():
+    """The genuinely-unreachable case, VERBATIM. The fleet's outage path reads
+    this string; it must not drift (chat.sdd, PLAN.md 1.2)."""
+    FakeBackend.healthy = {LOCAL: False}
     sm = slots_mod.SlotManager(_multi_cfg())
+    assert sm.unreachable_hint() == "local oMLX unreachable — try /backend m5"
+
+
+def test_a_healthy_endpoint_is_not_called_unreachable():
+    """2026-08-24 (session 168f1825a1fd): a turn that died on an oversized
+    payload printed "unreachable — try /backend local" while the endpoint was
+    demonstrably up, and the `local` it advised had already failed the same way
+    at a smaller window. EVIDENCE.md finding 2."""
+    FakeBackend.healthy = {LOCAL: True}
+    sm = slots_mod.SlotManager(_multi_cfg())
+    hint = sm.unreachable_hint()
+    assert "unreachable" not in hint
+    assert "/backend m5" not in hint      # no remedy is prescribed
+    assert "answered a health check" in hint
+    assert "local oMLX" in hint
+
+
+def test_the_hint_probe_is_bounded():
+    """It runs on a turn that has already failed, in front of a waiting user.
+    A hung endpoint must not hold it for the client's generation timeout."""
+    sm = slots_mod.SlotManager(_multi_cfg())
+    FakeBackend.health_bounds = []
+    sm.unreachable_hint()
+    assert FakeBackend.health_bounds == [slots_mod._HINT_PROBE_TIMEOUT_S]
+
+
+def test_a_probe_that_cannot_answer_keeps_todays_hint(monkeypatch):
+    """"Cannot answer" ⇒ pre-2026-08-24 behaviour, so nothing the outage path
+    depends on changes when the probe itself is the thing that is broken."""
+    sm = slots_mod.SlotManager(_multi_cfg())
+    monkeypatch.setattr(sm.backend, "health",
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     assert sm.unreachable_hint() == "local oMLX unreachable — try /backend m5"
 
 
@@ -276,6 +318,9 @@ def test_repl_turn_backend_error_prints_hint_only_multi(monkeypatch):
                                infer_task_type=lambda m: "review")
         return out.getvalue()
 
+    # The endpoint has to be DOWN for the escape hatch to be offered at all
+    # (2026-08-24): a healthy endpoint gets a true message instead.
+    FakeBackend.healthy = {LOCAL: False}
     multi_out = _run(_multi_cfg())
     assert "oMLX call failed" in multi_out
     assert "try /backend m5" in multi_out
@@ -608,6 +653,24 @@ def test_the_per_backend_roster_governs_the_picker():
     assert sm.available_models() == ["org/short-listed"]
 
 
+def test_the_constructed_backend_is_labelled_with_its_engine():
+    """The single chat construction site (`SlotManager._build_backend`) is
+    what stops a failure message from asserting the wrong serving stack —
+    "oMLX stream failed" on an OpenRouter turn, 2026-08-24 session
+    168f1825a1fd. Set as an instance attribute like `on_reasoning`, NOT via
+    `backend_kwargs()`, whose pinned contract is that `engine:` never touches
+    the wire/timeout surface (tests/test_config.py)."""
+    assert slots_mod.SlotManager(_or_cfg()).backend.engine_label == "OpenRouter"
+    assert slots_mod.SlotManager(_multi_cfg()).backend.engine_label == "oMLX"
+
+
+def test_the_label_follows_a_backend_switch():
+    FakeBackend.served = {LOCAL: ["org/short-listed"]}
+    sm = slots_mod.SlotManager(_or_cfg())
+    sm.switch_backend("local")
+    assert sm.backend.engine_label == "oMLX"
+
+
 def test_engine_label_names_the_provider():
     sm = slots_mod.SlotManager(_or_cfg())
     assert sm.engine_label() == "OpenRouter"
@@ -615,6 +678,7 @@ def test_engine_label_names_the_provider():
 
 
 def test_the_unreachable_hint_names_the_active_engine():
+    FakeBackend.healthy = {OR: False}
     sm = slots_mod.SlotManager(_or_cfg())
     hint = sm.unreachable_hint()
     assert "OpenRouter unreachable" in hint

@@ -245,6 +245,52 @@ class TestSkipPaths:
         assert res.written is None and "PermissionError" in res.skipped
 
 
+class TestNonUtf8MemoryFile:
+    """2026-08-24: a `.luxe/memory.md` that happened to start with gzip magic
+    bytes (0x1f 0x8b) raised UnicodeDecodeError out of a bare
+    `read_text(encoding="utf-8")`, and the whole notes write was lost —
+    logged as a silent skip, which is the documented contract for a real
+    write failure, not for "we could have written this but our own read of
+    unrelated bytes got in the way." A non-UTF-8 memory file must not destroy
+    the notes write."""
+
+    def test_gzip_magic_memory_file_does_not_raise_and_notes_are_written(
+            self, repo):
+        luxe_dir = repo / ".luxe"
+        luxe_dir.mkdir(parents=True)
+        raw = b"\x1f\x8b\x08\x00" + b"not valid utf-8: \xff\xfe\x80\x81" * 4
+        (luxe_dir / "memory.md").write_bytes(raw)
+
+        res = notes_mod.run_session_notes(_session(repo),
+                                          _Slots(_Backend(), _cfg()), _cfg(),
+                                          _console())
+
+        assert res.written is not None
+        assert res.skipped == ""
+        after = (luxe_dir / "memory.md").read_bytes()
+        assert after.startswith(raw)              # original bytes untouched
+        assert b"<!-- luxe:notes begin" in after
+        assert b"did a thing" in after
+
+    def test_gzip_magic_memory_file_does_not_corrupt_via_replacement_chars(
+            self, repo):
+        """errors="replace" would be a live option here too, but it silently
+        rewrites every undecodable byte to U+FFFD on the very next splice —
+        real, permanent corruption of a file that was merely unusual, not
+        broken. Assert the round-trip stays exact instead of merely present."""
+        luxe_dir = repo / ".luxe"
+        luxe_dir.mkdir(parents=True)
+        raw = bytes([0x1F, 0x8B]) + b"\x00\x01\x02\xfe\xff binary tail"
+        (luxe_dir / "memory.md").write_bytes(raw)
+
+        notes_mod.run_session_notes(_session(repo), _Slots(_Backend(), _cfg()),
+                                    _cfg(), _console())
+
+        after = (luxe_dir / "memory.md").read_bytes()
+        assert b"\xef\xbf\xbd" not in after        # no UTF-8-encoded U+FFFD
+        assert after[: len(raw)] == raw
+
+
 class TestOnDemand:
     def test_note_bypasses_the_config_toggle_and_turn_floor(self, repo):
         cfg = _cfg(notes=False)

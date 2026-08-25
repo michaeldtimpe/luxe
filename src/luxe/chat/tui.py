@@ -41,7 +41,11 @@ from luxe.chat.render import (
     render_footer_text,
 )
 from luxe.chat.render import CancelToken
-from luxe.chat.session import CTX_SUGGEST_PRESSURE, ChatSession, next_tier_up
+from luxe.chat.session import (
+    ChatSession,
+    aborted_ctx_line,
+    ctx_suggestion,
+)
 from luxe.chat.status import StatusState
 from luxe.memory import session as session_store
 
@@ -749,11 +753,21 @@ class ChatApp(App):
         s.prompt_tokens = result.prompt_tokens
         s.steps = result.steps
         s.has_turn = True
-        if result.peak_context_pressure >= CTX_SUGGEST_PRESSURE:
-            nxt = next_tier_up(outcome.num_ctx, prep.ctx_ceiling)
-            if nxt:
-                log.write(f"[dim]· context pressure {result.peak_context_pressure:.0%} "
-                          f"— `/ctx {nxt[0]}` gives more headroom[/]")
+        # Same display gate as the line REPL (repl.py): offer a bigger window
+        # only when a bigger window is plausibly the answer — not when one tool
+        # result ate this one, not on an abort more headroom cannot fix, and
+        # not for a tier this host has no RAM for (session.ctx_suggestion,
+        # 2026-08-24). Nothing dispatched changes; CTX_SUGGEST_PRESSURE and the
+        # compaction thresholds keep their values.
+        nxt = ctx_suggestion(
+            result, outcome.num_ctx, prep.ctx_ceiling,
+            # The RAM floors describe the box holding the KV cache, which a
+            # remote endpoint is not. Mirrors `cmd_toggles._ctx_on_local_ram`.
+            local_weights=(s.model_origin != "remote"),
+        )
+        if nxt:
+            log.write(f"[dim]· context pressure {result.peak_context_pressure:.0%} "
+                      f"— `/ctx {nxt[0]}` gives more headroom[/]")
         # Mirror the line REPL: a turn the agent loop ABORTED (backend failure
         # contained into the result rather than raised) is a failed turn and
         # must look like one — it used to render as a successful empty reply.
@@ -762,6 +776,12 @@ class ChatApp(App):
         if noted:
             reason, hint = noted
             log.write(Text(f"✗ {reason}", style="red"))
+            # Name which step each context number describes — the footer's
+            # `ctx:` is the last ACCEPTED step, the pressure figure is the step
+            # that FAILED (EVIDENCE.md 2026-08-24, finding 4).
+            ctx_line = aborted_ctx_line(result, outcome.num_ctx)
+            if ctx_line:
+                log.write(Text(f"· {ctx_line}", style="dim"))
             if hint:
                 log.write(Text(f"· {hint}", style="yellow"))
 

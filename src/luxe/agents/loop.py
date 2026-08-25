@@ -81,9 +81,12 @@ from luxe.context import (
     TieredCompact,
     calibrated_ctx_limit,
     calibration_ratio,
+    clamp_tool_result,
     context_pressure,
+    damped_calibration,
     elide_old_tool_results,
     estimate_messages_tokens,
+    tool_result_clamp_chars,
 )
 from luxe.run_state import append_event
 from luxe.spec import Spec
@@ -418,6 +421,28 @@ def run_agent(
     # 1.0 = uncalibrated, which is both the step-1 state and the ablation.
     ctx_server_truth_enabled = flags.ctx_server_truth
     ctx_calibration = 1.0
+    # Damp that extrapolation when the prompt has outgrown the sample the
+    # ratio was measured on (2026-08-24, OPT-IN, default OFF). The ratio
+    # describes the PREVIOUS request; at step 1 that request is system prompt
+    # + tool JSON (observed 1.79-2.64x) and the next one can be 96% prose
+    # (1.21-1.27x in the same sessions), which is how a request at ~65% of a
+    # 128K window reported 102.5% and was blamed on the endpoint. When the
+    # flag is unset `step_calibration is ctx_calibration` at every step and
+    # nothing downstream can tell the difference.
+    # `est_at_calibration` is the size of the prompt the live ratio was
+    # measured on; 0 = never measured, which `damped_calibration` returns
+    # unchanged.
+    ctx_cal_damp_enabled = flags.ctx_cal_damp
+    # Sweepable for the promotion bench (LUXE_CTX_CAL_UNMEASURED_RATIO);
+    # inert while the damping flag is off.
+    ctx_cal_unmeasured_ratio = flags.ctx_cal_unmeasured_ratio
+    est_at_calibration = 0
+    # Bound ONE tool result at insertion (2026-08-24, OPT-IN, default OFF).
+    # See luxe.context.clamp_tool_result for why this is not a TieredCompact
+    # change. `tool_result_clamp_chars` returning 0 means "no bound", so the
+    # disabled path never even computes a limit.
+    tool_result_clamp_enabled = flags.tool_result_clamp
+    tool_results_clamped = 0
     # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
     # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
     # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
@@ -440,6 +465,8 @@ def run_agent(
         ) if tiered_compact_enabled else None
     )
     compaction_tool_results_dropped_total = 0
+    #: Phases that fired and changed nothing (2026-08-24, telemetry only).
+    compaction_ineffective_fires = 0
     compaction_total_tokens_dropped = 0
     compaction_max_phase_this_run = 0
     compaction_phase_at_first_write: int | None = None
@@ -584,7 +611,22 @@ def run_agent(
         # under the server's own `usage.prompt_tokens` last call — see
         # `calibrated_ctx_limit`. Step 1 has nothing to calibrate against and
         # uses `num_ctx` raw, which is the historical behaviour.
-        effective_ctx = calibrated_ctx_limit(role_cfg.num_ctx, ctx_calibration)
+        # LUXE_CTX_CAL_DAMP (opt-in, default OFF): the live ratio was measured
+        # on ONE prompt; apply only the share of it that prompt still covers.
+        # `step_calibration is ctx_calibration` whenever the flag is off, so
+        # `effective_ctx`, the debug line, and every consumer are unchanged.
+        step_calibration = ctx_calibration
+        if ctx_cal_damp_enabled and ctx_calibration != 1.0:
+            _est_now = estimate_messages_tokens(messages)
+            step_calibration = damped_calibration(
+                ctx_calibration, est_at_calibration, _est_now,
+                unmeasured=ctx_cal_unmeasured_ratio)
+            if step_calibration != ctx_calibration:
+                logger.debug("ctx calibration damped %.2fx -> %.2fx "
+                             "(measured at est=%d, prompt now est=%d)",
+                             ctx_calibration, step_calibration,
+                             est_at_calibration, _est_now)
+        effective_ctx = calibrated_ctx_limit(role_cfg.num_ctx, step_calibration)
 
         pressure = context_pressure(messages, effective_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
@@ -597,7 +639,7 @@ def run_agent(
                      "num_ctx=%d effective_ctx=%d msgs=%d",
                      step + 1, pressure * 100,
                      context_pressure(messages, role_cfg.num_ctx) * 100,
-                     ctx_calibration, role_cfg.num_ctx, effective_ctx,
+                     step_calibration, role_cfg.num_ctx, effective_ctx,
                      len(messages))
         if on_progress is not None:
             on_progress(pressure)  # chat-only live ctx% (one source of truth, C2)
@@ -1006,6 +1048,18 @@ def run_agent(
                 compaction_total_tokens_dropped += (cr.tokens_before - cr.tokens_after)
                 if cr.phase_reached > compaction_max_phase_this_run:
                     compaction_max_phase_this_run = cr.phase_reached
+                # 2026-08-24 — ADDITIVE telemetry, no flag, no behaviour
+                # change: a phase can fire and achieve nothing (phase 3 with
+                # tokens_before == tokens_after == 71616 and zero drops, when
+                # `_find_eligible_end` returned 2 because the turn had two
+                # assistant messages). Existing field names and values are
+                # untouched; `effective` and `eligible_end` say whether the
+                # fire did anything and why. No events.jsonl consumer reads
+                # compaction records today (checked: scripts/*.py,
+                # benchmarks/maintain_suite/run.py, tests/) — the two new keys
+                # cannot break a field-shape assumption that does not exist.
+                if not cr.effective:
+                    compaction_ineffective_fires += 1
                 if log_calls:
                     append_event(
                         run_id, "compaction_phase_reached",
@@ -1014,6 +1068,8 @@ def run_agent(
                         tokens_before=cr.tokens_before,
                         tokens_after=cr.tokens_after,
                         tool_results_dropped=cr.tool_results_dropped,
+                        effective=cr.effective,
+                        eligible_end=cr.eligible_end,
                     )
         else:
             messages = elide_old_tool_results(messages, effective_ctx)
@@ -1063,6 +1119,9 @@ def run_agent(
                              "(server=%d est=%d)", ctx_calibration, new_cal,
                              resp.timing.prompt_tokens, est_sent)
             ctx_calibration = new_cal
+            # The prompt this ratio describes. Only meaningful while the
+            # ratio is; read solely by the opt-in damping above.
+            est_at_calibration = est_sent
 
         # Token-interval progress logging — fires when cumulative completion
         # tokens crosses each LUXE_TOKEN_LOG_INTERVAL multiple. Lets us see
@@ -1599,6 +1658,42 @@ def run_agent(
                     post_intervention_consecutive_writes = 0
 
             content = executed.error or executed.result
+            # LUXE_TOOL_RESULT_CLAMP (opt-in, default OFF). Bound ONE result
+            # here, at creation, rather than asking TieredCompact to reach a
+            # message its pinned protections put out of reach. Off => the
+            # helper is not called at all and `content` is the untouched
+            # string, so the benchmark path is byte-identical by construction.
+            #
+            # `executed.bytes_out` and the `tool_call` event keep reporting
+            # what the TOOL produced — the clamp is about what the CONTEXT
+            # carries, and conflating the two would make the corpus lie about
+            # tool behaviour.
+            #
+            # The other two `role: "tool"` appends in this loop (the schema
+            # reject and the dedup short-circuit) are deliberately NOT
+            # clamped: neither runs `dispatch_tool`, and both carry loop-
+            # authored constants — `validate_args` returns a fixed sentence
+            # that never echoes an argument value, and the dedup message is
+            # literal. Clamping them could only ever be a no-op on a hot path.
+            if tool_result_clamp_enabled and content:
+                _clamp_max = tool_result_clamp_chars(effective_ctx)
+                content, _clamp_dropped = clamp_tool_result(
+                    content, tool_name=tc.name, max_chars=_clamp_max,
+                    path=extract_path(tc.name, tc.arguments),
+                )
+                if _clamp_dropped:
+                    tool_results_clamped += 1
+                    logger.debug("tool result clamped name=%s max_chars=%d "
+                                 "dropped=%d", tc.name, _clamp_max,
+                                 _clamp_dropped)
+                    if log_calls:
+                        append_event(
+                            run_id, "tool_result_clamped",
+                            phase=phase, step=step, name=tc.name,
+                            max_chars=_clamp_max,
+                            chars_dropped=_clamp_dropped,
+                            bytes_out=executed.bytes_out,
+                        )
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id or f"call_{step}",
@@ -1700,8 +1795,13 @@ def run_agent(
             phase_at_first_write=compaction_phase_at_first_write,
             tool_results_dropped_total=compaction_tool_results_dropped_total,
             total_tokens_dropped=compaction_total_tokens_dropped,
+            # Additive 2026-08-24: how many of those fires achieved nothing.
+            ineffective_fires=compaction_ineffective_fires,
             aborted=result.aborted,
         )
+
+    if tool_results_clamped:
+        logger.debug("tool results clamped this run: %d", tool_results_clamped)
 
     result.wall_s = time.monotonic() - t0
     return result

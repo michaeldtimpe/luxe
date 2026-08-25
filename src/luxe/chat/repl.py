@@ -46,11 +46,11 @@ from luxe.chat.render import (
 )
 from luxe.chat import status as status_mod
 from luxe.chat.session import (
-    CTX_SUGGEST_PRESSURE,
     CTX_TIERS,
     ChatSession,
     ChatTurn,
-    next_tier_up,
+    aborted_ctx_line,
+    ctx_suggestion,
 )
 from luxe.chat import mcptools
 from luxe.chat.slots import SlotManager
@@ -719,6 +719,24 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     else:
         fs_mod.set_read_budget(None)
 
+    # Large-but-readable annotations in `list_dir`/`glob` (2026-08-24,
+    # EVIDENCE.md finding 6: a 257,988 B file at 0.98x the refusal cap listed
+    # as a bare name, then read whole, and the turn was lost). ON for chat,
+    # unconditionally — chat is not a benched path, so this needs no flag.
+    #
+    # It is set HERE, per turn and beside the read budget, for the same reason
+    # that one is: `/ctx` moves num_ctx mid-session, and both toggles are
+    # process-global module state that any other caller in this process may
+    # have moved.
+    #
+    # `set_large_file_notes` defaults OFF in `tools/fs.py` and `maintain.py`
+    # deliberately has NO such call: the bracket is not benchmark-path-neutral
+    # (the maintain_suite fixture cache holds files between half and the whole
+    # of the 262,144 B cap, and `nothing-ever-happens` backs doc fixtures whose
+    # task lists `docs/` directly). The bench path therefore stays
+    # byte-identical by construction — it never turns this on.
+    fs_mod.set_large_file_notes(True)
+
     extra_context, fold_version = session.build_extra_context(message)
 
     turn_idx = len(session.turns)
@@ -1080,14 +1098,26 @@ def _run_turn(
             status.prompt_tokens = result.prompt_tokens
             status.steps = result.steps
             status.has_turn = True
-        # Auto-suggest a larger window (never resizes silently — chat.sdd).
-        if result.peak_context_pressure >= CTX_SUGGEST_PRESSURE:
-            nxt = next_tier_up(role_cfg.num_ctx, prep.ctx_ceiling)
-            if nxt:
-                console.print(
-                    f"[dim]· context pressure {result.peak_context_pressure:.0%} — "
-                    f"`/ctx {nxt[0]}` (num_ctx {nxt[1]}) gives more headroom[/]"
-                )
+        # Auto-suggest a larger window (never resizes silently — chat.sdd),
+        # and only when a larger window is plausibly the answer: `ctx_suggestion`
+        # drops the offer when one tool result ate the window, when the turn
+        # aborted for something more headroom cannot fix, or when the next tier
+        # needs RAM this host does not have (session.py, 2026-08-24). Display
+        # gate only — CTX_SUGGEST_PRESSURE and every compaction threshold are
+        # untouched.
+        nxt = ctx_suggestion(
+            result, role_cfg.num_ctx, prep.ctx_ceiling,
+            # `CTX_TIER_MIN_RAM_GB` is arithmetic about the box holding the KV
+            # cache; on a remote endpoint that is not this one. Mirrors
+            # `cmd_toggles._ctx_on_local_ram`, including "unknown ⇒ local".
+            local_weights=(status.model_origin != "remote"
+                           if status is not None else True),
+        )
+        if nxt:
+            console.print(
+                f"[dim]· context pressure {result.peak_context_pressure:.0%} — "
+                f"`/ctx {nxt[0]}` (num_ctx {nxt[1]}) gives more headroom[/]"
+            )
 
         # Working-state view (B2): show the ledger after the footer so the
         # operator sees decided/done/remaining at a glance.
@@ -1102,6 +1132,13 @@ def _run_turn(
         if noted:
             reason, hint = noted
             console.print(f"[red]✗ {_escape(reason)}[/]")
+            # Which step each context number describes. Without it the footer's
+            # `ctx:` (last ACCEPTED step) reads as a contradiction of the
+            # pressure figure (the step that FAILED) — 2026-08-24, EVIDENCE.md
+            # finding 4.
+            ctx_line = aborted_ctx_line(result, role_cfg.num_ctx)
+            if ctx_line:
+                console.print(f"[dim]· {ctx_line}[/]")
             if hint:
                 console.print(f"[yellow]· {hint}[/]")
 

@@ -185,7 +185,25 @@ def write_notes(repo_root: str | Path, bullets: str, session_id: str) -> Path:
     from luxe.memory import project as project_mem
 
     path = project_mem.repo_memory_file(repo_root)
-    existing_text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    # errors="surrogateescape": matches project.splice_block's own read/write
+    # pair (project.py:238/265). A non-UTF-8 memory.md (2026-08-24: gzip
+    # magic bytes) must not raise here and lose the note before it even
+    # reaches splice_block — every invalid byte round-trips losslessly, it
+    # just won't ever match `<!-- luxe:notes begin` (plain ASCII), so
+    # `read_block` correctly finds no existing entries and the note still
+    # gets appended. surrogateescape is safe HERE specifically because this
+    # text never escapes to a model or a terminal: `existing_text` → `block`
+    # → `_entries(block)` → `roll(...)` all feed straight into
+    # `splice_block()` below, which writes it straight back to this same
+    # file (surrogateescape, matched) — `run_session_notes` only ever prints
+    # the returned `Path`, never this content. Contrast `load_memory`/
+    # `_read_facts` (project.py:100/130), which sanitize with
+    # errors="replace" because their return values DO escape — into
+    # `<project_memory>` (a request body httpx encodes with
+    # ensure_ascii=False, httpx/_content.py:177-178) and into `/memory`'s
+    # console output.
+    existing_text = (path.read_text(encoding="utf-8", errors="surrogateescape")
+                     if path.is_file() else "")
     block = project_mem.read_block(existing_text, BLOCK_NAME)
     entry = (f"### {time.strftime('%Y-%m-%d')} · {(session_id or '?')[:8]}\n"
              f"{cap(bullets)}")
