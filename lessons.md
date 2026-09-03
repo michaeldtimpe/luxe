@@ -5078,3 +5078,52 @@ notes,commands}.py`, `src/luxe/memory/project.py`, `src/luxe/tools/fs.py`,
 `src/luxe/context.py`, `src/luxe/agents/loop.py`; plan and evidence in
 `acceptance/chat_bigread_2026_08_24/{EVIDENCE,PLAN}.md`;
 `scripts/bigread_drill.py`.
+
+---
+
+### [2026-09-03] K2-Horizon-3.7B probe on neo — a fork-only model, native `--reasoning*`, and one more doctor gap
+
+**What happened**: Same-day probe of IFM/MBZUAI's K2 Horizon release
+(6 Apache-2.0 models) on neo, user-scoped as smoke-it/delete-it/note-it, not
+a bake-off. K2-Horizon-3.7B ran end-to-end through luxe with zero plumbing
+failures — `luxe ready`, `luxe smoke`, and `luxe smoke --chat --code` all
+exit 0 (38-39s), hand-verified real one-line fix both arms, pytest green,
+exactly the target file changed. It is the first model besides the champion
+to clear neo's code drill. NOT promoted: n=1, ~0.75 GB heavier resident than
+the champion's 3.66 GB, and it needs a fork build. Full report:
+`acceptance/k2horizon_neo_probe_2026_09/REPORT.md`.
+
+**Durable findings, independent of the verdict**:
+- Upstream llama.cpp has no k2-horizon arch; only IFM's own fork
+  (`MBZUAI-IFM/llama.cpp`, branch `model/K2Horizon`) builds it. HF ships no
+  pre-quantized GGUF either — self-quantizing with the fork's own
+  `llama-quantize` (BF16 → Q4_K_M, 58s) is the only path to a servable file.
+  A new model release having a blog post and a HF repo is not evidence it
+  runs on the standard toolchain; check the arch support before assuming it.
+- The fork's `--reasoning on|off|auto` / `--reasoning-effort` /
+  `--reasoning-budget` flags, propagated per-section by the `--models-preset`
+  router, controlled thinking with **zero luxe changes** — no
+  `chat_template_kwargs` plumbing needed, because llama-server takes it at
+  the server/preset level instead of per-request. Worth remembering as the
+  lower-effort lever the next time a model's reasoning needs toggling on a
+  llama-server host.
+- Reasoning=high bought nothing in this 16k agentic box: identical fix,
+  same wall (38 vs 39s) on the code drill. It cost 7.6× the completion
+  tokens on a plain one-sentence conversational question (175 vs 23 tokens)
+  — the tax lands on chat turns, not tool-latency-bound agentic ones, so a
+  blanket "turn reasoning up" policy would pay a real cost for no measured
+  benefit here.
+- `luxe ready` on an `engine: llama-server` backend still checks
+  `~/.omlx/models/<id>/` for the weights-on-disk probe — oMLX-specific
+  plumbing that a non-oMLX engine shouldn't need. neo already carries
+  pointer shims there for its GGUFs for exactly this reason; the probe
+  needed one more. Logged as a doctor-gap candidate, not fixed.
+- The "printed pass is not a result" discipline (2026-08-19 entry) was
+  applied and held: both arms' scratch repos were preserved (a monkeypatch
+  around the drill's delete-on-success path, `artifacts/drill_keep.py`) and
+  hand-read — `--stat` 1 file +1/-1, pytest 2 passed, test file untouched —
+  before either was credited as a real pass, not just a green summary line.
+
+**Affected files**: none in `src/luxe/` — probe-only, all weights and the
+fork checkout deleted at cleanup, production router re-bootstrapped and
+re-verified. Evidence in `acceptance/k2horizon_neo_probe_2026_09/{REPORT.md,artifacts/}`.

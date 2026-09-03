@@ -1,0 +1,10 @@
+### chat drill  wall=5.6s
+  [pass] drill repo: /var/folders/tc/d0_t_c8j159f4h0_69hl0y640000gn/T/luxe-chat-drill-oe9rt2j0
+  [pass] chat agent: K2-Horizon-3.7B: 2 step(s), 1 tool call(s), 5s
+  [pass] answer: magic word recovered (K2-Horizon-3.7B)
+### code drill  wall=22.8s
+  [pass] drill repo: /var/folders/tc/d0_t_c8j159f4h0_69hl0y640000gn/T/luxe-code-drill-_fz7isn8
+  [pass] code agent: K2-Horizon-3.7B: 6 step(s), 8 tool call(s), 22s
+  [pass] tests: pytest green after the fix
+  [pass] diff: exactly calc.py changed
+KEPT: ['/var/folders/tc/d0_t_c8j159f4h0_69hl0y640000gn/T/luxe-chat-drill-oe9rt2j0', '/var/folders/tc/d0_t_c8j159f4h0_69hl0y640000gn/T/luxe-code-drill-_fz7isn8']

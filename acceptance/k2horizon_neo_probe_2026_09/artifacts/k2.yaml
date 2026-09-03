@@ -1,0 +1,128 @@
+# ~/dotfiles/luxe/neo.yaml — luxe chat config for neo (A18 Pro, 8 GB).
+#
+# Lives in dotfiles, NOT in the luxe repo. The previous neo deploy edited
+# luxe's own configs/chat.yaml and pinned it with `git update-index
+# --skip-worktree`; that hid the file from `git status` while still blocking
+# every checkout and pull ("Please commit your changes" with a clean tree —
+# it cost 78 commits of drift). Out-of-tree + `--config` cannot do that.
+#
+# Usage:  luxe chat --config ~/dotfiles/luxe/neo.yaml     (or just `luxe-chat`,
+#         which picks this up automatically on neo — see dotfiles/bin/luxe-chat)
+#
+# neo does not run MLX/oMLX. The 35B champion does not fit in 8 GB, so luxe
+# here drives the neo-llm-bench-validated small-model pair through llama.cpp's
+# router server on :8080 (LaunchAgent com.micromind.llama-server, presets in
+# ~/dotfiles/luxe/neo-models.ini). The endpoint is OpenAI-compatible, which is
+# all luxe requires — nothing in the chat path is MLX-specific.
+#
+# SINGLE-MODEL as of 2026-08-03: the ladder + 4B-class bake-offs (micro-mind
+# lessons.md) left K2-Horizon-3.7B as the only model that passes every
+# drill here, and there is no low-RAM scenario where degrading to a 1.5B
+# serves better (~4.5 GB headroom with the 4B resident). `fallback` names the
+# same model deliberately: the degrade path is "same model, told loudly",
+# not a different set of weights.
+#
+# Benchmark/maintain never read this file — it is chat-only, like chat.yaml.
+omlx_base_url: "http://127.0.0.1:8081"
+
+# Single local endpoint: the llama.cpp router. The fleet backends (m5 etc.)
+# are deliberately absent — neo is the box you use when you're ON it, and a
+# 2400s remote-dense timeout is not a posture that makes sense here.
+backends:
+  local:
+    base_url: "http://127.0.0.1:8081"
+    # The serving stack behind the URL (luxe >= 2026-08-13). It switches OFF
+    # the oMLX-only diagnostics that are false here: the API-key warning
+    # (llama-server is keyless), the "weights location unreported" warning
+    # (there is no /v1/models/status), the stale-brew-Cellar probe, and the
+    # `brew services` fix strings. It changes nothing about the request —
+    # llama-server is OpenAI-compatible, which is why one client drives both.
+    # `luxe pull` refuses cleanly here too: weights arrive via the preset.
+    engine: "llama-server"
+    default: true
+
+  # OpenRouter cloud backend (luxe >= 2026-08-17) — opt-in per session via
+  # `luxe-api` / `--backend openrouter`. Billable: cost shows in the status
+  # bar and /usage, and budget_usd is a hard cap the session refuses to
+  # cross. Mirrors the entry in luxe's configs/chat.yaml so the same
+  # wrapper works on every host; key comes from the env/secrets.env/Keychain
+  # name below, never from YAML.
+  openrouter:
+    base_url: "https://openrouter.ai/api"
+    engine: "openrouter"
+    api_key_env: "OPENROUTER_API_KEY"
+    budget_usd: 5.00
+    default_model: "moonshotai/kimi-k3"
+    reasoning_effort: "low"
+    visible_models: ["moonshotai/kimi-k3"]
+    body_extras:
+      usage:
+        include: true
+
+profile:
+  name: "Interactive chat (neo / single-model)"
+  description: "luxe chat on K2-Horizon-3.7B via the llama.cpp router."
+  # Honest numbers for this box (declarative only — nothing reads them).
+  # The pre-router neo config claimed 16 GB; neo has 8. Peak measured on the
+  # 2026-08-03 ctx ladder: 3.66 GB llama RSS with the 4B resident at c=16384.
+  memory_budget_gb: 8
+  peak_model_gb: 3.7
+
+# Per-host manifest, keyed by short hostname. `main` drives every slot;
+# `fallback` is what the session degrades to — loudly — when main cannot be
+# served. Here that doubles as the manual pair: `/model` switches between
+# them and the router does the swap.
+#
+# Both ids must match a section name in neo-models.ini exactly — that string
+# is what luxe puts in the request `model` field and what the router routes
+# on. A mismatch surfaces as a model-not-found at first turn.
+hosts:
+  neo:                                     # A18 Pro, 8 GB
+    main: "K2-Horizon-3.7B"         # 2026-08-03 double bake-off winner (micro-mind lessons.md)
+    fallback: "K2-Horizon-3.7B"     # same model — see header note
+    # Pinned to the router's --ctx-size 16384; luxe must not offer a window
+    # the server cannot honour.
+    ctx_max:
+      "K2-Horizon-3.7B": 16384
+
+# The only two models /model offers. The router also reports a stray
+# `default` entry (an artifact of router mode with no -m); listing the pair
+# explicitly keeps it out of the picker.
+visible_models:
+  - K2-Horizon-3.7B
+
+models:
+  monolith: "K2-Horizon-3.7B"
+
+roles:
+  monolith:
+    model_key: monolith
+    # Matches `c = 16384` in neo-models.ini. Keep the two in step.
+    # (Raised from 8192 with the 2026-08-03 ctx ladder — see the ini note.)
+    num_ctx: 16384
+    # num_ctx_max deliberately OMITTED (defaults to 0 = no expansion), so /ctx
+    # can never raise the window above what the router was started with.
+    max_steps: 20
+    max_tokens_per_turn: 2048
+    temperature: 0.0
+    # micro-mind finding: the 1.5B token-loops at 1.0. Also set server-side in
+    # neo-models.ini — belt and braces, since either path can be bypassed.
+    repeat_penalty: 1.1
+    task_overlay_id: manage_strict_only
+    tools: [read_file, list_dir, glob, grep, bm25_search, find_symbol,
+            write_file, edit_file, git_diff, git_log, git_show, bash,
+            lint, typecheck, security_scan, deps_audit, cve_lookup]
+
+task_types:
+  review: {description: "Code review", pipeline: [monolith]}
+  implement: {description: "Feature implementation", pipeline: [monolith]}
+  bugfix: {description: "Bug investigation and fix", pipeline: [monolith]}
+  document: {description: "Documentation generation", pipeline: [monolith]}
+  summarize: {description: "Codebase summarization", pipeline: [monolith]}
+  manage: {description: "Repository management", pipeline: [monolith]}
+
+# `slots:` is deliberately omitted, so every slot resolves to main — which is
+# also the only model served. (2026-08-03 bake-off notes: coder variants were
+# dropped entirely — worse agents than instruct at 1.5B, 3B, and 7B; the
+# 1.5B low-RAM fallback was dropped once the 4B proved to fit with ~4.5 GB
+# headroom.)

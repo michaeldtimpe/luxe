@@ -1,0 +1,20 @@
+luxe ready
+  ✓ llama-server endpoint    local http://127.0.0.1:8081
+  ✓ API key                  not required by llama-server
+  ✓ chat model               K2-Horizon-3.7B
+  ✓ weights                  llama-server reports no model path (checked below)
+  ✓ host manifest            main K2-Horizon-3.7B · fallback K2-Horizon-3.7B
+  ✓ weights:K2-Horizon-3.7B  main · on disk
+  ✓ disk                     345.5 GB free
+  ! update                   1 commit(s) behind origin/main
+    → `luxe update`
+  ✓ search index             not built (`luxe ready` doesn't index; chat builds 
+it at startup)
+  ✓ index freshness          59b9f18
+  ✓ working tree             clean
+  ✓ mode                     n/a outside a session (chat starts read-only · bash
+allowlisted; `luxe code` and `--dev` start with write on)
+  ✓ web                      n/a outside a session (chat starts with web off)
+  ✓ TUI                      textual installed
+READY (warnings) (1s)
+full generation drill: `luxe smoke` · agentic drill: `luxe smoke --chat --code`

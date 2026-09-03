@@ -1,0 +1,1 @@
+35999d101cf2233fc54f09c3c8d599da7303ce02 Tue Sep 1 18:04:20 2026 +0000 model: K2 Horizon chat template and accomodate safetensors naming
