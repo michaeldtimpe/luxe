@@ -1,5 +1,22 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-09-03, m1) — K2-Horizon-3.7B probed on neo: passes the code drill, NOT PROMOTED
+
+IFM/MBZUAI released K2 Horizon (six Apache-2.0 models) on 2026-09-03. A
+user-scoped smoke-it/delete-it/note-it probe of the 3.7B ran the full luxe
+drill set on neo: `ready`, `smoke`, `smoke --chat --code` all exit 0 (~38s,
+a wash against the Qwen3-4B champion's 39s), real one-line fix hand-verified
+with reasoning off and high. Not promoted: n=1, ~0.75 GB heavier resident,
+18 t/s decode, and it needs the unmerged `MBZUAI-IFM/llama.cpp` branch
+`model/K2Horizon` (HF ships only a BF16 GGUF; we self-quantized to Q4_K_M).
+Weights + fork deleted, production router re-bootstrapped and re-verified.
+Report: `acceptance/k2horizon_neo_probe_2026_09/REPORT.md`; lessons.md
+2026-09-03. **Re-open** only when k2-horizon lands in upstream llama.cpp AND
+an n≥3 drill is requested. The 36B-A4B MoVA sibling (m5-class; vendor table
+puts it well ahead of the champion on Terminal-Bench/tau3) is blocked on
+mlx-lm/oMLX support. Open doctor-gap candidate: `luxe ready` on an
+`engine: llama-server` backend still probes `~/.omlx/models/<id>/`.
+
 ## ⇒ SESSION HANDOFF (2026-08-24, m1) — chat bigread incident: diagnostics and the read-budget fix both landed; three dormant flags still gated on maintain_suite runs
 
 Four real `luxe chat` turns were lost across two backends in one 30-minute
