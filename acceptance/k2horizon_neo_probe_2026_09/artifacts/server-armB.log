@@ -1,0 +1,211 @@
+0.00.038.369 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.039.697 I srv   load_models: Loaded 0 cached model presets
+0.00.039.878 I srv   load_models: Loaded 1 custom model presets from /Users/mtimpe/k2probe/k2-models.ini
+0.00.039.901 I srv    operator(): Available models (1) (*: custom preset)
+0.00.039.902 I srv    operator():   * K2-Horizon-3.7B
+0.00.039.932 W srv  llama_server: -----------------
+0.00.039.933 W srv  llama_server: CORS is set to allow all origins ('*') and no API key is set
+0.00.039.933 W srv  llama_server: this can be a security risk (cross-origin attacks)
+0.00.039.933 W srv  llama_server: more info: https://github.com/ggml-org/llama.cpp/pull/25655
+0.00.039.933 W srv  llama_server: -----------------
+0.00.039.936 W srv  llama_server: -----------------
+0.00.039.936 W srv  llama_server: the following feature(s) are enabled:
+0.00.039.936 W srv  llama_server:     router mode
+0.00.039.936 W srv  llama_server: do not expose the server to untrusted environments
+0.00.039.936 W srv  llama_server: -----------------
+0.00.039.937 I srv  llama_server: starting server in router mode. models will be automatically loaded on-demand
+0.00.041.506 I srv  load_startup: (startup) loading model K2-Horizon-3.7B
+0.00.041.651 I srv          load: spawning server instance with name=K2-Horizon-3.7B on port 61597
+0.00.041.657 I srv          load: spawning server instance with args:
+0.00.041.657 I srv          load:   /Users/mtimpe/k2probe/llama.cpp/build/bin/llama-server
+0.00.041.658 I srv          load:   --host
+0.00.041.658 I srv          load:   127.0.0.1
+0.00.041.658 I srv          load:   --jinja
+0.00.041.658 I srv          load:   --port
+0.00.041.658 I srv          load:   61597
+0.00.041.658 I srv          load:   --reasoning-budget
+0.00.041.658 I srv          load:   -1
+0.00.041.658 I srv          load:   --reasoning-effort
+0.00.041.659 I srv          load:   high
+0.00.041.659 I srv          load:   --repeat-penalty
+0.00.041.659 I srv          load:   1.1
+0.00.041.659 I srv          load:   --sleep-idle-seconds
+0.00.041.659 I srv          load:   900
+0.00.041.660 I srv          load:   --alias
+0.00.041.660 I srv          load:   K2-Horizon-3.7B
+0.00.041.660 I srv          load:   --ctx-size
+0.00.041.660 I srv          load:   16384
+0.00.041.660 I srv          load:   --cache-type-k
+0.00.041.662 I srv          load:   q8_0
+0.00.041.662 I srv          load:   --cache-type-v
+0.00.041.662 I srv          load:   q8_0
+0.00.041.662 I srv          load:   --model
+0.00.041.662 I srv          load:   /Users/mtimpe/k2probe/models/K2-Horizon-3.7B-Q4_K_M.gguf
+0.00.041.662 I srv          load:   --n-gpu-layers
+0.00.041.662 I srv          load:   99
+0.00.041.662 I srv          load:   --reasoning
+0.00.041.662 I srv          load:   on
+0.00.041.662 I srv          load:   --threads
+0.00.041.663 I srv          load:   6
+0.00.041.850 I srv  llama_server: listening on http://127.0.0.1:8081
+[61597] 0.00.024.096 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+[61597] 0.00.024.279 W srv  llama_server: -----------------
+[61597] 0.00.024.281 W srv  llama_server: CORS is set to allow all origins ('*') and no API key is set
+[61597] 0.00.024.281 W srv  llama_server: this can be a security risk (cross-origin attacks)
+[61597] 0.00.024.281 W srv  llama_server: more info: https://github.com/ggml-org/llama.cpp/pull/25655
+[61597] 0.00.024.281 W srv  llama_server: -----------------
+[61597] 0.00.025.917 I srv    load_model: loading model '/Users/mtimpe/k2probe/models/K2-Horizon-3.7B-Q4_K_M.gguf'
+[61597] 0.00.367.128 W load: special_eos_id is not in special_eog_ids - the tokenizer config may be incorrect
+[61597] 0.00.598.401 I cmn          init: llama threadpool init, n_threads = 6
+[61597] 0.00.818.429 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 16384, kv_unified = 'true'
+[61597] 0.00.870.798 I srv          init: chat template supports preserving reasoning, consider enabling it via --reasoning-preserve
+[61597] 0.00.870.803 I srv  llama_server: model loaded
+[61597] 0.00.870.804 I srv  llama_server: listening on http://127.0.0.1:61597
+0.31.816.615 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 0.31.859.084 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+[61597] 0.31.859.143 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+[61597] 0.37.921.244 I slot print_timing: id  3 | task 0 | n_gen =    100, tg =  16.88 t/s, tg_3s =  17.05 t/s
+[61597] 0.40.971.787 I slot print_timing: id  3 | task 0 | n_gen =    151, tg =  16.83 t/s, tg_3s =  16.72 t/s
+[61597] 0.42.405.887 I slot print_timing: id  3 | task 0 | prompt eval time =     198.47 ms /    20 tokens (    9.92 ms per token,   100.77 tokens per second)
+[61597] 0.42.405.897 I slot print_timing: id  3 | task 0 |        eval time =   10348.23 ms /   175 tokens (   59.47 ms per token,    16.81 tokens per second)
+[61597] 0.42.405.900 I slot print_timing: id  3 | task 0 |       total time =   10546.70 ms /   195 tokens
+[61597] 0.42.405.901 I slot print_timing: id  3 | task 0 |    graphs reused =        174
+[61597] 0.42.405.935 I slot      release: id  3 | task 0 | stop processing: n_tokens = 194, truncated = 0
+0.49.263.384 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 0.49.338.013 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+[61597] 0.49.338.282 I slot launch_slot_: id  2 | task 176 | processing task, is_child = 0
+[61597] 0.56.996.805 I slot print_timing: id  2 | task 176 | prompt eval time =    5047.95 ms /   840 tokens (    6.01 ms per token,   166.40 tokens per second)
+[61597] 0.56.996.812 I slot print_timing: id  2 | task 176 |        eval time =    2609.35 ms /    44 tokens (   60.68 ms per token,    16.48 tokens per second)
+[61597] 0.56.996.813 I slot print_timing: id  2 | task 176 |       total time =    7657.31 ms /   884 tokens
+[61597] 0.56.996.814 I slot print_timing: id  2 | task 176 |    graphs reused =        216
+[61597] 0.56.996.926 I slot      release: id  2 | task 176 | stop processing: n_tokens = 883, truncated = 0
+0.57.051.689 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 0.57.095.905 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.947 (> 0.100 thold), f_keep = 0.951
+[61597] 0.57.096.200 I slot launch_slot_: id  2 | task 221 | processing task, is_child = 0
+[61597] 0.59.506.308 I slot print_timing: id  2 | task 221 | prompt eval time =     450.08 ms /    47 tokens (    9.58 ms per token,   104.43 tokens per second)
+[61597] 0.59.506.318 I slot print_timing: id  2 | task 221 |        eval time =    1959.99 ms /    35 tokens (   57.65 ms per token,    17.35 tokens per second)
+[61597] 0.59.506.319 I slot print_timing: id  2 | task 221 |       total time =    2410.07 ms /    82 tokens
+[61597] 0.59.506.321 I slot print_timing: id  2 | task 221 |    graphs reused =        249
+[61597] 0.59.506.548 I slot      release: id  2 | task 221 | stop processing: n_tokens = 921, truncated = 0
+0.59.712.851 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 0.59.799.615 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.192 (> 0.100 thold), f_keep = 0.228
+[61597] 0.59.806.664 I slot launch_slot_: id  2 | task 257 | processing task, is_child = 0
+[61597] 1.09.086.291 I slot print_timing: id  2 | task 257 | prompt eval time =    6147.84 ms /   885 tokens (    6.95 ms per token,   143.95 tokens per second)
+[61597] 1.09.086.300 I slot print_timing: id  2 | task 257 |        eval time =    3131.76 ms /    51 tokens (   62.64 ms per token,    15.97 tokens per second)
+[61597] 1.09.086.301 I slot print_timing: id  2 | task 257 |       total time =    9279.59 ms /   936 tokens
+[61597] 1.09.086.302 I slot print_timing: id  2 | task 257 |    graphs reused =        298
+[61597] 1.09.086.491 I slot      release: id  2 | task 257 | stop processing: n_tokens = 1145, truncated = 0
+1.09.173.480 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.09.247.237 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.849 (> 0.100 thold), f_keep = 0.956
+[61597] 1.09.247.685 I slot launch_slot_: id  2 | task 309 | processing task, is_child = 0
+[61597] 1.13.148.714 I slot print_timing: id  2 | task 309 | prompt eval time =    1681.32 ms /   195 tokens (    8.62 ms per token,   115.98 tokens per second)
+[61597] 1.13.148.725 I slot print_timing: id  2 | task 309 |        eval time =    2219.68 ms /    36 tokens (   63.42 ms per token,    15.77 tokens per second)
+[61597] 1.13.148.725 I slot print_timing: id  2 | task 309 |       total time =    3900.99 ms /   231 tokens
+[61597] 1.13.148.726 I slot print_timing: id  2 | task 309 |    graphs reused =        332
+[61597] 1.13.148.917 I slot      release: id  2 | task 309 | stop processing: n_tokens = 1325, truncated = 0
+1.13.205.120 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.13.270.999 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.903 (> 0.100 thold), f_keep = 0.974
+[61597] 1.13.271.440 I slot launch_slot_: id  2 | task 346 | processing task, is_child = 0
+[61597] 1.19.243.877 I slot print_timing: id  2 | task 346 | prompt eval time =    1224.45 ms /   139 tokens (    8.81 ms per token,   113.52 tokens per second)
+[61597] 1.19.243.885 I slot print_timing: id  2 | task 346 |        eval time =    4747.95 ms /    77 tokens (   62.47 ms per token,    16.01 tokens per second)
+[61597] 1.19.243.886 I slot print_timing: id  2 | task 346 |       total time =    5972.40 ms /   216 tokens
+[61597] 1.19.243.886 I slot print_timing: id  2 | task 346 |    graphs reused =        407
+[61597] 1.19.244.064 I slot      release: id  2 | task 346 | stop processing: n_tokens = 1506, truncated = 0
+1.19.301.085 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.19.372.459 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.955 (> 0.100 thold), f_keep = 0.950
+[61597] 1.19.372.890 I slot launch_slot_: id  2 | task 424 | processing task, is_child = 0
+[61597] 1.21.735.123 I slot print_timing: id  2 | task 424 | prompt eval time =     749.40 ms /    67 tokens (   11.19 ms per token,    89.40 tokens per second)
+[61597] 1.21.735.129 I slot print_timing: id  2 | task 424 |        eval time =    1612.79 ms /    26 tokens (   64.51 ms per token,    15.50 tokens per second)
+[61597] 1.21.735.130 I slot print_timing: id  2 | task 424 |       total time =    2362.19 ms /    93 tokens
+[61597] 1.21.735.130 I slot print_timing: id  2 | task 424 |    graphs reused =        431
+[61597] 1.21.735.304 I slot      release: id  2 | task 424 | stop processing: n_tokens = 1522, truncated = 0
+1.21.809.740 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.21.894.149 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.975 (> 0.100 thold), f_keep = 0.984
+[61597] 1.21.894.635 I slot launch_slot_: id  2 | task 451 | processing task, is_child = 0
+[61597] 1.25.030.175 I slot print_timing: id  2 | task 451 | prompt eval time =     532.01 ms /    39 tokens (   13.64 ms per token,    73.31 tokens per second)
+[61597] 1.25.030.181 I slot print_timing: id  2 | task 451 |        eval time =    2603.49 ms /    43 tokens (   61.99 ms per token,    16.13 tokens per second)
+[61597] 1.25.030.181 I slot print_timing: id  2 | task 451 |       total time =    3135.50 ms /    82 tokens
+[61597] 1.25.030.182 I slot print_timing: id  2 | task 451 |    graphs reused =        472
+[61597] 1.25.030.338 I slot      release: id  2 | task 451 | stop processing: n_tokens = 1579, truncated = 0
+1.25.085.816 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.25.167.908 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.932 (> 0.100 thold), f_keep = 0.973
+[61597] 1.25.168.431 I slot launch_slot_: id  2 | task 495 | processing task, is_child = 0
+[61597] 1.27.601.456 I slot print_timing: id  2 | task 495 | prompt eval time =    1054.96 ms /   113 tokens (    9.34 ms per token,   107.11 tokens per second)
+[61597] 1.27.601.460 I slot print_timing: id  2 | task 495 |        eval time =    1378.02 ms /    23 tokens (   62.64 ms per token,    15.96 tokens per second)
+[61597] 1.27.601.460 I slot print_timing: id  2 | task 495 |       total time =    2432.98 ms /   136 tokens
+[61597] 1.27.601.461 I slot print_timing: id  2 | task 495 |    graphs reused =        493
+[61597] 1.27.601.624 I slot      release: id  2 | task 495 | stop processing: n_tokens = 1672, truncated = 0
+1.33.626.849 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.33.697.433 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.126
+[61597] 1.33.719.354 I slot launch_slot_: id  2 | task 519 | processing task, is_child = 0
+[61597] 1.33.719.380 W slot   operator(): id  2 | task 519 | need to evaluate at least 1 token for each active slot (n_past = 840, task.n_tokens() = 840)
+[61597] 1.33.719.382 W slot   operator(): id  2 | task 519 | n_past was set to 839
+[61597] 1.36.455.604 I slot print_timing: id  2 | task 519 | prompt eval time =      67.44 ms /     1 tokens (   67.44 ms per token,    14.83 tokens per second)
+[61597] 1.36.455.611 I slot print_timing: id  2 | task 519 |        eval time =    2668.77 ms /    44 tokens (   62.06 ms per token,    16.11 tokens per second)
+[61597] 1.36.455.612 I slot print_timing: id  2 | task 519 |       total time =    2736.21 ms /    45 tokens
+[61597] 1.36.455.613 I slot print_timing: id  2 | task 519 |    graphs reused =        536
+[61597] 1.36.455.775 I slot      release: id  2 | task 519 | stop processing: n_tokens = 883, truncated = 0
+1.36.514.509 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.36.560.451 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.947 (> 0.100 thold), f_keep = 0.951
+[61597] 1.36.560.742 I slot launch_slot_: id  2 | task 564 | processing task, is_child = 0
+[61597] 1.39.052.633 I slot print_timing: id  2 | task 564 | prompt eval time =     425.71 ms /    47 tokens (    9.06 ms per token,   110.40 tokens per second)
+[61597] 1.39.052.644 I slot print_timing: id  2 | task 564 |        eval time =    2066.15 ms /    35 tokens (   60.77 ms per token,    16.46 tokens per second)
+[61597] 1.39.052.646 I slot print_timing: id  2 | task 564 |       total time =    2491.85 ms /    82 tokens
+[61597] 1.39.052.647 I slot print_timing: id  2 | task 564 |    graphs reused =        569
+[61597] 1.39.052.849 I slot      release: id  2 | task 564 | stop processing: n_tokens = 921, truncated = 0
+1.39.258.928 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.39.341.349 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.192 (> 0.100 thold), f_keep = 0.228
+[61597] 1.39.353.222 I slot launch_slot_: id  2 | task 600 | processing task, is_child = 0
+[61597] 1.39.353.248 W slot   operator(): id  2 | task 600 | need to evaluate at least 1 token for each active slot (n_past = 1095, task.n_tokens() = 1095)
+[61597] 1.39.353.249 W slot   operator(): id  2 | task 600 | n_past was set to 1094
+[61597] 1.42.715.564 I slot print_timing: id  2 | task 600 | prompt eval time =     118.30 ms /     1 tokens (  118.30 ms per token,     8.45 tokens per second)
+[61597] 1.42.715.573 I slot print_timing: id  2 | task 600 |        eval time =    3244.00 ms /    51 tokens (   64.88 ms per token,    15.41 tokens per second)
+[61597] 1.42.715.574 I slot print_timing: id  2 | task 600 |       total time =    3362.30 ms /    52 tokens
+[61597] 1.42.715.575 I slot print_timing: id  2 | task 600 |    graphs reused =        619
+[61597] 1.42.715.766 I slot      release: id  2 | task 600 | stop processing: n_tokens = 1145, truncated = 0
+1.42.801.982 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.42.872.081 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.849 (> 0.100 thold), f_keep = 0.956
+[61597] 1.42.872.520 I slot launch_slot_: id  2 | task 652 | processing task, is_child = 0
+[61597] 1.46.853.798 I slot print_timing: id  2 | task 652 | prompt eval time =    1716.02 ms /   195 tokens (    8.80 ms per token,   113.63 tokens per second)
+[61597] 1.46.853.803 I slot print_timing: id  2 | task 652 |        eval time =    2265.22 ms /    36 tokens (   64.72 ms per token,    15.45 tokens per second)
+[61597] 1.46.853.804 I slot print_timing: id  2 | task 652 |       total time =    3981.24 ms /   231 tokens
+[61597] 1.46.853.805 I slot print_timing: id  2 | task 652 |    graphs reused =        653
+[61597] 1.46.853.992 I slot      release: id  2 | task 652 | stop processing: n_tokens = 1325, truncated = 0
+1.46.910.759 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.46.972.714 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.903 (> 0.100 thold), f_keep = 0.974
+[61597] 1.46.973.168 I slot launch_slot_: id  2 | task 689 | processing task, is_child = 0
+[61597] 1.53.231.893 I slot print_timing: id  2 | task 689 | prompt eval time =    1248.99 ms /   139 tokens (    8.99 ms per token,   111.29 tokens per second)
+[61597] 1.53.231.898 I slot print_timing: id  2 | task 689 |        eval time =    5009.69 ms /    77 tokens (   65.92 ms per token,    15.17 tokens per second)
+[61597] 1.53.231.899 I slot print_timing: id  2 | task 689 |       total time =    6258.68 ms /   216 tokens
+[61597] 1.53.231.900 I slot print_timing: id  2 | task 689 |    graphs reused =        728
+[61597] 1.53.232.082 I slot      release: id  2 | task 689 | stop processing: n_tokens = 1506, truncated = 0
+1.53.289.052 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.53.358.273 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.955 (> 0.100 thold), f_keep = 0.950
+[61597] 1.53.358.735 I slot launch_slot_: id  2 | task 767 | processing task, is_child = 0
+[61597] 1.55.681.403 I slot print_timing: id  2 | task 767 | prompt eval time =     767.44 ms /    67 tokens (   11.45 ms per token,    87.30 tokens per second)
+[61597] 1.55.681.408 I slot print_timing: id  2 | task 767 |        eval time =    1555.19 ms /    26 tokens (   62.21 ms per token,    16.08 tokens per second)
+[61597] 1.55.681.409 I slot print_timing: id  2 | task 767 |       total time =    2322.63 ms /    93 tokens
+[61597] 1.55.681.409 I slot print_timing: id  2 | task 767 |    graphs reused =        752
+[61597] 1.55.681.573 I slot      release: id  2 | task 767 | stop processing: n_tokens = 1522, truncated = 0
+1.55.755.775 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.55.827.761 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.975 (> 0.100 thold), f_keep = 0.984
+[61597] 1.55.828.221 I slot launch_slot_: id  2 | task 794 | processing task, is_child = 0
+[61597] 1.58.991.238 I slot print_timing: id  2 | task 794 | prompt eval time =     522.30 ms /    39 tokens (   13.39 ms per token,    74.67 tokens per second)
+[61597] 1.58.991.245 I slot print_timing: id  2 | task 794 |        eval time =    2640.67 ms /    43 tokens (   62.87 ms per token,    15.91 tokens per second)
+[61597] 1.58.991.246 I slot print_timing: id  2 | task 794 |       total time =    3162.97 ms /    82 tokens
+[61597] 1.58.991.246 I slot print_timing: id  2 | task 794 |    graphs reused =        793
+[61597] 1.58.991.436 I slot      release: id  2 | task 794 | stop processing: n_tokens = 1579, truncated = 0
+1.59.046.618 I srv  proxy_reques: proxying request to model K2-Horizon-3.7B on port 61597
+[61597] 1.59.127.317 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, f_sim_best = 0.932 (> 0.100 thold), f_keep = 0.973
+[61597] 1.59.127.795 I slot launch_slot_: id  2 | task 838 | processing task, is_child = 0
+[61597] 2.01.586.289 I slot print_timing: id  2 | task 838 | prompt eval time =    1062.37 ms /   113 tokens (    9.40 ms per token,   106.37 tokens per second)
+[61597] 2.01.586.292 I slot print_timing: id  2 | task 838 |        eval time =    1396.08 ms /    23 tokens (   63.46 ms per token,    15.76 tokens per second)
+[61597] 2.01.586.293 I slot print_timing: id  2 | task 838 |       total time =    2458.45 ms /   136 tokens
+[61597] 2.01.586.293 I slot print_timing: id  2 | task 838 |    graphs reused =        814
+[61597] 2.01.586.451 I slot      release: id  2 | task 838 | stop processing: n_tokens = 1672, truncated = 0
+2.57.036.000 I srv    operator(): operator(): cleaning up before exit...
+2.57.036.079 I srv    unload_all: stopping model instance name=K2-Horizon-3.7B
+2.57.036.099 I srv    operator(): stopping model instance name=K2-Horizon-3.7B
+[61597] 2.56.987.772 I srv    operator(): exit command received, exiting...
+[61597] 2.56.987.873 I srv    operator(): operator(): cleaning up before exit...
+2.57.120.281 I srv    operator(): instance name=K2-Horizon-3.7B exited with status 0

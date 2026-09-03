@@ -1,0 +1,5 @@
+llama_quantize: quantizing '/Users/mtimpe/k2probe/models/K2-Horizon-4B-BF16.gguf' to '/Users/mtimpe/k2probe/models/K2-Horizon-3.7B-Q4_K_M.gguf' as Q4_K_M using 6 threads
+llama_model_quantize_impl: model size  =  9648.21 MiB (16.00 BPW)
+llama_model_quantize_impl: quant size  =  2999.44 MiB (4.97 BPW)
+llama_quantize: quantize time = 58212.41 ms
+llama_quantize:    total time = 58212.41 ms

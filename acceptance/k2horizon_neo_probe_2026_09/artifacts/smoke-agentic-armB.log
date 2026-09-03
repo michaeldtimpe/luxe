@@ -1,0 +1,12 @@
+chat drill
+  ✓ drill repo — 
+/var/folders/tc/d0_t_c8j159f4h0_69hl0y640000gn/T/luxe-chat-drill-d0div92y
+  ✓ chat agent — K2-Horizon-3.7B: 2 step(s), 1 tool call(s), 10s
+  ✓ answer — magic word recovered (K2-Horizon-3.7B)
+code drill
+  ✓ drill repo — 
+/var/folders/tc/d0_t_c8j159f4h0_69hl0y640000gn/T/luxe-code-drill-ai900pp1
+  ✓ code agent — K2-Horizon-3.7B: 6 step(s), 8 tool call(s), 28s
+  ✓ tests — pytest green after the fix
+  ✓ diff — exactly calc.py changed
+READY (39s)

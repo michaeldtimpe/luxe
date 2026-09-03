@@ -1,0 +1,9 @@
+  ✓ manifest — neo: main K2-Horizon-3.7B · fallback K2-Horizon-3.7B
+  ✓ weights K2-Horizon-3.7B — on disk
+  ✓ weights K2-Horizon-3.7B — on disk
+  ✓ endpoint — http://127.0.0.1:8081
+  ✓ catalog — main + fallback in 1-model catalog
+  ✓ main turn — K2-Horizon-3.7B answered in 0.4s
+  ✓ tool call — K2-Horizon-3.7B called read_file in 2.2s
+  ✓ fallback turn — K2-Horizon-3.7B answered in 0.3s
+READY (3s)

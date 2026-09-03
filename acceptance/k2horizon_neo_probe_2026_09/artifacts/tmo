@@ -1,0 +1,10 @@
+#!/bin/bash
+# tmo <seconds> <cmd...> — timeout(1) stand-in (neo has no coreutils timeout).
+secs="$1"; shift
+"$@" &
+pid=$!
+( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 5; kill -KILL "$pid" 2>/dev/null ) &
+watcher=$!
+wait "$pid"; rc=$?
+kill "$watcher" 2>/dev/null
+exit $rc

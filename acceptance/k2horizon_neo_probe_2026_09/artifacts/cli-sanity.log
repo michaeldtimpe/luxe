@@ -1,0 +1,39 @@
+
+
+Loading model... |-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\| 
+
+▄▄ ▄▄
+██ ██
+██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
+██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
+██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
+                                    ██    ██
+                                    ▀▀    ▀▀
+
+build      : b1-35999d1
+model      : /Users/mtimpe/k2probe/models/K2-Horizon-3.7B-Q4_K_M.gguf
+ftype      : Q4_K - Medium
+modalities : text
+
+available commands:
+  /exit or Ctrl+C     stop or exit
+  /regen              regenerate the last response
+  /clear              clear the chat history
+  /read <file>        add a text file
+  /glob <pattern>     add text files using globbing pattern
+
+
+
+> What is the capital of France? Answer in one sentence.
+
+[Start thinking]
+
+The user asks: "What is the capital of France? Answer in one sentence." So we respond: "The capital of France is Paris." One sentence.
+[End thinking]
+
+The capital of France is Paris.
+
+[ Prompt: 69.3 t/s | Generation: 18.4 t/s ]
+
+
+Exiting...
