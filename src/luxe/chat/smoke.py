@@ -59,6 +59,27 @@ class SmokeReport:
     def failed(self) -> bool:
         return any(s.state == "fail" for s in self.steps)
 
+    @property
+    def stale_evidence(self) -> str:
+        """Why this report points at a stale oMLX, or "" when it doesn't.
+
+        Two independent witnesses (luxe.repair): the `oMLX build` line said
+        so (process table), or a failed turn's error body names a module
+        the running tree no longer has (the 2026-09-11 409s — matched even
+        when lsof is mute). Anything else is NOT a restart case: a dead
+        endpoint, a missing model, an empty answer each have their own fix.
+        """
+        from luxe.repair import looks_stale
+
+        for s in self.steps:
+            if s.name == "oMLX build" and s.state == "warn" \
+                    and "brew replaced" in s.detail:
+                return s.detail
+        for s in self.steps:
+            if s.state == "fail" and looks_stale(s.detail):
+                return s.detail
+        return ""
+
 
 def _ping(backend: Backend, model: str, report: SmokeReport,
           label: str) -> bool:

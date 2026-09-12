@@ -1,5 +1,20 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-09-11, m1) — stale-oMLX self-repair landed (`luxe.repair`)
+
+`luxe smoke` found m1's oMLX 12 days stale across a `brew upgrade` (0.6.3rc3
+running, 0.6.4 installed), diagnosed it, and stayed NOT READY. Now luxe
+acts: `luxe smoke` restarts a stale local brew oMLX and re-drills by
+default (`--no-fix` to diagnose only); `luxe ready --fix`, `luxe repair
+[--force]`, `/repair`, and a chat turn failing with the stale-load
+signature (repair runs BEFORE fallback-degrade) share `repair_omlx`.
+Signature-gated, local brew only, one restart per 5 min, never raises.
+Verified live on m1 (`luxe repair --force` → healthy 3s → smoke READY 21s).
+Tests: `tests/test_repair.py` (36). Contract: chat.sdd `luxe smoke` bullet
++ CLAUDE.md fallback kit; lessons.md 2026-09-11. Also: the `/web` help row
+now names the interactive browser (`web_page`, Chromium) and `--web`.
+Not a watchdog — the standing no-cron/launchd decision is unchanged.
+
 ## ⇒ SESSION NOTE (2026-09-03, m1) — K2-Horizon-3.7B probed on neo: passes the code drill, NOT PROMOTED
 
 IFM/MBZUAI released K2 Horizon (six Apache-2.0 models) on 2026-09-03. A

@@ -71,7 +71,7 @@ luxe pull --list                 # local models; flags DANGLING store entries
 luxe pull <model>                # mount (kappa/alpha) first, HuggingFace second
 luxe pull <model> --remove       # free disk; refuses manifest models without --force
 luxe unload                      # free oMLX RAM
-brew services restart omlx       # after provisioning, or when the build is stale
+luxe repair                      # restart a STALE oMLX (brew upgraded under it); by hand: brew services restart omlx
 luxe update                      # fetch → rebase onto origin/main → uv sync
 luxe smoke                       # real generation drill: weights → endpoint → turn → tool call
 luxe smoke --chat --code         # agentic drills in a planted scratch repo
@@ -86,8 +86,9 @@ server cannot load it. `luxe pull --list` and `luxe ready` both flag it —
 
 **Stale oMLX**: a server left running across a `brew upgrade` executes from a
 deleted Cellar tree. It passes health and lists its catalog, then fails a lazy
-import with a bogus `ModuleNotFoundError` / `[Errno 2]`. `luxe ready` warns on
-it; `brew services restart omlx` fixes it.
+import with a bogus `ModuleNotFoundError` / `[Errno 2]`. `luxe smoke` restarts
+it by itself and re-drills; `luxe ready` warns (`--fix` restarts); `luxe repair`
+and `/repair` are the explicit forms. One restart per 5 min, local brew only.
 
 ## 5. Forensics — every session leaves a trail
 

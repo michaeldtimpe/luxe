@@ -134,7 +134,32 @@ never touches this module.
   neo (2026-08-13): bare `luxe smoke` PASSES there against the local
   llama-server with `--config ~/dotfiles/luxe/neo.yaml` (or `$LUXE_CONFIG`).
   The earlier pin that it must fail on neo is retired — it described a host
-  with no manifest, not a property of the drill
+  with no manifest, not a property of the drill.
+  **Self-repair (2026-09-11, `luxe.repair`).** Detection was not enough:
+  the third stale-oMLX incident printed the diagnosis and the fix and left
+  the kit NOT READY at the moment it was reached for. `luxe smoke` now
+  ACTS on that ONE signature: when the drill fails and either the `oMLX
+  build` line is stale or a failed turn's body carries the stale-load
+  signature (`No module named` / `[Errno 2]` / `cannot import name` /
+  `unavailable after a previous load failure`), it runs
+  `repair_omlx` — `brew services restart omlx`, poll `/health`, confirm the
+  new pid is on the installed tree — prints every step, and RE-RUNS the
+  drill; the second table is the verdict. `--no-fix` = diagnose only. The
+  same repair is `luxe ready --fix` (ready itself stays read-only),
+  `luxe repair [--force]` (exit 0 recovered / 1 not recovered / 2 refused),
+  `/repair [--force]` in a session, and `SlotManager.try_self_repair`,
+  which both front-ends call on a turn-level BackendError BEFORE
+  `note_turn_failure` — a stale process fails main AND fallback with the
+  same lazy import, so degrading is the wrong diagnosis (2026-09-11: both
+  409s in one smoke). Invariants (tests/test_repair.py): refuses a
+  non-local endpoint, a non-`omlx` engine, a non-brew install, and any
+  failure without the signature (`--force` overrides only the signature);
+  ONE restart per 5-minute cooldown per process — a server still broken
+  after a restart is a different problem and a second attempt would hide
+  it; never raises; never loops a turn (the notice says `/retry`). This is
+  the on-demand counterpart of the standing "no cron/launchd watchdog"
+  decision, not a reversal of it: nothing restarts anything unless an
+  operator or a drill reached for the kit and hit the signature
   `--code` / `--chat` run the AGENTIC drills instead (combinable): real
   run_single turns against a planted scratch git repo — --code plants a
   one-line bug + failing test and verifies the fix DETERMINISTICALLY (pytest
@@ -686,6 +711,10 @@ never touches this module.
   network, zero model, zero config: it is the surface that has to work when
   nothing else does. The card's `luxe <sub>` references are asserted against
   the registered CLI commands by a test, so it can't rot.
+- `/repair` (`cmd_diag._repair`) is the ONLY session command that changes
+  host state outside the repo: it restarts a local brew oMLX through
+  `luxe.repair` and nothing else. `/doctor` stays read-only and keeps
+  printing `brew services restart omlx` as the fix string.
 - `/export`, `/diff`, `/doctor` live in `chat/inspection.py` — logic as testable
   functions, rendering in `commands.py`. All three are READ-ONLY. `/doctor`'s
   RENDERING is `inspection.render_doctor(doc, console, title=…)`, shared with
