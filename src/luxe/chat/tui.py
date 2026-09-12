@@ -679,7 +679,10 @@ class ChatApp(App):
             session_store.append_turn(self.session.session_id, "error",
                                       text=str(e),
                                       model=self.slots.backend.model)
-            notice = self.slots.note_turn_failure()
+            # Self-repair first (stale oMLX), then manifest auto-degrade —
+            # same order and reasons as the line REPL.
+            notice = (self.slots.try_self_repair(str(e))
+                      or self.slots.note_turn_failure())
             if notice:
                 self.write(f"[yellow]· {notice}[/]")
             else:

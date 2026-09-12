@@ -201,6 +201,43 @@ def _doctor(args, ctx: CommandContext) -> CommandResult:
     return CommandResult(handled=True)
 
 
+def _repair(args, ctx: CommandContext) -> CommandResult:
+    """`/repair` — restart a stale local oMLX and wait for it (luxe.repair).
+
+    The in-session form of `luxe repair`. Acts only on the stale-oMLX
+    signature (process table, or `--force`); every other failure keeps its
+    own fix line in `/doctor`. The turn path calls the same repair
+    automatically when a turn fails with the signature — this is for when
+    `/doctor` shows the warning before a turn has failed.
+    """
+    from luxe.repair import repair_omlx
+
+    force = "--force" in list(args or [])
+    slots = ctx.slots
+    try:
+        engine = slots.cfg.backend_entry(slots.backend_name).engine
+    except Exception:
+        engine = "omlx"
+    ctx.console.print("[dim]· checking the local oMLX build…[/]")
+    res = repair_omlx(base_url=slots.backend.base_url,
+                      health=slots.backend.health, engine=engine, force=force)
+    if not res.attempted:
+        ctx.console.print(f"[yellow]· no restart: {res.reason}[/]")
+        if not force:
+            ctx.console.print("[dim]  /repair --force restarts it anyway "
+                              "(local, brew-installed oMLX only)[/]")
+        return CommandResult(handled=True)
+    slots.stats.repairs += 1
+    for step in res.steps:
+        ctx.console.print(f"  [dim]·[/] {step}")
+    if res.ok:
+        ctx.console.print(f"[green]✓ {res.detail}[/]")
+    else:
+        ctx.console.print(f"[red]✗ {res.detail}[/] — `brew services info omlx`, "
+                          "`tail ~/.omlx/omlx.log`")
+    return CommandResult(handled=True)
+
+
 def _outage(args, ctx: CommandContext) -> CommandResult:
     """Print the offline emergency card (OUTAGE.md) into the session.
 

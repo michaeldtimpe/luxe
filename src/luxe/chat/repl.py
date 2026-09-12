@@ -392,10 +392,13 @@ def run_chat_repl(
                 logger.error("turn BackendError: %s", e)
                 session_store.append_turn(session.session_id, "error",
                                           text=str(e), model=slots.backend.model)
-                # Manifest auto-degrade: a healthy endpoint whose main model
-                # fails a turn (lazy load hits missing/corrupt weights HERE)
-                # switches the session to the fallback, loudly.
-                notice = slots.note_turn_failure()
+                # Self-repair FIRST (luxe.repair): a stale oMLX fails main
+                # AND fallback with the same lazy import, so degrading would
+                # be the wrong diagnosis. Then manifest auto-degrade: a
+                # healthy endpoint whose main model fails a turn (lazy load
+                # hits missing/corrupt weights HERE) switches the session to
+                # the fallback, loudly.
+                notice = slots.try_self_repair(str(e)) or slots.note_turn_failure()
                 if notice:
                     console.print(f"[yellow]· {notice}[/]")
                 else:

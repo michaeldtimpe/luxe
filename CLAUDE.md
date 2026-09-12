@@ -119,6 +119,15 @@ when reached for — availability over capability. Concretely:
   See README § "Self-testing luxe". Chat bash runs with luxe's venv bin
   prepended to PATH (tools/shell.py `_chat_bash_env`) so agent test runs
   (`pytest`) work on every host — bench bash env untouched.
+- **Self-repair of a stale oMLX (2026-09-11; `src/luxe/repair.py`).** The
+  ONE failure luxe fixes on its own: a server brew upgraded underneath
+  (passes health, then every load fails `No module named …`). `luxe smoke`
+  restarts it and re-drills by default (`--no-fix` to only diagnose);
+  `luxe ready --fix`, `luxe repair [--force]`, `/repair`, and a failed chat
+  turn carrying the signature all go through `repair_omlx`. Local brew oMLX
+  only, one restart per 5 min, never raises, refuses every other failure.
+  Repair runs BEFORE fallback-degrade (a stale process fails both models).
+  Not a watchdog — it acts only when something reached for the kit.
 - **Every session writes `~/.luxe/sessions/<id>/debug.log`** (always-on;
   chat/debuglog.py) and failed turns persist kind="error" transcript records —
   post-outage diagnosis must not depend on what the TUI happened to show.

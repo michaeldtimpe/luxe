@@ -11,12 +11,16 @@ swap path is dead code and the experience is identical to single-champion.
 
 from __future__ import annotations
 
+import logging
+
 import time
 from dataclasses import dataclass
 
 from luxe.backend import Backend, BackendError
 from luxe.chat import origin as origin_mod
 from luxe.config import BackendEntry, PipelineConfig
+
+logger = logging.getLogger(__name__)
 
 _SLOTS = ("chat", "plan", "code")
 
@@ -31,6 +35,7 @@ _HINT_PROBE_TIMEOUT_S = 4.0
 class SwapStats:
     count: int = 0
     seconds: float = 0.0
+    repairs: int = 0      # stale-oMLX restarts this session (luxe.repair)
 
 
 class SlotManager:
@@ -530,6 +535,49 @@ class SlotManager:
         try:
             return set(self.backend.list_models())
         except Exception:
+            return None
+
+    def try_self_repair(self, error_text: str) -> str | None:
+        """Called by the front-ends after a turn-level BackendError, BEFORE
+        `note_turn_failure`. When the failure carries the stale-oMLX
+        signature (luxe.repair) and the active endpoint is a local,
+        brew-installed oMLX, restart it, wait for health, and return a
+        user-facing notice (the operator must see that luxe restarted a
+        server). None = not a repair case, or the repair was refused
+        (cooldown, remote endpoint, other engine) — the caller falls
+        through to the fallback-degrade path exactly as before.
+
+        Ordering matters: degrading to the fallback on a stale process is
+        the WRONG diagnosis — the fallback fails the same lazy import
+        (2026-09-11: both 409s in one smoke). Repair first, degrade second.
+        """
+        try:
+            from luxe.repair import looks_stale, repair_omlx
+
+            if not looks_stale(error_text):
+                return None
+            try:
+                engine = self.cfg.backend_entry(self.backend_name).engine
+            except Exception:
+                engine = "omlx"
+            if self._on_status:
+                self._on_status("⟳ stale oMLX detected — restarting it")
+            res = repair_omlx(base_url=self.backend.base_url,
+                              health=self.backend.health,
+                              error_text=error_text, engine=engine)
+            logger.warning("self-repair: %s | %s", res.detail,
+                           " → ".join(res.steps))
+            if not res.attempted:
+                return None
+            self.stats.repairs += 1
+            if res.ok:
+                return (f"restarted a stale oMLX ({res.reason}) in "
+                        f"{res.seconds:.0f}s — /retry to re-run your message")
+            return (f"tried to restart a stale oMLX and it did not come back "
+                    f"({' → '.join(res.steps)}) — `brew services info omlx`, "
+                    "`tail ~/.omlx/omlx.log`")
+        except Exception as e:  # noqa: BLE001 - repair must never take a turn down
+            logger.error("self-repair crashed: %s", e)
             return None
 
     def note_turn_failure(self) -> str | None:

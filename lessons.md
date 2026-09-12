@@ -30,6 +30,46 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-09-11] the fallback kit diagnosed itself perfectly and stayed down — detection is not recovery
+
+**What happened**: `luxe smoke` on m1 printed the exact cause (`oMLX build —
+pid 1166 is running 0.6.3rc3, but 0.6.4 is what's installed — brew replaced
+the tree underneath it — \`brew services restart omlx\``), then both the main
+and fallback turns failed with 409 `No module named
+'transformers.models.qwen3_vl'` / `'omlx.patches.mlx_lm_mtp'`, and it
+stopped at `NOT READY (3s)`. Third occurrence of the stale-process condition
+(2026-08-03, 2026-08-04, now) — and the second one had ALREADY produced
+`luxe.staleproc` so it would never cost debugging time again. It didn't
+cost debugging time. It cost the thing the kit exists for: working when
+reached for. The process had been up 12 days across a `brew upgrade`.
+
+**Why it happened**: 2026-08-04 solved the problem as stated — "this looks
+like a missing dependency and wastes half an hour" — with a detector and a
+fix STRING. The fix string is one command, the detector is conclusive, the
+endpoint is local, and yet a human still had to read the line and type it.
+The per-host manifest's auto-degrade could not help either: it degrades
+main → fallback on a healthy endpoint, but a stale process fails both with
+the same lazy import, so the degrade path would have reported the wrong
+diagnosis ("main unavailable, running on fallback") and then failed again.
+
+**What we changed**: `src/luxe/repair.py` — luxe ACTS on this one signature.
+`luxe smoke` restarts the stale server, waits for health, confirms the new
+pid is on the installed tree, and re-runs the drill (second table = verdict;
+`--no-fix` to only diagnose). `luxe ready --fix`, `luxe repair [--force]`,
+`/repair`, and the chat turn-failure path (BEFORE `note_turn_failure`) all
+share it. Refuses everything that is not the signature: remote endpoint,
+non-brew, non-oMLX engine, ordinary errors; one restart per 5-min cooldown;
+never raises. Verified live on m1: `luxe repair --force` → healthy in 3s,
+build 0.6.4, `luxe smoke` READY.
+
+**Lesson**: a fix line the tool could run itself is a diagnosis, not a
+repair. For the fallback kit the bar is "works when reached for", and any
+WARN/FAIL whose `fix` is a single deterministic local command with a
+verifiable post-condition is a candidate for the same treatment — under
+the same guards (signature-gated, local-only, cooldown, loud). The standing
+"no watchdog" decision is untouched: nothing restarts anything until an
+operator or a drill reaches for the kit.
+
 ### [2026-08-13] the fallback host's model server was dead for 8 days, and every layer said it was fine
 
 **What happened**: neo — the fleet's local-fallback box — booted on 2026-08-04

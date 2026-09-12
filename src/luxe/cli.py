@@ -681,10 +681,14 @@ def update_cmd(no_sync: bool):
                    "(--chat/--code only — e.g. the m5 capacity model, which "
                    "is a keep:, never a main). The default kit drill stays "
                    "manifest-driven.")
+@click.option("--no-fix", "no_fix", is_flag=True, default=False,
+              help="Diagnose only: never restart a stale local oMLX. By "
+                   "default the kit drill self-repairs the one failure luxe "
+                   "can fix (a server brew upgraded underneath) and re-runs.")
 def smoke_cmd(config_path: str | None, backend_name: str | None,
               base_url: str, code_drill: bool, chat_drill: bool,
               skip_fallback: bool, skip_tools: bool, keep_loaded: bool,
-              expect_model: str, model_override: str | None):
+              expect_model: str, model_override: str | None, no_fix: bool):
     """Aliveness drills for this host's fallback kit (minutes, not a bench).
 
     Default: manifest → weights → endpoint → catalog → one real turn + tool
@@ -737,6 +741,25 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
                                  skip_tools=skip_tools))
         for step in reports[-1].steps:
             console.print(f"  {glyphs[step.state]} {step.name} — {step.detail}")
+        # Self-repair (luxe.repair, 2026-09-11): the fallback kit must WORK
+        # when reached for. A stale oMLX is the one failure luxe can fix on
+        # its own, so when the drill fails with that signature (and the
+        # endpoint is a local brew oMLX) restart it and drill again, loudly.
+        # The second table is the verdict. --no-fix keeps the old
+        # diagnose-only behaviour; --backend <remote> never restarts anything
+        # (repair_omlx refuses non-local endpoints itself).
+        if reports[-1].failed and not no_fix and not backend_name:
+            evidence = reports[-1].stale_evidence
+            if evidence:
+                rep = _smoke_self_repair(cfg, base_url or None, evidence)
+                if rep.attempted:
+                    console.print("[bold]after repair[/]")
+                    reports = [run_smoke(cfg, base_url=base_url or None,
+                                         skip_fallback=skip_fallback,
+                                         skip_tools=skip_tools)]
+                    for step in reports[-1].steps:
+                        console.print(f"  {glyphs[step.state]} {step.name} — "
+                                      f"{step.detail}")
 
     failed = any(r.failed for r in reports)
     if not keep_loaded and not backend_name:
@@ -754,6 +777,30 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
     verdict = ("[red]NOT READY[/]" if failed else "[green]READY[/]")
     console.print(f"[bold]{verdict}[/] [dim]({time.time() - t0:.0f}s)[/]")
     sys.exit(1 if failed else 0)
+
+
+def _smoke_self_repair(cfg, base_url: str | None, evidence: str):
+    """Restart a stale local oMLX for `luxe smoke` / `luxe ready --fix` /
+    `luxe repair`, narrating every step. Returns the RepairResult."""
+    from luxe.backend import Backend
+    from luxe.repair import repair_omlx
+    from luxe.secrets import resolve_api_key
+
+    entry = cfg.backend_entry(cfg.default_backend_name())
+    url = base_url or entry.base_url
+    backend = Backend(base_url=url, model="",
+                      api_key=resolve_api_key(entry.api_key_env))
+    console.print("[yellow]⟳ self-repair[/] — stale oMLX: restarting it "
+                  "[dim](--no-fix to only diagnose)[/]")
+    res = repair_omlx(base_url=url, health=backend.health,
+                      error_text=evidence, engine=entry.engine)
+    if not res.attempted:
+        console.print(f"  [yellow]·[/] no restart: {res.reason}")
+        return res
+    for step in res.steps:
+        console.print(f"  [dim]·[/] {step}")
+    console.print(f"  {'[green]✓[/]' if res.ok else '[red]✗[/]'} {res.detail}")
+    return res
 
 
 def build_ready_doctor(cfg, repo_path: str):
@@ -790,7 +837,11 @@ def build_ready_doctor(cfg, repo_path: str):
                    "of the default one.")
 @click.option("--repo", default=".",
               help="Directory to judge the project checks against (default: cwd)")
-def ready_cmd(config_path: str | None, backend_name: str | None, repo: str):
+@click.option("--fix", "fix", is_flag=True, default=False,
+              help="If the oMLX build line is stale, restart the local server "
+                   "and re-check (same repair `luxe smoke` runs by default).")
+def ready_cmd(config_path: str | None, backend_name: str | None, repo: str,
+              fix: bool):
     """Can I work right now? Point-in-time host preflight — seconds, no model.
 
     The same table `/doctor` prints inside a session: endpoint, oMLX build,
@@ -807,6 +858,16 @@ def ready_cmd(config_path: str | None, backend_name: str | None, repo: str):
 
     doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
     worst = inspection.render_doctor(doc, console, title="luxe ready")
+    if fix and not backend_name:
+        stale = next((c for c in doc.checks
+                      if c.name == "oMLX build" and c.state == inspection.WARN
+                      and "brew replaced" in c.detail), None)
+        if stale is None:
+            console.print("[dim]· --fix: oMLX build is not stale, nothing to restart[/]")
+        elif _smoke_self_repair(cfg, None, stale.detail).attempted:
+            console.print("[bold]after repair[/]")
+            doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
+            worst = inspection.render_doctor(doc, console, title="luxe ready")
 
     if worst == inspection.FAIL:
         console.print(f"[bold][red]NOT READY[/][/] "
@@ -820,6 +881,50 @@ def ready_cmd(config_path: str | None, backend_name: str | None, repo: str):
     console.print("[dim]full generation drill: `luxe smoke` · agentic drill: "
                   "`luxe smoke --chat --code`[/]")
     sys.exit(0)
+
+
+@main.command(name="repair")
+@click.option("--config", "config_path", default=None,
+              help="Config YAML (default: configs/chat.yaml)")
+@click.option("--force", is_flag=True, default=False,
+              help="Restart even when the build check is inconclusive "
+                   "(still local, brew-installed oMLX only).")
+def repair_cmd(config_path: str | None, force: bool):
+    """Restart a stale local oMLX and wait for it (the one self-repair).
+
+    A server left running across `brew upgrade` executes from a deleted
+    Cellar tree: it passes health, lists its catalog, then fails every
+    model load with a bogus `No module named …`. `luxe smoke` does this
+    repair automatically; `luxe ready` names it; this is the explicit form.
+    Refuses anything that is not that signature unless --force. Exit 0 =
+    healthy on the installed build, 1 = restart did not recover it,
+    2 = refused (not stale / remote / not brew / cooldown).
+    """
+    from luxe.backend import Backend
+    from luxe.repair import repair_omlx
+    from luxe.secrets import resolve_api_key
+
+    cfg = _chat_cfg(config_path)
+    entry = cfg.backend_entry(cfg.default_backend_name())
+    backend = Backend(base_url=entry.base_url, model="",
+                      api_key=resolve_api_key(entry.api_key_env))
+    console.print(f"[dim]· checking oMLX at {entry.base_url}…[/]")
+    res = repair_omlx(base_url=entry.base_url, health=backend.health,
+                      engine=entry.engine, force=force)
+    if not res.attempted:
+        console.print(f"[yellow]· no restart: {res.reason}[/]")
+        if not force:
+            console.print("[dim]  `luxe repair --force` restarts it anyway[/]")
+        sys.exit(2)
+    for step in res.steps:
+        console.print(f"  [dim]·[/] {step}")
+    if res.ok:
+        console.print(f"[green]✓ {res.detail}[/]")
+        console.print("[dim]next: `luxe smoke` for a real turn[/]")
+        sys.exit(0)
+    console.print(f"[red]✗ {res.detail}[/] — `brew services info omlx`, "
+                  "`tail ~/.omlx/omlx.log`")
+    sys.exit(1)
 
 
 @main.command(name="init")
