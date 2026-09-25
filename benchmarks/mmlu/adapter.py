@@ -31,6 +31,46 @@ def index_by_subject(rows: list[dict]) -> dict[str, list[dict]]:
     return dict(out)
 
 
+def select_stratified(rows: list[dict], limit: int | None) -> list[dict]:
+    """Select up to `limit` rows, stratified as evenly as possible across subjects.
+
+    If `limit` is None or covers the whole set, every row is used (no
+    stratification needed). Otherwise rows are handed out round-by-round in
+    even per-subject shares; a subject that runs out of rows before its
+    share is exhausted has its unused quota redistributed to subjects that
+    still have rows left, so the result always has exactly
+    `min(limit, len(rows))` rows rather than under-selecting when subjects
+    are small. Deterministic: subjects are visited in sorted order each
+    round and rows are kept in their original per-subject order.
+    """
+    if limit is None or limit >= len(rows):
+        return list(rows)
+
+    by_subject = index_by_subject(rows)
+    subjects = sorted(by_subject)
+    remaining = {s: list(by_subject[s]) for s in subjects}
+    taken: dict[str, list[dict]] = {s: [] for s in subjects}
+
+    quota = limit
+    active = subjects
+    while quota > 0 and active:
+        share, rem = divmod(quota, len(active))
+        next_active = []
+        for i, s in enumerate(active):
+            want = share + (1 if i < rem else 0)
+            avail = remaining[s]
+            take = min(want, len(avail))
+            if take:
+                taken[s].extend(avail[:take])
+                remaining[s] = avail[take:]
+                quota -= take
+            if remaining[s]:
+                next_active.append(s)
+        active = next_active
+
+    return [row for s in subjects for row in taken[s]]
+
+
 def fewshot_for_subject(
     dev_rows: list[dict],
     subject: str,

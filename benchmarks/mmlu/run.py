@@ -27,6 +27,7 @@ from benchmarks.mmlu.adapter import (  # noqa: E402
     build_prompt,
     fewshot_for_subject,
     index_by_subject,
+    select_stratified,
 )
 from benchmarks.mmlu.grade import aggregate  # noqa: E402
 
@@ -59,17 +60,10 @@ def main(argv: list[str] | None = None) -> int:
         if not test_rows:
             print(f"no rows for subject {args.subject!r}", file=sys.stderr)
             return 2
-    if args.limit is not None:
-        # Stratify across subjects so --limit doesn't collapse to one subject.
-        full_by_subject = index_by_subject(test_rows)
-        n_subj = len(full_by_subject)
-        per_subj_base = args.limit // n_subj
-        remainder = args.limit % n_subj
-        selected: list[dict] = []
-        for i, (subj, rows) in enumerate(sorted(full_by_subject.items())):
-            take = per_subj_base + (1 if i < remainder else 0)
-            selected.extend(rows[:take])
-        test_rows = selected
+    # Stratify across subjects so --limit doesn't collapse to one subject;
+    # a subject's unused quota is redistributed so a limit that covers (or
+    # nearly covers) the full set still selects every available row.
+    test_rows = select_stratified(test_rows, args.limit)
 
     by_subject = index_by_subject(test_rows)
 
