@@ -150,3 +150,12 @@ acceptance/chat_bigread_2026_08_24/*
 !acceptance/chat_bigread_2026_08_24/EVIDENCE.md
 !acceptance/chat_bigread_2026_08_24/REPORT.md
 !acceptance/k2horizon_neo_probe_2026_09/
+acceptance/k2horizon_neo_probe_2026_09/*
+!acceptance/k2horizon_neo_probe_2026_09/REPORT.md
+!acceptance/splash_engine_ab_2026_09/
+acceptance/splash_engine_ab_2026_09/*
+!acceptance/splash_engine_ab_2026_09/REPORT.md
+!acceptance/splash_engine_ab_2026_09/hand_verify/
+!acceptance/splash_engine_ab_2026_09/suite/
+acceptance/splash_engine_ab_2026_09/suite/*
+!acceptance/splash_engine_ab_2026_09/suite/FACTS.md

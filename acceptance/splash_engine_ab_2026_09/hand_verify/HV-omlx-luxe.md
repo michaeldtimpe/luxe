@@ -1,0 +1,27 @@
+# Hand-verify: omlx4 arm (Qwen3.6-35B-A3B-4bit), maintain_suite, 10 fixtures x 3 reps
+
+| Fixture | rep1 | rep2 | rep3 |
+|---|---|---|---|
+| isomer-document-quickstart | REAL — docker-compose+port ref, ISOMER_SECRET preserved (27 add) | REAL — same, minimal comment edit (25 add) | REAL — same (25 add) |
+| isomer-implement-healthcheck | REAL — `/health` route wired on existing Flask app | REAL — byte-identical diff | REAL — byte-identical diff |
+| lpe-rope-calc-document-typing | REAL — typed the one actual untyped param (`f: BinaryIO`), matches the fixture's known 1-gap state | REAL — byte-identical | REAL — byte-identical |
+| lpe-rope-calc-implement-strict-flag | REAL — `--strict` correctly threads `bad_gguf_count` through scan_ollama/scan_gguf_dir/scan_lmstudio, exits 1 only on genuinely-bad GGUF; minor blemish: committed a stray `__pycache__/*.pyc` binary | REAL — source byte-identical to rep1 (only .pyc hash differs) | REAL — same |
+| neon-rain-document-modules | REAL — all 9 subdirs + EventBus, fact-checked 2 claims (DebugLayout Ctrl+Shift+D, ServerAI priority order) against source — both correct | REAL — byte-identical | REAL — byte-identical |
+| neon-rain-implement-reset-shortcut | REAL — `e.shiftKey && e.key === 'R'` (uppercase) correctly wired via game:restart | REAL — `e.key === 'R'` correct, extra ctrl/alt guard | **THIN** — bug: checks `e.shiftKey && e.key === 'r'` (lowercase); Shift+R produces uppercase `'R'` in the DOM, so the shortcut never fires under normal input. Existing test suite still passes (doesn't exercise the handler), so the grader's `tests_pass` gate missed it. |
+| nothing-ever-happens-document-config | **THIN** — misses ~12 real startup env vars (PAPER_*, LOG_LEVEL, BOT_VARIANT, TRADE_LEDGER_*, POLYGON_RPC_URL, PM_RECOVERY_*, PM_REDEEM*, HEROKU_APP_NAME) and miscategorizes `DATABASE_URL` as "scripts only, not read by bot" when `bot/main.py:128` reads it at startup | REAL — most complete (~55 vars incl. PM_NH_*/PM_RISK_* groups), correct citations verified (FUNDER_ADDRESS:118, DATABASE_URL:128, POLYGON_RPC_URL:173); misses only the 5 live_recovery/redeemer vars | **THIN** — misses the entire PM_NH_*/PM_RISK_* group (~17 vars) and HEROKU_APP_NAME; PRIVATE_KEY/FUNDER_ADDRESS cited as `bot/config.py:48/51` — actual lines are 117/118 |
+| nothing-ever-happens-manage-deps-audit | REAL* — no branch (known bug, see below); synthesizer.md + 11 `cve_lookup` tool calls show 3 concrete, correctly-sourced findings (GHSA-mf9w-mj56-hr94/CVE-2026-28684 python-dotenv, GHSA-5hr4-253g-cpx2/CVE-2026-40072 web3, GHSA-cq5v-8q36-5273/CVE-2026-69244 aiohttp) | REAL* — same 3 findings, consistent | REAL* — same 3 findings, consistent |
+| the-game-document-architecture | REAL — line-accurate refs (`getTmdbPoster` app.py... server.js:80, `selectWithNeighbors` server.js:103, `shuffle()` App.jsx:26), all verified | REAL — byte-identical | REAL — byte-identical |
+| the-game-implement-shuffle-shortcut | REAL — 'r'/'R' keydown calls the real existing `shuffle()` (verified wired to ShuffleButton/useEffect at base) | REAL — byte-identical | REAL — byte-identical |
+
+\* `nothing-ever-happens-manage-deps-audit`: branch `luxe/manage/audit-requirements-txt-identify-any-pinned-19` does not exist on origin (confirmed: origin only has suffixes -2..-18) in any of the 3 reps — matches the known bookkeeping bug (model self-commits, harness's own commit step then sees a clean tree and fails `failed_no_mutations_produced`). Graded via `~/.luxe/runs/<id>/synthesizer.md` + result.json per the known workaround; not a model failure.
+
+## Tally (30 cells)
+REAL: 24 | THIN: 6 | VACUOUS: 0 | DAMAGING: 0
+
+## Observations
+- All 30 cells printed 4/5 (never 5/5) because `pr_opened=0` on every single one — `gh pr create` fails with "none of the git remotes... point to a known GitHub host" (env limitation, not a fixture-specific signal; ignore for verdicts).
+- `the-game-*` fixtures (both, all 3 reps) show `test_passed=False, is_draft=True` in diagnostics — confirmed NOT model-caused: `the-game`'s `package.json` has no `test` script at `base_sha` (only dev/build/start).
+- The real bug this hand-verify surfaced (neon-rain rep3) is a genuine JS footgun — `e.key` is case-shifted by an active Shift modifier, so `e.shiftKey && e.key==='r'` is nearly unreachable — and it's invisible to the harness because the fixture's `tests_pass` gate is the *existing* suite, which never exercises the new shortcut.
+- `nothing-ever-happens-document-config` is the highest-risk fixture (open-ended "every env var" documentation task) and is where the loose regex-only grader (min_matches=3, min_added_lines=20) is most exposed: all 3 reps pass the grader while covering only 40-90% of the true var set; rep2 is clearly the strongest of the three, rep1 additionally miscategorizes DATABASE_URL.
+- `lpe-rope-calc-implement-strict-flag`'s source diff is byte-identical across all 3 reps (only a committed `.pyc` binary's hash differs) — same for isomer-implement-healthcheck, lpe-rope-calc-document-typing, neon-rain-document-modules, the-game-document-architecture, the-game-implement-shuffle-shortcut. High determinism on implement/doc tasks with a narrow, well-specified gap.
+- The `nothing-ever-happens-manage-deps-audit` -19 branch-bookkeeping bug fired deterministically in all 3 reps (same suffix number reused despite 3 distinct run_ids) — worth a bookkeeping fix even though the model's actual work is sound.
