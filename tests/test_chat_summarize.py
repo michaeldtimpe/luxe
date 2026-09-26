@@ -67,4 +67,4 @@ def test_unknown_version_raises():
 
 
 def test_version_constant_is_pinned():
-    assert SUMMARIZER_VERSION == "trunc-v1"
+    assert SUMMARIZER_VERSION == "trunc-v2"
