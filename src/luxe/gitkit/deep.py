@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -70,9 +71,7 @@ _SYNTH_REDUCE_FRAC = 0.80
 # (30-47 files, 600k-1.4M prompt tokens), passes were slow, and the model
 # rambled without ever concluding (truncating before its findings). Smaller
 # base-window chunks keep each pass focused enough that the model concludes —
-# the "eaten in stages" intent. This multiple lets a capable box opt into a
-# modestly larger deep window than base without returning to the 131k failure.
-_DEEP_WINDOW_BASE_MULT = 1
+# the "eaten in stages" intent (see deep_window).
 # Ask for confirmation (interactive only) once a deep run needs this many chunks.
 _LARGE_CONFIRM_CHUNKS = 8
 # Per-STAGE wall estimates (seconds), fit from the 46-repo sweep, 2026-06
@@ -219,14 +218,12 @@ def base_ctx(role_cfg) -> int:
 
 
 def deep_window(role_cfg) -> int:
-    """The window the deep CHUNK passes run at. Defaults to the BASE num_ctx (a
-    deliberate choice — see _DEEP_WINDOW_BASE_MULT): small, focused chunks that
-    the model can actually conclude, rather than the huge-but-unconcludable
-    chunks an expanded window produced. Clamped to num_ctx_max when a >1
-    multiple opts into a larger deep window."""
-    base = base_ctx(role_cfg)
-    ceiling = getattr(role_cfg, "num_ctx_max", 0) or base
-    return min(base * _DEEP_WINDOW_BASE_MULT, ceiling) if ceiling >= base else base
+    """The window the deep CHUNK passes run at: the BASE num_ctx, a deliberate
+    choice — small, focused chunks that the model can actually conclude,
+    rather than the huge-but-unconcludable chunks an expanded window produced.
+    (A `base × multiple` clamped to num_ctx_max used to live here; the
+    multiple was 1, so the clamp never did anything.)"""
+    return base_ctx(role_cfg)
 
 
 def estimate_repo_tokens(summary) -> int:
@@ -266,6 +263,49 @@ def _file_priority(rel: str, recent: set[str]) -> int:
     return 2
 
 
+def _is_visible(rel: str, excludes=None) -> bool:
+    """`iter_pruned`'s pruning applied to a repo-relative path from git: no
+    excluded directory and no dot-directory (except .github) on the way down.
+    Lets git-sourced path lists (incremental adds, framing) see exactly the
+    files a tree walk would have."""
+    excludes = excludes if excludes is not None else _DEFAULT_EXCLUDES
+    for seg in rel.split("/")[:-1]:
+        if seg in excludes or (seg.startswith(".") and seg != ".github"):
+            return False
+    return True
+
+
+def file_recs_for(target: str | Path, rels, *, recent: set[str] | None = None,
+                  prune: bool = True, log=None) -> list[FileRec]:
+    """FileRecs for an explicit list of repo-relative paths (recognized
+    languages that exist as files) — the incremental path's added files and
+    the diff audit's changed files. Builds only what it is asked for; the
+    whole-tree walk (`enumerate_files`) is for a full (re)map."""
+    root = Path(target).resolve()
+    recent = recent or set()
+    recs: list[FileRec] = []
+    for rel in rels:
+        if prune and not _is_visible(rel):
+            continue
+        p = root / rel
+        lang = _detect_language(p.suffix)
+        if lang is None or not p.is_file():
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError as e:
+            if log:
+                log(f"skipping unreadable file {p}: {e}")
+            continue
+        top = rel.split("/", 1)[0] if "/" in rel else "."
+        recs.append(FileRec(
+            rel=rel, language=lang, loc=_count_lines(p), bytes=size,
+            tokens=max(1, size // _CHARS_PER_TOKEN), top_dir=top,
+            priority=_file_priority(rel, recent),
+        ))
+    return recs
+
+
 def enumerate_files(target: str | Path, summary, *,
                     excludes: set[str] | None = None, log=None) -> list[FileRec]:
     """Walk `target` for recognized source files with cheap token estimates and a
@@ -296,18 +336,37 @@ def enumerate_files(target: str | Path, summary, *,
     return recs
 
 
-def _symbols_for(files: set[str], symbol_index) -> list[str]:
-    if symbol_index is None:
+def _symbols_by_path(symbol_index) -> dict[str, list[str]]:
+    """One pass over the symbol index → {posix path: [names in index order]}.
+    Built once per partition; scanning the whole index once PER CHUNK was
+    O(chunks × symbols)."""
+    by_path: dict[str, list[str]] = {}
+    for s in getattr(symbol_index, "symbols", []) if symbol_index is not None else []:
+        by_path.setdefault(str(s.path).replace(os.sep, "/"), []).append(s.name)
+    return by_path
+
+
+def _symbols_for(files, symbol_index, *,
+                 by_path: dict[str, list[str]] | None = None) -> list[str]:
+    """Symbols defined in `files` (first-seen, deduped, capped), in the
+    index's order."""
+    if symbol_index is None and by_path is None:
         return []
+    if by_path is None:
+        by_path = _symbols_by_path(symbol_index)
+    files = set(files)
     names: list[str] = []
     seen: set[str] = set()
-    for s in getattr(symbol_index, "symbols", []):
-        spath = str(s.path).replace(os.sep, "/")
-        if spath in files and s.name not in seen:
-            seen.add(s.name)
-            names.append(s.name)
-            if len(names) >= _MAX_CHUNK_SYMBOLS:
-                break
+    # index order is preserved by walking the paths in their first-seen order
+    for path, pnames in by_path.items():
+        if path not in files:
+            continue
+        for name in pnames:
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+                if len(names) >= _MAX_CHUNK_SYMBOLS:
+                    return names
     return names
 
 
@@ -320,6 +379,7 @@ def build_chunks(files: list[FileRec], *, content_budget: int,
     capped at read time). Always returns ≥ 1 chunk."""
     budget = max(1, content_budget)
     ordered = sorted(files, key=lambda f: (f.priority, f.top_dir, f.rel))
+    by_path = _symbols_by_path(symbol_index) if symbol_index is not None else None
     chunks: list[Chunk] = []
     cur: list[FileRec] = []
     cur_tok = 0
@@ -338,7 +398,7 @@ def build_chunks(files: list[FileRec], *, content_budget: int,
             index=idx, files=[f.rel for f in cur],
             dirs=sorted(dir_counts), label=label,
             est_tokens=sum(f.tokens for f in cur), loc=sum(f.loc for f in cur),
-            symbols=_symbols_for(fileset, symbol_index),
+            symbols=_symbols_for(fileset, symbol_index, by_path=by_path),
             oversized=[f.rel for f in cur if f.tokens > budget],
         ))
         cur, cur_tok = [], 0
@@ -355,17 +415,21 @@ def build_chunks(files: list[FileRec], *, content_budget: int,
     return chunks
 
 
-def framing_files(target: str | Path, *, limit: int = 40) -> list[str]:
+_FRAMING_LIMIT = 40
+
+
+def _pick_framing(rels, *, limit: int = _FRAMING_LIMIT) -> list[str]:
+    """The framing selection rule over a path list (sorted, capped)."""
+    return sorted(r for r in rels if _FRAMING_RE.search(r))[:limit]
+
+
+def framing_files(target: str | Path, *, limit: int = _FRAMING_LIMIT) -> list[str]:
     """Deterministic framing-file picker for the survey (README/CI/Docker/IaC/
     auth/config/routing/entrypoints). Returns POSIX relative paths, capped."""
     root = Path(target).resolve()
-    found: list[str] = []
-    for p in iter_pruned(root, excludes=_DEFAULT_EXCLUDES):
-        rel = str(p.relative_to(root)).replace(os.sep, "/")
-        if _FRAMING_RE.search(rel):
-            found.append(rel)
-    found.sort()
-    return found[:limit]
+    return _pick_framing(
+        (str(p.relative_to(root)).replace(os.sep, "/")
+         for p in iter_pruned(root, excludes=_DEFAULT_EXCLUDES)), limit=limit)
 
 
 # --- chunk-output parsing + digest maintenance ------------------------------
@@ -672,6 +736,7 @@ class PassTiming:
     est_tokens: int = 0     # chunk passes only
     loc: int = 0            # chunk passes only
     n_files: int = 0        # chunk passes only
+    aborted: bool = False   # the pass ended in a backend/loop abort
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -799,18 +864,77 @@ def git_file_shas(target: str | Path) -> dict[str, str]:
     SHAs, never timestamps — the incremental staleness currency. Untracked
     files simply don't appear (callers treat sha-less files as always-dirty)."""
     from luxe.gitkit.health import _run_git
+    # -z: NUL-terminated and UNQUOTED (a non-ASCII path would otherwise come
+    # back C-quoted and never match the tree walk's name for it).
     ok, out = _run_git(
-        ["ls-tree", "-r", "--format=%(objectname) %(path)", "HEAD"], target)
+        ["ls-tree", "-r", "-z", "--format=%(objectname) %(path)", "HEAD"], target)
     if not ok:
         return {}
     shas: dict[str, str] = {}
-    for ln in out.splitlines():
+    for ln in out.split("\0"):
         parts = ln.split(" ", 1)
         # the committable .luxe/ sidecar (gitkit mirror, memory.md) is luxe's
         # OWN write — it must never count as a repo change (a committed mirror
         # README would otherwise read as a "framing file changed" rebuild).
         if len(parts) == 2 and not parts[1].startswith(".luxe/"):
             shas[parts[1]] = parts[0]
+    return shas
+
+
+_HASH_BATCH = 200
+
+
+def worktree_file_shas(target: str | Path) -> dict[str, str]:
+    """{rel path: blob sha} of the WORKING TREE — what a chunk pass actually
+    reads. HEAD's `ls-tree` shas, overlaid with `git hash-object` shas for
+    every modified or untracked (non-ignored) file, minus files deleted in
+    the tree. The cache used to validate against HEAD only, so an
+    uncommitted edit reused the note written for the committed content.
+
+    `git status` failing returns {} — every note is then invalid (re-run),
+    never "assume clean"."""
+    from luxe import gitcmd
+    shas = git_file_shas(target)
+    try:
+        st = gitcmd.run_in(target, "status", "--porcelain", "-z",
+                           "--untracked-files=all", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if st.returncode != 0:
+        return {}
+    root = Path(target)
+    to_hash: list[str] = []
+    toks = st.stdout.split("\0")
+    i = 0
+    while i < len(toks):
+        ent = toks[i]
+        i += 1
+        if len(ent) < 4:
+            continue
+        paths = [ent[3:]]
+        if ent[:1] in ("R", "C"):               # "XY new\0old"
+            if i < len(toks) and ent[:1] == "R":
+                shas.pop(toks[i], None)         # the old name is gone
+            i += 1
+        for rel in paths:
+            if rel.startswith(".luxe/"):
+                continue
+            if (root / rel).is_file():
+                to_hash.append(rel)
+            else:
+                shas.pop(rel, None)             # deleted in the working tree
+    for k in range(0, len(to_hash), _HASH_BATCH):
+        batch = to_hash[k:k + _HASH_BATCH]
+        try:
+            r = gitcmd.run_in(target, "hash-object", "--", *batch, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            r = None
+        out = r.stdout.split() if (r is not None and r.returncode == 0) else []
+        if len(out) != len(batch):
+            for rel in batch:                   # unknown content → never reusable
+                shas.pop(rel, None)
+            continue
+        shas.update(zip(batch, out))
     return shas
 
 
@@ -828,6 +952,8 @@ def save_map(target: str | Path, *, head: str, survey_notes: str,
              files: dict[str, str] | None = None,
              baseline: dict | None = None) -> Path:
     d = _map_dir(target)
+    if is_ephemeral():
+        return d       # nothing is written — and no empty map/ dir either
     d.mkdir(parents=True, exist_ok=True)
     # Atomic per-file writes, breadcrumb LAST: a crash anywhere before the
     # mapped.json replace leaves the OLD breadcrumb pointing at the OLD heavy
@@ -846,7 +972,7 @@ def save_map(target: str | Path, *, head: str, survey_notes: str,
     _atomic_write_text(d / "mapped.json", json.dumps(
         {"version": 2, "head": head or "", "n_chunks": len(chunks),
          "content_budget": content_budget, "mapped_at": int(time.time()),
-         "files": files if files is not None else git_file_shas(target),
+         "files": files if files is not None else worktree_file_shas(target),
          "baseline": baseline if baseline is not None else make_baseline(chunks)},
         indent=2))
     return d
@@ -873,6 +999,8 @@ def save_chunk_note(target: str | Path, kind: str, chunk: Chunk, *,
     """Persist one chunk's digest CONTRIBUTION (inputs to a future digest fold —
     never merged final findings) right after the chunk completes. Atomic, so it
     doubles as crash-resume. Best-effort: an OS error never aborts the run."""
+    if is_ephemeral():
+        return
     try:
         d = _notes_dir(target, kind)
         d.mkdir(parents=True, exist_ok=True)
@@ -913,6 +1041,18 @@ def chunk_note_is_valid(note: dict | None, chunk: Chunk,
     return True
 
 
+def _cacheable(contribution: dict, chunk_timings) -> bool:
+    """Whether a chunk's contribution may be written to the notes cache. Never
+    when ANY pass for the chunk aborted (the chunk pass itself or a recovery
+    pass — a failed format pass silently degrades a note to heuristic
+    salvage), and never an 'unanalyzed' result: both are transient failures,
+    and a cached one would be reused by sha on every later run as though the
+    chunk had been analyzed. Re-runs retry them instead."""
+    if contribution.get("unparsed"):
+        return False
+    return not any(getattr(t, "aborted", False) for t in chunk_timings)
+
+
 def fold_contribution(digest: dict, contribution: dict, chunk_index: int) -> None:
     """Fold a cached chunk contribution into the digest EXACTLY as the live
     chunk loop would have (same update_digest / markdown_notes / unparsed
@@ -936,7 +1076,6 @@ class IncrementalPlan:
     mode: str                   # "incremental" | "rebuild"
     reason: str = ""            # rebuild trigger / incremental summary
     chunks: list[Chunk] = field(default_factory=list)  # pruned + delta partition
-    dirty: set[int] = field(default_factory=set)       # indices that must re-run
     baseline: dict = field(default_factory=dict)       # carried-forward baseline
     n_changed: int = 0          # modified+deleted+added file count
 
@@ -944,25 +1083,39 @@ class IncrementalPlan:
 def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
                      chunks: list[Chunk], baseline: dict,
                      added_recs: list[FileRec], content_budget: int,
-                     symbol_index=None) -> IncrementalPlan:
+                     symbol_index=None,
+                     framing: list[str] | None = None) -> IncrementalPlan:
     """PURE incremental planner (no I/O): decide full-rebuild vs incremental
     from the old/new blob-sha maps, and produce the updated partition.
 
-    Rebuild triggers (each logged via `reason`): a FRAMING file changed; file
-    churn (added+deleted) > 20% of mapped files; anti-drift compaction —
-    cumulative delta chunks > 4, cumulative delta content > 15% of the original
-    corpus tokens, or chunk count grown > 25% over the original partition.
+    Rebuild triggers (each logged via `reason`): a FRAMING file changed — one
+    the survey actually read (the map's saved `framing` list) or one that
+    would now join that list; file churn (added+deleted) > 20% of mapped
+    files; anti-drift compaction — cumulative delta chunks > 4, cumulative
+    delta content > 15% of the original corpus tokens, or chunk count grown
+    > 25% over the original partition. `framing=None` (a caller without the
+    saved list) falls back to "any touched path matching the framing
+    pattern", which rebuilt on every edit to any index.js / app.py / main.*.
 
     Incremental: survey + partition kept; deleted files pruned from their
-    chunks (chunk → dirty); modified files mark their chunk dirty; added files
-    pack into APPENDED delta chunks (all dirty)."""
+    chunks; added files pack into APPENDED delta chunks. Which chunks re-run
+    is NOT decided here: the sha-validated notes cache does that against the
+    working tree (`chunk_note_is_valid`)."""
     modified = {r for r, s in new_files.items()
                 if r in old_files and old_files[r] != s}
     deleted = set(old_files) - set(new_files)
     added = set(new_files) - set(old_files)
 
     touched = modified | deleted | added
-    framing_hit = sorted(r for r in touched if _FRAMING_RE.search(r))
+    if framing is None:
+        framing_hit = sorted(r for r in touched if _FRAMING_RE.search(r))
+    else:
+        old_fr = set(framing)
+        new_fr = set(_pick_framing(
+            {r for r in new_files if _is_visible(r)} | (old_fr - deleted)))
+        # a changed/deleted file the survey READ, or an added one that would
+        # now join the list it reads
+        framing_hit = sorted((touched & old_fr) | (added & new_fr))
     if framing_hit:
         return IncrementalPlan("rebuild",
                                reason=f"framing file changed ({framing_hit[0]})")
@@ -973,7 +1126,6 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
 
     # Updated partition: prune deletions, mark dirt, append delta chunks.
     new_chunks: list[Chunk] = []
-    dirty: set[int] = set()
     mapped_files: set[str] = set()
     for c in chunks:
         keep = [f for f in c.files if f not in deleted]
@@ -982,8 +1134,6 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
                    est_tokens=c.est_tokens, loc=c.loc, symbols=c.symbols,
                    oversized=[f for f in c.oversized if f not in deleted])
         new_chunks.append(nc)
-        if len(keep) != len(c.files) or any(f in modified for f in keep):
-            dirty.add(c.index)
 
     # files added since the ORIGINAL map but unmapped (e.g. created between
     # generations and never folded) ride with the added set via added_recs.
@@ -997,7 +1147,6 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
         for dc in delta_chunks_new:
             dc.index += offset
             new_chunks.append(dc)
-            dirty.add(dc.index)
 
     # Anti-drift compaction triggers — evaluated on the would-be cumulative state.
     bl = dict(baseline or {})
@@ -1026,16 +1175,16 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
         "incremental",
         reason=f"{len(modified)} modified, {len(deleted)} deleted, "
                f"{len(delta_recs)} added",
-        chunks=new_chunks, dirty=dirty, baseline=bl,
+        chunks=new_chunks, baseline=bl,
         n_changed=len(modified) + len(deleted) + len(delta_recs))
 
 
-def _new_work_dir(target: str | Path, kind: str) -> Path:
+def _new_work_dir(target: str | Path, kind: str) -> Path | None:
     from luxe.gitkit import store
-    ts = int(time.time())
-    d = store.reports_dir(target) / f"{kind}-{ts}-{uuid.uuid4().hex[:6]}.work"
     if is_ephemeral():
         return None
+    ts = int(time.time())
+    d = store.reports_dir(target) / f"{kind}-{ts}-{uuid.uuid4().hex[:6]}.work"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -1215,7 +1364,8 @@ def run_deep_report(
             steps=int(getattr(res, "steps", 0) or 0),
             tool_calls_total=int(getattr(res, "tool_calls_total", 0) or 0),
             window=int(getattr(role, "num_ctx", 0) or 0),
-            started_at=start))
+            started_at=start,
+            aborted=bool(getattr(res, "aborted", False))))
         return res
 
     def _handle_partial_map(status: MapStatus) -> CacheDecision:
@@ -1275,23 +1425,24 @@ def run_deep_report(
             # trigger is logged loudly (never silently skipped).
             stale = load_map(target, head=head, allow_stale=True)
             if stale is not None:
-                current_shas = git_file_shas(target)
-                added = set(current_shas) - set(status.files)
-                added_recs = [r for r in enumerate_files(target, summary,
-                                                         log=_emit)
-                              if r.rel in added]
+                current_shas = worktree_file_shas(target)
+                added = sorted(set(current_shas) - set(status.files))
+                # FileRecs for the ADDED files only — not a whole-tree walk
+                # that counts every file's lines to find a handful of adds.
+                added_recs = file_recs_for(target, added,
+                                           recent=_norm_recent(summary),
+                                           log=_emit)
                 plan = plan_incremental(
                     old_files=status.files, new_files=current_shas,
                     chunks=stale["chunks"], baseline=status.baseline,
                     added_recs=added_recs, content_budget=content_budget,
-                    symbol_index=symbol_index)
+                    symbol_index=symbol_index, framing=stale["framing"])
                 if plan.mode == "incremental":
                     survey_notes = stale["survey_notes"]
                     chunks = plan.chunks
                     framing = stale["framing"]
                     _emit(f"incremental: HEAD {status.head[:8] or '?'} → "
-                          f"{(head or '?')[:8]} — {plan.reason}; "
-                          f"{len(plan.dirty)} chunk(s) marked dirty")
+                          f"{(head or '?')[:8]} — {plan.reason}")
                     save_map(target, head=head, survey_notes=survey_notes,
                              chunks=chunks, content_budget=content_budget,
                              framing=framing, summary_render=summary.render(),
@@ -1337,7 +1488,7 @@ def run_deep_report(
     # chunk's invalidation by construction.
     contributions: dict[int, dict] = {}
     if chunks_override is None:
-        current_shas = current_shas or git_file_shas(target)
+        current_shas = current_shas or worktree_file_shas(target)
         if not no_incremental and not rebuild_map:
             for c in chunks:
                 if not c.files:
@@ -1387,6 +1538,7 @@ def run_deep_report(
                         json.dumps(digest, indent=2))
                 continue
             contribution: dict = {}
+            n_timed = len(timings)     # every pass of THIS chunk lands after here
             _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label})")
             extra = (f"<survey_notes>\n{survey_notes}\n</survey_notes>\n\n"
                      f"{_digest_block(digest)}\n\n{_chunk_block(c, len(chunks))}")
@@ -1441,9 +1593,8 @@ def run_deep_report(
                     contribution["unparsed"] = label
                     _emit(f"chunk {c.index + 1} produced no usable steps "
                           "(empty/truncated) — flagged as unanalyzed")
-                if chunks_override is None and not getattr(res, "aborted", False):
-                    # an ABORTED pass (backend error / loop abort) must never
-                    # poison the notes cache — re-runs retry it instead
+                if chunks_override is None and _cacheable(contribution,
+                                                          timings[n_timed:]):
                     save_chunk_note(
                         target, kind, c, head=head,
                         file_shas={r: current_shas.get(r, "")
@@ -1494,8 +1645,8 @@ def run_deep_report(
                 contribution["unparsed"] = label
                 _emit(f"chunk {c.index + 1} produced no usable findings "
                       f"(empty/truncated) — flagged as unanalyzed")
-            if chunks_override is None and not getattr(res, "aborted", False):
-                # aborted pass → never cached (see gitchange branch above)
+            if chunks_override is None and _cacheable(contribution,
+                                                      timings[n_timed:]):
                 save_chunk_note(
                     target, kind, c, head=head,
                     file_shas={r: current_shas.get(r, "") for r in c.files},
