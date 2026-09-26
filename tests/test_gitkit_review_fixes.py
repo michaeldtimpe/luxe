@@ -762,3 +762,81 @@ def test_chunk_blocks_do_not_rerun_git_per_chunk(tmp_path, monkeypatch):
                                         stats=stats, per_file=per)
     assert "y = 2" in block and "x = 2" not in block
     assert block == scoped_git
+
+
+# --- plan ids, ephemeral leaks, compare bare side (15, 17, 18) ---------------
+
+def test_duplicate_step_ids_are_renamed_not_dropped():
+    """15: order_steps keys by id, so a repeated id silently dropped a step."""
+    from luxe.gitkit import plan
+    raw = {"steps": [
+        {"id": "S1", "title": "a", "change": {"detail": "x"}},
+        {"id": "S1", "title": "b", "change": {"detail": "y"}},
+        {"id": "S2", "title": "c", "change": {"detail": "z"}, "depends_on": ["S1"]},
+    ]}
+    p = plan.normalize_plan(raw, head="h")
+    assert [s["id"] for s in p["steps"]] == ["S1", "S1-2", "S2"]
+    assert [s["title"] for s in plan.order_steps(p)] == ["a", "b", "c"]
+
+
+@pytest.fixture
+def ephemeral():
+    from luxe import ephemeral as eph
+    eph.enable()
+    yield
+    eph.disable()
+
+
+def test_ephemeral_writes_no_plan_compare_or_map(tmp_path, isolated_home, ephemeral):
+    """17: plan.save_plan_json, compare store save/record_vote and the deep
+    map/notes mkdirs all wrote under ~/.luxe with --ephemeral on."""
+    from luxe.compare import store as cstore
+    from luxe.compare.run_pair import CompareResult, SideResult
+    from luxe.gitkit import deep, plan
+    repo = _init_repo(tmp_path / "r", {"a.py": "x = 1\n"})
+    assert plan.save_plan_json(repo, plan.normalize_plan({}, head="h")) is None
+    res = CompareResult(compare_id="c1", task="t", task_type="review", blind=False,
+                        sides=[SideResult(label="A", model_id="m", variant_id="v",
+                                          substrate_env={}, run_id="r")])
+    assert cstore.save(res) is None
+    cstore.record_vote("c1", "A")
+    chunk = deep.Chunk(index=0, files=["a.py"], label=".")
+    deep.save_map(repo, head="h", survey_notes="s", chunks=[chunk],
+                  content_budget=10, framing=[], summary_render="", files={})
+    deep.save_chunk_note(repo, "gitaudit", chunk, head="h", file_shas={},
+                         contribution={})
+    assert not (isolated_home / ".luxe").exists()
+
+
+def test_no_save_does_not_write_the_plan_json(tmp_path, isolated_home):
+    """17: finalize_and_save wrote plan-<head>.json even with --no-save."""
+    from luxe.gitkit import plan
+    repo = _init_repo(tmp_path / "r", {"a.py": "x = 1\n"})
+    raw = '```json\n{"steps": [{"id": "S1", "title": "t", "change": {"detail": "d"}}]}\n```'
+    _md, p = plan.finalize_and_save(repo, "h", raw, save=False)
+    assert p["steps"] and not (isolated_home / ".luxe").exists()
+
+
+def test_bare_compare_side_disables_default_on_levers():
+    """18: the bare side zeroed opt-in flags but left the DEFAULT-ON loop
+    levers (truncated/empty-turn retry, server-truth calibration) running."""
+    from luxe.agents.flags import RunFlags
+    from luxe.compare.run_pair import _env_overrides, build_sides
+    _a, b = build_sides(1, model_id="Champ")
+    with _env_overrides(b.substrate_env):
+        f = RunFlags.from_env()
+    assert f.truncated_turn_retry is False
+    assert f.empty_turn_retry is False
+    assert f.ctx_server_truth is False
+    assert f.tiered_compact is False
+
+
+def test_compare_overlay_tempdirs_are_cleaned(tmp_path, monkeypatch):
+    """18: _role_for_side leaked a mkdtemp dir per side per compare."""
+    import tempfile
+    from luxe.compare import run_pair
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    a, b = run_pair.build_sides(1, model_id="Champ")
+    run_pair._role_for_side(a)
+    run_pair._role_for_side(b)
+    assert [p for p in tmp_path.iterdir() if p.name.startswith("luxe_cmp_")] == []

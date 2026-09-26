@@ -1761,7 +1761,8 @@ def run_deep_report(
 
         report, _ = plan_mod.finalize_and_save(
             target, head, synth_text, extract_fn=_extract_plan_json,
-            fallback_steps=digest.get("steps"), title=_TITLES["gitchange"])
+            fallback_steps=digest.get("steps"), title=_TITLES["gitchange"],
+            save=save)
     else:
         report = extract_report(synth_text, kind)
         # Use the LLM synthesis ONLY if it came back clean. The champion narrates its
