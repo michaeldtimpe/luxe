@@ -344,3 +344,77 @@ def test_exc_text_flattens_exception_groups_and_names_bare_cancels():
                          [ConnectionError("no route to host")])
     assert _exc_text(grp) == "no route to host"
     assert _exc_text(asyncio.CancelledError()) == "CancelledError"
+
+
+# --- bounded handshake / close / discovery / result size ----------------------
+
+def test_a_server_that_never_answers_initialize_is_bounded():
+    """A stdio server that accepts the pipe and never replies pinned start()
+    for its whole 120s deadline — initialize/list_tools had no timeout."""
+    import sys
+    import time
+
+    cfg = MCPClientConfig(servers=[MCPServerConfig(
+        name="mute", command=sys.executable,
+        args=["-c", "import time; time.sleep(60)"], timeout_s=0.5)])
+    t0 = time.monotonic()
+    mgr = MCPClientManager(cfg).start()
+    try:
+        assert time.monotonic() - t0 < 15
+        runtime = mgr._servers["mute"]
+        assert runtime.is_down and "initialize" in runtime.down_reason
+    finally:
+        mgr.close()
+
+
+def test_close_cancels_a_lifetime_that_ignores_shutdown():
+    mgr = _bootstrap_manager_with_servers({"a": _server("a", behavior="ok")})
+    mgr._CLOSE_DRAIN_S = 0.2
+
+    async def _wedged():
+        await asyncio.sleep(3600)          # never looks at the shutdown event
+
+    mgr._lifetime_fut = mgr._submit(_wedged())
+    mgr.close()
+    assert mgr._lifetime_fut.cancelled()
+
+
+def test_discover_tools_reuses_the_connect_listing():
+    """discover_tools re-issued list_tools on every call (one more round trip
+    per server, and a failure point) for data connect already had."""
+    class _Tool:
+        name = "t1"
+        description = "d"
+        inputSchema = {"type": "object", "properties": {}}
+
+    class _NoRelist(_FakeSession):
+        async def list_tools(self):
+            raise AssertionError("list_tools must not be re-issued")
+
+    runtime = _server("a", behavior="ok")
+    runtime.session = _NoRelist()
+    runtime.tools = [_Tool()]
+    runtime.tool_names = ["t1"]
+    mgr = _bootstrap_manager_with_servers({"a": runtime})
+    try:
+        defs, fns = mgr.discover_tools()
+        assert [d.name for d in defs] == ["mcp__a__t1"]
+        assert "mcp__a__t1" in fns
+        assert runtime.consecutive_failures == 0
+    finally:
+        mgr.close()
+
+
+def test_sync_call_caps_an_oversized_result():
+    from luxe.mcp.client import MCP_RESULT_MAX_CHARS
+
+    runtime = _server("a", behavior="ok")
+    runtime.session = _FakeSession(behavior="ok", text="x" * 500_000)
+    mgr = _bootstrap_manager_with_servers({"a": runtime})
+    try:
+        text, err = mgr.sync_call("a", "tool1", {})
+        assert err is None
+        assert len(text) < MCP_RESULT_MAX_CHARS + 300
+        assert "[truncated: showing" in text and "500,000" in text
+    finally:
+        mgr.close()
