@@ -45,23 +45,7 @@ from luxe.backend import ChatResponse, GenerationTiming, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.tools.base import ToolDef
 
-
-class _ScriptedBackend:
-    """Backend stub that yields a pre-scripted sequence of ChatResponses,
-    capturing the messages list passed in on each call so assertions can
-    inspect the conversation post-hoc.
-    """
-
-    def __init__(self, scripted: list[ChatResponse]) -> None:
-        self._scripted = list(scripted)
-        self.calls: list[list[dict[str, Any]]] = []
-
-    def chat(self, messages, **kwargs) -> ChatResponse:
-        self.calls.append([dict(m) for m in messages])
-        if not self._scripted:
-            return ChatResponse(text="", finish_reason="stop",
-                                timing=GenerationTiming(prompt_tokens=10, completion_tokens=10))
-        return self._scripted.pop(0)
+from tests._fakes import ScriptedBackend as _ScriptedBackend
 
 
 def _read_resp(completion_tokens: int = 1500) -> ChatResponse:

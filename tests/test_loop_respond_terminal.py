@@ -31,24 +31,7 @@ from luxe.backend import ChatResponse, GenerationTiming, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.tools.base import ToolDef
 
-
-class _ScriptedBackend:
-    """Backend stub that yields a pre-scripted sequence of ChatResponses,
-    capturing the messages list passed in on each call so assertions can
-    inspect the conversation post-hoc."""
-
-    def __init__(self, scripted: list[ChatResponse]) -> None:
-        self._scripted = list(scripted)
-        self.calls: list[list[dict[str, Any]]] = []
-
-    def chat(self, messages, **kwargs) -> ChatResponse:
-        self.calls.append([dict(m) for m in messages])
-        if not self._scripted:
-            return ChatResponse(
-                text="", finish_reason="stop",
-                timing=GenerationTiming(prompt_tokens=10, completion_tokens=10),
-            )
-        return self._scripted.pop(0)
+from tests._fakes import ScriptedBackend as _ScriptedBackend
 
 
 def _make_role(max_steps: int = 30, num_ctx: int = 4096) -> RoleConfig:
@@ -377,28 +360,6 @@ def test_respond_passive_surrender_watchdog(monkeypatch):
               if m.get("_luxe_nudge_type") == "respond_passive_surrender"]
     assert len(nudges) == 1
     assert "step 4" in nudges[0]["content"]
-
-
-# ---------------------------------------------------------------------------
-# Test 7 — Compaction × respond (highest priority).
-# ---------------------------------------------------------------------------
-
-
-import pytest
-
-
-@pytest.mark.skip(reason="compaction x respond integration test deferred: "
-                        "requires triggering TieredCompact phase >= 2 fire "
-                        "via realistic context-pressure setup; deferred to "
-                        "the dedicated compaction integration suite. The "
-                        "gate ordering is exercised in "
-                        "test_respond_watchdog_ordering_compaction_wins, "
-                        "which monkeypatches the phase counter directly.")
-def test_respond_compaction_phantom_watchdog(monkeypatch):
-    """LUXE_TIERED_COMPACT=1 + LUXE_RESPOND_TERMINAL=1: simulate phase 2
-    compaction fire then respond at step 4 with writes_seen=0 →
-    respond_compaction_phantom event + reprompt."""
-    raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------

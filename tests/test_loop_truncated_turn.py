@@ -26,8 +26,6 @@ the ablation path these tests pin.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from luxe.agents.guardrails import _TRUNCATED_TURN_MAX_RETRIES
@@ -36,19 +34,7 @@ from luxe.backend import ChatResponse, GenerationTiming, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.tools.base import ToolDef
 
-
-class _ScriptedBackend:
-    def __init__(self, scripted: list[ChatResponse]) -> None:
-        self._scripted = list(scripted)
-        self.calls: list[list[dict[str, Any]]] = []
-
-    def chat(self, messages, **kwargs) -> ChatResponse:
-        self.calls.append([dict(m) for m in messages])
-        if not self._scripted:
-            return ChatResponse(
-                text="", finish_reason="stop",
-                timing=GenerationTiming(prompt_tokens=10, completion_tokens=10))
-        return self._scripted.pop(0)
+from tests._fakes import ScriptedBackend as _ScriptedBackend
 
 
 def _role(max_steps: int = 30) -> RoleConfig:
