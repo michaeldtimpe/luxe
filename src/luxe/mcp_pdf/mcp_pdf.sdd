@@ -51,8 +51,10 @@ inspect, extract, fill, overlay, convert, print.
 - Add anything here to `luxe.tools.TOOL_FNS`, `run_single`'s default tool
   list, or any benchmark config — a reproducible benchmark must not grow a
   dependency on local PDF binaries or a printer
-- Enable the server by default. `configs/mcp.yaml` `client.servers` stays
-  `[]`; the repo ships a COMMENTED example stanza only
+- Enable the server by default. `configs/mcp.yaml` registers no PDF server
+  entry; the repo ships a COMMENTED example stanza only. (Other opt-in
+  servers may be listed there since 2026-08-25 — every entry still attaches
+  only when a session names it with `--mcp`.)
 - Make `pypdf` / `reportlab` / `pillow` base dependencies. They live in the
   `[pdf]` optional extra; importing this package without them must produce
   the install remedy, not a traceback at import time
