@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -43,9 +44,9 @@ from typing import Any
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.ephemeral import is_ephemeral
+from luxe.gitkit import patterns
 from luxe.context import estimate_tokens
 from luxe.fswalk import iter_pruned
-from luxe.textfmt import truncate_for_display
 from luxe.repo_index import (
     _DEFAULT_EXCLUDES,
     _count_lines,
@@ -71,9 +72,7 @@ _SYNTH_REDUCE_FRAC = 0.80
 # (30-47 files, 600k-1.4M prompt tokens), passes were slow, and the model
 # rambled without ever concluding (truncating before its findings). Smaller
 # base-window chunks keep each pass focused enough that the model concludes —
-# the "eaten in stages" intent. This multiple lets a capable box opt into a
-# modestly larger deep window than base without returning to the 131k failure.
-_DEEP_WINDOW_BASE_MULT = 1
+# the "eaten in stages" intent (see deep_window).
 # Ask for confirmation (interactive only) once a deep run needs this many chunks.
 _LARGE_CONFIRM_CHUNKS = 8
 # Per-STAGE wall estimates (seconds), fit from the 46-repo sweep, 2026-06
@@ -127,9 +126,7 @@ _FRAMING_PATTERNS = (
 )
 _FRAMING_RE = re.compile("|".join(_FRAMING_PATTERNS), re.IGNORECASE)
 
-_SEVERITY_RANK = {
-    "critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0, "": 0,
-}
+_SEVERITY_RANK = patterns.SEVERITY_RANK
 
 
 # --- data shapes ------------------------------------------------------------
@@ -220,14 +217,12 @@ def base_ctx(role_cfg) -> int:
 
 
 def deep_window(role_cfg) -> int:
-    """The window the deep CHUNK passes run at. Defaults to the BASE num_ctx (a
-    deliberate choice — see _DEEP_WINDOW_BASE_MULT): small, focused chunks that
-    the model can actually conclude, rather than the huge-but-unconcludable
-    chunks an expanded window produced. Clamped to num_ctx_max when a >1
-    multiple opts into a larger deep window."""
-    base = base_ctx(role_cfg)
-    ceiling = getattr(role_cfg, "num_ctx_max", 0) or base
-    return min(base * _DEEP_WINDOW_BASE_MULT, ceiling) if ceiling >= base else base
+    """The window the deep CHUNK passes run at: the BASE num_ctx, a deliberate
+    choice — small, focused chunks that the model can actually conclude,
+    rather than the huge-but-unconcludable chunks an expanded window produced.
+    (A `base × multiple` clamped to num_ctx_max used to live here; the
+    multiple was 1, so the clamp never did anything.)"""
+    return base_ctx(role_cfg)
 
 
 def estimate_repo_tokens(summary) -> int:
@@ -267,6 +262,49 @@ def _file_priority(rel: str, recent: set[str]) -> int:
     return 2
 
 
+def _is_visible(rel: str, excludes=None) -> bool:
+    """`iter_pruned`'s pruning applied to a repo-relative path from git: no
+    excluded directory and no dot-directory (except .github) on the way down.
+    Lets git-sourced path lists (incremental adds, framing) see exactly the
+    files a tree walk would have."""
+    excludes = excludes if excludes is not None else _DEFAULT_EXCLUDES
+    for seg in rel.split("/")[:-1]:
+        if seg in excludes or (seg.startswith(".") and seg != ".github"):
+            return False
+    return True
+
+
+def file_recs_for(target: str | Path, rels, *, recent: set[str] | None = None,
+                  prune: bool = True, log=None) -> list[FileRec]:
+    """FileRecs for an explicit list of repo-relative paths (recognized
+    languages that exist as files) — the incremental path's added files and
+    the diff audit's changed files. Builds only what it is asked for; the
+    whole-tree walk (`enumerate_files`) is for a full (re)map."""
+    root = Path(target).resolve()
+    recent = recent or set()
+    recs: list[FileRec] = []
+    for rel in rels:
+        if prune and not _is_visible(rel):
+            continue
+        p = root / rel
+        lang = _detect_language(p.suffix)
+        if lang is None or not p.is_file():
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError as e:
+            if log:
+                log(f"skipping unreadable file {p}: {e}")
+            continue
+        top = rel.split("/", 1)[0] if "/" in rel else "."
+        recs.append(FileRec(
+            rel=rel, language=lang, loc=_count_lines(p), bytes=size,
+            tokens=max(1, size // _CHARS_PER_TOKEN), top_dir=top,
+            priority=_file_priority(rel, recent),
+        ))
+    return recs
+
+
 def enumerate_files(target: str | Path, summary, *,
                     excludes: set[str] | None = None, log=None) -> list[FileRec]:
     """Walk `target` for recognized source files with cheap token estimates and a
@@ -297,18 +335,37 @@ def enumerate_files(target: str | Path, summary, *,
     return recs
 
 
-def _symbols_for(files: set[str], symbol_index) -> list[str]:
-    if symbol_index is None:
+def _symbols_by_path(symbol_index) -> dict[str, list[str]]:
+    """One pass over the symbol index → {posix path: [names in index order]}.
+    Built once per partition; scanning the whole index once PER CHUNK was
+    O(chunks × symbols)."""
+    by_path: dict[str, list[str]] = {}
+    for s in getattr(symbol_index, "symbols", []) if symbol_index is not None else []:
+        by_path.setdefault(str(s.path).replace(os.sep, "/"), []).append(s.name)
+    return by_path
+
+
+def _symbols_for(files, symbol_index, *,
+                 by_path: dict[str, list[str]] | None = None) -> list[str]:
+    """Symbols defined in `files` (first-seen, deduped, capped), in the
+    index's order."""
+    if symbol_index is None and by_path is None:
         return []
+    if by_path is None:
+        by_path = _symbols_by_path(symbol_index)
+    files = set(files)
     names: list[str] = []
     seen: set[str] = set()
-    for s in getattr(symbol_index, "symbols", []):
-        spath = str(s.path).replace(os.sep, "/")
-        if spath in files and s.name not in seen:
-            seen.add(s.name)
-            names.append(s.name)
-            if len(names) >= _MAX_CHUNK_SYMBOLS:
-                break
+    # index order is preserved by walking the paths in their first-seen order
+    for path, pnames in by_path.items():
+        if path not in files:
+            continue
+        for name in pnames:
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+                if len(names) >= _MAX_CHUNK_SYMBOLS:
+                    return names
     return names
 
 
@@ -321,6 +378,7 @@ def build_chunks(files: list[FileRec], *, content_budget: int,
     capped at read time). Always returns ≥ 1 chunk."""
     budget = max(1, content_budget)
     ordered = sorted(files, key=lambda f: (f.priority, f.top_dir, f.rel))
+    by_path = _symbols_by_path(symbol_index) if symbol_index is not None else None
     chunks: list[Chunk] = []
     cur: list[FileRec] = []
     cur_tok = 0
@@ -339,7 +397,7 @@ def build_chunks(files: list[FileRec], *, content_budget: int,
             index=idx, files=[f.rel for f in cur],
             dirs=sorted(dir_counts), label=label,
             est_tokens=sum(f.tokens for f in cur), loc=sum(f.loc for f in cur),
-            symbols=_symbols_for(fileset, symbol_index),
+            symbols=_symbols_for(fileset, symbol_index, by_path=by_path),
             oversized=[f.rel for f in cur if f.tokens > budget],
         ))
         cur, cur_tok = [], 0
@@ -356,17 +414,21 @@ def build_chunks(files: list[FileRec], *, content_budget: int,
     return chunks
 
 
-def framing_files(target: str | Path, *, limit: int = 40) -> list[str]:
+_FRAMING_LIMIT = 40
+
+
+def _pick_framing(rels, *, limit: int = _FRAMING_LIMIT) -> list[str]:
+    """The framing selection rule over a path list (sorted, capped)."""
+    return sorted(r for r in rels if _FRAMING_RE.search(r))[:limit]
+
+
+def framing_files(target: str | Path, *, limit: int = _FRAMING_LIMIT) -> list[str]:
     """Deterministic framing-file picker for the survey (README/CI/Docker/IaC/
     auth/config/routing/entrypoints). Returns POSIX relative paths, capped."""
     root = Path(target).resolve()
-    found: list[str] = []
-    for p in iter_pruned(root, excludes=_DEFAULT_EXCLUDES):
-        rel = str(p.relative_to(root)).replace(os.sep, "/")
-        if _FRAMING_RE.search(rel):
-            found.append(rel)
-    found.sort()
-    return found[:limit]
+    return _pick_framing(
+        (str(p.relative_to(root)).replace(os.sep, "/")
+         for p in iter_pruned(root, excludes=_DEFAULT_EXCLUDES)), limit=limit)
 
 
 # --- chunk-output parsing + digest maintenance ------------------------------
@@ -488,8 +550,9 @@ def _evidence_keys(f: dict) -> set[str]:
     ("a.py line 12" / "a.py:12" / "a.py 12" → "a.py:12")."""
     keys: set[str] = set()
     for ev in f.get("evidence", []) or []:
-        for m in _FILE_LINE_RE.finditer(str(ev)):
-            keys.add(re.sub(r"[:\s]+(?:line\s+)?", ":", m.group(0).lower()))
+        for m in patterns.FILE_LINE_RE.finditer(str(ev)):
+            path = m.group("path").lower().removeprefix("./")
+            keys.add(f"{path}:{m.group('line')}")
     return keys
 
 
@@ -521,6 +584,10 @@ def confidence_of(f: dict) -> tuple[float, str]:
     if f.get("source") == "heuristic":
         label = "low"
     return round(score, 2), label
+
+
+def _sev_rank(f: dict) -> int:
+    return _SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0)
 
 
 def _merge_into(cur: dict, f: dict) -> None:
@@ -590,18 +657,26 @@ def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
     }
 
     if ceiling_tokens and estimate_tokens(json.dumps(out)) > ceiling_tokens:
-        # Drop lowest-severity findings first until under ceiling.
-        ranked = sorted(
-            out["provisional_findings"],
-            key=lambda f: _SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0))
-        dropped = 0
-        while ranked and estimate_tokens(json.dumps(out)) > ceiling_tokens:
-            victim = ranked.pop(0)
+        # Drop lowest-severity findings first until under ceiling — but NEVER
+        # one rated above medium: a high/critical finding is worth more than
+        # the window it costs, and the synthesis reduce exists for overflow.
+        droppable = sorted(
+            (f for f in out["provisional_findings"]
+             if _sev_rank(f) <= _SEVERITY_RANK["medium"]),
+            key=_sev_rank)
+        dropped: dict[str, int] = {}
+        while droppable and estimate_tokens(json.dumps(out)) > ceiling_tokens:
+            victim = droppable.pop(0)
             out["provisional_findings"].remove(victim)
-            dropped += 1
-        if dropped and log:
-            log(f"digest over budget — dropped {dropped} low-severity "
-                f"provisional finding(s) to stay in window")
+            sev = str(victim.get("severity", "") or "unrated").lower()
+            dropped[sev] = dropped.get(sev, 0) + 1
+        if log and dropped:
+            detail = ", ".join(f"{n} {sev}" for sev, n in dropped.items())
+            log(f"digest over budget — dropped {sum(dropped.values())} "
+                f"provisional finding(s) ({detail}) to stay in window")
+        if log and estimate_tokens(json.dumps(out)) > ceiling_tokens:
+            log("digest still over budget after dropping every finding rated "
+                "medium or below — kept all high/critical findings")
     return out
 
 
@@ -673,6 +748,7 @@ class PassTiming:
     est_tokens: int = 0     # chunk passes only
     loc: int = 0            # chunk passes only
     n_files: int = 0        # chunk passes only
+    aborted: bool = False   # the pass ended in a backend/loop abort
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -800,18 +876,77 @@ def git_file_shas(target: str | Path) -> dict[str, str]:
     SHAs, never timestamps — the incremental staleness currency. Untracked
     files simply don't appear (callers treat sha-less files as always-dirty)."""
     from luxe.gitkit.health import _run_git
+    # -z: NUL-terminated and UNQUOTED (a non-ASCII path would otherwise come
+    # back C-quoted and never match the tree walk's name for it).
     ok, out = _run_git(
-        ["ls-tree", "-r", "--format=%(objectname) %(path)", "HEAD"], target)
+        ["ls-tree", "-r", "-z", "--format=%(objectname) %(path)", "HEAD"], target)
     if not ok:
         return {}
     shas: dict[str, str] = {}
-    for ln in out.splitlines():
+    for ln in out.split("\0"):
         parts = ln.split(" ", 1)
         # the committable .luxe/ sidecar (gitkit mirror, memory.md) is luxe's
         # OWN write — it must never count as a repo change (a committed mirror
         # README would otherwise read as a "framing file changed" rebuild).
         if len(parts) == 2 and not parts[1].startswith(".luxe/"):
             shas[parts[1]] = parts[0]
+    return shas
+
+
+_HASH_BATCH = 200
+
+
+def worktree_file_shas(target: str | Path) -> dict[str, str]:
+    """{rel path: blob sha} of the WORKING TREE — what a chunk pass actually
+    reads. HEAD's `ls-tree` shas, overlaid with `git hash-object` shas for
+    every modified or untracked (non-ignored) file, minus files deleted in
+    the tree. The cache used to validate against HEAD only, so an
+    uncommitted edit reused the note written for the committed content.
+
+    `git status` failing returns {} — every note is then invalid (re-run),
+    never "assume clean"."""
+    from luxe import gitcmd
+    shas = git_file_shas(target)
+    try:
+        st = gitcmd.run_in(target, "status", "--porcelain", "-z",
+                           "--untracked-files=all", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if st.returncode != 0:
+        return {}
+    root = Path(target)
+    to_hash: list[str] = []
+    toks = st.stdout.split("\0")
+    i = 0
+    while i < len(toks):
+        ent = toks[i]
+        i += 1
+        if len(ent) < 4:
+            continue
+        paths = [ent[3:]]
+        if ent[:1] in ("R", "C"):               # "XY new\0old"
+            if i < len(toks) and ent[:1] == "R":
+                shas.pop(toks[i], None)         # the old name is gone
+            i += 1
+        for rel in paths:
+            if rel.startswith(".luxe/"):
+                continue
+            if (root / rel).is_file():
+                to_hash.append(rel)
+            else:
+                shas.pop(rel, None)             # deleted in the working tree
+    for k in range(0, len(to_hash), _HASH_BATCH):
+        batch = to_hash[k:k + _HASH_BATCH]
+        try:
+            r = gitcmd.run_in(target, "hash-object", "--", *batch, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            r = None
+        out = r.stdout.split() if (r is not None and r.returncode == 0) else []
+        if len(out) != len(batch):
+            for rel in batch:                   # unknown content → never reusable
+                shas.pop(rel, None)
+            continue
+        shas.update(zip(batch, out))
     return shas
 
 
@@ -829,6 +964,8 @@ def save_map(target: str | Path, *, head: str, survey_notes: str,
              files: dict[str, str] | None = None,
              baseline: dict | None = None) -> Path:
     d = _map_dir(target)
+    if is_ephemeral():
+        return d       # nothing is written — and no empty map/ dir either
     d.mkdir(parents=True, exist_ok=True)
     # Atomic per-file writes, breadcrumb LAST: a crash anywhere before the
     # mapped.json replace leaves the OLD breadcrumb pointing at the OLD heavy
@@ -847,7 +984,7 @@ def save_map(target: str | Path, *, head: str, survey_notes: str,
     _atomic_write_text(d / "mapped.json", json.dumps(
         {"version": 2, "head": head or "", "n_chunks": len(chunks),
          "content_budget": content_budget, "mapped_at": int(time.time()),
-         "files": files if files is not None else git_file_shas(target),
+         "files": files if files is not None else worktree_file_shas(target),
          "baseline": baseline if baseline is not None else make_baseline(chunks)},
         indent=2))
     return d
@@ -874,6 +1011,8 @@ def save_chunk_note(target: str | Path, kind: str, chunk: Chunk, *,
     """Persist one chunk's digest CONTRIBUTION (inputs to a future digest fold —
     never merged final findings) right after the chunk completes. Atomic, so it
     doubles as crash-resume. Best-effort: an OS error never aborts the run."""
+    if is_ephemeral():
+        return
     try:
         d = _notes_dir(target, kind)
         d.mkdir(parents=True, exist_ok=True)
@@ -914,6 +1053,18 @@ def chunk_note_is_valid(note: dict | None, chunk: Chunk,
     return True
 
 
+def _cacheable(contribution: dict, chunk_timings) -> bool:
+    """Whether a chunk's contribution may be written to the notes cache. Never
+    when ANY pass for the chunk aborted (the chunk pass itself or a recovery
+    pass — a failed format pass silently degrades a note to heuristic
+    salvage), and never an 'unanalyzed' result: both are transient failures,
+    and a cached one would be reused by sha on every later run as though the
+    chunk had been analyzed. Re-runs retry them instead."""
+    if contribution.get("unparsed"):
+        return False
+    return not any(getattr(t, "aborted", False) for t in chunk_timings)
+
+
 def fold_contribution(digest: dict, contribution: dict, chunk_index: int) -> None:
     """Fold a cached chunk contribution into the digest EXACTLY as the live
     chunk loop would have (same update_digest / markdown_notes / unparsed
@@ -937,7 +1088,6 @@ class IncrementalPlan:
     mode: str                   # "incremental" | "rebuild"
     reason: str = ""            # rebuild trigger / incremental summary
     chunks: list[Chunk] = field(default_factory=list)  # pruned + delta partition
-    dirty: set[int] = field(default_factory=set)       # indices that must re-run
     baseline: dict = field(default_factory=dict)       # carried-forward baseline
     n_changed: int = 0          # modified+deleted+added file count
 
@@ -945,25 +1095,39 @@ class IncrementalPlan:
 def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
                      chunks: list[Chunk], baseline: dict,
                      added_recs: list[FileRec], content_budget: int,
-                     symbol_index=None) -> IncrementalPlan:
+                     symbol_index=None,
+                     framing: list[str] | None = None) -> IncrementalPlan:
     """PURE incremental planner (no I/O): decide full-rebuild vs incremental
     from the old/new blob-sha maps, and produce the updated partition.
 
-    Rebuild triggers (each logged via `reason`): a FRAMING file changed; file
-    churn (added+deleted) > 20% of mapped files; anti-drift compaction —
-    cumulative delta chunks > 4, cumulative delta content > 15% of the original
-    corpus tokens, or chunk count grown > 25% over the original partition.
+    Rebuild triggers (each logged via `reason`): a FRAMING file changed — one
+    the survey actually read (the map's saved `framing` list) or one that
+    would now join that list; file churn (added+deleted) > 20% of mapped
+    files; anti-drift compaction — cumulative delta chunks > 4, cumulative
+    delta content > 15% of the original corpus tokens, or chunk count grown
+    > 25% over the original partition. `framing=None` (a caller without the
+    saved list) falls back to "any touched path matching the framing
+    pattern", which rebuilt on every edit to any index.js / app.py / main.*.
 
     Incremental: survey + partition kept; deleted files pruned from their
-    chunks (chunk → dirty); modified files mark their chunk dirty; added files
-    pack into APPENDED delta chunks (all dirty)."""
+    chunks; added files pack into APPENDED delta chunks. Which chunks re-run
+    is NOT decided here: the sha-validated notes cache does that against the
+    working tree (`chunk_note_is_valid`)."""
     modified = {r for r, s in new_files.items()
                 if r in old_files and old_files[r] != s}
     deleted = set(old_files) - set(new_files)
     added = set(new_files) - set(old_files)
 
     touched = modified | deleted | added
-    framing_hit = sorted(r for r in touched if _FRAMING_RE.search(r))
+    if framing is None:
+        framing_hit = sorted(r for r in touched if _FRAMING_RE.search(r))
+    else:
+        old_fr = set(framing)
+        new_fr = set(_pick_framing(
+            {r for r in new_files if _is_visible(r)} | (old_fr - deleted)))
+        # a changed/deleted file the survey READ, or an added one that would
+        # now join the list it reads
+        framing_hit = sorted((touched & old_fr) | (added & new_fr))
     if framing_hit:
         return IncrementalPlan("rebuild",
                                reason=f"framing file changed ({framing_hit[0]})")
@@ -974,7 +1138,6 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
 
     # Updated partition: prune deletions, mark dirt, append delta chunks.
     new_chunks: list[Chunk] = []
-    dirty: set[int] = set()
     mapped_files: set[str] = set()
     for c in chunks:
         keep = [f for f in c.files if f not in deleted]
@@ -983,8 +1146,6 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
                    est_tokens=c.est_tokens, loc=c.loc, symbols=c.symbols,
                    oversized=[f for f in c.oversized if f not in deleted])
         new_chunks.append(nc)
-        if len(keep) != len(c.files) or any(f in modified for f in keep):
-            dirty.add(c.index)
 
     # files added since the ORIGINAL map but unmapped (e.g. created between
     # generations and never folded) ride with the added set via added_recs.
@@ -998,7 +1159,6 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
         for dc in delta_chunks_new:
             dc.index += offset
             new_chunks.append(dc)
-            dirty.add(dc.index)
 
     # Anti-drift compaction triggers — evaluated on the would-be cumulative state.
     bl = dict(baseline or {})
@@ -1027,16 +1187,16 @@ def plan_incremental(*, old_files: dict[str, str], new_files: dict[str, str],
         "incremental",
         reason=f"{len(modified)} modified, {len(deleted)} deleted, "
                f"{len(delta_recs)} added",
-        chunks=new_chunks, dirty=dirty, baseline=bl,
+        chunks=new_chunks, baseline=bl,
         n_changed=len(modified) + len(deleted) + len(delta_recs))
 
 
-def _new_work_dir(target: str | Path, kind: str) -> Path:
+def _new_work_dir(target: str | Path, kind: str) -> Path | None:
     from luxe.gitkit import store
-    ts = int(time.time())
-    d = store.reports_dir(target) / f"{kind}-{ts}-{uuid.uuid4().hex[:6]}.work"
     if is_ephemeral():
         return None
+    ts = int(time.time())
+    d = store.reports_dir(target) / f"{kind}-{ts}-{uuid.uuid4().hex[:6]}.work"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -1062,10 +1222,60 @@ def _chunk_block(chunk: Chunk, total: int) -> str:
             f"Symbols defined in these files: {syms}{over}\n</chunk_files>")
 
 
-def _digest_block(digest: dict) -> str:
+_INDEX_LINE_CHARS = 160
+
+
+def _index_entries(digest: dict) -> list[str]:
+    """One line per earlier finding — severity, title, first file:line — for
+    the chunk-pass cross-reference. Structured findings first (severity
+    desc), then the finding-shaped lines of each earlier markdown note."""
+    out: list[str] = []
+    for f in sorted(digest.get("provisional_findings", []), key=_sev_rank,
+                    reverse=True):
+        ev = (f.get("evidence") or [""])[0]
+        line = (f"[{f.get('severity') or '?'}] {f.get('title', '')}"
+                + (f" — {ev}" if ev else "") + f" (chunk {f.get('chunk', 0) + 1})")
+        out.append(line[:_INDEX_LINE_CHARS])
+    for n in digest.get("markdown_notes", []):
+        for item in _heuristic_findings(n.get("md", ""), cap=30):
+            item = re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", item)
+            out.append(f"{item} (chunk {n.get('chunk', 0) + 1})"[:_INDEX_LINE_CHARS])
+    return out
+
+
+def _digest_block(digest: dict, *, max_tokens: int = 0) -> str:
+    """The chunk pass's cross-reference: the structural map (modules,
+    entities, cross-cutting concerns) plus a one-line INDEX of the findings
+    earlier chunks recorded — never their full notes (those go to synthesis
+    only; they used to be copied into every later chunk, unbounded). With
+    `max_tokens`, trailing index lines are cut to fit and the cut is stated;
+    the digest itself keeps everything."""
+    index = _index_entries(digest)
+    head = {"modules": digest.get("modules", []),
+            "entities": digest.get("entities", []),
+            "cross_cutting": digest.get("cross_cutting", [])}
+    map_json = json.dumps(head, indent=1)
+    kept: list[str] = []
+    if max_tokens:
+        used = estimate_tokens(map_json)
+        for ln in index:
+            cost = estimate_tokens(ln) + 1
+            if used + cost > max_tokens:
+                break
+            kept.append(ln)
+            used += cost
+    else:
+        kept = index
+    body = map_json
+    if kept:
+        body += "\n\nFindings recorded so far (index):\n" + "\n".join(
+            f"- {ln}" for ln in kept)
+    if len(kept) < len(index):
+        body += (f"\n(+{len(index) - len(kept)} more earlier findings not "
+                 "listed here — all are kept for the final report)")
     return ("<cross_reference_digest>\nRunning map from earlier chunks (use it to "
             "cross-reference; do not re-report its findings):\n"
-            f"{json.dumps(digest, indent=1)}\n</cross_reference_digest>")
+            f"{body}\n</cross_reference_digest>")
 
 
 def _notes_block(digest: dict) -> str:
@@ -1158,9 +1368,7 @@ def run_deep_report(
     deterministic tag-prior/caveat rendering. `extra_meta` merges into the
     saved report's frontmatter (base / merge_base).
     """
-    from rich.markdown import Markdown
-
-    from luxe.gitkit import health, store
+    from luxe.gitkit import health
     from luxe.gitkit.runner import _activity_callbacks
 
     if run_single_fn is None:
@@ -1218,7 +1426,8 @@ def run_deep_report(
             steps=int(getattr(res, "steps", 0) or 0),
             tool_calls_total=int(getattr(res, "tool_calls_total", 0) or 0),
             window=int(getattr(role, "num_ctx", 0) or 0),
-            started_at=start))
+            started_at=start,
+            aborted=bool(getattr(res, "aborted", False))))
         return res
 
     def _handle_partial_map(status: MapStatus) -> CacheDecision:
@@ -1278,23 +1487,24 @@ def run_deep_report(
             # trigger is logged loudly (never silently skipped).
             stale = load_map(target, head=head, allow_stale=True)
             if stale is not None:
-                current_shas = git_file_shas(target)
-                added = set(current_shas) - set(status.files)
-                added_recs = [r for r in enumerate_files(target, summary,
-                                                         log=_emit)
-                              if r.rel in added]
+                current_shas = worktree_file_shas(target)
+                added = sorted(set(current_shas) - set(status.files))
+                # FileRecs for the ADDED files only — not a whole-tree walk
+                # that counts every file's lines to find a handful of adds.
+                added_recs = file_recs_for(target, added,
+                                           recent=_norm_recent(summary),
+                                           log=_emit)
                 plan = plan_incremental(
                     old_files=status.files, new_files=current_shas,
                     chunks=stale["chunks"], baseline=status.baseline,
                     added_recs=added_recs, content_budget=content_budget,
-                    symbol_index=symbol_index)
+                    symbol_index=symbol_index, framing=stale["framing"])
                 if plan.mode == "incremental":
                     survey_notes = stale["survey_notes"]
                     chunks = plan.chunks
                     framing = stale["framing"]
                     _emit(f"incremental: HEAD {status.head[:8] or '?'} → "
-                          f"{(head or '?')[:8]} — {plan.reason}; "
-                          f"{len(plan.dirty)} chunk(s) marked dirty")
+                          f"{(head or '?')[:8]} — {plan.reason}")
                     save_map(target, head=head, survey_notes=survey_notes,
                              chunks=chunks, content_budget=content_budget,
                              framing=framing, summary_render=summary.render(),
@@ -1340,7 +1550,7 @@ def run_deep_report(
     # chunk's invalidation by construction.
     contributions: dict[int, dict] = {}
     if chunks_override is None:
-        current_shas = current_shas or git_file_shas(target)
+        current_shas = current_shas or worktree_file_shas(target)
         if not no_incremental and not rebuild_map:
             for c in chunks:
                 if not c.files:
@@ -1381,8 +1591,7 @@ def run_deep_report(
                 # exactly as the live path would have.
                 fold_contribution(digest, contributions[c.index], c.index)
                 if estimate_tokens(json.dumps(digest)) > ceiling:
-                    digest = compact_digest(digest, ceiling_tokens=ceiling,
-                                            log=_emit)
+                    digest = compact_digest(digest)
                 _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label}) — "
                       "cached note reused")
                 if work_dir is not None:
@@ -1390,9 +1599,11 @@ def run_deep_report(
                         json.dumps(digest, indent=2))
                 continue
             contribution: dict = {}
+            n_timed = len(timings)     # every pass of THIS chunk lands after here
             _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label})")
             extra = (f"<survey_notes>\n{survey_notes}\n</survey_notes>\n\n"
-                     f"{_digest_block(digest)}\n\n{_chunk_block(c, len(chunks))}")
+                     f"{_digest_block(digest, max_tokens=ceiling)}\n\n"
+                     f"{_chunk_block(c, len(chunks))}")
             if chunk_extra_blocks and c.index in chunk_extra_blocks:
                 extra += f"\n\n{chunk_extra_blocks[c.index]}"
             goal = (f"Analyze chunk {c.index + 1} of {len(chunks)} of this "
@@ -1431,8 +1642,7 @@ def run_deep_report(
                     update_digest(digest, steps_obj, c.index)
                     contribution["parsed"] = steps_obj
                     if estimate_tokens(json.dumps(digest)) > ceiling:
-                        digest = compact_digest(digest, ceiling_tokens=ceiling,
-                                                log=_emit)
+                        digest = compact_digest(digest)
                     _emit(f"chunk {c.index + 1}: {len(steps_obj['steps'])} "
                           "step(s) recorded")
                 elif analyzed:
@@ -1444,9 +1654,8 @@ def run_deep_report(
                     contribution["unparsed"] = label
                     _emit(f"chunk {c.index + 1} produced no usable steps "
                           "(empty/truncated) — flagged as unanalyzed")
-                if chunks_override is None and not getattr(res, "aborted", False):
-                    # an ABORTED pass (backend error / loop abort) must never
-                    # poison the notes cache — re-runs retry it instead
+                if chunks_override is None and _cacheable(contribution,
+                                                          timings[n_timed:]):
                     save_chunk_note(
                         target, kind, c, head=head,
                         file_shas={r: current_shas.get(r, "")
@@ -1462,7 +1671,7 @@ def run_deep_report(
                 update_digest(digest, parsed, c.index)
                 contribution["parsed"] = parsed
                 if estimate_tokens(json.dumps(digest)) > ceiling:
-                    digest = compact_digest(digest, ceiling_tokens=ceiling, log=_emit)
+                    digest = compact_digest(digest)
             elif _has_report_header(text, kind):
                 # The model concluded with the required header itself — slice off
                 # any leading monologue and keep the conclusion.
@@ -1497,8 +1706,8 @@ def run_deep_report(
                 contribution["unparsed"] = label
                 _emit(f"chunk {c.index + 1} produced no usable findings "
                       f"(empty/truncated) — flagged as unanalyzed")
-            if chunks_override is None and not getattr(res, "aborted", False):
-                # aborted pass → never cached (see gitchange branch above)
+            if chunks_override is None and _cacheable(contribution,
+                                                      timings[n_timed:]):
                 save_chunk_note(
                     target, kind, c, head=head,
                     file_shas={r: current_shas.get(r, "") for r in c.files},
@@ -1523,7 +1732,7 @@ def run_deep_report(
     if notes_tokens > _SYNTH_REDUCE_FRAC * synth_ctx_win:
         _emit(f"aggregate notes large ({notes_tokens} tok) — 2-level reduce")
         digest = _reduce_findings(digest, eff_ctx=synth_ctx_win, pass_fn=_pass,
-                                  log=_emit)
+                                  log=_emit, role=synth_role)
 
     synth_ctx = (f"{health_block}\n\n<survey_notes>\n{survey_notes}\n</survey_notes>"
                  f"\n\n{_notes_block(digest)}")
@@ -1552,7 +1761,8 @@ def run_deep_report(
 
         report, _ = plan_mod.finalize_and_save(
             target, head, synth_text, extract_fn=_extract_plan_json,
-            fallback_steps=digest.get("steps"), title=_TITLES["gitchange"])
+            fallback_steps=digest.get("steps"), title=_TITLES["gitchange"],
+            save=save)
     else:
         report = extract_report(synth_text, kind)
         # Use the LLM synthesis ONLY if it came back clean. The champion narrates its
@@ -1588,38 +1798,18 @@ def run_deep_report(
             "passes": [t.to_dict() for t in timings],
         }, indent=2))
 
-    saved: Path | None = None
-    if save:
-        saved = store.save_report(
-            target, kind, report,
-            meta={"model": backend.model, "head": head, "repo": target,
-                  "mode": "deep", "chunks": len(chunks),
-                  "total_wall_s": total_wall_s, "n_passes": n_passes,
-                  "avg_pass_s": avg_pass_s, **(extra_meta or {})})
-        if mirror and store.mirror_to_repo(target, kind, report, head):
-            _emit("mirrored map + report to <repo>/.luxe/gitkit/")
-
-    console.print()
-    display_src, n_filtered = report, 0
-    if min_severity:
-        # DISPLAY-side only — the saved report above is always unfiltered.
-        display_src, n_filtered = store.filter_min_severity(report, min_severity)
-    if verbose:
-        console.print(Markdown(display_src))
-    else:
-        shown, hidden = truncate_for_display(display_src, max_lines=30)
-        console.print(Markdown(shown))
-        if hidden:
-            console.print(f"[dim]… +{hidden} more lines — full report saved[/]")
-    if n_filtered:
-        where = saved if saved else "(not saved — run without --no-save)"
-        console.print(f"[dim]Filtered: {n_filtered} findings below "
-                      f"{min_severity} — full report at {where}[/]")
-    if saved:
-        _emit(f"deep report ({len(chunks)} chunks) saved")
-        console.print(f"[green]✓[/] report saved to [cyan]{saved}[/]")
-        if work_dir is not None:
-            console.print(f"[dim]· survey/chunk notes: {work_dir}[/]")
+    from luxe.gitkit.output import finish_report
+    after = (f"[dim]· survey/chunk notes: {work_dir}[/]",) if work_dir else ()
+    saved = finish_report(
+        console, target=target, kind=kind, report=report, head=head,
+        meta={"model": backend.model, "head": head, "repo": target,
+              "mode": "deep", "chunks": len(chunks),
+              "total_wall_s": total_wall_s, "n_passes": n_passes,
+              "avg_pass_s": avg_pass_s, **(extra_meta or {})},
+        save=save, mirror=mirror, verbose=verbose, min_severity=min_severity,
+        stats_line=(f"[dim]· deep · {len(chunks)} chunks · {n_passes} passes · "
+                    f"{total_wall_s:.1f}s[/]"),
+        after_saved=after)
     return report, saved
 
 
@@ -1666,6 +1856,7 @@ def _render_report(digest: dict, kind: str) -> str:
     unparsed = digest.get("unparsed_chunks", [])
 
     sections: list[str] = []
+    n_note_findings = 0
     for n in notes:
         body = _strip_report_header(n.get("md", ""))
         if body:
@@ -1675,6 +1866,7 @@ def _render_report(digest: dict, kind: str) -> str:
                 head += ("\n\n*(heuristic salvage from verbose model output — "
                          "confidence: low)*")
             sections.append(f"{head}\n\n{body}")
+            n_note_findings += len(_heuristic_findings(body))
     if pf:
         # severity desc, then deterministic confidence desc (evidence-weighted)
         ranked = sorted(pf, key=lambda f: (
@@ -1691,7 +1883,9 @@ def _render_report(digest: dict, kind: str) -> str:
         sections.append("## Additional findings\n\n" + "\n".join(lines))
 
     # Only gitaudit reaches deterministic render (gitchange returns via plan_mod).
-    n = len(pf) + sum(len(_heuristic_findings(s)) for s in sections)
+    # pf findings + the finding lines of the NOTE sections (the Additional
+    # findings section renders pf itself — counting it again doubled pf)
+    n = len(pf) + n_note_findings
     header = f"# {title}\n**Findings: {n} (consolidated across chunks)**"
 
     out = [header, *sections]
@@ -1705,9 +1899,11 @@ def _render_report(digest: dict, kind: str) -> str:
 
 
 # Heuristic finding patterns for the deterministic-render fallback (review).
+# A severity WORD (leading \b: "flow"/"allow"/"below" are not `low`) followed
+# by a code span or a file:line ref.
 _SEV_LINE_RE = re.compile(
-    r"(critical|high|medium|low)\b.*?(`[^`]+`|\b[\w./-]+\.[a-z]{1,4}:\d+)",
-    re.IGNORECASE)
+    r"\b(critical|high|medium|low)\b.*?(`[^`]+`|" + patterns.FILE_LINE_RE.pattern
+    + ")", re.IGNORECASE)
 # Additional finding shapes the champion actually emits when it rambles past the
 # report header (offline-recovery analysis 2026-06-08, scripts/recover_offline.py):
 # numbered BOLD list items carrying a file/line/code ref, and canonical report
@@ -1717,11 +1913,9 @@ _SEV_LINE_RE = re.compile(
 _NUM_BOLD_RE = re.compile(r"^\s*\d+[.)]\s+\*\*")
 _REPORT_BULLET_RE = re.compile(
     r"\*\*\s*(file|issue|bug|severity|line|impact|fix|problem|risk|location)\b", re.I)
-_FILE_LINE_RE = re.compile(
-    r"\b[\w./-]+\.(py|rs|js|ts|tsx|go|sh|ya?ml|toml|c|cpp|h)\b(?:[:\s]+(?:line\s+)?\d+)",
-    re.I)
+_FILE_LINE_RE = patterns.FILE_LINE_RE
 _BOLD_FILE_RE = re.compile(
-    r"\*\*[^*]*?(?:\.(py|rs|js|ts|go|sh|ya?ml)\b|line\s+\d+)[^*]*?\*\*", re.I)
+    r"\*\*[^*]*?(?:\.(?:" + patterns.EXT_ALT + r")\b|line\s+\d+)[^*]*?\*\*", re.I)
 # Lines the model explicitly marks as NON-findings — drop them to keep the salvage clean.
 _NON_FINDING_RE = re.compile(
     r"\b(not a bug|no issue|no code|nothing here|n/?a|this is correct"
@@ -1737,10 +1931,9 @@ _SEV_LEAD_RE = re.compile(
     r"|\[\s*(?:critical|high|medium|low)\s*\]"
     r"|severity\s*[:=]\s*(?:critical|high|medium|low)\b)",
     re.IGNORECASE)
-_SEV_WORD_RE = re.compile(r"\b(critical|high|medium|low)\b", re.IGNORECASE)
+_SEV_WORD_RE = patterns.SEV_WORD_RE
 _FINDING_HEADING_RE = re.compile(r"^#{3,4}\s+\S")
-_FILE_REF_RE = re.compile(
-    r"\b[\w./-]+\.(py|rs|js|ts|tsx|go|sh|ya?ml|toml|c|cpp|h)\b", re.IGNORECASE)
+_FILE_REF_RE = patterns.FILE_REF_RE
 
 
 def _strip_report_header(md: str) -> str:
@@ -1838,36 +2031,69 @@ def _clean_note(md: str, kind: str, *, pass_fn, role,
     return None, ""
 
 
-def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None) -> dict:
-    """2-level reduce: consolidate provisional_findings in window-sized batches
-    via LLM merge passes, then return a digest carrying the survivors. Falls back
-    to the input digest if a batch pass yields nothing parseable."""
-    findings = digest.get("provisional_findings", [])
+def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None,
+                     role=None) -> dict:
+    """2-level reduce: consolidate the aggregate notes — structured
+    provisional_findings AND the markdown chunk notes, which are usually the
+    bulk of it — in window-sized batches via LLM merge passes at the
+    SYNTHESIS window (`role`; it used to run on the chunk role's base window).
+    A batch whose pass yields nothing parseable keeps its inputs unchanged,
+    so a parse miss never loses findings. Batching sums per-item sizes once
+    (it re-measured the whole growing batch per item — quadratic)."""
+    findings = list(digest.get("provisional_findings", []))
+    md_notes = list(digest.get("markdown_notes", []))
+    items: list[tuple[str, dict]] = ([("f", f) for f in findings]
+                                     + [("n", n) for n in md_notes])
     batch_budget = int(eff_ctx * _SYNTH_REDUCE_FRAC)
-    batches: list[list[dict]] = []
-    cur: list[dict] = []
-    for f in findings:
-        cur.append(f)
-        if estimate_tokens(json.dumps(cur)) > batch_budget and len(cur) > 1:
-            batches.append(cur[:-1])
-            cur = [f]
+    batches: list[list[tuple[str, dict]]] = []
+    cur: list[tuple[str, dict]] = []
+    cur_tok = 0
+    for it in items:
+        cost = estimate_tokens(json.dumps(it[1]))
+        if cur and cur_tok + cost > batch_budget:
+            batches.append(cur)
+            cur, cur_tok = [], 0
+        cur.append(it)
+        cur_tok += cost
     if cur:
         batches.append(cur)
 
     survivors: list[dict] = []
+    kept_notes: list[dict] = []
     for i, batch in enumerate(batches):
+        b_findings = [x for k, x in batch if k == "f"]
+        b_notes = [x for k, x in batch if k == "n"]
         if log:
-            log(f"reduce batch {i + 1}/{len(batches)} ({len(batch)} findings)")
-        ctx = ("<chunk_findings>\nConsolidate these findings:\n"
-               f"{json.dumps({'findings': batch}, indent=1)}\n</chunk_findings>")
+            log(f"reduce batch {i + 1}/{len(batches)} ({len(b_findings)} "
+                f"findings, {len(b_notes)} notes)")
+        parts = ["<chunk_findings>\nConsolidate these findings:\n"
+                 f"{json.dumps({'findings': b_findings}, indent=1)}"]
+        if b_notes:
+            parts.append("\n\nAdditional per-chunk findings (markdown):\n"
+                         + "\n\n".join(
+                             f"### chunk {n.get('chunk', 0) + 1} "
+                             f"({n.get('label', '')})\n{n.get('md', '')}"
+                             for n in b_notes))
+        parts.append("\n</chunk_findings>")
         goal = "Consolidate this batch of findings.\n\n" + prompts.GIT_DEEP_REDUCE_HINT
-        res = pass_fn(goal, ctx, f"reduce-{i + 1}")
+        res = pass_fn(goal, "".join(parts), f"reduce-{i + 1}", role=role)
         parsed = parse_chunk_notes((getattr(res, "final_text", "") or "").strip())
-        if parsed and isinstance(parsed.get("findings"), list):
-            survivors.extend(parsed["findings"])
+        if parsed and isinstance(parsed.get("findings"), list) \
+                and not getattr(res, "aborted", False):
+            # provenance-honest: a merged finding is only as good as the
+            # weakest source that fed its batch
+            srcs = [x.get("source", "json") for x in b_findings] + \
+                   [x.get("source", "md_clean") for x in b_notes]
+            worst = min(srcs, key=lambda s_: _SOURCE_RANK.get(s_, -1)) if srcs else "json"
+            for f in parsed["findings"]:
+                if isinstance(f, dict):
+                    f.setdefault("source", worst)
+                    survivors.append(f)
         else:
-            survivors.extend(batch)  # never lose findings on a parse miss
+            survivors.extend(b_findings)     # never lose findings on a parse miss
+            kept_notes.extend(b_notes)
 
     out = dict(digest)
     out["provisional_findings"] = survivors
+    out["markdown_notes"] = kept_notes
     return compact_digest(out, ceiling_tokens=0)

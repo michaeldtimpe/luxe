@@ -395,7 +395,7 @@ def test_reduce_findings_batches_and_keeps_survivors():
     digest = _digest_with(findings)
     seen_batches = []
 
-    def fake_pass(goal, ctx, label):
+    def fake_pass(goal, ctx, label, role=None):
         blob = deep.parse_chunk_notes(ctx)
         seen_batches.append(len(blob["findings"]))
         # echo the batch back as the consolidated output
@@ -1282,7 +1282,7 @@ def _mk_chunks(*file_groups):
     return out
 
 
-def test_plan_incremental_one_edit_dirties_exactly_one_chunk():
+def test_plan_incremental_one_edit_keeps_the_partition():
     chunks = _mk_chunks(["a.py", "b.py"], ["c.py", "d.py"])
     old = {"a.py": "1", "b.py": "2", "c.py": "3", "d.py": "4"}
     new = {"a.py": "1", "b.py": "2", "c.py": "3X", "d.py": "4"}
@@ -1290,11 +1290,10 @@ def test_plan_incremental_one_edit_dirties_exactly_one_chunk():
                                  baseline=deep.make_baseline(chunks),
                                  added_recs=[], content_budget=1000)
     assert plan.mode == "incremental"
-    assert plan.dirty == {1}
     assert [c.files for c in plan.chunks] == [["a.py", "b.py"], ["c.py", "d.py"]]
 
 
-def test_plan_incremental_deletion_prunes_and_dirties():
+def test_plan_incremental_deletion_prunes():
     chunks = _mk_chunks(["a.py", "b.py"], ["c.py"])
     pad = {f"pad{i}.py": "p" for i in range(10)}          # stay under churn 20%
     old = {"a.py": "1", "b.py": "2", "c.py": "3", **pad}
@@ -1304,7 +1303,6 @@ def test_plan_incremental_deletion_prunes_and_dirties():
                                  added_recs=[], content_budget=1000)
     assert plan.mode == "incremental"
     assert plan.chunks[0].files == ["a.py"]               # pruned
-    assert 0 in plan.dirty and 1 not in plan.dirty
 
 
 def test_plan_incremental_added_file_appends_delta_chunk():
@@ -1321,7 +1319,6 @@ def test_plan_incremental_added_file_appends_delta_chunk():
     assert len(plan.chunks) == 6
     delta = plan.chunks[5]
     assert delta.index == 5 and delta.files == ["fresh.py"]
-    assert 5 in plan.dirty
     assert plan.baseline["delta_chunks"] == 1
     assert plan.baseline["delta_tokens"] == 50
 
