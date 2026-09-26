@@ -756,7 +756,8 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
         if model_override:
             console.print("[yellow]⚠ --model applies to --chat/--code drills "
                           "only; the kit drill is manifest-driven.[/]")
-        reports.append(run_smoke(cfg, base_url=base_url or None,
+        reports.append(run_smoke(cfg, backend_name=backend_name,
+                                 base_url=base_url or None,
                                  skip_fallback=skip_fallback,
                                  skip_tools=skip_tools))
         for step in reports[-1].steps:
@@ -766,15 +767,17 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
         # its own, so when the drill fails with that signature (and the
         # endpoint is a local brew oMLX) restart it and drill again, loudly.
         # The second table is the verdict. --no-fix keeps the old
-        # diagnose-only behaviour; --backend <remote> never restarts anything
+        # diagnose-only behaviour; a remote --backend never restarts anything
         # (repair_omlx refuses non-local endpoints itself).
-        if reports[-1].failed and not no_fix and not backend_name:
+        if reports[-1].failed and not no_fix:
             evidence = reports[-1].stale_evidence
             if evidence:
-                rep = _smoke_self_repair(cfg, base_url or None, evidence)
+                rep = _smoke_self_repair(cfg, base_url or None, evidence,
+                                         backend_name=backend_name)
                 if rep.attempted:
                     console.print("[bold]after repair[/]")
-                    reports = [run_smoke(cfg, base_url=base_url or None,
+                    reports = [run_smoke(cfg, backend_name=backend_name,
+                                         base_url=base_url or None,
                                          skip_fallback=skip_fallback,
                                          skip_tools=skip_tools)]
                     for step in reports[-1].steps:
@@ -782,16 +785,15 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
                                       f"{step.detail}")
 
     failed = any(r.failed for r in reports)
-    if not keep_loaded and not backend_name:
-        # Only unload the endpoint we own; a remote host's residency is its
-        # own business (never unload a server another session may be using).
+    from luxe.chat.smoke import endpoint_is_shared
+    if not keep_loaded and not endpoint_is_shared(cfg, backend_name,
+                                                  base_url or None):
+        # Only unload an endpoint we OWN (B5): a shared/remote host's
+        # residency is its own business — never unload a server another
+        # session may be using (chat.sdd: remote drills never unload).
         try:
-            from luxe.backend import Backend
-            from luxe.secrets import resolve_api_key
-            entry = cfg.backend_entry(cfg.default_backend_name())
-            Backend(base_url=base_url or entry.base_url, model="",
-                    api_key=resolve_api_key(entry.api_key_env)
-                    ).unload_all_loaded()
+            cfg.build_backend(backend_name, "",
+                              base_url=base_url or None).unload_all_loaded()
         except Exception:
             pass
     verdict = ("[red]NOT READY[/]" if failed else "[green]READY[/]")

@@ -39,12 +39,20 @@ _TOOL_SCHEMA = [{
 }]
 
 
+#: Liveness-probe deadline (seconds). `Backend.health()` otherwise uses the
+#: client's GENERATION read timeout (600s local, 2400s for the m5 entry), so a
+#: hung endpoint that accepts the socket could hold the drill's very first
+#: step for forty minutes. Same few-second bound `/doctor`'s hint probe uses.
+_LIVENESS_TIMEOUT_S = 4.0
+
+
 @dataclass
 class SmokeStep:
     name: str
     state: str            # "pass" | "warn" | "fail"
     detail: str = ""
     seconds: float = 0.0
+    model: str = ""       # the model a weights/turn step is ABOUT, if any
 
 
 @dataclass
@@ -52,8 +60,8 @@ class SmokeReport:
     steps: list[SmokeStep] = field(default_factory=list)
 
     def add(self, name: str, state: str, detail: str = "",
-            seconds: float = 0.0) -> None:
-        self.steps.append(SmokeStep(name, state, detail, seconds))
+            seconds: float = 0.0, model: str = "") -> None:
+        self.steps.append(SmokeStep(name, state, detail, seconds, model))
 
     @property
     def failed(self) -> bool:
@@ -68,15 +76,24 @@ class SmokeReport:
         the running tree no longer has (the 2026-09-11 409s — matched even
         when lsof is mute). Anything else is NOT a restart case: a dead
         endpoint, a missing model, an empty answer each have their own fix.
+
+        A turn whose model's own `weights` step already failed is NOT a
+        witness: `[Errno 2] No such file` is also exactly what loading a
+        dangling store entry says, and a restart cannot put weights back on
+        disk — the weights line has already named the real fix.
         """
-        from luxe.repair import looks_stale
+        from luxe.repair import is_stale_build_line, looks_stale
 
         for s in self.steps:
-            if s.name == "oMLX build" and s.state == "warn" \
-                    and "brew replaced" in s.detail:
+            if is_stale_build_line(s.name, s.state, s.detail):
                 return s.detail
+        bad_weights = {s.model for s in self.steps
+                       if s.name.startswith("weights") and s.model
+                       and s.state != "pass"}
         for s in self.steps:
-            if s.state == "fail" and looks_stale(s.detail):
+            if s.state != "fail" or (s.model and s.model in bad_weights):
+                continue
+            if looks_stale(s.detail):
                 return s.detail
         return ""
 
@@ -91,11 +108,12 @@ def _ping(backend: Backend, model: str, report: SmokeReport,
         resp = backend.chat(_PING_PROMPT, max_tokens=16, temperature=0.0)
     except BackendError as e:
         report.add(label, "fail", f"{model}: {e}",
-                   time.monotonic() - t0)
+                   time.monotonic() - t0, model=model)
         return False
     dt = time.monotonic() - t0
     if (resp.text or "").strip():
-        report.add(label, "pass", f"{model} answered in {dt:.1f}s", dt)
+        report.add(label, "pass", f"{model} answered in {dt:.1f}s", dt,
+                   model=model)
         return True
     # State the observable, then the discriminator — not a single theory.
     # (2026-08-03: this hint used to assert "the 'deleted weights'
@@ -111,7 +129,7 @@ def _ping(backend: Backend, model: str, report: SmokeReport,
                f"(completion_tokens={ct}: at/near the max_tokens cap → "
                "reasoning-channel model burned the budget before answering; "
                "near zero → check `luxe pull --list` for a dangling weights "
-               "entry)", dt)
+               "entry)", dt, model=model)
     return False
 
 
@@ -122,7 +140,8 @@ def _tool_ping(backend: Backend, model: str, report: SmokeReport) -> None:
         resp = backend.chat(_TOOL_PROMPT, tools=_TOOL_SCHEMA,
                             max_tokens=256, temperature=0.0)
     except BackendError as e:
-        report.add("tool call", "fail", f"{model}: {e}", time.monotonic() - t0)
+        report.add("tool call", "fail", f"{model}: {e}", time.monotonic() - t0,
+                   model=model)
         return
     dt = time.monotonic() - t0
     called = any(tc.name == "read_file" for tc in resp.tool_calls)
@@ -204,17 +223,35 @@ def _resolve_drill_backend(cfg, backend_name: str | None,
     entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
     url = base_url or entry.base_url
     host = host_for_endpoint(url)
-    from luxe.secrets import resolve_api_key
 
     manifest = cfg.host_manifest(host) if host else None
     if model_override:
         model = model_override
     else:
         model = manifest.main if manifest else cfg.model_for_slot("code")
-    backend = Backend(base_url=url, model=model,
-                      api_key=resolve_api_key(entry.api_key_env),
-                      **entry.backend_kwargs())
+    backend = entry.build_backend(model, base_url=url, backend_cls=Backend)
     return backend, model
+
+
+def endpoint_is_shared(cfg, backend_name: str | None = None,
+                       base_url: str | None = None) -> bool:
+    """True when the drill's target endpoint may be serving other clients.
+
+    Single-residency ("unload everything but mine") is a policy about a box
+    luxe OWNS. Applied to a fleet endpoint it evicts other hosts' models
+    mid-turn (B5, 2026-07-30) — so every smoke/drill unload asks this first.
+    The entry decides (`BackendEntry.is_shared`: explicit `shared:`, else
+    loopback = owned); a `--base-url` that points somewhere else than the
+    entry is judged by its own host, since the entry's flag describes a
+    different server.
+    """
+    from luxe.backend import is_loopback_url
+
+    entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
+    url = base_url or entry.base_url
+    if url.rstrip("/") != entry.base_url.rstrip("/"):
+        return not is_loopback_url(url)
+    return entry.is_shared()
 
 
 def _make_drill_repo(kind: str, files: dict[str, str]):
@@ -272,7 +309,7 @@ def _drill_role(cfg, drop: set[str], max_steps: int):
 
 
 def _run_drill_turn(backend, role, goal: str, task_type: str, repo, report,
-                    label: str):
+                    label: str, *, shared: bool = False):
     """One real run_single turn against the drill repo. Returns the
     AgentResult or None (failure already reported)."""
     from luxe.agents.single import run_single
@@ -280,12 +317,16 @@ def _run_drill_turn(backend, role, goal: str, task_type: str, repo, report,
 
     prior_root = getattr(fs_mod, "_REPO_ROOT", None)
     fs_mod.set_repo_root(str(repo))
-    try:
-        # Single-residency policy: a drill must not leave two models loaded
-        # (the m5 ended up with both after a drill ran beside a warm model).
-        backend.unload_all_loaded(except_for=[backend.model])
-    except Exception:
-        pass
+    if not shared:
+        try:
+            # Single-residency policy: a drill must not leave two models
+            # loaded (the m5 ended up with both after a drill ran beside a
+            # warm model). OWNED endpoints only — on a shared one the other
+            # residents are someone else's live session (chat.sdd: a remote
+            # drill never unloads that server's models).
+            backend.unload_all_loaded(except_for=[backend.model])
+        except Exception:
+            pass
     t0 = time.monotonic()
     try:
         result = run_single(backend, role, goal=goal, task_type=task_type,
@@ -326,17 +367,28 @@ def run_code_drill(cfg, *, backend_name: str | None = None,
     steps = _code_drill_steps(backend.model)
     result = _run_drill_turn(backend,
                              _drill_role(cfg, _DRILL_TOOL_DROP, steps),
-                             _CODE_GOAL, "bugfix", repo, report, "code")
+                             _CODE_GOAL, "bugfix", repo, report, "code",
+                             shared=endpoint_is_shared(cfg, backend_name,
+                                                       base_url))
     ok = result is not None
     if ok and result.tool_calls_total == 0:
         report.add("tool use", "fail", "the model made no tool calls")
         ok = False
 
     if ok:
-        tests = subprocess.run([sys.executable, "-m", "pytest", "-q"],
-                               cwd=str(repo), capture_output=True, text=True,
-                               timeout=120)
-        if tests.returncode == 0:
+        try:
+            tests = subprocess.run([sys.executable, "-m", "pytest", "-q"],
+                                   cwd=str(repo), capture_output=True,
+                                   text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            # The model can write an infinite loop into calc.py; that is a
+            # drill FAILURE to report, not a traceback that loses the table.
+            tests = None
+        if tests is None:
+            report.add("tests", "fail",
+                       "pytest did not finish in 120s (the edit hangs?)")
+            ok = False
+        elif tests.returncode == 0:
             report.add("tests", "pass", "pytest green after the fix")
         else:
             tail = (tests.stdout or tests.stderr).strip().splitlines()[-1:]
@@ -374,7 +426,9 @@ def run_chat_drill(cfg, *, backend_name: str | None = None,
     report.add("drill repo", "pass", str(repo))
 
     result = _run_drill_turn(backend, _drill_role(cfg, _READONLY_DROP, 8),
-                             _CHAT_GOAL, "review", repo, report, "chat")
+                             _CHAT_GOAL, "review", repo, report, "chat",
+                             shared=endpoint_is_shared(cfg, backend_name,
+                                                       base_url))
     ok = result is not None
     if ok:
         if result.tool_calls_total == 0:
@@ -413,13 +467,9 @@ def check_expected_model(cfg, expected: str, *,
     failure here (unlike micro-mind, luxe never spawns its own server, so
     "nothing listening" cannot resolve to the right model later).
     """
-    from luxe.secrets import resolve_api_key
-
     entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
     url = base_url or entry.base_url
-    backend = Backend(base_url=url, model="",
-                      api_key=resolve_api_key(entry.api_key_env),
-                      **entry.backend_kwargs())
+    backend = entry.build_backend("", base_url=url, backend_cls=Backend)
     try:
         served = backend.list_models()
     except Exception as e:  # noqa: BLE001 — preflight must report, not raise
@@ -432,25 +482,48 @@ def check_expected_model(cfg, expected: str, *,
                    "kill it or fix the backend url.")
 
 
-def run_smoke(cfg, *, base_url: str | None = None,
+def run_smoke(cfg, *, backend_name: str | None = None,
+              base_url: str | None = None,
               skip_fallback: bool = False,
               skip_tools: bool = False) -> SmokeReport:
-    """Run the drill against `cfg`'s default backend (or `base_url`)."""
-    from luxe.chat.origin import endpoint_is_local
-    from luxe.config import short_hostname
+    """Run the drill against `backend_name` (default: the config's default
+    entry), optionally at `base_url`.
+
+    DRILL rule (chat.sdd, same as the agentic drills and `luxe ready`): the
+    manifest is the one for the host the ENDPOINT points at. Before
+    2026-09-26 this function took no backend at all, so `luxe smoke --backend
+    m5` from m1 drilled m1's own endpoint with m1's pair and printed READY
+    about a server it never touched.
+    """
+    from luxe.chat import origin as origin_mod
+    from luxe.chat.inspection import endpoint_fixes
     from luxe.modelstore import model_state
-    from luxe.secrets import resolve_api_key
 
     report = SmokeReport()
+    entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
+    url = base_url or entry.base_url
+    fixes = endpoint_fixes(entry)
+    local = origin_mod.endpoint_is_local(url)
+    shared = endpoint_is_shared(cfg, backend_name, base_url)
+
+    # 0. Never a billable target (luxe.sdd cloud carve-out): a drill spends
+    #    tokens by design, and a drill that bills is not an aliveness check.
+    if entry.is_billable():
+        report.add("backend", "fail",
+                   f"{backend_name or cfg.default_backend_name()} is a billable "
+                   f"{entry.engine_label()} endpoint — never a smoke target; "
+                   "drill a local or fleet backend instead")
+        return report
 
     # 1. Manifest resolution — a typo'd hosts: block dies here, not in an
     #    outage (pydantic silently drops unknown top-level keys).
-    manifest = cfg.host_manifest()
+    host = origin_mod.host_for_endpoint(url)
+    manifest = cfg.host_manifest(host) if host else None
     if manifest is None:
         if cfg.hosts:
             report.add("manifest", "fail",
-                       f"hosts: has no entry for {short_hostname()!r} — "
-                       "add this host to configs/chat.yaml")
+                       f"hosts: has no entry for {host or url!r} — "
+                       "add that host to the config's hosts: block")
             return report
         report.add("manifest", "warn",
                    "no hosts: block — smoking the monolith default")
@@ -460,38 +533,40 @@ def run_smoke(cfg, *, base_url: str | None = None,
     else:
         main, fallback, keep = manifest.main, manifest.fallback, manifest.keep
         report.add("manifest", "pass",
-                   f"{short_hostname()}: main {main} · "
-                   f"fallback {fallback or '—'}")
+                   f"{host}: main {main} · fallback {fallback or '—'}")
 
-    entry = cfg.backend_entry(cfg.default_backend_name())
-    url = base_url or entry.base_url
-    backend = Backend(base_url=url, model=main,
-                      api_key=resolve_api_key(entry.api_key_env),
-                      **entry.backend_kwargs())
+    backend = entry.build_backend(main, base_url=url, backend_cls=Backend)
 
-    # 2. Weights really on disk (local endpoints only — dangling symlinks into
-    #    a wiped HF cache list fine and load never).
-    if endpoint_is_local(url):
+    # 2. Weights really on disk (local oMLX only — dangling symlinks into a
+    #    wiped HF cache list fine and load never). The oMLX store is the
+    #    only disk layout luxe knows: llama-server (neo) loads from its
+    #    preset's paths, so reading ~/.omlx/models there reported a working
+    #    host's main as missing. Its main turn below is the proof instead.
+    if local and entry.is_omlx():
         for mid in [m for m in [main, fallback, *keep] if m]:
             state = model_state(mid)
             if state == "ok":
-                report.add(f"weights {mid}", "pass", "on disk")
+                report.add(f"weights {mid}", "pass", "on disk", model=mid)
             else:
                 sev = "fail" if mid == main else "warn"
                 report.add(f"weights {mid}", sev,
-                           f"{state} — `luxe pull {mid}`")
+                           f"{state} — `luxe pull {mid}`", model=mid)
+    elif local:
+        report.add("weights", "pass",
+                   f"not checked — {entry.engine_label()} loads its own "
+                   "preset's files (the main turn below is the proof)")
 
-    # 3. Endpoint.
+    # 3. Endpoint. Bounded: this is a liveness question, not a generation.
     try:
-        healthy = backend.health()
+        healthy = backend.health(timeout_s=_LIVENESS_TIMEOUT_S)
     except Exception as e:
         healthy = False
-        detail = str(e)
+        detail, fix = str(e), fixes["start"]
     else:
-        detail = "not responding" if not healthy else url
+        detail, fix = ("not responding", fixes["restart"]) if not healthy \
+            else (url, "")
     if not healthy:
-        report.add("endpoint", "fail",
-                   f"{url}: {detail} — `brew services restart omlx`")
+        report.add("endpoint", "fail", f"{url}: {detail} — {fix}")
         return report
     report.add("endpoint", "pass", url)
 
@@ -504,8 +579,9 @@ def run_smoke(cfg, *, base_url: str | None = None,
     #     installed venv had it. WARN, not FAIL: a stale process may still be
     #     serving fine, and the real turns below fail on their own if it is
     #     not. This line exists so that when they do, the cause is already on
-    #     screen. Local endpoints only (lessons.md 2026-08-03/04).
-    if endpoint_is_local(url):
+    #     screen. Local oMLX only (lessons.md 2026-08-03/04; chat.sdd: skipped
+    #     on a non-oMLX engine — there is no formula to be stale about).
+    if local and entry.is_omlx():
         try:
             from luxe.staleproc import check_omlx
             stale = check_omlx()
@@ -527,8 +603,7 @@ def run_smoke(cfg, *, base_url: str | None = None,
         for mid in [m for m in [main, fallback] if m]:
             if mid not in served:
                 report.add("catalog", "fail",
-                           f"{mid} not served — restart oMLX after "
-                           "provisioning")
+                           f"{mid} not served — {fixes['served']}")
         if not any(s.name == "catalog" for s in report.steps):
             report.add("catalog", "pass",
                        f"main + fallback in {len(served)}-model catalog")
@@ -536,17 +611,21 @@ def run_smoke(cfg, *, base_url: str | None = None,
     # 5-7. Real generations: main ping, main tool call, fallback ping (the
     #      fallback leg exercises the unload+load swap — it's the slow one).
     #      Single-residency before the first ping too: never leave a host
-    #      with two models loaded because something else was warm.
-    try:
-        backend.unload_all_loaded(except_for=[main])
-    except Exception:
-        pass
+    #      with two models loaded because something else was warm. OWNED
+    #      endpoints only: on a shared one those residents are other hosts'
+    #      live sessions (chat.sdd: remote drills never unload).
+    if not shared:
+        try:
+            backend.unload_all_loaded(except_for=[main])
+        except Exception:
+            pass
     if _ping(backend, main, report, "main turn") and not skip_tools:
         _tool_ping(backend, main, report)
     if fallback and not skip_fallback:
-        try:
-            backend.unload_all_loaded(except_for=[fallback])
-        except Exception:
-            pass
+        if not shared:
+            try:
+                backend.unload_all_loaded(except_for=[fallback])
+            except Exception:
+                pass
         _ping(backend, fallback, report, "fallback turn")
     return report

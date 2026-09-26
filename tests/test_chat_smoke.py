@@ -32,19 +32,26 @@ class _Backend:
     reply_text = "OK"
     tool_reply: list = [_ToolCall()]
     fail_models: set = set()
+    health_timeouts: list = []
+    unloads: list = []
+    made: list = []
 
-    def __init__(self, base_url="", model="", timeout_s=600.0, api_key=""):
+    def __init__(self, base_url="", model="", timeout_s=600.0, api_key="",
+                 **kw):
         self.base_url = base_url
         self.model = model
         self.chatted: list[str] = []
+        type(self).made.append(self)
 
-    def health(self):
+    def health(self, timeout_s=None):
+        type(self).health_timeouts.append(timeout_s)
         return self.healthy
 
     def list_models(self):
         return list(self.served)
 
     def unload_all_loaded(self, *, except_for=None):
+        type(self).unloads.append((self.base_url, tuple(except_for or ())))
         return {}
 
     def chat(self, messages, tools=None, max_tokens=2048, temperature=0.2,
@@ -65,7 +72,16 @@ def _fakes(monkeypatch):
     monkeypatch.setattr(smoke_mod, "Backend", _Backend)
     monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
     monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: False)
+    # Loopback resolves to THIS host ("here") — the drill rule's local case —
+    # while weights/stale checks stay off (endpoint_is_local False above).
+    _real_host = origin_mod.host_for_endpoint
+    monkeypatch.setattr(
+        origin_mod, "host_for_endpoint",
+        lambda url: "here" if "127.0.0.1" in url else _real_host(url))
     _Backend.served = ["Main-M", "Fb-M"]
+    _Backend.health_timeouts = []
+    _Backend.unloads = []
+    _Backend.made = []
     _Backend.healthy = True
     _Backend.reply_text = "OK"
     _Backend.tool_reply = [_ToolCall()]
@@ -343,3 +359,209 @@ class TestCodeDrillStepBudget:
         from luxe.chat.smoke import _CODE_DRILL_STEPS, _code_drill_steps
         assert _code_drill_steps("") == _CODE_DRILL_STEPS
         assert _code_drill_steps(None) == _CODE_DRILL_STEPS
+
+
+# --- kit review 2026-09-26 -------------------------------------------------
+
+def _fleet_cfg(**m5_kw) -> PipelineConfig:
+    from luxe.config import BackendEntry
+    return PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        hosts={"here": HostManifest(main="Main-M", fallback="Fb-M"),
+               "m5": HostManifest(main="M5-Main", fallback="M5-Fb")},
+        backends={
+            "local": BackendEntry(base_url="http://127.0.0.1:8000",
+                                  default=True),
+            "m5": BackendEntry(base_url="http://m5.tail.example.ts.net:8000",
+                               **m5_kw),
+            "openrouter": BackendEntry(base_url="https://openrouter.ai/api",
+                                       engine="openrouter",
+                                       api_key_env="OPENROUTER_API_KEY"),
+        },
+    )
+
+
+class TestSmokeTargetsTheNamedBackend:
+    """#1: `luxe smoke --backend m5` used to smoke the LOCAL endpoint with
+    THIS host's manifest (run_smoke took no backend at all)."""
+
+    def test_backend_name_drills_that_endpoint_and_its_manifest(self):
+        _Backend.served = ["M5-Main", "M5-Fb"]
+        report = smoke_mod.run_smoke(_fleet_cfg(), backend_name="m5")
+        assert not report.failed, report.steps
+        assert "m5:" in next(s for s in report.steps
+                             if s.name == "manifest").detail
+        assert _states(report)["endpoint"] == "pass"
+        assert {b.base_url for b in _Backend.made} == {
+            "http://m5.tail.example.ts.net:8000"}
+        assert {s.model for s in report.steps if s.model} == {"M5-Main",
+                                                             "M5-Fb"}
+
+    def test_base_url_resolves_the_manifest_of_the_host_it_points_at(self):
+        _Backend.served = ["M5-Main", "M5-Fb"]
+        report = smoke_mod.run_smoke(
+            _fleet_cfg(), base_url="http://m5.tail.example.ts.net:8000")
+        assert "M5-Main" in next(s for s in report.steps
+                                 if s.name == "manifest").detail
+
+    def test_billable_backend_is_never_a_smoke_target(self):
+        report = smoke_mod.run_smoke(_fleet_cfg(), backend_name="openrouter")
+        assert report.failed and "billable" in report.steps[0].detail
+        assert _Backend.made == []           # not one request built
+
+    def test_liveness_probe_is_bounded(self):
+        smoke_mod.run_smoke(_cfg())
+        assert _Backend.health_timeouts
+        assert all(t is not None and t <= 10 for t in _Backend.health_timeouts)
+
+
+class TestRemoteSmokeNeverEvicts:
+    """#4: single-residency is a policy about a box luxe OWNS. On a shared
+    endpoint the other residents are other hosts' live sessions."""
+
+    def test_kit_drill_on_a_shared_endpoint_unloads_nothing(self):
+        _Backend.served = ["M5-Main", "M5-Fb"]
+        smoke_mod.run_smoke(_fleet_cfg(), backend_name="m5")
+        assert _Backend.unloads == []
+
+    def test_kit_drill_on_the_owned_endpoint_still_enforces_residency(self):
+        smoke_mod.run_smoke(_fleet_cfg())
+        assert _Backend.unloads             # unchanged locally
+
+    def test_explicit_shared_false_is_honoured(self):
+        _Backend.served = ["M5-Main", "M5-Fb"]
+        smoke_mod.run_smoke(_fleet_cfg(shared=False), backend_name="m5")
+        assert _Backend.unloads
+
+    def test_agentic_drill_on_a_shared_endpoint_unloads_nothing(
+            self, monkeypatch):
+        import shutil
+
+        import luxe.agents.single as single_mod
+
+        monkeypatch.setattr(
+            single_mod, "run_single",
+            lambda *a, **k: _FakeResult(text=smoke_mod._DRILL_MAGIC))
+        cfg = _fleet_cfg()
+        cfg.roles["monolith"] = RoleConfig(model_key="monolith",
+                                           tools=["read_file"])
+        report = smoke_mod.run_chat_drill(cfg, backend_name="m5")
+        assert not report.failed, report.steps
+        assert _Backend.unloads == []
+        repo = next(s for s in report.steps if s.name == "drill repo").detail
+        shutil.rmtree(repo, ignore_errors=True)
+
+    def test_cli_teardown_skips_a_shared_endpoint(self, monkeypatch):
+        from click.testing import CliRunner
+
+        import luxe.backend as backend_mod
+        from luxe import cli as cli_mod
+
+        _Backend.served = ["M5-Main", "M5-Fb"]
+        monkeypatch.setattr(cli_mod, "_chat_cfg", lambda p=None: _fleet_cfg())
+        monkeypatch.setattr(backend_mod, "Backend", _Backend)
+        res = CliRunner().invoke(cli_mod.main,
+                                 ["smoke", "--backend", "m5", "--no-fix"])
+        assert res.exit_code == 0, res.output
+        assert _Backend.unloads == []
+
+
+class TestEngineAwareSmoke:
+    """#8: on llama-server (neo) the weights step read ~/.omlx/models and the
+    endpoint fix said `brew services restart omlx`."""
+
+    @staticmethod
+    def _neo_cfg():
+        from luxe.config import BackendEntry
+        return PipelineConfig(
+            models={"monolith": "Champ"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+            hosts={"here": HostManifest(main="Q4B", fallback="Q4B")},
+            backends={"local": BackendEntry(base_url="http://127.0.0.1:8080",
+                                            engine="llama-server",
+                                            default=True)})
+
+    def test_no_omlx_store_check_on_llama_server(self, monkeypatch):
+        import luxe.modelstore as ms
+        from luxe.chat import origin as origin_mod
+
+        monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: True)
+        monkeypatch.setattr(ms, "model_state",
+                            lambda *a, **k: pytest.fail("read the oMLX store"))
+        _Backend.served = ["Q4B"]
+        report = smoke_mod.run_smoke(self._neo_cfg())
+        assert not report.failed, report.steps
+        assert not any(s.name.startswith("weights ") for s in report.steps)
+
+    def test_dead_llama_server_fix_is_not_brew(self):
+        _Backend.healthy = False
+        report = smoke_mod.run_smoke(self._neo_cfg())
+        step = next(s for s in report.steps if s.name == "endpoint")
+        assert step.state == "fail"
+        assert "brew" not in step.detail
+        assert "llama-server" in step.detail
+
+
+class TestStaleEvidenceIgnoresMissingWeights:
+    """#9: `[Errno 2] No such file` is also what loading a dangling entry
+    says. When that model's own weights step already failed, a restart
+    cannot help — the weights line named the real fix."""
+
+    def test_errno2_on_a_model_with_failed_weights_is_not_stale(self):
+        r = smoke_mod.SmokeReport()
+        r.add("weights Main-M", "fail", "dangling — `luxe pull Main-M`",
+              model="Main-M")
+        r.add("main turn", "fail",
+              "Main-M: [Errno 2] No such file or directory: 'x.safetensors'",
+              model="Main-M")
+        assert r.stale_evidence == ""
+
+    def test_same_signature_with_good_weights_still_counts(self):
+        r = smoke_mod.SmokeReport()
+        r.add("weights Main-M", "pass", "on disk", model="Main-M")
+        r.add("main turn", "fail", "Main-M: [Errno 2] No such file",
+              model="Main-M")
+        assert "Errno 2" in r.stale_evidence
+
+    def test_run_smoke_tags_the_failed_turn_with_its_model(self, monkeypatch):
+        import luxe.modelstore as ms
+        from luxe.chat import origin as origin_mod
+
+        monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: True)
+        monkeypatch.setattr(ms, "model_state",
+                            lambda mid, *a, **k: "dangling" if mid == "Main-M"
+                            else "ok")
+        monkeypatch.setattr(smoke_mod, "_ping",
+                            lambda b, m, r, label: (r.add(
+                                label, "fail", f"{m}: [Errno 2] No such file",
+                                model=m) or False))
+        report = smoke_mod.run_smoke(_cfg(), skip_fallback=True)
+        assert report.failed
+        assert report.stale_evidence == ""
+
+
+def test_code_drill_pytest_timeout_is_a_failure_not_a_traceback(monkeypatch):
+    import shutil
+    import subprocess
+
+    import luxe.agents.single as single_mod
+    from luxe.tools import fs as fs_mod
+
+    def fake_run_single(backend, role, *, goal, task_type, run_id=None, **kw):
+        _fix_calc(fs_mod.get_repo_root())
+        return _FakeResult()
+
+    monkeypatch.setattr(single_mod, "run_single", fake_run_single)
+    real_run = subprocess.run
+
+    def _run(argv, *a, **k):
+        if "pytest" in argv:
+            raise subprocess.TimeoutExpired(argv, 120)
+        return real_run(argv, *a, **k)
+    monkeypatch.setattr(subprocess, "run", _run)
+    report = smoke_mod.run_code_drill(_drill_cfg())
+    step = next(s for s in report.steps if s.name == "tests")
+    assert step.state == "fail" and "120s" in step.detail
+    kept = next(s for s in report.steps if s.name == "kept")
+    shutil.rmtree(kept.detail.split(": ", 1)[1], ignore_errors=True)
