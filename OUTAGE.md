@@ -111,7 +111,7 @@ In-session: `/doctor` (preflight) · `/status` (one-screen dump) · `/tools`
 ## 6. If luxe itself is broken
 
 ```
-cd ~/Downloads/luxe && uv sync --extra chat --extra dev --extra analyzers
+cd ~/Downloads/luxe && uv sync --extra chat --extra dev --extra analyzers --extra web
 uv run pytest -q
 git log --oneline -5          # what changed last
 ```

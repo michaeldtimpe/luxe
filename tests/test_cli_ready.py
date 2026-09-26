@@ -237,6 +237,21 @@ class TestOutageCard:
         missing = sorted(named - known)
         assert missing == [], f"OUTAGE.md names non-existent commands: {missing}"
 
+    def test_card_sync_line_matches_luxe_update_extras(self):
+        """§6's manual sync must install what `luxe update` does. Without
+        `--extra web` it prunes playwright and silently withholds the web
+        tools — the same prune shape that once broke the --code drill."""
+        import inspect
+        import re
+
+        extras = re.findall(r'"--extra", "(\w+)"',
+                            inspect.getsource(cli.update_cmd.callback))
+        assert extras, "could not read luxe update's extras"
+        text = outage_mod.CARD_PATH.read_text()
+        sync = next(ln for ln in text.splitlines()
+                    if "uv sync" in ln and "--extra dev" in ln)
+        assert re.findall(r"--extra (\w+)", sync) == extras
+
     def test_load_card_never_raises_on_a_missing_file(self, monkeypatch):
         monkeypatch.setattr(outage_mod, "CARD_PATH", Path("/nope/OUTAGE.md"))
         text = outage_mod.load_card()
