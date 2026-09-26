@@ -799,17 +799,15 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
     sys.exit(1 if failed else 0)
 
 
-def _smoke_self_repair(cfg, base_url: str | None, evidence: str):
+def _smoke_self_repair(cfg, base_url: str | None, evidence: str, *,
+                       backend_name: str | None = None):
     """Restart a stale local oMLX for `luxe smoke` / `luxe ready --fix` /
     `luxe repair`, narrating every step. Returns the RepairResult."""
-    from luxe.backend import Backend
     from luxe.repair import repair_omlx
-    from luxe.secrets import resolve_api_key
 
-    entry = cfg.backend_entry(cfg.default_backend_name())
+    entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
     url = base_url or entry.base_url
-    backend = Backend(base_url=url, model="",
-                      api_key=resolve_api_key(entry.api_key_env))
+    backend = entry.build_backend("", base_url=url)
     console.print("[yellow]⟳ self-repair[/] — stale oMLX: restarting it "
                   "[dim](--no-fix to only diagnose)[/]")
     res = repair_omlx(base_url=url, health=backend.health,
@@ -878,13 +876,15 @@ def ready_cmd(config_path: str | None, backend_name: str | None, repo: str,
 
     doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
     worst = inspection.render_doctor(doc, console, title="luxe ready")
-    if fix and not backend_name:
+    if fix:
+        from luxe.repair import is_stale_build_line
         stale = next((c for c in doc.checks
-                      if c.name == "oMLX build" and c.state == inspection.WARN
-                      and "brew replaced" in c.detail), None)
+                      if is_stale_build_line(c.name, c.state, c.detail)),
+                     None)
         if stale is None:
             console.print("[dim]· --fix: oMLX build is not stale, nothing to restart[/]")
-        elif _smoke_self_repair(cfg, None, stale.detail).attempted:
+        elif _smoke_self_repair(cfg, None, stale.detail,
+                                backend_name=backend_name).attempted:
             console.print("[bold]after repair[/]")
             doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
             worst = inspection.render_doctor(doc, console, title="luxe ready")
@@ -918,16 +918,16 @@ def repair_cmd(config_path: str | None, force: bool):
     repair automatically; `luxe ready` names it; this is the explicit form.
     Refuses anything that is not that signature unless --force. Exit 0 =
     healthy on the installed build, 1 = restart did not recover it,
-    2 = refused (not stale / remote / not brew / cooldown).
+    2 = refused (not stale / remote / not brew / not oMLX). The 5-minute
+    restart cooldown is per PROCESS, so it never refuses a fresh `luxe
+    repair` — it bounds the in-process callers (smoke's re-drill, a chat
+    session) instead.
     """
-    from luxe.backend import Backend
     from luxe.repair import repair_omlx
-    from luxe.secrets import resolve_api_key
 
     cfg = _chat_cfg(config_path)
     entry = cfg.backend_entry(cfg.default_backend_name())
-    backend = Backend(base_url=entry.base_url, model="",
-                      api_key=resolve_api_key(entry.api_key_env))
+    backend = entry.build_backend("")
     console.print(f"[dim]· checking oMLX at {entry.base_url}…[/]")
     res = repair_omlx(base_url=entry.base_url, health=backend.health,
                       engine=entry.engine, force=force)

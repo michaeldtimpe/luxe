@@ -42,9 +42,11 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
-from luxe.staleproc import StaleCheck, _installed_versions, check_omlx
+from luxe.staleproc import (STALE_MARKER, StaleCheck, _brew_prefix,
+                            _installed_versions, check_omlx)
 
-__all__ = ["RepairResult", "looks_stale", "repair_omlx", "COOLDOWN_S"]
+__all__ = ["RepairResult", "is_stale_build_line", "looks_stale",
+           "repair_omlx", "COOLDOWN_S"]
 
 # An "impossible" import or file error surfacing from a model LOAD. The
 # body oMLX returns on the failed load names the module the deleted tree
@@ -68,6 +70,17 @@ _last_restart_at: float | None = None
 def looks_stale(text: str) -> bool:
     """Does an error body carry the stale-load signature?"""
     return bool(text) and _SIGNATURE_RE.search(text) is not None
+
+
+def is_stale_build_line(name: str, state: str, detail: str) -> bool:
+    """Is this report line the `oMLX build` check saying STALE?
+
+    One predicate for the smoke step and the doctor Check (both spell the
+    warn state "warn") — the two used to each carry their own copy of the
+    `"brew replaced"` substring test, which would have drifted apart the
+    first time staleproc's wording changed.
+    """
+    return name == "oMLX build" and state == "warn" and STALE_MARKER in detail
 
 
 @dataclass
@@ -104,22 +117,36 @@ def reset_cooldown() -> None:
     _last_restart_at = None
 
 
-def _restart_service(formula: str) -> tuple[bool, str]:
+def _brew_bin() -> str:
+    """Absolute path to `brew`. A non-login shell (`ssh m1 luxe smoke`,
+    launchd) has no Homebrew on PATH, so a bare `brew` fails there even
+    though staleproc — which finds the prefix itself — just proved the
+    formula is installed. Same prefix, same answer."""
+    from pathlib import Path
+
+    candidate = Path(_brew_prefix()) / "bin" / "brew"
+    return str(candidate) if candidate.is_file() else "brew"
+
+
+def _restart_service(formula: str) -> tuple[bool, bool, str]:
+    """(ran, ok, message). `ran` is False when brew never executed (not
+    found / not startable) — the cooldown must not be armed for that."""
     try:
-        proc = subprocess.run(["brew", "services", "restart", formula],
+        proc = subprocess.run([_brew_bin(), "services", "restart", formula],
                               capture_output=True, text=True,
                               timeout=_RESTART_TIMEOUT_S, check=False)
     except FileNotFoundError:
-        return False, "`brew` not on PATH"
+        return False, False, "`brew` not found (not on PATH or under the Homebrew prefix)"
     except subprocess.TimeoutExpired:
-        return False, f"`brew services restart {formula}` hung >{_RESTART_TIMEOUT_S:.0f}s"
+        return True, False, (f"`brew services restart {formula}` hung "
+                             f">{_RESTART_TIMEOUT_S:.0f}s")
     except (OSError, subprocess.SubprocessError) as e:
-        return False, f"`brew services restart {formula}` failed: {e}"
+        return False, False, f"`brew services restart {formula}` failed to start: {e}"
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        return False, (f"`brew services restart {formula}` exited "
-                       f"{proc.returncode}: {tail[-1] if tail else '(no output)'}")
-    return True, "brew services restart ok"
+        return True, False, (f"`brew services restart {formula}` exited "
+                             f"{proc.returncode}: {tail[-1] if tail else '(no output)'}")
+    return True, True, "brew services restart ok"
 
 
 def _wait_healthy(health, wait_s: float) -> float | None:
@@ -194,11 +221,15 @@ def _repair_omlx(*, base_url, health, error_text, engine, force, check,
         why.append("forced")
     res.reason = "; ".join(why)
     res.attempted = True
-    _last_restart_at = _now()
     t0 = _now()
 
     res.steps.append("brew services restart omlx")
-    ok, msg = _restart_service("omlx")
+    ran, ok, msg = _restart_service("omlx")
+    # Arm the cooldown only once brew actually RAN: a restart that never
+    # happened (brew missing from a non-login PATH) must not lock out the
+    # next, correctly-environed attempt for five minutes.
+    if ran:
+        _last_restart_at = _now()
     res.steps.append(msg)
     if not ok:
         res.seconds = _now() - t0
