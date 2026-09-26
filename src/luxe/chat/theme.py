@@ -222,7 +222,14 @@ _PREF_PATH = luxe_home() / "theme"
 
 
 def save_preference(name: str) -> bool:
-    """Persist the palette choice for future sessions. Never raises."""
+    """Persist the palette choice for future sessions. Never raises.
+
+    Not in an ephemeral session: `~/.luxe/theme` is luxe's own state, and
+    `--ephemeral` promises nothing of the session is left behind."""
+    from luxe.ephemeral import is_ephemeral
+
+    if is_ephemeral():
+        return False
     try:
         _PREF_PATH.parent.mkdir(parents=True, exist_ok=True)
         _PREF_PATH.write_text((name or "auto").strip().lower() + "\n")
