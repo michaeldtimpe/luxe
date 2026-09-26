@@ -77,18 +77,32 @@ in the front-end. Survey map + chunk plan persist per repo under
   > 1. INTERACTIVE-ONLY — requires a TTY; no TTY ⇒ abort. Applying unattended is
   >    forbidden; the sweep NEVER applies.
   > 2. CLEAN-TREE-ONLY — aborts if the working tree is dirty (no `--allow-dirty`).
+  >    A `git status` that FAILS counts as dirty. The exemption is exactly the
+  >    `.luxe/gitkit/` mirror (never the rest of `.luxe/`); apply adds it to
+  >    `.git/info/exclude`, restores a COMMITTED mirror before the steps, and
+  >    never stages it.
   > 3. NON-DEFAULT-BRANCH — never main/master/the detected default branch; always a
   >    dedicated `gitchange/<head>-<rand>` branch (created up front).
   > 4. PER-STEP GATING — one MONO `run_single` per ordered step; after each, capture
   >    the diff, run the step's `verify`, SHOW both, and require an interactive
-  >    keep|discard. `keep` commits on the branch; `discard` reverts only that step.
+  >    keep|discard. `keep` commits on the branch — add/commit exit codes are
+  >    checked (stdin closed, bounded); a failed commit is NOT kept, is shown,
+  >    and stops the run with the work left in the tree. `discard` reverts
+  >    only that step via `reset --hard HEAD` + `clean -fd` (a `checkout -- .`
+  >    left `add -N` intent-to-add entries as empty files the next keep
+  >    committed). The step's `verify` is MODEL-WRITTEN shell: it is treated
+  >    as a command only by its FIRST token, is shown, and runs only after an
+  >    explicit y (default N) — never unconfirmed.
   >    `depends_on` is honored (a dependent is skipped if its prerequisite wasn't kept).
   >    A step pass that RAISES is reverted (kept steps are already committed, so the
   >    full-tree revert only discards the failed step's writes) and gated by an
   >    interactive [c]ontinue/[a]bort (default abort) — NEVER retried (invariant 6).
   >    The clean-tree invariant (2) is re-checked after branch creation AND after
   >    plan generation (TOCTOU; the sanctioned `.luxe/gitkit/` mirror is exempt), and
-  >    no abort may orphan the dedicated `gitchange/*` branch.
+  >    no abort may orphan the dedicated `gitchange/*` branch — the original
+  >    checkout is recorded by SHA so a detached HEAD is restored too. Ctrl-C
+  >    during a step reverts that step (kept steps stay committed) and still
+  >    prints the summary.
   > 5. NEVER pushes, NEVER merges, NEVER commits to the default branch, NEVER touches
   >    files outside the working tree.
   > 6. Orchestration is front-end Python (the deep.py/compare precedent): multiple
@@ -107,7 +121,14 @@ in the front-end. Survey map + chunk plan persist per repo under
   vs `pre-existing (touched code)` — never bare "introduced"; the header carries
   a fixed heuristic-classification caveat line and diffscope.py renders the
   deterministic hunk-overlap prior (the model's tag refines, never invents) —
-  both applied in Python regardless of model output.
+  both applied in Python regardless of model output. The prior applies to
+  EVERY finding-shaped line (model sections and the Python-rendered deep
+  `## Area:` / `## Additional findings`), never to structural / coverage /
+  summary sections or code fences; a cited path resolves exact → unique
+  suffix → unique basename (ambiguous = no match). Every diff whose text is
+  parsed carries `gitcmd.DIFF_PARSE_PINS` + `core.quotePath=false` (a
+  C-quoted non-ASCII path matched nothing), and the `-U10` diff is fetched
+  once and sliced per chunk.
 - Pick the path by repo size: small/medium repos → SINGLE-PASS (exactly one
   `run_single`); large repos (estimated token footprint over the deep threshold,
   or `--deep`/`/gitaudit deep`) → the staged deep mode above. The decision is
@@ -120,7 +141,14 @@ in the front-end. Survey map + chunk plan persist per repo under
   `extra_context`, tagged (`<repo_health>` / `<github_metadata>` / `<repo_map>` /
   `<framing_files>` / `<survey_notes>` / `<chunk_files>` / `<cross_reference_digest>`
   / `<chunk_findings>`). Every block is pure data and must carry no
-  instruction-like text.
+  instruction-like text. A CHUNK pass's `<cross_reference_digest>` is the
+  structural map plus a one-line INDEX of earlier findings (severity, title,
+  file:line) capped at the digest ceiling with the cut stated — never the
+  earlier chunks' full notes, which go to synthesis only. Nothing is dropped
+  from the digest before synthesis (in-loop compaction only merges); when
+  `compact_digest` does enforce a ceiling it never drops a finding above
+  medium and logs exactly what it dropped. The overflow 2-level reduce runs
+  at the SYNTHESIS window over findings AND markdown notes.
 - Gather GitHub data out-of-band through the `gh` CLI in `health.py`, never by
   adding `gh` to the shared bash allowlist (tools/shell.py `_ALLOWLIST` is the
   benchmark tool surface). All `gh` calls go through one helper that degrades
@@ -140,7 +168,13 @@ in the front-end. Survey map + chunk plan persist per repo under
   breadcrumb carries `{rel: blob_sha}` from `git ls-tree -r HEAD` (SHAs, never
   timestamps) + the original-partition baseline; per-chunk contributions cache
   under `map/notes/<kind>/chunk-<idx>.json` (atomic writes; doubles as
-  crash-resume). On HEAD move: FULL REBUILD when a framing file changed, >20%
+  crash-resume). Shas are WORKING-TREE shas (`worktree_file_shas`: HEAD's
+  ls-tree overlaid with `git hash-object` for modified/untracked files) —
+  chunk passes read the working tree, so an uncommitted edit must invalidate
+  its chunk's note. An `unanalyzed` chunk, or one where ANY pass (incl. a
+  recovery pass) aborted, is never cached. On HEAD move: FULL REBUILD when a
+  framing file changed (one on the map's saved framing list, or an added
+  file that would join it — not any index.js/app.py anywhere), >20%
   of mapped files churned, version<2, or an anti-drift compaction trigger
   fires (cumulative delta chunks > 4, delta content > 15% of the mapped corpus
   tokens, or chunk count grown > 25% over the original partition — the fired
@@ -157,6 +191,12 @@ in the front-end. Survey map + chunk plan persist per repo under
   the session's resident indices) and warns if HEAD moved since indices built.
 - Keep the benchmark/maintain path byte-identical: deep mode is front-end only
   (cli/chat → runner → deep); `single.py`/`loop.py`/benchmarks never reach it.
+
+- Keep ONE definition of each shared piece: finding shapes (file refs,
+  severity words/ranks, severity headers at `##`-`####` incl. the `### M —`
+  shorthand) in `patterns.py`; the report tail (save → mirror → display →
+  `--min-severity` honesty line) in `output.finish_report`; the repo-root +
+  index swap/restore in `workspace.indexed_target`.
 
 - Take cancellation, display truncation, and language detection from the
   NEUTRAL modules (`luxe.cancel`, `luxe.textfmt`, `luxe.repo_index`) at
@@ -178,7 +218,9 @@ in the front-end. Survey map + chunk plan persist per repo under
   mini-maintain workflow, and the apply executor must NOT retry a step's pass.)
 - Silently cap coverage: a `--max-chunks` truncation must `log` what was dropped.
   `--min-severity` is DISPLAY-ONLY (the saved report is always complete) and
-  prints an honesty line counting what was hidden. Finding `confidence` is
+  prints an honesty line counting what was hidden. `--no-save` and
+  `--ephemeral` write nothing under `~/.luxe/` (reports, `plan-<head>.json`,
+  `map/`, notes, work dirs). Finding `confidence` is
   DETERMINISTIC and provenance-honest: evidence-weighted (never
   frequency-weighted) Python scoring with heuristic-salvaged findings capped at
   low — never an LLM judgment.
