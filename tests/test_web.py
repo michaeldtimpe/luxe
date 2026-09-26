@@ -185,14 +185,14 @@ def server(monkeypatch):
 def test_fetch_html_and_extract(server):
     r = fetch_url(f"{server}/page")
     assert r.status == 200 and r.is_html
-    title, text, links = extract_text(r.text, base_url=r.url)
+    title, text = extract_text(r.text, base_url=r.url)
     assert title == "Doc"
     assert "Hello world." in text
     assert "# Heading" in text
     assert "code_here()" in text
     assert "nope" not in text          # <script> dropped
     assert "skip me" not in text       # <nav> chrome dropped
-    assert any(href.endswith("/next") for _t, href in links)
+    assert f"[Next page]({server}/next)" in text
 
 
 def test_fetch_follows_redirect_and_guards_each_hop(server):
@@ -245,7 +245,7 @@ def test_js_only_page_says_so_instead_of_looking_empty():
 
 
 def test_malformed_html_degrades_instead_of_raising():
-    title, text, _links = extract_text("<p>unclosed <b>bold <div>x")
+    title, text = extract_text("<p>unclosed <b>bold <div>x")
     assert isinstance(text, str)
 
 
@@ -255,6 +255,36 @@ def test_max_chars_is_reported_when_truncating():
                     text="<html><body><p>" + ("word " * 5000) + "</p></body></html>")
     out = to_markdown(r, max_chars=200)
     assert "truncated" in out and len(out) < 600
+
+
+def test_page_body_wrapped_in_a_form_is_kept():
+    """ASP.NET WebForms wraps the whole body in <form runat=server>; treating
+    `form` as chrome extracted such pages to nothing."""
+    html = ("<html><body><form id='aspnetForm' method='post'>"
+            "<h1>Release notes</h1><p>Version 4.2 fixes the parser.</p>"
+            "</form></body></html>")
+    _title, text = extract_text(html)
+    assert "Release notes" in text and "Version 4.2 fixes the parser." in text
+
+
+def test_unclosed_anchor_does_not_swallow_the_rest_of_the_page():
+    html = ("<p>See <a href='/a'>the docs</p>"
+            "<h2>Install</h2><p>pip install thing</p>")
+    _title, text = extract_text(html, base_url="https://x.test/")
+    assert "## Install" in text and "pip install thing" in text
+
+
+def test_anchor_text_keeps_its_place_and_spacing():
+    _title, text = extract_text(
+        "<p>Read<a href='https://x.test/d'> the docs </a>first.</p>")
+    assert text == "Read [the docs](https://x.test/d) first."
+
+
+def test_a_new_anchor_closes_an_unclosed_one():
+    _title, text = extract_text(
+        "<p><a href='https://x.test/1'>one <a href='https://x.test/2'>two</a></p>")
+    assert "[one](https://x.test/1)" in text
+    assert "[two](https://x.test/2)" in text
 
 
 def test_tidy_collapses_blank_lines():
