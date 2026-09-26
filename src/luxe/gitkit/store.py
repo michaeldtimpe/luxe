@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from luxe.ephemeral import is_ephemeral
+from luxe.gitkit import patterns
 from luxe.paths import luxe_home
 from luxe.memory.project import repo_hash
 
@@ -146,57 +147,105 @@ def mirror_to_repo(repo_path: str | Path, kind: str, report_text: str,
         return None
 
 
-_SEV_HDR_RE = re.compile(r"^##\s*(Critical|High|Medium|Low)\b", re.IGNORECASE)
-_SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 # a finding item line: "- **high** ..." / "1. **Critical:** ..." (inline severity)
 _INLINE_SEV_RE = re.compile(
     r"^\s*(?:[-*]|\d+[.)])\s+\*\*\s*(critical|high|medium|low)\b", re.IGNORECASE)
 _ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+\S")
 
 
+def _walk_sections(report_md: str):
+    """Yield (line, active severity section | None, is_severity_header) for
+    every line of a report. A severity section opens at a severity heading at
+    any of levels 2-4 (`## High`, `### High` under `## Bugs & security`, the
+    per-finding `### M — title`) and closes at the next heading at the same
+    or a shallower level; deeper non-severity headings stay inside it.
+    Headings inside fenced code are code, not structure. The section value is
+    `(level, severity, per_finding)`."""
+    section: tuple[int, str, bool] | None = None
+    in_fence = False
+    for ln in (report_md or "").splitlines():
+        if patterns.is_fence(ln):
+            in_fence = not in_fence
+            yield ln, section, False
+            continue
+        level = 0 if in_fence else patterns.heading_level(ln)
+        if level:
+            sh = patterns.severity_header(ln)
+            if sh is not None:
+                section = sh
+                yield ln, section, True
+                continue
+            if section is not None and level <= section[0]:
+                section = None
+        yield ln, section, False
+
+
+_BOLD_LEAD_RE = re.compile(r"^\*\*(.+?)\*\*")
+
+
+def _count_group_findings(lines: list[str]) -> int:
+    """Findings under one hidden GROUP header (`### Low`): its bold-lead
+    finding paragraphs (`**3. title**`, `**`a.py:3` — title**` — but not a
+    `**Impact:**` field label) when the model wrote that shape, else its
+    top-level list items — never the evidence/impact lines under a finding."""
+    bold = 0
+    for ln in lines:
+        m = _BOLD_LEAD_RE.match(ln)
+        if m and not m.group(1).rstrip().endswith(":"):
+            bold += 1
+    if bold:
+        return bold
+    return sum(1 for ln in lines if _ITEM_RE.match(ln) and not ln[:1].isspace())
+
+
 def filter_min_severity(report_md: str, min_severity: str) -> tuple[str, int]:
     """DISPLAY-side severity filter (the saved report is always the full,
-    unfiltered text — never silently cap coverage). Drops `## <Severity>`
-    sections below the threshold (counting their list items) and individual
-    `- **sev**`-shaped finding lines below it inside kept sections. Returns
-    (filtered markdown, number of findings filtered out)."""
-    thr = _SEV_ORDER.get((min_severity or "").lower(), 0)
+    unfiltered text — never silently cap coverage). Drops severity sections
+    below the threshold (a per-finding heading counts as one finding; a group
+    heading counts its findings, `_count_group_findings`) and individual
+    `- **sev**`-shaped finding lines below it elsewhere. Returns (filtered
+    markdown, number of findings filtered out)."""
+    thr = patterns.SEVERITY_RANK.get((min_severity or "").lower(), 0)
     if thr <= 1:                       # low = show everything
         return report_md, 0
     out: list[str] = []
     dropped = 0
-    keep_section = True
-    for ln in (report_md or "").splitlines():
-        if ln.startswith("## "):
-            m = _SEV_HDR_RE.match(ln)
-            keep_section = (m is None
-                            or _SEV_ORDER.get(m.group(1).lower(), 0) >= thr)
-            if not keep_section:
-                continue
-        if not keep_section:
-            if _ITEM_RE.match(ln):
-                dropped += 1
+    hidden_group: list[str] | None = None
+    for ln, section, is_hdr in _walk_sections(report_md):
+        if is_hdr or section is None:
+            if hidden_group is not None:
+                dropped += _count_group_findings(hidden_group)
+                hidden_group = None
+        if section is not None and patterns.SEVERITY_RANK[section[1]] < thr:
+            if is_hdr:
+                if section[2]:
+                    dropped += 1           # the heading IS the finding
+                else:
+                    hidden_group = []
+            elif hidden_group is not None:
+                hidden_group.append(ln)
             continue
         m = _INLINE_SEV_RE.match(ln)
-        if m and _SEV_ORDER.get(m.group(1).lower(), 5) < thr:
+        if m and patterns.SEVERITY_RANK.get(m.group(1).lower(), 5) < thr:
             dropped += 1
             continue
         out.append(ln)
+    if hidden_group is not None:
+        dropped += _count_group_findings(hidden_group)
     return "\n".join(out), dropped
 
 
 def extract_findings(report_md: str) -> str:
-    """Slice ONLY the severity-grouped findings out of a gitaudit report — keep each
-    `## Critical|High|Medium|Low` block (header → next `##`), drop the repository
-    summary / `## Area:` notes / files-checked prose. Keeps the injected payload
-    small when a prior audit is fed to gitchange. '' if no findings sections."""
+    """Slice ONLY the findings out of a gitaudit report — every severity
+    section (`## High`, `### High`, `### M — title`; heading → end of that
+    section) plus inline `- **sev** …` finding lines found elsewhere (the
+    deterministic deep render's `## Additional findings`); drop the repository
+    summary / `## Area:` prose / structural notes. Keeps the injected payload
+    small when a prior audit is fed to gitchange. '' if no findings."""
     if not report_md:
         return ""
     out: list[str] = []
-    keep = False
-    for ln in report_md.splitlines():
-        if ln.startswith("## "):
-            keep = bool(_SEV_HDR_RE.match(ln))
-        if keep:
+    for ln, section, _is_hdr in _walk_sections(report_md):
+        if section is not None or _INLINE_SEV_RE.match(ln):
             out.append(ln)
     return "\n".join(out).strip()
