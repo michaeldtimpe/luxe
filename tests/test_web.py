@@ -351,21 +351,12 @@ def test_answer_tool_reports_missing_key_as_a_tool_error(monkeypatch):
 
 
 def test_answer_parses_openai_shape(monkeypatch):
-    import httpx
+    from luxe.web import fetch as fetch_mod
 
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"model": "brave-pro",
-                    "choices": [{"message": {"role": "assistant",
-                                             "content": "K2."}}]}
-
+    body = {"model": "brave-pro",
+            "choices": [{"message": {"role": "assistant", "content": "K2."}}]}
     monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    monkeypatch.setattr(fetch_mod, "json_request", lambda *a, **k: (200, body))
     out = answers_mod.answer("second highest mountain?")
     assert "K2." in out and "brave-pro" in out
 
@@ -378,19 +369,12 @@ def test_answer_rejects_unknown_model(monkeypatch):
 
 
 def test_answer_empty_content_is_an_error_not_a_blank_success(monkeypatch):
-    import httpx
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"choices": [{"message": {"content": ""}}]}
+    from luxe.web import fetch as fetch_mod
 
     monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    monkeypatch.setattr(
+        fetch_mod, "json_request",
+        lambda *a, **k: (200, {"choices": [{"message": {"content": ""}}]}))
     with pytest.raises(WebError) as e:
         answers_mod.answer("q")
     assert "empty" in str(e.value)
@@ -428,3 +412,96 @@ def test_web_command_toggles_the_flag():
     from luxe.chat import commands as cmd
 
     assert "/web" in cmd._build_handlers()
+
+
+# --- per-turn cost and bounds -------------------------------------------------
+
+def test_provider_keys_resolve_once_per_web_enable(monkeypatch):
+    """web_tools() runs every turn; each miss used to cost a `security`
+    subprocess (up to three per turn on a host with no keys)."""
+    import luxe.secrets as secrets_mod
+    from luxe.web import keys as keys_mod
+
+    calls = []
+    monkeypatch.setattr(secrets_mod, "resolve_api_key",
+                        lambda name: calls.append(name) or "")
+    keys_mod.clear()
+    for _turn in range(3):
+        web_tools()
+    per_enable = len(search_mod._PROVIDERS) + 1      # + BRAVE_ANSWERS_API_KEY
+    assert len(calls) == per_enable
+    keys_mod.clear()                                  # what /web on does
+    web_tools()
+    assert len(calls) == 2 * per_enable
+
+
+def test_turning_web_on_clears_the_key_cache(monkeypatch):
+    import io
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from luxe.chat import cmd_toggles
+    from luxe.web import keys as keys_mod
+
+    keys_mod._CACHE["BRAVE_API_KEY"] = ""             # a stale miss
+    ctx = SimpleNamespace(session=SimpleNamespace(web_enabled=False),
+                          console=Console(file=io.StringIO()))
+    monkeypatch.setattr(search_mod, "configured", lambda: False)
+    monkeypatch.setattr(answers_mod, "configured", lambda: False)
+    cmd_toggles._web_mode("", ctx)
+    assert ctx.session.web_enabled is True
+    assert "BRAVE_API_KEY" not in keys_mod._CACHE
+
+
+@pytest.mark.parametrize("given,expected", [
+    (-5, 1_000), (0, 20_000), (None, 20_000), ("junk", 20_000),
+    (10**9, 50_000), (3_000, 3_000)])
+def test_fetch_max_chars_is_clamped(monkeypatch, given, expected):
+    from luxe.web import tools as tools_mod
+    seen = {}
+    monkeypatch.setattr("luxe.web.fetch.fetch_url", lambda url: FetchResult(
+        url=url, status=200, content_type="text/plain", text="x" * 100_000))
+
+    def _md(result, max_chars):
+        seen["n"] = max_chars
+        return "ok"
+
+    monkeypatch.setattr("luxe.web.extract.to_markdown", _md)
+    _d, fn = tools_mod.make_web_fetch_tool()
+    out, err = fn({"url": "https://x.test/", "max_chars": given})
+    assert err is None and seen["n"] == expected
+
+
+def test_search_goes_through_the_bounded_reader(monkeypatch):
+    """search/answers used bare httpx with per-read timeouts only and no
+    size cap (web.sdd requires both); they now share fetch's reader."""
+    from luxe.web import fetch as fetch_mod
+    seen = {}
+
+    def _fake(method, url, *, timeout_s, max_bytes, headers=None,
+              params=None, json=None, deadline=None):
+        seen.update(timeout_s=timeout_s, max_bytes=max_bytes)
+        return fetch_mod.RawResponse(
+            url=url, status=200, headers={},
+            body=b'{"web": {"results": [{"title": "T", "url": "https://u"}]}}',
+            truncated=False)
+
+    monkeypatch.setattr(fetch_mod, "bounded_request", _fake)
+    monkeypatch.setattr(search_mod, "active_provider",
+                        lambda: (search_mod._PROVIDERS[0], "k"))
+    _provider, hits = search_mod.search("q")
+    assert hits[0].url == "https://u"
+    assert seen == {"timeout_s": search_mod.SEARCH_TIMEOUT_S,
+                    "max_bytes": fetch_mod.API_MAX_BYTES}
+
+
+def test_an_oversized_api_response_is_refused(monkeypatch):
+    from luxe.web import fetch as fetch_mod
+    monkeypatch.setattr(
+        fetch_mod, "bounded_request",
+        lambda *a, **k: fetch_mod.RawResponse(url="u", status=200, headers={},
+                                              body=b"{", truncated=True))
+    monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
+    with pytest.raises(WebError, match="exceeded"):
+        answers_mod.answer("q")

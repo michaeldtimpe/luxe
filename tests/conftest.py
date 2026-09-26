@@ -68,3 +68,12 @@ def stub_public_dns(monkeypatch):
                      "", ("93.184.216.34", int(port or 80)))]
 
     monkeypatch.setattr(socket, "getaddrinfo", _stub)
+
+
+@pytest.fixture(autouse=True)
+def _reset_web_key_cache():
+    """`luxe.web.keys` caches provider-key lookups for the process; a value
+    one test resolved must not leak into the next."""
+    yield
+    from luxe.web import keys as _keys
+    _keys.clear()
