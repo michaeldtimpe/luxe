@@ -37,29 +37,58 @@ class GradeResult:
     details: dict[str, Any] | None = None
 
 
-def _value_matches(actual: Any, allowed_list: list[Any]) -> bool:
-    """A model's emitted arg value matches if it's `==` to any element of
-    allowed_list. Strings are compared case-sensitively; numerics by
-    value (so `5 == 5.0` passes if either is in the allowed list).
-    """
-    for allowed in allowed_list:
-        if actual == allowed:
-            return True
-        # Handle str↔number ambiguity: BFCL ground truth occasionally
-        # lists numeric values as strings ("5") when the spec is integer.
-        if isinstance(actual, (int, float)) and isinstance(allowed, str):
-            try:
-                if actual == float(allowed):
-                    return True
-            except ValueError:
-                pass
-        if isinstance(actual, str) and isinstance(allowed, (int, float)):
-            try:
-                if float(actual) == allowed:
-                    return True
-            except ValueError:
-                pass
+def _scalar_matches(actual: Any, allowed: Any) -> bool:
+    if actual == allowed:
+        return True
+    # Handle str↔number ambiguity: BFCL ground truth occasionally
+    # lists numeric values as strings ("5") when the spec is integer.
+    if isinstance(actual, (int, float)) and isinstance(allowed, str):
+        try:
+            return actual == float(allowed)
+        except ValueError:
+            return False
+    if isinstance(actual, str) and isinstance(allowed, (int, float)):
+        try:
+            return float(actual) == allowed
+        except ValueError:
+            return False
     return False
+
+
+def _one_matches(actual: Any, allowed: Any) -> bool:
+    """`actual` against ONE allowed value, recursing into containers.
+
+    BFCL wraps nested values the same way it wraps top-level args: a
+    dict-typed argument's allowed value is itself `{key: [acceptable...]}`.
+    Plain `==` compared `{"unit": "C"}` with `{"unit": ["C", "celsius"]}` and
+    failed every correct nested-dict call.
+    """
+    if _scalar_matches(actual, allowed):
+        return True
+    if isinstance(allowed, dict) and isinstance(actual, dict):
+        for key, sub_allowed in allowed.items():
+            options = sub_allowed if isinstance(sub_allowed, list) else [sub_allowed]
+            if key not in actual:
+                # Optional nested key — same sentinel convention as top level.
+                if "" in options or None in options:
+                    continue
+                return False
+            if not _value_matches(actual[key], options):
+                return False
+        return True
+    if isinstance(allowed, list) and isinstance(actual, list):
+        return (len(allowed) == len(actual)
+                and all(_one_matches(a, b) for a, b in zip(actual, allowed)))
+    return False
+
+
+def _value_matches(actual: Any, allowed_list: list[Any]) -> bool:
+    """A model's emitted arg value matches if it matches any element of
+    allowed_list. Strings are compared case-sensitively; numerics by
+    value (so `5 == 5.0` passes if either is in the allowed list); dicts
+    and lists recurse (nested values carry their own allowed lists).
+    """
+    return any(_one_matches(actual, allowed) for allowed in allowed_list)
 
 
 def _call_matches_gt_entry(
@@ -131,18 +160,25 @@ def grade_parallel(
         return GradeResult(False, f"emitted_{actual}_calls_expected_{expected}",
                            expected_calls=expected, actual_calls=actual)
 
-    # Greedy match: each actual call must consume one unmatched GT entry.
-    used = [False] * len(ground_truth)
-    for call_name, call_args in actual_calls:
-        matched = False
-        for i, gt_entry in enumerate(ground_truth):
-            if used[i]:
+    # Perfect bipartite matching (augmenting paths), not greedy: a greedy
+    # first-fit let an early call consume the one GT entry a later call
+    # needed, failing a response that has a valid assignment.
+    compat = [[_call_matches_gt_entry(name, args, gt) for gt in ground_truth]
+              for name, args in actual_calls]
+    owner: list[int | None] = [None] * len(ground_truth)
+
+    def _assign(ci: int, seen: set[int]) -> bool:
+        for gi, ok in enumerate(compat[ci]):
+            if not ok or gi in seen:
                 continue
-            if _call_matches_gt_entry(call_name, call_args, gt_entry):
-                used[i] = True
-                matched = True
-                break
-        if not matched:
+            seen.add(gi)
+            if owner[gi] is None or _assign(owner[gi], seen):
+                owner[gi] = ci
+                return True
+        return False
+
+    for ci, (call_name, _args) in enumerate(actual_calls):
+        if not _assign(ci, set()):
             return GradeResult(False, f"call_{call_name}_unmatched_in_gt",
                                expected_calls=expected, actual_calls=actual)
     return GradeResult(True, "all_calls_matched",

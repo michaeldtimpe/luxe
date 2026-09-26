@@ -46,6 +46,30 @@ def _json_default(o: Any) -> Any:
     return str(o)
 
 
+def _read_record(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _cached_record_usable(category: str, rec: dict[str, Any] | None) -> bool:
+    """A single-turn record whose backend call FAILED is not a result.
+
+    Before 2026-09 such records were written with `actual_calls=[]`, which
+    grades as a PASS on irrelevance (and a fail elsewhere) — and the cache
+    then replayed that verdict forever. Treat them as absent so they re-run.
+    Multi-turn keeps its records: a mid-dialogue exception there is graded
+    as the truncated trajectory it produced (see grade_multi_turn)."""
+    if rec is None:
+        return False
+    if rec.get("infra_error"):
+        return False
+    return category.startswith("multi_turn") or not rec.get("error")
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--categories", nargs="+", default=list(SUPPORTED_CATEGORIES),
@@ -86,6 +110,7 @@ def main() -> int:
 
     grand_pass = 0
     grand_total = 0
+    grand_infra = 0
     grand_wall = 0.0
     grand_prompt = 0
     grand_completion = 0
@@ -104,12 +129,19 @@ def main() -> int:
         except FileNotFoundError as e:
             print(f"  {category}: {e}")
             continue
-        gt_map = load_ground_truth(category)
+        try:
+            gt_map = load_ground_truth(category)
+        except FileNotFoundError as e:
+            # Fatal, not a skip: without ground truth every multi-turn problem
+            # graded against [] and PASSED.
+            print(f"  {category}: {e}", file=sys.stderr)
+            return 2
         cat_dir = args.output / category
         cat_dir.mkdir(parents=True, exist_ok=True)
         valid_categories.append((category, problems, gt_map, cat_dir))
         for idx, pr in enumerate(problems):
-            if not (cat_dir / f"{pr.get('id', f'{category}_{idx}')}.json").exists():
+            if not _cached_record_usable(
+                    category, _read_record(cat_dir / f"{pr.get('id', f'{category}_{idx}')}.json")):
                 global_remaining += 1
 
     grand_n = sum(len(p) for _, p, _, _ in valid_categories)
@@ -128,8 +160,10 @@ def main() -> int:
         cat_runtime_wall = 0.0
         cat_runtime_done = 0
 
+        cat_infra = 0
         existing = sum(1 for idx, pr in enumerate(problems)
-                       if (cat_dir / f"{pr.get('id', f'{category}_{idx}')}.json").exists())
+                       if _cached_record_usable(category, _read_record(
+                           cat_dir / f"{pr.get('id', f'{category}_{idx}')}.json")))
         if existing:
             print(f"  {category}: {existing}/{len(problems)} already on disk, "
                   f"will run {len(problems) - existing} fresh", flush=True)
@@ -138,12 +172,9 @@ def main() -> int:
             pid = problem.get("id", f"{category}_{i}")
             out_path = cat_dir / f"{pid}.json"
 
-            cached: dict[str, Any] | None = None
-            if out_path.exists():
-                try:
-                    cached = json.loads(out_path.read_text())
-                except (json.JSONDecodeError, OSError):
-                    cached = None
+            cached = _read_record(out_path)
+            if not _cached_record_usable(category, cached):
+                cached = None
 
             if cached is not None:
                 cat_pass += int(cached.get("passed", False))
@@ -165,7 +196,13 @@ def main() -> int:
                         temperature=args.temperature,
                         num_ctx=args.num_ctx,
                     )
-                    grade_res = grade_multi_turn(result.decoded_turns, gt or [], problem)
+                    if gt is None:
+                        # A problem absent from the answer file graded against []
+                        # and PASSED. Never a verdict.
+                        result.error = result.error or f"no ground truth for {pid}"
+                        grade_res = None
+                    else:
+                        grade_res = grade_multi_turn(result.decoded_turns, gt, problem)
                 elif args.mode == "raw":
                     result = run_problem_raw(
                         backend, problem,
@@ -185,6 +222,25 @@ def main() -> int:
                     )
                     grade_res = grade(category, result.actual_calls, gt)
                 elapsed = time.time() - t0
+
+                if not category.startswith("multi_turn") and result.error:
+                    # The backend call failed: there is no model output to
+                    # grade. Zero calls would read as an irrelevance PASS.
+                    grade_res = None
+                if grade_res is None:
+                    cat_infra += 1
+                    cat_wall += result.wall_s
+                    cat_runtime_wall += elapsed
+                    cat_runtime_done += 1
+                    global_runtime_wall += elapsed
+                    global_runtime_done += 1
+                    # Kept beside, never AS, the cache record — the next run retries.
+                    (cat_dir / f"{pid}.infra_error.json").write_text(json.dumps(
+                        {"id": pid, "category": category, "infra_error": True,
+                         "error": result.error, "wall_s": result.wall_s}, indent=2))
+                    print(f"  {category} {pid}: INFRA ERROR (excluded, not cached): "
+                          f"{result.error[:200]}", flush=True)
+                    continue
 
                 record: dict[str, Any] = {
                     "id": pid,
@@ -253,9 +309,11 @@ def main() -> int:
                       f"{eta_str}{skip_str}{global_str}",
                       flush=True)
 
-        n = len(problems)
+        # Infra errors are neither pass nor fail: out of the denominator.
+        n = len(problems) - cat_infra
         summary["categories"][category] = {
             "n": n,
+            "infra_errors": cat_infra,
             "passed": cat_pass,
             "pass_rate": (cat_pass / n) if n else 0.0,
             "total_wall_s": cat_wall,
@@ -265,12 +323,14 @@ def main() -> int:
         }
         grand_pass += cat_pass
         grand_total += n
+        grand_infra += cat_infra
         grand_wall += cat_wall
         grand_prompt += cat_prompt
         grand_completion += cat_completion
 
     summary["totals"] = {
         "n": grand_total,
+        "infra_errors": grand_infra,
         "passed": grand_pass,
         "pass_rate": (grand_pass / grand_total) if grand_total else 0.0,
         "total_wall_s": grand_wall,
@@ -284,6 +344,10 @@ def main() -> int:
     print(f"BFCL {args.mode} mode — totals: {grand_pass}/{grand_total} "
           f"({summary['totals']['pass_rate']:.2%}) "
           f"in {grand_wall:.0f}s wall")
+    if grand_infra:
+        print(f"  {grand_infra} problem(s) hit an infra error — excluded from the "
+              "totals and NOT cached; re-run to retry them")
+        return 1
     return 0
 
 
