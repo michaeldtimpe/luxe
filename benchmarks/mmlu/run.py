@@ -21,7 +21,9 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from benchmarks._eval_common.dataset import cache_dir, jsonl_load, sha256_file  # noqa: E402
+from benchmarks._eval_common.choices import pick_choice  # noqa: E402
 from benchmarks._eval_common.meta import build_run_meta  # noqa: E402
+from benchmarks._eval_common.store import ResultStore  # noqa: E402
 from benchmarks.mmlu.adapter import (  # noqa: E402
     LETTERS,
     build_prompt,
@@ -84,20 +86,25 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
+    store = ResultStore(out_dir, model=args.model, resume=args.resume)
     n_total = sum(len(v) for v in by_subject.values())
     n_done = 0
     n_correct = 0
     t0 = time.time()
+    selected: list[tuple[str, str]] = []
 
     for subject, sub_rows in sorted(by_subject.items()):
-        subj_dir = out_dir / subject
-        subj_dir.mkdir(parents=True, exist_ok=True)
         fewshot = fewshot_for_subject(dev_rows, subject)
 
         for i, row in enumerate(sub_rows):
-            item_path = subj_dir / f"q_{i:04d}.json"
-            if args.resume and item_path.exists():
-                cached = json.loads(item_path.read_text())
+            # `i` indexes the SELECTED rows, which differ with --limit; the
+            # question fingerprint stops a q_0003 from another selection
+            # being replayed as this one.
+            item_id = f"{subject}/q_{i:04d}"
+            fp = row["question"]
+            selected.append((item_id, fp))
+            cached = store.get(item_id, fp)
+            if cached is not None:
                 n_correct += int(cached.get("correct", False))
                 n_done += 1
                 continue
@@ -123,9 +130,9 @@ def main(argv: list[str] | None = None) -> int:
             scores = backend.score_choices(prompt_text, LETTERS, top_k=args.top_k)
             wall_s = time.time() - t_start
 
-            predicted = max(LETTERS, key=lambda L: scores[L])
+            predicted = pick_choice(scores, LETTERS)  # None: no letter in top-k
             gold = LETTERS[row["answer"]]
-            correct = predicted == gold
+            correct = predicted is not None and predicted == gold
 
             record = {
                 "subject": subject,
@@ -138,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
                 "scores": {L: (None if not math.isfinite(scores[L]) else scores[L]) for L in LETTERS},
                 "wall_s": wall_s,
             }
-            item_path.write_text(json.dumps(record, indent=2))
+            store.put(item_id, record, fp)
             n_correct += int(correct)
             n_done += 1
 
@@ -151,13 +158,10 @@ def main(argv: list[str] | None = None) -> int:
                     f"avg={rate:.2f}s eta={eta_m:.1f}m"
                 )
 
-    # Aggregate
-    items: list[dict] = []
-    for subject in sorted(by_subject.keys()):
-        subj_dir = out_dir / subject
-        for p in sorted(subj_dir.glob("q_*.json")):
-            items.append(json.loads(p.read_text()))
+    # Aggregate exactly the selected items (never a directory glob).
+    items = store.collect(selected).records
     summary_stats = aggregate(items)
+    summary_stats["no_choice_in_top_k"] = sum(1 for r in items if r.get("predicted") is None)
 
     sampling = {"temperature": 0.0, "max_tokens": 1, "top_k_inspected": args.top_k}
     meta = build_run_meta(

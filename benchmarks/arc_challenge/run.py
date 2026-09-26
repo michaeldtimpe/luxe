@@ -20,7 +20,9 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from benchmarks._eval_common.dataset import cache_dir, jsonl_load, sha256_file  # noqa: E402
+from benchmarks._eval_common.choices import pick_choice  # noqa: E402
 from benchmarks._eval_common.meta import build_run_meta  # noqa: E402
+from benchmarks._eval_common.store import ResultStore  # noqa: E402
 from benchmarks.arc_challenge.adapter import (  # noqa: E402
     LETTERS,
     build_prompt,
@@ -56,15 +58,19 @@ def main(argv: list[str] | None = None) -> int:
     choice_token_ids = backend.encode_choice_letters(LETTERS)
     print(f"  choice token ids: {choice_token_ids}")
 
+    store = ResultStore(out_dir, model=args.model, resume=args.resume)
     n_total = len(rows)
     n_done = 0
     n_correct = 0
     t0 = time.time()
+    selected: list[tuple[str, str]] = []
 
     for i, row in enumerate(rows):
-        item_path = out_dir / f"q_{i:05d}.json"
-        if args.resume and item_path.exists():
-            cached = json.loads(item_path.read_text())
+        item_id = f"q_{i:05d}"
+        fp = str(row["id"])
+        selected.append((item_id, fp))
+        cached = store.get(item_id, fp)
+        if cached is not None:
             n_correct += int(cached.get("correct", False))
             n_done += 1
             continue
@@ -87,9 +93,9 @@ def main(argv: list[str] | None = None) -> int:
         scores = backend.score_choices(prompt_text, valid, top_k=args.top_k)
         wall_s = time.time() - t_start
 
-        predicted = max(valid, key=lambda L: scores[L])
+        predicted = pick_choice(scores, valid)  # None: no letter in top-k
         gold = gold_letter(row)
-        correct = predicted == gold
+        correct = predicted is not None and predicted == gold
 
         record = {
             "id": row["id"],
@@ -103,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             "scores": {L: (None if not math.isfinite(scores[L]) else scores[L]) for L in valid},
             "wall_s": wall_s,
         }
-        item_path.write_text(json.dumps(record, indent=2))
+        store.put(item_id, record, fp)
         n_correct += int(correct)
         n_done += 1
 
@@ -116,8 +122,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"avg={rate:.2f}s eta={eta_m:.1f}m"
             )
 
-    items = [json.loads(p.read_text()) for p in sorted(out_dir.glob("q_*.json"))]
+    items = store.collect(selected).records   # the selected ids, not a glob
     summary_stats = aggregate(items)
+    summary_stats["no_choice_in_top_k"] = sum(1 for r in items if r.get("predicted") is None)
 
     meta = build_run_meta(
         benchmark_protocol_version=BENCHMARK_PROTOCOL_VERSION,
