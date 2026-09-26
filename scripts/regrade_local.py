@@ -14,7 +14,7 @@ at the path `Fixture.repo_url` points to, so we can:
     5. Call grade_fixture() directly with that worktree.
     6. Write result_regraded.json next to the original.
 
-Sister of scripts/regrade_phase2.py (which fetches PR state from GitHub via
+Sister of scripts/_archive/regrade_phase2.py (which fetches PR state from GitHub via
 gh). This one works with the offline-cache fixture setup introduced
 2026-05-01: every fixture's repo_url is a local path, every push lands in
 that local repo's branch list.

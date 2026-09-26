@@ -11,6 +11,10 @@ from pathlib import Path
 
 import pytest
 
+# Tests of closed-cycle scripts moved to scripts/_archive/ live beside them in
+# tests/_archive/ — kept runnable by hand, never part of the suite.
+collect_ignore = ["_archive"]
+
 
 # --- Hermetic HOME + network guard -------------------------------------------
 #
