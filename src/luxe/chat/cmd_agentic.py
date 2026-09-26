@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 
+from rich.markup import escape
+
 from luxe.chat.commands import CommandContext, CommandResult, _usage
 
 
@@ -18,7 +20,7 @@ def _goal(args, ctx: CommandContext) -> CommandResult:
         s = ctx.session
         if s.goal_active:
             ctx.console.print(f"[bold]goal active[/] [dim](round {s.goal_round}/"
-                              f"{s.goal_max_rounds})[/]: {s.goal}")
+                              f"{s.goal_max_rounds})[/]: {escape(s.goal)}")
         else:
             ctx.console.print("[yellow]Usage: /goal <objective>  ·  /goal stop[/]")
         return CommandResult(handled=True)
@@ -38,8 +40,10 @@ def _goal(args, ctx: CommandContext) -> CommandResult:
     ctx.session.goal_active = True
     ctx.session.goal_round = 0
     ctx.session.consecutive_crashes = 0
-    ctx.console.print(f"[green]✓[/] goal set [dim](starts now; /goal stop or Ctrl-C "
-                      f"to halt)[/]\n  [dim]{objective}[/]")
+    # A running goal owns the line REPL's prompt, so `/goal stop` can only be
+    # TYPED mid-goal in the TUI; Ctrl-C (esc in the TUI) works in both.
+    ctx.console.print(f"[green]✓[/] goal set [dim](starts now; Ctrl-C/esc "
+                      f"halts it)[/]\n  [dim]{escape(objective)}[/]")
     return CommandResult(handled=True)
 
 
@@ -51,7 +55,7 @@ def _plan(args, ctx: CommandContext) -> CommandResult:
         return _usage(ctx, "/plan")
     ctx.session.plan_pending = objective
     ctx.console.print(f"[green]✓[/] planning [dim](read-only draft; you'll choose "
-                      f"save / execute / both next)[/]\n  [dim]{objective}[/]")
+                      f"save / execute / both next)[/]\n  [dim]{escape(objective)}[/]")
     return CommandResult(handled=True)
 
 
@@ -83,7 +87,7 @@ def _attach(args, ctx: CommandContext) -> CommandResult:
                               f"injected into the next turn)[/]")
             for a in ctx.session.attachments:
                 mark = " [yellow](truncated)[/]" if a.get("truncated") else ""
-                ctx.console.print(f"  [cyan]{a['path']}[/] "
+                ctx.console.print(f"  [cyan]{escape(a['path'])}[/] "
                                   f"[dim]{a['size']} bytes[/]{mark}")
         else:
             _usage(ctx, "/attach")
@@ -93,15 +97,15 @@ def _attach(args, ctx: CommandContext) -> CommandResult:
     for raw in args:
         p = Path(os.path.expanduser(raw))
         if not p.is_file():
-            ctx.console.print(f"[yellow]✗ {raw}: no such file[/]")
+            ctx.console.print(f"[yellow]✗ {escape(raw)}: no such file[/]")
             continue
         try:
             data = p.read_bytes()
         except OSError as e:
-            ctx.console.print(f"[yellow]✗ {raw}: {e}[/]")
+            ctx.console.print(f"[yellow]✗ {escape(raw)}: {escape(str(e))}[/]")
             continue
         if b"\0" in data[:_BINARY_SNIFF_BYTES]:
-            ctx.console.print(f"[yellow]✗ {raw}: looks binary — refused[/] "
+            ctx.console.print(f"[yellow]✗ {escape(raw)}: looks binary — refused[/] "
                               "[dim](ask the model to read it instead — it "
                               "has read_file/bash)[/]")
             continue
@@ -114,7 +118,7 @@ def _attach(args, ctx: CommandContext) -> CommandResult:
             truncated = True
         if total + len(text) > ATTACH_MAX_TOTAL_BYTES:
             ctx.console.print(
-                f"[yellow]✗ {raw}: skipped — {ATTACH_MAX_TOTAL_BYTES // 1024}KB "
+                f"[yellow]✗ {escape(raw)}: skipped — {ATTACH_MAX_TOTAL_BYTES // 1024}KB "
                 f"total attachment cap reached[/] [dim](attachments are "
                 "one-shot: send this turn, then `/attach` it on the next — or "
                 "just name the path and let the model read it)[/]")
@@ -137,7 +141,7 @@ def _attach(args, ctx: CommandContext) -> CommandResult:
             )
         mark = (f" [yellow](truncated to {ATTACH_MAX_FILE_BYTES // 1024}KB)[/]"
                 if truncated else "")
-        ctx.console.print(f"[green]✓[/] attached [cyan]{p}[/] "
+        ctx.console.print(f"[green]✓[/] attached [cyan]{escape(str(p))}[/] "
                           f"[dim]({att['size']} bytes)[/]{mark}")
     if ctx.session.attachments:
         ctx.console.print("[dim]· injected into the NEXT turn only (one-shot)[/]")
@@ -155,7 +159,7 @@ def _sys(args, ctx: CommandContext) -> CommandResult:
         else:
             ctx.console.print(f"[bold]system constraints[/] [dim]({len(constraints)} active)[/]")
             for i, c in enumerate(constraints):
-                ctx.console.print(f"  [cyan]{i}[/] {c}")
+                ctx.console.print(f"  [cyan]{i}[/] {escape(c)}")
         return CommandResult(handled=True)
 
     if sub == "add":
@@ -176,9 +180,10 @@ def _sys(args, ctx: CommandContext) -> CommandResult:
         try:
             idx = int(args[1])
             removed = ctx.session.system_constraints.pop(idx)
-            ctx.console.print(f"[green]✓[/] removed constraint [cyan]{idx}[/]: {removed}")
+            ctx.console.print(f"[green]✓[/] removed constraint [cyan]{idx}[/]: "
+                              f"{escape(removed)}")
         except (ValueError, IndexError):
-            ctx.console.print(f"[yellow]No constraint at index {args[1]!r}. "
+            ctx.console.print(f"[yellow]No constraint at index {escape(repr(args[1]))}. "
                               f"Use /sys list to see indices.[/]")
         return CommandResult(handled=True)
 
@@ -188,6 +193,6 @@ def _sys(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print(f"[green]✓[/] cleared {count} constraint(s)")
         return CommandResult(handled=True)
 
-    ctx.console.print(f"[yellow]Unknown /sys subcommand {sub!r}. "
+    ctx.console.print(f"[yellow]Unknown /sys subcommand {escape(repr(sub))}. "
                       f"Expected: add <rule> | list | remove <index> | clear[/]")
     return CommandResult(handled=True)

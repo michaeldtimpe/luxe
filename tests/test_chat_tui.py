@@ -461,7 +461,8 @@ def test_command_crash_does_not_kill_the_app(tmp_path, monkeypatch):
             await pilot.pause()
             assert app.is_running
             assert not app._busy
-            assert any("turn failed" in str(w) for w in written)
+            # Named for what failed: it was a command, not a turn.
+            assert any("command failed" in str(w) for w in written)
     asyncio.run(scenario())
 
 
