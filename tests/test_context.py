@@ -164,6 +164,34 @@ def test_tiered_compact_phase1_drops_nudges_truncates_tool_results():
     assert truncated, "phase 1 should truncate at least one tool_result"
 
 
+def test_tiered_compact_phase1_does_not_re_truncate_its_own_output():
+    """Compaction is persistent, and a truncated body (~230 chars with its
+    marker) is still over TRUNCATE_CHARS. A second phase-1 fire used to
+    re-truncate it — "[Truncated — 1300 chars removed]" became "[Truncated —
+    33 chars removed]" and counted as a fresh drop (2026-09 review)."""
+    messages = _build_deep_trajectory(n_iterations=5, tool_result_size=1500)
+    tc = TieredCompact(keep_recent=2, compact_threshold=0.5)
+    first = tc.compact(messages, ctx_limit=4000)
+    assert first.phase_reached == 1 and first.tool_results_dropped > 0
+    second = tc.compact(first.messages, ctx_limit=2000)
+    assert second.phase_reached == 1
+    assert second.tool_results_dropped == 0
+    bodies = [m["content"] for m in second.messages
+              if m.get("role") == "tool" and "[Truncated" in m["content"]]
+    assert bodies and all("1300 chars removed" in b for b in bodies)
+
+
+def test_elide_does_not_re_elide_a_stub():
+    """Same persistence bug in the legacy (TIERED_COMPACT=0) path: the stub
+    was re-elided with its own size."""
+    big = "x" * 5000
+    messages = [{"role": "system", "content": "s"}] + [
+        {"role": "tool", "name": "grep", "content": big} for _ in range(6)]
+    once = elide_old_tool_results(messages, 1000, threshold=0.1, keep_recent=2)
+    twice = elide_old_tool_results(once, 1000, threshold=0.0, keep_recent=2)
+    assert twice[1]["content"] == "[elided: grep -> 5000 bytes]"
+
+
 def test_tiered_compact_phase2_drops_tool_results_entirely():
     """Phase 2 fire: tool_results dropped (not just truncated)."""
     # Force phase 2 by making tool_results numerous + large enough that
