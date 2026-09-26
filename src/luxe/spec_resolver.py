@@ -358,14 +358,18 @@ def _compile_glob(glob: str) -> re.Pattern[str]:
         c = glob[i]
         if c == "*":
             if i + 1 < n and glob[i + 1] == "*":
-                # `**` — match any chars including separators
-                out.append(".*")
                 i += 2
-                # Consume an immediately-following `/` so `foo/**/bar`
-                # matches `foo/bar` (no intermediate dir) as well as
-                # `foo/x/y/bar`.
                 if i < n and glob[i] == "/":
+                    # `**/` — zero or more WHOLE directories. It used to be
+                    # `.*` with the `/` swallowed, which left no directory
+                    # boundary: `**/test_*.py` matched `src/latest_results.py`
+                    # (`...la` + `test_results.py`), so Forbids refused
+                    # ordinary writes. `foo/**/bar` still matches `foo/bar`.
+                    out.append("(?:.*/)?")
                     i += 1
+                else:
+                    # trailing / bare `**` — any chars including separators
+                    out.append(".*")
             else:
                 out.append("[^/]*")
                 i += 1
