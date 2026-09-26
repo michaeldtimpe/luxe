@@ -395,7 +395,7 @@ def test_reduce_findings_batches_and_keeps_survivors():
     digest = _digest_with(findings)
     seen_batches = []
 
-    def fake_pass(goal, ctx, label):
+    def fake_pass(goal, ctx, label, role=None):
         blob = deep.parse_chunk_notes(ctx)
         seen_batches.append(len(blob["findings"]))
         # echo the batch back as the consolidated output

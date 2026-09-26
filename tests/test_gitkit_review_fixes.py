@@ -563,3 +563,98 @@ def test_note_whose_recovery_pass_aborted_is_not_cached(tmp_path, monkeypatch):
     assert "format" in calls
     notes = list((deep._map_dir(repo) / "notes" / "gitaudit").glob("chunk-*.json"))
     assert notes == []
+
+
+# --- digest cap, reduce, shared patterns (11, 12, 14) -----------------------
+
+def _finding(i: int, sev: str) -> dict:
+    return {"title": f"finding {i}", "root_cause": f"rc{i}", "severity": sev,
+            "evidence": [f"m{i}.py:{i + 1}"], "chunk": 0}
+
+
+def test_chunk_digest_block_is_capped_index_not_full_notes():
+    """11: every chunk got json.dumps(digest) — markdown_notes included,
+    unbounded."""
+    from luxe.context import estimate_tokens
+    from luxe.gitkit import deep
+    d = deep.empty_digest()
+    d["provisional_findings"] = [_finding(i, "high") for i in range(5)]
+    body = "Long explanation paragraph that should not be copied. " * 40
+    d["markdown_notes"] = [
+        {"chunk": i, "label": "x", "source": "md_clean",
+         "md": f"- **high** `n{i}.py:3` — note finding {i}\n\n{body}"}
+        for i in range(30)]
+    block = deep._digest_block(d, max_tokens=400)
+    assert "Long explanation paragraph" not in block   # index only
+    assert "finding 0" in block and "m0.py:1" in block
+    assert estimate_tokens(block) < 600
+    assert "more earlier findings not listed here" in block
+
+
+def test_compact_digest_never_drops_high_and_logs_truthfully():
+    """11: over the ceiling it dropped 'lowest severity first' straight
+    through criticals, and logged every drop as 'low-severity'."""
+    from luxe.gitkit import deep
+    d = deep.empty_digest()
+    d["provisional_findings"] = ([_finding(i, "critical") for i in range(5)]
+                                 + [_finding(10 + i, "low") for i in range(3)])
+    logs: list[str] = []
+    out = deep.compact_digest(d, ceiling_tokens=10, log=logs.append)
+    sevs = [f["severity"] for f in out["provisional_findings"]]
+    assert sevs.count("critical") == 5 and "low" not in sevs
+    assert any("3 low" in m for m in logs)
+    assert any("still over budget" in m for m in logs)
+
+
+def test_reduce_runs_on_synth_role_and_consolidates_notes():
+    """12: the reduce ran on the chunk role (pass_fn default) and only touched
+    provisional_findings, so an overflow made of markdown notes never
+    shrank."""
+    import json as _json
+    from luxe.gitkit import deep
+    d = deep.empty_digest()
+    d["provisional_findings"] = [_finding(0, "high")]
+    d["markdown_notes"] = [{"chunk": i, "label": "x", "source": "md_clean",
+                            "md": f"- **medium** `n{i}.py:2` — thing {i}"}
+                           for i in range(6)]
+    roles: list = []
+
+    def fake_pass(goal, ctx, label, role=None):
+        roles.append(role)
+        return _Res("```json\n" + _json.dumps(
+            {"findings": [{"title": "merged", "severity": "medium",
+                           "evidence": ["n1.py:2"]}]}) + "\n```")
+    synth = object()
+    out = deep._reduce_findings(d, eff_ctx=100, pass_fn=fake_pass, role=synth)
+    assert roles and all(r is synth for r in roles)
+    assert out["markdown_notes"] == []                  # notes were reduced too
+    titles = {f["title"] for f in out["provisional_findings"]}
+    assert "merged" in titles
+
+
+def test_severity_line_needs_a_whole_word():
+    """14: `(critical|high|medium|low)\\b` without a leading \\b read
+    "flow" / "allow" / "below" as severity `low`."""
+    from luxe.gitkit import deep
+    assert deep._heuristic_findings("the data flow through `parse()` is odd") == []
+    assert deep._heuristic_findings("see the list below in utils/x.py:12 please") == []
+    assert deep._heuristic_findings("**low** — tidy `utils/x.py:12`")
+
+
+def test_file_line_covers_more_languages():
+    from luxe.gitkit import patterns
+    for ref in ("src/App.java:12", "lib/x.rb:3", "a/b.kt line 9", "web/c.jsx:4"):
+        assert patterns.FILE_LINE_RE.search(ref), ref
+    assert patterns.FILE_LINE_RE.search("requests.get 5") is None
+
+
+def test_render_report_does_not_double_count_structured_findings():
+    """14: the count summed pf + heuristic lines over ALL sections, including
+    the Additional-findings section that renders pf itself."""
+    from luxe.gitkit import deep
+    d = deep.empty_digest()
+    d["provisional_findings"] = [_finding(i, "high") for i in range(3)]
+    d["markdown_notes"] = [{"chunk": 0, "label": "x", "source": "md_clean",
+                            "md": "- **medium** `n.py:2` — one note finding"}]
+    out = deep._render_report(d, "gitaudit")
+    assert "**Findings: 4 " in out

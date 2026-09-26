@@ -34,8 +34,8 @@ _EXTS = (
     "pl", "sql", "html", "scss", "css", "vue", "svelte", "dart", "exs", "ex",
     "erl", "hs", "clj", "tfvars", "tf", "md", "cfg", "ini", "gradle", "r",
 )
-_EXT_ALT = "|".join(_EXTS)
-_PATH = rf"[\w./-]*\w\.(?:{_EXT_ALT})(?![\w-])"
+EXT_ALT = "|".join(_EXTS)
+_PATH = rf"[\w./-]*\w\.(?:{EXT_ALT})(?![\w-])"
 
 #: A file reference, with or without a line (`a.py`, `src/x.ts`).
 FILE_REF_RE = re.compile(rf"(?<![\w/.-])(?P<path>{_PATH})", re.IGNORECASE)
