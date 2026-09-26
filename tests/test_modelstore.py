@@ -207,9 +207,42 @@ class TestCopyIntoStore:
     def test_refuses_to_clobber_without_force(self, tmp_path):
         src = _model_dir(tmp_path / "nas" / "Champ")
         store = tmp_path / "store"
-        (store / "Champ").mkdir(parents=True)
+        _model_dir(store / "Champ")                 # a WORKING model
         with pytest.raises(ms.ModelStoreError, match="already exists"):
             ms.copy_into_store(self._source(src), models_dir=store)
+
+    def test_live_symlink_entry_is_replaced_not_rmtreed(self, tmp_path):
+        """A store entry that is a LIVE symlink (into the HF cache) used to
+        die in `shutil.rmtree` — after the full copy — with force=True, which
+        is exactly what HF materialization passes. The link is unlinked; its
+        target (the cache, possibly backing other aliases) is left alone."""
+        src = _model_dir(tmp_path / "nas" / "Champ", weight_bytes=64)
+        cache = _model_dir(tmp_path / "hfcache" / "snap")
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "Champ").symlink_to(cache)
+
+        res = ms.copy_into_store(self._source(src), models_dir=store, force=True)
+
+        dest = Path(res.dest)
+        assert not dest.is_symlink() and dest.is_dir()
+        assert (dest / "model.safetensors").read_bytes() == b"\0" * 64
+        assert (cache / "model.safetensors").exists()      # target untouched
+
+    def test_dangling_symlink_entry_is_replaced_without_force(self, tmp_path):
+        """`exists()` is False for a dangling link, so the old pre-check let
+        the copy run and then the rename died with NotADirectoryError. A
+        dangling entry (the HF-cache-wipe signature) is what `luxe pull` is
+        run to FIX — replaceable without --force, decided before copying."""
+        src = _model_dir(tmp_path / "nas" / "Champ")
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "Champ").symlink_to(tmp_path / "wiped" / "snapshots" / "abc")
+
+        res = ms.copy_into_store(self._source(src), models_dir=store)
+
+        assert ms.model_state("Champ", store) == "ok"
+        assert not Path(res.dest).is_symlink()
 
     def test_force_replaces(self, tmp_path):
         src = _model_dir(tmp_path / "nas" / "Champ")
@@ -541,6 +574,25 @@ class TestXsymStubs:
         assert out.stat().st_size == 8192
         assert (Path(res.dest) / "config.json").read_text().startswith("{")
 
+    def test_a_store_entry_of_stubs_is_not_ok(self, tmp_path):
+        """A manual NAS copy INTO the store brings 1067-byte stubs, not
+        shards. It used to report "ok" in /doctor, smoke and pull --list
+        (config.json + a `.safetensors` name) and then fail to load."""
+        snap = self._snapshot(tmp_path)
+        store = tmp_path / "store"
+        store.mkdir()
+        import shutil
+        shutil.copytree(snap, store / "Champ")      # stubs, byte for byte
+
+        assert ms.is_model_dir(store / "Champ") is False
+        assert ms.model_state("Champ", store) == "dangling"
+
+    def test_a_stub_snapshot_is_still_a_valid_mount_SOURCE(self, tmp_path):
+        """The store rule must not break discovery: on a mount, stubs are
+        what an HF snapshot IS, and the import dereferences them."""
+        snap = self._snapshot(tmp_path)
+        assert ms._resolve_hf_snapshot(snap.parent.parent) == snap
+
     def test_dangling_stub_fails_loudly(self, tmp_path):
         snap = tmp_path / "snap"
         snap.mkdir()
@@ -573,3 +625,93 @@ class TestXsymStubs:
         res = ms.copy_into_store(src, models_dir=tmp_path / "store")
 
         assert (Path(res.dest) / "extra" / "tokenizer.json").exists()
+
+
+class TestDanglingEntryRepo:
+    """A dangling entry's link TEXT names the HF repo to re-fetch — the
+    fix `/doctor` prints has to route there (2026-09-26 kit review #3)."""
+
+    def test_repo_from_a_dangling_top_level_link(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "Qwen3.6-27B-4bit").symlink_to(
+            tmp_path / "hub" / "models--mlx-community--Qwen3.6-27B-4bit"
+            / "snapshots" / "abc")
+        assert ms.model_state("Qwen3.6-27B-4bit", store) == "dangling"
+        assert (ms.hf_repo_for("Qwen3.6-27B-4bit", store)
+                == "mlx-community/Qwen3.6-27B-4bit")
+
+    def test_repo_from_a_dir_of_links(self, tmp_path):
+        store = tmp_path / "store"
+        (store / "M").mkdir(parents=True)
+        (store / "M" / "config.json").symlink_to(
+            tmp_path / "hub" / "models--org--M" / "blobs" / "x")
+        assert ms.hf_repo_for("M", store) == "org/M"
+
+    def test_no_repo_for_a_real_dir_or_a_missing_entry(self, tmp_path):
+        store = tmp_path / "store"
+        _model_dir(store / "Real")
+        assert ms.hf_repo_for("Real", store) == ""
+        assert ms.hf_repo_for("Absent", store) == ""
+
+    def test_hf_cache_dir_is_the_models_dir_not_the_hub_root(self):
+        d = ms.hf_cache_dir_for("mlx-community/Qwen3.6-27B-4bit")
+        assert d.name == "models--mlx-community--Qwen3.6-27B-4bit"
+        assert d.parent.name == "hub"
+
+
+class TestPullCliOnABrokenEntry:
+    """`luxe pull <name>` is the fix `/doctor` prints for a dangling entry —
+    it must actually repair it (2026-09-26 kit review #2/#3)."""
+
+    @pytest.fixture()
+    def env(self, tmp_path, monkeypatch):
+        class _Admin:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        monkeypatch.setattr(ms, "OmlxAdmin", lambda **kw: _Admin())
+        monkeypatch.delenv("LUXE_CONFIG", raising=False)
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "M").symlink_to(tmp_path / "hub" / "models--org--M"
+                                 / "snapshots" / "abc")
+        src = _model_dir(tmp_path / "nas" / "M")
+        seen: list[str] = []
+
+        def _spy(ref, *, admin=None, from_path="", include_mounts=True):
+            seen.append(ref)
+            return [ms.ModelSource(kind="mount", ref=str(src), name="M",
+                                   size_bytes=ms.dir_size(src))]
+        monkeypatch.setattr(ms, "resolve_pull_sources", _spy)
+        return store, seen
+
+    def test_dangling_entry_is_replaced_not_already_in_store(self, env):
+        from click.testing import CliRunner
+
+        from luxe import cli as cli_mod
+
+        store, seen = env
+        res = CliRunner().invoke(cli_mod.main, ["pull", "M", "-y",
+                                                "--models-dir", str(store)])
+        assert res.exit_code == 0, res.output
+        assert "already in" not in res.output
+        assert ms.model_state("M", store) == "ok"
+        # the bare name was routed to the repo the dangling link named
+        assert seen == ["org/M"]
+
+    def test_an_oserror_mid_copy_is_a_clean_exit_not_a_traceback(
+            self, env, monkeypatch):
+        from click.testing import CliRunner
+
+        from luxe import cli as cli_mod
+
+        store, _ = env
+
+        def _full(*a, **k):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(ms, "copy_into_store", _full)
+        res = CliRunner().invoke(cli_mod.main, ["pull", "M", "-y",
+                                                "--models-dir", str(store)])
+        assert res.exit_code == 4, res.output
+        assert "No space left" in res.output
+        assert not isinstance(res.exception, OSError)

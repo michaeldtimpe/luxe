@@ -533,10 +533,32 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 sys.exit(2)
 
             name = ms.store_name_for(ref)
+            # Store state FIRST — before a ≤20s mount scan, and keyed on
+            # whether the weights RESOLVE, not on the name being listed. A
+            # dangling entry (the HF-cache-wipe signature) used to hit
+            # "already in the store — pass --force", so the fix `/doctor`
+            # printed for it did nothing. A broken entry is replaceable.
+            state = ms.model_state(name, dest_dir)
+            if state == "ok" and not force:
+                console.print(f"[yellow]· {name} is already in {dest_dir} "
+                              "— pass --force to replace it.[/]")
+                sys.exit(0)
+            source_ref = ref
+            if state not in ("missing", "ok"):
+                console.print(f"[dim]· {name} is in the store but its "
+                              f"weights don't resolve ({state}) — replacing "
+                              "it[/]")
+                # A bare name can only be found on a mount; the dangling
+                # link itself names the HF repo it pointed at, so offer that
+                # too instead of "an HF fetch needs a full repo id".
+                if "/" not in ref and not from_path:
+                    guessed = ms.hf_repo_for(name, dest_dir)
+                    if guessed:
+                        source_ref = guessed
             if not from_path and not force_hf:
                 console.print("[dim]· scanning mounted volumes…[/]")
             sources = ms.resolve_pull_sources(
-                ref, admin=admin, from_path=from_path,
+                source_ref, admin=admin, from_path=from_path,
                 include_mounts=not force_hf)
             if not sources:
                 # With --from the only empty case is "not a model directory";
@@ -556,10 +578,6 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
             if len(sources) > 1:
                 for alt in sources[1:]:
                     console.print(f"  [dim]alt: {alt.describe()}[/]")
-            if name in ms.local_model_names(dest_dir) and not force:
-                console.print(f"[yellow]· {name} is already in {dest_dir} "
-                              "— pass --force to replace it.[/]")
-                sys.exit(0)
             if not assume_yes and not click.confirm("Pull it?", default=True):
                 console.print("[dim]· cancelled[/]")
                 return
@@ -568,7 +586,9 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 _pull_from_mount(chosen, dest_dir, force)
             else:
                 _pull_from_hf(admin, chosen)
-        except ms.ModelStoreError as e:
+        except (ms.ModelStoreError, OSError) as e:
+            # OSError too: a full disk, a vanished mount, or a permission
+            # error mid-copy is an operator-facing failure, not a traceback.
             console.print(f"[red]✗ {e}[/]")
             sys.exit(4)
         except KeyboardInterrupt:
@@ -1355,9 +1375,7 @@ def _materialize_from_hf_cache(source, models_dir=None) -> None:
     from luxe import modelstore as ms
 
     try:
-        org_repo = source.ref.replace("/", "--")
-        cache_dir = (Path.home() / ".cache" / "huggingface" / "hub"
-                     / f"models--{org_repo}")
+        cache_dir = ms.hf_cache_dir_for(source.ref)
         snap = ms._resolve_hf_snapshot(cache_dir)
         if snap is None:
             console.print("[yellow]· downloaded, but no loadable snapshot "
@@ -1371,10 +1389,12 @@ def _materialize_from_hf_cache(source, models_dir=None) -> None:
         ms.copy_into_store(src, models_dir=models_dir, force=True)
         console.print(f"[green]✓[/] {source.name} → real bytes in the store")
     except Exception as e:
+        # Name the model's OWN cache directory: `--from` wants a model dir
+        # (or its `models--org--Name` parent), and the hub root is neither.
         console.print(f"[yellow]· store materialization failed ({e}) — the "
                       f"model is only in the HF cache; re-run "
-                      f"`luxe pull {source.name} --from {Path.home()}/.cache/"
-                      "huggingface/hub` to fix[/]")
+                      f"`luxe pull {source.name} --from "
+                      f"{ms.hf_cache_dir_for(source.ref)}` to fix[/]")
 
 
 @main.command(name="pr")
