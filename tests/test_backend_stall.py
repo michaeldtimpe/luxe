@@ -18,7 +18,10 @@ from a legitimately slow one: keepalives must not keep a dead request alive,
 and must not kill a live one.
 
 Real sockets, not MockTransport — the behaviour under test is wall-clock.
-Budgets are kept tiny so the file stays fast.
+Budgets are kept tiny so the file stays fast: every server beat is one
+`TICK`, and every budget is a multiple of it chosen so the ratio each test
+depends on (keepalive gap vs. budget, think time vs. budget) keeps a wide
+margin — only the absolute scale is small.
 """
 
 from __future__ import annotations
@@ -32,6 +35,9 @@ import pytest
 
 from luxe.backend import Backend, BackendError
 
+
+# One server beat. Budgets below are expressed as multiples of it.
+TICK = 0.05
 
 KEEPALIVE_CHUNK = {
     "id": "chatcmpl-test", "object": "chat.completion.chunk", "created": 0,
@@ -60,7 +66,10 @@ def _serve(script):
                 pass
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    # poll_interval: shutdown() waits out one poll; the 0.5s default was
+    # most of each test's wall.
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05},
+                     daemon=True).start()
     return f"http://127.0.0.1:{srv.server_address[1]}", srv.shutdown
 
 
@@ -92,7 +101,7 @@ def _run(base_url, *, stream, deadline=15.0, **kw):
 
 
 def test_non_stream_whitespace_keepalives_do_not_defeat_the_deadline():
-    """A bare `b' '` every 200ms used to hang forever. It must now abort."""
+    """A bare `b' '` every tick used to hang forever. It must now abort."""
     def script(h):
         h.send_response(200)
         h.send_header("Content-Type", "application/json")
@@ -100,11 +109,11 @@ def test_non_stream_whitespace_keepalives_do_not_defeat_the_deadline():
         while True:                                # trickle, never a body
             h.wfile.write(b" ")
             h.wfile.flush()
-            time.sleep(0.2)
+            time.sleep(TICK)
 
     url, stop = _serve(script)
     try:
-        out = _run(url, stream=False, stall_timeout_s=1.5)
+        out = _run(url, stream=False, stall_timeout_s=8 * TICK)
     finally:
         stop()
     assert out["result"] != "HUNG", "whitespace keepalives still defeat the deadline"
@@ -122,11 +131,11 @@ def test_stream_keepalive_chunks_do_not_defeat_the_deadline():
         while True:
             h.wfile.write(_sse(KEEPALIVE_CHUNK))
             h.wfile.flush()
-            time.sleep(0.2)
+            time.sleep(TICK)
 
     url, stop = _serve(script)
     try:
-        out = _run(url, stream=True, stall_timeout_s=1.5)
+        out = _run(url, stream=True, stall_timeout_s=8 * TICK)
     finally:
         stop()
     assert out["result"] != "HUNG", "keepalive chunks still defeat the deadline"
@@ -150,12 +159,12 @@ def test_stall_after_tokens_uses_the_tighter_decode_bound():
         while True:
             h.wfile.write(_sse(KEEPALIVE_CHUNK))
             h.wfile.flush()
-            time.sleep(0.2)
+            time.sleep(TICK)
 
     url, stop = _serve(script)
     try:
         # Generous prefill budget, tight decode budget: the decode bound must win.
-        out = _run(url, stream=True, stall_timeout_s=60.0, decode_stall_timeout_s=1.5)
+        out = _run(url, stream=True, stall_timeout_s=60.0, decode_stall_timeout_s=8 * TICK)
     finally:
         stop()
     assert out["result"] != "HUNG"
@@ -178,10 +187,10 @@ def test_keepalives_during_a_slow_prefill_do_not_abort_a_healthy_response():
         h.send_response(200)
         h.send_header("Content-Type", "application/json")
         h.end_headers()
-        for _ in range(10):                        # 2s of "prefill"
+        for _ in range(10):                        # 10 ticks of "prefill"
             h.wfile.write(b" ")
             h.wfile.flush()
-            time.sleep(0.2)
+            time.sleep(TICK)
         h.wfile.write(json.dumps({
             "choices": [{"message": {"content": "done", "role": "assistant"},
                          "finish_reason": "stop"}],
@@ -190,11 +199,11 @@ def test_keepalives_during_a_slow_prefill_do_not_abort_a_healthy_response():
 
     url, stop = _serve(script)
     try:
-        # Budget comfortably exceeds the simulated 2s prefill. This is the
+        # Budget comfortably exceeds the simulated 10-tick prefill. This is the
         # contract: keepalives covering a prefill SHORTER than the budget must
         # not abort it. (A budget below the real prefill time is supposed to
         # fire — that is the knob doing its job, not a bug.)
-        out = _run(url, stream=False, stall_timeout_s=6.0)
+        out = _run(url, stream=False, stall_timeout_s=30 * TICK)
     finally:
         stop()
     assert not isinstance(out["result"], Exception), out["result"]
@@ -211,7 +220,7 @@ def test_stream_keepalives_between_tokens_do_not_abort_a_healthy_stream():
             for _ in range(4):
                 h.wfile.write(_sse(KEEPALIVE_CHUNK))
                 h.wfile.flush()
-                time.sleep(0.2)
+                time.sleep(TICK)
             h.wfile.write(_sse({"choices": [{"index": 0,
                                              "delta": {"content": f"tok{i} "}}]}))
             h.wfile.flush()
@@ -222,7 +231,7 @@ def test_stream_keepalives_between_tokens_do_not_abort_a_healthy_stream():
 
     url, stop = _serve(script)
     try:
-        out = _run(url, stream=True, stall_timeout_s=60.0, decode_stall_timeout_s=1.5)
+        out = _run(url, stream=True, stall_timeout_s=60.0, decode_stall_timeout_s=8 * TICK)
     finally:
         stop()
     assert not isinstance(out["result"], Exception), out["result"]
@@ -241,7 +250,7 @@ def test_silent_server_still_read_times_out():
 
     url, stop = _serve(script)
     try:
-        out = _run(url, stream=False, timeout_s=1.0, stall_timeout_s=60.0)
+        out = _run(url, stream=False, timeout_s=8 * TICK, stall_timeout_s=60.0)
     finally:
         stop()
     assert isinstance(out["result"], BackendError)
@@ -317,10 +326,10 @@ def test_reasoning_chunks_keep_a_thinking_request_alive():
         h.send_response(200)
         h.send_header("Content-Type", "text/event-stream")
         h.end_headers()
-        for _ in range(8):                 # 1.6s of reasoning, 0.2s apart
+        for _ in range(16):                # 16 ticks of reasoning, 1 tick apart
             h.wfile.write(_reasoning_chunk())
             h.wfile.flush()
-            time.sleep(0.2)
+            time.sleep(TICK)
         h.wfile.write(_sse({"choices": [{"index": 0,
                                          "delta": {"content": "answer"},
                                          "finish_reason": "stop"}]}))
@@ -331,7 +340,7 @@ def test_reasoning_chunks_keep_a_thinking_request_alive():
     try:
         # A bound SHORTER than the total think time: only per-chunk progress
         # can carry this request to its answer.
-        out = _run(url, stream=True, stall_timeout_s=1.0)
+        out = _run(url, stream=True, stall_timeout_s=8 * TICK)
     finally:
         stop()
     assert out["result"] == "returned", f"a thinking model was killed: {out['result']}"
@@ -346,7 +355,7 @@ def test_reasoning_does_not_promote_the_request_to_the_decode_bound():
         h.end_headers()
         h.wfile.write(_reasoning_chunk())
         h.wfile.flush()
-        time.sleep(1.2)                    # > decode bound, < prefill bound
+        time.sleep(6 * TICK)               # > decode bound, < prefill bound
         h.wfile.write(_sse({"choices": [{"index": 0,
                                          "delta": {"content": "answer"},
                                          "finish_reason": "stop"}]}))
@@ -356,7 +365,7 @@ def test_reasoning_does_not_promote_the_request_to_the_decode_bound():
     url, stop = _serve(script)
     try:
         out = _run(url, stream=True, stall_timeout_s=30.0,
-                   decode_stall_timeout_s=0.5)
+                   decode_stall_timeout_s=2 * TICK)
     finally:
         stop()
     assert out["result"] == "returned", (
@@ -373,11 +382,11 @@ def test_a_silent_request_still_dies_even_with_reasoning_enabled():
         while True:
             h.wfile.write(_sse(KEEPALIVE_CHUNK))
             h.wfile.flush()
-            time.sleep(0.2)
+            time.sleep(TICK)
 
     url, stop = _serve(script)
     try:
-        out = _run(url, stream=True, stall_timeout_s=1.5)
+        out = _run(url, stream=True, stall_timeout_s=8 * TICK)
     finally:
         stop()
     assert isinstance(out["result"], BackendError)

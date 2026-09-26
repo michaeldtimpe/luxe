@@ -91,7 +91,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 def http_server():
     with socketserver.TCPServer(("127.0.0.1", 0), _Handler) as httpd:
         port = httpd.server_address[1]
-        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        # poll_interval: shutdown() waits out one poll (0.5s by default).
+        t = threading.Thread(target=httpd.serve_forever,
+                             kwargs={"poll_interval": 0.05}, daemon=True)
         t.start()
         yield port
         httpd.shutdown()
@@ -185,7 +187,7 @@ def test_tls_probe_times_out_bounded_on_silent_server(silent_server):
     """The plane signature: TCP accepts, handshake never answered. The probe
     must return within its deadline — never hang like the curls did."""
     t0 = time.monotonic()
-    p = probe_tls("127.0.0.1", silent_server, timeout=1.0)
+    p = probe_tls("127.0.0.1", silent_server, timeout=0.3)
     wall = time.monotonic() - t0
     assert not p.ok
     assert "timed out" in p.error
@@ -248,7 +250,7 @@ def test_dns_probe_bounded_when_resolver_hangs(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", _hang)
     t0 = time.monotonic()
-    p = probe_dns("example.com", timeout=0.5)
+    p = probe_dns("example.com", timeout=0.2)
     assert not p.ok and "no answer" in p.error
     assert time.monotonic() - t0 < 2.0
 
