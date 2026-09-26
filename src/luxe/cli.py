@@ -185,18 +185,26 @@ def _select_backend(cfg, backend_name: str | None, *,
                         for k, v in entries.items()}
 
 
-def _unload_unless(keep_loaded: bool) -> None:
+def _unload_unless(keep_loaded: bool, cfg=None) -> None:
     """Post-command teardown: free the local oMLX's RAM unless --keep-loaded.
 
     Best-effort by design — a teardown failure must never mask (or fail) the
     command whose `finally` this runs in. `maintain` keeps its own copy: it
     also REPORTS what it unloaded.
+
+    The endpoint is the one the command RAN against (`cfg.omlx_base_url`,
+    else the chat config's — `$LUXE_CONFIG` included), not a hard-coded
+    127.0.0.1:8000: on neo that port is not the server. Loopback only — a
+    teardown never evicts models on a host luxe does not own.
     """
     if keep_loaded:
         return
-    from luxe.backend import Backend
+    from luxe.backend import Backend, is_loopback_url
     try:
-        Backend(model="(unload-probe)").unload_all_loaded()
+        url = (getattr(cfg, "omlx_base_url", "")
+               or _omlx_base_url_from_config())
+        if is_loopback_url(url):
+            Backend(base_url=url, model="(unload-probe)").unload_all_loaded()
     except Exception:
         pass
 
@@ -283,7 +291,7 @@ def compare_run_cmd(task, repo, config_path, mode, model_b, prompt_a, prompt_b, 
     finally:
         search_mod.reset_index()
         symbols_mod.reset_index()
-        _unload_unless(keep_loaded)
+        _unload_unless(keep_loaded, cfg)
 
 
 @compare_group.command(name="review")
@@ -325,7 +333,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                        mirror=mirror, base=base, pr=pr,
                        min_severity=min_severity, no_incremental=no_incremental)
     finally:
-        _unload_unless(keep_loaded)
+        _unload_unless(keep_loaded, cfg)
 
 
 def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
@@ -343,7 +351,7 @@ def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
         rc = apply_mod.run_apply(repo_path=repo_path, cfg=cfg, console=console,
                                  deep=deep, rebuild_map=rebuild_map)
     finally:
-        _unload_unless(keep_loaded)
+        _unload_unless(keep_loaded, cfg)
     raise SystemExit(rc)
 
 
@@ -450,11 +458,16 @@ apply_aliases(main, {
 @click.option("--except", "except_for", multiple=True,
               help="Model ID(s) to keep resident (repeatable). Default: unload all.")
 def unload_models(except_for: tuple[str, ...]):
-    """Unload all currently-loaded models from oMLX to free RAM."""
-    from luxe.backend import Backend
-    b = Backend(model="(unload-cli)")
-    if not b.health():
-        console.print("[red]oMLX unreachable — is `brew services start omlx` running?[/]")
+    """Unload all currently-loaded models from the configured endpoint to
+    free RAM (the chat config's default backend — `$LUXE_CONFIG` honoured)."""
+    from luxe.chat.inspection import endpoint_fixes
+
+    cfg = _chat_cfg()
+    entry = cfg.backend_entry(cfg.default_backend_name())
+    b = entry.build_backend("(unload-cli)")
+    if not b.health(timeout_s=10.0):
+        console.print(f"[red]{entry.engine_label()} unreachable at "
+                      f"{entry.base_url} — {endpoint_fixes(entry)['start']}[/]")
         sys.exit(2)
     loaded = b.loaded_models()
     if not loaded:
