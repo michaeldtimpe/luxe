@@ -8,7 +8,7 @@
 # if a fixture flips PASS<->FAIL between cells
 # (feedback_ship_floor_needs_multirep_when_at_strictness).
 #
-# Run: scripts/run_c10_repeat_penalty.sh
+# Run: scripts/_archive/run_c10_repeat_penalty.sh
 
 variants:
   - {model_label: c10-baseline, model_id: Qwen3.6-35B-A3B-6bit}
