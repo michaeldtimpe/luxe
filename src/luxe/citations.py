@@ -26,6 +26,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from luxe import gitcmd
 from luxe.sdd import SddParseError
 from luxe.fswalk import iter_files
 from luxe.spec_resolver import _glob_matches, find_all_sdd
@@ -179,42 +180,51 @@ def extract_citations(text: str) -> list[Citation]:
     return out
 
 
-def _git_changed_files(repo_root: Path, base_sha: str) -> set[str]:
-    """Files changed (added/modified/deleted) since base_sha."""
-    if not base_sha:
-        return set()
+def _git_lines(repo_root: Path, args: list[str]) -> set[str] | None:
+    """Run a name-listing git command; None when git itself failed."""
     try:
         out = subprocess.run(
-            ["git", "diff", "--name-only", base_sha, "HEAD"],
+            ["git", *gitcmd.DIFF_PARSE_PINS, *args],
             cwd=repo_root,
             check=False,
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,
+            env=gitcmd.parse_env(),
         )
-        if out.returncode != 0:
-            return set()
-        return {line.strip() for line in out.stdout.splitlines() if line.strip()}
     except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return {line.strip() for line in out.stdout.splitlines() if line.strip()}
+
+
+def _git_changed_files(repo_root: Path, base_sha: str) -> set[str]:
+    """Files changed (added/modified/deleted) since base_sha, read from the
+    WORKING TREE — the same reference spec_validator diffs against.
+
+    This used to be `git diff base_sha HEAD`. The benchmark path lints in
+    `luxe maintain` BEFORE the PR cycle commits anything, so HEAD was still
+    base_sha and the set was always empty: every edited file got the strict
+    unchanged-file check, created files (a forbidden `tests/**` scaffold
+    included) never reached the spec-compliance check, and deletions read as
+    `missing_file`. The working-tree read is identical after a commit (the
+    regrade_local path) and correct before one. Untracked files come from
+    `ls-files --others` so nothing is staged (no `add -N` side effect).
+    """
+    if not base_sha:
         return set()
+    tracked = _git_lines(repo_root, ["diff", "--name-only", base_sha, "--"])
+    untracked = _git_lines(repo_root, ["ls-files", "--others", "--exclude-standard"])
+    return (tracked or set()) | (untracked or set())
 
 
 def _git_deleted_files(repo_root: Path, base_sha: str) -> set[str]:
-    """Files deleted between base_sha and HEAD."""
+    """Files present at base_sha and gone from the working tree."""
     if not base_sha:
         return set()
-    try:
-        out = subprocess.run(
-            ["git", "diff", "--diff-filter=D", "--name-only", base_sha, "HEAD"],
-            cwd=repo_root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if out.returncode != 0:
-            return set()
-        return {line.strip() for line in out.stdout.splitlines() if line.strip()}
-    except (OSError, subprocess.SubprocessError):
-        return set()
+    return _git_lines(repo_root, ["diff", "--diff-filter=D", "--name-only",
+                                  base_sha, "--"]) or set()
 
 
 def _normalize(s: str) -> str:
