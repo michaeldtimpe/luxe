@@ -48,6 +48,8 @@ def _from_keychain(name: str) -> str:
         r = subprocess.run(
             ["security", "find-generic-password", "-s", name, "-w"],
             capture_output=True, text=True, timeout=3,
+            # `security` can prompt; it must never read luxe's stdin.
+            stdin=subprocess.DEVNULL,
         )
         return r.stdout.strip() if r.returncode == 0 else ""
     except Exception:

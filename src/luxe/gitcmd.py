@@ -52,6 +52,12 @@ _CONFIG_PINS: tuple[str, ...] = ("-c", "color.ui=false", "-c", "core.pager=cat",
 #: output with a UnicodeDecodeError (`luxe.fswalk` sets the same precedent).
 _DECODE = {"text": True, "errors": "replace"}
 
+#: No git call reads luxe's stdin (2026-09-26; tools.sdd "No tool spawn
+#: inherits luxe's stdin"). A credential or editor prompt on an inherited
+#: stdin blocks for the whole timeout under a TTY and drains the session's
+#: queued input under a pipe (`printf … | luxe chat`).
+_NO_STDIN = {"stdin": subprocess.DEVNULL}
+
 #: The pins for a call whose DIFF TEXT is parsed, for the raw call sites that
 #: build their own argv (`pr.diff_against_base`,
 #: `spec_validator._added_lines_from_diff`) — they live here, in the neutral
@@ -88,7 +94,7 @@ def run(repo: str | Path, *args: str,
     than raising — git handles the path itself.
     """
     return subprocess.run(["git", "-C", str(repo), *_CONFIG_PINS, *args],
-                          capture_output=True, timeout=timeout, **_DECODE)
+                          capture_output=True, timeout=timeout, **_DECODE, **_NO_STDIN)
 
 
 def run_in(repo: str | Path, *args: str,
@@ -100,7 +106,7 @@ def run_in(repo: str | Path, *args: str,
     """
     return subprocess.run(["git", *_CONFIG_PINS, *args], cwd=str(repo),
                           capture_output=True, timeout=timeout,
-                          check=False, **_DECODE)
+                          check=False, **_DECODE, **_NO_STDIN)
 
 
 def run_ok(repo: str | Path, *args: str,
