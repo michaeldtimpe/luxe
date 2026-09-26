@@ -8,7 +8,9 @@ version = "1.6.1"
 description = "luxe — MLX-only repo maintainer (mono-only; SpecDD Lever 2)"
 requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.27",
+    # <1: web/fetch.py pins the connect by rebuilding httpx's transport pool
+    # with a custom httpcore network backend (the only hook for it).
+    "httpx>=0.27,<1",
     "pyyaml>=6.0",
     "pydantic>=2.0",
     "rich>=13.0",
@@ -31,7 +33,7 @@ dependencies = [
 # --extra dev --extra analyzers --extra web`, cli.py) does NOT pass `--extra bfcl`,
 # so without this pin every sync pruned mpmath and reddened test_miss_func_49 —
 # a recurring false alarm (lessons.md 2026-06-03).
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "mpmath>=1.3"]
+dev = ["pytest>=8.0", "mpmath>=1.3"]
 # The static-analysis toolchain the `lint`/`typecheck`/`security_scan`/`deps_audit`
 # tools shell out to. Install (`pip install -e '.[analyzers]'`) so a fresh box
 # isn't missing them — the M1 iteration-2 run had no ruff and silently skipped
@@ -60,14 +62,16 @@ chat = ["prompt_toolkit>=3.0", "textual>=0.74,<2.0"]
 # ~150-400 MB `playwright install chromium`, and the fallback kit must stay
 # installable on every fleet host without it. Plain web_fetch (httpx +
 # stdlib extraction) works with none of this; only JS-rendered pages need it.
-web = ["playwright>=1.40"]
+# >=1.48 for BrowserContext.route_web_socket (the in-browser egress guard).
+web = ["playwright>=1.48,<2"]
 # The opt-in PDF capability module (`src/luxe/mcp_pdf/`, server `luxe-pdf-mcp`).
 # NOT a base dep and not in [chat]: the module is only reachable when a chat
 # session attaches it with `--mcp`, and the benchmark path must never grow a
 # dependency on PDF libraries or local print queues. The CLI half (qpdf,
 # poppler's pdftotext/pdftoppm, CUPS lp) is not pip-installable — the tools
 # name the `brew install` when one is missing.
-pdf = ["pypdf>=5.0", "reportlab>=4.0", "pillow>=10.0"]
+# pypdf >=6.1: security fixes for crafted-PDF resource exhaustion.
+pdf = ["pypdf>=6.1", "reportlab>=4.0", "pillow>=10.0"]
 
 [project.scripts]
 luxe = "luxe.cli:main"
