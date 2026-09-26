@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,7 @@ from typing import Any, Callable
 
 import yaml
 
+from benchmarks.maintain_suite.fixtures import load_fixtures, origin_problem
 from benchmarks.maintain_suite.grade import (
     Fixture,
     FixtureResult,
@@ -280,6 +282,7 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
         "microstep_rejects_total": 0,
         "blackboard_bytes_total": 0,
         "no_diff_warning": False,
+        "push_error": "",
     }
     pr_state = rd / "pr_state.json"
     if pr_state.is_file():
@@ -289,6 +292,11 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
             out["pr_opened"] = bool(out["pr_url"])
             out["is_draft"] = bool(data.get("is_draft"))
             out["test_passed"] = data.get("test_passed")
+            # A failed PUSH is the environment (missing / read-only origin),
+            # not the model: the branch never reached the cache regrade reads.
+            for step in data.get("steps") or []:
+                if step.get("name") == "push" and step.get("status") == "failed":
+                    out["push_error"] = str(step.get("detail") or "push failed")
         except json.JSONDecodeError:
             pass
 
@@ -523,8 +531,15 @@ def _resolve_repo(fixture: Fixture, work_dir: Path) -> tuple[Path | None, str]:
             # prior variant on the same fixture, which makes `luxe maintain`
             # refuse to start (uncommitted-changes guard). 2026-05-09: surfaced
             # by the M5 Max multi-variant bake-off — variants 2-4 all rc=2'd.
+            #
+            # DETACH first, never `reset --hard` on whatever is checked out:
+            # the previous run leaves HEAD on its own `luxe/...` branch, and
+            # resetting that rewinds the branch to base_sha — destroying the
+            # very commit regrade_local.py and hand-verification read (every
+            # neon-rain clone branch -20..-29 sat at base ef953cc8).
             if fixture.base_sha:
-                for cmd in (["git", "reset", "--hard", "-q", fixture.base_sha],
+                for cmd in (["git", "checkout", "-q", "-f", "--detach",
+                             fixture.base_sha],
                             ["git", "clean", "-fdxq"]):
                     r = subprocess.run(cmd, cwd=target,
                                        capture_output=True, text=True, check=False)
@@ -583,6 +598,28 @@ def _ensure_luxe_importable() -> None:
         sys.exit(2)
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGTERM the child's process group, then SIGKILL whatever of the group
+    is left after a 10s grace — unconditionally, because the leader exiting
+    on SIGTERM says nothing about grandchildren that ignored it."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _run_capture(cmd: list[str], log_dir: Path,
                  env: dict | None = None,
                  timeout_s: float | None = None) -> tuple[int, str, str]:
@@ -592,24 +629,38 @@ def _run_capture(cmd: list[str], log_dir: Path,
     returns rc=124 (matches GNU `timeout` convention) plus a synthetic stderr
     so the caller can surface the timeout cleanly. Without this, a single
     runaway luxe invocation freezes the whole suite.
+
+    The child runs in its OWN process group and a timeout kills the whole
+    group (SIGTERM, then SIGKILL) — the scripts/opencode_harness.py shape.
+    `subprocess.run(timeout=)` kills only the direct child: luxe's own
+    children (a bash tool call, a test run) survived the timeout and kept
+    running into the next fixture, against the clone that fixture reuses.
     """
     log_dir.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, env=env, start_new_session=True)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False,
-                              env=env, timeout=timeout_s)
-    except subprocess.TimeoutExpired as e:
-        # Kill leaves us with whatever output the child wrote before SIGKILL.
-        stdout = (e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes)
-                  else (e.stdout or ""))
-        stderr = (e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes)
-                  else (e.stderr or ""))
-        stderr = (stderr + f"\n\n[--per-fixture-timeout] killed after {timeout_s:.0f}s\n").lstrip()
-        (log_dir / "stdout.log").write_text(stdout)
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        # The group is gone, so the pipes hit EOF: collect what was written.
+        try:
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+        stderr = ((stderr or "")
+                  + f"\n\n[--per-fixture-timeout] killed after {timeout_s:.0f}s\n").lstrip()
+        (log_dir / "stdout.log").write_text(stdout or "")
         (log_dir / "stderr.log").write_text(stderr)
-        return 124, stdout, stderr
-    (log_dir / "stdout.log").write_text(proc.stdout or "")
-    (log_dir / "stderr.log").write_text(proc.stderr or "")
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+        return 124, stdout or "", stderr
+    except BaseException:
+        # Its own session means ctrl+c no longer reaches the child through
+        # the terminal — take the group down with us instead of orphaning it.
+        _kill_group(proc)
+        raise
+    (log_dir / "stdout.log").write_text(stdout or "")
+    (log_dir / "stderr.log").write_text(stderr or "")
+    return proc.returncode, stdout or "", stderr or ""
 
 
 def _fmt_tok(n: int) -> str:
@@ -818,6 +869,9 @@ class Diagnostics:
                               # "schema_confusion" | "context_overflow" |
                               # "no_diff_writes" | "aborted"
     bailout_reason: str = ""  # human-readable evidence
+    # True when this record was replayed from disk for a SKIP_DONE fixture
+    # (never persisted as True — only set on the in-memory copy).
+    cached: bool = False
 
 
 _REFUSAL_PATTERNS = [
@@ -1083,6 +1137,7 @@ def _heal_stale_silent_failure(state: FixtureState, output: Path,
     # Inverse heal: ERROR-flagged but actually a real pass (single-mode
     # telemetry was missing in the prior runner version). Fix the state.
     if (state.status == FixtureStatus.ERROR and cached_result is not None
+            and not cached_result.error
             and (cached_result.diff_produced or cached_result.pr_opened)
             and cached_result.passed):
         state.status = FixtureStatus.DONE
@@ -1106,6 +1161,50 @@ def _heal_stale_silent_failure(state: FixtureState, output: Path,
     )
     save_state(output, state, variant_id)
     return True
+
+
+def _cached_outcome(fixture: Fixture, state: FixtureState, fdir: Path,
+                    reason: str) -> tuple[FixtureResult, Diagnostics]:
+    """What a SKIP_DONE fixture reports: derived from its STATE, never from
+    whatever result.json happens to be on disk.
+
+    DONE → the stored result (missing/corrupt → ERROR, not SKIP: a DONE
+    fixture with no grade is a harness fault). ERROR → an error result
+    carrying the last error. SKIPPED → a skip. The returned Diagnostics is
+    flagged `cached` so the driver prints it as a replay, not live data.
+    """
+    diag = _load_cached_diag_from(fdir, fixture.id)
+    diag.cached = True
+    if state.status == FixtureStatus.DONE:
+        rp = fdir / "result.json"
+        try:
+            d = json.loads(rp.read_text())
+            fr = FixtureResult(**{k: v for k, v in d.items()
+                                   if k in FixtureResult.__dataclass_fields__})
+        except (json.JSONDecodeError, OSError, TypeError) as e:
+            fr = FixtureResult(fixture_id=fixture.id,
+                               error=f"state is done but result.json is unreadable "
+                                     f"({type(e).__name__}); --force to re-run")
+        return fr, diag
+    if state.status == FixtureStatus.ERROR:
+        return (FixtureResult(fixture_id=fixture.id,
+                              error=state.last_error or "previous error"),
+                diag)
+    return (FixtureResult(fixture_id=fixture.id, skipped=True,
+                          skipped_reason=reason),
+            diag)
+
+
+def _load_cached_diag_from(fdir: Path, fixture_id: str) -> Diagnostics:
+    dp = fdir / "diagnostics.json"
+    if dp.is_file():
+        try:
+            dd = json.loads(dp.read_text())
+            return Diagnostics(**{k: v for k, v in dd.items()
+                                  if k in Diagnostics.__dataclass_fields__})
+        except (json.JSONDecodeError, OSError, TypeError):
+            pass
+    return Diagnostics(fixture_id=fixture_id)
 
 
 def run_fixture(
@@ -1159,34 +1258,17 @@ def run_fixture(
                               skipped_reason=reason),
                 Diagnostics(fixture_id=fixture.id))
     if decision == Decision.SKIP_DONE:
-        # Re-load result from disk so the summary is consistent.
-        rp = fdir / "result.json"
-        if rp.is_file():
-            try:
-                d = json.loads(rp.read_text())
-                fr = FixtureResult(**{k: v for k, v in d.items()
-                                       if k in FixtureResult.__dataclass_fields__})
-            except (json.JSONDecodeError, OSError, TypeError):
-                fr = FixtureResult(fixture_id=fixture.id, skipped=True,
-                                   skipped_reason=reason)
-        else:
-            fr = FixtureResult(fixture_id=fixture.id, skipped=True,
-                               skipped_reason=reason)
-        # Re-load diagnostics if present
-        dp = fdir / "diagnostics.json"
-        diag = Diagnostics(fixture_id=fixture.id)
-        if dp.is_file():
-            try:
-                dd = json.loads(dp.read_text())
-                diag = Diagnostics(**{k: v for k, v in dd.items()
-                                       if k in Diagnostics.__dataclass_fields__})
-            except (json.JSONDecodeError, OSError, TypeError):
-                pass
-        return fr, diag
+        return _cached_outcome(fixture, state, fdir, reason)
 
     # RUN_FRESH
     if force:
         state.luxe_run_id = ""  # discard cached run
+    # The previous attempt's grade must not outlive this one. Without this a
+    # re-run that ERRORs left the old result.json on disk, and the next
+    # invocation's cached path reported the stale PASS for a fixture whose
+    # state said error.
+    for stale in ("result.json", "diagnostics.json"):
+        (fdir / stale).unlink(missing_ok=True)
 
     repo, err = _resolve_repo(fixture, work_dir)
     if repo is None:
@@ -1280,7 +1362,15 @@ def run_fixture(
     # check is critical: a successful single-mode run shows tokens=0/wall=0
     # in the runner because single mode emits no per-stage events — but if
     # it produced a diff or a PR, that's a successful run, not silent.
-    if _is_silent_failure(diag, fr):
+    if artefacts.get("push_error"):
+        # Environment, not a verdict: the grade is kept in result.json for
+        # inspection but the fixture is ERRORED so it is neither a pass nor a
+        # fail on the scoreboard (maintain_suite.sdd).
+        fr.error = f"environment: {artefacts['push_error'][:300]}"
+        (fdir / "result.json").write_text(json.dumps(fr.to_dict(), indent=2))
+        state.status = FixtureStatus.ERROR
+        state.last_error = fr.error
+    elif _is_silent_failure(diag, fr):
         notes = _diagnose_silent_failure(diag, fdir)
         state.status = FixtureStatus.ERROR
         state.luxe_run_id = ""
@@ -1306,8 +1396,9 @@ def run_fixture(
 # --- top-level driver -----------------------------------------------------
 
 def _load_fixtures(path: Path) -> list[Fixture]:
-    raw = yaml.safe_load(path.read_text()) or {}
-    return [Fixture.from_dict(d) for d in (raw.get("fixtures") or [])]
+    # The shared loader: host-remaps the fixture-cache paths fixtures.yaml
+    # pins under another user's home (benchmarks/maintain_suite/fixtures.py).
+    return load_fixtures(path)
 
 
 def _verdict(r: FixtureResult) -> str:
@@ -1466,6 +1557,18 @@ def main() -> int:
         print("No matching fixtures.")
         return 2
 
+    # Origin preflight: every run pushes its branch to the fixture's origin
+    # (and regrade_local.py grades that pushed branch). A missing or
+    # read-only origin is an environment fault — refuse to start rather than
+    # spend hours producing runs whose push fails.
+    problems = sorted({origin_problem(f) for f in fixtures} - {""})
+    if problems:
+        print("origin preflight failed:")
+        for msg in problems:
+            print(f"  - {msg}")
+        if not args.dry_run:
+            return 2
+
     # Work dir: pinned default (clones are reused; deterministic across runs)
     # vs explicit path vs --ephemeral-work-dir (fresh tempdir, cleaned at exit).
     # The pinned default is load-bearing for temp=0 reproducibility — random
@@ -1576,7 +1679,7 @@ def main() -> int:
                 by_variant.setdefault(variant.variant_id, []).append((r, d))
             # Differentiate cached-skip from a fresh run so warnings/diagnostics
             # below aren't read as live information when they're stale.
-            cached_skip = (r.skipped and "already done" in (r.skipped_reason or ""))
+            cached_skip = d.cached
             # Cached skips finish in <1s and shouldn't poison the ETA.
             if not cached_skip and not r.skipped:
                 completed_walls.append(run_elapsed)

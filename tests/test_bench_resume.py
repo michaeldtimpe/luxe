@@ -674,3 +674,163 @@ def test_run_fixture_surfaces_stderr_excerpt(tmp_path, monkeypatch):
     state = load_state(out, "f1")
     assert state.status == FixtureStatus.ERROR
     assert "ModuleNotFoundError" in state.last_error
+
+
+# --- 2026-09 harness audit: stale results, clone reuse, timeouts --
+
+def test_errored_rerun_does_not_report_stale_pass(tmp_path):
+    """A fixture that PASSED, was re-run, and ERRORED must report ERROR —
+    not the previous run's result.json (which printed `PASS 5` while state
+    said error)."""
+    out = tmp_path / "acc"
+    fdir = out / "f1"
+    fdir.mkdir(parents=True)
+    stale = FixtureResult(fixture_id="f1", score=5, pr_opened=True,
+                          expected_outcome_passed=True)
+    (fdir / "result.json").write_text(json.dumps(stale.to_dict()))
+    save_state(out, FixtureState(fixture_id="f1", status=FixtureStatus.ERROR,
+                                  last_error="per-fixture timeout"))
+    fr, diag = run_fixture(_f(), out, tmp_path / "wd")
+    assert fr.error and "timeout" in fr.error
+    assert not fr.passed
+    assert br._verdict(fr) == "ERROR"
+    assert diag.cached
+
+
+def test_errored_fixture_without_result_is_error_not_skip(tmp_path):
+    out = tmp_path / "acc"
+    save_state(out, FixtureState(fixture_id="f1", status=FixtureStatus.ERROR,
+                                  last_error="git clone failed"))
+    fr, _ = run_fixture(_f(), out, tmp_path / "wd")
+    assert br._verdict(fr) == "ERROR"
+
+
+def test_done_fixture_replay_is_flagged_cached(tmp_path):
+    """The driver's `cached_skip` keyed on a skipped_reason a DONE replay
+    never carries, so it never matched; the replay is now flagged."""
+    out = tmp_path / "acc"
+    (out / "f1").mkdir(parents=True)
+    save_state(out, FixtureState(fixture_id="f1", status=FixtureStatus.DONE))
+    (out / "f1" / "result.json").write_text(
+        json.dumps(FixtureResult(fixture_id="f1", score=4).to_dict()))
+    fr, diag = run_fixture(_f(), out, tmp_path / "wd")
+    assert fr.score == 4 and diag.cached
+
+
+def test_done_fixture_missing_result_is_error(tmp_path):
+    out = tmp_path / "acc"
+    save_state(out, FixtureState(fixture_id="f1", status=FixtureStatus.DONE))
+    fr, _ = run_fixture(_f(), out, tmp_path / "wd")
+    assert br._verdict(fr) == "ERROR"
+
+
+def test_fresh_run_deletes_previous_result(tmp_path, monkeypatch):
+    out = tmp_path / "acc"
+    fdir = out / "f1"
+    fdir.mkdir(parents=True)
+    (fdir / "result.json").write_text(
+        json.dumps(FixtureResult(fixture_id="f1", score=5).to_dict()))
+    save_state(out, FixtureState(fixture_id="f1", status=FixtureStatus.ERROR))
+    monkeypatch.setattr(br, "_resolve_repo", lambda fix, wd: (None, "boom"))
+    fr, _ = run_fixture(_f(), out, tmp_path / "wd", retry_errors=True)
+    assert fr.error
+    assert not (fdir / "result.json").exists()
+    # and the next (non-retry) invocation reports the error, not a score
+    fr2, _ = run_fixture(_f(), out, tmp_path / "wd")
+    assert br._verdict(fr2) == "ERROR"
+
+
+def test_push_failure_is_error_not_score(tmp_path, monkeypatch):
+    """A push into a missing/read-only origin is the environment. It must
+    ERROR the fixture, never grade as a (lower) score."""
+    out = tmp_path / "acc"
+    monkeypatch.setattr(br, "_resolve_repo", lambda fix, wd: (Path("/tmp"), ""))
+    monkeypatch.setattr(br, "_head_sha", lambda repo: "ab" * 20)
+    monkeypatch.setattr(br, "_luxe_maintain",
+                        lambda repo, fix, log_dir, **_: (0, "rPUSH", ""))
+    rd = tmp_path / "fake-luxe-runs" / "rPUSH"
+    rd.mkdir(parents=True)
+    (rd / "pr_state.json").write_text(json.dumps({"steps": [
+        {"name": "commit", "done": True, "status": "done"},
+        {"name": "push", "done": False, "status": "failed",
+         "detail": "push failed: unable to create temporary object directory"},
+    ]}))
+    monkeypatch.setattr(br, "grade_fixture", lambda *a, **k: FixtureResult(
+        fixture_id="f1", score=3, diff_produced=True))
+    fr, _ = run_fixture(_f(), out, tmp_path / "wd")
+    assert br._verdict(fr) == "ERROR"
+    assert "environment" in fr.error and "push" in fr.error
+    assert load_state(out, "f1").status == FixtureStatus.ERROR
+    # a later invocation must not heal it back to DONE
+    fr2, _ = run_fixture(_f(), out, tmp_path / "wd")
+    assert br._verdict(fr2) == "ERROR"
+
+
+def _git(repo, *args):
+    import subprocess
+    return subprocess.run(["git", *args], cwd=repo, check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_reused_clone_does_not_rewind_previous_run_branch(tmp_path, monkeypatch):
+    """Reusing a bench clone used `reset --hard base_sha` on whatever was
+    checked out — the previous run's luxe/... branch — rewinding it to base
+    (every neon-rain clone branch -20..-29 sat at ef953cc8)."""
+    monkeypatch.setattr(br, "_prune_for_fixture", lambda *a, **k: None)
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@t")
+    _git(origin, "config", "user.name", "t")
+    (origin / "a.txt").write_text("base\n")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-q", "-m", "base")
+    base = _git(origin, "rev-parse", "HEAD")
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    fx = Fixture(id="fx", goal="g", task_type="implement",
+                 expected_outcome={"kind": "regex_present", "pattern": "x"},
+                 repo_url=str(origin), base_sha=base)
+    clone, err = br._resolve_repo(fx, wd)
+    assert clone is not None, err
+    _git(clone, "config", "user.email", "t@t")
+    _git(clone, "config", "user.name", "t")
+    _git(clone, "checkout", "-q", "-b", "luxe/implement/run-1")
+    (clone / "a.txt").write_text("agent work\n")
+    _git(clone, "commit", "-q", "-am", "agent")
+    work = _git(clone, "rev-parse", "HEAD")
+    (clone / "junk.txt").write_text("dirty\n")
+
+    clone2, err = br._resolve_repo(fx, wd)
+    assert clone2 == clone, err
+    assert _git(clone, "rev-parse", "luxe/implement/run-1") == work
+    assert _git(clone, "rev-parse", "HEAD") == base
+    assert not (clone / "junk.txt").exists()
+    assert (clone / "a.txt").read_text() == "base\n"
+
+
+def test_run_capture_timeout_kills_grandchildren(tmp_path):
+    """subprocess.run(timeout=) killed only the direct child; luxe's own
+    children (a bash tool, a test run) survived the per-fixture timeout and
+    kept running into the next fixture against the reused clone."""
+    import time as _t
+    pidfile = tmp_path / "grandchild.pid"
+    t0 = _t.monotonic()
+    rc, _out, err = br._run_capture(
+        ["bash", "-c", f"sleep 60 & echo $! > {pidfile}; wait"],
+        tmp_path / "logs", timeout_s=1)
+    assert rc == 124
+    assert "killed after" in err
+    assert _t.monotonic() - t0 < 30
+    pid = int(pidfile.read_text())
+    deadline = _t.monotonic() + 5
+    alive = True
+    while alive and _t.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+            _t.sleep(0.1)
+        except ProcessLookupError:
+            alive = False
+    if alive:
+        os.kill(pid, 9)
+    assert not alive, "grandchild survived the per-fixture timeout"
