@@ -344,8 +344,11 @@ def run_git_report(
             hunks = diffscope.changed_hunks(target, mb)
             eff_ctx = deep_mod.base_ctx(role_cfg)
             diff_cap = max(256, int(eff_ctx * diffscope.DIFF_BUDGET_FRAC))
+            # the -U10 diff is fetched ONCE; every block below is a slice of it
+            per_file = diffscope.file_diffs(target, mb)
             full_diff_block = diffscope.change_diff_block(
-                target, mb, base_label=base_ref, max_tokens=diff_cap)
+                target, mb, base_label=base_ref, max_tokens=diff_cap,
+                stats=stats, per_file=per_file)
             console.print(f"[dim]· diff scope: {base_ref} (merge-base {mb[:8]}) "
                           f"— {stats[0]} files, +{stats[1]}/−{stats[2]}[/]")
             extra_meta = {"base": base_ref, "merge_base": mb[:12]}
@@ -368,7 +371,8 @@ def run_git_report(
                 chunk_blocks = {
                     c.index: diffscope.change_diff_block(
                         target, mb, base_label=base_ref,
-                        max_tokens=diff_cap, files=c.files)
+                        max_tokens=diff_cap, files=c.files,
+                        stats=stats, per_file=per_file)
                     for c in chunks if c.files}
                 # Opportunistic: inject a FRESH whole-repo map's survey notes;
                 # NEVER generate one, and diff runs never write map/.

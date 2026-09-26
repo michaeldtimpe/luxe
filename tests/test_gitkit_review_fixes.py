@@ -658,3 +658,107 @@ def test_render_report_does_not_double_count_structured_findings():
                             "md": "- **medium** `n.py:2` — one note finding"}]
     out = deep._render_report(d, "gitaudit")
     assert "**Findings: 4 " in out
+
+
+# --- diffscope (8, 9, 10, 20) --------------------------------------------------
+
+def _two_commit(tmp_path: Path, base: dict[str, str],
+                change: dict[str, str]) -> tuple[Path, str]:
+    repo = _init_repo(tmp_path / "drepo", base)
+    mb = _out(repo, "rev-parse", "HEAD")
+    for rel, text in change.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "change")
+    return repo, mb
+
+
+def test_prior_applies_to_python_rendered_deep_sections():
+    """8: only `## Bugs & security` got the hunk-overlap prior; the deep
+    render's `## Area:` / `## Additional findings` lines went untagged (or
+    kept an unearned likely-introduced)."""
+    from luxe.gitkit import diffscope
+    hunks = {"src/a.py": [(10, 12)]}
+    report = ("# Diff audit\n\n## Area: src (chunk 1)\n\n"
+              "- **high** `src/a.py:11` — inside the change\n"
+              "- **high** `src/a.py:50` — **likely-introduced** outside it\n\n"
+              "## Additional findings\n\n"
+              "- **medium** `src/a.py:99` — far away\n\n"
+              "## Change-scoped structural notes\n\n"
+              "- consider splitting `src/a.py:11` handlers\n")
+    out = diffscope.apply_tag_priors(report, hunks).splitlines()
+    line = {k: next(ln for ln in out if k in ln) for k in
+            ("inside the change", "outside it", "far away", "splitting")}
+    assert line["inside the change"].endswith("**likely-introduced**")
+    assert "pre-existing (touched code)" in line["outside it"]
+    assert "likely-introduced" not in line["outside it"]
+    assert line["far away"].endswith("**pre-existing (touched code)**")
+    assert "introduced" not in line["splitting"]           # structural: untouched
+
+
+def test_prior_resolves_short_and_dotted_paths():
+    """9: exact path matching — `mod.py:3` / `./src/pkg/mod.py:3` never matched
+    the changed `src/pkg/mod.py`, so real introductions read pre-existing."""
+    from luxe.gitkit import diffscope
+    hunks = {"src/pkg/mod.py": [(1, 5)], "src/other/util.py": [(1, 5)],
+             "tests/util.py": [(1, 5)]}
+    assert diffscope.in_changed_hunk(hunks, "mod.py", 3)
+    assert diffscope.in_changed_hunk(hunks, "./src/pkg/mod.py", 3)
+    assert diffscope.in_changed_hunk(hunks, "pkg/mod.py", 3)
+    assert not diffscope.in_changed_hunk(hunks, "util.py", 3)   # ambiguous
+    assert not diffscope.in_changed_hunk(hunks, "mod.py", 9)
+
+
+def test_ref_regex_ignores_dotted_calls():
+    """9: `requests.get 5` read as file `requests.get`, line 5."""
+    from luxe.gitkit import diffscope
+    assert diffscope._REF_RE.search("calls requests.get 5 times") is None
+    m = diffscope._REF_RE.search("see `src/a.py:12`")
+    assert m and m.group("path") == "src/a.py" and m.group("line") == "12"
+
+
+def test_non_ascii_paths_survive_the_diff(tmp_path):
+    """10: git C-quotes non-ASCII paths by default; they matched nothing and
+    dropped out of changed_files / hunks."""
+    from luxe.gitkit import diffscope
+    repo, mb = _two_commit(tmp_path, {"café.py": "x = 1\n"},
+                           {"café.py": "x = 2\n", "naïve.py": "y = 1\n"})
+    assert set(diffscope.changed_files(repo, mb)) == {"café.py", "naïve.py"}
+    hunks = diffscope.changed_hunks(repo, mb)
+    assert "café.py" in hunks and "naïve.py" in hunks
+    per = diffscope.file_diffs(repo, mb)
+    assert set(per) == {"café.py", "naïve.py"}
+
+
+def test_diff_parse_ignores_host_noprefix(tmp_path):
+    """10: diffscope parsed `+++ b/<path>` without the parse pins, so a host
+    `diff.noprefix=true` zeroed every hunk."""
+    from luxe.gitkit import diffscope
+    repo, mb = _two_commit(tmp_path, {"b/x.py": "x = 1\n"}, {"b/x.py": "x = 2\n"})
+    _git(repo, "config", "diff.noprefix", "true")
+    assert set(diffscope.changed_hunks(repo, mb)) == {"b/x.py"}
+    _git(repo, "config", "--unset", "diff.noprefix")
+    _git(repo, "config", "diff.dstPrefix", "new/")
+    assert set(diffscope.changed_hunks(repo, mb)) == {"b/x.py"}
+
+
+def test_chunk_blocks_do_not_rerun_git_per_chunk(tmp_path, monkeypatch):
+    """20: change_diff_block re-ran `git diff` + `git diff --numstat` for every
+    chunk; with the precomputed per-file split it runs none."""
+    from luxe.gitkit import diffscope
+    repo, mb = _two_commit(tmp_path, {"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                           {"a.py": "x = 2\n", "b.py": "y = 2\n"})
+    per = diffscope.file_diffs(repo, mb)
+    stats = diffscope.diff_stats(repo, mb)
+    scoped_git = diffscope.change_diff_block(repo, mb, base_label="main",
+                                             max_tokens=10_000, files=["b.py"])
+
+    def boom(*a, **k):
+        raise AssertionError("git ran for a per-chunk block")
+    monkeypatch.setattr(diffscope, "_run_git", boom)
+    block = diffscope.change_diff_block(repo, mb, base_label="main",
+                                        max_tokens=10_000, files=["b.py"],
+                                        stats=stats, per_file=per)
+    assert "y = 2" in block and "x = 2" not in block
+    assert block == scoped_git
