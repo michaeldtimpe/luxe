@@ -304,12 +304,13 @@ def elide_old_tool_results(
     elide_set = set(tool_indices[:-keep_recent])
     result = []
     for i, msg in enumerate(messages):
-        if i in elide_set:
+        # Already a stub: re-eliding would report the stub's own size.
+        if i in elide_set and not msg.get("_luxe_elided"):
             content = msg.get("content", "")
             size = len(content.encode("utf-8", errors="replace"))
             name = msg.get("name", "tool")
             stub = f"[elided: {name} -> {size} bytes]"
-            result.append({**msg, "content": stub})
+            result.append({**msg, "content": stub, "_luxe_elided": True})
         else:
             result.append(msg)
     return result
@@ -545,7 +546,13 @@ class TieredCompact:
             if 2 <= i < eligible_end:
                 if _is_nudge(msg):
                     continue
-                if _is_tool_result(msg):
+                # Compaction is persistent (the loop keeps `cr.messages`), and a
+                # truncated body (~230 chars with its marker) is still over
+                # TRUNCATE_CHARS — so every later phase-1 fire re-truncated it,
+                # rewriting "[Truncated — 4800 chars removed]" into "[Truncated
+                # — 33 chars removed]" and counting it as a fresh drop. The
+                # `_luxe_truncated` marker rides the wire like `_luxe_nudge`.
+                if _is_tool_result(msg) and not msg.get("_luxe_truncated"):
                     content = msg.get("content", "") or ""
                     if len(content) > self.TRUNCATE_CHARS:
                         kept = content[: self.TRUNCATE_CHARS]
@@ -553,6 +560,7 @@ class TieredCompact:
                         result.append({
                             **msg,
                             "content": f"{kept}\n[Truncated — {removed} chars removed]",
+                            "_luxe_truncated": True,
                         })
                         dropped += 1
                         continue
