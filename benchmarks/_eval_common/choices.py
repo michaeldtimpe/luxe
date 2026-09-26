@@ -40,6 +40,21 @@ def format_mc_prompt(
     return "".join(parts)
 
 
+def pick_choice(scores: dict[str, float], letters: Sequence[str]) -> str | None:
+    """The highest-scoring letter, or None when no letter has a finite score.
+
+    `score_choices` reports -inf for a letter absent from the inspected
+    top-k. When EVERY letter is -inf the model put no choice in its top-k
+    at all; `max()` then returned the first letter, so such items were
+    graded as an "A" answer (correct whenever the gold happened to be A).
+    """
+    import math
+    finite = [L for L in letters if math.isfinite(scores.get(L, float("-inf")))]
+    if not finite:
+        return None
+    return max(finite, key=lambda L: scores[L])
+
+
 def _render_one(question: str, options: Sequence[str], letters: Sequence[str]) -> str:
     lines = [f"{question.rstrip()}\n"]
     for letter, opt in zip(letters, options):

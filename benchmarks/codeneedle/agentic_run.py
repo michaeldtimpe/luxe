@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from dataclasses import asdict
@@ -37,6 +36,12 @@ from luxe.tools.respond import respond_def, TOOL_FNS as RESPOND_TOOL_FNS  # noqa
 
 from benchmarks._eval_common.dataset import sha256_file  # noqa: E402
 from benchmarks._eval_common.meta import build_run_meta  # noqa: E402
+from benchmarks._eval_common.store import (  # noqa: E402
+    AGENTIC_VARIANT_ENV as _VARIANT_ENV,
+    ResultStore,
+    apply_variant_env as _apply_variant_env,
+    safe_name,
+)
 from benchmarks.codeneedle.adapter import build_prompt  # noqa: E402
 from benchmarks.codeneedle.grade import aggregate_items  # noqa: E402
 from benchmarks.codeneedle.upstream.scorer import score as score_function  # noqa: E402
@@ -52,45 +57,6 @@ _AGENTIC_SYSTEM_PROMPT = (
     "no code fences, no line numbers. When you have produced the answer, "
     "call the `respond` tool with the answer as its `message` argument."
 )
-
-_VARIANT_ENV: dict[str, dict[str, str]] = {
-    "minimal": {
-        "LUXE_TIERED_COMPACT": "0",
-        "LUXE_REFLECT": "0",
-        "LUXE_RESPOND_TERMINAL": "1",
-        "LUXE_WRITE_PRESSURE": "0",
-        "LUXE_EARLY_BAIL": "0",
-        "LUXE_ACTION_DENSITY_GATE": "0",
-        "LUXE_CONVERGENCE_GATE": "0",
-        "LUXE_PROSE_BURST": "0",
-    },
-    "full": {
-        "LUXE_TIERED_COMPACT": "1",
-        "LUXE_REFLECT": "1",
-        "LUXE_RESPOND_TERMINAL": "1",
-        "LUXE_WRITE_PRESSURE": "1",
-        "LUXE_EARLY_BAIL": "1",
-        "LUXE_ACTION_DENSITY_GATE": "1",
-        "LUXE_CONVERGENCE_GATE": "1",
-        "LUXE_PROSE_BURST": "1",
-    },
-}
-
-
-def _apply_variant_env(variant: str) -> None:
-    for k, v in _VARIANT_ENV[variant].items():
-        os.environ[k] = v
-
-
-def _safe_name(name: str) -> str:
-    return "".join(c if c.isalnum() or c in "_-." else "_" for c in name)
-
-
-def _json_default(obj):
-    if hasattr(obj, "value"):
-        return obj.value
-    return str(obj)
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
@@ -139,11 +105,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.limit_fns is not None:
             fns = fns[: args.limit_fns]
 
-        per_function_records: list[dict] = []
+        store = ResultStore(out_dir, model=args.model, variant=args.variant,
+                            resume=args.resume)
+        selected: list[tuple[str, str]] = []
         for fn in fns:
-            item_path = out_dir / f"{_safe_name(fn['name'])}.json"
-            if args.resume and item_path.exists():
-                per_function_records.append(json.loads(item_path.read_text()))
+            item_id = safe_name(fn["name"])
+            selected.append((item_id, fn["name"]))
+            if store.get(item_id, fn["name"]) is not None:
                 continue
 
             # Same prompt as raw, but DO let the model think.
@@ -167,23 +135,20 @@ def main(argv: list[str] | None = None) -> int:
                     tool_defs=tool_defs,
                     tool_fns=tool_fns,
                 )
-                final_text = result.final_text or ""
-                steps = result.steps
-                tool_calls_total = result.tool_calls_total
-                prompt_toks = result.prompt_tokens
-                completion_toks = result.completion_tokens
-                aborted = result.aborted
-                abort_reason = result.abort_reason
-                err = None
-            except Exception as e:  # noqa: BLE001
-                final_text = ""
-                steps = 0
-                tool_calls_total = 0
-                prompt_toks = 0
-                completion_toks = 0
-                aborted = True
-                abort_reason = f"exception:{type(e).__name__}"
-                err = f"{type(e).__name__}: {e}"
+            except Exception as e:  # noqa: BLE001 — infra, not an answer
+                store.put_infra_error(item_id, f"{type(e).__name__}: {e}",
+                                      fn["name"], variant=args.variant,
+                                      wall_s=time.time() - t0)
+                print(f"  {corpus_name}/{fn['name']}: INFRA ERROR "
+                      f"{type(e).__name__}: {e}"[:300])
+                continue
+            final_text = result.final_text or ""
+            steps = result.steps
+            tool_calls_total = result.tool_calls_total
+            prompt_toks = result.prompt_tokens
+            completion_toks = result.completion_tokens
+            aborted = result.aborted
+            abort_reason = result.abort_reason
             wall_s = time.time() - t0
 
             fscore = score_function(
@@ -193,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
                 predicted_text=final_text,
             )
             record = asdict(fscore)
-            record["error"] = err
+            record["error"] = None
             record["wall_s"] = wall_s
             record["raw_output"] = final_text
             record["prompt_chars"] = len(task_prompt)
@@ -204,8 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             record["aborted"] = aborted
             record["abort_reason"] = abort_reason
             record["variant"] = args.variant
-            item_path.write_text(json.dumps(record, indent=2, default=_json_default))
-            per_function_records.append(record)
+            store.put(item_id, record, fn["name"])
             print(
                 f"  {corpus_name}/{fn['name']}: "
                 f"primary={fscore.primary_matched}/{fscore.primary_total} "
@@ -214,7 +178,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"steps={steps} tools={tool_calls_total} wall={wall_s:.1f}s"
             )
 
+        got = store.collect(selected)
+        per_function_records = got.records
         summary_stats = aggregate_items(per_function_records)
+        summary_stats["infra_errors"] = got.infra_errors
         # Augment with agentic-specific stats
         walls = [r.get("wall_s", 0) for r in per_function_records]
         steps_list = [r.get("steps", 0) for r in per_function_records]
@@ -263,8 +230,10 @@ def main(argv: list[str] | None = None) -> int:
             f"wall_mean={s.get('wall_mean_s', 0):.1f}s, "
             f"steps_mean={s.get('steps_mean', 0):.2f}, "
             f"tools_mean={s.get('tool_calls_mean', 0):.2f}"
+            + (f", infra_errors={s['infra_errors']} (excluded, re-run to retry)"
+               if s.get("infra_errors") else "")
         )
-    return 0
+    return 1 if any(s.get("infra_errors") for s in all_summaries.values()) else 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

@@ -19,6 +19,8 @@ def aggregate_items(item_records: list[dict[str, Any]]) -> dict[str, Any]:
             "count": 0,
             "accuracy": 0.0,
             "correct": 0,
+            "parsed": 0,
+            "parse_rate": 0.0,
             "failure_reasons": {},
         }
 

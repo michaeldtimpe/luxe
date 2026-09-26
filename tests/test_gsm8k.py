@@ -40,6 +40,10 @@ class TestAggregateItems:
             "count": 0,
             "accuracy": 0.0,
             "correct": 0,
+            # same keys as the non-empty shape: an all-infra-error run
+            # printed summary["parse_rate"] and crashed on a KeyError
+            "parsed": 0,
+            "parse_rate": 0.0,
             "failure_reasons": {},
         }
 

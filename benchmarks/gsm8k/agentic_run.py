@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sys
 import time
 from pathlib import Path
@@ -47,6 +46,11 @@ from benchmarks._eval_common.dataset import (  # noqa: E402
 )
 from benchmarks._eval_common.extract import extract_gsm8k_answer  # noqa: E402
 from benchmarks._eval_common.meta import build_run_meta  # noqa: E402
+from benchmarks._eval_common.store import (  # noqa: E402
+    AGENTIC_VARIANT_ENV as _VARIANT_ENV,
+    ResultStore,
+    apply_variant_env as _apply_variant_env,
+)
 from benchmarks.gsm8k.adapter import build_messages, extract_gold_answer  # noqa: E402
 from benchmarks.gsm8k.grade import aggregate_items  # noqa: E402
 
@@ -62,35 +66,6 @@ _AGENTIC_SYSTEM_PROMPT = (
     "answer is 42.'). Do not call respond until you have computed the "
     "final answer."
 )
-
-_VARIANT_ENV: dict[str, dict[str, str]] = {
-    "minimal": {
-        "LUXE_TIERED_COMPACT": "0",
-        "LUXE_REFLECT": "0",
-        "LUXE_RESPOND_TERMINAL": "1",
-        "LUXE_WRITE_PRESSURE": "0",
-        "LUXE_EARLY_BAIL": "0",
-        "LUXE_ACTION_DENSITY_GATE": "0",
-        "LUXE_CONVERGENCE_GATE": "0",
-        "LUXE_PROSE_BURST": "0",
-    },
-    "full": {
-        "LUXE_TIERED_COMPACT": "1",
-        "LUXE_REFLECT": "1",
-        "LUXE_RESPOND_TERMINAL": "1",
-        "LUXE_WRITE_PRESSURE": "1",
-        "LUXE_EARLY_BAIL": "1",
-        "LUXE_ACTION_DENSITY_GATE": "1",
-        "LUXE_CONVERGENCE_GATE": "1",
-        "LUXE_PROSE_BURST": "1",
-    },
-}
-
-
-def _apply_variant_env(variant: str) -> None:
-    for k, v in _VARIANT_ENV[variant].items():
-        os.environ[k] = v
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
@@ -124,16 +99,21 @@ def main(argv: list[str] | None = None) -> int:
     tool_defs = [respond_def()]
     tool_fns = dict(RESPOND_TOOL_FNS)
 
+    store = ResultStore(out_dir, model=args.model, variant=args.variant,
+                        resume=args.resume)
     n_total = len(rows)
     n_done = 0
     n_correct = 0
     n_aborted = 0
     t0 = time.time()
+    selected: list[tuple[str, str]] = []
 
     for i, row in enumerate(rows):
-        item_path = out_dir / f"item_{i:05d}.json"
-        if args.resume and item_path.exists():
-            cached = json.loads(item_path.read_text())
+        item_id = f"item_{i:05d}"
+        fp = row["question"]
+        selected.append((item_id, fp))
+        cached = store.get(item_id, fp)
+        if cached is not None:
             n_correct += int(cached.get("correct", False))
             n_aborted += int(cached.get("aborted", False))
             n_done += 1
@@ -154,21 +134,20 @@ def main(argv: list[str] | None = None) -> int:
                 tool_defs=tool_defs,
                 tool_fns=tool_fns,
             )
-            final_text = result.final_text or ""
-            steps = result.steps
-            tool_calls_total = result.tool_calls_total
-            prompt_toks = result.prompt_tokens
-            completion_toks = result.completion_tokens
-            aborted = result.aborted
-            abort_reason = result.abort_reason
-        except Exception as e:  # noqa: BLE001
-            final_text = f"<ERROR: {type(e).__name__}: {e}>"
-            steps = 0
-            tool_calls_total = 0
-            prompt_toks = 0
-            completion_toks = 0
-            aborted = True
-            abort_reason = f"exception:{type(e).__name__}"
+        except Exception as e:  # noqa: BLE001 — infra, not an answer
+            store.put_infra_error(item_id, f"{type(e).__name__}: {e}", fp,
+                                  qid=i, variant=args.variant,
+                                  wall_s=time.time() - t_start)
+            print(f"  gsm8k_agentic[{args.variant}] item {i}: INFRA ERROR "
+                  f"{type(e).__name__}: {e}"[:300])
+            continue
+        final_text = result.final_text or ""
+        steps = result.steps
+        tool_calls_total = result.tool_calls_total
+        prompt_toks = result.prompt_tokens
+        completion_toks = result.completion_tokens
+        aborted = result.aborted
+        abort_reason = result.abort_reason
         wall_s = time.time() - t_start
 
         extracted, reason = extract_gsm8k_answer(final_text)
@@ -194,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
             "abort_reason": abort_reason,
             "variant": args.variant,
         }
-        item_path.write_text(json.dumps(record, indent=2))
+        store.put(item_id, record, fp)
         n_correct += int(correct)
         n_aborted += int(aborted)
         n_done += 1
@@ -208,8 +187,10 @@ def main(argv: list[str] | None = None) -> int:
             f"avg={rate:.1f}s eta={eta_m:.1f}m"
         )
 
-    item_records = [json.loads(p.read_text()) for p in sorted(out_dir.glob("item_*.json"))]
+    got = store.collect(selected)
+    item_records = got.records
     summary_stats = aggregate_items(item_records)
+    summary_stats["infra_errors"] = got.infra_errors
     walls = [r["wall_s"] for r in item_records if "wall_s" in r]
     steps_list = [r["steps"] for r in item_records if "steps" in r]
     tools_list = [r["tool_calls_total"] for r in item_records if "tool_calls_total" in r]
@@ -221,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         summary_stats["steps_max"] = max(steps_list)
     if tools_list:
         summary_stats["tool_calls_mean"] = sum(tools_list) / len(tools_list)
-    summary_stats["aborted_count"] = n_aborted
+    summary_stats["aborted_count"] = sum(1 for r in item_records if r.get("aborted"))
 
     sampling = {
         "temperature": args.temperature,
@@ -254,8 +235,10 @@ def main(argv: list[str] | None = None) -> int:
         f"wall_mean={summary_stats.get('wall_mean_s', 0):.1f}s, "
         f"steps_mean={summary_stats.get('steps_mean', 0):.1f}, "
         f"aborted={summary_stats.get('aborted_count', 0)}"
+        + (f", infra_errors={got.infra_errors} (excluded, re-run to retry)"
+           if got.infra_errors else "")
     )
-    return 0
+    return 1 if got.infra_errors else 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
