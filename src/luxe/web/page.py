@@ -33,11 +33,10 @@ import threading
 
 from luxe.web.browser import (
     DEFAULT_RENDER_TIMEOUT_S,
-    _browsers_root,
-    _system_chrome,
     availability,
+    launch_guarded,
 )
-from luxe.web.fetch import WebError, _assert_public, _normalize_url
+from luxe.web.fetch import WebError, _assert_public
 
 # Per-action driver timeout. Opens get the render ceiling; clicks/typing on a
 # loaded page should be near-instant, so a short bound catches a dead page
@@ -72,33 +71,20 @@ _ENUMERATE_JS = """
 
 
 def _default_launch():
-    """Start Playwright and return (playwright, browser, page).
+    """Start Playwright and return (playwright, browser, page, egress_guard).
 
-    Same chromium-or-system-Chrome resolution as `browser.render_url`. Runs
-    ON the owner thread — sync Playwright must be used from the thread that
-    started it.
+    Same launch path (and in-browser egress guard) as `browser.render_url`.
+    Runs ON the owner thread — sync Playwright must be used from the thread
+    that started it.
     """
     from playwright.sync_api import sync_playwright  # type: ignore[import-not-found]
 
     p = sync_playwright().start()
-    launch_kwargs: dict = {"headless": True}
-    root = _browsers_root()
     try:
-        have_download = any(q.is_dir() and q.name.startswith("chromium")
-                            for q in root.iterdir())
-    except OSError:
-        have_download = False
-    if not have_download:
-        system = _system_chrome()
-        if system:
-            launch_kwargs["executable_path"] = system
-    browser = p.chromium.launch(**launch_kwargs)
-    context = browser.new_context(
-        user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0 Safari/537.36 luxe/1.0"),
-        viewport={"width": 1280, "height": 2000},
-    )
+        browser, context, guard = launch_guarded(p)
+    except BaseException:
+        p.stop()
+        raise
     page = context.new_page()
     # One page is the whole surface: a popup would be an unguarded window.
     # Registered AFTER new_page and identity-guarded — the handler fires for
@@ -106,15 +92,16 @@ def _default_launch():
     # at birth in the first cut; the live drill caught it).
     context.on("page",
                lambda extra: extra.close() if extra is not page else None)
-    return p, browser, page
+    return p, browser, page, guard
 
 
 class PageSession:
     """One interactive page, owned by one daemon thread. See module docstring.
 
-    `launch` is injectable for tests: it must return a triple whose last
-    element duck-types the Playwright Page (goto/url/title/content/evaluate/
-    click/fill/press/go_back) and whose first two have `.stop()`/`.close()`.
+    `launch` is injectable for tests: it must return (playwright, browser,
+    page[, egress_guard]) where the page duck-types the Playwright Page
+    (goto/url/title/content/evaluate/click/fill/press/go_back), the first two
+    have `.stop()`/`.close()`, and the optional guard has `.check()`.
     """
 
     def __init__(self, launch=_default_launch):
@@ -124,6 +111,7 @@ class PageSession:
         self._lock = threading.Lock()
         self._closed = False
         self._driver = None  # (playwright, browser, page) — owner thread only
+        self._egress = None  # the context's EgressGuard, when there is one
 
     # -- caller side ---------------------------------------------------------
 
@@ -141,8 +129,14 @@ class PageSession:
                 self._thread = threading.Thread(
                     target=self._worker, name="luxe-web-page", daemon=True)
                 self._thread.start()
-                atexit.register(self.close)
-        budget = (timeout_s if timeout_s is not None else ACTION_TIMEOUT_S)
+        if timeout_s is not None:
+            budget = timeout_s
+        else:
+            # An open is a full navigation and gets the render ceiling; the
+            # caller must wait LONGER than the driver's own goto timeout, or a
+            # slow-but-healthy page is declared wedged and hard-closed.
+            budget = (DEFAULT_RENDER_TIMEOUT_S if action == "open"
+                      else ACTION_TIMEOUT_S)
         out: queue.Queue = queue.Queue(maxsize=1)
         self._q.put((action, kwargs, budget, out))
         try:
@@ -186,12 +180,18 @@ class PageSession:
             except BaseException as e:  # noqa: BLE001 — must reach the caller
                 if out is not None:
                     out.put(("err", e))
+            if self._closed:
+                # Closed by an egress violation (or by close() mid-op): the
+                # driver is gone, so this thread has nothing left to own.
+                self._teardown()
+                return
 
     def _teardown(self) -> None:
         if self._driver is None:
             return
         p, browser, _page = self._driver
         self._driver = None
+        self._egress = None
         for closer in (browser.close, p.stop):
             try:
                 closer()
@@ -207,12 +207,17 @@ class PageSession:
                 if not avail.ok:
                     raise WebError(
                         f"cannot open a page: {avail.reason}. Fix: {avail.fix}")
-            self._driver = self._launch()
+            driver = tuple(self._launch())
+            self._driver = driver[:3]
+            self._egress = driver[3] if len(driver) > 3 else None
         return self._driver[2]
 
     def _guard(self, page) -> None:
-        """Egress check on the CURRENT url; violation hard-closes the session."""
+        """Egress check on the CURRENT url and on every redirect hop the
+        browser took; a violation hard-closes the session."""
         try:
+            if self._egress is not None:
+                self._egress.check()
             _assert_public(page.url)
         except WebError:
             self._teardown()
@@ -223,10 +228,11 @@ class PageSession:
     def _dispatch(self, action: str, kwargs: dict, budget: float) -> dict:
         timeout_ms = int(budget * 1000)
         if action == "open":
-            url = _normalize_url(str(kwargs.get("url") or "").strip())
-            _assert_public(url)
+            # The browser gets the re-serialized, checked URL — never the
+            # model's original string.
+            target = _assert_public(str(kwargs.get("url") or "").strip())
             page = self._page()
-            page.goto(url, timeout=int(DEFAULT_RENDER_TIMEOUT_S * 1000),
+            page.goto(target.url, timeout=timeout_ms,
                       wait_until="domcontentloaded")
         elif action == "read":
             page = self._require_page()
@@ -311,6 +317,11 @@ def close_session() -> None:
         session, _SESSION = _SESSION, None
     if session is not None:
         session.close()
+
+
+# Registered ONCE for the process (it used to be once per session start,
+# which pinned every session ever created and re-ran each close at exit).
+atexit.register(close_session)
 
 
 def render_snapshot(snap: dict, *, max_chars: int = 12_000) -> str:
