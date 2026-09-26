@@ -31,6 +31,17 @@ inspect, extract, fill, overlay, convert, print.
 - Refuse to print to a label printer (name matching `*QL*` / `*label*`)
   unless the caller passes `allow_label=True`; the default target is a
   document printer
+- Bound every tool result: `pdf_text` extracts a PDF_TEXT_DEFAULT_PAGES
+  window when no `last_page` is given and says how many pages remain;
+  `pdf_to_images` clamps dpi to MIN_DPI..MAX_DPI and returns only the images
+  THIS call rendered (it renders into a fresh private directory — never glob
+  the output dir, whose contents and file names we do not control)
+- Keep passwords off argv wherever the tool allows it: qpdf reads them from
+  stdin (`--password-file=-`). poppler cannot (`-upw` only), which is a
+  documented limitation, not a licence to add more argv passwords
+- Validate every value that becomes a CUPS `-o` option (`media`, page
+  ranges, duplex) against a strict pattern — a comma or space smuggles in
+  further options
 - Declare mutating tools in the server's `gate_tools` so `luxe chat`
   withholds them until `/write`: everything that writes a file or spools a
   job. `pdf_info` / `pdf_text` / `pdf_form_fields` / `pdf_printers` are

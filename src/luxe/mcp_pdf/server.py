@@ -50,9 +50,13 @@ def build_server():
                  layout: bool = True, password: str = "") -> str:
         """Extract the text of a PDF (poppler pdftotext, layout preserved).
 
-        Page numbers are 1-based; 0 means "no limit". Returns nothing useful
-        for a scanned/image-only PDF — use pdf_to_images for those.
-        Read-only."""
+        Page numbers are 1-based. With last_page=0 a window of 20 pages from
+        first_page is extracted and `total_pages` / `note` say how much is
+        left — call again with first_page/last_page for the rest. Returns
+        nothing useful for a scanned/image-only PDF — use pdf_to_images for
+        those. A `password` here is visible to local `ps` for the call
+        (poppler takes it only on the command line); pdf_unlock first avoids
+        that. Read-only."""
         return _wrap(ops.pdf_text, path=path, first_page=first_page,
                      last_page=last_page, layout=layout, password=password)
 
@@ -130,7 +134,9 @@ def build_server():
                       last_page: int = 0, password: str = "") -> str:
         """Render each page to an image file (poppler pdftoppm).
 
-        Defaults to 150 dpi PNG into a `<name>-images/` sibling directory.
+        Defaults to 150 dpi PNG into a `<name>-images/` sibling directory;
+        dpi is clamped to 36-600. Returns only the pages rendered by this
+        call.
         Useful for reading a scanned PDF, or as the first half of a
         rasterising round-trip with images_to_pdf."""
         return _wrap(ops.pdf_to_images, path=path,
