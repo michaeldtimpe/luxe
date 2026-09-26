@@ -47,6 +47,11 @@ __all__ = ["StaleCheck", "check_stale_service", "check_omlx"]
 _CELLAR_RE = re.compile(r"/Cellar/(?P<formula>[^/]+)/(?P<version>[^/]+)")
 _TIMEOUT_S = 5.0
 
+#: The phrase a STALE verdict's `detail` always carries. `luxe.repair.
+#: is_stale_build_line` keys off it — one spelling, so the wording here and
+#: the predicate there cannot drift apart.
+STALE_MARKER = "brew replaced the tree underneath it"
+
 
 @dataclass
 class StaleCheck:
@@ -80,8 +85,7 @@ class StaleCheck:
             return self.reason
         if self.stale:
             return (f"pid {self.pid} is running {self.running}, but "
-                    f"{self.installed} is what's installed — brew replaced the "
-                    f"tree underneath it")
+                    f"{self.installed} is what's installed — {STALE_MARKER}")
         return f"{self.running} (matches installed)"
 
     @property

@@ -54,8 +54,8 @@ def host(monkeypatch):
 
     def _restart(formula):
         state["restart_calls"] += 1
-        return (True, "brew services restart ok") if state["restart_ok"] \
-            else (False, "`brew services restart omlx` exited 1: boom")
+        return (True, True, "brew services restart ok") if state["restart_ok"] \
+            else (True, False, "`brew services restart omlx` exited 1: boom")
     monkeypatch.setattr(repair_mod, "_restart_service", _restart)
     monkeypatch.setattr(repair_mod, "check_omlx", lambda: state["after"])
     monkeypatch.setattr(repair_mod.time, "sleep", lambda s: None)
@@ -217,7 +217,7 @@ def _smoke_cli(monkeypatch, tmp_path, reports, repair_result):
     monkeypatch.setattr(smoke_mod, "run_smoke", run_smoke)
     repairs: list[str] = []
 
-    def fake_repair(cfg, base_url, evidence):
+    def fake_repair(cfg, base_url, evidence, **kw):
         repairs.append(evidence)
         return repair_result
     monkeypatch.setattr(cli, "_smoke_self_repair", fake_repair)
@@ -371,7 +371,7 @@ def test_ready_fix_restarts_only_on_a_stale_build_line(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "build_ready_doctor",
                         lambda cfg, repo: docs[min(len(calls), 1)])
     monkeypatch.setattr(cli, "_smoke_self_repair",
-                        lambda cfg, url, ev: (calls.append(ev),
+                        lambda cfg, url, ev, **kw: (calls.append(ev),
                                               RepairResult(attempted=True,
                                                            ok=True))[1])
     res = CliRunner().invoke(cli.main, ["ready", "--fix", "--repo", str(tmp_path)])
@@ -535,3 +535,59 @@ def test_web_help_row_names_the_browser():
     from luxe.chat import commands as cmd
     row = next(r for r in cmd._HELP_ROWS if r[0] == "/web")
     assert "browser" in row[2] and "web_page" in row[2] and "--web" in row[2]
+
+
+# --- kit review 2026-09-26 (#7, #15) ---------------------------------------
+
+def test_restart_uses_brew_under_the_prefix_not_bare_path(monkeypatch, tmp_path):
+    """`ssh m1 luxe smoke` runs in a non-login shell with no Homebrew on
+    PATH; a bare `brew` failed there right after staleproc — which finds the
+    prefix itself — proved the formula is installed."""
+    brew = tmp_path / "bin" / "brew"
+    brew.parent.mkdir()
+    brew.write_text("#!/bin/sh\nexit 0\n")
+    brew.chmod(0o755)
+    monkeypatch.setattr(repair_mod, "_brew_prefix", lambda: str(tmp_path))
+    seen = []
+
+    class _Proc:
+        returncode, stdout, stderr = 0, "", ""
+
+    def _run(argv, **kw):
+        seen.append(argv)
+        return _Proc()
+    monkeypatch.setattr(repair_mod.subprocess, "run", _run)
+    ran, ok, _msg = repair_mod._restart_service("omlx")
+    assert ran and ok
+    assert seen[0][0] == str(brew)
+
+
+def test_cooldown_is_not_armed_when_brew_never_ran(host, monkeypatch):
+    """A restart that never happened must not lock out the next, correctly
+    environed attempt for five minutes."""
+    monkeypatch.setattr(repair_mod, "_restart_service",
+                        lambda f: (False, False, "`brew` not found"))
+    res = _go(host, check=_stale())
+    assert res.attempted and not res.ok
+    assert repair_mod._in_cooldown() == 0.0
+    monkeypatch.setattr(repair_mod, "_restart_service",
+                        lambda f: (True, True, "brew services restart ok"))
+    assert _go(host, check=_stale()).ok
+
+
+def test_cooldown_is_armed_once_brew_ran_even_if_it_failed(host):
+    host["restart_ok"] = False
+    _go(host, check=_stale())
+    assert repair_mod._in_cooldown() > 0
+
+
+def test_one_stale_build_predicate_for_smoke_and_doctor():
+    from luxe.chat import inspection
+
+    detail = _stale().detail
+    assert repair_mod.is_stale_build_line("oMLX build", "warn", detail)
+    assert repair_mod.is_stale_build_line("oMLX build", inspection.WARN, detail)
+    assert not repair_mod.is_stale_build_line("oMLX build", "pass", detail)
+    assert not repair_mod.is_stale_build_line("endpoint", "warn", detail)
+    assert not repair_mod.is_stale_build_line(
+        "oMLX build", "warn", "0.6.4 (matches installed)")
