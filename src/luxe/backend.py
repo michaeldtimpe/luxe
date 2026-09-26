@@ -1042,8 +1042,13 @@ class Backend:
         except (httpx.HTTPError, OSError):
             return False
 
-    def list_models(self) -> list[str]:
-        r = self._client.get("/v1/models")
+    def list_models(self, timeout_s: float | None = None) -> list[str]:
+        # `timeout_s` bounds THIS request only, like `health(timeout_s=)`:
+        # `/doctor` uses the catalog GET as its liveness probe too (one
+        # request instead of three), and a liveness question must not wait
+        # out the generation-sized read timeout. None = the client's own.
+        kw = {} if timeout_s is None else {"timeout": timeout_s}
+        r = self._client.get("/v1/models", **kw)
         r.raise_for_status()
         return [m["id"] for m in r.json().get("data", [])]
 

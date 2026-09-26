@@ -62,13 +62,29 @@ def human_bytes(n: float) -> str:
 # --- local store ------------------------------------------------------------
 
 
-def is_model_dir(path: str | os.PathLike[str]) -> bool:
-    """True when `path` looks like a loadable MLX model directory."""
+def is_model_dir(path: str | os.PathLike[str], *,
+                 resolve_xsym: bool = False) -> bool:
+    """True when `path` looks like a loadable MLX model directory.
+
+    A Synology `XSym` stub (a 1067-byte REGULAR file standing in for a
+    symlink) is not a weight file — oMLX would read 1067 bytes of link text.
+    In the local STORE (the default) a stub therefore never counts: a
+    manual NAS copy that brought stubs instead of shards used to report
+    "ok" in `/doctor`, `luxe smoke` and `pull --list` and then fail to load.
+    `resolve_xsym=True` is for SOURCES on a mounted volume, where the import
+    dereferences stubs: there a stub counts, and `_files_to_copy` refuses
+    loudly — naming the shard — if one does not resolve.
+    """
     p = Path(path)
     try:
         if not (p / "config.json").is_file():
             return False
-        return any(f.suffix in _WEIGHT_SUFFIXES for f in p.iterdir() if f.is_file())
+        for f in p.iterdir():
+            if f.suffix not in _WEIGHT_SUFFIXES or not f.is_file():
+                continue
+            if resolve_xsym or xsym_target(f) is None:
+                return True
+        return False
     except OSError:
         return False
 
@@ -193,6 +209,58 @@ def model_state(name: str, models_dir: Path | None = None) -> str:
     return "ok" if is_model_dir(p) else "dangling"
 
 
+def hf_repo_for(name: str, models_dir: Path | None = None) -> str:
+    """The HF repo id (`org/Name`) a store entry POINTS AT, or "".
+
+    A dangling entry is almost always a link into a wiped HF cache
+    (`…/hub/models--org--Name/snapshots/<sha>`), and the link text survives
+    the wipe — it names exactly what to re-fetch. That is what lets `/doctor`
+    print a fix that routes to HuggingFace instead of a bare `luxe pull
+    <name>`, which can only search mounts. Reads link TEXT only; never
+    follows or touches the target.
+    """
+    p = store_entry(name, models_dir)
+    if p is None:
+        return ""
+    links: list[Path] = []
+    try:
+        if p.is_symlink():
+            links.append(p)
+        elif p.is_dir():
+            links.extend(c for c in p.iterdir() if c.is_symlink())
+    except OSError:
+        return ""
+    for link in links:
+        try:
+            target = os.readlink(link)
+        except OSError:
+            continue
+        for part in Path(target).parts:
+            if not part.startswith("models--"):
+                continue
+            org, _, repo = part[len("models--"):].partition("--")
+            if org and repo:
+                return f"{org}/{repo}"
+    return ""
+
+
+def hf_cache_dir_for(repo_id: str) -> Path:
+    """`~/.cache/huggingface/hub/models--org--Name` for `org/Name` — the exact
+    directory `luxe pull <name> --from` accepts (it resolves `snapshots/`)."""
+    return (Path.home() / ".cache" / "huggingface" / "hub"
+            / f"models--{repo_id.replace('/', '--')}")
+
+
+def _remove_store_entry(p: Path) -> None:
+    """Delete one store entry of any shape. A symlink (live or dangling) or a
+    stray file is UNLINKED — `shutil.rmtree` refuses a symlink, and never
+    touching a link's target is the store's rule (see `remove_model`)."""
+    if p.is_symlink() or p.is_file():
+        p.unlink()
+    else:
+        shutil.rmtree(p)
+
+
 def remove_model(name: str, models_dir: Path | None = None) -> tuple[int, str]:
     """Delete one entry from the local store. Returns (bytes_freed, note).
 
@@ -296,14 +364,15 @@ def _resolve_hf_snapshot(path: Path) -> Path | None:
 
     A NAS copy of an HF cache entry is `models--org--Name/snapshots/<sha>/`;
     a plain export is the model directory itself. Anything else → None.
+    Sources may hold Synology `XSym` stubs (the import dereferences them).
     """
-    if is_model_dir(path):
+    if is_model_dir(path, resolve_xsym=True):
         return path
     snaps = path / "snapshots"
     try:
         if snaps.is_dir():
             for snap in sorted(snaps.iterdir()):
-                if is_model_dir(snap):
+                if is_model_dir(snap, resolve_xsym=True):
                     return snap
     except OSError:
         return None
@@ -341,10 +410,16 @@ def copy_into_store(
     src = Path(source.ref)
     dest_root = Path(models_dir or DEFAULT_MODELS_DIR)
     dest = dest_root / source.name
-    if dest.exists() and not force:
+    # Decide about the destination BEFORE the copy, and with `lexists`: a
+    # dangling symlink is `exists() == False`, so the old check let a copy of
+    # tens of GB run and then die renaming onto the link (and a live link
+    # died in `rmtree`, which refuses symlinks). An entry whose weights do
+    # not resolve holds nothing to protect, so it is replaceable without
+    # `force` — that is the very state `luxe pull` is run to repair.
+    if os.path.lexists(dest) and not force and is_model_dir(dest):
         raise ModelStoreError(
             f"{dest} already exists — pass force to replace it")
-    if not is_model_dir(src):
+    if not is_model_dir(src, resolve_xsym=True):
         raise ModelStoreError(f"{src} is not an MLX model directory "
                               "(needs config.json + weights)")
 
@@ -366,8 +441,8 @@ def copy_into_store(
             if on_progress:
                 on_progress(copied, total)
         dest_root.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            shutil.rmtree(dest)
+        if os.path.lexists(dest):
+            _remove_store_entry(dest)
         staging.rename(dest)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -581,9 +656,6 @@ class OmlxAdmin:
 
     def task(self, task_id: str) -> DownloadTask | None:
         return next((t for t in self.tasks() if t.task_id == task_id), None)
-
-    def cancel(self, task_id: str) -> None:
-        self._post(f"/admin/api/hf/cancel/{task_id}")
 
     def stored_models(self) -> list[dict]:
         """Models on this server's disk, with sizes (`/admin/api/hf/models`)."""

@@ -232,6 +232,38 @@ class BackendEntry(BaseModel):
             kw["key_fallback"] = False
         return kw
 
+    def build_backend(self, model: str = "", *, base_url: str | None = None,
+                      backend_cls=None):
+        """The ONE chat-side `Backend` constructor for this entry.
+
+        Before 2026-09-26 this was spelled out ~7 times (slots, smoke, the
+        kit CLI commands) and the copies drifted: the repair / teardown /
+        self-repair sites dropped `backend_kwargs()` and the engine label, so
+        a stale-oMLX restart on a billable entry could send the fleet key and
+        name the wrong stack. Everything a Backend needs from an entry —
+        env-resolved key (luxe.secrets, never YAML), `backend_kwargs()`, and
+        the display-only `engine_label` — is applied here.
+
+        `base_url` overrides the entry's URL (`--base-url`). `backend_cls`
+        lets a caller keep its own module-level `Backend` name (tests patch
+        `chat.slots.Backend`); default is `luxe.backend.Backend`, resolved at
+        call time. The label is set as an ATTRIBUTE, not a kwarg — see
+        `chat/slots.py`: it is display-only and must stay out of the pinned
+        `backend_kwargs()` wire/timeout surface.
+        """
+        from luxe.secrets import resolve_api_key
+
+        if backend_cls is None:
+            from luxe.backend import Backend as backend_cls
+        backend = backend_cls(base_url=base_url or self.base_url, model=model,
+                              api_key=resolve_api_key(self.api_key_env),
+                              **self.backend_kwargs())
+        try:
+            backend.engine_label = self.engine_label()
+        except Exception:
+            pass
+        return backend
+
 
 class RoleConfig(BaseModel):
     model_key: str
@@ -498,6 +530,15 @@ class PipelineConfig(BaseModel):
             if entry.default:
                 return name
         return next(iter(entries))
+
+    def build_backend(self, name: str | None = None, model: str = "", *,
+                      base_url: str | None = None, backend_cls=None):
+        """`Backend` for the named `backends:` entry (default entry when None).
+        Chat-side only — benchmark/maintain keep reading `omlx_base_url`.
+        See `BackendEntry.build_backend`."""
+        entry = self.backend_entry(name or self.default_backend_name())
+        return entry.build_backend(model, base_url=base_url,
+                                   backend_cls=backend_cls)
 
     def task_type(self, name: str) -> TaskTypeConfig:
         if name not in self.task_types:

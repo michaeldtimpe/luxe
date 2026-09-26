@@ -185,18 +185,26 @@ def _select_backend(cfg, backend_name: str | None, *,
                         for k, v in entries.items()}
 
 
-def _unload_unless(keep_loaded: bool) -> None:
+def _unload_unless(keep_loaded: bool, cfg=None) -> None:
     """Post-command teardown: free the local oMLX's RAM unless --keep-loaded.
 
     Best-effort by design — a teardown failure must never mask (or fail) the
     command whose `finally` this runs in. `maintain` keeps its own copy: it
     also REPORTS what it unloaded.
+
+    The endpoint is the one the command RAN against (`cfg.omlx_base_url`,
+    else the chat config's — `$LUXE_CONFIG` included), not a hard-coded
+    127.0.0.1:8000: on neo that port is not the server. Loopback only — a
+    teardown never evicts models on a host luxe does not own.
     """
     if keep_loaded:
         return
-    from luxe.backend import Backend
+    from luxe.backend import Backend, is_loopback_url
     try:
-        Backend(model="(unload-probe)").unload_all_loaded()
+        url = (getattr(cfg, "omlx_base_url", "")
+               or _omlx_base_url_from_config())
+        if is_loopback_url(url):
+            Backend(base_url=url, model="(unload-probe)").unload_all_loaded()
     except Exception:
         pass
 
@@ -283,7 +291,7 @@ def compare_run_cmd(task, repo, config_path, mode, model_b, prompt_a, prompt_b, 
     finally:
         search_mod.reset_index()
         symbols_mod.reset_index()
-        _unload_unless(keep_loaded)
+        _unload_unless(keep_loaded, cfg)
 
 
 @compare_group.command(name="review")
@@ -325,7 +333,7 @@ def _run_gitkit_cmd(kind: str, repo: str, config_path: str | None,
                        mirror=mirror, base=base, pr=pr,
                        min_severity=min_severity, no_incremental=no_incremental)
     finally:
-        _unload_unless(keep_loaded)
+        _unload_unless(keep_loaded, cfg)
 
 
 def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
@@ -343,7 +351,7 @@ def _run_gitapply_cmd(repo: str, config_path: str | None, keep_loaded: bool,
         rc = apply_mod.run_apply(repo_path=repo_path, cfg=cfg, console=console,
                                  deep=deep, rebuild_map=rebuild_map)
     finally:
-        _unload_unless(keep_loaded)
+        _unload_unless(keep_loaded, cfg)
     raise SystemExit(rc)
 
 
@@ -450,11 +458,16 @@ apply_aliases(main, {
 @click.option("--except", "except_for", multiple=True,
               help="Model ID(s) to keep resident (repeatable). Default: unload all.")
 def unload_models(except_for: tuple[str, ...]):
-    """Unload all currently-loaded models from oMLX to free RAM."""
-    from luxe.backend import Backend
-    b = Backend(model="(unload-cli)")
-    if not b.health():
-        console.print("[red]oMLX unreachable — is `brew services start omlx` running?[/]")
+    """Unload all currently-loaded models from the configured endpoint to
+    free RAM (the chat config's default backend — `$LUXE_CONFIG` honoured)."""
+    from luxe.chat.inspection import endpoint_fixes
+
+    cfg = _chat_cfg()
+    entry = cfg.backend_entry(cfg.default_backend_name())
+    b = entry.build_backend("(unload-cli)")
+    if not b.health(timeout_s=10.0):
+        console.print(f"[red]{entry.engine_label()} unreachable at "
+                      f"{entry.base_url} — {endpoint_fixes(entry)['start']}[/]")
         sys.exit(2)
     loaded = b.loaded_models()
     if not loaded:
@@ -533,10 +546,32 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 sys.exit(2)
 
             name = ms.store_name_for(ref)
+            # Store state FIRST — before a ≤20s mount scan, and keyed on
+            # whether the weights RESOLVE, not on the name being listed. A
+            # dangling entry (the HF-cache-wipe signature) used to hit
+            # "already in the store — pass --force", so the fix `/doctor`
+            # printed for it did nothing. A broken entry is replaceable.
+            state = ms.model_state(name, dest_dir)
+            if state == "ok" and not force:
+                console.print(f"[yellow]· {name} is already in {dest_dir} "
+                              "— pass --force to replace it.[/]")
+                sys.exit(0)
+            source_ref = ref
+            if state not in ("missing", "ok"):
+                console.print(f"[dim]· {name} is in the store but its "
+                              f"weights don't resolve ({state}) — replacing "
+                              "it[/]")
+                # A bare name can only be found on a mount; the dangling
+                # link itself names the HF repo it pointed at, so offer that
+                # too instead of "an HF fetch needs a full repo id".
+                if "/" not in ref and not from_path:
+                    guessed = ms.hf_repo_for(name, dest_dir)
+                    if guessed:
+                        source_ref = guessed
             if not from_path and not force_hf:
                 console.print("[dim]· scanning mounted volumes…[/]")
             sources = ms.resolve_pull_sources(
-                ref, admin=admin, from_path=from_path,
+                source_ref, admin=admin, from_path=from_path,
                 include_mounts=not force_hf)
             if not sources:
                 # With --from the only empty case is "not a model directory";
@@ -556,10 +591,6 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
             if len(sources) > 1:
                 for alt in sources[1:]:
                     console.print(f"  [dim]alt: {alt.describe()}[/]")
-            if name in ms.local_model_names(dest_dir) and not force:
-                console.print(f"[yellow]· {name} is already in {dest_dir} "
-                              "— pass --force to replace it.[/]")
-                sys.exit(0)
             if not assume_yes and not click.confirm("Pull it?", default=True):
                 console.print("[dim]· cancelled[/]")
                 return
@@ -568,7 +599,9 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 _pull_from_mount(chosen, dest_dir, force)
             else:
                 _pull_from_hf(admin, chosen)
-        except ms.ModelStoreError as e:
+        except (ms.ModelStoreError, OSError) as e:
+            # OSError too: a full disk, a vanished mount, or a permission
+            # error mid-copy is an operator-facing failure, not a traceback.
             console.print(f"[red]✗ {e}[/]")
             sys.exit(4)
         except KeyboardInterrupt:
@@ -736,7 +769,8 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
         if model_override:
             console.print("[yellow]⚠ --model applies to --chat/--code drills "
                           "only; the kit drill is manifest-driven.[/]")
-        reports.append(run_smoke(cfg, base_url=base_url or None,
+        reports.append(run_smoke(cfg, backend_name=backend_name,
+                                 base_url=base_url or None,
                                  skip_fallback=skip_fallback,
                                  skip_tools=skip_tools))
         for step in reports[-1].steps:
@@ -746,15 +780,17 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
         # its own, so when the drill fails with that signature (and the
         # endpoint is a local brew oMLX) restart it and drill again, loudly.
         # The second table is the verdict. --no-fix keeps the old
-        # diagnose-only behaviour; --backend <remote> never restarts anything
+        # diagnose-only behaviour; a remote --backend never restarts anything
         # (repair_omlx refuses non-local endpoints itself).
-        if reports[-1].failed and not no_fix and not backend_name:
+        if reports[-1].failed and not no_fix:
             evidence = reports[-1].stale_evidence
             if evidence:
-                rep = _smoke_self_repair(cfg, base_url or None, evidence)
+                rep = _smoke_self_repair(cfg, base_url or None, evidence,
+                                         backend_name=backend_name)
                 if rep.attempted:
                     console.print("[bold]after repair[/]")
-                    reports = [run_smoke(cfg, base_url=base_url or None,
+                    reports = [run_smoke(cfg, backend_name=backend_name,
+                                         base_url=base_url or None,
                                          skip_fallback=skip_fallback,
                                          skip_tools=skip_tools)]
                     for step in reports[-1].steps:
@@ -762,16 +798,15 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
                                       f"{step.detail}")
 
     failed = any(r.failed for r in reports)
-    if not keep_loaded and not backend_name:
-        # Only unload the endpoint we own; a remote host's residency is its
-        # own business (never unload a server another session may be using).
+    from luxe.chat.smoke import endpoint_is_shared
+    if not keep_loaded and not endpoint_is_shared(cfg, backend_name,
+                                                  base_url or None):
+        # Only unload an endpoint we OWN (B5): a shared/remote host's
+        # residency is its own business — never unload a server another
+        # session may be using (chat.sdd: remote drills never unload).
         try:
-            from luxe.backend import Backend
-            from luxe.secrets import resolve_api_key
-            entry = cfg.backend_entry(cfg.default_backend_name())
-            Backend(base_url=base_url or entry.base_url, model="",
-                    api_key=resolve_api_key(entry.api_key_env)
-                    ).unload_all_loaded()
+            cfg.build_backend(backend_name, "",
+                              base_url=base_url or None).unload_all_loaded()
         except Exception:
             pass
     verdict = ("[red]NOT READY[/]" if failed else "[green]READY[/]")
@@ -779,17 +814,15 @@ def smoke_cmd(config_path: str | None, backend_name: str | None,
     sys.exit(1 if failed else 0)
 
 
-def _smoke_self_repair(cfg, base_url: str | None, evidence: str):
+def _smoke_self_repair(cfg, base_url: str | None, evidence: str, *,
+                       backend_name: str | None = None):
     """Restart a stale local oMLX for `luxe smoke` / `luxe ready --fix` /
     `luxe repair`, narrating every step. Returns the RepairResult."""
-    from luxe.backend import Backend
     from luxe.repair import repair_omlx
-    from luxe.secrets import resolve_api_key
 
-    entry = cfg.backend_entry(cfg.default_backend_name())
+    entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
     url = base_url or entry.base_url
-    backend = Backend(base_url=url, model="",
-                      api_key=resolve_api_key(entry.api_key_env))
+    backend = entry.build_backend("", base_url=url)
     console.print("[yellow]⟳ self-repair[/] — stale oMLX: restarting it "
                   "[dim](--no-fix to only diagnose)[/]")
     res = repair_omlx(base_url=url, health=backend.health,
@@ -858,13 +891,15 @@ def ready_cmd(config_path: str | None, backend_name: str | None, repo: str,
 
     doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
     worst = inspection.render_doctor(doc, console, title="luxe ready")
-    if fix and not backend_name:
+    if fix:
+        from luxe.repair import is_stale_build_line
         stale = next((c for c in doc.checks
-                      if c.name == "oMLX build" and c.state == inspection.WARN
-                      and "brew replaced" in c.detail), None)
+                      if is_stale_build_line(c.name, c.state, c.detail)),
+                     None)
         if stale is None:
             console.print("[dim]· --fix: oMLX build is not stale, nothing to restart[/]")
-        elif _smoke_self_repair(cfg, None, stale.detail).attempted:
+        elif _smoke_self_repair(cfg, None, stale.detail,
+                                backend_name=backend_name).attempted:
             console.print("[bold]after repair[/]")
             doc = build_ready_doctor(cfg, str(Path(repo).expanduser()))
             worst = inspection.render_doctor(doc, console, title="luxe ready")
@@ -898,16 +933,16 @@ def repair_cmd(config_path: str | None, force: bool):
     repair automatically; `luxe ready` names it; this is the explicit form.
     Refuses anything that is not that signature unless --force. Exit 0 =
     healthy on the installed build, 1 = restart did not recover it,
-    2 = refused (not stale / remote / not brew / cooldown).
+    2 = refused (not stale / remote / not brew / not oMLX). The 5-minute
+    restart cooldown is per PROCESS, so it never refuses a fresh `luxe
+    repair` — it bounds the in-process callers (smoke's re-drill, a chat
+    session) instead.
     """
-    from luxe.backend import Backend
     from luxe.repair import repair_omlx
-    from luxe.secrets import resolve_api_key
 
     cfg = _chat_cfg(config_path)
     entry = cfg.backend_entry(cfg.default_backend_name())
-    backend = Backend(base_url=entry.base_url, model="",
-                      api_key=resolve_api_key(entry.api_key_env))
+    backend = entry.build_backend("")
     console.print(f"[dim]· checking oMLX at {entry.base_url}…[/]")
     res = repair_omlx(base_url=entry.base_url, health=backend.health,
                       engine=entry.engine, force=force)
@@ -1355,9 +1390,7 @@ def _materialize_from_hf_cache(source, models_dir=None) -> None:
     from luxe import modelstore as ms
 
     try:
-        org_repo = source.ref.replace("/", "--")
-        cache_dir = (Path.home() / ".cache" / "huggingface" / "hub"
-                     / f"models--{org_repo}")
+        cache_dir = ms.hf_cache_dir_for(source.ref)
         snap = ms._resolve_hf_snapshot(cache_dir)
         if snap is None:
             console.print("[yellow]· downloaded, but no loadable snapshot "
@@ -1371,10 +1404,12 @@ def _materialize_from_hf_cache(source, models_dir=None) -> None:
         ms.copy_into_store(src, models_dir=models_dir, force=True)
         console.print(f"[green]✓[/] {source.name} → real bytes in the store")
     except Exception as e:
+        # Name the model's OWN cache directory: `--from` wants a model dir
+        # (or its `models--org--Name` parent), and the hub root is neither.
         console.print(f"[yellow]· store materialization failed ({e}) — the "
                       f"model is only in the HF cache; re-run "
-                      f"`luxe pull {source.name} --from {Path.home()}/.cache/"
-                      "huggingface/hub` to fix[/]")
+                      f"`luxe pull {source.name} --from "
+                      f"{ms.hf_cache_dir_for(source.ref)}` to fix[/]")
 
 
 @main.command(name="pr")

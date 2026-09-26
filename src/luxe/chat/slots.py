@@ -69,6 +69,10 @@ class SlotManager:
         # announced ONCE via on_status. Manual /model overrides still win.
         self.degraded_from: str | None = None
         self.degraded_to: str | None = None
+        # A manifest whose fallback IS its main (neo: one 4B model, "same
+        # model, told loudly") has nothing to reroute to, but the failure is
+        # still announced — once. See `_degrade`.
+        self._same_model_announced = False
         self._catalog_checked = False
         # Single-residency policy (2026-07-30, user decision): ONE model in
         # RAM per host — the headroom is reserved for context. The swap path
@@ -113,36 +117,15 @@ class SlotManager:
             return False
 
     def _build_backend(self, entry: BackendEntry) -> Backend:
-        """Backend from a config entry. The API key is resolved HERE from the
-        entry's env-var name via luxe.secrets (env → secrets.env → keychain;
-        never stored in YAML); an empty value lets Backend fall back to
-        OMLX_API_KEY through the same chain."""
-        from luxe.secrets import resolve_api_key
-
-        backend = Backend(
-            base_url=entry.base_url,
-            model=self._resident,
-            api_key=resolve_api_key(entry.api_key_env),
-            **entry.backend_kwargs(),
-        )
-        # How a failed request NAMES the stack it was talking to. Set as an
-        # INSTANCE attribute rather than passed as a constructor kwarg — the
-        # same shape `on_reasoning` uses, and for the same reason: it is
-        # display-only, it reaches no request, and a Backend the benchmark
-        # path builds must keep the `"oMLX"` default this never touches
-        # (`backend.py`). Deliberately NOT routed through
-        # `BackendEntry.backend_kwargs()`, whose pinned contract is that the
-        # `engine:` field never changes the wire/timeout surface
-        # (tests/test_config.py) — a label is not the wire.
-        #
-        # Before 2026-08-24 every failure string was hardcoded "oMLX", so a
-        # turn that died on the OpenRouter backend reported "oMLX stream
-        # failed: RemoteProtocolError … (exhausted-attempts)" and pointed the
-        # reader at a local server that was never in the request path (session
-        # 168f1825a1fd; `acceptance/chat_bigread_2026_08_24/EVIDENCE.md`
-        # finding 1).
-        backend.engine_label = entry.engine_label()
-        return backend
+        """Backend from a config entry, through the one shared constructor
+        (`BackendEntry.build_backend`): key resolved from the entry's env-var
+        name via luxe.secrets (env → secrets.env → keychain; never YAML),
+        `backend_kwargs()`, and the display-only `engine_label` — so a failed
+        request names the stack it was really talking to (before 2026-08-24
+        every failure said "oMLX", even on OpenRouter; session 168f1825a1fd,
+        `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 1). Passes
+        this module's `Backend` so the tests that patch it keep working."""
+        return entry.build_backend(self._resident, backend_cls=Backend)
 
     # -- resolution ---------------------------------------------------------
 
@@ -513,8 +496,10 @@ class SlotManager:
         contract: a session silently running a different model than asked
         is the failure mode this exists to kill."""
         m = self.manifest
-        if (m is None or not m.fallback or m.fallback == m.main
-                or self.degraded_from is not None):
+        if m is None or not m.fallback or self.degraded_from is not None:
+            return False
+        if m.fallback == m.main:
+            self._announce_same_model(reason)
             return False
         self.degraded_from = m.main
         self.degraded_to = m.fallback
@@ -528,6 +513,23 @@ class SlotManager:
                 f"running on fallback {m.fallback}. "
                 f"Fix the main model and /model chat {m.main} to restore.")
         return True
+
+    def _announce_same_model(self, reason: str) -> str | None:
+        """The "same model, told loudly" degrade (neo's manifest declares its
+        main as its own fallback): there are no other weights to run, so no
+        reroute — but the session must not fail SILENTLY either, which is
+        what the old `fallback == main` early-return did. Announces once;
+        returns the notice (None when already announced)."""
+        if self._same_model_announced:
+            return None
+        self._same_model_announced = True
+        m = self.manifest
+        notice = (f"⚠ {m.main} unavailable ({reason}) — its declared "
+                  "fallback is the same model, so there is nothing to "
+                  "degrade to. Check the server (`luxe ready`), then /retry.")
+        if self._on_status:
+            self._on_status(notice)
+        return notice
 
     def _served_models(self) -> set[str] | None:
         """Server catalog, or None when the endpoint can't answer (down /
@@ -599,7 +601,13 @@ class SlotManager:
             healthy = False
         if not healthy:
             return None  # endpoint problem, not a model problem
-        if self._degrade("turn failed while the endpoint is healthy"):
+        reason = "turn failed while the endpoint is healthy"
+        if m.fallback and m.fallback == m.main:
+            if self._announce_same_model(reason):
+                return ("no other model to fall back to — /retry once "
+                        "`luxe ready` is green")
+            return None
+        if self._degrade(reason):
             return (f"switched to fallback {m.fallback} — "
                     f"/retry to re-run your message on it")
         return None

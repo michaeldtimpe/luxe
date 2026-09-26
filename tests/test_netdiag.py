@@ -320,10 +320,10 @@ def _fake_ladder_probes(monkeypatch):
     monkeypatch.setattr(netdiag, "probe_dns",
                         lambda host, timeout=0: _P("dns", True, host))
     monkeypatch.setattr(netdiag, "probe_tcp",
-                        lambda host, port=443, timeout=0:
+                        lambda host, port=443, timeout=0, ip="":
                         _P("tcp", True, f"{host}:{port}"))
     monkeypatch.setattr(netdiag, "probe_tls",
-                        lambda host, port=443, timeout=0:
+                        lambda host, port=443, timeout=0, ip="":
                         _P("tls", True, f"{host}:{port}"))
     monkeypatch.setattr(netdiag, "probe_http",
                         lambda url, timeout=0, layer=None:
@@ -398,3 +398,73 @@ def test_render_lines_marks_failures():
     lines = netdiag.render_lines(report)
     assert [ok for ok, _ in lines] == [True, False, False]
     assert "handshake timed out" in lines[1][1]
+
+
+# --- bounded ladder (kit review 2026-09-26 #5) --------------------------------
+
+
+def test_dns_failure_skips_every_name_rung(monkeypatch):
+    """After the DNS rung times out, tcp/tls/http/https/portal would each
+    re-run getaddrinfo with NO deadline. They are skipped; the DNS-free rung
+    still runs and the verdict is unchanged."""
+    _fake_ladder_probes(monkeypatch)
+    monkeypatch.setattr(netdiag, "probe_dns",
+                        lambda host, timeout=0: _P("dns", False, host,
+                                                   error="no answer in 3s"))
+    dialled: list[str] = []
+
+    def _tcp(host, port=443, timeout=0, ip=""):
+        dialled.append(host)
+        return _P("tcp", True, f"{host}:{port}")
+    monkeypatch.setattr(netdiag, "probe_tcp", _tcp)
+    for name in ("probe_tls", "probe_http", "probe_portal"):
+        monkeypatch.setattr(netdiag, name,
+                            lambda *a, **k: pytest.fail("name rung ran"))
+
+    report = netdiag.run_ladder("example.com")
+    assert dialled == [netdiag.DNSLESS_IP]
+    skipped = [p for p in report.probes if "skipped" in p.error]
+    assert {p.layer for p in skipped} == {"tcp", "tls", "http", "https",
+                                          "portal"}
+    assert report.verdict == netdiag.V_DNS_BROKEN
+
+
+def test_tcp_and_tls_dial_the_resolved_address(monkeypatch):
+    _fake_ladder_probes(monkeypatch)
+    monkeypatch.setattr(netdiag, "probe_dns",
+                        lambda host, timeout=0: Probe("dns", host, True, 5.0,
+                                                      detail="203.0.113.7, ::1"))
+    seen: dict[str, str] = {}
+
+    def _rec(layer):
+        def _probe(host, port=443, timeout=0, ip=""):
+            if host != netdiag.DNSLESS_IP:
+                seen[layer] = ip
+            return _P(layer, True, f"{host}:{port}")
+        return _probe
+    monkeypatch.setattr(netdiag, "probe_tcp", _rec("tcp"))
+    monkeypatch.setattr(netdiag, "probe_tls", _rec("tls"))
+    netdiag.run_ladder("example.com")
+    assert seen == {"tcp": "203.0.113.7", "tls": "203.0.113.7"}
+
+
+def test_a_hung_rung_cannot_hold_the_ladder_past_its_budget(monkeypatch):
+    import threading
+    import time as _time
+
+    _fake_ladder_probes(monkeypatch)
+    release = threading.Event()
+
+    def _hang(*a, **k):
+        release.wait(30)
+        return _P("http", True)
+    monkeypatch.setattr(netdiag, "probe_http", _hang)
+    monkeypatch.setattr(netdiag, "_LADDER_BUDGET_S", 0.3)
+    t0 = _time.monotonic()
+    try:
+        report = netdiag.run_ladder("example.com")
+    finally:
+        release.set()
+    assert _time.monotonic() - t0 < 5
+    http = [p for p in report.probes if p.layer in ("http", "https")]
+    assert http and all(not p.ok and "no result" in p.error for p in http)

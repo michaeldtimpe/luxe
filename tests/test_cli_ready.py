@@ -237,6 +237,21 @@ class TestOutageCard:
         missing = sorted(named - known)
         assert missing == [], f"OUTAGE.md names non-existent commands: {missing}"
 
+    def test_card_sync_line_matches_luxe_update_extras(self):
+        """§6's manual sync must install what `luxe update` does. Without
+        `--extra web` it prunes playwright and silently withholds the web
+        tools — the same prune shape that once broke the --code drill."""
+        import inspect
+        import re
+
+        extras = re.findall(r'"--extra", "(\w+)"',
+                            inspect.getsource(cli.update_cmd.callback))
+        assert extras, "could not read luxe update's extras"
+        text = outage_mod.CARD_PATH.read_text()
+        sync = next(ln for ln in text.splitlines()
+                    if "uv sync" in ln and "--extra dev" in ln)
+        assert re.findall(r"--extra (\w+)", sync) == extras
+
     def test_load_card_never_raises_on_a_missing_file(self, monkeypatch):
         monkeypatch.setattr(outage_mod, "CARD_PATH", Path("/nope/OUTAGE.md"))
         text = outage_mod.load_card()
@@ -464,3 +479,64 @@ class TestPullRefusesOnOpenRouter:
         monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path))
         res = CliRunner().invoke(cli.main, ["pull", "Nope", "--remove", "-y"])
         assert res.exit_code != 2 or "cannot fetch" not in res.output
+
+
+class TestUnloadFollowsTheConfig:
+    """#12: `luxe unload` / `_unload_unless` hard-coded 127.0.0.1:8000 and
+    ignored $LUXE_CONFIG — on neo (llama-server :8080) they hit nothing."""
+
+    @staticmethod
+    def _neo_yaml(tmp_path) -> Path:
+        p = tmp_path / "neo.yaml"
+        p.write_text(
+            "omlx_base_url: http://127.0.0.1:8080\n"
+            "models:\n  monolith: Q4B\n"
+            "roles:\n  monolith:\n    model_key: monolith\n"
+            "backends:\n  local:\n    base_url: http://127.0.0.1:8080\n"
+            "    engine: llama-server\n    default: true\n")
+        return p
+
+    def test_unload_uses_luxe_config_endpoint(self, tmp_path, monkeypatch):
+        import luxe.backend as backend_mod
+
+        made: list[str] = []
+
+        class B(_Backend):
+            def __init__(self, base_url="", **kw):
+                super().__init__(base_url=base_url, **kw)
+                made.append(base_url)
+
+            def health(self, timeout_s=None):
+                return True
+
+            def loaded_models(self):
+                return []
+
+        monkeypatch.setattr(backend_mod, "Backend", B)
+        monkeypatch.setenv("LUXE_CONFIG", str(self._neo_yaml(tmp_path)))
+        res = CliRunner().invoke(cli.main, ["unload"])
+        assert res.exit_code == 0, res.output
+        assert made == ["http://127.0.0.1:8080"]
+
+    def test_teardown_uses_the_commands_cfg_and_never_a_remote(
+            self, tmp_path, monkeypatch):
+        import luxe.backend as backend_mod
+
+        made: list[str] = []
+
+        class B(_Backend):
+            def __init__(self, base_url="", **kw):
+                super().__init__(base_url=base_url, **kw)
+                made.append(base_url)
+
+        monkeypatch.setattr(backend_mod, "Backend", B)
+        local = PipelineConfig(models={"monolith": "M"},
+                               roles={"monolith": RoleConfig(model_key="monolith")},
+                               omlx_base_url="http://127.0.0.1:8080")
+        cli._unload_unless(False, local)
+        assert made == ["http://127.0.0.1:8080"]
+        made.clear()
+        remote = local.model_copy(
+            update={"omlx_base_url": "http://m5.example.ts.net:8000"})
+        cli._unload_unless(False, remote)
+        assert made == []                       # never evicts a shared host

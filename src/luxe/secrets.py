@@ -43,15 +43,28 @@ def _from_file(name: str) -> str:
     return ""
 
 
+# Keychain answers, per process. Every chat-side Backend construction resolves
+# its key, and a miss in env + secrets.env fell through to a `security`
+# subprocess EVERY time (≤3s each) — `/doctor`, a `/backend` probe, a smoke
+# run each paid it again for an answer that cannot change mid-process. Misses
+# are cached too: a keyless host (neo's llama-server) is exactly the one that
+# paid on every call. env and secrets.env stay live (cheap, and editable).
+_KEYCHAIN_CACHE: dict[str, str] = {}
+
+
 def _from_keychain(name: str) -> str:
+    if name in _KEYCHAIN_CACHE:
+        return _KEYCHAIN_CACHE[name]
     try:
         r = subprocess.run(
             ["security", "find-generic-password", "-s", name, "-w"],
             capture_output=True, text=True, timeout=3,
         )
-        return r.stdout.strip() if r.returncode == 0 else ""
+        value = r.stdout.strip() if r.returncode == 0 else ""
     except Exception:
-        return ""
+        return ""          # not cached: a timeout may be transient
+    _KEYCHAIN_CACHE[name] = value
+    return value
 
 
 def resolve_api_key(env_name: str = "OMLX_API_KEY") -> str:
