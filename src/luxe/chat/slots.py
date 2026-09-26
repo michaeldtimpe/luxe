@@ -69,6 +69,10 @@ class SlotManager:
         # announced ONCE via on_status. Manual /model overrides still win.
         self.degraded_from: str | None = None
         self.degraded_to: str | None = None
+        # A manifest whose fallback IS its main (neo: one 4B model, "same
+        # model, told loudly") has nothing to reroute to, but the failure is
+        # still announced — once. See `_degrade`.
+        self._same_model_announced = False
         self._catalog_checked = False
         # Single-residency policy (2026-07-30, user decision): ONE model in
         # RAM per host — the headroom is reserved for context. The swap path
@@ -492,8 +496,10 @@ class SlotManager:
         contract: a session silently running a different model than asked
         is the failure mode this exists to kill."""
         m = self.manifest
-        if (m is None or not m.fallback or m.fallback == m.main
-                or self.degraded_from is not None):
+        if m is None or not m.fallback or self.degraded_from is not None:
+            return False
+        if m.fallback == m.main:
+            self._announce_same_model(reason)
             return False
         self.degraded_from = m.main
         self.degraded_to = m.fallback
@@ -507,6 +513,23 @@ class SlotManager:
                 f"running on fallback {m.fallback}. "
                 f"Fix the main model and /model chat {m.main} to restore.")
         return True
+
+    def _announce_same_model(self, reason: str) -> str | None:
+        """The "same model, told loudly" degrade (neo's manifest declares its
+        main as its own fallback): there are no other weights to run, so no
+        reroute — but the session must not fail SILENTLY either, which is
+        what the old `fallback == main` early-return did. Announces once;
+        returns the notice (None when already announced)."""
+        if self._same_model_announced:
+            return None
+        self._same_model_announced = True
+        m = self.manifest
+        notice = (f"⚠ {m.main} unavailable ({reason}) — its declared "
+                  "fallback is the same model, so there is nothing to "
+                  "degrade to. Check the server (`luxe ready`), then /retry.")
+        if self._on_status:
+            self._on_status(notice)
+        return notice
 
     def _served_models(self) -> set[str] | None:
         """Server catalog, or None when the endpoint can't answer (down /
@@ -578,7 +601,13 @@ class SlotManager:
             healthy = False
         if not healthy:
             return None  # endpoint problem, not a model problem
-        if self._degrade("turn failed while the endpoint is healthy"):
+        reason = "turn failed while the endpoint is healthy"
+        if m.fallback and m.fallback == m.main:
+            if self._announce_same_model(reason):
+                return ("no other model to fall back to — /retry once "
+                        "`luxe ready` is green")
+            return None
+        if self._degrade(reason):
             return (f"switched to fallback {m.fallback} — "
                     f"/retry to re-run your message on it")
         return None
