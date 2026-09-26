@@ -345,8 +345,11 @@ def assert_gh_auth() -> None:
 
 
 def is_dirty(repo_path: str | Path) -> bool:
+    """True when the tree has uncommitted changes — OR when `git status`
+    itself failed: a tree whose state is unknown is not a clean one (this
+    returned False, "clean", on any git failure)."""
     r = _run(["git", "status", "--porcelain"], cwd=repo_path)
-    return r.ok and bool(r.stdout.strip())
+    return (not r.ok) or bool(r.stdout.strip())
 
 
 def assert_clean_tree(repo_path: str | Path, *,
@@ -384,7 +387,9 @@ def detect_base_branch(repo_path: str | Path) -> str:
     # Fallback: parse `git symbolic-ref refs/remotes/origin/HEAD`
     r = _run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"], cwd=repo_path)
     if r.ok and r.stdout.strip():
-        return r.stdout.strip().rsplit("/", 1)[-1]
+        # strip the remote prefix, not "everything up to the last slash" — a
+        # default branch named release/2.x is not "2.x"
+        return r.stdout.strip().removeprefix("refs/remotes/origin/")
     return "main"
 
 
@@ -576,8 +581,15 @@ def _do_commit(spec: RunSpec, state: PRState, report_text: str,
         step.completed_at = time.time()
         return
 
-    # Create branch
-    co = _run(["git", "checkout", "-b", state.branch_name], cwd=repo)
+    # Create the branch — or, when a previous attempt got as far as creating
+    # it (a resumed commit after a failing hook), just be on it.
+    cur = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo)
+    if cur.ok and cur.stdout.strip() == state.branch_name:
+        co = cur
+    elif _branch_exists_local(repo, state.branch_name):
+        co = _run(["git", "checkout", state.branch_name], cwd=repo)
+    else:
+        co = _run(["git", "checkout", "-b", state.branch_name], cwd=repo)
     if not co.ok:
         step.status = "failed"
         step.detail = f"git checkout failed: {co.stderr.strip()[:300]}"
@@ -699,7 +711,8 @@ def _do_create(spec: RunSpec, state: PRState, report_text: str,
             "--base", spec.base_branch, "--head", state.branch_name]
     if is_draft:
         args.append("--draft")
-    res = _run(args, cwd=repo)
+    # network call: bounded + non-interactive (a hung gh blocked forever)
+    res = _run_net(args, cwd=repo)
     if not res.ok:
         step.status = "failed"
         step.detail = f"gh pr create failed: {res.stderr.strip()[:500]}"
@@ -715,6 +728,32 @@ def _do_create(spec: RunSpec, state: PRState, report_text: str,
     step.status = "done"
     step.detail = url
     step.completed_at = time.time()
+
+
+_CHECK_FAILED = frozenset({"fail", "cancel"})
+_CHECK_DONE_OK = frozenset({"pass", "skipping"})
+
+
+def _classify_checks(out: str) -> tuple[str, str]:
+    """(verdict, first failing line) from `gh pr checks` output — one
+    tab-separated row per check, the STATE in column 2 (pass / fail / pending
+    / skipping / cancel). Matching the WORD in that column, not a substring of
+    the whole output: a check named `failover-tests` read as a failure and
+    `bypass-lint` as a pass. Verdict is passed | failed | pending; anything
+    unparseable is pending (the watch then times out, never guesses)."""
+    states: list[tuple[str, str]] = []
+    for line in (out or "").splitlines():
+        cols = line.split("\t")
+        if len(cols) >= 2 and cols[1].strip():
+            states.append((cols[1].strip().lower(), line.strip()))
+    if not states:
+        return "pending", ""
+    for st, line in states:
+        if st in _CHECK_FAILED:
+            return "failed", line
+    if all(st in _CHECK_DONE_OK for st, _ in states):
+        return "passed", ""
+    return "pending", ""
 
 
 def _do_watch_ci(spec: RunSpec, state: PRState, cfg: PRConfig) -> None:
@@ -734,30 +773,25 @@ def _do_watch_ci(spec: RunSpec, state: PRState, cfg: PRConfig) -> None:
     failing_check = ""
     while time.monotonic() < deadline:
         res = _run_net(["gh", "pr", "checks", str(state.pr_number)], cwd=repo)
-        out = res.stdout
-        # gh's `pr checks` returns 0 on green, 8 on pending, non-zero on red
-        # depending on version. We grep the output rather than relying on rc.
-        if "fail" in out.lower():
-            final_state = "failed"
-            for line in out.splitlines():
-                if "fail" in line.lower():
-                    failing_check = line.strip()
-                    break
+        verdict, failing = _classify_checks(res.stdout)
+        if verdict == "failed":
+            final_state, failing_check = "failed", failing
             break
-        if res.ok and "pass" in out.lower() and "pending" not in out.lower():
+        if verdict == "passed":
             final_state = "passed"
             break
         time.sleep(cfg.watch_ci_poll_interval_s)
 
     if final_state == "passed":
         if cfg.convert_to_ready_on_green and state.is_draft:
-            _run(["gh", "pr", "ready", str(state.pr_number)], cwd=repo)
+            _run_net(["gh", "pr", "ready", str(state.pr_number)], cwd=repo)
             state.is_draft = False
         step.detail = "ci passed"
     elif final_state == "failed":
         # If we opened it ready, convert back to draft
         if not state.is_draft:
-            _run(["gh", "pr", "ready", str(state.pr_number), "--undo"], cwd=repo)
+            _run_net(["gh", "pr", "ready", str(state.pr_number), "--undo"],
+                     cwd=repo)
             state.is_draft = True
         step.detail = f"ci failed: {failing_check}"
     else:
@@ -878,6 +912,13 @@ def resume_pr(run_id: str, *, push_only: bool = False, watch_ci: bool = False,
           push_only=push_only, watch_ci=watch_ci)
 
     try:
+        if not state.is_done("commit"):
+            # a commit that FAILED (hook, identity) is retried here — resume
+            # used to start at `test` and push a branch with nothing on it
+            _do_commit(spec, state, report_text, spec.task_type, spec.goal)
+            save_pr_state(run_id, state)
+            if state.step("commit").status == "skipped":
+                return state
         if not state.is_done("test"):
             _do_test(spec, state, cfg)
             save_pr_state(run_id, state)
