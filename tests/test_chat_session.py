@@ -45,7 +45,7 @@ def test_first_turn_no_memory_write_mode_is_empty_context(repo: Path):
                     project_kind="dir")
     ctx, version = s.build_extra_context("what does foo do?")
     assert ctx == ""  # Goal carries the message; nothing else to disambiguate
-    assert version == "trunc-v1"
+    assert version == "trunc-v2"
 
 
 def test_terse_default_injects_response_style(repo: Path):
