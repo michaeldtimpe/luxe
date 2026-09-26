@@ -20,6 +20,7 @@ import json
 import re
 from pathlib import Path
 
+from luxe.ephemeral import is_ephemeral
 from luxe.gitkit.store import reports_dir
 
 PLAN_SCHEMA = "gitplan/v1"
@@ -88,14 +89,28 @@ def _norm_step(raw: dict, idx: int, default_verify: str) -> dict | None:
 def normalize_plan(raw: dict | None, *, head: str, summary: str = "",
                    default_verify: str = "") -> dict:
     """Normalize a parsed plan into the gitplan/v1 schema. Fills ids/risk/verify/
-    depends_on, drops malformed steps, prunes dangling depends_on, stamps
-    schema+head. Never raises — an empty/None input yields a valid empty plan."""
+    depends_on, drops malformed steps, makes ids UNIQUE, prunes dangling
+    depends_on, stamps schema+head. Never raises — an empty/None input yields
+    a valid empty plan.
+
+    A repeated id (the model numbering two steps "S2", or two chunks' steps
+    both defaulting to "S1") is renamed `S2-2`, `S2-3`, …: `order_steps` keys
+    steps by id, so a duplicate used to silently DROP every step but the
+    last. A `depends_on` naming a duplicated id keeps pointing at the first."""
     raw = raw or {}
     steps: list[dict] = []
+    seen: set[str] = set()
     for i, s in enumerate(raw.get("steps") or []):
         ns = _norm_step(s, i, default_verify)
-        if ns is not None:
-            steps.append(ns)
+        if ns is None:
+            continue
+        if ns["id"] in seen:
+            n = 2
+            while f"{ns['id']}-{n}" in seen:
+                n += 1
+            ns["id"] = f"{ns['id']}-{n}"
+        seen.add(ns["id"])
+        steps.append(ns)
     ids = {s["id"] for s in steps}
     for s in steps:  # drop dependencies on steps that didn't survive
         s["depends_on"] = [d for d in s["depends_on"] if d in ids and d != s["id"]]
@@ -162,9 +177,12 @@ def _plan_path(repo_path: str | Path, head: str) -> Path:
     return reports_dir(repo_path) / f"plan-{head or 'nohead'}.json"
 
 
-def save_plan_json(repo_path: str | Path, plan: dict) -> Path:
+def save_plan_json(repo_path: str | Path, plan: dict) -> Path | None:
     """Persist the machine-readable plan, keyed by HEAD (latest wins), beside the
-    canonical reports under ~/.luxe/reports/<hash>/."""
+    canonical reports under ~/.luxe/reports/<hash>/. None under --ephemeral
+    (the plan is still returned and rendered, just never filed)."""
+    if is_ephemeral():
+        return None
     p = _plan_path(repo_path, plan.get("head", ""))
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(plan, indent=2))
@@ -174,9 +192,11 @@ def save_plan_json(repo_path: str | Path, plan: dict) -> Path:
 def finalize_and_save(repo_path: str | Path, head: str, raw_text: str, *,
                       fallback_steps: list | None = None,
                       extract_fn=None,
-                      title: str = "Change plan") -> tuple[str, dict]:
-    """Parse the model's plan JSON, normalize it, persist `plan-<head>.json`, and
-    return (markdown_report, plan).
+                      title: str = "Change plan",
+                      save: bool = True) -> tuple[str, dict]:
+    """Parse the model's plan JSON, normalize it, persist `plan-<head>.json`
+    (unless `save=False` — `--no-save` — or --ephemeral), and return
+    (markdown_report, plan).
 
     The champion rarely emits clean JSON in an agentic final message, so when the
     raw text has no parseable steps and `extract_fn` is given, run a TRANSCRIPTION
@@ -194,7 +214,8 @@ def finalize_and_save(repo_path: str | Path, head: str, raw_text: str, *,
     if (not parsed or not parsed.get("steps")) and fallback_steps:
         parsed = {"summary": (parsed or {}).get("summary", ""), "steps": fallback_steps}
     plan = normalize_plan(parsed, head=head)
-    save_plan_json(repo_path, plan)
+    if save:
+        save_plan_json(repo_path, plan)
     return render_markdown(plan, title), plan
 
 

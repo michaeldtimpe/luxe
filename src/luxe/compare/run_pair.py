@@ -18,8 +18,18 @@ from benchmarks.maintain_suite.run import Variant, make_overlay
 from luxe.config import load_config
 
 # Env that disables the luxe substrate for the "bare champion" side of mode 1.
+# BOTH kinds of lever: the opt-in ones (forced off in case the operator's
+# shell exported them) and the DEFAULT-ON ones — only the exact string "0"
+# turns those off (agents/flags.py), and until 2026-09 the bare side left
+# truncated-turn retry, empty-turn retry and server-truth calibration running,
+# so "bare" still carried three of the substrate's loop interventions.
 _BARE_SUBSTRATE_ENV = {
+    # default-ON levers
     "LUXE_TIERED_COMPACT": "0",
+    "LUXE_TRUNCATED_TURN_RETRY": "0",
+    "LUXE_EMPTY_TURN_RETRY": "0",
+    "LUXE_CTX_SERVER_TRUTH": "0",
+    # opt-in levers
     "LUXE_REFLECT": "0",
     "LUXE_ADAPTIVE_POLICY": "0",
     "LUXE_WRITE_PRESSURE": "0",
@@ -122,10 +132,12 @@ def build_sides(
 
 
 def _role_for_side(side: CompareSide):
-    overlay_dir = Path(tempfile.mkdtemp(prefix="luxe_cmp_"))
-    overlay_path = make_overlay(side.variant, overlay_dir)
-    cfg = load_config(overlay_path)
-    return cfg.role("monolith")
+    # The overlay YAML is only needed while load_config reads it — a mkdtemp
+    # here leaked one directory per side per compare.
+    with tempfile.TemporaryDirectory(prefix="luxe_cmp_") as d:
+        overlay_path = make_overlay(side.variant, Path(d))
+        cfg = load_config(overlay_path)
+        return cfg.role("monolith")
 
 
 def run_compare(

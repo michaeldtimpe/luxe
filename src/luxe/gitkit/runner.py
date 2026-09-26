@@ -473,7 +473,7 @@ def run_git_report(
 
             report, _ = plan_mod.finalize_and_save(
                 target, _head, (result.final_text or "").strip(),
-                extract_fn=_extract_plan_json, title=_TITLES[kind])
+                extract_fn=_extract_plan_json, title=_TITLES[kind], save=save)
         else:
             # WS1.2: slice off any leading monologue before the report's required title.
             report = extract_report((result.final_text or "").strip(), kind) or \
