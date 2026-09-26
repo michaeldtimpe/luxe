@@ -21,8 +21,10 @@ from html.parser import HTMLParser
 _SKIP_TAGS = {"script", "style", "noscript", "svg", "canvas", "template",
               "iframe", "object", "embed"}
 # Structural chrome. Removing these is what separates "the article" from
-# "the article plus every nav link on the site".
-_CHROME_TAGS = {"nav", "header", "footer", "aside", "form"}
+# "the article plus every nav link on the site". NOT `form`: ASP.NET
+# WebForms (and plenty of CMS templates) wrap the ENTIRE page body in one
+# <form runat=server>, so dropping forms emptied those pages completely.
+_CHROME_TAGS = {"nav", "header", "footer", "aside"}
 _BLOCK_TAGS = {"p", "div", "section", "article", "main", "br", "hr", "tr",
                "table", "ul", "ol", "dl", "blockquote", "figure"}
 _HEADINGS = {"h1": "#", "h2": "##", "h3": "###",
@@ -35,15 +37,18 @@ class _Extractor(HTMLParser):
         self.base_url = base_url
         self.keep_links = keep_links
         self.out: list[str] = []
-        self.links: list[tuple[str, str]] = []
         self.title = ""
         self._skip_depth = 0
         self._chrome_depth = 0
         self._in_title = False
         self._in_pre = 0
         self._heading: str | None = None
+        # An open <a>: its href and where its text starts in `out`. Link
+        # text is emitted INLINE like any other text and rewritten into
+        # `[text](href)` at </a> — buffering it instead meant an unclosed
+        # <a> swallowed the whole rest of the page.
         self._link_href: str | None = None
-        self._link_text: list[str] = []
+        self._link_start = 0
 
     # -- helpers --
     def _emit(self, text: str) -> None:
@@ -59,6 +64,20 @@ class _Extractor(HTMLParser):
             return urljoin(self.base_url, href)
         except ValueError:
             return href
+
+    def _close_link(self) -> None:
+        """Rewrite the open link's inline text as `[text](href)`."""
+        if self._link_href is None:
+            return
+        href, start = self._link_href, self._link_start
+        self._link_href = None
+        raw = "".join(self.out[start:])
+        text = " ".join(raw.split())
+        if text:
+            lead = " " if raw[:1].isspace() else ""
+            trail = " " if raw[-1:].isspace() else ""
+            del self.out[start:]
+            self.out.append(f"{lead}[{text}]({href}){trail}")
 
     # -- parser hooks --
     def handle_starttag(self, tag, attrs):
@@ -81,10 +100,11 @@ class _Extractor(HTMLParser):
         elif tag == "li":
             self._emit("\n- ")
         elif tag == "a" and self.keep_links:
+            self._close_link()          # <a> cannot nest; an open one ends here
             href = dict(attrs).get("href") or ""
             if href and not href.startswith(("javascript:", "#")):
                 self._link_href = self._absolute(href)
-                self._link_text = []
+                self._link_start = len(self.out)
         elif tag == "img":
             alt = dict(attrs).get("alt") or ""
             if alt:
@@ -109,13 +129,8 @@ class _Extractor(HTMLParser):
         elif tag in _HEADINGS:
             self._heading = None
             self._emit("\n")
-        elif tag == "a" and self._link_href is not None:
-            text = "".join(self._link_text).strip()
-            if text:
-                self._emit(f"[{text}]({self._link_href})")
-                self.links.append((text, self._link_href))
-            self._link_href = None
-            self._link_text = []
+        elif tag == "a":
+            self._close_link()
         elif tag in _BLOCK_TAGS:
             self._emit("\n")
 
@@ -127,9 +142,6 @@ class _Extractor(HTMLParser):
             return
         if self._in_pre:
             self.out.append(data)
-            return
-        if self._link_href is not None:
-            self._link_text.append(data)
             return
         # Collapse runs of whitespace; the block tags carry the structure.
         cleaned = re.sub(r"\s+", " ", data)
@@ -147,8 +159,8 @@ def _tidy(text: str) -> str:
 
 
 def extract_text(html: str, *, base_url: str = "",
-                 keep_links: bool = True) -> tuple[str, str, list[tuple[str, str]]]:
-    """(title, markdown_text, links) for an HTML document."""
+                 keep_links: bool = True) -> tuple[str, str]:
+    """(title, markdown_text) for an HTML document. Links stay inline."""
     parser = _Extractor(base_url=base_url, keep_links=keep_links)
     try:
         parser.feed(html)
@@ -157,7 +169,8 @@ def extract_text(html: str, *, base_url: str = "",
         # A malformed document must degrade, not raise: partial text beats a
         # tool error, and HTMLParser can throw on genuinely broken markup.
         pass
-    return parser.title.strip(), _tidy("".join(parser.out)), parser.links
+    parser._close_link()
+    return parser.title.strip(), _tidy("".join(parser.out))
 
 
 def to_markdown(fetched, *, keep_links: bool = True,
@@ -175,8 +188,8 @@ def to_markdown(fetched, *, keep_links: bool = True,
         body = fetched.text
         note = ""
     else:
-        title, body, _links = extract_text(fetched.text, base_url=fetched.url,
-                                           keep_links=keep_links)
+        title, body = extract_text(fetched.text, base_url=fetched.url,
+                                   keep_links=keep_links)
         if title:
             header = f"# {title}\n{fetched.url}"
         note = ""
