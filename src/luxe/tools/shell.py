@@ -4,10 +4,12 @@ Hardened 2026-05-02 against allowlist-bypass via shell chains. The
 original implementation checked `parts[0]` against the allowlist
 and ran `command` via `shell=True`, which meant a command like
 `cat foo && rm -rf /` passed the check (parts[0] == 'cat') and
-then the shell still executed `rm`. The fix uses `shlex.split` to
-tokenize the command, then rejects any chain operator (`&&`, `||`,
-`;`, `|`, `&`) or redirect (`>`, `<`, `>>`) or command-substitution
-(`` ` ``, `$(`) tokens that would bypass the allowlist. The model
+then the shell still executed `rm`. The fix tokenizes the command
+(shell punctuation split out, `_shell_tokens`, 2026-09-26 — plain
+`shlex.split` missed operators glued to words, `echo a;touch X`),
+then rejects any chain operator (`&&`, `||`, `;`, `|`, `&`),
+redirect (`>`, `<`, `>>`), unquoted newline, or command-substitution
+(`` ` ``, `$(`) that would bypass the allowlist. The model
 can issue multiple bash calls if it needs sequential commands;
 write_file/read_file are the right tools for what redirects would
 otherwise do.
@@ -18,7 +20,9 @@ is preserved for the single, allowlisted binary.
 
 from __future__ import annotations
 
+import os
 import shlex
+import signal
 import subprocess
 from typing import Any
 
@@ -83,6 +87,37 @@ def _clip_output(output: str) -> str:
             f"{_MAX_OUTPUT:,}; head and tail kept)\n{tail}")
 
 
+#: Characters sh treats as control/redirection operators when UNQUOTED.
+_OPERATOR_CHARS = frozenset(";&|<>")
+
+
+def _shell_tokens(command: str) -> list[str]:
+    """Tokenize like sh does for operators (2026-09-26).
+
+    `shlex.split` splits on whitespace only, so an operator glued to a word
+    stayed inside it: `echo a;touch X` was `['echo', 'a;touch', 'X']`, passed
+    the chain check, and sh ran `touch`. `punctuation_chars` makes shlex split
+    unquoted `();<>|&` runs into their own tokens (`['echo', 'a', ';', …]`)
+    while quoted text stays one token (`grep "a|b"` → `a|b`). `commenters` is
+    cleared because `shlex.shlex` — unlike `shlex.split` — treats `#` as a
+    comment even mid-word: `echo a#;touch X` tokenized as `['echo', 'a']`.
+    """
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
+
+
+def _is_operator(token: str) -> bool:
+    """A punctuation-only token carrying a shell operator (`;`, `>&`, `|&`…).
+
+    Quoted text never lands here as a mixed token, but a lone quoted `";"`
+    is indistinguishable from an operator after shlex — refused, as it
+    always was under `shlex.split`."""
+    return (bool(token) and all(c in "();<>|&" for c in token)
+            and any(c in _OPERATOR_CHARS for c in token))
+
+
 def _validate_command(command: str) -> tuple[list[str], str | None]:
     """Tokenize via shlex and reject anything that would let a non-allowlisted
     binary execute. Returns (tokens, error). On error, tokens is empty.
@@ -92,13 +127,26 @@ def _validate_command(command: str) -> tuple[list[str], str | None]:
     quoted regex doesn't trip the chain check.
     """
     try:
-        tokens = shlex.split(command)
+        tokens = _shell_tokens(command)
     except ValueError as e:
         return [], f"Failed to parse command (mismatched quotes?): {e}"
     if not tokens:
         return [], "Empty command"
 
-    bad_chain = [t for t in tokens if t in _CHAIN_TOKENS or t in _REDIRECT_TOKENS]
+    # An UNQUOTED newline is a command separator to sh, and shlex swallows it
+    # as whitespace — `echo a\ntouch X` validated as one `echo` and ran both.
+    # A newline inside quotes survives into its token (`python -c "a\nb"`),
+    # so any newline the tokens don't account for was unquoted. \r is not a
+    # separator to sh, but shlex drops it the same way; refuse both.
+    for ch in ("\n", "\r"):
+        if command.count(ch) > sum(t.count(ch) for t in tokens):
+            return [], (
+                "Unquoted newline in command — sh runs each line as a "
+                "separate command. Issue separate bash calls instead."
+            )
+
+    bad_chain = [t for t in tokens
+                 if t in _CHAIN_TOKENS or t in _REDIRECT_TOKENS or _is_operator(t)]
     if bad_chain:
         return [], (
             f"Shell chain/redirect operators not allowed: {bad_chain}. "
@@ -107,8 +155,10 @@ def _validate_command(command: str) -> tuple[list[str], str | None]:
         )
 
     # Command substitution — `cat $(echo /etc/passwd)` would let any binary
-    # execute via the inner shell. Reject backticks and $(.
-    for t in tokens:
+    # execute via the inner shell. Reject backticks and $(. Checked on the
+    # WHITESPACE tokens (shlex.split): the operator-splitting tokenizer above
+    # breaks `$(ls)` into `$`, `(`, `ls`, `)`, where no token contains "$(".
+    for t in shlex.split(command):
         if "`" in t or "$(" in t:
             return [], (
                 f"Command substitution not allowed in token {t!r}. "
@@ -126,6 +176,25 @@ _UNRESTRICTED_TIMEOUT = 600
 _CANCEL_POLL_S = 0.2
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the process GROUP `proc` leads (it was started with
+    start_new_session), so `sh -c`'s children die with the shell."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.kill()
+
+
+def _reap(proc: subprocess.Popen) -> None:
+    """Collect a killed process. Bounded: a descendant that escaped the group
+    (its own setsid) can hold the pipes open forever, and a tool must not
+    hang on it after already reporting the timeout."""
+    try:
+        proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _run_cancellable(command: str, *, cwd, env, timeout: int,
                      cancel) -> tuple[str, str | None]:
     """Chat-only subprocess runner that honours a CancelToken mid-flight.
@@ -136,9 +205,7 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
     duck-typed token (any object with a truthy `.requested`) and kills the
     WHOLE process group (start_new_session) so `sh -c` children die with the
     shell. Only reachable via make_bash_fn(cancel=...); the benchmark path
-    keeps subprocess.run in _bash, byte-identical."""
-    import os
-    import signal as _signal
+    runs _bash's own Popen, which shares the group teardown (_kill_group)."""
     import time as _time
 
     proc = subprocess.Popen(
@@ -149,12 +216,6 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
         cwd=cwd, env=env, start_new_session=True,
     )
 
-    def _kill() -> None:
-        try:
-            os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            proc.kill()
-
     deadline = _time.monotonic() + timeout
     while True:
         try:
@@ -163,12 +224,12 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
             return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
         except subprocess.TimeoutExpired:
             if getattr(cancel, "requested", False):
-                _kill()
-                proc.communicate()  # reap; pipes already buffered
+                _kill_group(proc)
+                _reap(proc)
                 return "", "cancelled by user"
             if _time.monotonic() >= deadline:
-                _kill()
-                proc.communicate()
+                _kill_group(proc)
+                _reap(proc)
                 return "", f"Command timed out after {timeout}s"
 
 
@@ -179,8 +240,8 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
     """`env=None` (the default, and the ONLY value the benchmark path ever
     passes) inherits the process environment unchanged — byte-identical
     behaviour. The chat front-end passes an augmented env (see
-    make_bash_fn). `cancel=None` (benchmark default) keeps the original
-    subprocess.run path; a token switches to the cancellable Popen runner.
+    make_bash_fn). `cancel=None` (benchmark default) runs one blocking
+    Popen.communicate; a token switches to the cancellable polling runner.
     `extra_allow` (empty on the benchmark default, so the rejection message
     is byte-identical) widens the allowlist for chat sessions only."""
     repo_root = get_repo_root()
@@ -208,31 +269,42 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         return _run_cancellable(command, cwd=repo_root, env=env,
                                 timeout=timeout, cancel=cancel)
 
+    # Popen + its own session rather than subprocess.run (2026-09-26): on
+    # timeout, run() kills only the direct child, so anything the command
+    # started (a dev server, a watcher, `sleep` under a test) outlived the
+    # timeout, orphaned and still running in the repo. start_new_session puts
+    # the whole tree in one process group and the timeout kills the GROUP,
+    # the same teardown _run_cancellable already used. Output, exit-code and
+    # timeout strings are unchanged.
+    proc = subprocess.Popen(
+        command, shell=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        # A command whose output is not valid UTF-8 (a stray byte in a log,
+        # a binary blob catted by accident) used to raise
+        # UnicodeDecodeError out of subprocess and throw away EVERYTHING it
+        # printed — the model saw a tool error instead of the 8 KB of
+        # perfectly readable text around the bad byte.
+        errors="replace",
+        # stdin=DEVNULL is LOAD-BEARING (2026-08-12), for the same reason
+        # ripgrep needed it in fs.py: the child inherits luxe's stdin. With
+        # a piped parent stdin (a benchmark launched from a script, CI, the
+        # headless `printf … | luxe chat` form) `bash("cat")` returned the
+        # PARENT's queued input as its own output and drained it — the next
+        # REPL read got nothing. Under a TTY the same command blocks until
+        # the timeout. Neither is a shell command's job.
+        stdin=subprocess.DEVNULL,
+        cwd=repo_root,
+        env=env,   # None (bench default) == inherit, unchanged
+        start_new_session=True,
+    )
     try:
-        proc = subprocess.run(
-            command, shell=True,
-            capture_output=True, text=True,
-            # A command whose output is not valid UTF-8 (a stray byte in a log,
-            # a binary blob catted by accident) used to raise
-            # UnicodeDecodeError out of subprocess and throw away EVERYTHING it
-            # printed — the model saw a tool error instead of the 8 KB of
-            # perfectly readable text around the bad byte.
-            errors="replace",
-            # stdin=DEVNULL is LOAD-BEARING (2026-08-12), for the same reason
-            # ripgrep needed it in fs.py: the child inherits luxe's stdin. With
-            # a piped parent stdin (a benchmark launched from a script, CI, the
-            # headless `printf … | luxe chat` form) `bash("cat")` returned the
-            # PARENT's queued input as its own output and drained it — the next
-            # REPL read got nothing. Under a TTY the same command blocks until
-            # the timeout. Neither is a shell command's job.
-            stdin=subprocess.DEVNULL,
-            cwd=repo_root, timeout=timeout,
-            env=env,   # None (bench default) == inherit, unchanged
-        )
-        output = _clip_output(proc.stdout + proc.stderr)
-        return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        _reap(proc)
         return "", f"Command timed out after {timeout}s"
+    output = _clip_output(stdout + stderr)
+    return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
 
 
 # Substrings that identify a rejection that ONLY happens because unrestricted

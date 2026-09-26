@@ -36,8 +36,21 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   60/600s timeout; `on_start` fires with the command string BEFORE execution
   (dispatch-time visibility) and is exception-guarded — a broken UI callback
   never fails the tool. `cancel=None` (the bench default, and the only value
-  `TOOL_FNS["bash"]` can produce) keeps the original `subprocess.run` path
-  byte-identically; the timeout is enforced on both paths
+  `TOOL_FNS["bash"]` can produce) runs one blocking `Popen.communicate`;
+  the timeout is enforced on both paths. Since 2026-09-26 BOTH paths spawn
+  with start_new_session and a timeout kills the process GROUP
+  (`_kill_group`): `subprocess.run`'s timeout killed only `sh -c`, leaving
+  anything it started running, orphaned. Output/exit/timeout strings are
+  unchanged (`tests/test_bash_hardening.py`)
+
+- `_validate_command` tokenizes with `_shell_tokens` (shlex,
+  `punctuation_chars=True`, `commenters=""`), not `shlex.split` (2026-09-26):
+  whitespace-only splitting let an operator glued to a word through
+  (`echo a;touch X`, `a&&b`, `echo hi>X`), and shlex.shlex's default `#`
+  comment handling truncated `echo a#;touch X` to `echo a`. Unquoted
+  newlines/CRs are refused (a newline inside quotes stays an argument).
+  Command substitution is still checked on the whitespace tokens, where
+  `$(` survives intact
 
 - `read_file`'s size gate applies to UNWINDOWED reads only (2026-08-11). A
   call that passes `limit` is served at any file size — `_MAX_FILE_SIZE`
