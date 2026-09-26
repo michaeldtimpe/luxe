@@ -199,7 +199,13 @@ class _Backend:
     def health(self):
         return self._healthy
 
-    def list_models(self):
+    def list_models(self, timeout_s=None):
+        # Like the real Backend: a dead endpoint's catalog GET raises. It is
+        # /doctor's liveness probe AND its catalog (one request, 2026-09-26).
+        self.list_calls = getattr(self, "list_calls", 0) + 1
+        self.list_timeouts = getattr(self, "list_timeouts", []) + [timeout_s]
+        if not self._healthy:
+            raise OSError(61, "Connection refused")
         return list(self._models)
 
     def model_paths(self):
@@ -269,7 +275,7 @@ class TestDoctor:
         session, sm, repo = doctor_ctx
 
         class Boom(_Backend):
-            def health(self):
+            def list_models(self, timeout_s=None):
                 raise OSError(60, "Operation timed out")
 
         sm.backend = Boom()
@@ -642,3 +648,126 @@ class TestDoctorOnAnOpenRouterEngine:
         doc = inspection.run_doctor(session, sm, repo)
         assert called == []
         assert not [c for c in doc.checks if c.name == "oMLX build"]
+
+
+# --- kit review 2026-09-26 ----------------------------------------------------
+
+
+class TestDoctorKitReview:
+    """#3 dangling fix routes to HF, #8 engine-aware weights, #10 key env,
+    #11 billable manifest, #14 one catalog request."""
+
+    @staticmethod
+    def _ctx(tmp_path, monkeypatch, *, entry, hosts=None, backend=None):
+        import luxe.config as config_mod
+        from luxe import buildinfo
+        from luxe.chat import origin as origin_mod
+        from luxe.chat import slots as slots_mod
+
+        origin_mod.reset_cache()
+        monkeypatch.setattr(origin_mod, "network_mounts", lambda **k: [])
+        monkeypatch.setattr(buildinfo, "fetch_origin", lambda **k: False)
+        monkeypatch.setattr(config_mod, "short_hostname", lambda: "here")
+        cfg = PipelineConfig(models={"monolith": "Main-M"},
+                             roles={"monolith": RoleConfig(model_key="monolith")},
+                             hosts=hosts or {},
+                             backends={"b": entry})
+        made = backend or _Backend(models=("Main-M", "Fb-M"),
+                                   base_url=entry.base_url)
+        monkeypatch.setattr(slots_mod, "Backend", lambda **k: made)
+        sm = SlotManager(cfg)
+        sm.backend = made
+        repo = _repo(tmp_path)
+        return ChatSession(repo_path=str(repo)), sm, str(repo)
+
+    def test_dangling_weights_fix_names_the_hf_repo(self, tmp_path,
+                                                    monkeypatch):
+        import luxe.modelstore as ms
+        from luxe.chat import origin as origin_mod
+        from luxe.config import BackendEntry, HostManifest
+
+        ctx = self._ctx(tmp_path, monkeypatch,
+                        entry=BackendEntry(base_url="http://127.0.0.1:8000"),
+                        hosts={"here": HostManifest(main="Main-M",
+                                                    fallback="Fb-M")})
+        monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: True)
+        monkeypatch.setattr(ms, "model_state",
+                            lambda mid, *a, **k: "dangling" if mid == "Main-M"
+                            else "ok")
+        monkeypatch.setattr(ms, "hf_repo_for",
+                            lambda mid, *a, **k: "mlx-community/Main-M")
+        doc = inspection.run_doctor(*ctx)
+        fix = next(c for c in doc.checks if c.name == "weights:Main-M").fix
+        assert "luxe pull mlx-community/Main-M" in fix
+
+    def test_llama_server_does_not_read_the_omlx_store(self, tmp_path,
+                                                       monkeypatch):
+        import luxe.modelstore as ms
+        from luxe.chat import origin as origin_mod
+        from luxe.config import BackendEntry, HostManifest
+
+        ctx = self._ctx(tmp_path, monkeypatch,
+                        entry=BackendEntry(base_url="http://127.0.0.1:8080",
+                                           engine="llama-server"),
+                        hosts={"here": HostManifest(main="Main-M",
+                                                    fallback="Main-M")},
+                        backend=_Backend(key="", models=("Main-M",),
+                                         base_url="http://127.0.0.1:8080"))
+        monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: True)
+        monkeypatch.setattr(ms, "model_state",
+                            lambda *a, **k: "missing")   # ~/.omlx/models
+        doc = inspection.run_doctor(*ctx)
+        assert not any(c.name.startswith("weights:Main") for c in doc.checks)
+        assert doc.worst != inspection.FAIL
+
+    def test_missing_key_fix_names_the_entrys_variable(self, tmp_path,
+                                                       monkeypatch):
+        from luxe.config import BackendEntry
+
+        entry = BackendEntry(base_url="http://m5.example.ts.net:8000",
+                             api_key_env="OMLX_API_KEY_M5")
+        ctx = self._ctx(tmp_path, monkeypatch, entry=entry,
+                        backend=_Backend(key="", models=("Main-M",),
+                                         base_url=entry.base_url))
+        doc = inspection.run_doctor(*ctx)
+        key = next(c for c in doc.checks if c.name == "API key")
+        assert "OMLX_API_KEY_M5=" in key.fix
+
+    def test_billable_backend_manifest_is_not_a_hosts_warning(self, tmp_path,
+                                                              monkeypatch):
+        """`ready --backend openrouter` told the user to add a hosts: entry
+        for a cloud endpoint — a fix the cloud carve-out forbids."""
+        from luxe.config import BackendEntry, HostManifest
+
+        entry = BackendEntry(base_url="https://openrouter.ai/api",
+                             engine="openrouter",
+                             api_key_env="OPENROUTER_API_KEY")
+        ctx = self._ctx(tmp_path, monkeypatch, entry=entry,
+                        hosts={"m1": HostManifest(main="A", fallback="B")},
+                        backend=_Backend(models=("Main-M",),
+                                         base_url=entry.base_url))
+        ctx[1]._manifest_host = "openrouter"
+        ctx[1].manifest = None
+        doc = inspection.run_doctor(*ctx)
+        manifest = next(c for c in doc.checks if c.name == "host manifest")
+        assert manifest.state == inspection.OK
+        assert "hosts:" not in manifest.fix
+
+    def test_one_bounded_catalog_request_serves_every_check(self, tmp_path,
+                                                            monkeypatch):
+        from luxe.config import BackendEntry, HostManifest
+
+        made = _Backend(models=("Main-M", "Fb-M"),
+                        base_url="http://m5.example.ts.net:8000")
+        health_calls = []
+        made.health = lambda *a, **k: health_calls.append(1) or True
+        ctx = self._ctx(tmp_path, monkeypatch,
+                        entry=BackendEntry(base_url=made.base_url),
+                        hosts={"here": HostManifest(main="Main-M",
+                                                    fallback="Fb-M")},
+                        backend=made)
+        doc = inspection.run_doctor(*ctx)
+        assert doc.checks[0].state == inspection.OK
+        assert made.list_calls == 1
+        assert health_calls == []
+        assert made.list_timeouts[0] is not None and made.list_timeouts[0] <= 10

@@ -187,12 +187,17 @@ def reset_cache() -> None:
     _origin_cache.clear()
 
 
-def origins_for_backend(backend, *, force: bool = False) -> dict[str, ModelOrigin]:
+def origins_for_backend(backend, *, force: bool = False,
+                        served: list[str] | None = None
+                        ) -> dict[str, ModelOrigin]:
     """Map every model the endpoint serves to its provenance.
 
     One `/v1/models/status` call per endpoint, cached for the session (model
     paths don't move under a running server). Never raises: an unreachable or
     old server yields `{}` and callers fall back to `unknown`.
+
+    `served` is a catalog the caller ALREADY fetched (`/doctor` does); a
+    remote endpoint then needs no request of its own.
     """
     base_url = getattr(backend, "base_url", "") or ""
     if not force and base_url in _origin_cache:
@@ -204,7 +209,8 @@ def origins_for_backend(backend, *, force: bool = False) -> dict[str, ModelOrigi
         host = endpoint_host(base_url) or base_url
         origins: dict[str, ModelOrigin] = {}
         try:
-            for mid in backend.list_models():
+            for mid in (served if served is not None
+                        else backend.list_models()):
                 origins[mid] = ModelOrigin(kind="remote", detail=host, model_id=mid)
         except Exception:
             pass
@@ -226,15 +232,17 @@ def origins_for_backend(backend, *, force: bool = False) -> dict[str, ModelOrigi
     return origins
 
 
-def origin_for(backend, model_id: str) -> ModelOrigin:
+def origin_for(backend, model_id: str, *,
+               served: list[str] | None = None) -> ModelOrigin:
     """Provenance of one model on the active endpoint (`unknown` if unreported).
 
     May perform one HTTP call (the first time an endpoint is seen) — call it
-    from a worker/startup path, never from a render.
+    from a worker/startup path, never from a render. `served`: see
+    `origins_for_backend`.
     """
     if not model_id:
         return ModelOrigin(kind="unknown")
-    found = origins_for_backend(backend).get(model_id)
+    found = origins_for_backend(backend, served=served).get(model_id)
     return found or ModelOrigin(kind="unknown", model_id=model_id)
 
 
