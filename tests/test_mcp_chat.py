@@ -150,6 +150,40 @@ def test_mcptools_registry_roundtrip():
     assert mcptools.active() is None
 
 
+def test_gated_mcp_fns_are_stubbed_when_read_only():
+    """The loop dispatches on registered FNS, not offered DEFS — so a gated
+    tool's real fn must not be registered while read-only, or a model that
+    names it anyway runs a mutating remote operation with /write off."""
+    calls = []
+    d1 = ToolDef(name="mcp__alpha__system_info", description="d", parameters={"type": "object"})
+    d2 = ToolDef(name="mcp__alpha__firewall_disable", description="d", parameters={"type": "object"})
+    surf = mcptools.MCPSurface(
+        always_defs=[d1], gated_defs=[d2],
+        fns={d1.name: lambda a: (calls.append(d1.name) or "ok", None),
+             d2.name: lambda a: (calls.append(d2.name) or "ok", None)})
+
+    ro = surf.fns_for(False)
+    assert set(ro) == {d1.name, d2.name}
+    out, err = ro[d2.name]({})
+    assert out == "" and "/write" in err and "gated" in err
+    assert calls == []                      # never reached the server
+    ro[d1.name]({})
+    assert calls == [d1.name]               # inspection tools still work
+
+    rw = surf.fns_for(True)
+    rw[d2.name]({})
+    assert calls == [d1.name, d2.name]
+
+
+def test_prepare_turn_read_only_never_registers_gated_mcp_fn():
+    """End-to-end through the seam both front-ends share."""
+    import inspect
+    from luxe.chat import repl
+    src = inspect.getsource(repl.prepare_turn)
+    assert "mcp_surface.fns_for(write_on)" in src
+    assert "update(mcp_surface.fns)" not in src
+
+
 def test_stdio_command_and_args_expand_home(tmp_path):
     """One relays.yaml is shared across hosts whose $HOME differs, so a stdio
     entry must be able to say `~/Downloads/luxe/.venv/bin/luxe-pdf-mcp`."""
