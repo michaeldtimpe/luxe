@@ -114,7 +114,10 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   drained it; under a TTY it blocks for the whole timeout. Every one of those
   spawns also decodes with `errors="replace"` — one non-UTF-8 byte used to
   raise `UnicodeDecodeError` and discard the entire captured output
-  (`luxe.fswalk` set the precedent)
+  (`luxe.fswalk` set the precedent). Extended 2026-09-26 to the non-tool
+  spawns that had been missed: `gitcmd.run`/`run_in`,
+  `repo_index._git_recent_files` (which also gained a 30s timeout) and
+  `secrets._from_keychain` (`tests/test_spawn_stdin.py`)
 
 - Tool truncation is ANNOUNCED, never silent (2026-08-12). `_grep_result`
   reports both of grep's caps — ripgrep's per-file `--max-count=150` and the

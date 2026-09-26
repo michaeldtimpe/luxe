@@ -128,12 +128,19 @@ def _count_lines(path: Path) -> int:
         return 0
 
 
+_GIT_RECENT_TIMEOUT_S = 30
+
+
 def _git_recent_files(repo_root: Path, days: int = 90) -> list[str]:
     try:
         out = subprocess.run(
             ["git", "log", f"--since={days}.days", "--name-only",
              "--pretty=format:"],
             cwd=repo_root, capture_output=True, text=True, check=False,
+            # Never luxe's stdin, and bounded: this runs at index build, where
+            # a git that stalls (a lock, a huge history on a slow mount) used
+            # to hang the build with no deadline at all (2026-09-26).
+            stdin=subprocess.DEVNULL, timeout=_GIT_RECENT_TIMEOUT_S,
         )
         if out.returncode != 0:
             return []
