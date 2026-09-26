@@ -15,6 +15,9 @@ from luxe.web import page as page_mod
 from luxe.web.fetch import WebError
 from luxe.web.page import PageSession
 
+# No live DNS: every hostname answers a public address (conftest).
+pytestmark = pytest.mark.usefixtures("stub_public_dns")
+
 
 class _FakePage:
     """Duck-types the slice of Playwright's Page that PageSession touches."""

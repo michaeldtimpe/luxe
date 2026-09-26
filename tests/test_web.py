@@ -21,6 +21,9 @@ from luxe.web.fetch import FetchResult, WebError, _is_public_ip, fetch_url
 from luxe.web.tools import (make_web_answer_tool, make_web_fetch_tool,
                             make_web_search_tool, web_tools)
 
+# No live DNS: every hostname answers a public address (conftest).
+pytestmark = pytest.mark.usefixtures("stub_public_dns")
+
 
 # --- egress guard -----------------------------------------------------------
 #
