@@ -76,6 +76,32 @@ def _ledger_path(session_id: str):
     return session_dir(session_id) / "ledger.json"
 
 
+# Ephemeral sessions keep the ledger IN MEMORY rather than not at all. The
+# disk write is suppressed (luxe.ephemeral), but the ledger is also live
+# state: `/goal` completion reads `completed` back every round, `/diff`
+# scopes to `files`, and `<working_state>` is injected from it. With saves
+# simply dropped, every load came back empty — the goal runner could never
+# see completion, and /diff lost the session's own writes.
+_MEMORY: dict[str, "Ledger"] = {}
+
+
+def _copy(ledger: "Ledger") -> "Ledger":
+    return Ledger.from_dict(ledger.to_dict())
+
+
+def hold_in_memory(session_id: str) -> None:
+    """Seed the in-memory ledger from disk — called as `/ephemeral` turns ON
+    mid-session, just before the purge removes the file."""
+    if session_id and session_id not in _MEMORY:
+        _MEMORY[session_id] = _copy(_load_disk(session_id))
+
+
+def forget_in_memory(session_id: str) -> None:
+    """Drop the in-memory ledger (`/ephemeral` off: what was recorded while it
+    was on is not carried onto disk)."""
+    _MEMORY.pop(session_id, None)
+
+
 def _dedup_cap(seq: list[str], cap: int = _LIST_CAP) -> list[str]:
     """Order-preserving de-dup, then keep the most recent `cap` entries."""
     seen: set[str] = set()
@@ -93,6 +119,12 @@ def load(session_id: str) -> Ledger:
     """Load the ledger for a session, or an empty one if absent/corrupt."""
     if not session_id:
         return Ledger()
+    if is_ephemeral():
+        return _copy(_MEMORY.get(session_id) or Ledger())
+    return _load_disk(session_id)
+
+
+def _load_disk(session_id: str) -> Ledger:
     p = _ledger_path(session_id)
     if not p.is_file():
         return Ledger()
@@ -103,14 +135,33 @@ def load(session_id: str) -> Ledger:
 
 
 def save(session_id: str, ledger: Ledger) -> None:
-    """Atomically persist the ledger (mirrors memory.session._write_meta)."""
-    if not session_id or is_ephemeral():
+    """Atomically persist the ledger (mirrors memory.session._write_meta).
+    Ephemeral: held in memory for the session instead (see `_MEMORY`)."""
+    if not session_id:
+        return
+    if is_ephemeral():
+        _MEMORY[session_id] = _copy(ledger)
         return
     p = _ledger_path(session_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(ledger.to_dict(), indent=2))
     tmp.replace(p)
+
+
+def reset(session_id: str) -> None:
+    """Empty the ledger (`/clear`): the working state describes the
+    conversation being thrown away. Removes the file rather than writing an
+    empty one, so a cleared session looks like a fresh one on disk."""
+    if not session_id:
+        return
+    _MEMORY.pop(session_id, None)
+    if is_ephemeral():
+        return
+    try:
+        _ledger_path(session_id).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def record_files(session_id: str, paths: list[str]) -> None:
@@ -249,13 +300,20 @@ def render(ledger: Ledger, *, char_budget: int = _RENDER_CHAR_BUDGET) -> str:
 
 
 def render_rich(ledger: Ledger) -> str:
-    """Rich-markup view for verbose mode (B2). Colors via theme roles (B4)."""
+    """Rich-markup view for verbose mode (B2). Colors via theme roles (B4).
+
+    Every entry is MODEL-written (update_ledger) or a path, so it is escaped:
+    one `[/x]` in a decision string raised MarkupError at print and ended the
+    line REPL mid-turn, before the aborted-turn handling ever ran."""
     if ledger.is_empty():
         return "[dim]· ledger empty[/]"
+    from rich.markup import escape
+
     from luxe.chat import theme as theme_mod
     out: list[str] = ["[bold]· progress ledger[/]"]
     if ledger.goal:
-        out.append(f"  [{theme_mod.rich('accent') or 'cyan'}]goal[/] {ledger.goal}")
+        out.append(f"  [{theme_mod.rich('accent') or 'cyan'}]goal[/] "
+                   f"{escape(ledger.goal)}")
     for title, items, role in (
         ("decided", ledger.decided, "accent"),
         ("completed", ledger.completed, "success"),
@@ -265,9 +323,9 @@ def render_rich(ledger: Ledger) -> str:
         style = theme_mod.rich(role) or {"accent": "cyan", "success": "green",
                                          "warn": "yellow", "error": "red"}[role]
         for it in items:
-            out.append(f"  [{style}]{title}[/] {it}")
+            out.append(f"  [{style}]{title}[/] {escape(it)}")
     if ledger.files:
-        out.append(f"  [dim]files[/] {', '.join(ledger.files)}")
+        out.append(f"  [dim]files[/] {escape(', '.join(ledger.files))}")
     return "\n".join(out)
 
 

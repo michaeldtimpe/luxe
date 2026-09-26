@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from rich.markup import escape
+
 from luxe.chat.commands import _SLOTS, CommandContext, CommandResult
 from luxe.chat.session import (
     CTX_TIER_MIN_RAM_GB,
@@ -51,16 +53,21 @@ def _theme(args, ctx: CommandContext) -> CommandResult:
 
     name = args[0].lower()
     if name not in choices:
-        ctx.console.print(f"[yellow]Unknown palette {name!r}. "
+        ctx.console.print(f"[yellow]Unknown palette {escape(repr(name))}. "
                           f"Choose from: {', '.join(choices)}.[/]")
         return CommandResult(handled=True)
     theme_mod.set_palette(name)
+    from luxe import ephemeral as eph
+    # `~/.luxe/theme` is luxe state like any other: an ephemeral session
+    # switches the palette for itself and writes nothing (theme.py guards it).
     saved = theme_mod.save_preference(name)
     ctx.console.print(f"[green]✓[/] palette → [cyan]{name}[/]"
                       + ("  [dim](tracking your terminal theme)[/]"
                          if name == "auto" else "")
                       + ("  [dim]· saved — future sessions start here[/]"
-                         if saved else ""))
+                         if saved else "")
+                      + ("  [dim]· this session only (ephemeral — not saved)[/]"
+                         if eph.is_ephemeral() else ""))
     _theme_sample(ctx, label="")
     return CommandResult(handled=True)
 
@@ -142,6 +149,10 @@ def _ctx_on_local_ram(ctx: CommandContext) -> bool:
 def _ctx(args, ctx: CommandContext) -> CommandResult:
     # Display against the conversational `chat` slot (the default route).
     ceiling = ctx.slots.ctx_ceiling("chat")
+    # The status bar clamps a pending override to this; it reads the cached
+    # value rather than asking the endpoint from a render (status.fields).
+    if ctx.status is not None and hasattr(ctx.status, "ctx_ceiling"):
+        ctx.status.ctx_ceiling = ceiling
     base = ctx.slots.default_num_ctx("chat")
     active = ctx.session.num_ctx_override or base
     local_ram = _ctx_on_local_ram(ctx)
@@ -436,7 +447,7 @@ def _ephemeral(args, ctx: CommandContext) -> CommandResult:
     if arg in ("on", "off"):
         want = arg == "on"
     elif arg:
-        ctx.console.print(f"[yellow]Unknown option {arg!r}; expected on|off.[/]")
+        ctx.console.print(f"[yellow]Unknown option {escape(repr(arg))}; expected on|off.[/]")
         return CommandResult(handled=True)
     else:
         want = not eph.is_ephemeral()
@@ -446,8 +457,13 @@ def _ephemeral(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print(f"[dim]ephemeral is already {state}.[/]")
         return CommandResult(handled=True)
 
+    from luxe.chat import debuglog
+    from luxe.state import ledger as ledger_mod
+
     if not want:
         eph.disable()
+        _resume_session_records(ctx)
+        ledger_mod.forget_in_memory(ctx.session.session_id)
         ctx.console.print(
             "ephemeral: [red]OFF[/] [dim](writes resume from the next turn; "
             "the turns taken while it was on were never recorded and do not "
@@ -456,9 +472,11 @@ def _ephemeral(args, ctx: CommandContext) -> CommandResult:
 
     # ON: stop the debug log FIRST — the handler holds debug.log open inside
     # the directory about to be removed.
-    from luxe.chat import debuglog
     if getattr(ctx, "session_log", None) is not None:
         debuglog.uninstall(ctx.session_log)
+    # The ledger is live state (goal completion, /diff, <working_state>):
+    # carry it in memory before the purge deletes the file.
+    ledger_mod.hold_in_memory(ctx.session.session_id)
     eph.enable()
     removed = eph.purge_session(ctx.session.session_id,
                                 getattr(ctx.session, "repo_path", "") or "")
@@ -469,7 +487,7 @@ def _ephemeral(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print(f"[dim]· removed {len(removed)} path(s) this session "
                           f"had already written:[/]")
         for p in removed:
-            ctx.console.print(f"[dim]    {p}[/]")
+            ctx.console.print(f"[dim]    {escape(p)}[/]")
     repo = getattr(ctx.session, "repo_path", "") or ""
     if repo and (Path(repo) / ".luxe" / "memory.md").is_file():
         ctx.console.print(
@@ -477,6 +495,38 @@ def _ephemeral(args, ctx: CommandContext) -> CommandResult:
             "touched — it holds your curated text alongside luxe's blocks. "
             "No further writes will be made to it.[/]")
     return CommandResult(handled=True)
+
+
+def _resume_session_records(ctx: CommandContext) -> None:
+    """`/ephemeral off`: put back what makes this a real, resumable session.
+
+    Writes resume, but only `append_turn` recreates its directory on demand —
+    `meta.json` (what `/resume` and `list_sessions` key on) was purged by ON,
+    or never written by `--ephemeral`, and the debug log stayed detached. So
+    the transcript written from here on was an orphan no resume could find,
+    and post-hoc diagnosis stayed off for the rest of the session."""
+    from luxe.chat import debuglog
+    from luxe.memory import session as session_store
+
+    s = ctx.session
+    if not s.session_id:
+        return
+    try:
+        slots = ctx.slots
+        session_store.restore_meta(
+            s.session_id,
+            repo_path=s.repo_path or "",
+            project_hash=getattr(s, "project_hash", "") or "",
+            slot_models=slots.slot_models(),
+            backend_name=getattr(slots, "backend_name", "") or "",
+            base_url=getattr(slots.backend, "base_url", "") or "",
+        )
+    except Exception:
+        # Guarded like the log below: a toggle must not raise into the loop.
+        pass
+    if getattr(ctx, "session_log", None) is not None:
+        debuglog.reinstall(ctx.session_log,
+                           session_store.session_dir(s.session_id))
 
 
 def _web_mode(args, ctx: CommandContext) -> CommandResult:
