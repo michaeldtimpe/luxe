@@ -581,7 +581,7 @@ def test_pull_previews_before_transferring(ctx, _no_network_pull, monkeypatch):
 def test_pull_yes_starts_the_download(ctx, _no_network_pull, monkeypatch):
     from luxe import modelstore as ms
 
-    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: [])
+    monkeypatch.setattr(ms, "model_state", lambda *a, **k: "missing")
     cmd.dispatch("/pull org/Champ --yes", ctx)
     assert _FakeAdmin.started == ["org/Champ"]
     assert "downloaded" in _text(ctx)
@@ -590,10 +590,23 @@ def test_pull_yes_starts_the_download(ctx, _no_network_pull, monkeypatch):
 def test_pull_refuses_a_model_already_in_the_store(ctx, _no_network_pull, monkeypatch):
     from luxe import modelstore as ms
 
-    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: ["Champ"])
+    monkeypatch.setattr(ms, "model_state", lambda *a, **k: "ok")
     cmd.dispatch("/pull org/Champ --yes", ctx)
     assert "--force" in _text(ctx)
     assert _FakeAdmin.started == []
+
+
+def test_pull_replaces_a_dangling_entry_without_force(ctx, _no_network_pull,
+                                                      monkeypatch):
+    """A LISTED-but-dangling entry (the HF-cache-wipe signature) is exactly
+    what `/pull` is run to repair; "already in the store — add --force" made
+    the fix `/doctor` prints a no-op (2026-09-26 kit review #3)."""
+    from luxe import modelstore as ms
+
+    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: ["Champ"])
+    monkeypatch.setattr(ms, "model_state", lambda *a, **k: "dangling")
+    cmd.dispatch("/pull org/Champ --yes", ctx)
+    assert _FakeAdmin.started == ["org/Champ"]
 
 
 def test_pull_reports_when_there_is_no_source(ctx, _no_network_pull):
