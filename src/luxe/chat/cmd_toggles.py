@@ -498,6 +498,10 @@ def _web_mode(args, ctx: CommandContext) -> CommandResult:
                           "[dim](no network egress from tools; /web to enable)[/]")
         return CommandResult(handled=True)
 
+    # Provider keys are resolved once per enable and cached (luxe.web.keys) —
+    # a fresh enable is how a key added mid-session gets picked up.
+    from luxe.web import keys as web_keys
+    web_keys.clear()
     ctx.console.print("web tools: [yellow]ON[/] "
                       "[dim](web_fetch — public http/https only; private, "
                       "loopback and tailnet hosts are refused)[/]")

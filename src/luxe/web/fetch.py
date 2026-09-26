@@ -420,6 +420,37 @@ def bounded_request(method: str, url: str, *,
         raise WebError(f"{type(e).__name__} fetching {target.url}: {e}") from e
 
 
+#: API responses (search results, one answer) are small; anything past this
+#: is a misbehaving endpoint, not a bigger answer.
+API_MAX_BYTES = 1_000_000
+
+
+def json_request(method: str, url: str, *, timeout_s: float,
+                 max_bytes: int = API_MAX_BYTES,
+                 headers: dict[str, str] | None = None,
+                 params: dict | None = None,
+                 json: object = None) -> tuple[int, object]:
+    """(status, parsed JSON or None) through the same guarded, pinned,
+    bounded reader as `fetch_url` — a total deadline and a byte cap, which
+    a bare `httpx.post(timeout=…)` (per-read, unbounded body) never had."""
+    import json as _json
+
+    resp = bounded_request(method, url, timeout_s=timeout_s,
+                           max_bytes=max_bytes,
+                           headers={"Accept": "application/json",
+                                    **(headers or {})},
+                           params=params, json=json)
+    if resp.truncated:
+        raise WebError(f"response from {url} exceeded {max_bytes} bytes or "
+                       f"the {timeout_s:.0f}s deadline — refusing a partial "
+                       "API response")
+    try:
+        data = _json.loads(resp.body.decode("utf-8", errors="replace"))
+    except ValueError:
+        data = None
+    return resp.status, data
+
+
 def _charset(content_type: str) -> str:
     m = re.search(r"charset=\"?([\w.:-]+)", content_type or "", re.I)
     return m.group(1) if m else "utf-8"
