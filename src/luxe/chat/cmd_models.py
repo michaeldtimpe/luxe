@@ -365,10 +365,17 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
 
             ref = positional[0] if positional else ms.store_name_for(from_path)
             name = ms.store_name_for(ref)
+            # Same store rule as `luxe pull`: an entry whose weights don't
+            # resolve is replaceable, and its dangling link names the HF
+            # repo to re-fetch when only a bare name was given.
+            state = ms.model_state(name)
+            source_ref = ref
+            if state == "dangling" and "/" not in ref and not from_path:
+                source_ref = ms.hf_repo_for(name) or ref
             if not from_path:
                 ctx.console.print("[dim]· looking for it (mounts, then HF)…[/]")
             sources = ms.resolve_pull_sources(
-                ref, admin=admin, from_path=from_path,
+                source_ref, admin=admin, from_path=from_path,
                 include_mounts="--hf" not in flags)
             if not sources:
                 # With --from the only empty case is "not a model directory";
@@ -384,7 +391,7 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
                 return CommandResult(handled=True)
 
             chosen = sources[0]
-            already = name in ms.local_model_names()
+            already = state == "ok"
             ctx.console.print(f"[bold]{name}[/] ← {chosen.describe()}")
             if already and "--force" not in flags:
                 ctx.console.print("[yellow]· already in the local store "
@@ -399,7 +406,7 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
                 _pull_copy(ctx, chosen, force="--force" in flags)
             else:
                 _pull_download(ctx, admin, chosen)
-    except ms.ModelStoreError as e:
+    except (ms.ModelStoreError, OSError) as e:
         ctx.console.print(f"[red]✗ {e}[/]")
     return CommandResult(handled=True)
 
