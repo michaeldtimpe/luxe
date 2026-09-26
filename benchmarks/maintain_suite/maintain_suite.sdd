@@ -47,6 +47,23 @@ single pipeline; new fixtures must declare their per-requirement spec.
   `git grep` keeps rc 1 as a legitimate no-match (ok_codes=(0,1)); the
   vacuous-test worktree gate keeps its documented fail-open (it only ever
   removes points)
+- ONE fixtures.yaml loader (2026-09): `fixtures.py:load_fixtures` host-remaps
+  the `/Users/<someone>/.luxe/fixture-cache/...` paths the YAML pins; run.py,
+  `scripts/regrade_local.py` and `scripts/opencode_harness.py` all read
+  through it. run.py preflights every local origin (`origin_problem`: exists,
+  objects/ + refs/heads/ writable) and refuses to start otherwise
+- An ENVIRONMENT failure is an ERROR, never a score: a failed `push` step in
+  pr_state.json errors the fixture (the grade stays in result.json for
+  inspection), and regrade_local reports a branch it cannot find as
+  UNREGRADABLE (excluded from totals) instead of grading base_sha
+- A fixture's reported outcome comes from its STATE: a fresh attempt deletes
+  the previous result.json/diagnostics.json first; a SKIP_DONE replay of an
+  ERROR state reports ERROR (never the stale file), and replays are flagged
+  `Diagnostics.cached`
+- Reusing a clone DETACHES at base_sha (`checkout -f --detach`) — never
+  `reset --hard` on the checked-out branch, which rewound the previous run's
+  `luxe/...` branch to base
+- The per-fixture timeout kills luxe's whole process group
 
 ## Must not
 - Run bench without `--keep-loaded` (post-run unload fires by default)

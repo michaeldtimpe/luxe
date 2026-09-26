@@ -143,3 +143,28 @@ def test_remap_repo_url_to_local_home(tmp_path):
     assert oh.remap_repo_url("/Users/x/.luxe/fixture-cache/nope", home=tmp_path) \
         == "/Users/x/.luxe/fixture-cache/nope"
     assert oh.remap_repo_url("https://github.com/a/b", home=tmp_path) == "https://github.com/a/b"
+
+
+def test_write_summary_reads_every_gate_key_shape(tmp_path):
+    """grade.py wrote vacuous_test/orphan_file as {"gate": ...} and the rest
+    as {"name": ...}; write_summary indexed g["name"] and raised KeyError
+    outside the per-fixture try, killing the harness. Old result.json files
+    keep the legacy key, so the reader must accept both."""
+    out = tmp_path / "out"
+    (out / "fx-1").mkdir(parents=True)
+    (out / "fx-1" / "result.json").write_text(json.dumps({
+        "score": 1, "outcome_points": 0, "diff_produced": True,
+        "gates_triggered": [{"gate": "orphan_file", "detail": "x"},
+                            {"name": "destructive_diff", "detail": "y"}]}))
+    (out / "fx-1" / "meta.json").write_text(json.dumps({
+        "wall_s": 1.0, "timed_out": False, "exit_code": 0,
+        "tool_calls_total": 0, "tokens": {}}))
+    ctx = oh.RunCtx(model="m", base_url="u", output=out, work_dir=tmp_path,
+                    timeout_s=1, env={}, config_path=tmp_path / "c.json")
+    s = oh.write_summary(ctx, ["fx-1"], {"fx-1": {"status": "done"}}, {})
+    assert s["fixtures"][0]["gates"] == ["orphan_file", "destructive_diff"]
+
+
+def test_harness_uses_the_shared_fixture_loader():
+    from benchmarks.maintain_suite import fixtures as shared
+    assert oh.remap_repo_url is shared.remap_repo_url
