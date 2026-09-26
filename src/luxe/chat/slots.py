@@ -113,36 +113,15 @@ class SlotManager:
             return False
 
     def _build_backend(self, entry: BackendEntry) -> Backend:
-        """Backend from a config entry. The API key is resolved HERE from the
-        entry's env-var name via luxe.secrets (env → secrets.env → keychain;
-        never stored in YAML); an empty value lets Backend fall back to
-        OMLX_API_KEY through the same chain."""
-        from luxe.secrets import resolve_api_key
-
-        backend = Backend(
-            base_url=entry.base_url,
-            model=self._resident,
-            api_key=resolve_api_key(entry.api_key_env),
-            **entry.backend_kwargs(),
-        )
-        # How a failed request NAMES the stack it was talking to. Set as an
-        # INSTANCE attribute rather than passed as a constructor kwarg — the
-        # same shape `on_reasoning` uses, and for the same reason: it is
-        # display-only, it reaches no request, and a Backend the benchmark
-        # path builds must keep the `"oMLX"` default this never touches
-        # (`backend.py`). Deliberately NOT routed through
-        # `BackendEntry.backend_kwargs()`, whose pinned contract is that the
-        # `engine:` field never changes the wire/timeout surface
-        # (tests/test_config.py) — a label is not the wire.
-        #
-        # Before 2026-08-24 every failure string was hardcoded "oMLX", so a
-        # turn that died on the OpenRouter backend reported "oMLX stream
-        # failed: RemoteProtocolError … (exhausted-attempts)" and pointed the
-        # reader at a local server that was never in the request path (session
-        # 168f1825a1fd; `acceptance/chat_bigread_2026_08_24/EVIDENCE.md`
-        # finding 1).
-        backend.engine_label = entry.engine_label()
-        return backend
+        """Backend from a config entry, through the one shared constructor
+        (`BackendEntry.build_backend`): key resolved from the entry's env-var
+        name via luxe.secrets (env → secrets.env → keychain; never YAML),
+        `backend_kwargs()`, and the display-only `engine_label` — so a failed
+        request names the stack it was really talking to (before 2026-08-24
+        every failure said "oMLX", even on OpenRouter; session 168f1825a1fd,
+        `acceptance/chat_bigread_2026_08_24/EVIDENCE.md` finding 1). Passes
+        this module's `Backend` so the tests that patch it keep working."""
+        return entry.build_backend(self._resident, backend_cls=Backend)
 
     # -- resolution ---------------------------------------------------------
 

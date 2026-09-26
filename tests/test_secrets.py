@@ -83,3 +83,27 @@ def test_slot_manager_resolves_entry_key_via_secrets(monkeypatch, tmp_path):
     )
     slots_mod.SlotManager(cfg)
     assert seen["api_key"] == "tailnet-key"
+
+
+def test_keychain_is_asked_once_per_process_per_name(monkeypatch, tmp_path):
+    """Every chat-side Backend construction resolves its key; a miss in env
+    + secrets.env spawned `security` EVERY time (≤3s each). Cache per name —
+    misses included (a keyless host paid it on every call)."""
+    monkeypatch.setattr(secrets, "SECRETS_PATH", tmp_path / "absent.env")
+    monkeypatch.delenv("CACHE_PROBE_KEY", raising=False)
+    monkeypatch.setattr(secrets, "_KEYCHAIN_CACHE", {})
+    calls = []
+
+    class _R:
+        returncode, stdout = 44, ""
+
+    def _run(argv, **kw):
+        calls.append(argv)
+        return _R()
+    monkeypatch.setattr(secrets.subprocess, "run", _run)
+    for _ in range(3):
+        assert secrets.resolve_api_key("CACHE_PROBE_KEY") == ""
+    assert len(calls) == 1
+    # env still wins, live (not cached behind the keychain answer)
+    monkeypatch.setenv("CACHE_PROBE_KEY", "late")
+    assert secrets.resolve_api_key("CACHE_PROBE_KEY") == "late"
