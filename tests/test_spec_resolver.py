@@ -41,6 +41,14 @@ class TestGlobMatching:
             ("**/test_*.py", "tests/test_foo.py", True),
             ("**/test_*.py", "src/sub/test_x.py", True),
             ("**/test_*.py", "test.py", False),  # no underscore
+            # `**/` stops at a directory boundary: the basename must START
+            # with `test_` (was `.*test_...` — matched any name containing it)
+            ("**/test_*.py", "src/latest_results.py", False),
+            ("**/test_*.py", "contest_entry.py", False),
+            ("**/*.test.js", "src/foo.test.js", True),
+            ("**/*.test.js", "foo.test.js", True),
+            ("**/__tests__/**", "src/__tests__/a.js", True),
+            ("**/__tests__/**", "src/my__tests__/a.js", False),
             # Subtree
             ("src/luxe/**", "src/luxe/spec.py", True),
             ("src/luxe/**", "src/luxe/agents/loop.py", True),
