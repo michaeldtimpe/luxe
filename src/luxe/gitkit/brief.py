@@ -134,13 +134,11 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
     `~/.claude/` or the repo's `CLAUDE.md`: the brief is built from the repo's
     own code and git history only (memory.sdd discipline extends here).
     """
-    from luxe import search as search_mod
-    from luxe import symbols as symbols_mod
     from luxe.backend import Backend
     from luxe.gitkit.runner import GITKIT_MAX_TOKENS, _activity_callbacks
+    from luxe.gitkit.workspace import indexed_target
     from luxe.mcp.server import make_read_only_role
     from luxe.memory import project as project_mem
-    from luxe.tools.fs import get_repo_root, set_repo_root
 
     if run_single_fn is None:
         from luxe.agents.single import run_single as run_single_fn
@@ -151,18 +149,8 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
 
     ctx_block, cached = _survey_context(target, console)
 
-    prev_root = get_repo_root()
-    prev_bm25, prev_sym = search_mod._index, symbols_mod._index
-    reuse = prev_root is not None and str(prev_root) == target
-    swapped = False
-    try:
-        if not reuse:
-            set_repo_root(target)
-            console.print("[dim]· indexing repository for search…[/]")
-            search_mod.set_index(search_mod.build_bm25_index(target))
-            symbols_mod.set_index(symbols_mod.build_symbol_index(target))
-            swapped = True
-
+    with indexed_target(target, console=console,
+                        note="· indexing repository for search…"):
         model = getattr(backend, "model", "") or cfg.model_for_slot("chat")
         console.print(f"[dim]· project brief — model: {model} (read-only)[/]")
         if backend is None:
@@ -192,12 +180,6 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
                 result = _do_run(on_e, on_t)
         except (ChatCancelled, KeyboardInterrupt):
             return BriefResult(ok=False, repo_root=target, error="cancelled")
-    finally:
-        if swapped:
-            search_mod.set_index(prev_bm25)
-            symbols_mod.set_index(prev_sym)
-            if prev_root is not None:
-                set_repo_root(str(prev_root))
 
     text = (getattr(result, "final_text", "") or "").strip()
     if not text:

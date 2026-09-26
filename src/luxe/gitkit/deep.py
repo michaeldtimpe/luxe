@@ -45,7 +45,6 @@ from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.ephemeral import is_ephemeral
 from luxe.context import estimate_tokens
 from luxe.fswalk import iter_pruned
-from luxe.textfmt import truncate_for_display
 from luxe.repo_index import (
     _DEFAULT_EXCLUDES,
     _count_lines,
@@ -1158,9 +1157,7 @@ def run_deep_report(
     deterministic tag-prior/caveat rendering. `extra_meta` merges into the
     saved report's frontmatter (base / merge_base).
     """
-    from rich.markdown import Markdown
-
-    from luxe.gitkit import health, store
+    from luxe.gitkit import health
     from luxe.gitkit.runner import _activity_callbacks
 
     if run_single_fn is None:
@@ -1588,38 +1585,18 @@ def run_deep_report(
             "passes": [t.to_dict() for t in timings],
         }, indent=2))
 
-    saved: Path | None = None
-    if save:
-        saved = store.save_report(
-            target, kind, report,
-            meta={"model": backend.model, "head": head, "repo": target,
-                  "mode": "deep", "chunks": len(chunks),
-                  "total_wall_s": total_wall_s, "n_passes": n_passes,
-                  "avg_pass_s": avg_pass_s, **(extra_meta or {})})
-        if mirror and store.mirror_to_repo(target, kind, report, head):
-            _emit("mirrored map + report to <repo>/.luxe/gitkit/")
-
-    console.print()
-    display_src, n_filtered = report, 0
-    if min_severity:
-        # DISPLAY-side only — the saved report above is always unfiltered.
-        display_src, n_filtered = store.filter_min_severity(report, min_severity)
-    if verbose:
-        console.print(Markdown(display_src))
-    else:
-        shown, hidden = truncate_for_display(display_src, max_lines=30)
-        console.print(Markdown(shown))
-        if hidden:
-            console.print(f"[dim]… +{hidden} more lines — full report saved[/]")
-    if n_filtered:
-        where = saved if saved else "(not saved — run without --no-save)"
-        console.print(f"[dim]Filtered: {n_filtered} findings below "
-                      f"{min_severity} — full report at {where}[/]")
-    if saved:
-        _emit(f"deep report ({len(chunks)} chunks) saved")
-        console.print(f"[green]✓[/] report saved to [cyan]{saved}[/]")
-        if work_dir is not None:
-            console.print(f"[dim]· survey/chunk notes: {work_dir}[/]")
+    from luxe.gitkit.output import finish_report
+    after = (f"[dim]· survey/chunk notes: {work_dir}[/]",) if work_dir else ()
+    saved = finish_report(
+        console, target=target, kind=kind, report=report, head=head,
+        meta={"model": backend.model, "head": head, "repo": target,
+              "mode": "deep", "chunks": len(chunks),
+              "total_wall_s": total_wall_s, "n_passes": n_passes,
+              "avg_pass_s": avg_pass_s, **(extra_meta or {})},
+        save=save, mirror=mirror, verbose=verbose, min_severity=min_severity,
+        stats_line=(f"[dim]· deep · {len(chunks)} chunks · {n_passes} passes · "
+                    f"{total_wall_s:.1f}s[/]"),
+        after_saved=after)
     return report, saved
 
 

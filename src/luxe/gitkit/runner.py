@@ -10,23 +10,21 @@ session is left untouched after a `/gitsummary` over a freshly-cloned repo).
 
 from __future__ import annotations
 
+import contextlib
 import re
 from pathlib import Path
 
 from luxe import gitclone
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled, raise_if_cancelled
+from luxe.gitkit.output import finish_report
 from luxe.repo_index import _detect_languages_for_repo
-from luxe.textfmt import truncate_for_display
 
 # Per-run generation ceiling for the FINAL report (safety margin, not the fix —
 # WS1's prompt discipline keeps reports well under this). The first test hit the
 # chat role's 8192 cap and truncated mid-report. Applied via a per-run
 # model_copy in run_git_report; never mutates the shared role / chat.yaml.
 GITKIT_MAX_TOKENS = 16384
-
-# On-screen preview cap (full report is always saved + available via --verbose).
-_PREVIEW_LINES = 30
 
 _H1_RE = re.compile(r"^#\s", re.MULTILINE)
 
@@ -237,15 +235,13 @@ def run_git_report(
     headroom copy); BM25/symbol indices and repo_root are swapped to the target
     and restored afterward; report + (deep) map/notes file writes; optional clone.
     """
-    from rich.markdown import Markdown
-
-    from luxe import search as search_mod
     from luxe import symbols as symbols_mod
     from luxe.agents.single import run_single
     from luxe.backend import Backend
     from luxe.gitkit import health, store
+    from luxe.gitkit.workspace import indexed_target
     from luxe.mcp.server import make_read_only_role
-    from luxe.tools.fs import get_repo_root, set_repo_root
+    from luxe.tools.fs import get_repo_root
 
     if kind not in KINDS:
         raise ValueError(f"unknown gitkit kind {kind!r}; expected {sorted(KINDS)}")
@@ -278,10 +274,8 @@ def run_git_report(
     # the target (the common REPL case); otherwise build for the target and
     # restore the prior global state afterward (so chat is left untouched).
     prev_root = get_repo_root()
-    prev_bm25 = search_mod._index   # module-level resident index (no public getter)
-    prev_sym = symbols_mod._index
     reuse = prev_root is not None and str(prev_root) == target
-    swapped = False
+    stack = contextlib.ExitStack()
 
     try:
         if reuse and expected_head:
@@ -290,12 +284,7 @@ def run_git_report(
                 console.print(
                     f"[yellow]· repo HEAD moved since indices were built "
                     f"({expected_head} → {cur}); search results may be stale.[/]")
-        if not reuse:
-            set_repo_root(target)
-            console.print("[dim]· Indexing repository for search…[/]")
-            search_mod.set_index(search_mod.build_bm25_index(target))
-            symbols_mod.set_index(symbols_mod.build_symbol_index(target))
-            swapped = True
+        stack.enter_context(indexed_target(target, console=console))
 
         languages = _detect_languages_for_repo(target)
         model = cfg.model_for_slot("chat")
@@ -488,53 +477,17 @@ def run_git_report(
             if diff_post is not None:
                 report = diff_post(report)
 
-        # Full report is always saved; on screen show a preview unless verbose.
-        saved: Path | None = None
-        if save:
-            _wall = round(result.wall_s, 3)
-            saved = store.save_report(
-                target, kind, report,
-                meta={"model": model, "head": _head, "repo": target,
-                      "total_wall_s": _wall, "avg_pass_s": _wall, "n_passes": 1,
-                      **extra_meta},
-            )
-            if mirror and store.mirror_to_repo(target, kind, report, _head):
-                console.print("[dim]· mirrored report to <repo>/.luxe/gitkit/[/]")
-
-        console.print()
-        display_src, n_filtered = report, 0
-        if min_severity:
-            # DISPLAY-side only — the saved report above is always unfiltered.
-            display_src, n_filtered = store.filter_min_severity(report,
-                                                                min_severity)
-        if verbose:
-            console.print(Markdown(display_src))
-        else:
-            shown, hidden = truncate_for_display(display_src,
-                                                 max_lines=_PREVIEW_LINES)
-            console.print(Markdown(shown))
-            if hidden:
-                console.print(f"[dim]… +{hidden} more lines — full report below[/]")
-        if n_filtered:
-            where = saved if saved else "(not saved — run without --no-save)"
-            console.print(f"[dim]Filtered: {n_filtered} findings below "
-                          f"{min_severity} — full report at {where}[/]")
-        console.print(
-            f"\n[dim]· {result.steps} steps · {result.tool_calls_total} tool calls "
-            f"· {result.wall_s:.1f}s · {result.completion_tokens} out-tok[/]")
-        if saved:
-            tail = "" if verbose else " — re-run with --verbose / -v for the full report"
-            console.print(f"[green]✓[/] report saved to [cyan]{saved}[/]{tail}")
+        _wall = round(result.wall_s, 3)
+        saved = finish_report(
+            console, target=target, kind=kind, report=report, head=_head,
+            meta={"model": model, "head": _head, "repo": target,
+                  "total_wall_s": _wall, "avg_pass_s": _wall, "n_passes": 1,
+                  **extra_meta},
+            save=save, mirror=mirror, verbose=verbose, min_severity=min_severity,
+            stats_line=(
+                f"\n[dim]· {result.steps} steps · {result.tool_calls_total} "
+                f"tool calls · {result.wall_s:.1f}s · "
+                f"{result.completion_tokens} out-tok[/]"))
         return report, saved
     finally:
-        if swapped:
-            if prev_root is not None:
-                set_repo_root(prev_root)
-            if prev_bm25 is not None:
-                search_mod.set_index(prev_bm25)
-            else:
-                search_mod.reset_index()
-            if prev_sym is not None:
-                symbols_mod.set_index(prev_sym)
-            else:
-                symbols_mod.reset_index()
+        stack.close()
