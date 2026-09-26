@@ -27,6 +27,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+#: Default bound for `Backend.health()` — a liveness probe, not a generation.
+#: Loose enough for a remote endpoint behind a tunnel; tight enough that a
+#: server that accepts the socket and never answers can't hold a failure path.
+HEALTH_TIMEOUT_S = 10.0
+
 
 # Names that mean "this machine" but are not parseable as an address.
 _LOOPBACK_NAMES = frozenset({"localhost", "0.0.0.0"})
@@ -1035,9 +1040,15 @@ class Backend:
         # that accepts the socket and never answers would hold the probe for
         # the full read timeout. `chat/slots.unreachable_hint` passes a few
         # seconds for exactly that reason (EVIDENCE.md finding 2).
+        #
+        # None now means `HEALTH_TIMEOUT_S`, not the client's generation
+        # timeout (2026-09 review): every caller asks a liveness question, and
+        # most passed nothing — `luxe ready` ("seconds") and the degrade path
+        # could hang 10 min locally / 40 min on m5 against a wedged endpoint.
         try:
-            kw = {} if timeout_s is None else {"timeout": timeout_s}
-            r = self._client.get("/v1/models", **kw)
+            r = self._client.get(
+                "/v1/models",
+                timeout=HEALTH_TIMEOUT_S if timeout_s is None else timeout_s)
             return r.status_code == 200
         except (httpx.HTTPError, OSError):
             return False

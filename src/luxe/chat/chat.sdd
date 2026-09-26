@@ -242,7 +242,12 @@ never touches this module.
   gets the SAME treatment in both front-ends — the reason on screen in red
   plus a kind="error" transcript record (`repl.note_aborted_turn`) — because
   an aborted turn returns empty text and otherwise renders as a successful
-  blank reply (session 3aabb18b0e07, five of them against a dead proxy).
+  blank reply (session 3aabb18b0e07, five of them against a dead proxy). An
+  aborted turn whose reason is a backend error ALSO runs the kit's recovery
+  (`try_self_repair` → `note_turn_failure` → `unreachable_hint`) inside
+  `note_aborted_turn` — the loop contains backend exceptions, so the
+  `except BackendError` branches never saw a mid-turn failure and repair/
+  degrade were unreachable from a real turn until the 2026-09 review.
   Containing only BackendError is what let an `OSError(ETIMEDOUT)` from a repo
   walk kill the TUI on 2026-07-29. The status bar gains a `backend`
   segment (mid drop-priority) only when >1 backend is configured; configs
