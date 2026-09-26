@@ -663,3 +663,42 @@ def test_chat_yaml_openrouter_declares_its_default_model():
     # local entries keep resolving from the host manifest
     assert cfg.backend_entry("local").default_model == ""
     assert cfg.backend_entry("m5").default_model == ""
+
+
+
+class TestBuildBackend:
+    """#15: one chat-side Backend constructor. The repair / teardown /
+    self-repair copies dropped `backend_kwargs()` and the engine label —
+    on a billable entry that meant the fleet key could go out (no
+    `key_fallback=False`) and failures named the wrong stack."""
+
+    def test_applies_key_kwargs_and_label(self, monkeypatch):
+        import luxe.secrets as secrets
+        from luxe.config import BackendEntry
+
+        monkeypatch.setattr(secrets, "resolve_api_key",
+                            lambda name="": {"OPENROUTER_API_KEY": ""}.get(
+                                name, "fleet-omlx-key"))
+        e = BackendEntry(base_url="https://openrouter.ai/api",
+                         engine="openrouter",
+                         api_key_env="OPENROUTER_API_KEY")
+        b = e.build_backend("m")
+        assert b.api_key == ""               # never the fleet key
+        assert b.engine_label == "OpenRouter"
+        assert b.send_num_ctx is False
+        assert b.model == "m" and b.base_url == "https://openrouter.ai/api"
+
+    def test_base_url_override_and_config_level_entry_point(self, monkeypatch):
+        import luxe.secrets as secrets
+        from luxe.config import BackendEntry
+
+        monkeypatch.setattr(secrets, "resolve_api_key", lambda *a, **k: "k")
+        cfg = PipelineConfig(
+            models={"monolith": "M"},
+            roles={"monolith": RoleConfig(model_key="monolith")},
+            backends={"m5": BackendEntry(base_url="http://m5:8000",
+                                         timeout_s=2400.0, default=True)})
+        b = cfg.build_backend(None, "x", base_url="http://127.0.0.1:9")
+        assert b.base_url == "http://127.0.0.1:9"
+        assert b.timeout_s == 2400.0
+        assert b.engine_label == "oMLX"
