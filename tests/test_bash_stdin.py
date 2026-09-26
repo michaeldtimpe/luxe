@@ -38,14 +38,17 @@ def set_root(tmp_repo: Path):
 
 
 def _spy_run(monkeypatch) -> dict:
+    """Capture the benchmark spawn's kwargs. `_bash` spawns via Popen since
+    2026-09-26 (process-group teardown on timeout; test_bash_hardening.py)."""
     seen: dict = {}
-    real = subprocess.run
+    real = subprocess.Popen
 
-    def _spy(cmd, **kw):
-        seen.update(kw)
-        return real(cmd, **kw)
+    class _Spy(real):  # type: ignore[misc]
+        def __init__(self, *a, **kw):
+            seen.update(kw)
+            super().__init__(*a, **kw)
 
-    monkeypatch.setattr(subprocess, "run", _spy)
+    monkeypatch.setattr(subprocess, "Popen", _Spy)
     return seen
 
 

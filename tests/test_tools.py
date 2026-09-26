@@ -539,13 +539,14 @@ class TestUnrestrictedBash:
         """The benchmark path's bash (module default, env=None) must inherit
         the process environment byte-identically — no venv injection."""
         seen = {}
-        real_run = shell.subprocess.run
+        # _bash spawns via Popen (process-group teardown on timeout, 2026-09-26).
+        real_popen = shell.subprocess.Popen
 
         def spy(*a, **k):
             seen["env"] = k.get("env", "MISSING")
-            return real_run(*a, **k)
+            return real_popen(*a, **k)
 
-        monkeypatch.setattr(shell.subprocess, "run", spy)
+        monkeypatch.setattr(shell.subprocess, "Popen", spy)
         shell._bash({"command": "echo ok"})
         assert seen["env"] is None
 
