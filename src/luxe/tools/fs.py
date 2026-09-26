@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from luxe.fswalk import INDEX_EXCLUDE_DIRS
 from luxe.sdd import SddParseError
 from luxe.spec_resolver import resolve_chain
 from luxe.tools.base import ToolDef, ToolFn
@@ -278,13 +279,38 @@ def get_repo_root() -> Path | None:
     return _REPO_ROOT
 
 
-def _safe(rel: str) -> Path:
+def _resolve_rel(rel: str) -> tuple[Path, str]:
+    """THE path canonicalizer for model-supplied paths (2026-09-26).
+
+    Returns `(absolute resolved path, canonical repo-relative posix path)` —
+    `"."` for the root itself — and raises `PermissionError` when the path
+    resolves outside the repo. Every fs tool, and the analysis tools' `path`
+    argument, goes through here BEFORE any guard, and every guard (role-path,
+    SpecDD Forbids) runs on the canonical relative path it returns.
+
+    Two bugs had the same root, a path checked in one spelling and used in
+    another:
+      * scoping was a string `startswith`, so a SIBLING directory sharing the
+        root's prefix (`../repo2` beside `.../repo`) was "inside" the repo;
+        `is_relative_to` compares path components instead.
+      * the guards read the RAW string while the write went to the RESOLVED
+        path, so `src/../tests/b.py` or an absolute `<root>/tests/b.py` walked
+        past `Forbids: tests/**`, and an absolute path under a checkout
+        directory named like a role (`~/validator/repo/…`) tripped the
+        role-path guard on a component outside the repo.
+    For an ordinary relative path the canonical form IS the input, so every
+    message that quotes it is byte-identical.
+    """
     if _REPO_ROOT is None:
         raise RuntimeError("Repo root not set — call set_repo_root() first")
     resolved = (_REPO_ROOT / rel).resolve()
-    if not str(resolved).startswith(str(_REPO_ROOT)):
+    if not resolved.is_relative_to(_REPO_ROOT):
         raise PermissionError(f"Path escapes repo root: {rel}")
-    return resolved
+    return resolved, resolved.relative_to(_REPO_ROOT).as_posix()
+
+
+def _safe(rel: str) -> Path:
+    return _resolve_rel(rel)[0]
 
 
 def _check_spec_forbids(rel: str, *, creating: bool) -> str | None:
@@ -361,7 +387,7 @@ def _check_spec_forbids(rel: str, *, creating: bool) -> str | None:
     )
 
 
-def _too_large_message(rel: str, size: int, path: Path) -> str:
+def _too_large_message(rel: str, size: int, path: Path, canon: str) -> str:
     """The oversized-read rejection, phrased as a next call rather than a wall.
 
     The bare "File too large (N bytes, limit M)" it replaced named no way
@@ -370,7 +396,13 @@ def _too_large_message(rel: str, size: int, path: Path) -> str:
     same unwindowed read, got the same refusal, and fell back to answering
     from whatever grep had already returned. Observed on a 442 KB auth.log
     (session 0e524f033300, 2026-08-11): two rejected reads, then a capped
-    8,192-token monologue. State the window, and the model takes it."""
+    8,192-token monologue. State the window, and the model takes it.
+
+    The grep advice names `glob=` — grep has NO `path` parameter, so the
+    `grep(pattern=..., path=...)` this used to suggest was a call the schema
+    rejects. A path glob scopes ripgrep to the one file; `canon` (the
+    repo-relative form) is used there because an absolute or `./`-prefixed
+    spelling would not match as a glob."""
     lines_note = ""
     if size <= _LINE_COUNT_MAX_BYTES:
         try:
@@ -386,12 +418,12 @@ def _too_large_message(rel: str, size: int, path: Path) -> str:
         f'    read_file(path="{rel}", offset=0, limit=500)\n'
         f"Advance `offset` by `limit` for each further window. To find "
         f"specific content without paging the whole file, use "
-        f'grep(pattern="...", path="{rel}").'
+        f'grep(pattern="...", glob="{canon}").'
     )
 
 
 def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
-    path = _safe(args["path"])
+    path, canon = _resolve_rel(args["path"])
     if not path.is_file():
         return "", f"File not found: {args['path']}"
     size = path.stat().st_size
@@ -438,7 +470,7 @@ def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
     # window has already bounded what comes back, and `_MAX_READ_BYTES` below
     # bounds it again regardless of how large `limit` is.
     if size > read_limit() and limit is None:
-        return "", _too_large_message(args["path"], size, path)
+        return "", _too_large_message(args["path"], size, path, canon)
 
     # Stream the window rather than materialising the file: `limit` is allowed
     # against arbitrarily large files now, so `read_text()` is no longer safe.
@@ -471,7 +503,7 @@ def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
             f"Line {offset + 1} of {args['path']} is larger than the "
             f"{read_limit():,}-byte read budget on its own, so no window "
             f"can return it — the file is probably minified or single-line. "
-            f'Use grep(pattern="...", path="{args["path"]}") to pull out the '
+            f'Use grep(pattern="...", glob="{canon}") to pull out the '
             f"parts you need."
         )
     if truncated:
@@ -589,7 +621,20 @@ def _glob(args: dict[str, Any]) -> tuple[str, str | None]:
     if _REPO_ROOT is None:
         return "", "Repo root not set"
     pattern = args["pattern"]
+    # Refuse what pathlib would either raise on (an empty or absolute
+    # pattern leaked `ValueError`/`NotImplementedError` text through
+    # dispatch) or silently honour outside the repo (`../*` listed the
+    # parent directory). The tool is repo-scoped like every other fs tool.
+    if not isinstance(pattern, str) or not pattern.strip():
+        return "", "glob: pattern is required (e.g. **/*.py)"
+    if pattern.startswith(("/", "~")) or Path(pattern).is_absolute():
+        return "", (f"glob: pattern must be relative to the repo root, got "
+                    f"{pattern!r} (e.g. src/**/*.py)")
+    if ".." in Path(pattern).parts:
+        return "", (f"glob: '..' is not allowed in a pattern ({pattern!r}) — "
+                    f"glob searches inside the repo only")
     matches, stopped = _glob_matches_tolerant(_REPO_ROOT, pattern)
+    matches = [m for m in matches if not _in_pruned_dir(m, pattern)]
     lines = [f"{m.relative_to(_REPO_ROOT)}{_oversize_note(m)}"
              for m in matches[:_MAX_RESULTS]]
     result = "\n".join(lines)
@@ -598,6 +643,20 @@ def _glob(args: dict[str, Any]) -> tuple[str, str | None]:
     if stopped:
         result += f"\n(scan stopped early — {stopped}; results may be incomplete)"
     return result, None
+
+
+def _in_pruned_dir(match: Path, pattern: str) -> bool:
+    """True when `match` sits under a vendor/cache directory the index walks
+    prune (`fswalk.INDEX_EXCLUDE_DIRS`) that the pattern did not name.
+
+    `**/*.py` in a repo with a `.venv` used to spend all 150 result slots on
+    site-packages and never reach the project's own files. A pattern that
+    spells the directory out (`.venv/*.cfg`, `node_modules/x/**`) still
+    searches it — the prune is a default, not a wall.
+    """
+    named = set(Path(pattern).parts)
+    rel_dirs = match.relative_to(_REPO_ROOT).parts[:-1]
+    return any(d in INDEX_EXCLUDE_DIRS and d not in named for d in rel_dirs)
 
 
 def _glob_matches_tolerant(root: Path, pattern: str) -> tuple[list[Path], str]:
@@ -745,9 +804,14 @@ def _grep_python(pattern: str, file_glob: str) -> tuple[str, str | None]:
     capped = False
     for root, _, files in os.walk(_REPO_ROOT):
         for f in files:
-            if file_glob and not fnmatch.fnmatch(f, file_glob):
-                continue
             fp = Path(root) / f
+            # A glob with a slash scopes by repo-relative PATH, the way
+            # ripgrep's `--glob` does (read_file's refusals advise
+            # `glob="src/big.txt"`); a bare one still matches the file name.
+            subject = (fp.relative_to(_REPO_ROOT).as_posix()
+                       if "/" in file_glob else f)
+            if file_glob and not fnmatch.fnmatch(subject, file_glob):
+                continue
             try:
                 for i, line in enumerate(fp.open(errors="replace"), 1):
                     if regex.search(line):
@@ -847,27 +911,29 @@ def _write_file(args: dict[str, Any], *, prose_exempt: bool = False,
     rel = args["path"]
     content = args["content"]
 
+    # Canonicalize FIRST: every guard below must judge the path the write
+    # will actually land on, not the model's spelling of it (see
+    # `_resolve_rel`). An escape becomes a tool error rather than a
+    # PermissionError past the dispatch wrapper. Resolving is pure path
+    # arithmetic (no I/O on the target), so guards still refuse for free.
+    try:
+        path, canon = _resolve_rel(rel)
+    except (PermissionError, ValueError) as e:
+        return "", str(e)
+
     # Honesty guards — applied before any I/O so a refusal costs nothing.
-    if (err := _check_role_path(rel)):
+    if (err := _check_role_path(canon)):
         return "", err
-    if not (prose_exempt and _is_prose_path(rel)):
+    if not (prose_exempt and _is_prose_path(canon)):
         if (err := _check_placeholder_text(content)):
             return "", err
 
-    # `_safe` rejects path-escape attempts; convert to a tool error so
-    # the call site doesn't have to worry about PermissionError leaking
-    # past the dispatch wrapper. Done up front because the Forbids check
-    # below needs `path.is_file()` to compute the create-vs-edit signal.
-    try:
-        path = _safe(rel)
-    except (PermissionError, ValueError) as e:
-        return "", str(e)
     creating = not path.is_file()
 
     # SpecDD Lever 2: tool-side Forbids enforcement. Cheap directory
     # walk; no-op when no `.sdd` exists in the chain. `creating`
     # routes `Forbids creating` checks (v1.6) — see _check_spec_forbids.
-    if (err := _check_spec_forbids(rel, creating=creating)):
+    if (err := _check_spec_forbids(canon, creating=creating)):
         return "", err
 
     # Mass-deletion check needs the existing content (if file exists).
@@ -890,26 +956,37 @@ def _write_file(args: dict[str, Any], *, prose_exempt: bool = False,
 def _edit_file(args: dict[str, Any], *, prose_exempt: bool = False,
                ) -> tuple[str, str | None]:
     rel = args["path"]
-    if (err := _check_role_path(rel)):
+    # Canonicalize before any guard — same reason as _write_file. Unlike
+    # write, an escape here keeps RAISING (dispatch_tool formats it) exactly
+    # as `_safe` always did, so that error text is unchanged.
+    path, canon = _resolve_rel(rel)
+    if (err := _check_role_path(canon)):
         return "", err
     # SpecDD Lever 2: tool-side Forbids — symmetric with _write_file.
     # `creating=False` always: edit_file requires the file to exist
     # (enforced two lines down), so it's structurally never a create.
-    if (err := _check_spec_forbids(rel, creating=False)):
+    if (err := _check_spec_forbids(canon, creating=False)):
         return "", err
 
-    path = _safe(rel)
     if not path.is_file():
         return "", f"File not found: {rel}"
+    old = args["old_string"]
+    new = args["new_string"]
+    # An empty old_string "occurs" between every pair of characters:
+    # `text.count("")` is len(text)+1, so with replace_all the edit inserted
+    # `new` between every character of the file. There is no sensible reading
+    # of "replace nothing" — refuse and name the tool that does what was meant.
+    if not old:
+        return "", (f"old_string must not be empty — edit_file replaces "
+                    f"existing text. Use write_file to create or overwrite "
+                    f"{rel}.")
     try:
         text = path.read_text()
     except Exception as e:
         return "", str(e)
-    old = args["old_string"]
-    new = args["new_string"]
 
     # Block placeholder text from sneaking in via edits.
-    if not (prose_exempt and _is_prose_path(rel)):
+    if not (prose_exempt and _is_prose_path(canon)):
         if (err := _check_placeholder_text(new)):
             return "", err
 
