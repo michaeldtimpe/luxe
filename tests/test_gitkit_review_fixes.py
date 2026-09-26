@@ -840,3 +840,91 @@ def test_compare_overlay_tempdirs_are_cleaned(tmp_path, monkeypatch):
     run_pair._role_for_side(a)
     run_pair._role_for_side(b)
     assert [p for p in tmp_path.iterdir() if p.name.startswith("luxe_cmp_")] == []
+
+
+# --- pr.py (19) -----------------------------------------------------------------
+
+def test_detect_base_branch_keeps_slashes(tmp_path, monkeypatch):
+    """19: `rsplit('/')` turned a default branch `release/2.x` into `2.x`."""
+    from luxe import pr
+    monkeypatch.setattr(pr, "_run_net",
+                        lambda cmd, cwd, **k: pr.CmdResult(1, "", "no gh"))
+    monkeypatch.setattr(pr, "_run", lambda cmd, cwd, **k: pr.CmdResult(
+        0, "refs/remotes/origin/release/2.x\n", ""))
+    assert pr.detect_base_branch(tmp_path) == "release/2.x"
+
+
+def test_watch_ci_matches_the_state_column_not_substrings():
+    """19: substring 'fail'/'pass' — a check NAMED failover-tests read as a
+    failure, bypass-lint as a pass."""
+    from luxe import pr
+    out = ("failover-tests\tpass\t1m\thttps://x\n"
+           "bypass-lint\tpending\t0s\thttps://y\n")
+    assert pr._classify_checks(out) == ("pending", "")
+    out2 = "failover-tests\tpass\t1m\thttps://x\nunit\tfail\t2m\thttps://z\n"
+    verdict, line = pr._classify_checks(out2)
+    assert verdict == "failed" and line.startswith("unit")
+    assert pr._classify_checks("a\tpass\t1m\nb\tskipping\t0\n")[0] == "passed"
+    assert pr._classify_checks("")[0] == "pending"
+
+
+def test_gh_create_and_ready_are_bounded(tmp_path, monkeypatch):
+    """19: gh pr create / ready ran through the unbounded _run."""
+    from luxe import pr
+    from luxe.run_state import RunSpec
+    seen: list[tuple[list[str], float | None]] = []
+
+    def fake_run(cmd, cwd, env=None, timeout=None):
+        seen.append((cmd, timeout))
+        if cmd[:3] == ["gh", "pr", "create"]:
+            return pr.CmdResult(0, "https://github.com/o/r/pull/7\n", "")
+        if cmd[:3] == ["gh", "pr", "checks"]:
+            return pr.CmdResult(0, "unit\tpass\t1m\thttps://z\n", "")
+        return pr.CmdResult(0, "", "")
+    monkeypatch.setattr(pr, "_run", fake_run)
+    spec = RunSpec(run_id="r1", goal="g", task_type="bugfix",
+                   repo_path=str(tmp_path), base_sha="", base_branch="main")
+    state = pr.PRState(branch_name="luxe/x")
+    state.test_passed = False
+    cfg = pr.PRConfig(test_commands=[], watch_ci_total_wait_s=5,
+                      watch_ci_poll_interval_s=0)
+    pr._do_create(spec, state, "", "bugfix", "g", cfg)
+    pr._do_watch_ci(spec, state, cfg)
+    gh = [(c, t) for c, t in seen if c[:1] == ["gh"]]
+    assert {c[2] for c, _ in gh} >= {"create", "checks", "ready"}
+    assert all(t is not None for _c, t in gh)
+
+
+def test_resume_retries_a_failed_commit(tmp_path, monkeypatch):
+    """19: resume_pr started at `test`, so a commit that failed (hook) was
+    never retried and an empty branch got pushed."""
+    from luxe import pr
+    from luxe.run_state import RunSpec, init_run_dir, save_pr_state
+    monkeypatch.setattr("luxe.run_state.runs_root", lambda: tmp_path / "runs")
+    repo = _init_repo(tmp_path / "r", {"a.py": "x = 1\n"})
+    _git(repo, "checkout", "-q", "-b", "luxe/bugfix/x")   # first attempt got here
+    (repo / "a.py").write_text("x = 2\n")
+    spec = RunSpec(run_id="rc1", goal="fix x", task_type="bugfix",
+                   repo_path=str(repo), base_sha="", base_branch="main")
+    init_run_dir(spec)
+    state = pr.PRState(branch_name="luxe/bugfix/x")
+    state.step("commit").status = "failed"
+    save_pr_state(spec.run_id, state)
+    real_run = pr._run
+
+    def fake_run(cmd, cwd, env=None, timeout=None):
+        if cmd[:1] == ["gh"] or cmd[:2] == ["git", "push"]:
+            return pr.CmdResult(0, "https://github.com/o/r/pull/9\n", "")
+        return real_run(cmd, cwd, env=env, timeout=timeout)
+    monkeypatch.setattr(pr, "_run", fake_run)
+    after = pr.resume_pr(spec.run_id, push_only=True)
+    assert after.is_done("commit")
+    assert _out(repo, "log", "-1", "--pretty=%s").startswith("bugfix:")
+    assert _out(repo, "status", "--porcelain") == ""
+
+
+def test_is_dirty_treats_git_failure_as_dirty(tmp_path):
+    from luxe import pr
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert pr.is_dirty(plain) is True
