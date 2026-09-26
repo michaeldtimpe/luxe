@@ -1434,8 +1434,9 @@ def serve_cmd(transport: str, port: int, unsafe: bool):
     )
 
     tool_list = server_tool_names(unsafe, policy)
+    where = f" port={port}" if transport == "sse" else ""
     sys.stderr.write(
-        f"luxe serve: transport={transport} unsafe={unsafe} "
+        f"luxe serve: transport={transport}{where} unsafe={unsafe} "
         f"tools={tool_list}\n"
     )
     sys.stderr.flush()
@@ -1443,6 +1444,9 @@ def serve_cmd(transport: str, port: int, unsafe: bool):
     if transport == "stdio":
         server.run(transport="stdio")
     elif transport == "sse":
+        # FastMCP binds settings.port, whose default (8000) is the local
+        # oMLX endpoint — `--port` was accepted and silently ignored.
+        server.settings.port = port
         server.run(transport="sse")
     else:
         sys.stderr.write(f"unknown transport: {transport}\n")
