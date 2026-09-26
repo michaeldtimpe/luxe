@@ -7,12 +7,14 @@ at the path `Fixture.repo_url` points to, so we can:
 
     1. Read each fixture's <output>/<variant>/<fixture>/state.json for run_id.
     2. Read ~/.luxe/runs/<run_id>/pr_state.json for branch_name.
-    3. Clone the cache repo to /tmp (local clone — sub-second).
-    4. Checkout origin/<branch_name>.
+    3. Clone the cache repo into a private mkdtemp dir (local clone — sub-second).
+    4. Checkout origin/<branch_name>. A recorded branch missing from the
+       cache is UNREGRADABLE (excluded from the totals), never graded at
+       base_sha.
     5. Call grade_fixture() directly with that worktree.
     6. Write result_regraded.json next to the original.
 
-Sister of scripts/regrade_phase2.py (which fetches PR state from GitHub via
+Sister of scripts/_archive/regrade_phase2.py (which fetches PR state from GitHub via
 gh). This one works with the offline-cache fixture setup introduced
 2026-05-01: every fixture's repo_url is a local path, every push lands in
 that local repo's branch list.
@@ -29,6 +31,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -41,6 +44,9 @@ from benchmarks.maintain_suite.grade import (  # noqa: E402
     FixtureResult,
     grade_fixture,
 )
+from benchmarks.maintain_suite.fixtures import (  # noqa: E402
+    load_fixtures as _load_fixtures,
+)
 from luxe.citations import lint_report  # noqa: E402
 
 
@@ -51,11 +57,9 @@ def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str]:
 
 
 def load_fixtures() -> dict[str, Fixture]:
-    """Read fixtures.yaml; return {fixture_id: Fixture}."""
-    import yaml
-    p = ROOT / "benchmarks" / "maintain_suite" / "fixtures.yaml"
-    raw = yaml.safe_load(p.read_text()) or {}
-    return {f["id"]: Fixture.from_dict(f) for f in (raw.get("fixtures") or [])}
+    """{fixture_id: Fixture} via the shared, host-remapping loader — the
+    literal fixtures.yaml path is another host's home on m1."""
+    return {f.id: f for f in _load_fixtures()}
 
 
 def _pushed_branch_for(run_id: str) -> str:
@@ -71,30 +75,41 @@ def _pushed_branch_for(run_id: str) -> str:
     return str(d.get("branch_name", ""))
 
 
-def _prepare_worktree(fixture: Fixture, branch: str, dest: Path) -> bool:
+class Unregradable(RuntimeError):
+    """The run's graded state cannot be reconstructed from the cache."""
+
+
+def _prepare_worktree(fixture: Fixture, branch: str, dest: Path,
+                      had_diff: bool) -> None:
     """Local-clone the fixture's repo to `dest` and check out the agent's
-    pushed branch. Returns True if the branch was checked out, False if no
-    branch existed (so the worktree is at default HEAD == base_sha territory).
+    pushed branch.
+
+    Raises Unregradable instead of quietly grading base_sha when the state
+    to grade is gone: a branch recorded in pr_state.json but absent from the
+    cache (push failed, or pruned), or no branch at all for a run whose
+    original grade saw a diff. Grading base_sha there scored "the model
+    changed nothing" — a fabricated FAIL counted into the totals. Only a run
+    that recorded no branch AND no diff is legitimately graded at base_sha.
     """
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     rc, out = _run(["git", "clone", "--quiet", "--local", fixture.repo_url, str(dest)])
     if rc != 0:
-        raise RuntimeError(f"clone failed for {fixture.id}: {out}")
+        raise Unregradable(f"clone of {fixture.repo_url} failed: {out.strip()[:200]}")
     if not branch:
-        # No pushed branch (stuck-loop run); leave HEAD on the default branch
-        # but reset to base_sha so the grader sees zero diff vs base_sha.
+        if had_diff:
+            raise Unregradable("no pushed branch recorded, but the original "
+                               "grade saw a diff — nothing to regrade")
         if fixture.base_sha:
-            _run(["git", "checkout", "-q", fixture.base_sha], cwd=dest)
-        return False
+            rc, out = _run(["git", "checkout", "-q", fixture.base_sha], cwd=dest)
+            if rc != 0:
+                raise Unregradable(f"checkout {fixture.base_sha} failed: {out.strip()[:200]}")
+        return
     rc, out = _run(["git", "checkout", "-q", f"origin/{branch}"], cwd=dest)
     if rc != 0:
-        # Branch reference doesn't exist in cache (rare). Fall back to base_sha.
-        if fixture.base_sha:
-            _run(["git", "checkout", "-q", fixture.base_sha], cwd=dest)
-        return False
-    return True
+        raise Unregradable(f"branch {branch} not in {fixture.repo_url} "
+                           "(push failed or pruned)")
 
 
 def regrade_one(result_path: Path, fixtures: dict[str, Fixture]) -> dict:
@@ -116,14 +131,30 @@ def regrade_one(result_path: Path, fixtures: dict[str, Fixture]) -> dict:
     run_id = str(state.get("luxe_run_id", ""))
     branch = _pushed_branch_for(run_id) if run_id else ""
 
+    # A private temp dir per call — a fixed /tmp/regrade-<id> collided
+    # between concurrent regrades and was never cleaned up.
+    tmp = Path(tempfile.mkdtemp(prefix=f"regrade-{fixture_id}-"))
+    try:
+        return _regrade_in(tmp / "repo", raw, fixture, run_id, branch,
+                           result_path)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _regrade_in(worktree: Path, raw: dict, fixture: Fixture, run_id: str,
+                branch: str, result_path: Path) -> dict:
+    fixture_id = fixture.id
     # Carry over agent-loop outputs we don't recompute: pr_url, pr_opened.
     # The grader's responsibility is the *grading* logic; the agent-loop's
     # responsibility was the diff and PR cycle, treated as ground truth.
     pr_url = str(raw.get("pr_url", ""))
     pr_opened = bool(raw.get("pr_opened", False))
-
-    worktree = Path("/tmp") / f"regrade-{fixture_id}"
-    _prepare_worktree(fixture, branch, worktree)
+    try:
+        _prepare_worktree(fixture, branch, worktree,
+                          had_diff=bool(raw.get("diff_produced")))
+    except Unregradable as e:
+        return {"fixture_id": fixture_id, "unregradable": str(e),
+                "branch": branch}
 
     # Re-run the citation linter against the original synthesizer.md if we
     # can find it. Falls back to stored counts if the run dir is gone or
@@ -212,6 +243,9 @@ def main() -> int:
         if r.get("skipped"):
             print(f"  {r['fixture_id']:45s}  SKIP   {r['skipped']}")
             continue
+        if r.get("unregradable"):
+            print(f"  {r['fixture_id']:45s}  UNREGRADABLE  {r['unregradable']}")
+            continue
         v1 = f"{r['v1_score']}{'P' if r['v1_passed'] else 'F'}"
         v2 = f"{r['v2_score']}{'P' if r['v2_passed'] else 'F'}"
         add_d = f"{r['v1_diff_add']}→{r['v2_diff_add']}"
@@ -222,10 +256,14 @@ def main() -> int:
         print(f"  {r['fixture_id']:45s}  {v1:>5}  {v2:>5}  "
               f"{add_d:>10}  {del_d:>10}  {gates_d:<35}")
 
-    real_rows = [r for r in rows if not r.get("skipped")]
+    real_rows = [r for r in rows
+                 if not r.get("skipped") and not r.get("unregradable")]
     v1p = sum(1 for r in real_rows if r["v1_passed"])
     v2p = sum(1 for r in real_rows if r["v2_passed"])
     print(f"\n  totals: v1 PASS = {v1p}/{len(real_rows)}, v2 PASS = {v2p}/{len(real_rows)}")
+    n_unreg = sum(1 for r in rows if r.get("unregradable"))
+    if n_unreg:
+        print(f"  excluded: {n_unreg} UNREGRADABLE (graded state not in the cache)")
 
     return 0
 

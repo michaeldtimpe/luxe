@@ -53,6 +53,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
+from benchmarks.maintain_suite.fixtures import (  # noqa: E402
+    load_fixtures as _load_fixtures,
+    remap_repo_url,  # noqa: F401 — re-exported; one remap for every reader
+)
 from benchmarks.maintain_suite.grade import Fixture, grade_fixture  # noqa: E402
 
 PROVIDER_ID = "luxeab"
@@ -332,30 +336,9 @@ def export_session(sid: str, env: dict, cwd: Path, dest: Path) -> bool:
     return True
 
 
-def remap_repo_url(url: str, home: Path | None = None) -> str:
-    """fixtures.yaml pins absolute fixture-cache paths under one host's home
-    (/Users/mtimpe/.luxe/fixture-cache/<repo>). When that path is absent but
-    the same cache exists under THIS user's ~/.luxe, use it. Anything else is
-    returned unchanged."""
-    marker = "/.luxe/fixture-cache/"
-    if not url or marker not in url or Path(url).exists():
-        return url
-    local = (home or Path.home()) / ".luxe" / "fixture-cache" / url.split(marker, 1)[1]
-    return str(local) if local.exists() else url
-
-
 def load_fixtures() -> list[Fixture]:
-    import dataclasses
-
-    import yaml
-    p = ROOT / "benchmarks" / "maintain_suite" / "fixtures.yaml"
-    raw = yaml.safe_load(p.read_text()) or {}
-    out = []
-    for f in raw.get("fixtures") or []:
-        fx = Fixture.from_dict(f)
-        url = remap_repo_url(fx.repo_url)
-        out.append(dataclasses.replace(fx, repo_url=url) if url != fx.repo_url else fx)
-    return out
+    """The shared, host-remapping loader (benchmarks/maintain_suite/fixtures.py)."""
+    return _load_fixtures()
 
 
 def resolve_key(env_name: str) -> str:
@@ -446,7 +429,8 @@ def write_summary(ctx: RunCtx, ids: list[str], state: dict, extra: dict) -> dict
             r, m = json.loads(rp.read_text()), json.loads(mp.read_text())
             row.update(score=r["score"], outcome_points=r["outcome_points"],
                        diff_produced=r["diff_produced"],
-                       gates=[g["name"] for g in r.get("gates_triggered") or []],
+                       gates=[g.get("name") or g.get("gate", "?")
+                              for g in r.get("gates_triggered") or []],
                        wall_s=m["wall_s"], timed_out=m["timed_out"],
                        exit_code=m["exit_code"],
                        tool_calls_total=m["tool_calls_total"],

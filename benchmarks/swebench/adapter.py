@@ -61,6 +61,10 @@ def _run(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = N
         return 124, out, err
 
 
+_CLONE_TIMEOUT_S = 900.0
+_FETCH_TIMEOUT_S = 600.0
+
+
 def ensure_repo(instance: SweBenchInstance, work_dir: Path) -> Path:
     """Ensure the repo for this instance is cloned and reset to base_commit.
 
@@ -73,12 +77,17 @@ def ensure_repo(instance: SweBenchInstance, work_dir: Path) -> Path:
     inst_dir = work_dir / instance.instance_id
     repo_dir = inst_dir / "repo"
     inst_dir.mkdir(parents=True, exist_ok=True)
+    # Network git gets a wall bound: an unbounded clone/fetch on a stalled
+    # connection held the whole bench forever (the per-instance timeout only
+    # covers the agent run, which starts after this).
     if not (repo_dir / ".git").is_dir():
-        rc, out, err = _run(["git", "clone", "--quiet", instance.repo_url, str(repo_dir)])
+        rc, out, err = _run(["git", "clone", "--quiet", instance.repo_url, str(repo_dir)],
+                            timeout_s=_CLONE_TIMEOUT_S)
         if rc != 0:
             raise RuntimeError(f"clone failed for {instance.instance_id}: {err.strip()}")
     # Hard reset to base_commit
-    rc, out, err = _run(["git", "fetch", "origin", instance.base_commit], cwd=repo_dir)
+    rc, out, err = _run(["git", "fetch", "origin", instance.base_commit], cwd=repo_dir,
+                        timeout_s=_FETCH_TIMEOUT_S)
     rc, out, err = _run(["git", "reset", "--hard", instance.base_commit], cwd=repo_dir)
     if rc != 0:
         raise RuntimeError(f"reset failed for {instance.instance_id}: {err.strip()}")

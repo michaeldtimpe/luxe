@@ -441,3 +441,33 @@ class TestSpecComplianceFindings:
         )
         res = lint_report("", git_repo, base_sha=base)
         assert res.spec_violations == []
+
+
+class TestUncommittedWorkingTree:
+    """The benchmark path lints in `luxe maintain` BEFORE the PR cycle
+    commits, so HEAD == base_sha. Diffing base..HEAD saw nothing: forbidden
+    creations were never flagged and deletions read as missing files."""
+
+    def test_uncommitted_forbidden_creation_is_flagged(self, git_repo: Path):
+        _add_sdd(git_repo, f"{git_repo.name}.sdd",
+                 "# root\n## Forbids\n- tests/**\n")
+        subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "sdd"], cwd=git_repo, check=True)
+        base = _base_sha(git_repo)
+        (git_repo / "tests").mkdir()
+        (git_repo / "tests" / "test_new.py").write_text("x = 1\n")  # untracked
+        res = lint_report("", git_repo, base_sha=base)
+        assert [v.path for v in res.spec_violations] == ["tests/test_new.py"]
+
+    def test_uncommitted_deletion_resolves_citation(self, git_repo: Path):
+        base = _base_sha(git_repo)
+        (git_repo / "src" / "calc.py").unlink()
+        res = lint_report("Removed `src/calc.py:4`.", git_repo, base_sha=base)
+        assert res.citations[0].status == "resolved_by_deletion"
+        assert not res.is_blocking
+
+    def test_uncommitted_edit_counts_as_changed(self, git_repo: Path):
+        from luxe.citations import _git_changed_files
+        base = _base_sha(git_repo)
+        (git_repo / "src" / "calc.py").write_text("# edited\n")
+        assert _git_changed_files(git_repo, base) == {"src/calc.py"}

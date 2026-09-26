@@ -4,7 +4,7 @@
 # 2 document, 1 manage). The env var is NOT a Variant field — the A/B is
 # two sequential invocations of this single-cell file with different
 # parent env + output subdirs (run.py copies os.environ into the
-# fixture subprocess). Driver: scripts/run_c12_adaptive_smoke.sh
+# fixture subprocess). Driver: scripts/_archive/run_c12_adaptive_smoke.sh
 #
 # Gates (direction-finding only; promotion needs 3-rep per
 # feedback_ship_floor_needs_multirep_when_at_strictness):

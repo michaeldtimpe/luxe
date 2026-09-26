@@ -470,9 +470,19 @@ def check_vacuous_test(
     files from HEAD into it, then run the test command. If rc=0, the test
     file isn't exercising any new behaviour — mark vacuous.
 
-    Returns (vacuous, detail). Returns (False, "...") on infrastructure
-    errors (worktree creation failed, etc.) — fail-open so a flaky check
-    doesn't downgrade legitimate passes.
+    A pass at base only indicts a test the command actually RAN. A test
+    file the command never loads (neon-rain's `npm test` runs one named
+    file; a model's new `tests/foo.test.js` is invisible to it) passes at
+    base trivially, and scoring that as vacuous failed correct
+    implementations. So each copied test is probed: its content is swapped
+    for a line no language parses and the command re-run. rc still 0 → the
+    command never loaded it → UNWIRED (reported in the detail, no
+    penalty). Only tests the probe proves were run can make the gate fire.
+
+    Returns (vacuous, detail); detail is non-empty for an unwired-only
+    result too. Returns (False, "") on infrastructure errors (worktree
+    creation failed, etc.) — fail-open so a flaky check doesn't downgrade
+    legitimate passes.
     """
     if not base_sha or not command:
         return False, ""
@@ -504,16 +514,49 @@ def check_vacuous_test(
 
             rc, out = _run(["bash", "-lc", command], cwd=wt, timeout=timeout)
             tail = "\n".join((out or "").splitlines()[-15:])[:600]
-            if rc == 0:
+            if rc != 0:
+                return False, ""
+            ran, unwired = _probe_tests_run(wt, command, test_paths, timeout)
+            if ran:
                 return True, (
-                    f"new test files {test_paths!r} passed against base SHA "
+                    f"new test files {ran!r} passed against base SHA "
                     f"({base_sha[:8]}) — test isn't exercising new code; tail:\n{tail}"
                 )
-            return False, ""
+            return False, (f"unwired: `{command}` does not run {unwired!r} "
+                           "(sabotaged copies still passed) — not penalized")
         finally:
             # Best-effort cleanup; tempdir context will reap whatever's left.
             _run(["git", "worktree", "remove", "--force", str(wt)],
                  cwd=repo_path, timeout=60)
+
+
+# One line that is a syntax error in every language the suite's test commands
+# load (JS/TS, Python, Go, Rust, Ruby...): a loaded file with this body fails.
+_UNPARSEABLE = "@@@ luxe vacuous-test probe: this file must not parse ((( @@@\n"
+
+
+def _probe_tests_run(wt: Path, command: str, test_paths: list[str],
+                     timeout: float) -> tuple[list[str], list[str]]:
+    """Split `test_paths` into (run by `command`, never loaded by it).
+
+    Each file in turn is replaced by `_UNPARSEABLE` in the base worktree and
+    the command re-run; a still-zero rc means the command never read it.
+    The file's HEAD content is restored before the next probe.
+    """
+    ran: list[str] = []
+    unwired: list[str] = []
+    for rel in test_paths:
+        dst = wt / rel
+        if not dst.is_file():
+            continue
+        original = dst.read_bytes()
+        try:
+            dst.write_text(_UNPARSEABLE)
+            rc, _out = _run(["bash", "-lc", command], cwd=wt, timeout=timeout)
+        finally:
+            dst.write_bytes(original)
+        (unwired if rc == 0 else ran).append(rel)
+    return ran, unwired
 
 
 # Source-code extensions for the orphan-file gate. Files outside this set
@@ -856,8 +899,9 @@ def _check_regex_present(repo_path: Path, pattern: str,
     rx = re.compile(pattern)
 
     if base_sha and changed_files:
-        _rc, out = _run_git(["git", "diff", base_sha, "HEAD", "--",
-                             *changed_files], cwd=repo_path)
+        _rc, out = _run_git(["git", "diff", "-M", base_sha, "HEAD", "--",
+                             *_diff_pathspec(repo_path, base_sha, changed_files)],
+                            cwd=repo_path)
         if out:
             added_lines: list[tuple[str, str]] = []  # (file, line)
             current_file = ""
@@ -915,12 +959,70 @@ def _check_regex_present(repo_path: Path, pattern: str,
     return False, f"pattern not found in {len(changed_files)} changed files"
 
 
+_ABSENT_SCAN_MAX_BYTES = 2_000_000
+
+
+def _base_files_matching(repo_path: Path, base_sha: str,
+                         rx: "re.Pattern[str]") -> list[str]:
+    """Tracked files whose base_sha content matches `rx` — the files a
+    regex_absent task is actually about. One `ls-tree` + one streamed
+    `cat-file --batch`, so Python's regex (not git grep's dialect) decides."""
+    _rc, out = _run_git(["git", "ls-tree", "-r", "-z", base_sha], cwd=repo_path)
+    entries: list[tuple[str, str]] = []  # (blob sha, path)
+    for rec in out.split("\0"):
+        if not rec:
+            continue
+        meta, _tab, path = rec.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            entries.append((parts[2], path))
+    if not entries:
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch"], cwd=str(repo_path),
+            input="".join(f"{sha}\n" for sha, _ in entries).encode(),
+            capture_output=True, check=False, timeout=120)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        raise GitRunError(f"git cat-file --batch (cwd={repo_path}) failed: {e}")
+    if proc.returncode != 0:
+        raise GitRunError(f"git cat-file --batch (cwd={repo_path}) exited "
+                          f"{proc.returncode}: {proc.stderr.decode(errors='replace')[-300:]}")
+    data = proc.stdout
+    pos = 0
+    hits: list[str] = []
+    for _sha, path in entries:
+        nl = data.index(b"\n", pos)
+        header = data[pos:nl].split()
+        size = int(header[2])
+        body = data[nl + 1: nl + 1 + size]
+        pos = nl + 1 + size + 1
+        if size > _ABSENT_SCAN_MAX_BYTES or b"\0" in body[:8000]:
+            continue
+        if rx.search(body.decode("utf-8", errors="replace")):
+            hits.append(path)
+    return hits
+
+
 def _check_regex_absent(repo_path: Path, pattern: str,
-                        changed_files: list[str]) -> tuple[bool, str]:
+                        changed_files: list[str],
+                        base_sha: str = "") -> tuple[bool, str, list[str]]:
+    """Pattern must be absent from the files the task is about.
+
+    Returns (passed, detail, deleted_targets). The scan set is the changed
+    files PLUS every file that matched at base_sha. Scanning only the
+    changed files let a model pass by editing an unrelated file while the
+    target still matched, and skipping files missing from the final tree let
+    it pass by deleting the target — `deleted_targets` names those so the
+    caller can gate them.
+    """
     if not pattern:
-        return False, "no pattern"
+        return False, "no pattern", []
     rx = re.compile(pattern)
-    for rel in changed_files:
+    targets = _base_files_matching(repo_path, base_sha, rx) if base_sha else []
+    scan = list(dict.fromkeys([*changed_files, *targets]))
+    deleted = [rel for rel in targets if not (repo_path / rel).is_file()]
+    for rel in scan:
         p = repo_path / rel
         if not p.is_file():
             continue
@@ -929,8 +1031,36 @@ def _check_regex_absent(repo_path: Path, pattern: str,
         except OSError:
             continue
         if rx.search(text):
-            return False, f"pattern matched in {rel} (should be absent)"
-    return True, f"pattern absent in {len(changed_files)} changed files"
+            return False, f"pattern matched in {rel} (should be absent)", deleted
+    return True, (f"pattern absent in {len(scan)} file(s) "
+                  f"({len(targets)} matched at base, {len(changed_files)} changed)"), deleted
+
+
+def _rename_sources(repo_path: Path, base_sha: str) -> list[str]:
+    """Old paths of files renamed in base_sha..HEAD (`R<score>` rows)."""
+    _rc, out = _run_git(["git", "diff", "--name-status", "-M", base_sha, "HEAD"],
+                        cwd=repo_path)
+    olds: list[str] = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[0].startswith("R"):
+            olds.append(parts[1])
+    return olds
+
+
+def _diff_pathspec(repo_path: Path, base_sha: str,
+                   changed_files: list[str]) -> list[str]:
+    """`changed_files` plus the OLD side of every rename.
+
+    `_changed_files` lists a renamed file under its new name only, and a
+    pathspec of just the new name hides the old one from git's rename
+    detection — so a pure `git mv` diffed as a brand-new file whose every
+    line was "added", and regex_present credited moved content as new work.
+    With both sides in the pathspec and `-M`, a pure rename contributes no
+    added lines.
+    """
+    olds = [p for p in _rename_sources(repo_path, base_sha) if p not in changed_files]
+    return [*changed_files, *olds]
 
 
 def _changed_files(repo_path: Path, base_sha: str) -> list[str]:
@@ -979,7 +1109,8 @@ def _diff_hunks(repo_path: Path, base_sha: str,
     """
     if not base_sha or not changed_files:
         return {}
-    _rc, out = _run_git(["git", "diff", base_sha, "HEAD", "--", *changed_files],
+    _rc, out = _run_git(["git", "diff", "-M", base_sha, "HEAD", "--",
+                         *_diff_pathspec(repo_path, base_sha, changed_files)],
                         cwd=repo_path)
     return _parse_diff_hunks(out)
 
@@ -1155,17 +1286,24 @@ def grade_fixture(
         earned_outcome = 3 if passed else 0
         # Vacuous-test gate: a passing test that also passes against the
         # unmodified base SHA isn't exercising the implementation.
-        if passed:
+        # implement-only, as maintain_suite.sdd has always specified — the
+        # code fired it for every tests_pass task. (No bugfix fixture uses
+        # tests_pass today, so this narrowing changes no current score.)
+        vacuous, vac_detail = False, ""
+        if passed and fixture.task_type == "implement":
             vacuous, vac_detail = check_vacuous_test(
                 repo_path, base_sha, eo.get("command", ""), changed,
             )
+            if not vacuous and vac_detail:
+                result.expected_outcome_detail = f"{detail}\n\n[vacuous_test] {vac_detail}"
+        if passed:
             if vacuous:
                 result.expected_outcome_passed = False
                 result.expected_outcome_detail = (
                     f"{detail}\n\n[vacuous_test gate] {vac_detail}"
                 )
                 result.gates_triggered.append({
-                    "gate": "vacuous_test",
+                    "name": "vacuous_test",
                     "detail": vac_detail[:500],
                 })
                 earned_outcome = 0
@@ -1183,7 +1321,7 @@ def grade_fixture(
                         f"{detail}\n\n[orphan_file gate] {orph_detail}"
                     )
                     result.gates_triggered.append({
-                        "gate": "orphan_file",
+                        "name": "orphan_file",
                         "detail": orph_detail[:500],
                     })
                     earned_outcome = 0
@@ -1209,12 +1347,21 @@ def grade_fixture(
                     f"{detail}\n\n[orphan_file gate] {orph_detail}"
                 )
                 result.gates_triggered.append({
-                    "gate": "orphan_file",
+                    "name": "orphan_file",
                     "detail": orph_detail[:500],
                 })
                 earned_outcome = 0
     elif kind == "regex_absent":
-        passed, detail = _check_regex_absent(repo_path, eo.get("pattern", ""), changed)
+        passed, detail, deleted = _check_regex_absent(
+            repo_path, eo.get("pattern", ""), changed, base_sha=base_sha)
+        if passed and deleted:
+            # Deleting the file that held the pattern is not removing the
+            # pattern from it.
+            passed = False
+            gate_detail = f"target file(s) deleted instead of edited: {deleted[:5]}"
+            detail = f"{detail}\n\n[deleted_target gate] {gate_detail}"
+            result.gates_triggered.append({"name": "deleted_target",
+                                           "detail": gate_detail[:500]})
         result.expected_outcome_passed = passed
         result.expected_outcome_detail = detail
         earned_outcome = 3 if passed else 0

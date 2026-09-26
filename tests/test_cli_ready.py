@@ -408,11 +408,36 @@ class TestPullRefusesOffOmlx:
 
     def test_an_explicit_base_url_bypasses_the_config_engine(
             self, monkeypatch, tmp_path):
-        """`--base-url` names an endpoint whose stack luxe was never told."""
+        """`--base-url` names an endpoint whose stack luxe was never told.
+
+        The admin client is stubbed: this used to reach the REAL oMLX port
+        on 127.0.0.1:8000 and asserted only an absence, so it passed whether
+        the command worked, crashed, or talked to a live server."""
+        from luxe import modelstore as ms
         monkeypatch.setenv("LUXE_CONFIG", self._cfg(tmp_path, "llama-server"))
+        seen: dict = {}
+
+        class _FakeAdmin:
+            def __init__(self, base_url="", **_):
+                seen["base_url"] = base_url
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def tasks(self):
+                seen["tasks"] = True
+                return []
+
+        monkeypatch.setattr(ms, "OmlxAdmin", _FakeAdmin)
         res = CliRunner().invoke(
-            cli.main, ["pull", "--list", "--base-url", "http://127.0.0.1:8000"])
+            cli.main, ["pull", "--list", "--base-url", "http://127.0.0.1:8000",
+                       "--models-dir", str(tmp_path / "models")])
+        assert res.exit_code == 0, res.output
         assert "cannot fetch weights" not in res.output
+        assert seen == {"base_url": "http://127.0.0.1:8000", "tasks": True}
 
     def test_list_does_not_blame_a_missing_key_for_the_download_queue(
             self, monkeypatch, tmp_path):
