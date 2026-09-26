@@ -40,14 +40,15 @@ class ToolCall:
 
 
 @dataclass
-class ToolResult:
-    content: str
-    error: str | None = None
-
-
-@dataclass
 class ToolCache:
-    """Per-task memoization for read-only tools."""
+    """Per-task memoization for read-only tools.
+
+    INERT in production: no caller constructs one, so `run_single`/`run_agent`
+    always pass `cache=None` and `dispatch_tool` never memoizes. Kept because
+    it is the type of `run_agent`'s `cache` parameter, and that signature is
+    frozen (chat.sdd) — removing the plumbing is a signature change, not a
+    cleanup. The per-module `CACHEABLE` sets only matter if one is ever
+    passed."""
     _store: dict[str, tuple[str, str | None]] = field(default_factory=dict)
     hits: int = 0
     misses: int = 0
