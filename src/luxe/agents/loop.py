@@ -286,7 +286,10 @@ _RESPOND_COMPACTION_PHANTOM_NUDGE = (
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
 # patterns mid-run. Set to 0 to disable. Configurable via env.
 import os as _os_for_logging
-_TOKEN_LOG_INTERVAL = int(_os_for_logging.environ.get("LUXE_TOKEN_LOG_INTERVAL", "5000"))
+try:
+    _TOKEN_LOG_INTERVAL = int(_os_for_logging.environ.get("LUXE_TOKEN_LOG_INTERVAL", "5000"))
+except ValueError:  # malformed degrades silently, like every other knob —
+    _TOKEN_LOG_INTERVAL = 5000  # it used to crash `import luxe.agents.loop`
 
 
 def _call_key(name: str, args: dict[str, Any]) -> str:
@@ -342,14 +345,18 @@ def run_agent(
     result = AgentResult()
     t0 = time.monotonic()
 
-    def _notice(text: str) -> None:
-        """Display-only; a broken front-end callback must not kill the run."""
-        if on_notice is None:
+    def _display(cb, arg, what: str) -> None:
+        """Display-only callbacks (chat front-end; None on the benchmark
+        path): a broken one must not kill the run."""
+        if cb is None:
             return
         try:
-            on_notice(text)
+            cb(arg)
         except Exception:
-            logger.debug("on_notice raised", exc_info=True)
+            logger.debug("%s raised", what, exc_info=True)
+
+    def _notice(text: str) -> None:
+        _display(on_notice, text, "on_notice")
     # Every LUXE_* switch this run obeys, read once, here (agents/flags.py).
     # Same variables, same defaults, same malformed-value fallbacks as the
     # sixteen scattered os.environ.get() calls this replaced; each is still
@@ -641,8 +648,8 @@ def run_agent(
                      context_pressure(messages, role_cfg.num_ctx) * 100,
                      step_calibration, role_cfg.num_ctx, effective_ctx,
                      len(messages))
-        if on_progress is not None:
-            on_progress(pressure)  # chat-only live ctx% (one source of truth, C2)
+        # chat-only live ctx% (one source of truth, C2)
+        _display(on_progress, pressure, "on_progress")
 
         # v1.10 — compute convergence score ONCE per step at the top of the
         # iteration. Used by both early_bail and action_density_gate
@@ -1391,23 +1398,33 @@ def run_agent(
             # post_write_idle_exit never arms).
             tc.name = tc.name.strip()
 
-            if tc.name in tool_def_map:
+            # Arguments that decode to something other than an object (`null`,
+            # a list, a double-encoded string) used to reach `validate_args` /
+            # `_call_key` / `.get` and kill the whole run with an uncaught
+            # AttributeError. Reject them like any other schema error — for
+            # every name, offered or not.
+            if not isinstance(tc.arguments, dict):
+                err = ("Arguments must be a JSON object, got "
+                       f"{type(tc.arguments).__name__}")
+            elif tc.name in tool_def_map:
                 err = validate_args(tool_def_map[tc.name], tc.arguments)
-                if err:
-                    result.schema_rejects += 1
-                    if log_calls:
-                        append_event(
-                            run_id, "tool_reject",
-                            phase=phase, step=step, name=tc.name,
-                            reason="schema", message=str(err)[:300],
-                        )
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id or f"call_{step}",
-                        "name": tc.name,
-                        "content": f"Schema error: {err}",
-                    })
-                    continue
+            else:
+                err = None
+            if err:
+                result.schema_rejects += 1
+                if log_calls:
+                    append_event(
+                        run_id, "tool_reject",
+                        phase=phase, step=step, name=tc.name,
+                        reason="schema", message=str(err)[:300],
+                    )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id or f"call_{step}",
+                    "name": tc.name,
+                    "content": f"Schema error: {err}",
+                })
+                continue
 
             key = _call_key(tc.name, tc.arguments)
             key_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
@@ -1453,8 +1470,7 @@ def run_agent(
                     "name": tc.name,
                     "content": content,
                 })
-                if on_tool_event:
-                    on_tool_event(dup)
+                _display(on_tool_event, dup, "on_tool_event")
                 if log_calls:
                     append_event(
                         run_id, "tool_call",
@@ -1701,8 +1717,7 @@ def run_agent(
                 "content": content,
             })
 
-            if on_tool_event:
-                on_tool_event(executed)
+            _display(on_tool_event, executed, "on_tool_event")
             if log_calls:
                 append_event(
                     run_id, "tool_call",
