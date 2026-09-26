@@ -229,6 +229,26 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   reproducible, and the default description is golden-pinned. Remote
   mutations via gh ride GIT_WORKFLOW_HINT's explicit-ask rule
 
+- ONE path canonicalizer (2026-09-26): `fs._resolve_rel(rel) -> (abs,
+  canonical_rel)` resolves a model-supplied path, raises `PermissionError`
+  when it leaves the repo (`is_relative_to`, never a string `startswith` — a
+  sibling `../repo2` of `.../repo` shares the prefix), and returns the
+  repo-relative posix form. Every fs tool and the analysis tools' `path`
+  argument go through it BEFORE any guard, and the role-path and SpecDD
+  Forbids guards judge `canonical_rel`, never the raw string (raw
+  `src/../tests/x.py` or absolute `<root>/tests/x.py` used to walk past
+  `Forbids: tests/**`). Success/refusal messages keep quoting the model's own
+  spelling, so ordinary relative paths are byte-identical. `_safe` is now a
+  thin wrapper over it (`tests/test_tool_path_canonicalization.py`)
+- Analysis `path` arguments never reach argv as options (2026-09-26): a
+  leading `-` is refused, the path must pass `_resolve_rel`, and ruff/mypy/
+  bandit get it behind `--` (`lint(path="--fix")` used to REWRITE files from
+  a read-only tool). `security_scan` reports bandit's `results` list (report
+  via `-o` tempfile + `-q`), `deps_audit` audits the REPO (`-r
+  requirements*.txt`, else the project dir, else `skipped`) and flattens
+  `dependencies[].vulns`; both go through the same 150-finding announced cap
+  (`tests/test_analysis_args.py`)
+
 ## Must not
 - Bypass `_safe()` path scoping in any new tool
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)
