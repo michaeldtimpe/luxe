@@ -146,12 +146,15 @@ def probe_dns(host: str, timeout: float = DNS_TIMEOUT_S) -> Probe:
 
 
 def probe_tcp(host: str, port: int = 443,
-              timeout: float = TCP_TIMEOUT_S) -> Probe:
+              timeout: float = TCP_TIMEOUT_S, *, ip: str = "") -> Probe:
+    """TCP connect. `ip` (the DNS rung's answer) is dialled instead of
+    `host`: `create_connection` would otherwise re-run getaddrinfo, which has
+    NO timeout — the very call the DNS rung fenced off on a daemon thread."""
     target = f"{host}:{port}"
 
     def _connect():
         try:
-            with socket.create_connection((host, port), timeout=timeout):
+            with socket.create_connection((ip or host, port), timeout=timeout):
                 return True, "connected", ""
         except socket.timeout:
             return False, "", f"connect timed out after {timeout:.0f}s"
@@ -163,17 +166,19 @@ def probe_tcp(host: str, port: int = 443,
 
 
 def probe_tls(host: str, port: int = 443,
-              timeout: float = TLS_TIMEOUT_S) -> Probe:
+              timeout: float = TLS_TIMEOUT_S, *, ip: str = "") -> Probe:
     """TLS handshake with SNI + certificate verification. The three failure
     shapes carry distinct meanings (see classify): a handshake TIMEOUT is
     filtering; an UNTRUSTED certificate is interception; a clean handshake
-    reports version + issuer."""
+    reports version + issuer. `ip`: dial the already-resolved address (see
+    `probe_tcp`); SNI and certificate checks still use `host`."""
     target = f"{host}:{port}"
 
     def _shake():
         ctx = ssl.create_default_context()
         try:
-            with socket.create_connection((host, port), timeout=timeout) as raw:
+            with socket.create_connection((ip or host, port),
+                                          timeout=timeout) as raw:
                 raw.settimeout(timeout)
                 with ctx.wrap_socket(raw, server_hostname=host) as tls:
                     cert = tls.getpeercert() or {}
@@ -270,25 +275,84 @@ def probe_endpoint(name: str, base_url: str,
 # --- ladder + classification -------------------------------------------------
 
 
+#: Wall budget for the threaded rungs, past the DNS rung. Every probe carries
+#: its own deadline, but a NAME-based probe (http/https/portal via httpx)
+#: still calls getaddrinfo, which has none; on a dead resolver that alone
+#: held the ladder for ~15s against a 3s DNS budget. So the ladder joins its
+#: futures against this deadline and abandons stragglers (daemon-style, like
+#: `probe_dns`) rather than waiting them out.
+_LADDER_BUDGET_S = HTTP_TIMEOUT_S + 1.0
+
+
+def _skipped(layer: str, target: str, why: str) -> Probe:
+    return Probe(layer, target, False, 0.0, error=f"skipped — {why}")
+
+
+def _join(futs: dict, budget_s: float, targets: dict[str, tuple[str, str]]
+          ) -> dict[str, Probe]:
+    """Collect `futs` against ONE shared deadline; a future still running at
+    the deadline becomes a failed probe naming the budget. Never blocks past
+    `budget_s` (the pool is shut down with wait=False by the caller)."""
+    deadline = time.monotonic() + budget_s
+    results: dict[str, Probe] = {}
+    for key, fut in futs.items():
+        left = max(0.0, deadline - time.monotonic())
+        try:
+            results[key] = fut.result(timeout=left)
+        except concurrent.futures.TimeoutError:
+            layer, target = targets[key]
+            results[key] = Probe(layer, target, False, budget_s * 1000.0,
+                                 error=f"no result in {budget_s:.0f}s "
+                                       "(blocked — name resolution?)")
+        except Exception as e:  # a probe must never take the ladder down
+            layer, target = targets[key]
+            results[key] = Probe(layer, target, False, 0.0,
+                                 error=f"{type(e).__name__}: {e}")
+    return results
+
+
 def run_ladder(host: str = ANCHOR_HOST) -> LadderReport:
     """The full layered probe for one host + the DNS-free and portal rungs.
     Sequential where a layer informs the next, threaded where independent;
-    worst-case wall ≈ one slow layer, not the sum of all deadlines."""
+    worst-case wall ≈ the DNS deadline + `_LADDER_BUDGET_S`, never the sum.
+
+    When the DNS rung FAILS, every rung that needs a name (tcp/tls/http/
+    https to `host`, and the portal) is SKIPPED: each would re-run
+    getaddrinfo with no deadline, and the verdict is already decided by DNS
+    + the DNS-free rung (`classify`). When it succeeds, tcp/tls dial the
+    address it returned instead of resolving again."""
     report = LadderReport(host=host)
     dns = probe_dns(host)
     report.probes.append(dns)
+    ip = (dns.detail.split(",")[0].strip() if dns.ok else "")
 
-    with concurrent.futures.ThreadPoolExecutor(
-            max_workers=6, thread_name_prefix="netdiag") as pool:
-        futs = {
-            "tcp": pool.submit(probe_tcp, host, 443),
-            "tls": pool.submit(probe_tls, host, 443),
-            "http": pool.submit(probe_http, f"http://{host}/"),
-            "https": pool.submit(probe_http, f"https://{host}/"),
-            "portal": pool.submit(probe_portal),
-            "dnsless": pool.submit(probe_tcp, DNSLESS_IP, 443),
-        }
-        results = {k: f.result() for k, f in futs.items()}
+    targets = {
+        "tcp": ("tcp", f"{host}:443"),
+        "tls": ("tls", f"{host}:443"),
+        "http": ("http", f"http://{host}/"),
+        "https": ("https", f"https://{host}/"),
+        "portal": ("portal", PORTAL_URL),
+        "dnsless": ("tcp", f"{DNSLESS_IP}:443"),
+    }
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=6, thread_name_prefix="netdiag")
+    try:
+        futs = {"dnsless": pool.submit(probe_tcp, DNSLESS_IP, 443)}
+        if dns.ok:
+            futs.update({
+                "tcp": pool.submit(probe_tcp, host, 443, ip=ip),
+                "tls": pool.submit(probe_tls, host, 443, ip=ip),
+                "http": pool.submit(probe_http, f"http://{host}/"),
+                "https": pool.submit(probe_http, f"https://{host}/"),
+                "portal": pool.submit(probe_portal),
+            })
+        results = _join(futs, _LADDER_BUDGET_S, targets)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    for key in ("tcp", "tls", "http", "https", "portal"):
+        if key not in results:
+            layer, target = targets[key]
+            results[key] = _skipped(layer, target, "DNS failed above")
 
     results["dnsless"].detail = (results["dnsless"].detail
                                  or "") + " (no DNS involved)"
@@ -359,13 +423,25 @@ def full_report(cfg=None, host: str = ANCHOR_HOST) -> NetReport:
         except Exception:
             entries = {}
 
-    with concurrent.futures.ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="netdiag-ep") as pool:
+    # Same no-unbounded-join rule as `run_ladder`: an endpoint probe resolves
+    # its hostname (a tailnet name, when Tailscale is down) with no deadline.
+    budget = DNS_TIMEOUT_S + _LADDER_BUDGET_S + 1.0
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=4, thread_name_prefix="netdiag-ep")
+    try:
         lad_fut = pool.submit(run_ladder, host)
-        ep_futs = [pool.submit(probe_endpoint, name, e.base_url)
-                   for name, e in entries.items()]
-        ladder = lad_fut.result()
-        endpoints = [f.result() for f in ep_futs]
+        ep_futs = {f"ep{i}": pool.submit(probe_endpoint, name, e.base_url)
+                   for i, (name, e) in enumerate(entries.items())}
+        targets = {f"ep{i}": ("endpoint", f"{name} ({e.base_url})")
+                   for i, (name, e) in enumerate(entries.items())}
+        endpoints = list(_join(ep_futs, budget, targets).values())
+        try:
+            ladder = lad_fut.result(timeout=budget)
+        except Exception as e:
+            ladder = LadderReport(host=host, verdict=V_OFFLINE,
+                                  advice=f"ladder did not finish ({e!r})")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     return NetReport(ladder=ladder, endpoints=endpoints)
 
 
