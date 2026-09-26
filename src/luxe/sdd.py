@@ -202,9 +202,8 @@ def _split_sections(text: str, path: Path) -> dict[str, list[str]]:
             continue
 
         if stripped.startswith("- "):
-            entry = stripped[2:].strip()
-            if entry and current in _GLOB_SECTIONS:
-                entry = _glob_entry(entry)
+            raw = stripped[2:].strip()
+            entry = _glob_entry(raw) if (raw and current in _GLOB_SECTIONS) else raw
             if entry:
                 sections[current].append(entry)
 
