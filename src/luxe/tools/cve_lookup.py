@@ -39,18 +39,31 @@ from luxe.paths import luxe_home
 from luxe.tools.base import ToolDef, ToolFn
 
 _OSV_API = "https://api.osv.dev/v1/query"
-_CACHE_DIR = luxe_home() / "cve_cache"
+#: Test/override seam only. `None` (the default) means `luxe_home()/cve_cache`
+#: resolved on EACH call — it used to be bound at import, so a process that
+#: moved $HOME (every test that isolates ~/.luxe) still wrote to the real one.
+_CACHE_DIR: Path | None = None
 _CACHE_TTL_SEC = 24 * 3600  # 24 hours
 _HTTP_TIMEOUT = 10.0
 _MAX_VULNS_PER_RESPONSE = 30   # truncation cap; keeps token cost bounded
 _SUMMARY_MAX_CHARS = 400        # truncation cap on each vuln's summary text
 
 
+def _cache_dir() -> Path:
+    return _CACHE_DIR if _CACHE_DIR is not None else luxe_home() / "cve_cache"
+
+
+def _safe_part(s: str) -> str:
+    """One filename component: no separators, so no part of a model-supplied
+    argument can step out of the cache directory. `ecosystem` used to go in
+    raw — `ecosystem="../../x"` named a file two levels up."""
+    return s.replace("/", "_").replace("\\", "_").replace(":", "_").replace("\0", "_")
+
+
 def _cache_key(package: str, ecosystem: str, version: str | None) -> Path:
     """Filesystem-safe cache key. Versions like '3.9.0,<4.0.0' get sanitized."""
-    safe_version = (version or "any").replace("/", "_").replace(":", "_")
-    safe_pkg = package.replace("/", "_")
-    return _CACHE_DIR / f"{ecosystem.lower()}__{safe_pkg}__{safe_version}.json"
+    return _cache_dir() / (f"{_safe_part(ecosystem.lower())}__{_safe_part(package)}"
+                           f"__{_safe_part(version or 'any')}.json")
 
 
 def _read_cache(p: Path) -> dict[str, Any] | None:
@@ -70,7 +83,7 @@ def _write_cache(p: Path, data: dict[str, Any]) -> None:
     if is_ephemeral():
         return
     try:
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data))
     except OSError:
         pass

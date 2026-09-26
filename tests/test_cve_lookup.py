@@ -245,3 +245,21 @@ def test_cve_lookup_def_documents_use_before_citing():
     on this, the model will skip the tool and hallucinate as before."""
     d = cve_lookup.cve_lookup_def()
     assert "BEFORE" in d.description.upper()
+
+
+class TestCacheLocation:
+    """2026-09-26: the cache dir was bound at import and `ecosystem` went
+    into the filename raw."""
+
+    def test_cache_dir_follows_home_moved_after_import(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(cve_lookup, "_CACHE_DIR", None)   # the default
+        p = cve_lookup._cache_key("requests", "PyPI", None)
+        assert p.parent == tmp_path / ".luxe" / "cve_cache"
+
+    def test_ecosystem_cannot_escape_the_cache_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(cve_lookup, "_CACHE_DIR", None)   # the default
+        p = cve_lookup._cache_key("x", "../../evil", "1/2")
+        assert p.parent == tmp_path / ".luxe" / "cve_cache"
+        assert "/" not in p.name
