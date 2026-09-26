@@ -176,6 +176,36 @@ class TestSectionParsing:
             assert getattr(sf, name) == []
 
 
+class TestGlobSectionProse:
+    """Glob sections (Owns/Depends on/Forbids/Forbids creating) used to take
+    every bullet verbatim as a glob — gitkit.sdd's Owns bullet carried a
+    comment and so matched zero files."""
+
+    def test_glob_with_trailing_comment_keeps_the_glob(self):
+        sf = parse_sdd("## Owns\n- src/luxe/gitkit/** (incl. `plan.py` — x)\n"
+                       "- `vendor/p/` — patch packages\n")
+        assert sf.owns == ["src/luxe/gitkit/**", "vendor/p/"]
+
+    def test_prose_bullet_in_glob_section_is_skipped(self):
+        sf = parse_sdd("## Forbids\n- Prompt/directive strings here — they live "
+                       "elsewhere\n- Inline prompt strings (registry)\n"
+                       "- tests/**\n")
+        assert sf.forbids == ["tests/**"]
+
+    def test_single_token_globs_are_unchanged(self):
+        sf = parse_sdd("## Forbids creating\n- **/verify_*.py\n- `odd`\n")
+        assert sf.forbids_create == ["**/verify_*.py", "`odd`"]
+
+    def test_prose_sections_are_untouched(self):
+        sf = parse_sdd("## Must\n- Prose with a/slash — and a dash\n")
+        assert sf.must == ["Prose with a/slash — and a dash"]
+
+    def test_gitkit_contract_owns_its_package(self):
+        root = Path(__file__).resolve().parent.parent
+        sf = parse_sdd_file(root / "src" / "luxe" / "gitkit" / "gitkit.sdd")
+        assert sf.owns == ["src/luxe/gitkit/**"]
+
+
 class TestStrictness:
     def test_duplicate_section_raises(self):
         with pytest.raises(SddParseError, match="duplicate section"):
