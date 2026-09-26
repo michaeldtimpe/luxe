@@ -21,6 +21,7 @@ from luxe.backend import Backend  # noqa: E402
 
 from benchmarks._eval_common.dataset import sha256_file  # noqa: E402
 from benchmarks._eval_common.meta import build_run_meta  # noqa: E402
+from benchmarks._eval_common.store import ResultStore, safe_name  # noqa: E402
 from benchmarks.codeneedle.adapter import build_prompt  # noqa: E402
 from benchmarks.codeneedle.grade import aggregate_items  # noqa: E402
 from benchmarks.codeneedle.upstream.scorer import score as score_function  # noqa: E402
@@ -78,11 +79,12 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-        per_function_records: list[dict] = []
+        store = ResultStore(out_dir, model=args.model, resume=args.resume)
+        selected: list[tuple[str, str]] = []
         for fn in c["functions"]:
-            item_path = out_dir / f"{_safe_name(fn['name'])}.json"
-            if args.resume and item_path.exists():
-                per_function_records.append(json.loads(item_path.read_text()))
+            item_id = safe_name(fn["name"])
+            selected.append((item_id, fn["name"]))
+            if store.get(item_id, fn["name"]) is not None:
                 continue
 
             prompt = build_prompt(
@@ -104,10 +106,14 @@ def main(argv: list[str] | None = None) -> int:
                     num_ctx=args.num_ctx,
                 )
                 raw_output = resp.text or ""
-                err = None
-            except Exception as e:
-                raw_output = ""
-                err = f"{type(e).__name__}: {e}"
+            except Exception as e:  # noqa: BLE001 — infra, not an answer
+                # Scoring "" as the model's recall graded a dead backend as
+                # a model that remembered nothing; and it was cached.
+                store.put_infra_error(item_id, f"{type(e).__name__}: {e}",
+                                      fn["name"], wall_s=time.time() - t0)
+                print(f"  {corpus_name}/{fn['name']}: INFRA ERROR "
+                      f"{type(e).__name__}: {e}"[:300])
+                continue
             wall_s = time.time() - t0
 
             fscore = score_function(
@@ -117,12 +123,11 @@ def main(argv: list[str] | None = None) -> int:
                 predicted_text=raw_output,
             )
             record = asdict(fscore)
-            record["error"] = err
+            record["error"] = None
             record["wall_s"] = wall_s
             record["raw_output"] = raw_output
             record["prompt_chars"] = len(prompt)
-            item_path.write_text(json.dumps(record, indent=2, default=_json_default))
-            per_function_records.append(record)
+            store.put(item_id, record, fn["name"])
             print(
                 f"  {corpus_name}/{fn['name']}: "
                 f"primary={fscore.primary_matched}/{fscore.primary_total} "
@@ -130,7 +135,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"{'PASS' if fscore.passed else 'FAIL'} wall={wall_s:.1f}s"
             )
 
-        summary_stats = aggregate_items(per_function_records)
+        got = store.collect(selected)
+        summary_stats = aggregate_items(got.records)
+        summary_stats["infra_errors"] = got.infra_errors
         all_summaries[corpus_name] = summary_stats
         (out_dir / "summary.json").write_text(json.dumps(summary_stats, indent=2))
 
@@ -159,18 +166,10 @@ def main(argv: list[str] | None = None) -> int:
             f"pass_rate={s['pass_rate']:.2%}, "
             f"primary_match_rate={s['primary_match_rate']:.2%}, "
             f"hallucinations={s['hallucinated']}"
+            + (f", infra_errors={s['infra_errors']} (excluded, re-run to retry)"
+               if s.get("infra_errors") else "")
         )
-    return 0
-
-
-def _safe_name(name: str) -> str:
-    return "".join(c if c.isalnum() or c in "_-." else "_" for c in name)
-
-
-def _json_default(obj):
-    if hasattr(obj, "value"):
-        return obj.value
-    return str(obj)
+    return 1 if any(s.get("infra_errors") for s in all_summaries.values()) else 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
