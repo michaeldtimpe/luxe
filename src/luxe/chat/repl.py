@@ -687,7 +687,7 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         extra_tool_defs.extend(mcp_surface.always_defs)
         if write_on:
             extra_tool_defs.extend(mcp_surface.gated_defs)
-        extra_tool_fns.update(mcp_surface.fns)
+        extra_tool_fns.update(mcp_surface.fns_for(write_on))
 
     # `/ctx` size override (chat-only) — clamp to the effective ceiling
     # (role's box ceiling ∧ the manifest's per-model cap for the model this
