@@ -57,7 +57,7 @@ done
 
 # Blocking pre-flight: the miss_func/miss_param cycle is moot without ground truth.
 # Fail loudly here rather than silently baselining against an empty GT map
-# (load_ground_truth returns {} for a missing file — that would grade everything fail).
+# (load_ground_truth now raises on a missing file; this check fails earlier and clearer).
 for cat in multi_turn_miss_func multi_turn_miss_param; do
     gt="$TARGET/possible_answer/BFCL_v4_${cat}.json"
     if [[ ! -s "$gt" ]]; then

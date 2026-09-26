@@ -206,13 +206,19 @@ def load_problems(category: str, limit: int | None = None) -> list[dict[str, Any
 def load_ground_truth(category: str) -> dict[str, list[Any]]:
     """Load ground-truth for a category as a {problem_id: gt_list} dict.
     Returns empty dict for irrelevance (no gt).
+
+    Raises FileNotFoundError when the answer file is missing. It used to
+    return {} — which run.py fed to the multi-turn checker as `gt or []`, a
+    zero-turn ground truth every trajectory satisfies: a missing download
+    PASSED every problem.
     """
     if category == "irrelevance":
         return {}
     data_dir = _bfcl_data_dir()
     path = data_dir / "possible_answer" / _category_filename(category)
     if not path.is_file():
-        return {}
+        raise FileNotFoundError(
+            f"BFCL ground truth not found: {path} — run scripts/fetch_bfcl_data.sh")
     out: dict[str, list[Any]] = {}
     with open(path) as f:
         for line in f:
