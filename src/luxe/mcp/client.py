@@ -38,6 +38,11 @@ from luxe.tools.base import ToolDef, ToolFn
 
 logger = logging.getLogger(__name__)
 
+#: Ceiling on one tool result handed to the model. An MCP server can return
+#: anything (a whole PDF's text, a log dump); unbounded, one call could fill
+#: the chat window by itself. Truncation is announced, never silent.
+MCP_RESULT_MAX_CHARS = 64_000
+
 
 # --- config ----------------------------------------------------------------
 
@@ -168,6 +173,23 @@ def _exc_text(e: BaseException) -> str:
     return str(e) or type(e).__name__
 
 
+async def _drain_other_tasks(timeout_s: float) -> None:
+    """Give every other task on this loop up to `timeout_s` to finish."""
+    others = [t for t in asyncio.all_tasks()
+              if t is not asyncio.current_task()]
+    if others:
+        await asyncio.wait(others, timeout=timeout_s)
+
+
+def _cap_result(text: str, limit: int = MCP_RESULT_MAX_CHARS) -> str:
+    """Truncate a tool result for the model, saying so and how to get more."""
+    if len(text) <= limit:
+        return text
+    return (text[:limit] + f"\n\n[truncated: showing {limit:,} of "
+            f"{len(text):,} chars — call the tool again for a narrower slice "
+            "(a page range, offset, or filter) to see the rest]")
+
+
 # --- server runtime --------------------------------------------------------
 
 @dataclass
@@ -179,6 +201,7 @@ class _ServerRuntime:
     is_down: bool = False
     down_reason: str = ""
     tool_names: list[str] = field(default_factory=list)
+    tools: list[Any] = field(default_factory=list)   # listing from connect
 
 
 # --- manager ---------------------------------------------------------------
@@ -192,6 +215,10 @@ class MCPClientManager:
       ...inject into agent loop...
       mgr.close()  # at end of pipeline run
     """
+
+    #: How long close() waits for the lifetime task to unwind its own exit
+    #: stacks before cancelling it outright.
+    _CLOSE_DRAIN_S = 10.0
 
     def __init__(self, cfg: MCPClientConfig):
         self.cfg = cfg
@@ -394,10 +421,26 @@ class MCPClientManager:
                 f"server {s.name}: unknown transport `{s.transport}` "
                 "(stdio | streamable_http)"
             )
-        session = await stack.enter_async_context(ClientSession(read, write))
-        await session.initialize()
-        listing = await session.list_tools()
+        from datetime import timedelta
+
+        # Every request on this session gets the server's timeout (the SDK
+        # applies read_timeout_seconds per request), and the handshake as a
+        # whole is bounded too: a server that accepts the connection but
+        # never answers `initialize` otherwise pinned start() for its full
+        # 120s. asyncio.timeout, NOT wait_for — wait_for runs the awaitable
+        # in a new task, and anyio cancel scopes must stay on this one.
+        session = await stack.enter_async_context(ClientSession(
+            read, write,
+            read_timeout_seconds=timedelta(seconds=s.timeout_s)))
+        try:
+            async with asyncio.timeout(s.timeout_s):
+                await session.initialize()
+                listing = await session.list_tools()
+        except TimeoutError:
+            raise MCPError(f"server {s.name}: no answer to initialize/"
+                           f"list_tools within {s.timeout_s:.0f}s") from None
         runtime.session = session
+        runtime.tools = list(listing.tools)
         runtime.tool_names = [t.name for t in listing.tools]
         logger.info("MCP server %s up; tools: %s", s.name, runtime.tool_names)
 
@@ -414,9 +457,21 @@ class MCPClientManager:
                 self._loop.call_soon_threadsafe(self._shutdown.set)
             if self._lifetime_fut is not None:
                 try:
-                    self._lifetime_fut.result(timeout=10.0)
+                    self._lifetime_fut.result(timeout=self._CLOSE_DRAIN_S)
                 except Exception as e:
-                    logger.warning("MCP lifetime drain failed: %s", e)
+                    logger.warning("MCP lifetime drain failed: %s",
+                                   _exc_text(e))
+                if not self._lifetime_fut.done():
+                    # A wedged server ignored the shutdown request. Cancel
+                    # the task rather than stopping the loop under it, which
+                    # abandoned it mid-await with its subprocesses attached.
+                    self._lifetime_fut.cancel()
+                    try:
+                        # The concurrent future reports "cancelled" at once;
+                        # the loop still has to deliver it and unwind.
+                        self._submit(_drain_other_tasks(2.0)).result(timeout=5.0)
+                    except BaseException:  # noqa: BLE001 — teardown noise
+                        pass
             self._loop.call_soon_threadsafe(self._loop.stop)
             if self._loop_thread:
                 self._loop_thread.join(timeout=5.0)
@@ -447,16 +502,9 @@ class MCPClientManager:
                 # was the second half of the "0 tools from 2 servers" report).
                 self._record_failure(runtime, "no session")
                 continue
-            # We hold the tool listing on _ServerRuntime.tool_names; re-fetch
-            # via async call to get full Tool objects with schemas.
-            try:
-                fut = self._submit(runtime.session.list_tools())
-                listing = fut.result(timeout=runtime.cfg.timeout_s)
-            except Exception as e:
-                logger.warning("MCP %s list_tools failed: %s", name, e)
-                self._record_failure(runtime, str(e))
-                continue
-            for tool in listing.tools:
+            # The listing from connect carries the full Tool objects (schemas
+            # included); tools attach at startup only, so it is current.
+            for tool in runtime.tools:
                 if not runtime.cfg.tool_allowed(tool.name):
                     continue
                 td = mcp_tool_to_tooldef(tool, name)
@@ -518,10 +566,9 @@ class MCPClientManager:
             return "", "MCP loop not running"
 
         async def _do():
-            return await asyncio.wait_for(
-                runtime.session.call_tool(tool_name, args),
-                timeout=runtime.cfg.timeout_s,
-            )
+            # asyncio.timeout, not wait_for: same task (anyio cancel scopes).
+            async with asyncio.timeout(runtime.cfg.timeout_s):
+                return await runtime.session.call_tool(tool_name, args)
 
         try:
             fut = self._submit(_do())
@@ -542,7 +589,8 @@ class MCPClientManager:
         runtime.total_calls += 1
 
         is_error = bool(getattr(result, "isError", False))
-        text = render_mcp_call_result(getattr(result, "content", []) or [])
+        text = _cap_result(
+            render_mcp_call_result(getattr(result, "content", []) or []))
         if is_error:
             return "", text or "MCP tool reported isError=true"
         return text, None
