@@ -301,3 +301,24 @@ def test_verify_runs_after_yes_and_prose_is_advisory(tmp_path, apply_env):
                                   console=con,
                                   reader=lambda p: asked.append(p) or "y")
     assert ok is None and not asked               # first token, not substring
+
+
+# --- structural: one repo-root/index swap -------------------------------------
+
+def test_indexed_target_restores_an_unset_root(tmp_path, monkeypatch):
+    from luxe import search, symbols
+    from luxe.gitkit.workspace import indexed_target
+    from luxe.tools import fs
+    repo = _init_repo(tmp_path / "r", {"a.py": "def a():\n    return 1\n"})
+    monkeypatch.setattr(fs, "_REPO_ROOT", None)
+    search.reset_index()
+    symbols.reset_index()
+    with indexed_target(str(repo)) as swapped:
+        assert swapped and fs.get_repo_root() == repo.resolve()
+        assert search.get_index() is not None
+    assert fs.get_repo_root() is None
+    assert search.get_index() is None and symbols.get_index() is None
+    # a resident root that already IS the target is reused, not rebuilt
+    fs.set_repo_root(repo)
+    with indexed_target(str(repo.resolve())) as swapped:
+        assert swapped is False
