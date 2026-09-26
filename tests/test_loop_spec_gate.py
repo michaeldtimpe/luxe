@@ -19,18 +19,7 @@ from luxe.config import RoleConfig
 from luxe.spec import Requirement, Spec
 from luxe.tools.base import ToolDef
 
-
-class _ScriptedBackend:
-    def __init__(self, scripted: list[ChatResponse]) -> None:
-        self._scripted = list(scripted)
-        self.calls: list[list[dict[str, Any]]] = []
-
-    def chat(self, messages, **kwargs) -> ChatResponse:
-        self.calls.append([dict(m) for m in messages])
-        if not self._scripted:
-            return ChatResponse(text="", finish_reason="stop",
-                                timing=GenerationTiming(prompt_tokens=10, completion_tokens=10))
-        return self._scripted.pop(0)
+from tests._fakes import ScriptedBackend as _ScriptedBackend
 
 
 def _tool_call_resp(name: str, args: dict[str, Any] | None = None) -> ChatResponse:
