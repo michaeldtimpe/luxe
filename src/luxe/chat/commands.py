@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from rich.console import Console
+from rich.markup import escape
 
 from luxe.chat.session import ChatSession
 from luxe.chat.slots import SlotManager
@@ -47,6 +48,11 @@ class CommandContext:
     # needs it: the handler holds debug.log open inside the directory the
     # command is about to remove, so it must be detached first.
     session_log: object | None = None
+    # Run an interactive terminal program (argv) and return its exit code.
+    # The TUI supplies one that suspends the app around it — a bare
+    # subprocess fights the alternate screen for the tty. None = plain
+    # `subprocess.call` (the line REPL owns a normal terminal).
+    run_external: Callable[[list[str]], int] | None = None
 
 
 # (command, args, description) — rendered into an auto-aligned table by _help()
@@ -87,10 +93,12 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/debug", "", 'toggle "show everything" (verbose full + reasoning)'),
     ("/terse", "", "toggle terse model output (default ON; saves tokens)"),
     ("/compact", "", "toggle compact display (tighter on-screen output ceiling)"),
-    ("/goal", "<objective> | stop", "autonomously run rounds until the objective is met"),
+    ("/goal", "<objective> | stop",
+     "autonomously run rounds until the objective is met (esc/Ctrl-C halts a "
+     "running goal; `/goal stop` typed in the TUI ends it after the round)"),
     ("/plan", "<objective>", "draft a plan, then choose: save / execute / both"),
     ("/attach", "<path> [...]", "attach file contents to the NEXT turn (one-shot)"),
-    ("/sys", "[add <rule>|list|clear]", "manage session-scoped system constraints"),
+    ("/sys", "[add <rule>|list|remove <n>|clear]", "manage session-scoped system constraints"),
     ("/memory", "list|add|promote|forget|edit", "manage project memory"),
     ("/init", "[--dry-run]", "draft this repo's brief into .luxe/memory.md"),
     ("/note", "", "bank session working notes into .luxe/memory.md now"),
@@ -181,7 +189,7 @@ def dispatch(line: str, ctx: CommandContext) -> CommandResult:
 
         near = difflib.get_close_matches(cmd, list(_handlers()), n=2, cutoff=0.6)
         hint = f" Did you mean {' or '.join(near)}?" if near else ""
-        ctx.console.print(f"[yellow]Unknown command {cmd}.{hint} "
+        ctx.console.print(f"[yellow]Unknown command {escape(cmd)}.{hint} "
                           "Try /help.[/]")
         return CommandResult(handled=True)
     return fn(args, ctx)
@@ -277,7 +285,7 @@ def _usage(ctx: CommandContext, name: str) -> CommandResult:
     stop`, …) say something the table cannot express and stay hand-written.
     """
     args = next((a for cmd, a, _ in _HELP_ROWS if cmd == name), "")
-    ctx.console.print(f"[yellow]Usage: {name} {args}[/]" if args
+    ctx.console.print(f"[yellow]Usage: {name} {escape(args)}[/]" if args
                       else f"[yellow]Usage: {name}[/]")
     return CommandResult(handled=True)
 
@@ -309,7 +317,7 @@ def _retry(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print("[yellow]Nothing to retry yet.[/]")
         return CommandResult(handled=True)
     preview = last if len(last) <= 60 else last[:59] + "…"
-    ctx.console.print(f"[dim]· retrying:[/] {preview}")
+    ctx.console.print(f"[dim]· retrying:[/] {escape(preview)}")
     return CommandResult(handled=True, submit=last)
 
 
@@ -327,10 +335,31 @@ def _clear(args, ctx: CommandContext) -> CommandResult:
     The status bar's `ctx N%` / `cache` describe the conversation that just went
     away; leaving them up made a cleared session look full (reported 2026-07-30).
     The window size and mode flags survive — those are settings, not history.
+
+    Everything else that carries the old conversation into the next prompt
+    goes too: the working-state ledger (injected as `<working_state>` every
+    turn), the drafted `/plan`, and any pending plan/goal. A kind="clear"
+    transcript record marks the cut so `/resume` of this session restores
+    only what came after it — before, `/clear` wrote nothing and a resume
+    brought the "cleared" conversation straight back.
     """
-    ctx.session.turns.clear()
-    ctx.session.pinned_slot = None
-    ctx.session.attachments.clear()
+    from luxe.memory import session as session_store
+    from luxe.state import ledger as ledger_mod
+
+    s = ctx.session
+    s.turn_offset += len(s.turns)
+    s.turns.clear()
+    s.pinned_slot = None
+    s.attachments.clear()
+    s.consumed_attachments = []
+    s.plan_text = ""
+    s.plan_pending = None
+    s.goal = ""
+    s.goal_active = False
+    s.goal_round = 0
+    if s.session_id:
+        ledger_mod.reset(s.session_id)
+        session_store.append_turn(s.session_id, "clear")
     reset_turn_status(ctx.status)
     ctx.console.print("[dim]· conversation cleared[/]")
     return CommandResult(handled=True)

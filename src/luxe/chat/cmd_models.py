@@ -6,6 +6,8 @@ Split out of `commands.py` 2026-08-04 (behavior unchanged). The dispatcher in
 
 from __future__ import annotations
 
+from rich.markup import escape
+
 from luxe.chat import modelcaps
 from luxe.chat import origin as origin_mod
 from luxe.chat.commands import _SLOTS, CommandContext, CommandResult
@@ -211,12 +213,12 @@ def _model_find(args, ctx: CommandContext) -> CommandResult:
         key=lambda r: str(r.get("id", "")),
     )
     if not hits:
-        ctx.console.print(f"[yellow]No model id contains {query!r}[/] "
+        ctx.console.print(f"[yellow]No model id contains {escape(repr(query))}[/] "
                           f"[dim]({len(records)} in this catalog)[/]")
         return CommandResult(handled=True)
 
     ctx.console.print(f"[bold]{len(hits)} match{'es' if len(hits) != 1 else ''}[/] "
-                      f"[dim]for {query!r} — prices per 1M tokens (in/out)[/]")
+                      f"[dim]for {escape(repr(query))} — prices per 1M tokens (in/out)[/]")
     for rec in hits[:_FIND_MAX_ROWS]:
         mid = str(rec.get("id", ""))
         pricing = rec.get("pricing") if isinstance(rec.get("pricing"), dict) else {}
@@ -272,7 +274,7 @@ def _backend(args, ctx: CommandContext) -> CommandResult:
     else:
         name = sel
     if name not in entries:
-        ctx.console.print(f"[yellow]Unknown backend {name!r}. "
+        ctx.console.print(f"[yellow]Unknown backend {escape(repr(name))}. "
                           f"Configured: {', '.join(names)}.[/]")
         return CommandResult(handled=True)
     if name == ctx.slots.backend_name:
@@ -281,7 +283,7 @@ def _backend(args, ctx: CommandContext) -> CommandResult:
     try:
         dropped = ctx.slots.switch_backend(name)
     except BackendError as e:
-        ctx.console.print(f"[red]✗ {e}[/] [dim](staying on "
+        ctx.console.print(f"[red]✗ {escape(str(e))}[/] [dim](staying on "
                           f"{ctx.slots.backend_name})[/]")
         # Name the unlock: an unreachable REMOTE entry is almost always the
         # link or the key, and both are one command away.
@@ -319,6 +321,11 @@ def _backend(args, ctx: CommandContext) -> CommandResult:
     for slot in dropped:
         ctx.console.print(f"[yellow]· dropped /model override on slot "
                           f"[cyan]{slot}[/] — model not served here[/]")
+    # The new endpoint has its own window; the status bar reads this cached
+    # value rather than asking the endpoint from a render (status.fields).
+    if ctx.status is not None and hasattr(ctx.status, "ctx_ceiling"):
+        from luxe.chat.repl import startup_ctx_ceiling
+        ctx.status.ctx_ceiling = startup_ctx_ceiling(ctx.slots)
     return CommandResult(handled=True)
 
 
@@ -374,7 +381,7 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
                 # With --from the only empty case is "not a model directory";
                 # without it, nothing anywhere has these weights.
                 if from_path:
-                    ctx.console.print(f"[red]✗ {from_path} is not an MLX model "
+                    ctx.console.print(f"[red]✗ {escape(str(from_path))} is not an MLX model "
                                       "directory (config.json + weights).[/]")
                 else:
                     ctx.console.print(
@@ -400,7 +407,7 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
             else:
                 _pull_download(ctx, admin, chosen)
     except ms.ModelStoreError as e:
-        ctx.console.print(f"[red]✗ {e}[/]")
+        ctx.console.print(f"[red]✗ {escape(str(e))}[/]")
     return CommandResult(handled=True)
 
 
@@ -414,7 +421,7 @@ def _pull_show_state(ctx: CommandContext, admin) -> None:
     try:
         tasks = admin.tasks()
     except ModelStoreError as e:
-        ctx.console.print(f"[dim]· download queue unavailable: {e}[/]")
+        ctx.console.print(f"[dim]· download queue unavailable: {escape(str(e))}[/]")
         return
     for t in tasks:
         ctx.console.print(f"  ↓ {t.repo_id} — {t.status} {t.progress:.0f}% "
@@ -428,7 +435,7 @@ def _pull_show_search(ctx: CommandContext, admin, query: str) -> None:
 
     hits = admin.search(query)
     if not hits:
-        ctx.console.print(f"[yellow]No MLX models found for {query!r}.[/]")
+        ctx.console.print(f"[yellow]No MLX models found for {escape(repr(query))}.[/]")
         return
     for m in hits[:15]:
         size = f"  [dim]{human_bytes(m.size_bytes)}[/]" if m.size_bytes else ""
@@ -475,7 +482,7 @@ def _pull_download(ctx: CommandContext, admin, source) -> None:
                           "[dim](/model to select it)[/]")
     else:
         ctx.console.print(f"[red]✗ {final.repo_id}: "
-                          f"{final.error or final.status}[/]")
+                          f"{escape(str(final.error or final.status))}[/]")
 
 
 def _unload(args, ctx: CommandContext) -> CommandResult:
@@ -488,7 +495,7 @@ def _unload(args, ctx: CommandContext) -> CommandResult:
     try:
         loaded = backend.loaded_models()
     except Exception as e:
-        ctx.console.print(f"[red]✗ oMLX unreachable: {e}[/]")
+        ctx.console.print(f"[red]✗ oMLX unreachable: {escape(str(e))}[/]")
         return CommandResult(handled=True)
     if not loaded:
         ctx.console.print("[dim]· nothing loaded — no RAM to free[/]")

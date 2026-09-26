@@ -142,11 +142,31 @@ def test_ctx_override_reflected_immediately(monkeypatch):
                                       num_ctx_max=262144)},
     )
     sm = slots_module.SlotManager(cfg)
-    out = _flat(fields(ChatSession(num_ctx_override=131072), sm, "", StatusState()))
+    # The ceiling rides on the state (seeded at startup, refreshed per turn /
+    # `/ctx` / `/backend`) — a render never asks the endpoint for it.
+    state = StatusState(ctx_ceiling=sm.ctx_ceiling("chat"))
+    out = _flat(fields(ChatSession(num_ctx_override=131072), sm, "", state))
     assert "128K" in out                      # override reflected as size
     # clamped to the ceiling when it exceeds it
-    out2 = _flat(fields(ChatSession(num_ctx_override=999999), sm, "", StatusState()))
+    out2 = _flat(fields(ChatSession(num_ctx_override=999999), sm, "", state))
     assert "256K" in out2
+
+
+def test_status_render_never_asks_for_the_ctx_ceiling(slots, monkeypatch):
+    """Finding 9: `fields()` called `slots.ctx_ceiling`, which on a billable
+    endpoint GETs `/v1/models` (30s connect timeout) — from the TUI's 10 Hz
+    render. The bar now reads the cached `StatusState.ctx_ceiling`."""
+    def _boom(*a, **k):
+        raise AssertionError("render path asked for the ctx ceiling")
+
+    monkeypatch.setattr(slots, "ctx_ceiling", _boom)
+    out = _flat(fields(ChatSession(num_ctx_override=999999), slots, "",
+                       StatusState(ctx_ceiling=131072)))
+    assert "128K" in out
+    # Unknown ceiling: shown unclamped rather than fetched.
+    out = _flat(fields(ChatSession(num_ctx_override=65536), slots, "",
+                       StatusState()))
+    assert "64K" in out
 
 
 def test_rate_not_in_status_bar(slots):

@@ -62,7 +62,9 @@ def install(session_dir: str | Path) -> SessionLog:
 
 
 def uninstall(log: SessionLog) -> None:
-    """Detach the session handler. Never raises."""
+    """Detach the session handler. Never raises. Idempotent — the handle is
+    left empty, so the front-end's final uninstall after an `/ephemeral`
+    toggle already did one is a no-op."""
     if log is None or log._handler is None:
         return
     pkg = logging.getLogger("luxe")
@@ -72,3 +74,19 @@ def uninstall(log: SessionLog) -> None:
         pkg.setLevel(log._prior_level)
     except Exception:
         pass
+    log._handler = None
+    log.path = None
+
+
+def reinstall(log: SessionLog, session_dir: str | Path) -> None:
+    """Re-attach a session's debug log IN PLACE (`/ephemeral off`).
+
+    Mutates `log` rather than returning a new handle: the front-end holds
+    this same object and uninstalls it in its `finally`, so a fresh handle
+    would leak the handler past the session. Never raises."""
+    if log is None:
+        return
+    uninstall(log)
+    fresh = install(session_dir)
+    log._handler, log._prior_level, log.path = (
+        fresh._handler, fresh._prior_level, fresh.path)

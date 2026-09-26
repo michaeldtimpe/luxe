@@ -30,6 +30,10 @@ _SLOTS = ("chat", "plan", "code")
 #: that cannot be produced in a few seconds is not worth producing.
 _HINT_PROBE_TIMEOUT_S = 4.0
 
+#: After a failed `/v1/models` catalog GET, how long `catalog()` answers []
+#: from memory before asking the endpoint again (seconds).
+_CATALOG_RETRY_S = 60.0
+
 
 @dataclass
 class SwapStats:
@@ -83,6 +87,11 @@ class SlotManager:
         # Full `/v1/models` payloads per backend name (`/model find`). One GET
         # per endpoint per session; a cloud catalog is ~300 records.
         self._catalog_cache: dict[str, list[dict] | None] = {}
+        # When the last catalog GET per backend FAILED (monotonic). A failure
+        # used to cache nothing, so on a flaky network every caller re-paid
+        # the 30s connect timeout — including `ctx_ceiling`, which the status
+        # bar reached from its 10 Hz render. Retried after _CATALOG_RETRY_S.
+        self._catalog_failed_at: dict[str, float] = {}
         # Multi-backend (chat-only): build from the config's default backend
         # entry so per-endpoint timeout/api-key settings apply from turn one.
         # Configs without `backends:` synthesize a single "local" entry from
@@ -354,10 +363,15 @@ class SlotManager:
         is paid once per endpoint per session. Guarded: [] when unreachable.
         """
         if self._catalog_cache.get(self.backend_name) is None:
+            failed = self._catalog_failed_at.get(self.backend_name)
+            if failed is not None and time.monotonic() - failed < _CATALOG_RETRY_S:
+                return []
             try:
                 records = self.backend.list_models_full()
             except Exception:
+                self._catalog_failed_at[self.backend_name] = time.monotonic()
                 return []
+            self._catalog_failed_at.pop(self.backend_name, None)
             self._catalog_cache[self.backend_name] = records
             # A catalog that declares `supported_parameters` is a first-party
             # answer to "can this model call tools?" — better than the

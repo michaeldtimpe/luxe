@@ -11,8 +11,8 @@ mode chips (chat.sdd requires write-mode visibility every turn).
 
 LIGHTWEIGHT variant: a static bar pinned under the input line, refreshed from
 `StatusState` BETWEEN turns (the tool tail-log streams above for live progress).
-`fields()` is the single source of segment order/content; `toolbar()`
-(prompt_toolkit) and `status_markup()` (plain-input fallback) both render from it.
+`fields()` is the single source of segment order/content; `status_markup()`
+(line REPL), `to_rich_text()` (TUI bar + in-turn live view) render from it.
 Unlike YASL there is no width-responsive segment-dropping yet — prompt_toolkit
 truncates the bar; the path is shown home-relative but not middle-ellipsised.
 """
@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 
 # Colours follow the user's ACTIVE Claude statusline theme (resolved live by
@@ -102,6 +104,9 @@ def _seg_text(seg: Segment) -> str:
 
 _GIT_TTL = 5.0
 _git_cache: dict[str, tuple[float, "GitInfo | None"]] = {}
+# Repos with a background refresh in flight (see `git_info(background=True)`).
+_git_inflight: set[str] = set()
+_git_lock = threading.Lock()
 
 
 @dataclass
@@ -138,17 +143,53 @@ def _run_git(repo: str, *args: str) -> subprocess.CompletedProcess | None:
         return None
 
 
-def git_info(repo: str) -> GitInfo | None:
+def git_info(repo: str, *, background: bool = False,
+             on_update: Callable[[], None] | None = None) -> GitInfo | None:
     """Rich git state for `repo`, or None if not a git repo. TTL-cached so a
-    per-keystroke toolbar redraw doesn't spawn git each time. Mirrors the
-    yet-another-statusline porcelain=v1 -b parse."""
+    redraw doesn't spawn git each time. Mirrors the yet-another-statusline
+    porcelain=v1 -b parse.
+
+    `background=True` is for RENDER paths (the TUI bar, the in-turn live
+    view): a stale entry is refreshed on a daemon thread and the last known
+    value (None the first time) is returned at once — three `git`
+    subprocesses with 2s timeouts used to run on the UI thread every 5s.
+    `on_update` fires from that thread when fresh data lands."""
     if not repo:
         return None
     now = time.monotonic()
     hit = _git_cache.get(repo)
     if hit and (now - hit[0]) < _GIT_TTL:
         return hit[1]
+    if background:
+        with _git_lock:
+            start = repo not in _git_inflight
+            _git_inflight.add(repo)
+        if start:
+            def _refresh() -> None:
+                try:
+                    _git_cache[repo] = (time.monotonic(), _read_git(repo))
+                except Exception:
+                    pass
+                finally:
+                    with _git_lock:
+                        _git_inflight.discard(repo)
+                if on_update is not None:
+                    try:
+                        on_update()
+                    except Exception:
+                        pass
 
+            threading.Thread(target=_refresh, name="luxe-git-status",
+                             daemon=True).start()
+        return hit[1] if hit else None
+
+    res = _read_git(repo)
+    _git_cache[repo] = (now, res)
+    return res
+
+
+def _read_git(repo: str) -> GitInfo | None:
+    """The three git calls behind `git_info` (blocking; ≤2s each)."""
     res: GitInfo | None = None
     head = _run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     if head is not None and head.returncode == 0:
@@ -163,8 +204,6 @@ def git_info(repo: str) -> GitInfo | None:
         if st is not None and st.returncode == 0:
             _parse_porcelain(st.stdout, gi)
         res = gi
-
-    _git_cache[repo] = (now, res)
     return res
 
 
@@ -200,8 +239,10 @@ def _parse_porcelain(out: str, gi: GitInfo) -> None:
         i += 1
 
 
-def _git_segment(repo: str) -> list[Span] | None:
-    gi = git_info(repo)
+def _git_segment(repo: str, *, background: bool = False,
+                 on_update: Callable[[], None] | None = None) -> list[Span] | None:
+    gi = (git_info(repo, background=True, on_update=on_update) if background
+          else git_info(repo))
     if gi is None or not gi.branch:
         return None
     label_role = {"drift": "alert", "pending": "warn", "clean": "safe"}[gi.state]
@@ -253,6 +294,11 @@ class StatusState:
     # backend is billable OR real cost data has arrived — a local session must
     # never grow a permanent "$0.00" chip.
     session_cost_usd: float = 0.0
+    # The chat slot's `/ctx` ceiling as last computed OFF the render path (a
+    # turn's prep, `/ctx`). The bar clamps a pending override to it; asking
+    # `slots.ctx_ceiling` from a render could GET the endpoint's catalog.
+    # 0 = not known yet → the override is shown unclamped.
+    ctx_ceiling: int = 0
 
 
 # Model-provenance markers (chat/origin.ModelOrigin.kind). Only a WIRE CROSSING
@@ -298,14 +344,21 @@ def _cost_segment(session, slots, state: StatusState) -> "Segment | None":
     return Segment([_S(text, style)], priority=5)
 
 
-def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
+def fields(session, slots, repo: str, state: StatusState, *,
+           on_git_update: Callable[[], None] | None = None,
+           background_git: bool | None = None) -> list[Segment]:
     """Ordered status segments. THE place to change the bar's format. Order (user
     spec): path · git · ctx · cache · [$spend] · start · last · write · bash · model.
     The `$` segment exists only on a billable backend (chat/cost.py).
     `priority` drives responsive drop order (higher = dropped first); path/git/
     ctx/model are protected (1-2). git keeps the active theme's role colours; the
     rest use the sparing luxe palette (path blue, model yellow, grey labels,
-    default-fg values)."""
+    default-fg values).
+
+    Render-path callers pass `on_git_update` (or `background_git=True`): git
+    state then refreshes off-thread and this function does no I/O at all."""
+    if background_git is None:
+        background_git = on_git_update is not None
     segs: list[Segment] = []
 
     # home-relative path (theme `pwd` role; elastic: ellipsised before drops)
@@ -316,7 +369,8 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     # git (theme-coloured) — slots in after path when inside a repo. When the
     # session isn't attached to a project at all (started from `~`, say), say so
     # instead: the model has no index, and that's worth seeing every turn.
-    git_seg = _git_segment(repo)
+    git_seg = _git_segment(repo, background=background_git,
+                           on_update=on_git_update)
     if git_seg:
         segs.append(Segment(git_seg, priority=1))
     elif getattr(session, "project_kind", "git") == "none":
@@ -328,10 +382,9 @@ def fields(session, slots, repo: str, state: StatusState) -> list[Segment]:
     # command. The % appears once a turn has measured usage (live mid-turn).
     eff_win = state.num_ctx
     if session.num_ctx_override:
-        try:
-            eff_win = min(session.num_ctx_override, slots.ctx_ceiling("chat"))
-        except Exception:
-            eff_win = session.num_ctx_override
+        ceiling = getattr(state, "ctx_ceiling", 0) or 0
+        eff_win = (min(session.num_ctx_override, ceiling) if ceiling
+                   else session.num_ctx_override)
     ctx_spans: list[Span] = [_S("ctx ", _DEFAULT)]
     if state.has_turn:
         ctx_spans.append(_S(f"{state.ctx_pressure:.0%} ", _DEFAULT))
@@ -491,20 +544,6 @@ def _term_width(default: int = 100) -> int:
 # ------------------------------------------------------------- render ------
 
 
-def toolbar(session, slots, repo: str, state: StatusState, width: int | None = None):
-    """prompt_toolkit bottom_toolbar value (FormattedText), fitted to width."""
-    from prompt_toolkit.formatted_text import FormattedText
-
-    w = width if width is not None else _term_width() - 1
-    sep_ptk = _sep_style()[0]
-    parts: list[tuple[str, str]] = []
-    for i, seg in enumerate(fit(fields(session, slots, repo, state), w)):
-        if i:
-            parts.append((sep_ptk, " · "))
-        parts += [(style, text) for (text, style, _rich) in seg.spans]
-    return FormattedText(parts)
-
-
 def status_markup(session, slots, repo: str, state: StatusState,
                   width: int | None = None) -> str:
     """Rich-markup one-liner for the plain-input fallback (no prompt_toolkit)."""
@@ -607,6 +646,9 @@ class LiveActivity:
             act.append(f" · thinking {think_s:.0f}s", style="bright_black")
         lines.append(act)
         # 3. status bar
+        # Renders on rich.Live's refresh thread at 10 Hz: git refreshes in
+        # the background so a slow `git status` can't freeze the animation.
         lines.append(to_rich_text(fit(fields(self.session, self.slots, self.repo,
-                                             self.state), width)))
+                                             self.state, background_git=True),
+                                      width)))
         return Group(*lines)

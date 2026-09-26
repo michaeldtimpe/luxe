@@ -21,6 +21,7 @@ import time
 
 import click
 from rich.console import Console
+from rich.markup import escape
 
 from luxe import ephemeral as eph
 from luxe import spec_resolver
@@ -262,15 +263,15 @@ def _run_interactive(
     if require_project and not project.is_project:
         # `luxe code` is dead simple on purpose: inside a project it just
         # works; outside one it says so and stops rather than degrading.
-        console.print(f"[red]✗ no project at {_tilde(repo_path)} — "
+        console.print(f"[red]✗ no project at {escape(_tilde(repo_path))} — "
                       "`luxe code` needs a git repo or a marker-bearing "
                       "directory.[/]")
         console.print("[dim]  cd into your project (or pass --repo <path>), "
                       "or use `luxe chat` for a no-project session.[/]")
         sys.exit(2)
     if project.root != repo_path and project.is_project:
-        console.print(f"[dim]· {_tilde(repo_path)} is inside "
-                      f"{_tilde(project.root)} — using the project root[/]")
+        console.print(f"[dim]· {escape(_tilde(repo_path))} is inside "
+                      f"{escape(_tilde(project.root))} — using the project root[/]")
     repo_path = project.root
     set_repo_root(repo_path)
 
@@ -295,7 +296,7 @@ def _run_interactive(
         # coverage the model can't rely on). Read tools still work against cwd;
         # `/index` or `/project <path>` turns code search on later.
         console.print(
-            f"[dim]· no project at {_tilde(repo_path)} — chat mode "
+            f"[dim]· no project at {escape(_tilde(repo_path))} — chat mode "
             "(read tools on; `/project <path>` or `/index` to add code "
             "search)[/]")
 
@@ -347,6 +348,10 @@ def _run_interactive(
                            truncated=sc.truncated, used_git=sc.used_git)
         else:
             languages = frozenset()
+        # The front-ends' session follows this (repl.apply_project_summary):
+        # turn setup reads `session.languages`, so lint/typecheck target the
+        # project actually attached rather than the one the session started in.
+        summary["languages"] = languages
         return summary
 
     # `--mcp <name>` (chat-only): connect the named servers from the MCP

@@ -7,8 +7,11 @@ Split out of `commands.py` 2026-08-04 (behavior unchanged).
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from pathlib import Path
+
+from rich.markup import escape
 
 from luxe.chat.commands import CommandContext, CommandResult, _usage
 from luxe.memory import project as project_mem
@@ -31,7 +34,7 @@ def _project(args, ctx: CommandContext) -> CommandResult:
         root = ctx.session.repo_path or "(none)"
         label = {"git": "git repo", "dir": "project", "none": "no project"}.get(
             kind, kind)
-        ctx.console.print(f"[bold]Project[/] {root}  [dim]({label})[/]")
+        ctx.console.print(f"[bold]Project[/] {escape(root)}  [dim]({label})[/]")
         avail = repl_mod.index_tools_available()
         for tool, ok in avail.items():
             mark = "[green]✓[/]" if ok else "[yellow]·[/]"
@@ -48,11 +51,11 @@ def _project(args, ctx: CommandContext) -> CommandResult:
 
     target = str(Path(args[0]).expanduser())
     if not Path(target).is_dir():
-        ctx.console.print(f"[red]✗ not a directory: {args[0]}[/]")
+        ctx.console.print(f"[red]✗ not a directory: {escape(args[0])}[/]")
         return CommandResult(handled=True)
     resolved = project_mod.resolve(target)
     if resolved.root != str(Path(target).resolve()):
-        ctx.console.print(f"[dim]· {args[0]} is inside {resolved.root} "
+        ctx.console.print(f"[dim]· {escape(args[0])} is inside {escape(resolved.root)} "
                           "— attaching the whole project[/]")
     return _do_attach(ctx, target, verb="project")
 
@@ -68,7 +71,7 @@ def _index_cmd(args, ctx: CommandContext) -> CommandResult:
         return CommandResult(handled=True)
     target = str(Path(args[0]).expanduser()) if args else None
     if target and not Path(target).is_dir():
-        ctx.console.print(f"[red]✗ not a directory: {args[0]}[/]")
+        ctx.console.print(f"[red]✗ not a directory: {escape(args[0])}[/]")
         return CommandResult(handled=True)
     return _do_attach(ctx, target, verb="index")
 
@@ -80,25 +83,29 @@ def _do_attach(ctx: CommandContext, target: str | None, *, verb: str) -> Command
     try:
         summary = ctx.on_project(target)
     except LockHeld as e:
-        ctx.console.print(f"[red]✗ {e}[/] [dim](staying on "
-                          f"{ctx.session.repo_path})[/]")
+        ctx.console.print(f"[red]✗ {escape(str(e))}[/] [dim](staying on "
+                          f"{escape(ctx.session.repo_path or '')})[/]")
         return CommandResult(handled=True)
     except Exception as e:
-        ctx.console.print(f"[red]✗ {verb} failed: {type(e).__name__}: {e}[/]")
+        ctx.console.print(f"[red]✗ {verb} failed: {type(e).__name__}: "
+                          f"{escape(str(e))}[/]")
         return CommandResult(handled=True)
 
+    from luxe.chat import repl as repl_mod
+
     root, kind = summary["root"], summary["kind"]
-    ctx.session.repo_path = root
-    ctx.session.project_kind = kind
+    # Idempotent with the front-ends' hooks, which already applied it; a
+    # context built with a bare hook (tests, embedders) still ends up right.
+    repl_mod.apply_project_summary(ctx.session, summary)
     if kind == "none":
         ctx.console.print(
-            f"[yellow]· {root} isn't a project[/] [dim]— no index built. Read "
+            f"[yellow]· {escape(root)} isn't a project[/] [dim]— no index built. Read "
             "tools still work; pass a path with a repo or a project marker "
             "(pyproject.toml, package.json, …).[/]")
         return CommandResult(handled=True)
     how = "git-tracked" if summary.get("used_git") else "walked"
     ctx.console.print(
-        f"[green]✓[/] project → {root} [dim]({summary['label']})[/]\n"
+        f"[green]✓[/] project → {escape(root)} [dim]({escape(summary['label'])})[/]\n"
         f"  [dim]indexed {summary['files']} files · {summary['symbols']} "
         f"symbols · {how}[/]")
     if summary.get("truncated"):
@@ -108,22 +115,31 @@ def _do_attach(ctx: CommandContext, target: str | None, *, verb: str) -> Command
 
 
 def _memory(args, ctx: CommandContext) -> CommandResult:
+    from luxe.ephemeral import is_ephemeral
+
     repo = ctx.session.repo_path
     if not repo:
         ctx.console.print("[yellow]No repo bound to this session.[/]")
         return CommandResult(handled=True)
     sub = args[0] if args else "list"
+    if sub in ("add", "promote", "forget") and is_ephemeral():
+        # The fact store's writer is suppressed in an ephemeral session, so
+        # these used to print "✓ saved" / "✓ promoted" and write NOTHING.
+        ctx.console.print(f"[yellow]· /memory {sub}: not saved — ephemeral "
+                          "session (no project-memory writes). "
+                          "`/ephemeral off` to record it.[/]")
+        return CommandResult(handled=True)
     if sub == "list":
         mem = project_mem.load_memory(repo)
         if mem.curated_md.strip():
             ctx.console.print("[bold]curated (.luxe/memory.md)[/]")
-            ctx.console.print(f"[dim]{mem.curated_md.strip()}[/]")
+            ctx.console.print(f"[dim]{escape(mem.curated_md.strip())}[/]")
         if mem.facts:
             ctx.console.print("[bold]facts[/]")
             for f in mem.facts:
                 tag = "[green]✓[/]" if f.confidence == "manual" else "[dim]·[/]"
-                ctx.console.print(f"  {tag} [cyan]{f.id}[/] ({f.kind}) {f.text} "
-                                  f"[dim]{f.confidence}[/]")
+                ctx.console.print(f"  {tag} [cyan]{escape(f.id)}[/] ({escape(f.kind)}) "
+                                  f"{escape(f.text)} [dim]{escape(f.confidence)}[/]")
         if not mem.curated_md.strip() and not mem.facts:
             ctx.console.print("[dim](no project memory yet)[/]")
     elif sub == "add":
@@ -133,7 +149,7 @@ def _memory(args, ctx: CommandContext) -> CommandResult:
             return CommandResult(handled=True)
         # User-added memory is curated → injected immediately.
         f = project_mem.add_fact(repo, text, source="user", confidence="manual")
-        ctx.console.print(f"[green]✓[/] saved [cyan]{f.id}[/] (injected)")
+        ctx.console.print(f"[green]✓[/] saved [cyan]{escape(f.id)}[/] (injected)")
     elif sub == "promote":
         if len(args) < 2:
             ctx.console.print("[yellow]Usage: /memory promote <id>[/]")
@@ -148,12 +164,33 @@ def _memory(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print("[green]✓ forgotten[/]" if ok else "[yellow]no such fact[/]")
     elif sub == "edit":
         path = project_mem.repo_memory_file(repo)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch(exist_ok=True)
-        editor = os.environ.get("EDITOR", "vi")
-        subprocess.call([editor, str(path)])
+        if not path.exists():
+            if is_ephemeral():
+                ctx.console.print("[yellow]· /memory edit: .luxe/memory.md "
+                                  "doesn't exist and an ephemeral session "
+                                  "won't create it. `/ephemeral off` first.[/]")
+                return CommandResult(handled=True)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+        # $EDITOR is a COMMAND LINE (`code -w`, `emacsclient -t`), not a
+        # program name — as one argv element it failed to launch at all.
+        try:
+            argv = shlex.split(os.environ.get("EDITOR", "") or "vi")
+        except ValueError:
+            argv = []
+        if not argv:
+            argv = ["vi"]
+        runner = ctx.run_external or subprocess.call
+        try:
+            rc = runner([*argv, str(path)])
+        except OSError as e:
+            ctx.console.print(f"[red]✗ couldn't start {escape(argv[0])}: "
+                              f"{escape(str(e))}[/] [dim](set $EDITOR)[/]")
+            return CommandResult(handled=True)
+        if rc:
+            ctx.console.print(f"[yellow]· {escape(argv[0])} exited {rc}[/]")
     else:
-        ctx.console.print(f"[yellow]Unknown /memory subcommand {sub!r}.[/]")
+        ctx.console.print(f"[yellow]Unknown /memory subcommand {escape(repr(sub))}.[/]")
     return CommandResult(handled=True)
 
 
@@ -228,14 +265,14 @@ def _init(args, ctx: CommandContext) -> CommandResult:
                                 console=ctx.console, dry_run=dry,
                                 backend=backend)
     if not result.ok:
-        ctx.console.print(f"[red]✗ {result.error}[/]")
+        ctx.console.print(f"[red]✗ {escape(str(result.error))}[/]")
         return CommandResult(handled=True)
     if dry:
         from rich.markdown import Markdown
         ctx.console.print(Markdown(result.text))
         ctx.console.print("[dim]· --dry-run: nothing written[/]")
         return CommandResult(handled=True)
-    ctx.console.print(f"[green]✓[/] brief → {result.written} "
+    ctx.console.print(f"[green]✓[/] brief → {escape(str(result.written))} "
                       f"[dim]({len(result.text)} chars"
                       f"{', truncated' if result.truncated else ''}; injected "
                       "as <project_memory> from the next turn)[/]")
@@ -253,7 +290,8 @@ def _note(args, ctx: CommandContext) -> CommandResult:
     res = notes_mod.run_session_notes(ctx.session, ctx.slots, ctx.slots.cfg,
                                       ctx.console, on_demand=True)
     if res.written is None and res.skipped and "no project" not in res.skipped:
-        ctx.console.print(f"[yellow]· no session notes written ({res.skipped})[/]")
+        ctx.console.print(f"[yellow]· no session notes written "
+                          f"({escape(res.skipped)})[/]")
     return CommandResult(handled=True)
 
 

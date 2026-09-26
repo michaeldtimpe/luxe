@@ -167,9 +167,9 @@ def format_tool_call(tc: ToolCall) -> str:
     # Escape the args so a value containing `[` can't break the span. The PRINT
     # sites pass highlight=False so rich's ReprHighlighter doesn't repaint the
     # untagged `name(` call-pattern magenta over the theme (iter-6 color fix).
-    head = f"[{accent}]→[/] {tc.name}([dim]{_escape(summarize_args(tc.arguments))}[/])"
+    head = f"[{accent}]→[/] {_escape(tc.name)}([dim]{_escape(summarize_args(tc.arguments))}[/])"
     if tc.error:
-        tail = f"  [{theme_mod.rich('error') or 'red'}]✗ {tc.error[:80]}[/]"
+        tail = f"  [{theme_mod.rich('error') or 'red'}]✗ {_escape(tc.error[:80])}[/]"
     elif tc.duplicate:
         tail = f"  [{theme_mod.rich('warn') or 'yellow'}]⟳ duplicate[/]"
     elif tc.cached:

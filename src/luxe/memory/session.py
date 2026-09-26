@@ -98,6 +98,25 @@ def new_session(
     return meta
 
 
+def restore_meta(session_id: str, **fields) -> SessionMeta | None:
+    """(Re)write `meta.json` for an EXISTING session id — `/ephemeral off`,
+    where the purge (or `--ephemeral` from the start) left none. Without it the
+    transcript written afterwards is an orphan: `load_session`/`/resume` and
+    `list_sessions` key on meta.json. A meta already on disk is kept (only
+    `last_active` moves). No-op while ephemeral."""
+    if is_ephemeral():
+        return None
+    meta = load_meta(session_id)
+    if meta is None:
+        meta = SessionMeta(session_id=session_id,
+                           **{k: v for k, v in fields.items()
+                              if k in SessionMeta.__dataclass_fields__})
+    meta.last_active = time.time()
+    session_dir(session_id).mkdir(parents=True, exist_ok=True)
+    _write_meta(meta)
+    return meta
+
+
 def touch(session_id: str) -> None:
     """Bump last_active (called as turns are appended)."""
     if is_ephemeral():
@@ -176,12 +195,13 @@ def list_sessions() -> list[SessionMeta]:
 
 
 def gc_sessions(*, keep_recent: int = 50, retention_days: int = 30) -> int:
-    """Evict old sessions. Removes a session if it is BOTH outside the
-    `keep_recent` most-recent set AND older than `retention_days`.
+    """Evict old sessions. Removes a session only if it is BOTH outside the
+    `keep_recent` most-recent set AND older than `retention_days` — i.e. a
+    session survives if EITHER rule keeps it (whichever keeps more).
 
-    Returns the count removed. Defaults: keep the 50 most recent, drop anything
-    older than 30 days (whichever removes more) — defined per memory.sdd so the
-    function doesn't bitrot.
+    Returns the count removed. Defaults per memory.sdd: the 50 most recent
+    are always kept, and so is anything active in the last 30 days. Run at
+    chat session start on a background thread (`repl.start_session_gc`).
     """
     metas = list_sessions()  # already sorted most-recent-first
     if not metas:
