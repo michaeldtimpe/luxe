@@ -44,6 +44,7 @@ from typing import Any
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.ephemeral import is_ephemeral
+from luxe.gitkit import patterns
 from luxe.context import estimate_tokens
 from luxe.fswalk import iter_pruned
 from luxe.repo_index import (
@@ -125,9 +126,7 @@ _FRAMING_PATTERNS = (
 )
 _FRAMING_RE = re.compile("|".join(_FRAMING_PATTERNS), re.IGNORECASE)
 
-_SEVERITY_RANK = {
-    "critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0, "": 0,
-}
+_SEVERITY_RANK = patterns.SEVERITY_RANK
 
 
 # --- data shapes ------------------------------------------------------------
@@ -551,8 +550,9 @@ def _evidence_keys(f: dict) -> set[str]:
     ("a.py line 12" / "a.py:12" / "a.py 12" → "a.py:12")."""
     keys: set[str] = set()
     for ev in f.get("evidence", []) or []:
-        for m in _FILE_LINE_RE.finditer(str(ev)):
-            keys.add(re.sub(r"[:\s]+(?:line\s+)?", ":", m.group(0).lower()))
+        for m in patterns.FILE_LINE_RE.finditer(str(ev)):
+            path = m.group("path").lower().removeprefix("./")
+            keys.add(f"{path}:{m.group('line')}")
     return keys
 
 
@@ -584,6 +584,10 @@ def confidence_of(f: dict) -> tuple[float, str]:
     if f.get("source") == "heuristic":
         label = "low"
     return round(score, 2), label
+
+
+def _sev_rank(f: dict) -> int:
+    return _SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0)
 
 
 def _merge_into(cur: dict, f: dict) -> None:
@@ -653,18 +657,26 @@ def compact_digest(digest: dict, *, ceiling_tokens: int = 0,
     }
 
     if ceiling_tokens and estimate_tokens(json.dumps(out)) > ceiling_tokens:
-        # Drop lowest-severity findings first until under ceiling.
-        ranked = sorted(
-            out["provisional_findings"],
-            key=lambda f: _SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0))
-        dropped = 0
-        while ranked and estimate_tokens(json.dumps(out)) > ceiling_tokens:
-            victim = ranked.pop(0)
+        # Drop lowest-severity findings first until under ceiling — but NEVER
+        # one rated above medium: a high/critical finding is worth more than
+        # the window it costs, and the synthesis reduce exists for overflow.
+        droppable = sorted(
+            (f for f in out["provisional_findings"]
+             if _sev_rank(f) <= _SEVERITY_RANK["medium"]),
+            key=_sev_rank)
+        dropped: dict[str, int] = {}
+        while droppable and estimate_tokens(json.dumps(out)) > ceiling_tokens:
+            victim = droppable.pop(0)
             out["provisional_findings"].remove(victim)
-            dropped += 1
-        if dropped and log:
-            log(f"digest over budget — dropped {dropped} low-severity "
-                f"provisional finding(s) to stay in window")
+            sev = str(victim.get("severity", "") or "unrated").lower()
+            dropped[sev] = dropped.get(sev, 0) + 1
+        if log and dropped:
+            detail = ", ".join(f"{n} {sev}" for sev, n in dropped.items())
+            log(f"digest over budget — dropped {sum(dropped.values())} "
+                f"provisional finding(s) ({detail}) to stay in window")
+        if log and estimate_tokens(json.dumps(out)) > ceiling_tokens:
+            log("digest still over budget after dropping every finding rated "
+                "medium or below — kept all high/critical findings")
     return out
 
 
@@ -1210,10 +1222,60 @@ def _chunk_block(chunk: Chunk, total: int) -> str:
             f"Symbols defined in these files: {syms}{over}\n</chunk_files>")
 
 
-def _digest_block(digest: dict) -> str:
+_INDEX_LINE_CHARS = 160
+
+
+def _index_entries(digest: dict) -> list[str]:
+    """One line per earlier finding — severity, title, first file:line — for
+    the chunk-pass cross-reference. Structured findings first (severity
+    desc), then the finding-shaped lines of each earlier markdown note."""
+    out: list[str] = []
+    for f in sorted(digest.get("provisional_findings", []), key=_sev_rank,
+                    reverse=True):
+        ev = (f.get("evidence") or [""])[0]
+        line = (f"[{f.get('severity') or '?'}] {f.get('title', '')}"
+                + (f" — {ev}" if ev else "") + f" (chunk {f.get('chunk', 0) + 1})")
+        out.append(line[:_INDEX_LINE_CHARS])
+    for n in digest.get("markdown_notes", []):
+        for item in _heuristic_findings(n.get("md", ""), cap=30):
+            item = re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", item)
+            out.append(f"{item} (chunk {n.get('chunk', 0) + 1})"[:_INDEX_LINE_CHARS])
+    return out
+
+
+def _digest_block(digest: dict, *, max_tokens: int = 0) -> str:
+    """The chunk pass's cross-reference: the structural map (modules,
+    entities, cross-cutting concerns) plus a one-line INDEX of the findings
+    earlier chunks recorded — never their full notes (those go to synthesis
+    only; they used to be copied into every later chunk, unbounded). With
+    `max_tokens`, trailing index lines are cut to fit and the cut is stated;
+    the digest itself keeps everything."""
+    index = _index_entries(digest)
+    head = {"modules": digest.get("modules", []),
+            "entities": digest.get("entities", []),
+            "cross_cutting": digest.get("cross_cutting", [])}
+    map_json = json.dumps(head, indent=1)
+    kept: list[str] = []
+    if max_tokens:
+        used = estimate_tokens(map_json)
+        for ln in index:
+            cost = estimate_tokens(ln) + 1
+            if used + cost > max_tokens:
+                break
+            kept.append(ln)
+            used += cost
+    else:
+        kept = index
+    body = map_json
+    if kept:
+        body += "\n\nFindings recorded so far (index):\n" + "\n".join(
+            f"- {ln}" for ln in kept)
+    if len(kept) < len(index):
+        body += (f"\n(+{len(index) - len(kept)} more earlier findings not "
+                 "listed here — all are kept for the final report)")
     return ("<cross_reference_digest>\nRunning map from earlier chunks (use it to "
             "cross-reference; do not re-report its findings):\n"
-            f"{json.dumps(digest, indent=1)}\n</cross_reference_digest>")
+            f"{body}\n</cross_reference_digest>")
 
 
 def _notes_block(digest: dict) -> str:
@@ -1529,8 +1591,7 @@ def run_deep_report(
                 # exactly as the live path would have.
                 fold_contribution(digest, contributions[c.index], c.index)
                 if estimate_tokens(json.dumps(digest)) > ceiling:
-                    digest = compact_digest(digest, ceiling_tokens=ceiling,
-                                            log=_emit)
+                    digest = compact_digest(digest)
                 _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label}) — "
                       "cached note reused")
                 if work_dir is not None:
@@ -1541,7 +1602,8 @@ def run_deep_report(
             n_timed = len(timings)     # every pass of THIS chunk lands after here
             _emit(f"chunk {c.index + 1}/{len(chunks)} ({c.label})")
             extra = (f"<survey_notes>\n{survey_notes}\n</survey_notes>\n\n"
-                     f"{_digest_block(digest)}\n\n{_chunk_block(c, len(chunks))}")
+                     f"{_digest_block(digest, max_tokens=ceiling)}\n\n"
+                     f"{_chunk_block(c, len(chunks))}")
             if chunk_extra_blocks and c.index in chunk_extra_blocks:
                 extra += f"\n\n{chunk_extra_blocks[c.index]}"
             goal = (f"Analyze chunk {c.index + 1} of {len(chunks)} of this "
@@ -1580,8 +1642,7 @@ def run_deep_report(
                     update_digest(digest, steps_obj, c.index)
                     contribution["parsed"] = steps_obj
                     if estimate_tokens(json.dumps(digest)) > ceiling:
-                        digest = compact_digest(digest, ceiling_tokens=ceiling,
-                                                log=_emit)
+                        digest = compact_digest(digest)
                     _emit(f"chunk {c.index + 1}: {len(steps_obj['steps'])} "
                           "step(s) recorded")
                 elif analyzed:
@@ -1610,7 +1671,7 @@ def run_deep_report(
                 update_digest(digest, parsed, c.index)
                 contribution["parsed"] = parsed
                 if estimate_tokens(json.dumps(digest)) > ceiling:
-                    digest = compact_digest(digest, ceiling_tokens=ceiling, log=_emit)
+                    digest = compact_digest(digest)
             elif _has_report_header(text, kind):
                 # The model concluded with the required header itself — slice off
                 # any leading monologue and keep the conclusion.
@@ -1671,7 +1732,7 @@ def run_deep_report(
     if notes_tokens > _SYNTH_REDUCE_FRAC * synth_ctx_win:
         _emit(f"aggregate notes large ({notes_tokens} tok) — 2-level reduce")
         digest = _reduce_findings(digest, eff_ctx=synth_ctx_win, pass_fn=_pass,
-                                  log=_emit)
+                                  log=_emit, role=synth_role)
 
     synth_ctx = (f"{health_block}\n\n<survey_notes>\n{survey_notes}\n</survey_notes>"
                  f"\n\n{_notes_block(digest)}")
@@ -1794,6 +1855,7 @@ def _render_report(digest: dict, kind: str) -> str:
     unparsed = digest.get("unparsed_chunks", [])
 
     sections: list[str] = []
+    n_note_findings = 0
     for n in notes:
         body = _strip_report_header(n.get("md", ""))
         if body:
@@ -1803,6 +1865,7 @@ def _render_report(digest: dict, kind: str) -> str:
                 head += ("\n\n*(heuristic salvage from verbose model output — "
                          "confidence: low)*")
             sections.append(f"{head}\n\n{body}")
+            n_note_findings += len(_heuristic_findings(body))
     if pf:
         # severity desc, then deterministic confidence desc (evidence-weighted)
         ranked = sorted(pf, key=lambda f: (
@@ -1819,7 +1882,9 @@ def _render_report(digest: dict, kind: str) -> str:
         sections.append("## Additional findings\n\n" + "\n".join(lines))
 
     # Only gitaudit reaches deterministic render (gitchange returns via plan_mod).
-    n = len(pf) + sum(len(_heuristic_findings(s)) for s in sections)
+    # pf findings + the finding lines of the NOTE sections (the Additional
+    # findings section renders pf itself — counting it again doubled pf)
+    n = len(pf) + n_note_findings
     header = f"# {title}\n**Findings: {n} (consolidated across chunks)**"
 
     out = [header, *sections]
@@ -1833,9 +1898,11 @@ def _render_report(digest: dict, kind: str) -> str:
 
 
 # Heuristic finding patterns for the deterministic-render fallback (review).
+# A severity WORD (leading \b: "flow"/"allow"/"below" are not `low`) followed
+# by a code span or a file:line ref.
 _SEV_LINE_RE = re.compile(
-    r"(critical|high|medium|low)\b.*?(`[^`]+`|\b[\w./-]+\.[a-z]{1,4}:\d+)",
-    re.IGNORECASE)
+    r"\b(critical|high|medium|low)\b.*?(`[^`]+`|" + patterns.FILE_LINE_RE.pattern
+    + ")", re.IGNORECASE)
 # Additional finding shapes the champion actually emits when it rambles past the
 # report header (offline-recovery analysis 2026-06-08, scripts/recover_offline.py):
 # numbered BOLD list items carrying a file/line/code ref, and canonical report
@@ -1845,11 +1912,9 @@ _SEV_LINE_RE = re.compile(
 _NUM_BOLD_RE = re.compile(r"^\s*\d+[.)]\s+\*\*")
 _REPORT_BULLET_RE = re.compile(
     r"\*\*\s*(file|issue|bug|severity|line|impact|fix|problem|risk|location)\b", re.I)
-_FILE_LINE_RE = re.compile(
-    r"\b[\w./-]+\.(py|rs|js|ts|tsx|go|sh|ya?ml|toml|c|cpp|h)\b(?:[:\s]+(?:line\s+)?\d+)",
-    re.I)
+_FILE_LINE_RE = patterns.FILE_LINE_RE
 _BOLD_FILE_RE = re.compile(
-    r"\*\*[^*]*?(?:\.(py|rs|js|ts|go|sh|ya?ml)\b|line\s+\d+)[^*]*?\*\*", re.I)
+    r"\*\*[^*]*?(?:\.(?:" + patterns.EXT_ALT + r")\b|line\s+\d+)[^*]*?\*\*", re.I)
 # Lines the model explicitly marks as NON-findings — drop them to keep the salvage clean.
 _NON_FINDING_RE = re.compile(
     r"\b(not a bug|no issue|no code|nothing here|n/?a|this is correct"
@@ -1865,10 +1930,9 @@ _SEV_LEAD_RE = re.compile(
     r"|\[\s*(?:critical|high|medium|low)\s*\]"
     r"|severity\s*[:=]\s*(?:critical|high|medium|low)\b)",
     re.IGNORECASE)
-_SEV_WORD_RE = re.compile(r"\b(critical|high|medium|low)\b", re.IGNORECASE)
+_SEV_WORD_RE = patterns.SEV_WORD_RE
 _FINDING_HEADING_RE = re.compile(r"^#{3,4}\s+\S")
-_FILE_REF_RE = re.compile(
-    r"\b[\w./-]+\.(py|rs|js|ts|tsx|go|sh|ya?ml|toml|c|cpp|h)\b", re.IGNORECASE)
+_FILE_REF_RE = patterns.FILE_REF_RE
 
 
 def _strip_report_header(md: str) -> str:
@@ -1966,36 +2030,69 @@ def _clean_note(md: str, kind: str, *, pass_fn, role,
     return None, ""
 
 
-def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None) -> dict:
-    """2-level reduce: consolidate provisional_findings in window-sized batches
-    via LLM merge passes, then return a digest carrying the survivors. Falls back
-    to the input digest if a batch pass yields nothing parseable."""
-    findings = digest.get("provisional_findings", [])
+def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None,
+                     role=None) -> dict:
+    """2-level reduce: consolidate the aggregate notes — structured
+    provisional_findings AND the markdown chunk notes, which are usually the
+    bulk of it — in window-sized batches via LLM merge passes at the
+    SYNTHESIS window (`role`; it used to run on the chunk role's base window).
+    A batch whose pass yields nothing parseable keeps its inputs unchanged,
+    so a parse miss never loses findings. Batching sums per-item sizes once
+    (it re-measured the whole growing batch per item — quadratic)."""
+    findings = list(digest.get("provisional_findings", []))
+    md_notes = list(digest.get("markdown_notes", []))
+    items: list[tuple[str, dict]] = ([("f", f) for f in findings]
+                                     + [("n", n) for n in md_notes])
     batch_budget = int(eff_ctx * _SYNTH_REDUCE_FRAC)
-    batches: list[list[dict]] = []
-    cur: list[dict] = []
-    for f in findings:
-        cur.append(f)
-        if estimate_tokens(json.dumps(cur)) > batch_budget and len(cur) > 1:
-            batches.append(cur[:-1])
-            cur = [f]
+    batches: list[list[tuple[str, dict]]] = []
+    cur: list[tuple[str, dict]] = []
+    cur_tok = 0
+    for it in items:
+        cost = estimate_tokens(json.dumps(it[1]))
+        if cur and cur_tok + cost > batch_budget:
+            batches.append(cur)
+            cur, cur_tok = [], 0
+        cur.append(it)
+        cur_tok += cost
     if cur:
         batches.append(cur)
 
     survivors: list[dict] = []
+    kept_notes: list[dict] = []
     for i, batch in enumerate(batches):
+        b_findings = [x for k, x in batch if k == "f"]
+        b_notes = [x for k, x in batch if k == "n"]
         if log:
-            log(f"reduce batch {i + 1}/{len(batches)} ({len(batch)} findings)")
-        ctx = ("<chunk_findings>\nConsolidate these findings:\n"
-               f"{json.dumps({'findings': batch}, indent=1)}\n</chunk_findings>")
+            log(f"reduce batch {i + 1}/{len(batches)} ({len(b_findings)} "
+                f"findings, {len(b_notes)} notes)")
+        parts = ["<chunk_findings>\nConsolidate these findings:\n"
+                 f"{json.dumps({'findings': b_findings}, indent=1)}"]
+        if b_notes:
+            parts.append("\n\nAdditional per-chunk findings (markdown):\n"
+                         + "\n\n".join(
+                             f"### chunk {n.get('chunk', 0) + 1} "
+                             f"({n.get('label', '')})\n{n.get('md', '')}"
+                             for n in b_notes))
+        parts.append("\n</chunk_findings>")
         goal = "Consolidate this batch of findings.\n\n" + prompts.GIT_DEEP_REDUCE_HINT
-        res = pass_fn(goal, ctx, f"reduce-{i + 1}")
+        res = pass_fn(goal, "".join(parts), f"reduce-{i + 1}", role=role)
         parsed = parse_chunk_notes((getattr(res, "final_text", "") or "").strip())
-        if parsed and isinstance(parsed.get("findings"), list):
-            survivors.extend(parsed["findings"])
+        if parsed and isinstance(parsed.get("findings"), list) \
+                and not getattr(res, "aborted", False):
+            # provenance-honest: a merged finding is only as good as the
+            # weakest source that fed its batch
+            srcs = [x.get("source", "json") for x in b_findings] + \
+                   [x.get("source", "md_clean") for x in b_notes]
+            worst = min(srcs, key=lambda s_: _SOURCE_RANK.get(s_, -1)) if srcs else "json"
+            for f in parsed["findings"]:
+                if isinstance(f, dict):
+                    f.setdefault("source", worst)
+                    survivors.append(f)
         else:
-            survivors.extend(batch)  # never lose findings on a parse miss
+            survivors.extend(b_findings)     # never lose findings on a parse miss
+            kept_notes.extend(b_notes)
 
     out = dict(digest)
     out["provisional_findings"] = survivors
+    out["markdown_notes"] = kept_notes
     return compact_digest(out, ceiling_tokens=0)
