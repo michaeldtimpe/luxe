@@ -37,6 +37,14 @@ def truncate_for_display(text: str, *, max_lines: int | None,
         return text, 0
     kept = lines[:cut]
     hidden = len(lines) - cut
+    if cut == 0 and max_chars is not None and (max_lines is None
+                                               or max_lines > 0):
+        # The FIRST line alone is over max_chars (one long minified line, a
+        # paragraph with no newlines): cutting on line boundaries would show
+        # nothing at all. Show its head; the rest of it counts as hidden so
+        # the caller still says "truncated" for a one-line text.
+        kept = [lines[0][:max_chars]]
+        hidden = max(1, len(lines) - 1)
     if sum(1 for ln in kept if ln.lstrip().startswith("```")) % 2 == 1:
         kept.append("```")  # close a dangling code fence
     return "\n".join(kept), hidden
