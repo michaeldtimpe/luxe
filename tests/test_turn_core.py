@@ -459,6 +459,43 @@ def test_aborted_turn_is_reported_and_recorded(_ctx, monkeypatch):
     assert errs[-1]["model"] == "Champ"
 
 
+def test_aborted_backend_turn_runs_repair_then_degrade(_ctx, monkeypatch):
+    """The loop contains backend exceptions into `aborted`, so the front-ends'
+    `except BackendError` never ran for a mid-turn failure — self-repair and
+    manifest auto-degrade were unreachable from a real turn (2026-09 review)."""
+    cfg, session, sm = _ctx
+    calls = []
+    monkeypatch.setattr(sm, "try_self_repair",
+                        lambda text: calls.append(("repair", text)) or None)
+    monkeypatch.setattr(sm, "note_turn_failure",
+                        lambda: calls.append(("degrade",)) or
+                        "main failed — switched to fallback Fallback")
+    monkeypatch.setattr(sm, "unreachable_hint", lambda: "should not be used")
+
+    reason, hint = repl.note_aborted_turn(session, sm, _AbortedResult())
+    assert [c[0] for c in calls] == ["repair", "degrade"]
+    assert calls[0][1] == reason
+    assert hint == "main failed — switched to fallback Fallback"
+
+
+def test_aborted_stale_turn_repair_wins_over_degrade(_ctx, monkeypatch):
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(sm, "try_self_repair", lambda text: "restarted a stale oMLX")
+    monkeypatch.setattr(sm, "note_turn_failure",
+                        lambda: pytest.fail("degrade must not run after a repair"))
+    _, hint = repl.note_aborted_turn(session, sm, _AbortedResult())
+    assert hint == "restarted a stale oMLX"
+
+
+def test_aborted_non_backend_turn_skips_recovery(_ctx, monkeypatch):
+    cfg, session, sm = _ctx
+    monkeypatch.setattr(sm, "try_self_repair",
+                        lambda text: pytest.fail("not an endpoint failure"))
+    _, hint = repl.note_aborted_turn(session, sm,
+                                     _AbortedResult("Max steps reached (30)"))
+    assert hint is None
+
+
 def test_healthy_turn_writes_no_error_record(_ctx, monkeypatch):
     cfg, session, sm = _ctx
     monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())

@@ -910,10 +910,19 @@ def note_aborted_turn(session, slots, result) -> tuple[str, str | None] | None:
     logger.error("turn aborted: %s", reason)
     session_store.append_turn(session.session_id, "error",
                               text=reason, model=slots.backend.model)
-    # The `/backend` escape hatch only speaks to an endpoint failure — offering
-    # it for "Max steps reached (…)" would point at the wrong problem. Keyed on
-    # the reason text the way `agents/outcomes.py` classifies the same field.
-    hint = slots.unreachable_hint() if "backend error" in reason.lower() else None
+    # Only an endpoint failure gets the kit's recovery — "Max steps reached
+    # (…)" is not one. Keyed on the reason text the way `agents/outcomes.py`
+    # classifies the same field.
+    if "backend error" not in reason.lower():
+        return reason, None
+    # The loop CONTAINS backend exceptions (`loop.py`, `except Exception` around
+    # `backend.chat`), so the front-ends' `except BackendError` branches never
+    # see a failure raised mid-turn — the self-repair and manifest auto-degrade
+    # they call were unreachable from a real turn. Run the same sequence here:
+    # repair FIRST (a stale oMLX fails main and fallback alike), then degrade,
+    # then the `/backend` escape hatch.
+    hint = (slots.try_self_repair(reason) or slots.note_turn_failure()
+            or slots.unreachable_hint())
     return reason, hint
 
 
