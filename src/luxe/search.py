@@ -172,11 +172,27 @@ def bm25_search_def() -> ToolDef:
     )
 
 
+#: Ceiling on `bm25_search`'s k — past this a ranked list stops being a
+#: shortlist and becomes a directory listing with scores.
+_BM25_MAX_K = 50
+
+
+def _clamp_k(raw: Any, default: int) -> int:
+    """Model-supplied `k` → [1, _BM25_MAX_K]. It went to a slice raw:
+    `k=-1` meant "every hit but the last", `k=0` "(no matches)" for a query
+    that matched, and a non-integer raised."""
+    try:
+        k = int(raw)
+    except (TypeError, ValueError):
+        k = default
+    return max(1, min(k, _BM25_MAX_K))
+
+
 def _bm25_search_fn(args: dict[str, Any]) -> tuple[str, str | None]:
     if _index is None:
         return "", "BM25 index not built (set_index must be called first)"
     query = str(args.get("query", "")).strip()
-    k = int(args.get("k", 10))
+    k = _clamp_k(args.get("k", 10), default=10)
     if not query:
         return "", "query is required"
     hits = _index.search(query, k=k)
