@@ -569,11 +569,18 @@ def test_pdf_tools_are_not_in_the_benchmark_tool_surface():
     assert leaked == [], f"PDF tools leaked into the benchmark surface: {leaked}"
 
 
-def test_default_mcp_config_ships_no_servers():
+def test_default_mcp_config_ships_no_pdf_server():
+    """mcp_pdf.sdd: the PDF server is never registered by default. The file
+    lists other opt-in servers since 2026-08-25 (1925950); this used to
+    assert the list was empty and has been red since that commit."""
     import yaml
     from luxe.mcp.client import default_mcp_config_path
     raw = yaml.safe_load(default_mcp_config_path().read_text())
-    assert raw["client"]["servers"] == []
+    for server in raw["client"]["servers"] or []:
+        blob = " ".join([str(server.get("name", "")),
+                         str(server.get("command", ""))]
+                        + [str(a) for a in server.get("args", []) or []])
+        assert "pdf" not in blob.lower(), server
 
 
 @needs_qpdf
