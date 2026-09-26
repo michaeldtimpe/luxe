@@ -92,14 +92,18 @@ def run(repo: str | Path, *args: str,
 
 
 def run_in(repo: str | Path, *args: str,
-           timeout: float | None = None) -> subprocess.CompletedProcess:
+           timeout: float | None = None,
+           stdin: int | None = None) -> subprocess.CompletedProcess:
     """`git <args…>` with `cwd=<repo>`, output captured as text.
 
     Raises `FileNotFoundError` when `repo` does not exist OR when git is not on
     PATH — callers that distinguish the two must do so some other way.
+    `stdin` is passed through (default: inherited); a call that can run
+    user hooks (`commit`) passes `subprocess.DEVNULL` so a hook cannot read
+    the operator's terminal.
     """
     return subprocess.run(["git", *_CONFIG_PINS, *args], cwd=str(repo),
-                          capture_output=True, timeout=timeout,
+                          capture_output=True, timeout=timeout, stdin=stdin,
                           check=False, **_DECODE)
 
 
