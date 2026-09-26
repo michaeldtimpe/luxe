@@ -76,7 +76,12 @@ never touches this module.
   `GenerationTiming.cost_usd` is parsed from `usage.cost` on BOTH the stream
   and non-stream paths, summed across every `backend.chat` of a turn into
   `AgentResult.cost_usd`, and rendered in the status bar (`$0.042`), the
-  footer, `/status`, and `/usage`. (b) SPEND IS BOUNDED: `budget_usd` on the
+  footer, `/status`, and `/usage`. The SESSION total is billed from
+  `Backend.cost_total_usd` — a per-request running sum on the instance chat
+  owns, read-only bookkeeping that nothing on the wire consults — as a DELTA
+  across each turn (`repl.settle_turn_cost`, in a `finally`), so requests
+  billed by a turn that then errored, aborted, or was interrupted still count
+  against the cap (2026-09 review: only completed turns used to). (b) SPEND IS BOUNDED: `budget_usd` on the
   entry is a HARD cap — a turn is refused BEFORE dispatch once the session
   total reaches it, never interrupted mid-turn, and only `/usage budget <usd>`
   raises it (deliberate, for this session only). No cap configured = no cap and
@@ -235,7 +240,12 @@ never touches this module.
   `BackendEntry.engine_label()` — an INSTANCE attribute like `on_reasoning`,
   never through `backend_kwargs()`, whose contract is that `engine:` does not
   touch the wire/timeout surface. ANY other turn/command
-  exception is contained the same way (last traceback line to the transcript,
+  exception is contained the same way — in the line REPL that now includes
+  `cmd.dispatch`, `/plan` and the `/goal` supervisor, which used to run bare
+  inside the loop's try/finally (one exception, or ctrl+c mid-`/pull`, ended
+  the session). The record + recovery live in ONE place both front-ends call
+  (`repl.note_backend_error` / `note_turn_crash` / `recover_backend_failure`),
+  and a failed `/goal` round goes through the same sequence (last traceback line to the transcript,
   full traceback to the logger, session stays up) — a crashed turn is a
   message, never an exit. A turn the agent loop ABORTED instead of raising
   (`AgentResult.aborted`, e.g. a contained backend ConnectError or max steps)
@@ -332,7 +342,12 @@ never touches this module.
   `Backend.unload_all_loaded` + `thermal_guard`; swap count + seconds are
   instrumented and surfaced; keep chat-slot model resident, group code work
 - The history summarizer (`chat/summarize.py`) is NON-model, deterministic, and
-  versioned (`SUMMARIZER_VERSION`); its output is persisted to `fold.jsonl`
+  versioned (`SUMMARIZER_VERSION`); its output is persisted to `fold.jsonl`.
+  `trunc-v2` (2026-09): the recent verbatim turns are capped per message
+  (`recent_cap`, head+tail around an elision marker) and the
+  `<current_request>` echo is capped too (`session.cap_echo`) — the full
+  message is already the Goal. v1 left both uncapped, so one 200 KB paste
+  rode the next three turns whole
 - **ctrl+c CLEARS, it never quits** (2026-08-13). One key, three cases, in
   precedence order — `tui.ChatApp.action_interrupt`: a turn is running (or a
   modal is up) → cancel, exactly as before; idle with text in the prompt →
@@ -432,10 +447,17 @@ never touches this module.
   a tool-fingerprint guard is a faster stuck trip; a ≤32K window prints a
   low-context advisory. The pure `evaluate_goal_round()` + `parse_test_result()`
   are unit-tested. Requires write mode;
-  Ctrl-C or `/goal stop` halts it
+  Ctrl-C (esc in the TUI) halts it. `/goal stop` typed WHILE a goal runs is
+  TUI-only (the line REPL's prompt is owned by the supervisor): it is applied
+  at submit instead of queued, and the goal ends after the current round.
+  A round refused before dispatch (`TurnOutcome.crashed` — the spend cap)
+  stops the goal at once; a BackendError or a backend-abort round counts
+  toward the consecutive-failure budget AFTER the shared recovery ran
 - `/plan <objective>` drafts a plan in a forced READ-ONLY turn (PLAN_HINT, reusing
   make_read_only_role) then prompts save / execute / both / discard. Save never
-  clobbers an existing `plan.md` (writes `.luxe/plans/<id>-<n>.md`); execute seeds
+  clobbers an existing `plan.md` (writes `.luxe/plans/<id>-<n>.md`), and a
+  session with NO project saves under `~/.luxe/plans/` (never the CWD, which
+  is `$HOME` there) — refused in an ephemeral session; execute seeds
   the `/goal` runner and injects the drafted plan as a `<plan>` provenance block
   so the agent keeps following it
 - `/attach <path> [...]` stages file contents for the NEXT turn, ONE-SHOT:
@@ -446,7 +468,10 @@ never touches this module.
   `<system_constraints>` in the precedence ladder (the user's explicit rules
   outrank pasted content; attachments outrank style/plan/ledger/memory/
   history), then cleared on consumption — later turns recall it only via
-  conversation history. Each attach appends a kind="attachment" transcript
+  conversation history. Consumption is provisional until the turn completes:
+  a turn that fails (BackendError, crash, abort, interrupt) RE-STAGES the
+  payload (`session.consumed_attachments` → `repl.restore_attachments`) and
+  says so, so `/retry` resends it instead of it vanishing with the request. Each attach appends a kind="attachment" transcript
   record (path, size, sha256, truncated, capped content); resume pairing
   ignores unknown kinds, so old readers are unaffected
 - `/terse` (default ON) injects the registry `TERSE_HINT` `<response_style>` block
@@ -614,8 +639,12 @@ never touches this module.
   it acquires the NEW lock before releasing the old one, so a `LockHeld` leaves
   the session exactly where it was. The hook re-indexes, re-points
   `set_repo_root`, invalidates the `.sdd` scan cache, and returns a summary the
-  command renders; both front-ends then update `session.repo_path` /
-  `project_kind` / `index_head`.
+  command renders; both front-ends then apply it through ONE helper
+  (`repl.apply_project_summary`: `repo_path` / `project_kind` /
+  `project_hash` / `index_head` / `languages`). The SESSION is the single
+  live source: turn setup, the status bar, and `/compare` read
+  `session.repo_path` / `session.languages` at use time — never a value
+  captured at startup (the summary carries the new project's `languages`).
 - Startup indexing is ONE bounded scan (2026-07-30). `cli._build_chat_indexes`
   calls `fswalk.scan_source_files` once and passes the file list to BOTH
   `build_bm25_index(files=…)` and `build_symbol_index(files=…)`; languages come
@@ -628,8 +657,12 @@ never touches this module.
   builders' no-`files` path is the unchanged unbounded walk the benchmarks use.
 - SESSION WORKING NOTES (`chat/notes.py`, 2026-08-04): luxe remembers what it
   did. On session end — the `finally` of BOTH front-ends, BEFORE the model
-  unload so the backend is still usable — and on demand via `/note`, ONE
-  non-agentic `backend.chat` call (never `run_single`; no tools are needed)
+  unload so the backend is still usable (the TUI's quit action therefore
+  never unloads itself; quitting MID-TURN sets the cancel token and leaves the
+  models loaded for the unwinding request) — and on demand via `/note`, ONE
+  non-agentic `backend.chat` call (never `run_single`; no tools are needed;
+  bounded at session end by `notes.EXIT_TIMEOUT_S` on a daemon thread, `/note`
+  unbounded)
   distils the DETERMINISTIC FOLD of the conversation (`chat/summarize.py`,
   never the raw transcript) into 3–6 bullets using the registry's
   `SESSION_NOTES_HINT`, RECOVERS the bullet list from the reply in Python
@@ -785,7 +818,12 @@ never touches this module.
   `model_path`; a remote endpoint is UNKNOWN and keeps tools ON — a detection gap
   must never disarm the agent.
 - `/clear` resets the TURN-DERIVED status too (ctx%, cache, steps, wall, tok/s,
-  has_turn) plus pending attachments, via `commands.reset_turn_status`. Window
+  has_turn) plus pending attachments, via `commands.reset_turn_status`. It also
+  drops everything that would carry the old conversation into the next
+  prompt — the working-state ledger (`ledger.reset`), `plan_text`, a pending
+  plan/goal — and appends a kind="clear" transcript record; `resume._pair_turns`
+  restarts at the last one, so `/resume` honours the cut. `session.turn_offset`
+  keeps run ids unique across it. Window
   size, slot, model, and mode flags survive — those are settings, not history.
   `CommandContext.status` exists for exactly this.
 - `/theme preview` renders THIS session's status bar + a tool line + a diff line
@@ -927,7 +965,18 @@ never touches this module.
   instead. Detach the debug-log handler (`CommandContext.session_log`) BEFORE
   the rmtree: it holds `debug.log` open inside that directory. Turning it OFF
   resumes writing from the next call; the turns taken while it was on are a
-  permanent hole in the transcript and the command says so.
+  permanent hole in the transcript and the command says so. OFF also REWRITES
+  `meta.json` (`session_store.restore_meta`) and re-attaches the debug log IN
+  PLACE on the front-end's handle (`debuglog.reinstall`) — without them the
+  transcript written afterwards was an orphan no `/resume` could find.
+- The ledger is live state, not only a record (goal completion, `/diff`,
+  `<working_state>`), so an ephemeral session keeps it IN MEMORY
+  (`ledger._MEMORY`); ON mid-session seeds it from disk before the purge, OFF
+  drops it. `/theme <name>` switches without persisting `~/.luxe/theme`;
+  `/memory add|promote|forget` REFUSE and say nothing was saved (they used to
+  print "✓ saved" and write nothing); `/memory edit` will not create a missing
+  `.luxe/memory.md`. `/resume` records the resumed turns into THIS session's
+  transcript (`resumed_from`) and refuses the same id twice.
 - Status bar: an `eph on` chip at priority 1 (protected from the responsive
   drop, like git/ctx/model), shown ONLY when on — unlike write/bash/web, whose
   "off" is a safe default worth confirming, this is off in every ordinary
@@ -1034,14 +1083,20 @@ never touches this module.
   (slot, e.g. `chat`) is its own segment, then the model name pinned last. The
   startup banner is intentionally minimal (session + /help) — repo/slot/model/mode
   are NOT reprinted there since the bar already shows them. `fields()` (→ `list[Segment]`, each
-  with a drop-`priority`) is the single source of order/content; `toolbar()`
-  (prompt_toolkit bottom bar — its grey/reversed background is overridden to
-  `bg:default` so the bar sits on the terminal background), `status_markup()`
-  (plain-input fallback), and `to_rich_text()`/`LiveActivity` (in-turn live bar)
-  all render from it so they never drift. `fit(segs, width)` is responsive: it
+  with a drop-`priority`) is the single source of order/content;
+  `status_markup()` (line REPL) and `to_rich_text()`/`LiveActivity` (TUI bar,
+  in-turn live bar) all render from it so they never drift. (The unused
+  prompt_toolkit `toolbar()` renderer was removed 2026-09.) `fit(segs, width)` is responsive: it
   drops low-value segments (cache=8, start/last=7) highest-first, then
   middle-ellipsises the elastic path; path/git/ctx/model (priority 1–2) protected.
-  Git state is TTL-cached to avoid per-keystroke `git` spawns.
+  Git state is TTL-cached to avoid per-keystroke `git` spawns, and RENDER
+  paths (the TUI bar, `LiveActivity`) refresh it on a background thread
+  (`git_info(background=True)`, repaint via `on_git_update`) — a render does
+  no I/O. The `/ctx` clamp on a pending override reads `StatusState.ctx_ceiling`
+  (seeded at startup, refreshed per turn / `/ctx` / `/backend`), never
+  `slots.ctx_ceiling`, which can GET the endpoint catalog; a FAILED catalog
+  GET is remembered for `slots._CATALOG_RETRY_S` instead of re-paying the
+  connect timeout on every caller.
 - Colours follow the user's ACTIVE Claude statusline theme, resolved LIVE by
   `chat/theme.py`: read the theme name (`CLAUDE_STATUSLINE_THEME` env →
   `~/.claude/statusline-theme` → `claude-dark`), import the user's

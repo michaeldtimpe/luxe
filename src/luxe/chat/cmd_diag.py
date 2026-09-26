@@ -10,6 +10,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from rich.markup import escape
+
 from luxe import textfmt
 from luxe.chat import cost as cost_mod
 from luxe.chat import modelcaps
@@ -80,7 +82,7 @@ def _status(args, ctx: CommandContext) -> CommandResult:
     width = max(len(k) for k, _ in rows)
     ctx.console.print("[bold]Session[/]")
     for key, val in rows:
-        ctx.console.print(f"  [dim]{key.ljust(width)}[/]  {val}")
+        ctx.console.print(f"  [dim]{key.ljust(width)}[/]  {escape(val)}")
     return CommandResult(handled=True)
 
 
@@ -222,18 +224,18 @@ def _repair(args, ctx: CommandContext) -> CommandResult:
     res = repair_omlx(base_url=slots.backend.base_url,
                       health=slots.backend.health, engine=engine, force=force)
     if not res.attempted:
-        ctx.console.print(f"[yellow]· no restart: {res.reason}[/]")
+        ctx.console.print(f"[yellow]· no restart: {escape(str(res.reason))}[/]")
         if not force:
             ctx.console.print("[dim]  /repair --force restarts it anyway "
                               "(local, brew-installed oMLX only)[/]")
         return CommandResult(handled=True)
     slots.stats.repairs += 1
     for step in res.steps:
-        ctx.console.print(f"  [dim]·[/] {step}")
+        ctx.console.print(f"  [dim]·[/] {escape(str(step))}")
     if res.ok:
-        ctx.console.print(f"[green]✓ {res.detail}[/]")
+        ctx.console.print(f"[green]✓ {escape(str(res.detail))}[/]")
     else:
-        ctx.console.print(f"[red]✗ {res.detail}[/] — `brew services info omlx`, "
+        ctx.console.print(f"[red]✗ {escape(str(res.detail))}[/] — `brew services info omlx`, "
                           "`tail ~/.omlx/omlx.log`")
     return CommandResult(handled=True)
 
@@ -354,7 +356,7 @@ def _net(args, ctx: CommandContext) -> CommandResult:
     try:
         report = netdiag.full_report(ctx.slots.cfg, host=host)
     except Exception as e:
-        ctx.console.print(f"[red]✗ net report failed: {e}[/]")
+        ctx.console.print(f"[red]✗ net report failed: {escape(str(e))}[/]")
         return CommandResult(handled=True)
     textfmt.render_ok_lines(ctx.console, netdiag.render_lines(report))
     style = "green" if report.ladder.verdict == netdiag.V_OK else "yellow"
@@ -380,7 +382,7 @@ def _planeproxy(args, ctx: CommandContext) -> CommandResult:
     try:
         report = planeproxy.full_report(check=check)
     except Exception as e:
-        ctx.console.print(f"[red]✗ planeproxy report failed: {e}[/]")
+        ctx.console.print(f"[red]✗ planeproxy report failed: {escape(str(e))}[/]")
         return CommandResult(handled=True)
     textfmt.render_ok_lines(ctx.console, planeproxy.render_lines(report))
     return CommandResult(handled=True)
@@ -405,7 +407,7 @@ def _claude(args, ctx: CommandContext) -> CommandResult:
         report = claudecode.full_report(check=check,
                                         repo_path=ctx.session.repo_path)
     except Exception as e:
-        ctx.console.print(f"[red]✗ claude report failed: {e}[/]")
+        ctx.console.print(f"[red]✗ claude report failed: {escape(str(e))}[/]")
         return CommandResult(handled=True)
     textfmt.render_ok_lines(ctx.console, claudecode.render_lines(report))
     return CommandResult(handled=True)
