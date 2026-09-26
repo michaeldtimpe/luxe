@@ -253,3 +253,44 @@ def test_audit_log_redacts_secrets(monkeypatch, tmp_path):
     last = audit[-1]
     assert last["args"]["confirm_token"] == "[redacted]"
     assert last["outcome"] == "accepted"
+
+
+# --- token comparison / serve wiring ---------------------------------------
+
+def test_confirm_token_is_compared_in_constant_time(monkeypatch):
+    """`!=` leaks the matching prefix length through timing; the bearer
+    secret must go through hmac.compare_digest."""
+    monkeypatch.setenv("LUXE_MCP_TOKEN", "right-token")
+    calls = []
+    real = srv.hmac.compare_digest
+    monkeypatch.setattr(srv.hmac, "compare_digest",
+                        lambda a, b: calls.append((a, b)) or real(a, b))
+    assert _check_confirm_token("right-token") == (True, "")
+    ok, _msg = _check_confirm_token("wrong")
+    assert not ok and len(calls) == 2
+
+
+@pytest.mark.parametrize("argv,expected_port", [
+    (["serve", "--transport", "sse", "--port", "9123"], 9123),
+    (["serve", "--transport", "sse"], 8765),     # NOT FastMCP's 8000 (= oMLX)
+])
+def test_serve_sse_binds_the_requested_port(monkeypatch, argv, expected_port):
+    from types import SimpleNamespace
+
+    from click.testing import CliRunner
+
+    from luxe.cli import main
+
+    seen = {}
+
+    class _Server:
+        settings = SimpleNamespace(port=8000, host="127.0.0.1")
+
+        def run(self, transport):
+            seen["transport"] = transport
+            seen["port"] = self.settings.port
+
+    monkeypatch.setattr(srv, "build_server", lambda **kw: _Server())
+    result = CliRunner().invoke(main, argv)
+    assert result.exit_code == 0, result.output
+    assert seen == {"transport": "sse", "port": expected_port}

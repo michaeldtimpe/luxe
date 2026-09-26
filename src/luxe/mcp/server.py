@@ -24,6 +24,7 @@ from __future__ import annotations
 from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 
+import hmac
 import json
 import os
 import time
@@ -136,7 +137,9 @@ def _check_confirm_token(token: str) -> tuple[bool, str]:
         return False, "LUXE_MCP_TOKEN env var not set on the server"
     if not token:
         return False, "missing confirm_token"
-    if token != expected:
+    # Constant-time: `!=` returns at the first differing byte, which leaks how
+    # much of a guessed bearer secret was right.
+    if not hmac.compare_digest(token.encode(), expected.encode()):
         return False, "confirm_token does not match LUXE_MCP_TOKEN"
     return True, ""
 
