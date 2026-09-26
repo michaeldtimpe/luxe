@@ -14,6 +14,21 @@ from __future__ import annotations
 from luxe.tools.base import ToolDef
 from luxe.web.fetch import WebError
 
+# `max_chars` is model-set. Unbounded it could ask for a whole 2 MB page in
+# one tool result (or a negative number, which sliced from the END); the
+# ceiling keeps one result well inside a chat window.
+MIN_MAX_CHARS = 1_000
+MAX_MAX_CHARS = 50_000
+
+
+def _clamp_chars(value, default: int) -> int:
+    """`max_chars` as an int in [MIN_MAX_CHARS, MAX_MAX_CHARS]; junk → default."""
+    try:
+        n = int(value) if value not in (None, "", 0) else default
+    except (TypeError, ValueError):
+        n = default
+    return max(MIN_MAX_CHARS, min(n, MAX_MAX_CHARS))
+
 _FETCH_DESC = (
     "Fetch a web page or file over HTTP(S) and return its readable content as "
     "markdown. Use this to read documentation, articles, RFCs, source files, "
@@ -43,7 +58,8 @@ _FETCH_PARAMS = {
         },
         "max_chars": {
             "type": "integer",
-            "description": "Cap on returned characters (default 20000).",
+            "description": "Cap on returned characters (default 20000, "
+                           "range 1000-50000).",
         },
     },
     "required": ["url"],
@@ -101,7 +117,7 @@ def make_web_fetch_tool():
         url = str(args.get("url") or "").strip()
         if not url:
             return "", "web_fetch: `url` is required"
-        max_chars = int(args.get("max_chars") or 20_000)
+        max_chars = _clamp_chars(args.get("max_chars"), 20_000)
         render = bool(args.get("render"))
         wait_for = str(args.get("wait_for") or "").strip()
         try:
@@ -194,7 +210,8 @@ _PAGE_PARAMS = {
         "direction": {"type": "string", "enum": ["up", "down"],
                       "description": "For scroll (default down)."},
         "max_chars": {"type": "integer",
-                      "description": "Cap on returned content (default 12000)."},
+                      "description": "Cap on returned content (default "
+                                     "12000, range 1000-50000)."},
     },
     "required": ["action"],
 }
@@ -214,7 +231,7 @@ def make_web_page_tool():
         if action == "close":
             page_mod.close_session()
             return "page session closed", None
-        max_chars = int(args.get("max_chars") or 12_000)
+        max_chars = _clamp_chars(args.get("max_chars"), 12_000)
         try:
             snap = page_mod.get_session().op(
                 action,

@@ -41,11 +41,8 @@ class SearchHit:
 
 
 def _key_for(p: Provider) -> str:
-    from luxe.secrets import resolve_api_key
-    try:
-        return resolve_api_key(p.env_name) or ""
-    except Exception:
-        return ""
+    from luxe.web import keys
+    return keys.resolve(p.env_name)
 
 
 def active_provider() -> tuple[Provider, str] | None:
@@ -68,17 +65,27 @@ def missing_key_message() -> str:
             "to ~/.luxe/secrets.env (the NAME goes in config, never the value).")
 
 
-def _search_brave(query: str, key: str, count: int) -> list[SearchHit]:
-    import httpx
+class _HTTPStatus(Exception):
+    def __init__(self, status: int):
+        super().__init__(f"HTTP {status}")
+        self.status = status
 
-    r = httpx.get(
-        "https://api.search.brave.com/res/v1/web/search",
-        params={"q": query, "count": count},
-        headers={"Accept": "application/json", "X-Subscription-Token": key},
-        timeout=SEARCH_TIMEOUT_S,
-    )
-    r.raise_for_status()
-    data = r.json()
+
+def _api(method: str, url: str, **kw) -> dict:
+    """JSON from a provider through fetch's guarded, bounded reader."""
+    from luxe.web import fetch as _fetch
+
+    status, data = _fetch.json_request(method, url, timeout_s=SEARCH_TIMEOUT_S,
+                                       **kw)
+    if status >= 400:
+        raise _HTTPStatus(status)
+    return data if isinstance(data, dict) else {}
+
+
+def _search_brave(query: str, key: str, count: int) -> list[SearchHit]:
+    data = _api("GET", "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": count},
+                headers={"X-Subscription-Token": key})
     hits = []
     for item in (data.get("web", {}) or {}).get("results", [])[:count]:
         hits.append(SearchHit(
@@ -90,15 +97,8 @@ def _search_brave(query: str, key: str, count: int) -> list[SearchHit]:
 
 
 def _search_tavily(query: str, key: str, count: int) -> list[SearchHit]:
-    import httpx
-
-    r = httpx.post(
-        "https://api.tavily.com/search",
-        json={"api_key": key, "query": query, "max_results": count},
-        timeout=SEARCH_TIMEOUT_S,
-    )
-    r.raise_for_status()
-    data = r.json()
+    data = _api("POST", "https://api.tavily.com/search",
+                json={"api_key": key, "query": query, "max_results": count})
     hits = []
     for item in data.get("results", [])[:count]:
         hits.append(SearchHit(
@@ -126,12 +126,15 @@ def search(query: str, *, count: int = DEFAULT_COUNT) -> tuple[str, list[SearchH
     count = max(1, min(int(count or DEFAULT_COUNT), MAX_COUNT))
     try:
         hits = _IMPLS[provider.name](query, key, count)
-    except Exception as e:
-        import httpx
-        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (401, 403):
+    except _HTTPStatus as e:
+        if e.status in (401, 403):
             raise WebError(
                 f"{provider.name} rejected the API key in {provider.env_name} "
-                f"(HTTP {e.response.status_code}) — check it is current") from e
+                f"(HTTP {e.status}) — check it is current") from e
+        raise WebError(f"{provider.name} search failed: HTTP {e.status}") from e
+    except WebError as e:
+        raise WebError(f"{provider.name} search failed: {e}") from e
+    except Exception as e:
         raise WebError(f"{provider.name} search failed: {type(e).__name__}: {e}") from e
     return provider.name, hits
 
