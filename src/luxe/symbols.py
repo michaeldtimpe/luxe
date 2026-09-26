@@ -147,18 +147,30 @@ def _extract_name(node: Any, src: bytes) -> str:
 
 def _walk_for_symbols(node: Any, src: bytes, kind_map: dict[str, str],
                       lang: str, rel_path: str, out: list[Symbol]) -> None:
-    if node.type in kind_map:
-        name = _extract_name(node, src)
-        out.append(Symbol(
-            name=name,
-            kind=kind_map[node.type],
-            language=lang,
-            path=rel_path,
-            start_line=node.start_point[0] + 1,
-            end_line=node.end_point[0] + 1,
-        ))
-    for child in node.children:
-        _walk_for_symbols(child, src, kind_map, lang, rel_path, out)
+    """Pre-order walk collecting symbols — ITERATIVE, via a TreeCursor.
+
+    It recursed once per tree level, so a single deeply nested file (a long
+    method chain, generated nested arrays) raised RecursionError and killed
+    the whole index build. The cursor visits nodes in the same pre-order the
+    recursion did, so symbol order is unchanged.
+    """
+    cursor = node.walk()
+    while True:
+        n = cursor.node
+        if n.type in kind_map:
+            out.append(Symbol(
+                name=_extract_name(n, src),
+                kind=kind_map[n.type],
+                language=lang,
+                path=rel_path,
+                start_line=n.start_point[0] + 1,
+                end_line=n.end_point[0] + 1,
+            ))
+        if cursor.goto_first_child():
+            continue
+        while not cursor.goto_next_sibling():
+            if not cursor.goto_parent():
+                return
 
 
 def _parse_file(path: Path, lang: str) -> list[Symbol]:
@@ -207,7 +219,10 @@ def build_symbol_index(
         lang = _detect_language(p.suffix)
         if lang is None:
             continue
-        file_syms = _parse_file(p, lang)
+        try:
+            file_syms = _parse_file(p, lang)
+        except Exception:   # noqa: BLE001 — one bad file must not sink the index
+            file_syms = []
         parsed += 1
         if on_progress is not None and parsed % 200 == 0:
             on_progress(parsed)
@@ -283,6 +298,20 @@ def find_symbol_def() -> ToolDef:
     )
 
 
+#: Ceiling on `find_symbol`'s k (default 50).
+_FIND_SYMBOL_MAX_K = 200
+
+
+def _clamp_k(raw: Any, default: int) -> int:
+    """Model-supplied `k` → [1, _FIND_SYMBOL_MAX_K]; a non-integer (which
+    used to raise out of `int()`) falls back to the default."""
+    try:
+        k = int(raw)
+    except (TypeError, ValueError):
+        k = default
+    return max(1, min(k, _FIND_SYMBOL_MAX_K))
+
+
 def _find_symbol_fn(args: dict[str, Any]) -> tuple[str, str | None]:
     if _index is None:
         return "", "symbol index not built (set_index must be called first)"
@@ -291,7 +320,7 @@ def _find_symbol_fn(args: dict[str, Any]) -> tuple[str, str | None]:
         return "", "name is required"
     kind = str(args.get("kind", "any")).strip().lower() or "any"
     language = str(args.get("language", "any")).strip().lower() or "any"
-    k = int(args.get("k", 50))
+    k = _clamp_k(args.get("k", 50), default=50)
 
     hits = _index.find(name=name, kind=kind, language=language, k=k)
 

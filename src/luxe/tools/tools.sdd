@@ -36,8 +36,21 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   60/600s timeout; `on_start` fires with the command string BEFORE execution
   (dispatch-time visibility) and is exception-guarded — a broken UI callback
   never fails the tool. `cancel=None` (the bench default, and the only value
-  `TOOL_FNS["bash"]` can produce) keeps the original `subprocess.run` path
-  byte-identically; the timeout is enforced on both paths
+  `TOOL_FNS["bash"]` can produce) runs one blocking `Popen.communicate`;
+  the timeout is enforced on both paths. Since 2026-09-26 BOTH paths spawn
+  with start_new_session and a timeout kills the process GROUP
+  (`_kill_group`): `subprocess.run`'s timeout killed only `sh -c`, leaving
+  anything it started running, orphaned. Output/exit/timeout strings are
+  unchanged (`tests/test_bash_hardening.py`)
+
+- `_validate_command` tokenizes with `_shell_tokens` (shlex,
+  `punctuation_chars=True`, `commenters=""`), not `shlex.split` (2026-09-26):
+  whitespace-only splitting let an operator glued to a word through
+  (`echo a;touch X`, `a&&b`, `echo hi>X`), and shlex.shlex's default `#`
+  comment handling truncated `echo a#;touch X` to `echo a`. Unquoted
+  newlines/CRs are refused (a newline inside quotes stays an argument).
+  Command substitution is still checked on the whitespace tokens, where
+  `$(` survives intact
 
 - `read_file`'s size gate applies to UNWINDOWED reads only (2026-08-11). A
   call that passes `limit` is served at any file size — `_MAX_FILE_SIZE`
@@ -101,7 +114,10 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   drained it; under a TTY it blocks for the whole timeout. Every one of those
   spawns also decodes with `errors="replace"` — one non-UTF-8 byte used to
   raise `UnicodeDecodeError` and discard the entire captured output
-  (`luxe.fswalk` set the precedent)
+  (`luxe.fswalk` set the precedent). Extended 2026-09-26 to the non-tool
+  spawns that had been missed: `gitcmd.run`/`run_in`,
+  `repo_index._git_recent_files` (which also gained a 30s timeout) and
+  `secrets._from_keychain` (`tests/test_spawn_stdin.py`)
 
 - Tool truncation is ANNOUNCED, never silent (2026-08-12). `_grep_result`
   reports both of grep's caps — ripgrep's per-file `--max-count=150` and the
@@ -228,6 +244,26 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   byte-identical: a benchmark that can reach GitHub's API is not
   reproducible, and the default description is golden-pinned. Remote
   mutations via gh ride GIT_WORKFLOW_HINT's explicit-ask rule
+
+- ONE path canonicalizer (2026-09-26): `fs._resolve_rel(rel) -> (abs,
+  canonical_rel)` resolves a model-supplied path, raises `PermissionError`
+  when it leaves the repo (`is_relative_to`, never a string `startswith` — a
+  sibling `../repo2` of `.../repo` shares the prefix), and returns the
+  repo-relative posix form. Every fs tool and the analysis tools' `path`
+  argument go through it BEFORE any guard, and the role-path and SpecDD
+  Forbids guards judge `canonical_rel`, never the raw string (raw
+  `src/../tests/x.py` or absolute `<root>/tests/x.py` used to walk past
+  `Forbids: tests/**`). Success/refusal messages keep quoting the model's own
+  spelling, so ordinary relative paths are byte-identical. `_safe` is now a
+  thin wrapper over it (`tests/test_tool_path_canonicalization.py`)
+- Analysis `path` arguments never reach argv as options (2026-09-26): a
+  leading `-` is refused, the path must pass `_resolve_rel`, and ruff/mypy/
+  bandit get it behind `--` (`lint(path="--fix")` used to REWRITE files from
+  a read-only tool). `security_scan` reports bandit's `results` list (report
+  via `-o` tempfile + `-q`), `deps_audit` audits the REPO (`-r
+  requirements*.txt`, else the project dir, else `skipped`) and flattens
+  `dependencies[].vulns`; both go through the same 150-finding announced cap
+  (`tests/test_analysis_args.py`)
 
 ## Must not
 - Bypass `_safe()` path scoping in any new tool
