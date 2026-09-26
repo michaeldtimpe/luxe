@@ -346,7 +346,7 @@ def test_orphan_file_gate_flags_duplicate_stem_in_same_dir(git_repo: Path):
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
     assert not r.expected_outcome_passed
-    assert any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+    assert any(g["name"] == "orphan_file" for g in r.gates_triggered)
     assert "duplicates existing" in r.expected_outcome_detail
 
 
@@ -362,7 +362,7 @@ def test_orphan_file_gate_flags_unreferenced_new_source(git_repo: Path):
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
     assert not r.expected_outcome_passed
-    assert any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+    assert any(g["name"] == "orphan_file" for g in r.gates_triggered)
 
 
 def test_orphan_file_gate_does_not_fire_when_new_file_is_imported(git_repo: Path):
@@ -381,7 +381,7 @@ def test_orphan_file_gate_does_not_fire_when_new_file_is_imported(git_repo: Path
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
     assert r.expected_outcome_passed
-    assert not any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+    assert not any(g["name"] == "orphan_file" for g in r.gates_triggered)
 
 
 def test_orphan_file_gate_skips_document_tasks(git_repo: Path):
@@ -399,7 +399,7 @@ def test_orphan_file_gate_skips_document_tasks(git_repo: Path):
                       citations_unresolved=0, citations_total=0, base_sha=base)
     # Doc tasks pass even when the new file is technically an orphan.
     assert r.expected_outcome_passed
-    assert not any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+    assert not any(g["name"] == "orphan_file" for g in r.gates_triggered)
 
 
 def test_orphan_file_gate_skips_non_source_additions(git_repo: Path):
@@ -415,7 +415,7 @@ def test_orphan_file_gate_skips_non_source_additions(git_repo: Path):
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
     assert r.expected_outcome_passed
-    assert not any(g["gate"] == "orphan_file" for g in r.gates_triggered)
+    assert not any(g["name"] == "orphan_file" for g in r.gates_triggered)
 
 
 def test_summarize_counts_pass_fail():
@@ -1152,3 +1152,133 @@ class TestGitFailureIsAnErrorNotAVerdict:
         from benchmarks.maintain_suite.grade import _changed_files
         assert _changed_files(git_repo, base) == []
         assert _diff_shortstat(git_repo, base) == (0, 0)
+
+
+# --- 2026-09 grader audit ------------------------------------------------
+
+def _seed_py_tests(repo: Path) -> None:
+    """A repo whose test command runs ONE named file (the neon-rain shape:
+    `npm test` = node tests/all-personas.test.js)."""
+    _commit_added_files(repo, {
+        "tests/test_main.py":
+            "import sys; sys.path.insert(0, 'src')\n"
+            "from main import add\nassert add(1, 2) == 3\n",
+    }, "existing suite")
+
+
+_RUN_ONE = "python3 tests/test_main.py"
+
+
+def test_vacuous_gate_ignores_a_test_the_command_never_runs(git_repo: Path):
+    """A correct implementation plus a new test file the fixture's command
+    does not load used to fail as vacuous (the base run passes trivially)."""
+    _seed_py_tests(git_repo)
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "src/main.py": "def add(a, b): return a + b\ndef sub(a, b): return a - b\n",
+        "tests/test_sub.py": "import sys; sys.path.insert(0, 'src')\n"
+                             "from main import sub\nassert sub(3, 1) == 2\n",
+    }, "impl + unwired test")
+    fix = _f("vac-unwired", "tests_pass", task_type="implement", command=_RUN_ONE)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed, r.expected_outcome_detail
+    assert "vacuous_test" not in _gate_names(r)
+    assert "unwired" in r.expected_outcome_detail
+
+
+def test_vacuous_gate_still_fires_on_a_run_test_that_passes_at_base(git_repo: Path):
+    _seed_py_tests(git_repo)
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "src/main.py": "def add(a, b): return a + b\ndef sub(a, b): return a - b\n",
+        "tests/test_main.py": "import sys; sys.path.insert(0, 'src')\n"
+                              "from main import add\nassert add(2, 2) == 4\n",
+    }, "impl + vacuous edit of the run test")
+    fix = _f("vac-real", "tests_pass", task_type="implement", command=_RUN_ONE)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert "vacuous_test" in _gate_names(r)
+    # ONE key for every gate entry
+    assert all("name" in g and "gate" not in g for g in r.gates_triggered)
+
+
+def test_vacuous_gate_is_implement_only(git_repo: Path):
+    _seed_py_tests(git_repo)
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "src/main.py": "def add(a, b):\n    return a + b\n",
+        "tests/test_main.py": "import sys; sys.path.insert(0, 'src')\n"
+                              "from main import add\nassert add(2, 2) == 4\n",
+    }, "bugfix-shaped change")
+    fix = _f("vac-bugfix", "tests_pass", task_type="bugfix", command=_RUN_ONE)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert "vacuous_test" not in _gate_names(r)
+
+
+def test_pure_rename_is_not_credited_as_new_content(git_repo: Path):
+    _commit_added_files(git_repo, {
+        "docs/SETUP.md": "# Setup\n\nRun docker compose up.\nThen open the dashboard.\n",
+    }, "doc at base")
+    base = _base_sha(git_repo)
+    subprocess.run(["git", "mv", "docs/SETUP.md", "docs/QUICKSTART.md"],
+                   cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "rename only"], cwd=git_repo, check=True)
+    fix = _f("rename", "regex_present", task_type="document",
+             pattern=r"(?i)docker[\s-]?compose", min_added_lines=1)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed, r.expected_outcome_detail
+
+
+def test_rename_with_real_edit_still_credits_the_added_lines(git_repo: Path):
+    _commit_added_files(git_repo, {
+        "docs/SETUP.md": "# Setup\n\nline one\nline two\nline three\nline four\n",
+    }, "doc at base")
+    base = _base_sha(git_repo)
+    subprocess.run(["git", "mv", "docs/SETUP.md", "docs/QUICKSTART.md"],
+                   cwd=git_repo, check=True)
+    p = git_repo / "docs" / "QUICKSTART.md"
+    p.write_text(p.read_text() + "Run docker compose up.\n")
+    subprocess.run(["git", "commit", "-q", "-am", "rename + edit"], cwd=git_repo, check=True)
+    fix = _f("rename-edit", "regex_present", task_type="document",
+             pattern=r"(?i)docker[\s-]?compose")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed, r.expected_outcome_detail
+
+
+def test_regex_absent_fails_when_an_unrelated_file_was_edited(git_repo: Path):
+    _commit_added_files(git_repo, {"src/legacy.py": "x = 1  # TODO remove\n"}, "target")
+    base = _base_sha(git_repo)
+    _make_diff(git_repo)  # edits src/main.py only; legacy.py keeps the TODO
+    fix = _f("absent-unrelated", "regex_absent", pattern=r"TODO")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert "legacy.py" in r.expected_outcome_detail
+
+
+def test_regex_absent_deleting_the_target_is_a_gate(git_repo: Path):
+    _commit_added_files(git_repo, {"src/legacy.py": "x = 1  # TODO remove\n"}, "target")
+    base = _base_sha(git_repo)
+    subprocess.run(["git", "rm", "-q", "src/legacy.py"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "delete target"], cwd=git_repo, check=True)
+    fix = _f("absent-deleted", "regex_absent", pattern=r"TODO")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert "deleted_target" in _gate_names(r)
+
+
+def test_regex_absent_passes_when_the_target_is_cleaned(git_repo: Path):
+    _commit_added_files(git_repo, {"src/legacy.py": "x = 1  # TODO remove\n"}, "target")
+    base = _base_sha(git_repo)
+    (git_repo / "src" / "legacy.py").write_text("x = 1\n")
+    subprocess.run(["git", "commit", "-q", "-am", "clean"], cwd=git_repo, check=True)
+    fix = _f("absent-clean", "regex_absent", pattern=r"TODO")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed, r.expected_outcome_detail
