@@ -104,7 +104,9 @@ never touches this module.
   a session running a different model than asked is the failure mode this
   kills. Manual `/model` overrides bypass the reroute; an endpoint-down
   BackendError does NOT degrade (that's a backend problem, `/backend` is the
-  escape hatch)
+  escape hatch). A manifest whose fallback IS its main (neo: "same model,
+  told loudly") reroutes nothing but still ANNOUNCES the failure, once
+  (`slots._announce_same_model`) — it used to return silently
 - Multi-slot fan-out activates ONLY on explicit `configs/chat.yaml` `slots:` —
   the sanctioned, opt-in exception to luxe.sdd "no per-task model selection",
   scoped to this front-end
@@ -125,6 +127,19 @@ never touches this module.
   one real generation + one tool call on main, one generation on the fallback
   (exercises the swap).
   Minutes, not a bench; exit 0/1; run it after provisioning and on a schedule.
+  **The kit drill follows the DRILL rule too (2026-09-26):** `run_smoke`
+  takes the backend name, builds against that entry (or `--base-url`), and
+  resolves the manifest of `origin.host_for_endpoint(url)` — before, `luxe
+  smoke --backend m5` smoked THIS host's endpoint and pair. A billable entry
+  is refused as a target. The `weights` step reads the oMLX store only on a
+  local `engine: omlx` endpoint (llama-server loads its preset's files; the
+  main turn is the proof there), and every fix string comes from
+  `inspection.endpoint_fixes(entry)` — the engine-aware set `/doctor` uses.
+  EVERY smoke/drill unload (pre-ping residency, drill turns, the CLI
+  teardown) is gated on `smoke.endpoint_is_shared` (the entry's
+  `is_shared()`, or loopback-ness for a `--base-url` elsewhere): a shared
+  endpoint's other residents are other hosts' live sessions. Liveness is
+  `health(timeout_s=4)`, never the generation-sized read timeout.
   The `oMLX build` step (`luxe.staleproc`, shared with `/doctor` — same
   invariants, see the `/doctor` bullet) is diagnostic and WARN-only: it must
   never flip the exit code on its own, because its job is to EXPLAIN the turn
@@ -141,12 +156,15 @@ never touches this module.
   ACTS on that ONE signature: when the drill fails and either the `oMLX
   build` line is stale or a failed turn's body carries the stale-load
   signature (`No module named` / `[Errno 2]` / `cannot import name` /
-  `unavailable after a previous load failure`), it runs
+  `unavailable after a previous load failure`) — except on a turn whose
+  model's own `weights` step already failed (`[Errno 2]` is also what a
+  dangling entry says; a restart cannot put weights back) — it runs
   `repair_omlx` — `brew services restart omlx`, poll `/health`, confirm the
   new pid is on the installed tree — prints every step, and RE-RUNS the
   drill; the second table is the verdict. `--no-fix` = diagnose only. The
   same repair is `luxe ready --fix` (ready itself stays read-only),
-  `luxe repair [--force]` (exit 0 recovered / 1 not recovered / 2 refused),
+  `luxe repair [--force]` (exit 0 recovered / 1 not recovered / 2 refused —
+  the cooldown is per PROCESS, so a fresh `luxe repair` never hits it),
   `/repair [--force]` in a session, and `SlotManager.try_self_repair`,
   which both front-ends call on a turn-level BackendError BEFORE
   `note_turn_failure` — a stale process fails main AND fallback with the
@@ -156,7 +174,11 @@ never touches this module.
   failure without the signature (`--force` overrides only the signature);
   ONE restart per 5-minute cooldown per process — a server still broken
   after a restart is a different problem and a second attempt would hide
-  it; never raises; never loops a turn (the notice says `/retry`). This is
+  it; the cooldown arms only once brew actually RAN (brew is invoked as
+  `<staleproc prefix>/bin/brew`, since a non-login ssh shell has no
+  Homebrew on PATH, and a restart that never happened must not lock out
+  the next one); the "stale build line" test is ONE predicate,
+  `repair.is_stale_build_line` (smoke report + ready --fix); never raises; never loops a turn (the notice says `/retry`). This is
   the on-demand counterpart of the standing "no cron/launchd watchdog"
   decision, not a reversal of it: nothing restarts anything unless an
   operator or a drill reached for the kit and hit the signature
@@ -740,7 +762,15 @@ never touches this module.
   `/doctor` returns ordered `Check`s (endpoint → build → key → model → weights
   → manifest → disk → update → index → freshness → tree → mode → TUI); every
   WARN/FAIL carries the fix, an unreachable endpoint is a FAIL not an
-  exception, and nothing it calls may raise. The `build` check
+  exception, and nothing it calls may raise. The endpoint line, the chat-model
+  roster check, the manifest `served:` check and a remote origin all come from
+  ONE bounded (`list_models(timeout_s=4)`) catalog GET (2026-09-26; it was up
+  to four). The oMLX-store `weights:<id>` lines run on a local oMLX only; a
+  DANGLING entry's fix names the HF repo its link text points at
+  (`modelstore.hf_repo_for`) so `luxe pull` routes to HuggingFace, and `luxe
+  pull`/`/pull` treat any entry whose weights don't resolve as replaceable
+  without --force. A billable entry's manifest line is OK "n/a" (never "add
+  a hosts: entry"), and the missing-key fix names the ENTRY's variable. The `build` check
   (`luxe.staleproc`, shared with `luxe smoke`) sits directly under the endpoint
   because it EXPLAINS the checks below it: a server left running across a
   `brew upgrade` executes from a deleted Cellar tree, passes health and
