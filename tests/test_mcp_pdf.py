@@ -409,6 +409,121 @@ def test_pdf_print_rejects_junk_page_range(plain: Path, monkeypatch):
                       dry_run=True)
 
 
+@pytest.mark.parametrize("media", ["A4,-o,job-hold-until=indefinite",
+                                   "Letter number-up=4", "A4\nx", ""])
+def test_pdf_print_validates_media(plain: Path, monkeypatch, media):
+    """`media` went into lp's argv verbatim; a comma or space smuggles in
+    further CUPS options."""
+    monkeypatch.setattr(ops, "pdf_printers", lambda: {
+        "printers": [{"name": "Doc_Printer", "state": "idle",
+                      "label_printer": False}],
+        "default": "Doc_Printer", "note": "",
+    })
+    if not media:
+        res = ops.pdf_print(str(plain), printer="Doc_Printer", dry_run=True)
+        assert not any(a.startswith("media=") for a in res["argv"])
+        return
+    with pytest.raises(ops.PdfToolError, match="invalid media"):
+        ops.pdf_print(str(plain), printer="Doc_Printer", media=media,
+                      dry_run=True)
+
+
+def test_pdf_print_accepts_a_real_media_name(plain: Path, monkeypatch):
+    monkeypatch.setattr(ops, "pdf_printers", lambda: {
+        "printers": [{"name": "Doc_Printer", "state": "idle",
+                      "label_printer": False}],
+        "default": "Doc_Printer", "note": "",
+    })
+    res = ops.pdf_print(str(plain), printer="Doc_Printer",
+                        media="na_legal_8.5x14in", dry_run=True)
+    assert "media=na_legal_8.5x14in" in res["argv"]
+
+
+# --- bounded output / hygiene ----------------------------------------------
+
+@needs_poppler
+def test_pdf_text_defaults_to_a_page_window(tmp_path: Path):
+    """No last_page used to mean the whole document in one tool result."""
+    big = _make_plain_pdf(tmp_path / "big.pdf", pages=ops.PDF_TEXT_DEFAULT_PAGES + 5)
+    out = ops.pdf_text(str(big))
+    last = ops.PDF_TEXT_DEFAULT_PAGES
+    assert f"luxe test page {last}" in out["text"]
+    assert f"luxe test page {last + 1}" not in out["text"]
+    assert out["pages"] == f"1-{last}"
+    assert out["total_pages"] == last + 5
+    assert f"of {last + 5}" in out["note"] and "last_page" in out["note"]
+    # An explicit range is honoured as asked, with no window note.
+    tail = ops.pdf_text(str(big), first_page=last + 1, last_page=last + 5)
+    assert f"luxe test page {last + 5}" in tail["text"] and "note" not in tail
+
+
+@needs_poppler
+def test_pdf_to_images_returns_only_this_runs_pages(tmp_path: Path):
+    """The result globbed `<stem>-*` in output_dir: stale images from an
+    earlier run came back too, and a stem like `W9 [2024]` is a glob
+    character class that matched nothing ("produced no images")."""
+    src = _make_plain_pdf(tmp_path / "W9 [2024].pdf", pages=2)
+    outdir = tmp_path / "img"
+    outdir.mkdir()
+    (outdir / "W9 [2024]-7.png").write_bytes(b"stale")
+    res = ops.pdf_to_images(str(src), output_dir=str(outdir), dpi=40)
+    assert res["count"] == 2
+    assert all("W9 [2024]-" in Path(p).name for p in res["images"])
+    assert str(outdir / "W9 [2024]-7.png") not in res["images"]
+    assert not [p for p in outdir.iterdir() if p.name.startswith(".luxe-render")]
+
+
+def test_pdf_to_images_clamps_dpi(plain: Path, tmp_path: Path, monkeypatch):
+    seen = {}
+
+    def _fake_run(argv, **kw):
+        seen["dpi"] = argv[argv.index("-r") + 1]
+        prefix = Path(argv[-1])
+        (prefix.parent / f"{prefix.name}-1.png").write_bytes(b"png")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(ops, "_require_bin", lambda name: name)
+    monkeypatch.setattr(ops, "_run", _fake_run)
+    res = ops.pdf_to_images(str(plain), output_dir=str(tmp_path / "a"),
+                            dpi=5000)
+    assert seen["dpi"] == str(ops.MAX_DPI) and res["dpi"] == ops.MAX_DPI
+    res = ops.pdf_to_images(str(plain), output_dir=str(tmp_path / "b"), dpi=1)
+    assert seen["dpi"] == str(ops.MIN_DPI)
+
+
+def test_pdf_unlock_keeps_the_password_off_argv(locked: Path, monkeypatch):
+    """`ps` shows every process's argv to every local user."""
+    seen = {}
+
+    def _fake_run(argv, **kw):
+        seen["argv"], seen["input_text"] = list(argv), kw.get("input_text")
+        raise ops.PdfToolError("stop here")
+
+    monkeypatch.setattr(ops, "_require_bin", lambda name: name)
+    monkeypatch.setattr(ops, "pdf_info", lambda *a, **k: {
+        "restricted": True, "blocked_actions": []})
+    monkeypatch.setattr(ops, "_run", _fake_run)
+    with pytest.raises(ops.PdfToolError, match="stop here"):
+        ops.pdf_unlock(str(locked), password="hunter2")
+    assert not any("hunter2" in a for a in seen["argv"])
+    assert "--password-file=-" in seen["argv"]
+    assert seen["input_text"] == "hunter2\n"
+
+
+@needs_qpdf
+def test_pdf_unlock_with_a_user_password_via_stdin(tmp_path: Path, form: Path):
+    sealed = tmp_path / "sealed.pdf"
+    subprocess.run(
+        ["qpdf", "--encrypt", "--user-password=secret", "--owner-password=o",
+         "--bits=256", "--", str(form), str(sealed)],
+        check=True, capture_output=True, text=True)
+    res = ops.pdf_unlock(str(sealed), password="secret")
+    assert res["still_encrypted"] is False
+    with pytest.raises(ops.PdfToolError, match="password"):
+        ops.pdf_unlock(str(sealed), output=str(tmp_path / "x.pdf"),
+                       password="wrong")
+
+
 # --- server wiring ---------------------------------------------------------
 
 def test_server_exposes_the_documented_tool_set():
@@ -454,11 +569,18 @@ def test_pdf_tools_are_not_in_the_benchmark_tool_surface():
     assert leaked == [], f"PDF tools leaked into the benchmark surface: {leaked}"
 
 
-def test_default_mcp_config_ships_no_servers():
+def test_default_mcp_config_ships_no_pdf_server():
+    """mcp_pdf.sdd: the PDF server is never registered by default. The file
+    lists other opt-in servers since 2026-08-25 (1925950); this used to
+    assert the list was empty and has been red since that commit."""
     import yaml
     from luxe.mcp.client import default_mcp_config_path
     raw = yaml.safe_load(default_mcp_config_path().read_text())
-    assert raw["client"]["servers"] == []
+    for server in raw["client"]["servers"] or []:
+        blob = " ".join([str(server.get("name", "")),
+                         str(server.get("command", ""))]
+                        + [str(a) for a in server.get("args", []) or []])
+        assert "pdf" not in blob.lower(), server
 
 
 @needs_qpdf

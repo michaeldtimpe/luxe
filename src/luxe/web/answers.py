@@ -25,11 +25,8 @@ MODELS = ("brave", "brave-pro")
 
 
 def _key() -> str:
-    from luxe.secrets import resolve_api_key
-    try:
-        return resolve_api_key(ANSWERS_ENV) or ""
-    except Exception:
-        return ""
+    from luxe.web import keys
+    return keys.resolve(ANSWERS_ENV)
 
 
 def configured() -> bool:
@@ -45,8 +42,7 @@ def missing_key_message() -> str:
 
 def answer(query: str, *, model: str = "") -> str:
     """One grounded answer for `query`. Raises WebError when unusable."""
-    import httpx
-
+    from luxe.web import fetch as _fetch
     from luxe.web.fetch import WebError
 
     query = (query or "").strip()
@@ -64,29 +60,28 @@ def answer(query: str, *, model: str = "") -> str:
                            f"(supported: {', '.join(MODELS)})")
         body["model"] = model
     try:
-        r = httpx.post(
-            ANSWERS_URL,
-            json=body,
-            headers={"Accept": "application/json",
-                     "x-subscription-token": key},
-            timeout=ANSWER_TIMEOUT_S,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code
-        if code in (401, 403):
-            raise WebError(
-                f"brave answers rejected the API key in {ANSWERS_ENV} "
-                f"(HTTP {code}) — check it is current and on the Answers "
-                "plan (a separate subscription from web search)") from e
-        if code == 402:
-            raise WebError("brave answers: payment required (HTTP 402) — "
-                           "the Answers subscription is out of quota") from e
-        raise WebError(f"brave answers failed: HTTP {code}") from e
+        # Same guarded, bounded reader as web_fetch: a total deadline (not a
+        # per-read timeout a trickling server can keep resetting) and a cap.
+        code, data = _fetch.json_request(
+            "POST", ANSWERS_URL, timeout_s=ANSWER_TIMEOUT_S, json=body,
+            headers={"x-subscription-token": key})
+    except WebError as e:
+        raise WebError(f"brave answers failed: {e}") from e
     except Exception as e:
         raise WebError(
             f"brave answers failed: {type(e).__name__}: {e}") from e
+    if code in (401, 403):
+        raise WebError(
+            f"brave answers rejected the API key in {ANSWERS_ENV} "
+            f"(HTTP {code}) — check it is current and on the Answers "
+            "plan (a separate subscription from web search)")
+    if code == 402:
+        raise WebError("brave answers: payment required (HTTP 402) — "
+                       "the Answers subscription is out of quota")
+    if code >= 400:
+        raise WebError(f"brave answers failed: HTTP {code}")
+    if not isinstance(data, dict):
+        data = {}
 
     try:
         content = (data.get("choices") or [{}])[0].get("message", {}) \

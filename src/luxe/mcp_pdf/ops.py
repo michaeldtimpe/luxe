@@ -12,6 +12,13 @@ External binaries (shelled out with argv lists, never a shell string):
   lpstat/lp  — printing (CUPS, ships with macOS)
 
 Python extras (`uv sync --extra pdf`): pypdf, reportlab, pillow.
+
+Passwords never go on qpdf's argv (where `ps` shows them to every local
+user): qpdf reads them from stdin via `--password-file=-`. poppler has no
+equivalent — pdftotext/pdftoppm accept a user password only as `-upw` on
+the command line — so a password given to `pdf_text` / `pdf_to_images` is
+visible in the process table for the life of that one call. Run
+`pdf_unlock` first to avoid that for a file you will read repeatedly.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -84,21 +92,30 @@ _RUN_TIMEOUT_S = 60
 #: Rasterizing is the one operation that is legitimately slow (a long document
 #: at high DPI), so it gets its own budget rather than a false timeout.
 _RENDER_TIMEOUT_S = 300
+#: pdf_to_images DPI bounds: below 36 nothing is legible; above 600 one
+#: letter page is ~34 MP per image and a long document fills the disk.
+MIN_DPI = 36
+MAX_DPI = 600
 
 
 def _run(argv: list[str], *, what: str,
-         timeout: float = _RUN_TIMEOUT_S) -> subprocess.CompletedProcess:
-    """Run argv (shell=False) and raise PdfToolError with stderr on failure."""
+         timeout: float = _RUN_TIMEOUT_S,
+         input_text: str | None = None) -> subprocess.CompletedProcess:
+    """Run argv (shell=False) and raise PdfToolError with stderr on failure.
+
+    `input_text` is written to the child's stdin (a password for
+    `qpdf --password-file=-`); otherwise stdin is closed.
+    """
+    # None of these read input unless told to; qpdf and gs PROMPT for a
+    # password on stdin, which with an inherited stdin means eating the
+    # session's input or hanging until the timeout.
+    stdin_kw: dict = ({"input": input_text} if input_text is not None
+                      else {"stdin": subprocess.DEVNULL})
     try:
         proc = subprocess.run(argv, capture_output=True, text=True,
                               # Tool output can carry raw bytes out of a PDF.
                               errors="replace",
-                              # None of these read input; qpdf and gs PROMPT
-                              # for a password on stdin, which with an
-                              # inherited stdin means eating the session's
-                              # input or hanging until the timeout.
-                              stdin=subprocess.DEVNULL,
-                              timeout=timeout, check=False)
+                              timeout=timeout, check=False, **stdin_kw)
     except subprocess.TimeoutExpired as exc:
         raise PdfToolError(
             f"{what}: `{argv[0]}` did not finish within {timeout:.0f}s and was "
@@ -251,23 +268,51 @@ def pdf_info(path: str, password: str = "") -> dict[str, Any]:
     }
 
 
+#: Pages `pdf_text` extracts when the caller names no `last_page`. A whole
+#: long document in one tool result would fill the chat window by itself.
+PDF_TEXT_DEFAULT_PAGES = 20
+
+
+def _page_count(src: Path, password: str = "") -> int | None:
+    """Best-effort page count (None when pypdf is absent or the file won't
+    open) — only used to say how much of a document was left out."""
+    try:
+        return len(_open_reader(src, password).pages)
+    except Exception:  # noqa: BLE001 - informational only
+        return None
+
+
 def pdf_text(path: str, first_page: int = 0, last_page: int = 0,
              layout: bool = True, password: str = "") -> dict[str, Any]:
-    """Extract text with poppler's pdftotext (layout-preserving by default)."""
+    """Extract text with poppler's pdftotext (layout-preserving by default).
+
+    Pages are 1-based. With no `last_page`, a window of
+    PDF_TEXT_DEFAULT_PAGES pages starting at `first_page` is extracted and
+    the result says how many pages the document has.
+    """
     src = _in_path(path)
     _require_bin("pdftotext")
+    first = max(1, int(first_page or 1))
+    windowed = not last_page
+    last = (first + PDF_TEXT_DEFAULT_PAGES - 1) if windowed else int(last_page)
+    total = _page_count(src, password)
+    if total is not None:
+        last = min(last, total)
     argv = ["pdftotext"]
     if layout:
         argv.append("-layout")
-    if first_page:
-        argv += ["-f", str(int(first_page))]
-    if last_page:
-        argv += ["-l", str(int(last_page))]
+    argv += ["-f", str(first), "-l", str(last)]
     if password:
-        argv += ["-upw", password]
+        argv += ["-upw", password]    # poppler has no stdin option (see top)
     argv += [str(src), "-"]
     proc = _run(argv, what="pdf_text")
-    return {"path": str(src), "text": proc.stdout}
+    out: dict[str, Any] = {"path": str(src), "pages": f"{first}-{last}",
+                           "total_pages": total, "text": proc.stdout}
+    if windowed and (total is None or last < total):
+        out["note"] = (f"extracted pages {first}-{last}"
+                       + (f" of {total}" if total is not None else "")
+                       + " — pass first_page/last_page for more")
+    return out
 
 
 def pdf_form_fields(path: str, password: str = "") -> dict[str, Any]:
@@ -380,10 +425,12 @@ def pdf_unlock(path: str, output: str | None = None, password: str = "",
 
     argv = ["qpdf", "--decrypt"]
     if password:
-        argv.append(f"--password={password}")
+        # stdin, never argv: `ps` shows every process's argv to every user.
+        argv.append("--password-file=-")
     argv += [str(src), str(dest)]
     try:
-        _run(argv, what="pdf_unlock")
+        _run(argv, what="pdf_unlock",
+             input_text=(password + "\n") if password else None)
     except PdfToolError as exc:
         if "invalid password" in str(exc).lower():
             raise PdfToolError(
@@ -521,26 +568,44 @@ def _flatten_by_raster(pdf: Path, dpi: int = 150) -> None:
 def pdf_to_images(path: str, output_dir: str | None = None, dpi: int = 150,
                   fmt: str = "png", first_page: int = 0, last_page: int = 0,
                   password: str = "") -> dict[str, Any]:
-    """Render pages to images with poppler's pdftoppm."""
+    """Render pages to images with poppler's pdftoppm.
+
+    `dpi` is clamped to MIN_DPI..MAX_DPI. Only images rendered by THIS call
+    are returned: pdftoppm writes into a fresh private directory, and its
+    files are then moved to `output_dir` as `<stem>-<page>.<ext>`. (Globbing
+    `output_dir` for `<stem>-*` returned stale images from earlier runs, and
+    a stem such as `W9 [2024]` is a glob character class that matched none.)
+    """
     src = _in_path(path)
     if fmt not in ("png", "jpeg"):
         raise PdfToolError(f"fmt must be png or jpeg, got {fmt!r}")
+    dpi = max(MIN_DPI, min(int(dpi), MAX_DPI))
     outdir = Path(output_dir).expanduser() if output_dir else \
         src.with_name(f"{src.stem}-images")
     outdir.mkdir(parents=True, exist_ok=True)
     _require_bin("pdftoppm")
-    prefix = outdir / src.stem
-    argv = ["pdftoppm", f"-{fmt}", "-r", str(int(dpi))]
-    if first_page:
-        argv += ["-f", str(int(first_page))]
-    if last_page:
-        argv += ["-l", str(int(last_page))]
-    if password:
-        argv += ["-upw", password]
-    argv += [str(src), str(prefix)]
-    _run(argv, what="pdf_to_images", timeout=_RENDER_TIMEOUT_S)
     ext = "png" if fmt == "png" else "jpg"
-    images = sorted(str(p) for p in outdir.glob(f"{src.stem}-*.{ext}"))
+    scratch = Path(tempfile.mkdtemp(prefix=".luxe-render-", dir=outdir))
+    try:
+        argv = ["pdftoppm", f"-{fmt}", "-r", str(dpi)]
+        if first_page:
+            argv += ["-f", str(int(first_page))]
+        if last_page:
+            argv += ["-l", str(int(last_page))]
+        if password:
+            argv += ["-upw", password]  # poppler has no stdin option (see top)
+        argv += [str(src), str(scratch / "page")]
+        _run(argv, what="pdf_to_images", timeout=_RENDER_TIMEOUT_S)
+        rendered = sorted(p for p in scratch.iterdir()
+                          if p.name.startswith("page-")
+                          and p.suffix == f".{ext}")
+        images = []
+        for p in rendered:
+            dest = outdir / f"{src.stem}-{p.stem[len('page-'):]}.{ext}"
+            os.replace(p, dest)
+            images.append(str(dest))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     if not images:
         raise PdfToolError(
             f"pdftoppm produced no images in {outdir} — is {src.name} a valid PDF?")
@@ -735,6 +800,12 @@ def pdf_print(path: str, printer: str = "", copies: int = 1,
             raise PdfToolError(f"duplex must be one of {sorted(allowed)}")
         argv += ["-o", f"sides={duplex}"]
     if media:
+        # One CUPS option value: `media=a4,-o,...` or spaces would smuggle
+        # further options into lp's argv.
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", media):
+            raise PdfToolError(
+                f"invalid media {media!r} — use a CUPS media name like "
+                f"Letter, A4, or na_legal_8.5x14in")
         argv += ["-o", f"media={media}"]
     argv.append(str(src))
 

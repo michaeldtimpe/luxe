@@ -72,3 +72,14 @@ def test_render_final_empty():
     console = Console(file=out, force_terminal=False, width=100)
     render_final(console, "", mode="truncated")
     assert "no response text" in out.getvalue()
+
+
+def test_truncate_keeps_the_head_of_an_overlong_first_line():
+    """A first line longer than max_chars used to yield '' — the whole
+    answer vanished from the screen instead of being truncated."""
+    shown, hidden = truncate_for_display("y" * 500, max_lines=100,
+                                         max_chars=40)
+    assert shown == "y" * 40 and hidden >= 1
+    shown, hidden = truncate_for_display("z" * 500 + "\nsecond\nthird",
+                                         max_lines=100, max_chars=40)
+    assert shown == "z" * 40 and hidden == 2
