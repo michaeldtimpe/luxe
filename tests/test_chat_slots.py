@@ -245,3 +245,32 @@ def test_turn_failure_on_dead_endpoint_does_not_degrade(monkeypatch):
         assert sm.degraded_from is None
     finally:
         ManifestBackend.healthy = True
+
+
+def test_same_model_fallback_is_told_loudly_once(monkeypatch):
+    """neo's manifest declares its main as its own fallback ("same model,
+    told loudly", ~/dotfiles/luxe/neo.yaml). `_degrade` used to return early
+    on fallback == main, so a failing main was never announced at all."""
+    import luxe.config as config_mod
+    from luxe.config import HostManifest
+
+    monkeypatch.setattr(slots_mod, "Backend", ManifestBackend)
+    monkeypatch.setattr(config_mod, "short_hostname", lambda: "neo")
+    ManifestBackend.served = ["Q4B"]
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        hosts={"neo": HostManifest(main="Q4B", fallback="Q4B")},
+    )
+    notices: list[str] = []
+    sm = slots_mod.SlotManager(cfg, on_status=notices.append)
+    sm.backend.model = "Q4B"
+
+    notice = sm.note_turn_failure()
+    assert notice and "no other model" in notice
+    assert any("Q4B unavailable" in n and "same model" in n for n in notices)
+    assert sm.degraded_from is None            # nothing to reroute to
+    assert sm.model_for("chat") == "Q4B"
+    # Single-fire, like every degrade notice.
+    assert sm.note_turn_failure() is None
+    assert len([n for n in notices if "same model" in n]) == 1
