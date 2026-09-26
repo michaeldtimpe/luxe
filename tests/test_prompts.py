@@ -225,12 +225,13 @@ def test_get_overlay_returns_none_for_empty_string():
     assert get_overlay("") is None
 
 
-def test_get_overlay_returns_none_for_unknown_id():
-    """Unknown overlay ids return None rather than raising — overlays
-    are opt-in (unlike PromptVariants which surface typos via KeyError).
-    A missing overlay just falls through to role defaults."""
+def test_get_overlay_raises_for_unknown_id():
+    """A typo'd overlay id used to return None and silently run baseline
+    prompts under the cell's label, contaminating the bake-off. It now
+    raises like PromptVariants do (2026-09 review)."""
     from luxe.agents.prompts import get_overlay
-    assert get_overlay("does_not_exist") is None
+    with pytest.raises(KeyError, match="does_not_exist"):
+        get_overlay("does_not_exist")
 
 
 def test_implement_via_cot_overlay_is_registered():
@@ -573,19 +574,17 @@ def test_resolve_prompt_ids_overlay_misses_falls_back_to_role():
     assert task_id == "baseline"
 
 
-def test_resolve_prompt_ids_unknown_overlay_acts_as_no_overlay():
-    """Typo'd overlay id resolves to None and falls through to role
-    defaults — surfaces as the role's prompts being used (no error)."""
+def test_resolve_prompt_ids_unknown_overlay_raises():
+    """Typo'd overlay id is an error, not a silent fall-through to the role
+    defaults (which ran a different arm than the variant label said)."""
     from luxe.agents.prompts import resolve_prompt_ids
-    sys_id, task_id = resolve_prompt_ids(
-        "implement",
-        system_prompt_id="sot",  # role-level non-default
-        task_prompt_id="baseline",
-        task_overlay_id="typo_does_not_exist",
-    )
-    # Unknown overlay → no override → role defaults win.
-    assert sys_id == "sot"
-    assert task_id == "baseline"
+    with pytest.raises(KeyError):
+        resolve_prompt_ids(
+            "implement",
+            system_prompt_id="sot",
+            task_prompt_id="baseline",
+            task_overlay_id="typo_does_not_exist",
+        )
 
 
 def test_task_overlay_is_frozen():
