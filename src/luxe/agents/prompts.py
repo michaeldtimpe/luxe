@@ -1064,13 +1064,19 @@ TASK_OVERLAYS: dict[str, TaskOverlay] = {
 
 
 def get_overlay(overlay_id: str) -> TaskOverlay | None:
-    """Look up a TaskOverlay by id. Returns None for empty string or
-    unknown id — overlays are opt-in (unlike PromptVariants, which are
-    required and surface typos via KeyError). Empty string is the
-    "no overlay" sentinel that RoleConfig.task_overlay_id defaults to."""
+    """Look up a TaskOverlay by id. Returns None for the empty string — the
+    "no overlay" sentinel RoleConfig.task_overlay_id defaults to. An UNKNOWN
+    non-empty id raises KeyError, like PromptVariants: it used to fall back
+    to baseline prompts silently, so a typo'd variant cell ran a different
+    arm than its label said and contaminated the bake-off (2026-09 review)."""
     if not overlay_id:
         return None
-    return TASK_OVERLAYS.get(overlay_id)
+    try:
+        return TASK_OVERLAYS[overlay_id]
+    except KeyError:
+        raise KeyError(
+            f"unknown task_overlay_id {overlay_id!r}; known: "
+            f"{', '.join(sorted(TASK_OVERLAYS))}") from None
 
 
 def resolve_prompt_ids(

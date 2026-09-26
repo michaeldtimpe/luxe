@@ -225,3 +225,27 @@ class TestEmptyAndStepTextRecords(object):
             _resp("done"),
         ])
         assert _run(backend, "r-silent").step_texts == []
+
+
+class TestNonObjectArguments:
+    """Arguments that decode to a non-object (`null`, a list, a double-encoded
+    string) used to crash `run_agent` with an uncaught AttributeError from
+    `validate_args`. They are now an ordinary schema reject (2026-09 review)."""
+
+    @pytest.mark.parametrize("args", [None, [1], "x", 3])
+    def test_non_object_args_are_a_schema_reject_not_a_crash(self, events, args):
+        bad = _resp(tool_calls=[
+            ToolCallResponse(id="c", name="read_file", arguments=args)])
+        backend = _ScriptedBackend([bad])
+        result = _run(backend, "tel-nonobj")
+        assert not result.aborted
+        assert result.schema_rejects == 1
+        tool_msgs = [m for m in backend.calls[-1] if m.get("role") == "tool"]
+        assert "Arguments must be a JSON object" in tool_msgs[-1]["content"]
+
+    def test_non_object_args_to_unknown_tool_do_not_crash(self, events):
+        bad = _resp(tool_calls=[
+            ToolCallResponse(id="c", name="made_up", arguments=None)])
+        result = _run(_ScriptedBackend([bad]), "tel-nonobj-unknown")
+        assert not result.aborted
+        assert result.schema_rejects == 1
