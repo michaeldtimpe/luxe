@@ -14,6 +14,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
 from luxe.compare.run_pair import CompareResult, SideResult
 
@@ -33,7 +34,10 @@ def _atomic_write(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def save(result: CompareResult) -> Path:
+def save(result: CompareResult) -> Path | None:
+    """Persist a comparison. None under --ephemeral (nothing is written)."""
+    if is_ephemeral():
+        return None
     d = compare_dir(result.compare_id)
     d.mkdir(parents=True, exist_ok=True)
     meta = {
@@ -56,6 +60,8 @@ def save(result: CompareResult) -> Path:
 
 
 def record_vote(compare_id: str, winner: str, *, reason: str = "", blind: bool = False) -> None:
+    if is_ephemeral():
+        return
     p = compare_dir(compare_id) / "votes.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     record = {"winner": winner, "reason": reason, "blind": blind, "ts": time.time()}

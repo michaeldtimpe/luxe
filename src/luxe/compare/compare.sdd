@@ -11,8 +11,12 @@ benchmark `Variant`/`make_overlay` machinery and `run_single`.
   oMLX RAM (~25 GB doubled). Cross-model (mode 3) inserts
   `unload_all_loaded(except_for=[model])` + `thermal_guard` between sides
 - Mode 1 (luxe-enhanced vs bare champion) drives the bare side via an
-  `os.environ` save/restore context manager (LUXE_TIERED_COMPACT=0, interventions
-  off, baseline prompt); env overrides must be restored after each side
+  `os.environ` save/restore context manager (baseline prompt; EVERY substrate
+  lever off — the default-ON ones need the exact string "0": LUXE_TIERED_COMPACT,
+  LUXE_TRUNCATED_TURN_RETRY, LUXE_EMPTY_TURN_RETRY, LUXE_CTX_SERVER_TRUTH — plus
+  the opt-in interventions); env overrides must be restored after each side
+- Persistence honors `--ephemeral` (`store.save` / `record_vote` write nothing);
+  the per-side overlay YAML lives in a TemporaryDirectory removed after load
 - Each side gets its own `run_id` so existing `~/.luxe/runs/<run_id>/` logging
   works unchanged
 - A non-determinism disclaimer prints immediately before the vote prompt
