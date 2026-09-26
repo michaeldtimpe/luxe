@@ -573,6 +573,21 @@ class Backend:
         # `_created_at`. It stays None on every process that has not set
         # `LUXE_PAYLOAD_SUSPECT_RETRY=1` — nothing measures it when off.
         self._last_accepted_prompt_chars: int | None = None
+        # Running USD this instance has been billed, summed per REQUEST as
+        # responses report `usage.cost` (0.0 forever on every local engine,
+        # which reports none). Read-only bookkeeping: nothing on the wire or in
+        # control flow consults it. It exists so chat's hard spend cap counts
+        # requests billed by a turn that later errors or is interrupted — the
+        # per-turn `AgentResult.cost_usd` sum is lost with the result
+        # (chat/cost.py). An instance attribute for the same reason as
+        # `on_reasoning`: `agents/loop.py`'s call site is frozen.
+        self.cost_total_usd: float = 0.0
+
+    def _note_cost(self, cost: float | None) -> float | None:
+        """Add one response's reported cost to `cost_total_usd`; passthrough."""
+        if cost:
+            self.cost_total_usd += cost
+        return cost
 
     def chat(
         self,
@@ -709,7 +724,7 @@ class Backend:
                     prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0),
                     total_s=wall,
-                    cost_usd=_usage_cost(usage),
+                    cost_usd=self._note_cost(_usage_cost(usage)),
                 )
 
                 tc_list: list[ToolCallResponse] = []
@@ -992,7 +1007,7 @@ class Backend:
                         completion_tokens=usage.get("completion_tokens", 0),
                         total_s=wall,
                         time_to_first_token_s=ttft,
-                        cost_usd=_usage_cost(usage),
+                        cost_usd=self._note_cost(_usage_cost(usage)),
                     ),
                     retries=attempt,
                     reasoning_chars=reasoning_chars,

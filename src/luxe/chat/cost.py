@@ -112,7 +112,21 @@ def record_turn(session, result, status=None) -> float:
     and a list of 0.0 entries would make `/usage` claim a per-turn history it
     does not have.
     """
-    turn_cost = float(getattr(result, "cost_usd", 0.0) or 0.0)
+    return record_spend(session, getattr(result, "cost_usd", 0.0), status)
+
+
+def record_spend(session, amount, status=None) -> float:
+    """Fold `amount` USD into the session total. Returns what was recorded.
+
+    The front-ends call this through `repl.settle_turn_cost` with the Backend's
+    spend DELTA across a turn — so the requests of a turn that errored,
+    aborted, or was interrupted still count against the hard cap; summing only
+    completed turns' `AgentResult.cost_usd` let a flaky session bill past it.
+    """
+    try:
+        turn_cost = float(amount or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
     if turn_cost <= 0:
         return 0.0
     session.session_cost_usd = spent(session) + turn_cost
@@ -120,6 +134,17 @@ def record_turn(session, result, status=None) -> float:
     if status is not None and hasattr(status, "session_cost_usd"):
         status.session_cost_usd = session.session_cost_usd
     return turn_cost
+
+
+def backend_spend(backend) -> float:
+    """USD `backend` has been billed over its lifetime (0.0 when unknown).
+
+    `Backend.cost_total_usd` is summed per REQUEST as responses report cost,
+    independently of whether the surrounding turn ever finishes."""
+    try:
+        return float(getattr(backend, "cost_total_usd", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def credits(slots) -> tuple[float | None, float | None]:
