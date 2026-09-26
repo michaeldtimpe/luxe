@@ -41,3 +41,30 @@ def _reset_tool_sizing_globals():
 @pytest.fixture
 def config_path() -> Path:
     return Path(__file__).parent.parent / "configs" / "single_64gb.yaml"
+
+
+@pytest.fixture
+def stub_public_dns(monkeypatch):
+    """Answer every hostname lookup with a public address, never real DNS.
+
+    The web egress guard resolves names before it allows them; tests that
+    only need "a public name" must not depend on the network or the host's
+    resolver. IP literals still go to the real getaddrinfo (no lookup
+    happens for those). A test that needs a specific answer patches
+    `socket.getaddrinfo` again on top of this.
+    """
+    import ipaddress
+    import socket
+
+    real = socket.getaddrinfo
+
+    def _stub(host, port, *a, **k):
+        name = host.decode() if isinstance(host, bytes) else str(host)
+        try:
+            ipaddress.ip_address(name)
+            return real(host, port, *a, **k)
+        except ValueError:
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP,
+                     "", ("93.184.216.34", int(port or 80)))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _stub)
