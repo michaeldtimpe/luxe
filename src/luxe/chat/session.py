@@ -281,6 +281,21 @@ def aborted_ctx_line(result, num_ctx: int) -> str | None:
     return "context: " + " · ".join(bits)
 
 
+#: Cap on the `<current_request>` recency echo (chars). The whole message is
+#: already the Goal at the top of the prompt; the echo only has to put the ASK
+#: last, so its head and tail are what matter.
+CURRENT_REQUEST_ECHO_CAP = 2000
+
+
+def cap_echo(message: str, cap: int = CURRENT_REQUEST_ECHO_CAP) -> str:
+    """The `<current_request>` body: the message, head+tail capped."""
+    from luxe.chat.summarize import head_tail
+
+    return head_tail(message.strip(), cap,
+                     marker="[… {n} chars elided — the full message is the "
+                            "Goal above …]")
+
+
 @dataclass
 class ChatTurn:
     user: str
@@ -337,6 +352,18 @@ class ChatSession:
     # the command; injected as <attached_files> into the NEXT turn only
     # (one-shot — build_extra_context clears it on consumption).
     attachments: list[dict] = field(default_factory=list)
+    # What `build_extra_context` last consumed from `attachments`. Held until
+    # the turn completes so a turn that FAILS (BackendError, crash, abort,
+    # interrupt) can re-stage it for `/retry` (repl.restore_attachments)
+    # instead of the payload vanishing with the failed request.
+    consumed_attachments: list[dict] = field(default_factory=list)
+    # Turns cleared by `/clear` so far. Run ids are `<session>-<n>`; without
+    # the offset a post-/clear turn would reuse `<session>-0` and append to
+    # the earlier run's events on disk.
+    turn_offset: int = 0
+    # Session ids already folded in by `/resume`, so a second `/resume <id>`
+    # can't duplicate every prior turn into the history.
+    resumed_ids: set = field(default_factory=set)
 
     # -- observability (B2): tool-IO depth + reasoning stream are independent --
     verbose_level: str = "off"   # off | diff | full — set by /verbose
@@ -449,12 +476,16 @@ class ChatSession:
                 "<attached_files>\nThe user attached these files for this "
                 f"turn:\n{file_blocks}\n</attached_files>",
             )
+            self.consumed_attachments = list(self.attachments)
             self.attachments = []
         if not parts:
             # First turn, no memory, write mode on: nothing to disambiguate.
             return "", fold_version
-        # Something precedes the request — echo it last for recency.
-        parts.append(f"<current_request>\n{current_user_message.strip()}\n</current_request>")
+        # Something precedes the request — echo it last for recency. The echo
+        # is CAPPED: the full message is already the Goal, and repeating a
+        # 200 KB paste verbatim doubled what one message cost the window.
+        parts.append(f"<current_request>\n{cap_echo(current_user_message)}"
+                     "\n</current_request>")
         return "\n\n" + "\n\n".join(parts), fold_version
 
     def add_turn(self, turn: ChatTurn) -> None:
