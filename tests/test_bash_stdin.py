@@ -130,9 +130,16 @@ class TestTheOtherCommandRunners:
     def test_gitkit_apply_verify(self, tmp_repo, monkeypatch):
         from luxe.gitkit import apply as apply_mod
 
+        import io
+
+        from rich.console import Console
+
         seen = _spy_run(monkeypatch)
-        # "test" makes it look like a verify command; `true` keeps it instant.
-        ok, tail = apply_mod._run_verify("true # test", tmp_repo, timeout=5)
+        # first token `sh` makes it a verify command (run only after the
+        # operator's y); `true` keeps it instant.
+        ok, tail = apply_mod._run_verify(
+            "sh -c true", tmp_repo, timeout=5,
+            console=Console(file=io.StringIO()), reader=lambda _p: "y")
         assert seen.get("stdin") is subprocess.DEVNULL
         assert seen.get("errors") == "replace"
         assert ok in (True, False)
