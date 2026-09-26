@@ -132,3 +132,34 @@ def test_grade_unsupported_category():
     res = grade("nonexistent", [], None)
     assert res.passed is False
     assert "unsupported" in res.reason
+
+
+# --- 2026-09 grader audit --
+
+def test_nested_dict_values_carry_their_own_allowed_lists():
+    """BFCL wraps nested values like top-level ones; `==` against the
+    wrapped dict failed every correct nested-dict call."""
+    gt = {"get_weather": {"location": ["Paris"],
+                          "options": [{"unit": ["C", "celsius"], "days": [3, ""]}]}}
+    assert _call_matches_gt_entry(
+        "get_weather", {"location": "Paris", "options": {"unit": "celsius", "days": 3}}, gt)
+    # optional nested key omitted
+    assert _call_matches_gt_entry(
+        "get_weather", {"location": "Paris", "options": {"unit": "C"}}, gt)
+    assert not _call_matches_gt_entry(
+        "get_weather", {"location": "Paris", "options": {"unit": "F"}}, gt)
+
+
+def test_list_of_nested_dicts_matches_elementwise():
+    allowed = [[{"name": ["a"], "qty": [1]}, {"name": ["b"], "qty": [2, "2"]}]]
+    assert _value_matches([{"name": "a", "qty": 1}, {"name": "b", "qty": 2}], allowed)
+    assert not _value_matches([{"name": "a", "qty": 1}], allowed)
+
+
+def test_parallel_uses_a_full_matching_not_greedy_first_fit():
+    """Call 1 fits both GT entries, call 2 only the first. Greedy gave call 1
+    the first entry and then failed call 2 — a valid assignment exists."""
+    gt = [{"f": {"x": [1, 2]}}, {"f": {"x": [1]}}]
+    res = grade_parallel([("f", {"x": 1}), ("f", {"x": 2})], gt)
+    assert res.passed, res.reason
+    assert not grade_parallel([("f", {"x": 2}), ("f", {"x": 2})], gt).passed
