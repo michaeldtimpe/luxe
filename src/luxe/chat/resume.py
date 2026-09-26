@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 
 from rich.console import Console
+from rich.markup import escape
 
 from luxe.chat.session import ChatSession, ChatTurn
 from luxe.memory import session as session_store
@@ -26,7 +27,7 @@ def list_resumable(console: Console, *, limit: int = 20) -> None:
     for m in metas[:limit]:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(m.last_active))
         title = m.title or m.repo_path or "(no repo)"
-        console.print(f"  [cyan]{m.session_id}[/]  {when}  [dim]{title}[/]")
+        console.print(f"  [cyan]{escape(m.session_id)}[/]  {when}  [dim]{escape(title)}[/]")
 
 
 def _pair_turns(records: list[dict]) -> list[ChatTurn]:
@@ -36,6 +37,12 @@ def _pair_turns(records: list[dict]) -> list[ChatTurn]:
     pending_slot = "chat"
     for r in records:
         kind = r.get("kind")
+        if kind == "clear":
+            # `/clear` cut the conversation here: what came before it was
+            # deliberately thrown away and must not come back on resume.
+            turns = []
+            pending_user = None
+            continue
         if kind == "user":
             # If a previous user had no assistant reply, flush it first.
             if pending_user is not None:
@@ -57,23 +64,47 @@ def _pair_turns(records: list[dict]) -> list[ChatTurn]:
 
 def resume_into(session_id: str, session: ChatSession, console: Console) -> bool:
     """Load a prior session's turns into `session` and replay them. Returns
-    True on success."""
+    True on success.
+
+    The resumed turns are also PERSISTED into the current session's
+    transcript (stamped `resumed_from`), so this session's own transcript —
+    `/export`, a later `/resume` of it — carries the context it actually ran
+    with. Resuming the same session twice is refused: it used to append every
+    prior turn a second time."""
+    if session_id == session.session_id:
+        console.print("[yellow]That is this session.[/]")
+        return False
+    if session_id in session.resumed_ids:
+        console.print(f"[yellow]Session {escape(session_id)} is already "
+                      "resumed into this one.[/]")
+        return False
     loaded = session_store.load_session(session_id)
     if loaded is None:
-        console.print(f"[yellow]No session {session_id!r}.[/]")
+        console.print(f"[yellow]No session {escape(repr(session_id))}.[/]")
         return False
     meta, records = loaded
     turns = _pair_turns(records)
 
-    console.print(f"[bold]Resuming session[/] [cyan]{session_id}[/] "
+    # Everything below is transcript text (user- or model-written): escaped,
+    # or one `[/x]` in an old message crashed the TUI at mount (--resume).
+    console.print(f"[bold]Resuming session[/] [cyan]{escape(session_id)}[/] "
                   f"[dim]({len(turns)} turns)[/]")
     for t in turns:
         if t.user:
-            console.print(f"[bold]› {t.user}[/]")
+            console.print(f"[bold]› {escape(t.user)}[/]")
         if t.assistant:
             preview = t.assistant.strip().splitlines()[0:1]
-            console.print(f"[dim]  {preview[0] if preview else ''}[/]")
+            console.print(f"[dim]  {escape(preview[0]) if preview else ''}[/]")
     console.print("[dim]· resumed context is summarized, not a verbatim restore[/]")
 
+    if session.session_id:
+        for t in turns:
+            session_store.append_turn(session.session_id, "user", text=t.user,
+                                      slot=t.slot, resumed_from=session_id)
+            if t.assistant:
+                session_store.append_turn(session.session_id, "assistant",
+                                          text=t.assistant, run_id=t.run_id,
+                                          resumed_from=session_id)
     session.turns.extend(turns)
+    session.resumed_ids.add(session_id)
     return True

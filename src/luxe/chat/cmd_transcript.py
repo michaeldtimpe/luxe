@@ -5,6 +5,8 @@ Split out of `commands.py` 2026-08-04 (behavior unchanged).
 
 from __future__ import annotations
 
+from rich.markup import escape
+
 from luxe.chat.commands import CommandContext, CommandResult
 from luxe.ephemeral import is_ephemeral
 
@@ -42,7 +44,7 @@ def _diff(args, ctx: CommandContext) -> CommandResult:
 
     diffs, err = inspection.session_diff(repo, paths)
     if err:
-        ctx.console.print(f"[red]✗ {err}[/]")
+        ctx.console.print(f"[red]✗ {escape(str(err))}[/]")
         return CommandResult(handled=True)
     if not diffs:
         ctx.console.print(f"[dim]· no changes ({scope})[/]")
@@ -52,11 +54,11 @@ def _diff(args, ctx: CommandContext) -> CommandResult:
     tot_a = tot_r = 0
     for d in diffs:
         if d.untracked:
-            ctx.console.print(f"  [green]+[/] {d.path}  [dim](new, untracked)[/]")
+            ctx.console.print(f"  [green]+[/] {escape(str(d.path))}  [dim](new, untracked)[/]")
             continue
         tot_a += d.added
         tot_r += d.removed
-        ctx.console.print(f"  [green]+{d.added}[/] [red]-{d.removed}[/]  {d.path}")
+        ctx.console.print(f"  [green]+{d.added}[/] [red]-{d.removed}[/]  {escape(str(d.path))}")
     if tot_a or tot_r:
         ctx.console.print(f"  [dim]{len(diffs)} file(s) · "
                           f"[/][green]+{tot_a}[/] [red]-{tot_r}[/]")
@@ -114,10 +116,10 @@ def _export(args, ctx: CommandContext) -> CommandResult:
     try:
         out = inspection.export_transcript(ctx.session.session_id, dest)
     except FileNotFoundError as e:
-        ctx.console.print(f"[red]✗ {e}[/]")
+        ctx.console.print(f"[red]✗ {escape(str(e))}[/]")
         return CommandResult(handled=True)
     except OSError as e:
-        ctx.console.print(f"[red]✗ cannot write export: {e}[/]")
+        ctx.console.print(f"[red]✗ cannot write export: {escape(str(e))}[/]")
         return CommandResult(handled=True)
     size = out.stat().st_size if out.is_file() else 0
     ctx.console.print(f"[green]✓[/] exported → {out} [dim]({size:,} bytes)[/]")
@@ -172,7 +174,7 @@ def _copy(args, ctx: CommandContext) -> CommandResult:
     try:
         subprocess.run(tool, input=text.encode("utf-8"), check=True, timeout=10)
     except Exception as e:
-        ctx.console.print(f"[red]✗ clipboard copy failed: {e}[/]")
+        ctx.console.print(f"[red]✗ clipboard copy failed: {escape(str(e))}[/]")
         return CommandResult(handled=True)
     ctx.console.print(f"[green]✓[/] copied last answer "
                       f"[dim]({len(text):,} chars)[/]")

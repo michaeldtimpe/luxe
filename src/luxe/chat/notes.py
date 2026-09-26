@@ -213,12 +213,48 @@ def write_notes(repo_root: str | Path, bullets: str, session_id: str) -> Path:
               "block; edit freely above/below)")
 
 
+#: Bound on the session-end distillation (seconds). Quitting waits for it —
+#: the model is resident, so a healthy distil is ~30s — but a stalled request
+#: must not hold the exit for the backend's own 30-minute progress deadline.
+EXIT_TIMEOUT_S = 90.0
+
+
+def _distil_bounded(session, slots, timeout_s: float | None) -> str:
+    """`distil` on the chat backend, abandoned after `timeout_s` (None = no
+    bound). The call runs on a daemon thread because a blocking HTTP request
+    cannot be interrupted from outside; on timeout the thread is left to die
+    with the process and its reply, if it ever comes, is discarded. Raises
+    TimeoutError on timeout, or whatever the distillation raised."""
+    if timeout_s is None:
+        return distil(session, slots.backend_for("chat"))
+    import threading
+
+    box: dict = {}
+
+    def _run() -> None:
+        try:
+            box["bullets"] = distil(session, slots.backend_for("chat"))
+        except BaseException as e:  # noqa: BLE001 — re-raised below
+            box["error"] = e
+
+    t = threading.Thread(target=_run, name="luxe-session-notes", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise TimeoutError(f"distillation timed out after {timeout_s:.0f}s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("bullets", "")
+
+
 def run_session_notes(session, slots, cfg, console, *,
-                      on_demand: bool = False) -> NotesResult:
+                      on_demand: bool = False,
+                      timeout_s: float | None = None) -> NotesResult:
     """Distil and write, or skip. NEVER raises, never blocks exit.
 
     Called from both front-ends' session-end `finally` (BEFORE the model
-    unload — the backend is still usable there) and from `/note`.
+    unload — the backend is still usable there; bounded by `timeout_s`) and
+    from `/note` (unbounded — the user is waiting for it on purpose).
     """
     why = skip_reason(session, cfg, on_demand=on_demand)
     if why:
@@ -226,8 +262,7 @@ def run_session_notes(session, slots, cfg, console, *,
             console.print(f"[yellow]· no session notes: {why}[/]")
         return NotesResult(skipped=why)
     try:
-        backend = slots.backend_for("chat")
-        bullets = distil(session, backend)
+        bullets = _distil_bounded(session, slots, timeout_s)
         if not bullets:
             # Logged, not silent: an empty distillation used to be
             # indistinguishable from the feature not running at all.
@@ -244,6 +279,8 @@ def run_session_notes(session, slots, cfg, console, *,
         # held hostage by a nicety — silent skip, no retry.
         logger.info("session notes skipped: %s: %s", type(e).__name__, e)
         return NotesResult(skipped=f"{type(e).__name__}: {e}")
-    console.print(f"[dim]· session notes → {path} "
+    from rich.markup import escape
+
+    console.print(f"[dim]· session notes → {escape(str(path))} "
                   "(disable: `notes: false` in chat.yaml)[/]")
     return NotesResult(written=path, text=bullets)

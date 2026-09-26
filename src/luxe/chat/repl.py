@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.markup import escape as _escape
 from rich.status import Status
+from rich.text import Text
 
 from luxe import ephemeral
 from luxe.agents.single import run_single
@@ -228,7 +229,7 @@ def run_chat_repl(
         from luxe.chat import theme as theme_mod
         theme_mod.set_palette(theme_name)
 
-    slots = SlotManager(cfg, on_status=lambda m: console.print(f"[dim]· {m}[/]"))
+    slots = SlotManager(cfg, on_status=lambda m: console.print(Text(f"· {m}", style="dim")))
     session = ChatSession(
         repo_path=repo_path,
         project_hash=project_mem.project_hash(repo_path) if repo_path else "",
@@ -273,10 +274,13 @@ def run_chat_repl(
     # shows the right size (`ctx 32K` / `ctx 128K`) immediately — before that
     # turn measures usage. `default_num_ctx` is the role's window everywhere
     # but a billable endpoint, which starts wider (chat/session.py).
-    status = StatusState(opened_at=time.time(), num_ctx=slots.default_num_ctx("chat"))
+    status = StatusState(opened_at=time.time(), num_ctx=slots.default_num_ctx("chat"),
+                         ctx_ceiling=startup_ctx_ceiling(slots))
     reader = reader or _default_reader(
         console,
-        status_markup_fn=lambda: status_mod.status_markup(session, slots, repo_path, status),
+        # session.repo_path, not the startup `repo_path`: `/project` moves it.
+        status_markup_fn=lambda: status_mod.status_markup(
+            session, slots, session.repo_path, status),
     )
     meta = session_store.new_session(
         repo_path=repo_path,
@@ -293,7 +297,8 @@ def run_chat_repl(
     from luxe.chat import debuglog
     dbglog = debuglog.install(session_store.session_dir(meta.session_id))
     if (_eph_notice := ephemeral.startup_notice()):
-        console.print(f"[yellow]·[/] [dim]{_eph_notice}[/]")
+        console.print(f"[yellow]·[/] [dim]{_escape(_eph_notice)}[/]")
+    start_session_gc()
     logger.info("session %s start · repo=%s · backend=%s (%s) · slots=%s",
                 meta.session_id, repo_path or "(none)", slots.backend_name,
                 slots.backend.base_url, slots.slot_models())
@@ -310,7 +315,7 @@ def run_chat_repl(
         session=session,
         slots=slots,
         on_resume=_make_resume_hook(console, session),
-        on_compare=_make_compare_hook(console, cfg, repo_path, languages, slots),
+        on_compare=_make_compare_hook(console, cfg, session, slots),
         on_compare_review=_make_compare_review_hook(console),
         on_git_analysis=_make_git_analysis_hook(console, cfg, session, cancel),
         on_project=_make_project_hook(session, on_project),
@@ -336,26 +341,62 @@ def run_chat_repl(
     # when clean & current.
     _hint = build_status_hint()
     if _hint:
-        console.print(f"[yellow][hint][/] [dim]{_hint}[/]")
+        console.print(f"[yellow]\\[hint][/] [dim]{_escape(_hint)}[/]")
     # Where the weights actually live (local disk / network volume / remote
     # host) — stated once at startup so a networked session is never implicit.
     console.print(model_origin_notice(slots, status))
+
+    def _contained(what: str, fn, *args, **kwargs):
+        """Run one command/plan/goal/turn so that NOTHING it raises ends the
+        session — the same containment a turn always had. /pull, /doctor,
+        /net, /repair and /compare used to run bare inside the loop's
+        try/finally, so one exception (or ctrl+c mid-/pull) was an EXIT."""
+        try:
+            return fn(*args, **kwargs)
+        except (ChatCancelled, KeyboardInterrupt):
+            console.print("[yellow]· interrupted[/]")
+        except BackendError as e:
+            # Interactive turns survive a dead endpoint: report it, run the
+            # kit's recovery (repair → degrade → /backend hint), keep going.
+            text, hint = note_backend_error(session, slots, e)
+            console.print(Text(f"✗ {text}", style="red"))
+            if hint:
+                console.print(Text(f"· {hint}", style="yellow"))
+            if (kept := attachments_kept_note(session)):
+                console.print(Text(kept, style="dim"))
+        except Exception:
+            # One bad turn or command must not end the session (an uncaught
+            # OSError from a repo walk did exactly that on 2026-07-29).
+            # Report the last line, log the rest.
+            exc_line = note_turn_crash(session, what)
+            console.print(Text(f"✗ {what} failed: {exc_line}", style="red"))
+            console.print("[yellow]· the session is still alive — retry, "
+                          "or /quit if it repeats[/]")
+            if (kept := attachments_kept_note(session)):
+                console.print(Text(kept, style="dim"))
+        return None
 
     try:
         while True:
             # /plan (B5): draft a plan, then maybe execute — runs before the goal
             # check because choosing "execute" sets goal_active for the next pass.
             if session.plan_pending:
-                _run_plan(session, slots, cfg, languages, console, cancel,
-                          infer, status)
+                cancel.reset()
+                _contained("plan", _run_plan, session, slots, cfg,
+                           session.languages, console, cancel, infer, status)
                 continue
             # Goal auto-runner (B4): while a goal is active, the supervisor drives
             # rounds itself instead of blocking on the prompt. Returns when the
             # goal completes, pauses, or is interrupted — then we fall back to the
             # normal interactive prompt.
             if session.goal_active:
-                _run_goal_loop(session, slots, cfg, languages, console, cancel,
-                               infer, status)
+                cancel.reset()
+                _contained("goal", _run_goal_loop, session, slots, cfg,
+                           session.languages, console, cancel, infer, status)
+                # The supervisor only returns once the goal is inactive; if
+                # something escaped it instead, a goal still marked active
+                # would re-enter it forever.
+                session.goal_active = False
                 continue
             try:
                 line = reader()
@@ -375,53 +416,27 @@ def run_chat_repl(
             if not line:
                 continue
             if cmd.is_command(line):
-                res = cmd.dispatch(line, ctx)
+                # A token left set by an interrupted turn would cancel the
+                # next command that polls it (/gitaudit) before it started.
+                cancel.reset()
+                res = _contained("command", cmd.dispatch, line, ctx)
+                if res is None:
+                    continue
                 if res.exit:
                     break
                 if not res.submit:
                     continue
                 line = res.submit   # /retry: fall through and run it as a turn
-            try:
-                _run_turn(line, session, slots, cfg, languages, console, cancel,
-                          infer, status)
-            except BackendError as e:
-                # Interactive turns survive a dead endpoint: report it and, when
-                # the config offers another backend, point at the escape hatch
-                # (e.g. "local oMLX unreachable — try /backend m5").
-                console.print(f"[red]✗ {e}[/]")
-                logger.error("turn BackendError: %s", e)
-                session_store.append_turn(session.session_id, "error",
-                                          text=str(e), model=slots.backend.model)
-                # Self-repair FIRST (luxe.repair): a stale oMLX fails main
-                # AND fallback with the same lazy import, so degrading would
-                # be the wrong diagnosis. Then manifest auto-degrade: a
-                # healthy endpoint whose main model fails a turn (lazy load
-                # hits missing/corrupt weights HERE) switches the session to
-                # the fallback, loudly.
-                notice = slots.try_self_repair(str(e)) or slots.note_turn_failure()
-                if notice:
-                    console.print(f"[yellow]· {notice}[/]")
-                else:
-                    hint = slots.unreachable_hint()
-                    if hint:
-                        console.print(f"[yellow]· {hint}[/]")
-            except Exception:
-                # Parity with the TUI worker: one bad turn must not end the
-                # session (an uncaught OSError from a repo walk did exactly
-                # that on 2026-07-29). Report the last line, log the rest.
-                exc_line = traceback.format_exc().strip().splitlines()[-1]
-                console.print(f"[red]✗ turn failed: {exc_line}[/]")
-                console.print("[yellow]· the session is still alive — retry, "
-                              "or /quit if it repeats[/]")
-                logger.error("chat turn crashed\n%s", traceback.format_exc())
-                session_store.append_turn(session.session_id, "error",
-                                          text=exc_line)
+            _contained("turn", _run_turn, line, session, slots, cfg,
+                       session.languages, console, cancel, infer, status)
     finally:
         # Session working notes — BEFORE the unload, while the backend is
-        # still usable. Never raises, never retries, silent on failure
-        # (chat/notes.py): quitting must not be held hostage by a nicety.
+        # still usable. Never raises, never retries, silent on failure, and
+        # bounded (chat/notes.py): quitting must not be held hostage by a
+        # nicety.
         from luxe.chat import notes as notes_mod
-        notes_mod.run_session_notes(session, slots, cfg, console)
+        notes_mod.run_session_notes(session, slots, cfg, console,
+                                    timeout_s=notes_mod.EXIT_TIMEOUT_S)
         if not keep_loaded:
             # WS3: show the unload is happening BEFORE the blocking call (it can
             # take a few seconds) so quitting doesn't look like a hang.
@@ -462,6 +477,12 @@ class TurnPrep:
     # tools had run (session 5bb630813c21 turn 11: one bash call, 9m40s hang,
     # nothing recorded).
     observed_calls: list = field(default_factory=list)
+    # The Backend this turn dispatches on and its running spend when the turn
+    # began: `settle_turn_cost` bills the DELTA, so requests billed by a turn
+    # that then errored, aborted, or was interrupted still count (the old
+    # per-result sum only ever saw completed turns).
+    backend: object | None = None
+    cost_start: float = 0.0
 
 
 # Tools that are useless without a resident index (chat/project.py "none" mode).
@@ -498,16 +519,63 @@ def _make_project_hook(session, on_project):
 
     def _hook(target: str | None) -> dict:
         summary = on_project(target)
-        session.repo_path = summary["root"]
-        session.project_kind = summary["kind"]
-        try:
-            from luxe.gitkit.health import current_head
-            session.index_head = current_head(summary["root"]) or ""
-        except Exception:
-            session.index_head = ""
+        apply_project_summary(session, summary)
         return summary
 
     return _hook
+
+
+def apply_project_summary(session, summary: dict) -> None:
+    """Make the SESSION follow a `/project` / `/index` attach.
+
+    The session is the single live source for everything project-shaped —
+    both front-ends read `session.repo_path` / `session.languages` at turn
+    time — so a switch lands here once instead of in per-front-end copies
+    that went stale (the startup `languages` kept steering lint/typecheck at
+    the OLD project's languages)."""
+    root = summary["root"]
+    session.repo_path = root
+    session.project_kind = summary["kind"]
+    if "languages" in summary:
+        session.languages = frozenset(summary["languages"] or ())
+    try:
+        session.project_hash = project_mem.project_hash(root) if root else ""
+    except Exception:
+        session.project_hash = ""
+    try:
+        from luxe.gitkit.health import current_head
+        session.index_head = current_head(root) or ""
+    except Exception:
+        session.index_head = ""
+
+
+def start_session_gc() -> None:
+    """Evict old session directories in the background (memory.sdd names the
+    eviction policy; nothing ever called it, so `~/.luxe/sessions/` grew
+    without bound). Daemon thread: never blocks startup, never raises, and
+    skipped entirely in an ephemeral session — deleting is still writing."""
+    if ephemeral.is_ephemeral():
+        return
+
+    def _gc() -> None:
+        try:
+            n = session_store.gc_sessions()
+            if n:
+                logger.info("session gc: evicted %d old session(s)", n)
+        except Exception as e:  # noqa: BLE001 — housekeeping must not surface
+            logger.debug("session gc skipped: %s: %s", type(e).__name__, e)
+
+    import threading
+    threading.Thread(target=_gc, name="luxe-session-gc", daemon=True).start()
+
+
+def startup_ctx_ceiling(slots) -> int:
+    """The chat slot's `/ctx` ceiling, resolved once at startup for the status
+    bar (which must not ask the endpoint from a render). 0 if unknown."""
+    try:
+        return int(slots.ctx_ceiling("chat") or 0)
+    except Exception:
+        return 0
 
 
 def model_origin_notice(slots, status=None) -> str:
@@ -754,7 +822,9 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     extra_context, fold_version = session.build_extra_context(message)
 
     turn_idx = len(session.turns)
-    run_id = f"{session.session_id}-{turn_idx}"
+    # Not `len(session.turns)` alone: `/clear` empties the list, and a run id
+    # reused after it would overwrite the earlier run's events on disk.
+    run_id = f"{session.session_id}-{turn_idx + session.turn_offset}"
     session_store.append_turn(session.session_id, "user", text=message, slot=slot)
     if extra_context:
         session_store.append_fold(session.session_id, turn_idx, fold_version, extra_context)
@@ -803,6 +873,8 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         fingerprint=fingerprint, test_result=test_result,
         backend_name=getattr(slots, "backend_name", ""),
         observed_calls=observed_calls,
+        backend=backend,
+        cost_start=cost_mod.backend_spend(backend),
     )
 
 
@@ -867,6 +939,13 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
                      "partial_chars=%d", prep.run_id, observed,
                      len(assistant_text))
     session_store.touch(session.session_id)
+    # An /attach payload rides exactly one turn. A turn that did not complete
+    # (interrupted, or aborted by the loop) keeps it staged so `/retry` — or
+    # simply the next message — resends it instead of silently losing it.
+    if interrupted or result is None or getattr(result, "aborted", False):
+        restore_attachments(session)
+    else:
+        session.consumed_attachments = []
     session.add_turn(ChatTurn(
         user=message, assistant=assistant_text, slot=prep.slot,
         model=prep.model, run_id=prep.run_id,
@@ -913,17 +992,88 @@ def note_aborted_turn(session, slots, result) -> tuple[str, str | None] | None:
     # Only an endpoint failure gets the kit's recovery — "Max steps reached
     # (…)" is not one. Keyed on the reason text the way `agents/outcomes.py`
     # classifies the same field.
-    if "backend error" not in reason.lower():
+    if not is_backend_abort(result):
         return reason, None
     # The loop CONTAINS backend exceptions (`loop.py`, `except Exception` around
     # `backend.chat`), so the front-ends' `except BackendError` branches never
     # see a failure raised mid-turn — the self-repair and manifest auto-degrade
-    # they call were unreachable from a real turn. Run the same sequence here:
-    # repair FIRST (a stale oMLX fails main and fallback alike), then degrade,
-    # then the `/backend` escape hatch.
-    hint = (slots.try_self_repair(reason) or slots.note_turn_failure()
+    # they call were unreachable from a real turn. Run the same sequence here.
+    return reason, recover_backend_failure(slots, reason)
+
+
+def is_backend_abort(result) -> bool:
+    """True when the loop aborted this turn because the ENDPOINT failed."""
+    reason = getattr(result, "abort_reason", "") or ""
+    return bool(getattr(result, "aborted", False)) and "backend error" in reason.lower()
+
+
+def recover_backend_failure(slots, reason: str) -> str | None:
+    """The kit's recovery for a turn that failed on the backend, in order:
+    self-repair FIRST (luxe.repair — a stale oMLX fails main AND fallback
+    with the same lazy import, so degrading would be the wrong diagnosis),
+    then manifest auto-degrade (a healthy endpoint whose main model fails a
+    turn switches the session to the fallback, loudly), then the `/backend`
+    escape hatch. Returns the one line to show, or None.
+
+    The ONE sequence every failure path runs — a raised BackendError, a
+    loop-contained abort, a failed /goal round — so no path can skip a step
+    the others take."""
+    return (slots.try_self_repair(reason) or slots.note_turn_failure()
             or slots.unreachable_hint())
-    return reason, hint
+
+
+def note_backend_error(session, slots, exc) -> tuple[str, str | None]:
+    """Record a BackendError that escaped a turn and run the kit's recovery.
+
+    Writes the kind="error" transcript record + log line both front-ends used
+    to write separately, re-stages any consumed `/attach` payload, and
+    returns `(message, hint)` for the caller to render in its own idiom."""
+    text = str(exc)
+    logger.error("turn BackendError: %s", text)
+    session_store.append_turn(session.session_id, "error",
+                              text=text, model=slots.backend.model)
+    restore_attachments(session)
+    return text, recover_backend_failure(slots, text)
+
+
+def note_turn_crash(session, what: str = "turn") -> str:
+    """Record an unexpected exception from a turn or command; returns the
+    last traceback line for the screen. Call from inside the `except`."""
+    tb = traceback.format_exc()
+    exc_line = tb.strip().splitlines()[-1]
+    logger.error("chat %s crashed\n%s", what, tb)
+    session_store.append_turn(session.session_id, "error", text=exc_line)
+    restore_attachments(session)
+    return exc_line
+
+
+def restore_attachments(session) -> int:
+    """Re-stage the `/attach` payload the failed turn consumed. Returns how
+    many attachments are staged afterwards."""
+    consumed = getattr(session, "consumed_attachments", None) or []
+    if consumed and not session.attachments:
+        session.attachments = list(consumed)
+    session.consumed_attachments = []
+    return len(session.attachments)
+
+
+def attachments_kept_note(session) -> str:
+    """One line saying a failed turn's attachments are still staged, or ""."""
+    n = len(getattr(session, "attachments", None) or [])
+    if not n:
+        return ""
+    return (f"· {n} attachment{'s' if n != 1 else ''} still staged — "
+            "/retry (or your next message) resends "
+            f"{'them' if n != 1 else 'it'}")
+
+
+def settle_turn_cost(session, prep: "TurnPrep", status=None) -> float:
+    """Bill this turn's spend: whatever the Backend was billed since the turn
+    began, however the turn ended. Call from a `finally`."""
+    return cost_mod.record_spend(
+        session,
+        cost_mod.backend_spend(prep.backend) - prep.cost_start,
+        status)
 
 
 def _run_turn(
@@ -959,8 +1109,10 @@ def _run_turn(
                         plan_mode=plan_mode, cancel=cancel,
                         on_tool_start=_on_tool_start)
     role_cfg = prep.role_cfg
+    if status is not None:
+        status.ctx_ceiling = prep.ctx_ceiling
     bash_note = " · [red]bash:unrestricted[/]" if prep.dev_bash else ""
-    console.print(f"[dim]slot: {prep.slot} · model: {prep.model}{bash_note}[/]")
+    console.print(f"[dim]slot: {prep.slot} · model: {_escape(prep.model)}{bash_note}[/]")
 
     cancel.reset()
     # Reasoning sink for THIS turn, on the Backend instance chat owns (the
@@ -993,6 +1145,7 @@ def _run_turn(
                 slot=prep.slot, model=prep.model,
                 opened_at=(status.opened_at if status else 0.0),
                 num_ctx=role_cfg.num_ctx,  # show ctx size during the turn
+                ctx_ceiling=prep.ctx_ceiling,
                 ctx_pressure=(status.ctx_pressure if status else 0.0),
                 has_turn=(status.has_turn if status else False),  # last-known %
             )
@@ -1067,6 +1220,9 @@ def _run_turn(
     finally:
         ended_at = time.time()
         turn_backend.on_reasoning = None
+        # Spend first, and whatever happened: a request billed before the
+        # turn errored or was interrupted still counts against the hard cap.
+        settle_turn_cost(session, prep, status)
         if prev_handler is not None:
             try:
                 signal.signal(signal.SIGINT, prev_handler)
@@ -1081,9 +1237,6 @@ def _run_turn(
                             partial_text="".join(stream_parts))
 
     if not interrupted and result is not None:
-        # Spend first: the footer and status bar below both read the running
-        # session total, and the cap check on the NEXT turn reads it too.
-        cost_mod.record_turn(session, result, status)
         # WS4 output ladder: full when /verbose full (or /debug), else compact
         # if /compact, else the default truncated preview.
         out_mode = ("full" if session.verbose_level == "full"
@@ -1163,7 +1316,11 @@ def _run_turn(
             if ctx_line:
                 console.print(f"[dim]· {ctx_line}[/]")
             if hint:
-                console.print(f"[yellow]· {hint}[/]")
+                console.print(Text(f"· {hint}", style="yellow"))
+            if (kept := attachments_kept_note(session)):
+                console.print(Text(kept, style="dim"))
+    elif interrupted and (kept := attachments_kept_note(session)):
+        console.print(Text(kept, style="dim"))
 
     return outcome
 
@@ -1305,7 +1462,7 @@ def _run_goal_loop(
 
     console.print(
         f"[bold cyan]· goal started[/] [dim]{_escape(session.goal)}[/]\n"
-        f"[dim]  up to {session.goal_max_rounds} rounds · Ctrl-C or /goal stop to halt[/]")
+        f"[dim]  up to {session.goal_max_rounds} rounds · Ctrl-C/esc halts[/]")
     eff_ctx = session.num_ctx_override or slots.role_for("chat").num_ctx
     if eff_ctx and eff_ctx <= _GOAL_LOW_CTX:
         console.print(
@@ -1323,8 +1480,23 @@ def _run_goal_loop(
         rnd = session.goal_round
         base = session.goal if rnd == 1 else "continue work"
         message = base + _GOAL_SUFFIX
-        console.print(f"\n[bold]· [goal round {rnd}/{session.goal_max_rounds}][/] "
+        # `\[`: an unescaped `[goal round …]` is parsed as a style tag and
+        # silently eaten, so the round header never showed.
+        console.print(f"\n[bold]· \\[goal round {rnd}/{session.goal_max_rounds}][/] "
                       f"[dim]{_escape(base)}[/]")
+
+        def _crashed(detail: str) -> bool:
+            """Count one failed round; True when the goal must pause."""
+            session.consecutive_crashes += 1
+            console.print(Text(
+                f"· goal round failed ({detail}) — consecutive "
+                f"{session.consecutive_crashes}/{_GOAL_MAX_CRASHES}", style="red"))
+            if session.consecutive_crashes >= _GOAL_MAX_CRASHES:
+                console.print("[yellow]· too many consecutive failures — "
+                              "pausing goal for a human.[/]")
+                session.goal_active = False
+                return True
+            return False
 
         try:
             outcome = run_turn(message, session, slots, cfg, languages,
@@ -1333,22 +1505,44 @@ def _run_goal_loop(
             console.print("[yellow]· goal halted by interrupt.[/]")
             session.goal_active = False
             break
-        except Exception as e:  # crash: bounded retry on CONSECUTIVE failures
-            session.consecutive_crashes += 1
-            console.print(f"[red]· goal round crashed ({type(e).__name__}: {e}) — "
-                          f"consecutive {session.consecutive_crashes}/"
-                          f"{_GOAL_MAX_CRASHES}[/]")
-            if session.consecutive_crashes >= _GOAL_MAX_CRASHES:
-                console.print("[yellow]· too many consecutive crashes — "
-                              "pausing goal for a human.[/]")
-                session.goal_active = False
+        except BackendError as e:
+            # Same record + recovery as an interactive turn (repair → degrade
+            # → /backend hint): a failed round is a failed turn, and it used
+            # to be counted as a bare "crash" with no error record, no repair
+            # and no degrade — so the next round hit the same broken model.
+            text, hint = note_backend_error(session, slots, e)
+            if hint:
+                console.print(Text(f"· {hint}", style="yellow"))
+            if _crashed(f"BackendError: {text}"):
+                break
             continue
-        session.consecutive_crashes = 0
+        except Exception as e:  # crash: bounded retry on CONSECUTIVE failures
+            note_turn_crash(session, "goal round")
+            if _crashed(f"{type(e).__name__}: {e}"):
+                break
+            continue
+
+        if outcome.crashed:
+            # The turn was refused before dispatch (today: the spend cap). The
+            # refusal was already printed; retrying cannot change it, and the
+            # old loop spent its whole crash budget re-asking.
+            console.print("[yellow]· goal paused — the turn was refused "
+                          "(see above).[/]")
+            session.goal_active = False
+            break
 
         if outcome.interrupted:
             console.print("[yellow]· goal halted by interrupt.[/]")
             session.goal_active = False
             break
+
+        if outcome.result is not None and is_backend_abort(outcome.result):
+            # The loop contained the backend failure into an abort; the turn
+            # renderer already ran the recovery. Count it like a raised one.
+            if _crashed("backend error"):
+                break
+            continue
+        session.consecutive_crashes = 0
 
         # Read the (pruned) ledger to judge progress this round.
         led = ledger_mod.prune(session.session_id)
@@ -1420,17 +1614,40 @@ def _run_goal_loop(
 # -- /plan mode (B5) --------------------------------------------------------
 
 
-def _write_plan_file(session: ChatSession, plan_text: str):
-    """Write the drafted plan, never clobbering an existing plan.md."""
+def _plan_base(session: ChatSession):
+    """Where `/plan` saves, or None when there is no project to save into.
+
+    A session with no project (`luxe chat` from `~`) used to write `plan.md`
+    into the CWD — i.e. drop a file in $HOME. Such a session keeps its plans
+    under `~/.luxe/plans/` instead, which is luxe's own state and therefore
+    suppressed in an ephemeral session (None)."""
     from pathlib import Path
 
-    base = Path(session.repo_path or ".")
-    target = base / "plan.md"
-    if target.exists():
-        plans_dir = base / ".luxe" / "plans"
-        plans_dir.mkdir(parents=True, exist_ok=True)
-        sid = (session.session_id or "plan")[:8]
-        target = plans_dir / f"plan-{sid}-{len(session.turns)}.md"
+    if session.repo_path and session.project_kind != "none":
+        return Path(session.repo_path)
+    if ephemeral.is_ephemeral():
+        return None
+    from luxe.paths import luxe_home
+    return luxe_home() / "plans"
+
+
+def _write_plan_file(session: ChatSession, plan_text: str):
+    """Write the drafted plan, never clobbering an existing plan.md. Returns
+    the path, or None when there is nowhere to write it (see `_plan_base`)."""
+    base = _plan_base(session)
+    if base is None:
+        return None
+    sid = (session.session_id or "plan")[:8]
+    if not session.repo_path or session.project_kind == "none":
+        # No project: luxe's own directory, one file per plan.
+        base.mkdir(parents=True, exist_ok=True)
+        target = base / f"plan-{sid}-{len(session.turns)}.md"
+    else:
+        target = base / "plan.md"
+        if target.exists():
+            plans_dir = base / ".luxe" / "plans"
+            plans_dir.mkdir(parents=True, exist_ok=True)
+            target = plans_dir / f"plan-{sid}-{len(session.turns)}.md"
     target.write_text(plan_text)
     return target
 
@@ -1451,8 +1668,6 @@ def _run_plan(
 
     `run_turn`/`reader` are injected by the TUI (renders into the RichLog; asks
     via a modal); both default to the line-REPL behaviour."""
-    from pathlib import Path
-
     from luxe.agents.prompts import PLAN_HINT
 
     run_turn = run_turn or _run_turn
@@ -1477,9 +1692,15 @@ def _run_plan(
     session.plan_text = plan_text
 
     # Interactive choice. plan.md-exists changes only the save destination/label.
-    exists = (Path(session.repo_path or ".") / "plan.md").exists()
-    save_label = ("save to alternate path (existing plan.md found)" if exists
-                  else "save to plan.md")
+    base = _plan_base(session)
+    if base is None:
+        save_label = "save (unavailable — ephemeral session, no project)"
+    elif not session.repo_path or session.project_kind == "none":
+        save_label = f"save under {_escape(str(base))}"
+    elif (base / "plan.md").exists():
+        save_label = "save to alternate path (existing plan.md found)"
+    else:
+        save_label = "save to plan.md"
     console.print(f"\n[bold]Plan ready.[/]  [cyan]s[/]={save_label} · "
                   f"[cyan]e[/]xecute · [cyan]b[/]oth · [cyan]d[/]iscard")
     try:
@@ -1496,7 +1717,11 @@ def _run_plan(
 
     if choice in ("s", "b"):
         path = _write_plan_file(session, plan_text)
-        console.print(f"[green]✓[/] plan written to [cyan]{path}[/]")
+        if path is None:
+            console.print("[yellow]· plan not saved — ephemeral session with "
+                          "no project (`/project <path>` to save into one).[/]")
+        else:
+            console.print(f"[green]✓[/] plan written to [cyan]{_escape(str(path))}[/]")
 
     if choice in ("e", "b"):
         if not session.write_enabled:
@@ -1530,14 +1755,16 @@ def _make_resume_hook(console: Console, session: ChatSession):
     return _resume
 
 
-def _make_compare_hook(console, cfg, repo_path, languages, slots):
+def _make_compare_hook(console, cfg, session, slots):
     def _compare(task: str) -> None:
         try:
             from luxe.compare.run_pair import interactive_compare
         except Exception:
             console.print("[yellow]compare module unavailable.[/]")
             return
-        interactive_compare(task, cfg, repo_path, languages, console=console)
+        # Read at call time: `/project` moves both.
+        interactive_compare(task, cfg, session.repo_path, session.languages,
+                            console=console)
 
     return _compare
 
