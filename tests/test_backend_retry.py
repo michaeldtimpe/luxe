@@ -333,9 +333,10 @@ def test_an_empty_label_falls_back_to_the_default():
 
 # --- health() takes a per-call bound (2026-08-24) ---------------------------
 
-def test_health_without_a_bound_is_unchanged():
-    """Every pre-2026-08-24 caller passes nothing and keeps the client's own
-    timeout — the probe request must be identical to what it was."""
+def test_health_without_a_bound_uses_the_liveness_default():
+    """No caller wants the GENERATION timeout for a liveness question: with it,
+    `luxe ready` hung 600s (2400s on m5) against a wedged endpoint."""
+    from luxe.backend import HEALTH_TIMEOUT_S
     seen: list = []
 
     def handler(request):
@@ -347,7 +348,7 @@ def test_health_without_a_bound_is_unchanged():
                                    timeout=httpx.Timeout(600.0),
                                    transport=httpx.MockTransport(handler))
     assert backend.health() is True
-    assert seen[0]["read"] == 600.0
+    assert seen[0]["read"] == HEALTH_TIMEOUT_S
 
 
 def test_health_with_a_bound_uses_it():
