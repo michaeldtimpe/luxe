@@ -20,7 +20,7 @@ Outputs:
   - acceptance/v19_mining/action_density_distribution.json — full data
   - acceptance/v19_mining/action_density_report.md — human-readable
 
-Reuses _run_id_for_swebench from scripts/backfill_v17_taxonomy.py
+Reuses _run_id_for_swebench from scripts/_archive/backfill_v17_taxonomy.py
 pattern (replicated here to keep the script self-contained).
 """
 
