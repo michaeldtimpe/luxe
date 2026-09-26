@@ -36,6 +36,13 @@ six canonical sections:
 (relative to the repo root). `Must`, `Must not`, and `Done when` are
 prose statements (one bullet per statement).
 
+A glob bullet may carry a trailing comment — `- src/x/** (incl. plan.py)`
+or `` - `vendor/p/` — why `` — and the glob is its first token. A bullet in a
+glob section that does not START with a glob (`- Inline prompt strings —
+they live in prompts.py`) is prose written for humans and is skipped: it was
+parsed as a "glob" that matched nothing, which is how gitkit.sdd's Owns came
+to match zero files.
+
 `Forbids` fires on every write attempt (create or edit). `Forbids
 creating` fires *only* when the write would create a new file at the
 target path — i.e., the path does not currently exist as a file. This
@@ -57,6 +64,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+
+# Sections whose bullets are path globs (see `_glob_entry`).
+_GLOB_SECTIONS = frozenset({"owns", "depends_on", "forbids", "forbids_create"})
+# What may follow a glob's first token to mark the rest as a comment.
+_COMMENT_LEADS = ("(", "—", "–", "-", "#", ":")
 
 CANONICAL_SECTIONS = (
     "must",
@@ -191,10 +203,32 @@ def _split_sections(text: str, path: Path) -> dict[str, list[str]]:
 
         if stripped.startswith("- "):
             entry = stripped[2:].strip()
+            if entry and current in _GLOB_SECTIONS:
+                entry = _glob_entry(entry)
             if entry:
                 sections[current].append(entry)
 
     return sections
+
+
+def _glob_entry(entry: str) -> str | None:
+    """The glob a glob-section bullet declares, or None for a prose bullet.
+
+    A single-token bullet is returned unchanged (every fixture/contract glob
+    in use is one — byte-identical to the old parse). Otherwise the first
+    token is the glob when it looks like a path (has `/`, `*` or a `.`, or is
+    backticked) AND what follows reads as a comment (starts with `(`, a dash,
+    `#` or `:`); anything else is a sentence, not a glob."""
+    parts = entry.split(None, 1)
+    if len(parts) == 1:
+        return entry
+    first, rest = parts
+    ticked = len(first) > 2 and first.startswith("`") and first.endswith("`")
+    glob = first.strip("`").rstrip(":")
+    looks_like_path = ticked or any(c in glob for c in "/*.")
+    if glob and looks_like_path and rest.lstrip().startswith(_COMMENT_LEADS):
+        return glob
+    return None
 
 
 def _normalize_section_name(header: str) -> str | None:
