@@ -322,3 +322,244 @@ def test_indexed_target_restores_an_unset_root(tmp_path, monkeypatch):
     fs.set_repo_root(repo)
     with indexed_target(str(repo.resolve())) as swapped:
         assert swapped is False
+
+
+# --- deep cache (1, 13, 16, 20) -----------------------------------------------
+
+class _Res:
+    def __init__(self, text: str, aborted: bool = False):
+        self.final_text = text
+        self.aborted = aborted
+        self.wall_s = 1.0
+        self.completion_tokens = 1
+        self.steps = 1
+        self.tool_calls_total = 0
+
+
+def _deep_cfg():
+    from luxe.config import PipelineConfig, RoleConfig
+    return PipelineConfig(models={"monolith": "Champ"},
+                          roles={"monolith": RoleConfig(model_key="monolith")})
+
+
+def _bug_repo(tmp_path: Path) -> Path:
+    files = {
+        "auth/login.py": "def login():\n    pass  # BUG: token-not-checked\n"
+                         + "x = 1\n" * 30,
+        "core/engine.py": "def run():\n    pass  # BUG: leak-in-engine\n"
+                          + "y = 2\n" * 30,
+        "web/index.js": "export const a = 1;\n" + "// pad\n" * 30,
+    }
+    for i in range(8):
+        files[f"core/pad{i}.py"] = f"p{i} = {i}\n" + "w = 0\n" * 30
+    return _init_repo(tmp_path / "bugrepo", files)
+
+
+def _stage(run_id: str) -> str:
+    for s in ("survey", "synthesis", "reduce", "format", "chunk"):
+        if s in run_id:
+            return s
+    return "?"
+
+
+def _bug_stub(repo: Path, calls: list[str], *, empty: bool = False):
+    """Chunk passes report one finding per BUG: marker in the chunk's files,
+    read from the WORKING TREE at call time (as the real agent's tools do)."""
+    import json as _json
+    import re as _re
+
+    def fake(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        stage = _stage(run_id)
+        calls.append(stage)
+        if stage == "survey":
+            return _Res("Survey notes: python app.")
+        if stage == "synthesis":
+            return _Res("# Repository audit\n**Findings: n**\nok")
+        if empty:
+            return _Res("")
+        body = extra_context.split("<chunk_files>")[1].split("Symbols defined")[0]
+        findings = []
+        for rel in _re.findall(r"^- (.+)$", body, _re.M):
+            p = repo / rel.strip()
+            if p.is_file():
+                for ln in p.read_text().splitlines():
+                    if "BUG:" in ln:
+                        findings.append({"title": ln.split("BUG:")[1].strip(),
+                                         "severity": "high",
+                                         "evidence": [f"{rel.strip()}:2"]})
+        return _Res("```json\n" + _json.dumps({"findings": findings}) + "\n```")
+    return fake
+
+
+def _run_deep(repo: Path, monkeypatch, calls: list[str], **kw):
+    import luxe.agents.single as single_mod
+    from luxe.gitkit import deep, run_git_report
+
+    class _FB:
+        def __init__(self, *a, **k):
+            self.model = "Champ"
+    monkeypatch.setattr("luxe.backend.Backend", _FB)
+    monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
+    stub = kw.pop("stub", None) or _bug_stub(repo, calls)
+    monkeypatch.setattr(single_mod, "run_single", stub)
+    con = Console(file=io.StringIO(), force_terminal=False, width=200)
+    run_git_report("gitaudit", cfg=_deep_cfg(), repo_path=repo, console=con,
+                   save=True, deep=True, mirror=False, **kw)
+    return con.file.getvalue()
+
+
+def _xref_titles(repo: Path) -> set[str]:
+    import json as _json
+    from luxe.gitkit import store
+    work = max(store.reports_dir(repo).glob("gitaudit-*.work"),
+               key=lambda p: (p / "xref.json").stat().st_mtime_ns)
+    xref = _json.loads((work / "xref.json").read_text())
+    return {f["title"] for f in xref["provisional_findings"]}
+
+
+def test_uncommitted_edit_invalidates_cached_note(tmp_path, monkeypatch):
+    """1: note validation compared HEAD blob shas while the chunk pass reads
+    the working tree — an uncommitted fix still reused the stale finding."""
+    repo = _bug_repo(tmp_path)
+    calls: list[str] = []
+    _run_deep(repo, monkeypatch, calls)
+    assert "leak-in-engine" in _xref_titles(repo)
+
+    f = repo / "core" / "engine.py"
+    f.write_text(f.read_text().replace("# BUG: leak-in-engine", "# fixed"))
+    calls.clear()
+    _run_deep(repo, monkeypatch, calls)             # same HEAD, dirty tree
+    assert "leak-in-engine" not in _xref_titles(repo)
+    assert calls.count("chunk") == 1                # only the edited chunk
+
+    # …and the note written for the DIRTY content is reusable on the next
+    # run over the same tree (hashed, not treated as always-dirty):
+    calls.clear()
+    _run_deep(repo, monkeypatch, calls)
+    assert calls.count("chunk") == 0
+
+
+def test_worktree_shas_track_edits_deletes_and_untracked(tmp_path):
+    from luxe.gitkit import deep
+    repo = _init_repo(tmp_path / "r", {"a.py": "a = 1\n", "b.py": "b = 1\n"})
+    head = deep.git_file_shas(repo)
+    (repo / "a.py").write_text("a = 2\n")
+    (repo / "b.py").unlink()
+    (repo / "c.py").write_text("c = 1\n")
+    (repo / ".luxe").mkdir()
+    (repo / ".luxe" / "memory.md").write_text("m\n")
+    wt = deep.worktree_file_shas(repo)
+    assert wt["a.py"] != head["a.py"]
+    assert wt["a.py"] == _out(repo, "hash-object", "a.py")
+    assert "b.py" not in wt
+    assert wt["c.py"] == _out(repo, "hash-object", "c.py")
+    assert not any(k.startswith(".luxe/") for k in wt)
+
+
+def test_non_framing_index_js_edit_stays_incremental(tmp_path):
+    """13: the framing trigger matched ANY index.js / app.py / main.* anywhere;
+    only files the survey actually read (the saved framing list) count."""
+    from luxe.gitkit import deep
+    chunks = [deep.Chunk(index=i, files=[f"f{i}.py"], label="x",
+                         est_tokens=100) for i in range(4)]
+    pad = {f"f{i}.py": "s" for i in range(4)}
+    pad.update({f"p{i}.py": "s" for i in range(20)})
+    old = {**pad, "web/deep/index.js": "1", "README.md": "r"}
+    new = {**old, "web/deep/index.js": "2"}
+    plan = deep.plan_incremental(old_files=old, new_files=new, chunks=chunks,
+                                 baseline=deep.make_baseline(chunks),
+                                 added_recs=[], content_budget=1000,
+                                 framing=["README.md"])
+    assert plan.mode == "incremental"
+    new2 = {**old, "README.md": "r2"}                # a file the survey read
+    plan = deep.plan_incremental(old_files=old, new_files=new2, chunks=chunks,
+                                 baseline=deep.make_baseline(chunks),
+                                 added_recs=[], content_budget=1000,
+                                 framing=["README.md"])
+    assert plan.mode == "rebuild" and "README.md" in plan.reason
+
+
+def test_incremental_path_does_not_walk_the_whole_tree(tmp_path, monkeypatch):
+    """20: the incremental path enumerated (and line-counted) every file in the
+    repo just to find the handful of added ones."""
+    from luxe.gitkit import deep
+    repo = _bug_repo(tmp_path)
+    calls: list[str] = []
+    _run_deep(repo, monkeypatch, calls)
+    (repo / "core" / "newmod.py").write_text("n = 1\n" * 30)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "add newmod")
+
+    def boom(*a, **k):
+        raise AssertionError("whole-tree enumerate_files on the incremental path")
+    monkeypatch.setattr(deep, "enumerate_files", boom)
+    calls.clear()
+    out = _run_deep(repo, monkeypatch, calls)
+    assert "incremental:" in out and calls.count("chunk") == 1
+
+
+def test_symbols_for_is_built_once_per_partition():
+    from luxe.gitkit import deep
+
+    class _S:
+        def __init__(self, path, name):
+            self.path, self.name = path, name
+
+    class _Idx:
+        def __init__(self):
+            self._symbols = [_S(f"f{i}.py", f"s{i}") for i in range(50)]
+            self.reads = 0
+
+        @property
+        def symbols(self):
+            self.reads += 1
+            return self._symbols
+
+    idx = _Idx()
+    recs = [deep.FileRec(rel=f"f{i}.py", language="python", loc=1, bytes=4,
+                         tokens=1, top_dir=".", priority=2) for i in range(50)]
+    chunks = deep.build_chunks(recs, content_budget=1, symbol_index=idx)
+    assert len(chunks) == 50
+    assert idx.reads == 1                           # not once per chunk
+    by_file = {c.files[0]: c.symbols for c in chunks}
+    assert by_file["f3.py"] == ["s3"]
+
+
+def test_unanalyzed_chunk_is_not_cached(tmp_path, monkeypatch):
+    """16: an 'unanalyzed' (empty) chunk result was cached and reused, so a
+    transient empty pass stuck as a permanent coverage gap."""
+    from luxe.gitkit import deep
+    repo = _bug_repo(tmp_path)
+    calls: list[str] = []
+    _run_deep(repo, monkeypatch, calls, stub=_bug_stub(repo, calls, empty=True))
+    notes = list((deep._map_dir(repo) / "notes" / "gitaudit").glob("chunk-*.json"))
+    assert notes == []
+    calls.clear()
+    _run_deep(repo, monkeypatch, calls)
+    assert "leak-in-engine" in _xref_titles(repo)
+
+
+def test_note_whose_recovery_pass_aborted_is_not_cached(tmp_path, monkeypatch):
+    """16: a rambly chunk whose format-recovery pass ABORTED fell to heuristic
+    salvage and was cached as if complete."""
+    from luxe.gitkit import deep
+    repo = _bug_repo(tmp_path)
+    calls: list[str] = []
+    ramble = ("let me look. I need to check. wait, okay, hmm actually, "
+              "let me see\n" * 5
+              + "1. **High** `core/engine.py:2` — leak in engine\n")
+
+    def stub(backend, role_cfg, *, run_id="", extra_context="", **kw):
+        stage = _stage(run_id)
+        calls.append(stage)
+        if stage == "survey":
+            return _Res("Survey notes.")
+        if stage == "synthesis":
+            return _Res("# Repository audit\n**Findings: 1**\nok")
+        if stage == "format":
+            return _Res("", aborted=True)
+        return _Res(ramble)
+    _run_deep(repo, monkeypatch, calls, stub=stub)
+    assert "format" in calls
+    notes = list((deep._map_dir(repo) / "notes" / "gitaudit").glob("chunk-*.json"))
+    assert notes == []
