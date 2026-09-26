@@ -4,7 +4,18 @@ The 10-fixture v1 acceptance bench. Strict gates dispatch through a
 single pipeline; new fixtures must declare their per-requirement spec.
 
 ## Must
-- `vacuous_test` gate fires on `implement` + `tests_pass` only
+- `vacuous_test` gate fires on `implement` + `tests_pass` only, and only
+  for a test file the command demonstrably RUNS (2026-09): each copied test
+  is swapped for an unparseable body in the base worktree and the command
+  re-run; still rc 0 means the command never loads it → reported as
+  `unwired` in the outcome detail, no penalty
+- `gates_triggered` entries use ONE key, `name` (vacuous_test/orphan_file
+  wrote `gate` until 2026-09 — readers of old result.json accept both)
+- Diffs that feed grading run with `-M` and include the OLD side of every
+  rename, so a pure rename contributes no added lines
+- `regex_absent` scans the changed files PLUS every file that matched at
+  base_sha; a matching base file deleted instead of edited fires the
+  `deleted_target` gate
 - `min_added_lines` is a floor, not a ceiling
 - New fixtures land with a `requirements:` block (SpecDD Lever 1 schema)
 - Bench runs use `--work-dir ~/.luxe/bench-workspace` (variance leak fix)
