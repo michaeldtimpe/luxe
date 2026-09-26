@@ -45,13 +45,26 @@ def _filter_to_subset(
     all_instances: list[SweBenchInstance],
     subset_ids: list[str],
 ) -> list[SweBenchInstance]:
-    """Return instances whose instance_id is in subset_ids, preserving subset order."""
+    """Return instances whose instance_id is in subset_ids, preserving subset order.
+
+    Raises ValueError naming any subset id absent from the dataset — it used
+    to drop them silently, so an n=75 subset against a stale dump quietly
+    became an n=7x run whose rate was compared to n=75 baselines.
+    """
     by_id = {i.instance_id: i for i in all_instances}
-    out = []
-    for sid in subset_ids:
-        if sid in by_id:
-            out.append(by_id[sid])
-    return out
+    unknown = [sid for sid in subset_ids if sid not in by_id]
+    if unknown:
+        raise ValueError(f"{len(unknown)} subset id(s) not in the dataset: "
+                         f"{unknown[:10]}")
+    return [by_id[sid] for sid in subset_ids]
+
+
+def _is_reusable(cached: dict) -> bool:
+    """A per-instance summary the resume may reuse. Legacy summaries
+    (pre-resume) carry no patch; a setup_failed one recorded an infra fault,
+    not a prediction (pre-2026-09 runs cached those as empty patches)."""
+    return ("model_patch" in cached
+            and not str(cached.get("error", "")).startswith("setup_failed"))
 
 
 def _preflight_check_venv_pollution() -> int:
@@ -202,7 +215,11 @@ def main() -> int:
     all_instances = load_instances_from_json(args.dataset)
     if args.subset:
         ids = read_subset(args.subset)
-        instances = _filter_to_subset(all_instances, ids)
+        try:
+            instances = _filter_to_subset(all_instances, ids)
+        except ValueError as e:
+            print(f"  subset {args.subset}: {e}", file=sys.stderr)
+            return 2
     elif args.smoke:
         instances = all_instances[: args.smoke]
     else:
@@ -215,6 +232,7 @@ def main() -> int:
     print(f"output={args.output}")
 
     results = []
+    setup_failed: list[str] = []
     started = time.time()
 
     # Count cached vs fresh up front so the startup banner is honest.
@@ -224,7 +242,7 @@ def main() -> int:
         if sp.exists():
             try:
                 cached_summary = json.loads(sp.read_text())
-                if "model_patch" in cached_summary:
+                if _is_reusable(cached_summary):
                     cached_count += 1
             except (json.JSONDecodeError, OSError):
                 pass
@@ -242,9 +260,7 @@ def main() -> int:
         if inst_summary_path.exists():
             try:
                 cached = json.loads(inst_summary_path.read_text())
-                # Legacy summaries (pre-resume) don't carry the patch;
-                # treat them as a re-run candidate.
-                if "model_patch" not in cached:
+                if not _is_reusable(cached):
                     cached = None
             except (json.JSONDecodeError, OSError):
                 cached = None
@@ -293,11 +309,26 @@ def main() -> int:
             tiered_compact_phase_thresholds=args.tiered_compact_phase_thresholds,
             respond_terminal=args.respond_terminal,
         )
-        results.append(result)
-
         elapsed = time.time() - t0
         runtime_wall += elapsed
         runtime_done += 1
+
+        if result.error.startswith("setup_failed"):
+            # Infra (clone/fetch/reset), not the model: no patch was ever
+            # attempted. Recording it as an empty prediction cached it
+            # forever and graded it unresolved. Keep a breadcrumb WITHOUT
+            # `model_patch` (so the next run retries it) and leave it out of
+            # predictions.json.
+            setup_failed.append(result.instance_id)
+            inst_summary_path.write_text(json.dumps({
+                "instance_id": result.instance_id,
+                "wall_s": result.wall_s,
+                "error": result.error,
+            }, indent=2))
+            print(f"      ! {result.error[:200]} (infra; not cached, not predicted)",
+                  flush=True)
+            continue
+        results.append(result)
 
         # Save per-instance summary, including the model_patch so a
         # crashed/Ctrl-C run can resume by skipping completed instances.
@@ -326,9 +357,11 @@ def main() -> int:
     # Summary
     n_with_patch = sum(1 for r in results if r.model_patch.strip())
     summary = {
-        "n": len(instances),
+        "n": len(results),
         "n_with_patch": n_with_patch,
-        "patch_rate": (n_with_patch / len(instances)) if instances else 0.0,
+        "patch_rate": (n_with_patch / len(results)) if results else 0.0,
+        "n_setup_failed": len(setup_failed),
+        "setup_failed": setup_failed,
         "total_wall_s": sum(r.wall_s for r in results),
         "model_name": args.model_name,
         "started_at": started,
@@ -337,8 +370,12 @@ def main() -> int:
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2))
 
     print()
-    print(f"SWE-bench preds-only run: {n_with_patch}/{len(instances)} produced a non-empty patch")
+    print(f"SWE-bench preds-only run: {n_with_patch}/{len(results)} produced a non-empty patch")
     print(f"predictions.json written to {preds_path}")
+    if setup_failed:
+        print(f"  {len(setup_failed)} instance(s) failed SETUP (infra) and were left "
+              f"out — re-run to retry: {setup_failed[:5]}")
+        return 1
     print("next: feed predictions.json to the Docker harness for FAIL_TO_PASS scoring")
     return 0
 

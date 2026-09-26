@@ -99,11 +99,22 @@ def run_harness(
 
     # The harness writes per-instance reports under the cwd by default;
     # collect them into our output_dir for downstream aggregation.
-    return collect_results(run_id, output_dir)
+    return collect_results(run_id, output_dir, predictions=predictions)
 
 
-def collect_results(run_id: str, output_dir: Path) -> dict[str, HarnessResult]:
+def collect_results(
+    run_id: str,
+    output_dir: Path,
+    predictions: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, HarnessResult]:
     """Walk the harness's output and build {instance_id: HarnessResult}.
+
+    With `predictions`, the result covers EVERY predicted instance: the
+    harness skips empty patches entirely (no log dir, no report), so a
+    denominator built from the log dirs dropped them and inflated the
+    resolution rate. A predicted instance with no harness record is
+    unresolved — `empty_patch` in `raw` when the patch was empty,
+    `error="not_evaluated"` when a real patch never produced a report.
 
     swebench >= 4.x writes per-instance reports at
     `logs/run_evaluation/<run_id>/<model_name>/<instance_id>/report.json`
@@ -162,6 +173,15 @@ def collect_results(run_id: str, output_dir: Path) -> dict[str, HarnessResult]:
                     instance_id=iid, resolved=False, error="harness_error",
                 )
 
+    for iid, row in (predictions or {}).items():
+        if iid in out:
+            continue
+        if not str(row.get("model_patch") or "").strip():
+            out[iid] = HarnessResult(instance_id=iid, resolved=False,
+                                     raw={"empty_patch": True})
+        else:
+            out[iid] = HarnessResult(instance_id=iid, resolved=False,
+                                     error="not_evaluated")
     return out
 
 
