@@ -217,15 +217,27 @@ class Doctor:
 _MIN_FREE_GB = 40      # a champion swap writes ~28 GB of weights + KV headroom
 
 
-def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
+def _manifest_checks(doc: Doctor, slots, reachable: bool,
+                     served: list[str] | None = None) -> None:
     """Fallback-kit checks: manifest resolution, degrade state, weight presence.
 
     The 2026-07-29 incident this exists for: champion weights silently deleted,
     chat started fine and returned nothing. Nothing owned the assertion "these
-    weights should be here" — now this does. Never raises.
+    weights should be here" — now this does. Never raises. `served` is the
+    catalog `run_doctor` already fetched (None = unknown / not fetched).
     """
     try:
         cfg = slots.cfg
+        entry = backend_entry_for(slots)
+        is_omlx, engine_label = _engine_facts(slots)
+        if entry is not None and entry.is_billable():
+            # A billable endpoint is never a manifest main/fallback (luxe.sdd
+            # cloud carve-out), so "add a hosts: entry for it" would be a fix
+            # the contract forbids. Its catalog is the provider's, not a host's.
+            doc.add("host manifest", OK,
+                    f"n/a — {engine_label} is billable; manifests describe "
+                    "local weights only")
+            return
         # The SlotManager already resolved WHOSE manifest governs (this host
         # for sessions; the endpoint's host for `luxe ready --backend <name>`,
         # the drill rule) — never re-derive locally here, that was the bug
@@ -252,11 +264,15 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
                     f"restore it (`luxe pull {slots.degraded_from}`), then "
                     f"`/model chat {slots.degraded_from}`")
 
-        # Weight presence on the LOCAL store — a remote endpoint's disk is its
-        # own doctor's problem; served-catalog coverage is checked below.
+        # Weight presence on the LOCAL oMLX store — a remote endpoint's disk
+        # is its own doctor's problem; served-catalog coverage is checked
+        # below. `~/.omlx/models` is the only layout luxe knows: llama-server
+        # (neo) loads the paths in its preset, so reading the oMLX store
+        # there FAILED a working host's main as "not in the store".
         from luxe.chat.origin import endpoint_is_local
-        from luxe.modelstore import model_state
-        if endpoint_is_local(getattr(slots.backend, "base_url", "")):
+        from luxe.modelstore import hf_repo_for, model_state
+        local = endpoint_is_local(getattr(slots.backend, "base_url", ""))
+        if local and is_omlx:
             for mid in manifest.all_models():
                 state = model_state(mid)
                 role = ("main" if mid == manifest.main
@@ -268,23 +284,94 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool) -> None:
                     why = ("store entry dangles into a wiped cache"
                            if state == "dangling" else "not in the store")
                     doc.add(f"weights:{mid}", sev, f"{role} · {why}",
-                            f"`luxe pull {mid}` (kappa mount or HF)")
-        if reachable:
-            try:
-                served = set(slots.backend.list_models())
-            except Exception:
-                served = set()
-            is_omlx, engine_label = _engine_facts(slots)
-            served_fix = ("restart oMLX after provisioning "
-                          "(`brew services restart omlx`)" if is_omlx else
-                          f"add the model to {engine_label}'s preset and "
-                          "restart it, then re-run")
+                            _weights_fix(mid, state, hf_repo_for))
+        elif local:
+            doc.add("weights:store", OK,
+                    f"n/a — {engine_label} loads the files its own preset "
+                    "names (a real turn is the proof: `luxe smoke`)")
+        if reachable and served:
+            served_set = set(served)
+            served_fix = endpoint_fixes(entry)["served"]
             for mid in (manifest.main, manifest.fallback):
-                if mid and served and mid not in served:
+                if mid and mid not in served_set:
                     doc.add(f"served:{mid}", WARN, "not in the server catalog",
                             served_fix)
     except Exception as e:
         doc.add("host manifest", WARN, f"check errored: {e}")
+
+
+def _weights_fix(mid: str, state: str, hf_repo_for) -> str:
+    """Runnable fix for a missing/dangling manifest model.
+
+    A DANGLING entry's link text still names the HF repo it pointed at, and a
+    full `org/Name` is what routes `luxe pull` to HuggingFace — a bare name
+    can only be found on a mounted volume, which is not where a wiped HF
+    cache's weights live. Name the repo whenever the link gives it away.
+    """
+    repo = hf_repo_for(mid) if state == "dangling" else ""
+    if repo:
+        return (f"`luxe pull {repo}` (re-fetch from HuggingFace — the "
+                "dangling entry pointed there)")
+    return f"`luxe pull {mid}` (kappa mount; `luxe pull <org>/{mid}` for HF)"
+
+
+#: Deadline for `/doctor`'s one catalog GET, which doubles as its liveness
+#: probe. The client's own read timeout is sized for GENERATION (600s local,
+#: 2400s for the m5 entry) — wrong for a question asked during an outage.
+_LIVENESS_TIMEOUT_S = 4.0
+
+
+def _fetch_catalog(backend) -> list[str]:
+    """ONE bounded `/v1/models` GET: liveness and catalog in a single request.
+
+    `/doctor` used to ask the same endpoint the same question up to four
+    times (health, available_models, the manifest's served check, and the
+    remote-origin lookup) — four round-trips over a degraded link. Raises on
+    failure; the caller turns that into the endpoint line.
+    """
+    try:
+        return list(backend.list_models(timeout_s=_LIVENESS_TIMEOUT_S))
+    except TypeError:
+        # A stand-in predating the bound; it is a fake, nothing to hang on.
+        return list(backend.list_models())
+
+
+def endpoint_fixes(entry) -> dict[str, str]:
+    """Engine-aware fix strings for an endpoint: `start` (the server is not
+    there), `restart` (it is there and not answering), `served` (a manifest
+    model is missing from its catalog).
+
+    Shared by `/doctor`, `luxe ready` and `luxe smoke` so no surface prints
+    `brew services restart omlx` at a llama-server host (neo) or a cloud
+    endpoint again. `entry` None = the oMLX defaults. Never raises.
+    """
+    try:
+        is_omlx = True if entry is None else entry.is_omlx()
+        is_cloud = False if entry is None else entry.is_openrouter()
+        label = "oMLX" if entry is None else entry.engine_label()
+    except Exception:
+        is_omlx, is_cloud, label = True, False, "oMLX"
+    key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
+    # A cloud endpoint has no local process: "start the server" is the one fix
+    # that cannot possibly apply, and the real causes are the link and the key.
+    cloud_fix = (f"check the network (`/net`) and that ${key_env} is set "
+                 "(env or `~/.luxe/secrets.env`); `/usage` shows whether the "
+                 "account still has credits, `/backend <other>` to run local")
+    start = (cloud_fix if is_cloud else
+             "start it (`brew services start omlx`) or `/backend <other>`"
+             if is_omlx else
+             "start the server (on neo: `launchctl bootstrap gui/$UID "
+             "~/Library/LaunchAgents/com.micromind.llama-server.plist`), "
+             "or `/backend <other>`")
+    restart = (cloud_fix if is_cloud else
+               "`brew services restart omlx`, or `/backend <other>`"
+               if is_omlx else
+               "restart the server (on neo: `launchctl kickstart -k "
+               "gui/$UID/com.micromind.llama-server`), or `/backend <other>`")
+    served = ("restart oMLX after provisioning (`brew services restart omlx`)"
+              if is_omlx else
+              f"add the model to {label}'s preset and restart it, then re-run")
+    return {"start": start, "restart": restart, "served": served}
 
 
 def backend_entry_for(slots):
@@ -446,35 +533,28 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     is_cloud = _is_cloud(slots)
     entry = backend_entry_for(slots)
     key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
-    # A cloud endpoint has no local process: "start the server" is the one fix
-    # that cannot possibly apply, and the real causes are the link and the key.
-    cloud_fix = (f"check the network (`/net`) and that ${key_env} is set "
-                 "(env or `~/.luxe/secrets.env`); `/usage` shows whether the "
-                 "account still has credits, `/backend <other>` to run local")
-    start_fix = (cloud_fix if is_cloud else
-                 "start it (`brew services start omlx`) or `/backend <other>`"
-                 if is_omlx else
-                 "start the server (on neo: `launchctl bootstrap gui/$UID "
-                 "~/Library/LaunchAgents/com.micromind.llama-server.plist`), "
-                 "or `/backend <other>`")
-    restart_fix = (cloud_fix if is_cloud else
-                   "`brew services restart omlx`, or `/backend <other>`"
-                   if is_omlx else
-                   "restart the server (on neo: `launchctl kickstart -k "
-                   "gui/$UID/com.micromind.llama-server`), or `/backend <other>`")
+    fixes = endpoint_fixes(entry)
+
+    # Liveness AND catalog from one bounded GET (see `_fetch_catalog`). A
+    # non-200 is "there but not answering" (restart); anything else — refused,
+    # timed out, unroutable — is "not there" (start).
+    import httpx
 
     reachable = False
+    served: list[str] | None = None
     try:
-        reachable = bool(backend.health())
+        served = _fetch_catalog(backend)
+        reachable = True
+    except httpx.HTTPStatusError as e:
+        doc.add(f"{engine_label} endpoint", FAIL,
+                f"{name} {base_url} not responding "
+                f"(HTTP {e.response.status_code})", fixes["restart"])
     except Exception as e:
-        doc.add(f"{engine_label} endpoint", FAIL, f"{name} {base_url}: {e}",
-                start_fix)
+        doc.add(f"{engine_label} endpoint", FAIL,
+                f"{name} {base_url}: {str(e) or type(e).__name__}",
+                fixes["start"])
     else:
-        if reachable:
-            doc.add(f"{engine_label} endpoint", OK, f"{name} {base_url}")
-        else:
-            doc.add(f"{engine_label} endpoint", FAIL,
-                    f"{name} {base_url} not responding", restart_fix)
+        doc.add(f"{engine_label} endpoint", OK, f"{name} {base_url}")
 
     # Stale-process check. Placed directly under the endpoint because it
     # EXPLAINS the checks below it: a server running a Cellar tree brew
@@ -494,8 +574,10 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
                 f"`echo '{key_env}=<key>' >> ~/.luxe/secrets.env` "
                 "(or export it in this shell), then restart the session")
     elif is_omlx:
+        # The ENTRY's variable, not a hard-coded OMLX_API_KEY: the m5 entry
+        # reads OMLX_API_KEY_M5, and writing the other name fixes nothing.
         doc.add("API key", WARN, "no key resolved for this endpoint",
-                "`echo 'OMLX_API_KEY=<key>' >> ~/.luxe/secrets.env` "
+                f"`echo '{key_env}=<key>' >> ~/.luxe/secrets.env` "
                 "(or export it in this shell)")
     else:
         # llama-server is keyless unless started with --api-key. A standing
@@ -506,9 +588,15 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     model = slots.model_for("chat")
     if reachable:
         try:
-            available = set(slots.available_models())
+            # Same roster filter as `SlotManager.available_models`, applied
+            # to the catalog already in hand instead of a second GET.
+            available = set(slots.cfg.visible(served or [],
+                                              entry=slots.active_entry()))
         except Exception:
-            available = set()
+            try:
+                available = set(slots.available_models())
+            except Exception:
+                available = set()
         if available and model not in available:
             doc.add("chat model", FAIL, f"{model} is not served here",
                     f"`/model chat <id>`, or `luxe pull {model}`")
@@ -517,7 +605,7 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
         org = origin_mod.cached_origin_for(backend, model)
         if org.kind == "unknown":
             try:
-                org = origin_mod.origin_for(backend, model)
+                org = origin_mod.origin_for(backend, model, served=served)
             except Exception:
                 pass
         if is_cloud:
@@ -541,10 +629,10 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
             doc.add("weights", WARN, "location unreported by oMLX")
         else:
             # llama-server has no `/v1/models/status`, so there is no path to
-            # report and nothing to fix. The manifest `weights:<id>` check
-            # below is the one that actually verifies bytes on disk.
+            # report and nothing to fix; it loads what its own preset names.
             doc.add("weights", OK,
-                    f"{engine_label} reports no model path (checked below)")
+                    f"{engine_label} reports no model path (its preset "
+                    "owns it)")
     else:
         doc.add("chat model", WARN, f"{model} (unverified — endpoint down)",
                 "fix the endpoint above first, then re-run")
@@ -553,7 +641,7 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     # machine, and whether its weights are actually on disk. Config-only plus
     # local filesystem — runs in no-project sessions too. Guarded throughout
     # (doctor contract: nothing here may raise).
-    _manifest_checks(doc, slots, reachable)
+    _manifest_checks(doc, slots, reachable, served)
 
     try:
         free = shutil.disk_usage(Path.home()).free
