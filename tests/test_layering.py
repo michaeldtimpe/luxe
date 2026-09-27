@@ -25,9 +25,11 @@ SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "luxe"
 
 # Modules outside `chat/` that are ALLOWED a module-level `luxe.chat.*` import,
 # with the reason. `cli` is the composition root: it wires the CLI surface onto
-# the chat front-end, so it sits ABOVE chat and the direction is correct.
+# the chat front-end, so it sits ABOVE chat and the direction is correct. Since
+# the cli.py -> cli/ package split only the `chat`/`code` shells module holds
+# that import (`cli/__init__.py` re-exports through it).
 SANCTIONED_MODULE_LEVEL_CHAT_IMPORTS = {
-    "cli.py": {"luxe.chat.launch"},
+    "cli/chat.py": {"luxe.chat.launch"},
 }
 
 

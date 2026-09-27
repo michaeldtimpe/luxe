@@ -208,7 +208,7 @@ def _smoke_cli(monkeypatch, tmp_path, reports, repair_result):
     cfg_path = tmp_path / "chat.yaml"
     cfg_path.write_text("models:\n  monolith: Champ\nroles:\n  monolith:\n"
                         "    model_key: monolith\n")
-    monkeypatch.setattr(cli, "_default_chat_config", lambda: str(cfg_path))
+    monkeypatch.setattr(cli._common, "_default_chat_config", lambda: str(cfg_path))
     runs: list[int] = []
 
     def run_smoke(cfg, **kw):
@@ -220,7 +220,7 @@ def _smoke_cli(monkeypatch, tmp_path, reports, repair_result):
     def fake_repair(cfg, base_url, evidence, **kw):
         repairs.append(evidence)
         return repair_result
-    monkeypatch.setattr(cli, "_smoke_self_repair", fake_repair)
+    monkeypatch.setattr(cli.kit, "_smoke_self_repair", fake_repair)
 
     class _B:
         def __init__(self, *a, **k): ...
@@ -309,7 +309,7 @@ def _cli_cfg(monkeypatch, tmp_path):
     cfg_path = tmp_path / "chat.yaml"
     cfg_path.write_text("models:\n  monolith: Champ\nroles:\n  monolith:\n"
                         "    model_key: monolith\n")
-    monkeypatch.setattr(cli, "_default_chat_config", lambda: str(cfg_path))
+    monkeypatch.setattr(cli._common, "_default_chat_config", lambda: str(cfg_path))
 
     class _B:
         def __init__(self, *a, **k): ...
@@ -368,9 +368,9 @@ def test_ready_fix_restarts_only_on_a_stale_build_line(monkeypatch, tmp_path):
     docs[1].add("endpoint", inspection.OK, "http://127.0.0.1:8000")
     docs[1].add("oMLX build", inspection.OK, "0.6.4 (matches installed)")
     calls = []
-    monkeypatch.setattr(cli, "build_ready_doctor",
+    monkeypatch.setattr(cli.kit, "build_ready_doctor",
                         lambda cfg, repo: docs[min(len(calls), 1)])
-    monkeypatch.setattr(cli, "_smoke_self_repair",
+    monkeypatch.setattr(cli.kit, "_smoke_self_repair",
                         lambda cfg, url, ev, **kw: (calls.append(ev),
                                               RepairResult(attempted=True,
                                                            ok=True))[1])
@@ -381,7 +381,7 @@ def test_ready_fix_restarts_only_on_a_stale_build_line(monkeypatch, tmp_path):
 
     # Not stale → --fix says so and restarts nothing.
     calls.clear()
-    monkeypatch.setattr(cli, "build_ready_doctor", lambda cfg, repo: docs[1])
+    monkeypatch.setattr(cli.kit, "build_ready_doctor", lambda cfg, repo: docs[1])
     res = CliRunner().invoke(cli.main, ["ready", "--fix", "--repo", str(tmp_path)])
     assert res.exit_code == 0 and calls == []
     assert "nothing to restart" in res.output
@@ -394,8 +394,8 @@ def test_ready_without_fix_never_restarts(monkeypatch, tmp_path):
     _cli_cfg(monkeypatch, tmp_path)
     doc = inspection.Doctor()
     doc.add("oMLX build", inspection.WARN, _stale().detail, _stale().fix)
-    monkeypatch.setattr(cli, "build_ready_doctor", lambda cfg, repo: doc)
-    monkeypatch.setattr(cli, "_smoke_self_repair",
+    monkeypatch.setattr(cli.kit, "build_ready_doctor", lambda cfg, repo: doc)
+    monkeypatch.setattr(cli.kit, "_smoke_self_repair",
                         lambda *a: (_ for _ in ()).throw(AssertionError("restarted")))
     res = CliRunner().invoke(cli.main, ["ready", "--repo", str(tmp_path)])
     assert res.exit_code == 0 and "brew services restart omlx" in res.output
