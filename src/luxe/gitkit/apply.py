@@ -1,6 +1,6 @@
 """gitchange --apply / gitapply — the gated executor (gitkit's SOLE write path).
 
-Orchestrates N MONO `run_single` calls from Python (the deep.py/compare precedent —
+Orchestrates N MONO `run_single` calls from Python (the deep/compare precedent —
 NOT an in-agent repair loop / goal-runner): one per ordered plan step, each in WRITE
 mode on a dedicated branch, gated by a per-step diff + verify + interactive
 keep|discard. The SIX mandatory invariants (gitkit.sdd):
