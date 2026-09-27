@@ -348,6 +348,15 @@ class TestLuxeConfigEnvVar:
         monkeypatch.delenv("LUXE_CONFIG", raising=False)
         assert cli._default_chat_config().endswith("configs/chat.yaml")
 
+    def test_the_in_tree_default_is_the_repo_config(self, monkeypatch):
+        """`endswith` alone passes for a wrong parent depth (the 2026-09-26
+        cli.py -> cli/ package split moved the module one directory down):
+        pin that the default is the checkout's real configs/chat.yaml."""
+        monkeypatch.delenv("LUXE_CONFIG", raising=False)
+        repo_root = Path(__file__).resolve().parent.parent
+        assert (Path(cli._default_chat_config())
+                == repo_root / "configs" / "chat.yaml")
+
     def test_set_wins_over_the_default(self, monkeypatch, tmp_path):
         p = tmp_path / "neo.yaml"
         p.write_text("models: {}\n")
