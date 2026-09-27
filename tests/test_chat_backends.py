@@ -17,6 +17,7 @@ from rich.console import Console
 from luxe.backend import BackendError
 from luxe.chat import commands as cmd
 from luxe.chat import slots as slots_mod
+from luxe.chat import turn as turn_mod
 from luxe.chat.session import ChatSession
 from luxe.config import BackendEntry, PipelineConfig, RoleConfig
 
@@ -300,7 +301,7 @@ def test_repl_turn_backend_error_prints_hint_only_multi(monkeypatch):
     def _raise(*a, **k):
         raise BackendError("oMLX call failed: ConnectError")
 
-    monkeypatch.setattr(repl_mod, "run_single", _raise)
+    monkeypatch.setattr(turn_mod, "run_single", _raise)
 
     def _run(cfg) -> str:
         out = io.StringIO()
@@ -339,7 +340,7 @@ def test_repl_turn_unexpected_exception_keeps_session_alive(monkeypatch):
     def _raise(*a, **k):
         raise OSError(60, "Operation timed out")
 
-    monkeypatch.setattr(repl_mod, "run_single", _raise)
+    monkeypatch.setattr(turn_mod, "run_single", _raise)
 
     out = io.StringIO()
     console = Console(file=out, force_terminal=False, width=120)

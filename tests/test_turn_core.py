@@ -11,6 +11,7 @@ from rich.console import Console
 
 from luxe.chat import repl
 from luxe.chat import slots as slots_mod
+from luxe.chat import turn as turn_mod
 from luxe.chat.session import ChatSession
 from luxe.config import PipelineConfig, RoleConfig
 from luxe.memory import session as session_store
@@ -82,7 +83,7 @@ def test_prepare_turn_assembles_run_single_chat_call(_ctx, monkeypatch):
         captured["role_cfg"] = role_cfg
         return _FakeResult()
 
-    monkeypatch.setattr(repl, "run_single", fake_run_single)
+    monkeypatch.setattr(turn_mod, "run_single", fake_run_single)
     prep = repl.prepare_turn("do it", session, sm, cfg, frozenset(), lambda m: "review")
     res = prep.call(lambda tc: None, None, None)
 
@@ -110,7 +111,7 @@ def test_chat_slot_gets_conversational_persona(_ctx, monkeypatch):
     role's prompt ids to the conversational variant so it answers directly
     instead of running the code-maintenance orientation loop."""
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
     assert prep.slot == "chat"
     assert prep.role_cfg.system_prompt_id == _persona_id(prep.model)
@@ -124,7 +125,7 @@ def test_freeform_codey_message_stays_conversational(_ctx, monkeypatch):
     only picks the model. Previously the persona was keyed on slot == 'chat',
     so this message inherited the repo-maintenance persona."""
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("add a feature", session, sm, cfg, frozenset(),
                              lambda m: "implement")
     assert prep.slot == "code"     # model routing unchanged
@@ -138,7 +139,7 @@ def test_freeform_turn_clears_config_task_overlay(_ctx, monkeypatch):
     turn must not drag the manage/strict overlay along."""
     cfg, session, sm = _ctx
     cfg.roles["monolith"].task_overlay_id = "manage_strict_only"
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("can you explain how this repo builds?", session,
                              sm, cfg, frozenset(), lambda m: "summarize")
     assert prep.role_cfg.task_overlay_id == ""
@@ -151,7 +152,7 @@ def test_real_inference_heuristic_no_longer_flips_persona(_ctx, monkeypatch):
     from luxe.cli import _infer_task_type
 
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     for msg in ("explain the difference between threads and processes",
                 "I want to change my flight to Tuesday",
                 "how do I fix a flat tire?"):
@@ -165,7 +166,7 @@ def test_use_pinned_slot_keeps_baseline_persona(_ctx, monkeypatch):
     baseline maintenance persona."""
     cfg, session, sm = _ctx
     session.pinned_slot = "code"
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("add a feature", session, sm, cfg, frozenset(),
                              lambda m: "implement")
     assert prep.slot == "code"
@@ -177,7 +178,7 @@ def test_goal_rounds_keep_working_persona_on_chat_slot(_ctx, monkeypatch):
     /goal run it must stay a working turn, not flip conversational."""
     cfg, session, sm = _ctx
     session.goal_active = True
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("continue work", session, sm, cfg, frozenset(),
                              lambda m: "review")
     assert prep.slot == "chat"
@@ -188,7 +189,7 @@ def test_plan_drafting_keeps_working_persona(_ctx, monkeypatch):
     """/plan drafting turns route through prepare_turn with plan_mode=True and
     must not be flipped to the conversational persona."""
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("draft a plan", session, sm, cfg, frozenset(),
                              lambda m: "review", plan_mode=True)
     assert prep.role_cfg.system_prompt_id == "baseline"
@@ -196,7 +197,7 @@ def test_plan_drafting_keeps_working_persona(_ctx, monkeypatch):
 
 def test_note_tool_records_changed_files_and_fingerprint(_ctx, monkeypatch):
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("x", session, sm, cfg, frozenset(), lambda m: "review")
 
     prep.note_tool(_TC("edit_file", path="src/a.py"))
@@ -207,7 +208,7 @@ def test_note_tool_records_changed_files_and_fingerprint(_ctx, monkeypatch):
 
 def test_finalize_turn_builds_outcome_and_persists(_ctx, monkeypatch):
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
     prep.note_tool(_TC("edit_file", path="b.py"))
     result = prep.call(lambda tc: None, None, None)
@@ -227,7 +228,7 @@ def test_finalize_turn_stamps_backend_on_assistant_record(_ctx, monkeypatch):
     import json
 
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(), lambda m: "review")
     result = prep.call(lambda tc: None, None, None)
     repl.finalize_turn(session, prep, result, interrupted=False,
@@ -241,7 +242,7 @@ def test_finalize_turn_stamps_backend_on_assistant_record(_ctx, monkeypatch):
 def test_line_run_turn_still_works_headless(_ctx, monkeypatch):
     """The non-terminal line path runs end-to-end through the new core."""
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
     outcome = repl._run_turn("hi", session, sm, cfg, frozenset(), out,
                              repl.CancelToken(), lambda m: "review")
@@ -259,7 +260,7 @@ def test_finalize_interrupted_turn_records_observed_tool_calls(_ctx, monkeypatch
     import json
 
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("probe the network", session, sm, cfg, frozenset(),
                              lambda m: "review")
     prep.note_tool(_TC("bash", command="curl -v https://x"))
@@ -282,7 +283,7 @@ def test_finalize_interrupted_turn_persists_partial_stream(_ctx, monkeypatch):
     import json
 
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("hi", session, sm, cfg, frozenset(), lambda m: "review")
 
     repl.finalize_turn(session, prep, None, interrupted=True, message="hi",
@@ -299,7 +300,7 @@ def test_finalize_completed_turn_ignores_partial_text(_ctx, monkeypatch):
     """A completed turn keeps the model's final text even when a stream buffer
     is passed (it always is by the front-ends)."""
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("hi", session, sm, cfg, frozenset(), lambda m: "review")
     result = prep.call(lambda tc: None, None, None)
     outcome = repl.finalize_turn(session, prep, result, interrupted=False,
@@ -318,7 +319,7 @@ def test_prepare_turn_passes_cancel_and_on_start_to_chat_bash(_ctx, monkeypatch)
     fs_mod.set_repo_root(session.repo_path)
     session.write_enabled = True
     session.unrestricted_bash = True
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
 
     started: list = []
     tok = repl.CancelToken()
@@ -330,7 +331,7 @@ def test_prepare_turn_passes_cancel_and_on_start_to_chat_bash(_ctx, monkeypatch)
         bash_fn = kw["extra_tool_fns"]["bash"]
         return _FakeResult()
 
-    monkeypatch.setattr(repl, "run_single", fake_run_single)
+    monkeypatch.setattr(turn_mod, "run_single", fake_run_single)
     prep = repl.prepare_turn("run it", session, sm, cfg, frozenset(),
                              lambda m: "review", cancel=tok,
                              on_tool_start=started.append)
@@ -349,7 +350,7 @@ def test_finalize_turn_invalidates_scan_cache_when_a_sdd_is_written(_ctx, monkey
     from luxe import spec_resolver
 
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     dropped: list = []
     monkeypatch.setattr(spec_resolver, "invalidate_scan_cache", dropped.append)
 
@@ -366,7 +367,7 @@ def test_finalize_turn_keeps_scan_cache_for_ordinary_writes(_ctx, monkeypatch):
     from luxe import spec_resolver
 
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     dropped: list = []
     monkeypatch.setattr(spec_resolver, "invalidate_scan_cache", dropped.append)
 
@@ -387,7 +388,7 @@ def test_the_conversational_persona_names_the_model_serving_the_turn(
     from luxe.agents.prompts import get as get_prompt
 
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("hello", session, sm, cfg, frozenset(),
                              lambda m: "review")
     system = get_prompt(prep.role_cfg.system_prompt_id).system
@@ -405,7 +406,7 @@ def test_a_pinned_turn_keeps_the_unparameterised_maintenance_persona(
 
     cfg, session, sm = _ctx
     session.pinned_slot = "code"
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     prep = repl.prepare_turn("do the thing", session, sm, cfg, frozenset(),
                              lambda m: "implement")
     assert prep.role_cfg.system_prompt_id == "baseline"
@@ -445,7 +446,7 @@ def test_aborted_turn_is_reported_and_recorded(_ctx, monkeypatch):
     the REPL rendered five SUCCESSFUL blank replies, with not one `error`
     record in the transcript to say what happened."""
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _AbortedResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _AbortedResult())
     out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
 
     outcome = repl._run_turn("hi", session, sm, cfg, frozenset(), out,
@@ -498,7 +499,7 @@ def test_aborted_non_backend_turn_skips_recovery(_ctx, monkeypatch):
 
 def test_healthy_turn_writes_no_error_record(_ctx, monkeypatch):
     cfg, session, sm = _ctx
-    monkeypatch.setattr(repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
     repl._run_turn("hi", session, sm, cfg, frozenset(), out,
                    repl.CancelToken(), lambda m: "review")

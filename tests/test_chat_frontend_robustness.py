@@ -20,6 +20,7 @@ from luxe.backend import BackendError
 from luxe.chat import commands as cmd
 from luxe.chat import repl as repl_mod
 from luxe.chat import slots as slots_mod
+from luxe.chat import turn as turn_mod
 from luxe.chat.render import ChatCancelled
 from luxe.chat.session import ChatSession, ChatTurn
 from luxe.config import PipelineConfig, RoleConfig
@@ -146,7 +147,7 @@ def test_1_repl_backend_error_with_markup_does_not_end_the_session(monkeypatch):
     def _raise(*a, **k):
         raise BackendError(f"oMLX returned 500: {NASTY}")
 
-    monkeypatch.setattr(repl_mod, "run_single", _raise)
+    monkeypatch.setattr(turn_mod, "run_single", _raise)
     out = _repl(["hello", "again"])
     # Both prompts ran: the handler's print used to raise MarkupError from
     # INSIDE the except, escaping the loop on the first failure.
@@ -384,7 +385,7 @@ def test_6_a_turn_that_errors_after_billing_still_counts(monkeypatch):
         backend.cost_total_usd = getattr(backend, "cost_total_usd", 0.0) + 0.5
         raise BackendError("upstream 502 after a billed step")
 
-    monkeypatch.setattr(repl_mod, "run_single", _bill_then_fail)
+    monkeypatch.setattr(turn_mod, "run_single", _bill_then_fail)
     real_new = ChatSession.__init__
 
     def _capture(self, *a, **k):
@@ -405,7 +406,7 @@ def test_7_project_switch_moves_languages_for_the_next_turn(monkeypatch, tmp_pat
         got["languages"] = k.get("languages")
         return _Result()
 
-    monkeypatch.setattr(repl_mod, "run_single", _run_single)
+    monkeypatch.setattr(turn_mod, "run_single", _run_single)
     target = tmp_path / "other"
     target.mkdir()
 
@@ -582,7 +583,7 @@ def test_13_an_interrupted_turn_does_not_cancel_the_next_command(monkeypatch, tm
         seen["cancel"].requested = True
         raise ChatCancelled()
 
-    monkeypatch.setattr(repl_mod, "run_single", _interrupted)
+    monkeypatch.setattr(turn_mod, "run_single", _interrupted)
     repo = tmp_path / "r"
     repo.mkdir()
     _repl(["hello", "/gitaudit"], repo=str(repo))
@@ -665,7 +666,7 @@ def test_17_tui_stream_buffer_is_chunked_and_bounded(tmp_path, monkeypatch):
             k["on_token"](chunk)
         return _Result()
 
-    monkeypatch.setattr(repl_mod, "run_single", _streaming)
+    monkeypatch.setattr(turn_mod, "run_single", _streaming)
 
     async def scenario():
         app = _app(tmp_path, keep_loaded=True)
@@ -702,7 +703,7 @@ def test_19_attachments_are_restaged_when_the_turn_fails(monkeypatch, tmp_path):
     def _raise(*a, **k):
         raise BackendError("oMLX call failed: ConnectError")
 
-    monkeypatch.setattr(repl_mod, "run_single", _raise)
+    monkeypatch.setattr(turn_mod, "run_single", _raise)
     out = _repl([f"/attach {f}", "summarise it", "/attach"])
     assert "still staged" in out
     assert "pending attachments" in out        # `/retry` would resend it
