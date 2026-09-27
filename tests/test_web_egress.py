@@ -161,6 +161,7 @@ def test_environment_proxies_are_ignored(dns, loopback_is_public, port,
     "http://example.com/\x00",
     "http://user:pw@example.com/",
     "http://[fe80::1%25en0]/",
+    "http://[2606:4700::1111%25en0]/",        # zone id on a GLOBAL address
 ])
 def test_ambiguous_urls_are_refused_before_resolution(dns, url):
     with pytest.raises(WebError):
