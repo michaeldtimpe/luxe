@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from luxe import backend as backend_mod
-from luxe.backend import Backend, BackendError, RetryDecision, classify_failure
+from luxe.backend import Backend, BackendError, classify_failure
 
 
 # --- classify_failure -------------------------------------------------------
@@ -174,17 +174,23 @@ def test_chat_exhausts_retries(monkeypatch):
     assert transport.calls == 3
 
 
-def test_chat_invokes_on_retry_callback(monkeypatch):
+def test_a_retry_is_observable_in_the_log_and_the_response(monkeypatch, caplog):
+    """Was `on_retry=` — a callback no production caller ever passed (2026-09
+    review). A retry is observable where production actually reads it: the
+    `decision=` log line (debug.log; luxe.sdd) and `ChatResponse.retries`."""
     monkeypatch.setattr("luxe.backend.time.sleep", lambda s: None)
     transport = _MockTransport([
         _err_response(503, "loading"),
         _ok_response(),
     ])
     backend = _backend(transport, max_attempts=3)
-    seen: list[RetryDecision] = []
-    backend.chat([{"role": "user", "content": "hi"}], on_retry=lambda d, a: seen.append(d))
-    assert len(seen) == 1
-    assert seen[0].retry
+    with caplog.at_level(logging.WARNING, logger="luxe.backend"):
+        resp = backend.chat([{"role": "user", "content": "hi"}])
+    assert resp.retries == 1
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines == [
+        "backend test status=503 body='loading' decision=RetryDecision("
+        "retry=True, reason='5xx-transient-loading', delay_s=1.0)"]
 
 
 # --- 429 is the one 4xx worth retrying (2026-08-17, openrouter) -------------

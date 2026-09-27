@@ -81,7 +81,10 @@ BAR_SESSIONS = 2
 _TOOL_CALL_TAG_RE = re.compile(r"<tool_call>")
 _RETRY_RE = re.compile(
     r"(transient-\w+|5xx-transient-\S+|5xx-terminal-\S+|5xx-empty-\w+|"
-    r"4xx-\d+|unknown-error-\w+|exhausted-attempts|unexpected-\d+)")
+    r"4xx-\d+|unknown-error-\w+|exhausted-attempts|unexpected-\d+|"
+    # 2026-09-26 classes (backend.py): terminal answered-failure shapes and
+    # the no-longer-retried progress stall.
+    r"200-error-body|200-malformed-body|stream-error-chunk|progress-stall)")
 
 
 @dataclass
