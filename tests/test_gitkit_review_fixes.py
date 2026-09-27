@@ -192,9 +192,12 @@ def test_failed_commit_is_not_reported_kept(tmp_path, _cfg, apply_env):
     fake, calls = _stub(repo, {"S1": {"main.py": "def f():\n    return 2\n"},
                                "S2": {"other.py": "y = 2\n"}})
     con = _tty_console()
-    apply_env.run_apply(repo_path=str(repo), cfg=_cfg, console=con,
-                        reader=lambda _p: "keep", run_single_fn=fake)
+    rc = apply_env.run_apply(repo_path=str(repo), cfg=_cfg, console=con,
+                             reader=lambda _p: "keep", run_single_fn=fake)
     out = con.file.getvalue()
+    # a stopped run is not a finished one: non-zero, says so, no merge advice
+    assert rc == 1
+    assert "stopped" in out and "merge:" not in out
     assert "kept=0" in out and "failed=1" in out
     assert "lint says no" in out
     assert calls == ["S1"]                        # stopped; S2 never ran
@@ -928,3 +931,49 @@ def test_is_dirty_treats_git_failure_as_dirty(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
     assert pr.is_dirty(plain) is True
+
+
+def test_operator_file_created_mid_run_survives_discard_and_keep(
+        tmp_path, _cfg, apply_env):
+    """Review follow-up: the revert's blanket `clean -fd` deleted untracked
+    files the OPERATOR created mid-run (irreversibly), and keep's `add -A`
+    would have committed them. Only the step pass's own creations are
+    touched."""
+    repo = _repo(tmp_path)
+    _save_plan(repo, [_step("S1"), _step("S2")])
+    fake, _ = _stub(repo, {"S1": {"pkg/newmod.py": "x = 1\n"},
+                           "S2": {"main.py": "def f():\n    return 2\n"}})
+    answers = iter(["discard", "keep"])
+    wrote: list[bool] = []
+
+    def reader(p):
+        # the operator jots a file (once) while reviewing S1's diff
+        if not wrote:
+            (repo / "operator-notes.txt").write_text("mine\n")
+            wrote.append(True)
+        return next(answers)
+    rc = apply_env.run_apply(repo_path=str(repo), cfg=_cfg,
+                             console=_tty_console(), reader=reader,
+                             run_single_fn=fake)
+    assert rc == 0
+    assert (repo / "operator-notes.txt").read_text() == "mine\n"   # survived
+    assert not (repo / "pkg").exists()           # the step's own dir is gone
+    committed = _out(repo, "show", "--name-only", "--pretty=", "HEAD").split()
+    assert committed == ["main.py"]              # operator file not swept in
+    assert _out(repo, "status", "--porcelain") == "?? operator-notes.txt"
+
+
+def test_reduce_empty_findings_is_a_miss_that_keeps_inputs():
+    """Review follow-up: a reduce pass answering `{"findings": []}` parsed
+    "successfully" and dropped the batch's findings AND markdown notes."""
+    from luxe.gitkit import deep
+    d = deep.empty_digest()
+    d["provisional_findings"] = [_finding(0, "high")]
+    d["markdown_notes"] = [{"chunk": 1, "label": "x", "source": "md_clean",
+                            "md": "- **medium** `n.py:2` — a note finding"}]
+
+    def empty_pass(goal, ctx, label, role=None):
+        return _Res('```json\n{"findings": []}\n```')
+    out = deep._reduce_findings(d, eff_ctx=100_000, pass_fn=empty_pass)
+    assert [f["title"] for f in out["provisional_findings"]] == ["finding 0"]
+    assert len(out["markdown_notes"]) == 1
