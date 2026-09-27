@@ -530,7 +530,7 @@ luxe/
 │   ├── mcp.yaml                                  # MCP client + server policy
 │   └── pr.yaml                                   # PR cycle config
 ├── src/luxe/
-│   ├── cli.py                  # luxe maintain | pr | runs | serve | check | unload
+│   ├── cli/                    # the `luxe` CLI: kit (ready/smoke/…), pull, git, maint, chat
 │   ├── luxe.sdd                # root architectural contract
 │   ├── pr.py                   # branch → commit → test → push → PR
 │   ├── locks.py                # per-repo flock

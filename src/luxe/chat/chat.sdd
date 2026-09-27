@@ -7,13 +7,15 @@ never touches this module.
 
 ## Must
 - `chat/launch.py` owns the STARTUP path of `luxe chat` / `luxe code`
-  (2026-08-04 lift out of cli.py, behavior unchanged): the shared Click option
+  (2026-08-04 lift out of the then-single cli.py, behavior unchanged; the CLI
+  is the `luxe/cli/` package since 2026-09-26): the shared Click option
   list, `_run_interactive` (resolve project → bounded index → repo lock → MCP
   → front-end selection → teardown), `_build_chat_indexes` + its
   `LUXE_INDEX_MAX_*` bounds, `_resolve_theme_name`, `_apply_slot_overrides`.
-  `cli.chat_cmd` / `cli.code_cmd` are two-line shells that differ ONLY in the
-  `require_project` / `start_write` posture, and `cli` re-exports every moved
-  private so `luxe.cli._X` keeps resolving. `cli` imports this module; this
+  `cli.chat_cmd` / `cli.code_cmd` (in `cli/chat.py`) are two-line shells that
+  differ ONLY in the `require_project` / `start_write` posture, and `cli`
+  re-exports every moved private so `luxe.cli._X` keeps resolving. `cli`
+  (via `cli/chat.py`) imports this module; this
   module imports `cli` only INSIDE functions (`_resolve_repo`,
   `_default_chat_config`, `_default_mcp_config_hint`,
   `_languages_from_paths`) — never at module level, or the two would deadlock
