@@ -1301,6 +1301,16 @@ def run_agent(
             if tc.name in _WRITE_TOOLS and not executed.error:
                 st.writes_seen += 1
                 st.post_write_idle_tools = 0
+                # A write changes what every observation tool would return, so
+                # "you already called this — the result was provided above" is
+                # false for any call made before it. Keyed on args alone, the
+                # dedup refused post-write re-verification (`bash` pytest,
+                # `grep`, `typecheck`): 174 such refusals across 122 runs in
+                # ~/.luxe/runs (2026-09 review), each also counted toward the
+                # repeat-streak abort. Write keys survive, so a repeated
+                # identical write is still deduplicated as before.
+                st.seen_calls = {k for k in st.seen_calls
+                                 if k.partition(":")[0] in _WRITE_TOOLS}
                 # forge-hybrid Phase 2 (A) — capture compaction phase at the
                 # first successful write. Used by the resolve-time telemetry
                 # to attribute write-step gating to compaction state. Fires
