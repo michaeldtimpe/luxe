@@ -7,8 +7,11 @@ here too, so the two postures cannot drift apart.
 The handful of names this reaches back into `cli` for (`_chat_cfg`,
 `_default_mcp_config_hint`, `_languages_from_paths`, `_select_backend`)
 are imported INSIDE `_run_interactive`. `cli` imports this module at module
-level, so a top-level import back would be circular — and the late binding is
-also what keeps `monkeypatch.setattr(cli, ...)` working exactly as before.
+level (from `cli/chat.py`), so a top-level import back would be circular — and
+the late binding reads the `luxe.cli` package attributes at call time. Since
+the 2026-09-26 package split those are re-exports of `luxe.cli._common`, so
+`_chat_cfg`'s own lookup of `_default_chat_config` is patched at
+`luxe.cli._common`.
 (Repo resolution now comes from `luxe.gitclone.resolve_repo` at module level
 — moved out of `cli` 2026-08-05, deferred-list #6.)
 """

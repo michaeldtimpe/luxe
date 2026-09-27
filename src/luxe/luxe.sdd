@@ -140,7 +140,8 @@ auto-memory.
 - LAYERING is one-directional and TESTED (`tests/test_layering.py`,
   2026-08-04). `chat/` is the top tier and may reach down; nothing below it
   imports `luxe.chat.*` at module level (`cli` is the one sanctioned
-  exception — it is the composition root and sits above chat). `agents/`
+  exception — it is the composition root and sits above chat; within the
+  package only `cli/chat.py` holds that import). `agents/`
   never imports `chat/` at all. Code that two tiers genuinely share lives in
   a NEUTRAL root-tier module: `luxe/mounts.py` (the `mount(8)` parse, shared
   by `chat.origin` and `modelstore`), `luxe/cancel.py`
@@ -183,13 +184,25 @@ auto-memory.
   that surfaces as `rc=124` with a message, because a credential prompt on an
   inherited stdin has no deadline at all
 - The `luxe maintain` PIPELINE lives in `luxe/maintain.py`
-  (`maintain_pipeline`), not in `cli.py`; `cli.maintain` is a Click shell that
-  forwards its eleven parameters unchanged. Both benchmark adapters spawn
-  `python -m luxe.cli maintain`, so the command name, arguments, and option
+  (`maintain_pipeline`), not in the CLI; `cli.maintain` (defined in
+  `cli/maint.py`) is a Click shell that forwards its eleven parameters
+  unchanged. Both benchmark adapters spawn `python -m luxe.cli maintain`
+  (served by `cli/__main__.py`), so the command name, arguments, and option
   surface are frozen — check `luxe maintain --help` against the previous
-  revision before shipping a change there. `maintain.py` imports `cli` only
-  INSIDE the function (`_resolve_repo`, `_infer_task_type`); `cli` imports it
-  at module level
+  revision before shipping a change there. `maintain.py` does not import
+  `cli` at all; `cli/maint.py` imports it at module level
+- The CLI is the PACKAGE `luxe/cli/` (split from the single `cli.py`
+  2026-09-26, behavior and `--help` byte-identical): `_common.py` holds the
+  root group `main` (entry point stays `luxe.cli:main`), `AliasedGroup`, the
+  shared console and cross-command helpers; commands live in `kit.py`
+  (ready/doctor, smoke, repair, outage, net, planeproxy, claudecode, unload,
+  update), `pull.py`, `git.py` (gitaudit/gitchange/gitapply, init),
+  `maint.py` (maintain, compare, pr, serve, runs, check) and `chat.py`
+  (chat/code shells); hidden aliases are registered in `__init__.py`, which
+  re-exports every name the old module had so `from luxe.cli import X` keeps
+  working. A re-export is a copied binding: a monkeypatch must target the
+  submodule that LOOKS THE NAME UP (`luxe.cli._common._default_chat_config`,
+  `luxe.cli.kit._smoke_self_repair`, …) — patching `luxe.cli.X` is inert
 - `~/.luxe` is spelled ONCE, in `luxe/paths.py` (`luxe_home()`), and resolved
   per call so a test that moves `$HOME` is obeyed. Deliberately NOT
   configurable — every one of those paths is also written down in OUTAGE.md.
