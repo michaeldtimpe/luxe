@@ -1014,7 +1014,8 @@ def test_save_map_crash_mid_write_keeps_old_breadcrumb(tmp_path, monkeypatch):
             raise OSError("disk full")
         return real_replace(src, dst, *a, **kw)
 
-    monkeypatch.setattr(deep.os, "replace", flaky_replace)
+    # `os.replace` is called from deep/mapcache.py (`_atomic_write_text`)
+    monkeypatch.setattr(deep.mapcache.os, "replace", flaky_replace)
     with pytest.raises(OSError):
         deep.save_map(target, head="h2", survey_notes="new notes",
                       chunks=[deep.Chunk(index=0, files=["b.py"], label="b")],
