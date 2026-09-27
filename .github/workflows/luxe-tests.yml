@@ -34,6 +34,12 @@ jobs:
       # `chat` is not optional here: luxe's mission is the interactive
       # fallback front-end, and without textual/prompt_toolkit the whole TUI
       # module import-skips — 26 tests silently not run.
+      # luxe's grep tool shells out to ripgrep; without it three grep tests
+      # fail (FileNotFoundError: 'rg') and main has been red since at least
+      # 59b9f18. Every fleet host has rg (brew), so the runner should too.
+      - name: Install ripgrep
+        run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep
+
       - name: Sync dependencies
         run: uv sync --extra dev --extra chat
 
