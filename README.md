@@ -195,7 +195,7 @@ override with `LUXE_HOME`):
   the `task_overlay_id: manage_strict_only` line → `RoleConfig` baseline
   prompts). Equivalent to `luxe compare` mode-1's "bare champion" side.
 - **`luxe-full`** flips every *validated* lever to `1`. The three default-OFF
-  *refuted* experimental flags (`LUXE_RESPOND_TERMINAL`,
+  *refuted* experimental flags (`LUXE_RESPOND_TERMINAL` — now removed,
   `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`, `LUXE_EARLY_BAIL_COMMIT_ONLY`) stay off.
 - The model weights never change — bare vs full is purely harness scaffolding.
 - chat starts read-only; type `/write` in the REPL to enable edits + `bash`.

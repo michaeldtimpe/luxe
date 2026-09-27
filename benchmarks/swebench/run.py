@@ -182,14 +182,6 @@ def main() -> int:
                         "trigger. Use to capture phase-1 benefits without phase-3 "
                         "destruction (forge-hybrid Phase 2 (A) n=75 4-arm sweep "
                         "finding). No effect without --tiered-compact.")
-    p.add_argument("--respond-terminal", action="store_true",
-                   help="forge-hybrid Phase 3 (B1): set LUXE_RESPOND_TERMINAL=1 so "
-                        "the agent surface exposes the `respond` terminal tool. The "
-                        "loop intercepts respond calls BEFORE dispatch and applies 4 "
-                        "watchdogs (compaction-phantom, early-respond, no-writes-late, "
-                        "passive-surrender). When a respond passes all gates the loop "
-                        "terminates cleanly with result.final_text set. Default off; "
-                        "baseline is byte-identical when this flag is absent.")
     args = p.parse_args()
 
     if not args.dataset.is_file():
@@ -291,7 +283,6 @@ def main() -> int:
             tiered_compact=args.tiered_compact,
             tiered_compact_threshold=args.tiered_compact_threshold,
             tiered_compact_phase_thresholds=args.tiered_compact_phase_thresholds,
-            respond_terminal=args.respond_terminal,
         )
         results.append(result)
 
