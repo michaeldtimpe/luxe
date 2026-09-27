@@ -495,6 +495,21 @@ def run_deep_report(
     digest = empty_digest()
     from luxe.gitkit.runner import extract_report
 
+    def _record_chunk(c: Chunk, contribution: dict, n_timed: int) -> None:
+        """The shared tail of a FRESHLY analyzed chunk, for every kind: cache
+        its contribution (unless diff mode, or any of its passes aborted / it
+        came back unanalyzed — `_cacheable`), then refresh the run's
+        xref.json from the digest as it stands now."""
+        if chunks_override is None and _cacheable(contribution,
+                                                  timings[n_timed:]):
+            save_chunk_note(
+                target, kind, c, head=head,
+                file_shas={r: current_shas.get(r, "") for r in c.files},
+                contribution=contribution,
+                wall_s=(timings[-1].wall_s if timings else 0.0))
+        if work_dir is not None:
+            (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
+
     # --- Stage 2: per-chunk analysis ----------------------------------------
     chunk_hint = _CHUNK_HINTS[kind]
     try:
@@ -570,16 +585,7 @@ def run_deep_report(
                     contribution["unparsed"] = label
                     _emit(f"chunk {c.index + 1} produced no usable steps "
                           "(empty/truncated) — flagged as unanalyzed")
-                if chunks_override is None and _cacheable(contribution,
-                                                          timings[n_timed:]):
-                    save_chunk_note(
-                        target, kind, c, head=head,
-                        file_shas={r: current_shas.get(r, "")
-                                   for r in c.files},
-                        contribution=contribution,
-                        wall_s=(timings[-1].wall_s if timings else 0.0))
-                if work_dir is not None:
-                    (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
+                _record_chunk(c, contribution, n_timed)
                 continue
 
             note_src = None
@@ -622,15 +628,7 @@ def run_deep_report(
                 contribution["unparsed"] = label
                 _emit(f"chunk {c.index + 1} produced no usable findings "
                       f"(empty/truncated) — flagged as unanalyzed")
-            if chunks_override is None and _cacheable(contribution,
-                                                      timings[n_timed:]):
-                save_chunk_note(
-                    target, kind, c, head=head,
-                    file_shas={r: current_shas.get(r, "") for r in c.files},
-                    contribution=contribution,
-                    wall_s=(timings[-1].wall_s if timings else 0.0))
-            if work_dir is not None:
-                (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
+            _record_chunk(c, contribution, n_timed)
     except (ChatCancelled, KeyboardInterrupt):
         if work_dir is not None:
             (work_dir / "xref.json").write_text(json.dumps(digest, indent=2))
