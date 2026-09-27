@@ -1,0 +1,28 @@
+{
+ "head": "3c382480e5435873f052175a0d01d64458751a36",
+ "files": [
+  "src/util.py"
+ ],
+ "file_shas": {
+  "src/util.py": "0049ebf5110ce020a4534c1302b6bc5dcab1fb0a"
+ },
+ "contribution": {
+  "parsed": {
+   "findings": [
+    {
+     "title": "t1",
+     "severity": "high",
+     "evidence": [
+      "src/util.py:1"
+     ]
+    }
+   ]
+  },
+  "note": {
+   "label": "src",
+   "md": "- **high** `src/util.py:1` x",
+   "source": "md_clean"
+  }
+ },
+ "wall_s": 1.5
+}
