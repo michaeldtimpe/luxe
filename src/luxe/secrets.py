@@ -49,7 +49,11 @@ def _from_file(name: str) -> str:
 # run each paid it again for an answer that cannot change mid-process. Misses
 # are cached too: a keyless host (neo's llama-server) is exactly the one that
 # paid on every call. env and secrets.env stay live (cheap, and editable).
+# Only DEFINITIVE answers are cached: a found key, or `security`'s exit 44
+# ("item not found"). A locked keychain, a denied prompt or a timeout is
+# transient — caching it would pin "no key" for the life of the process.
 _KEYCHAIN_CACHE: dict[str, str] = {}
+_SECURITY_NOT_FOUND = 44
 
 
 def _from_keychain(name: str) -> str:
@@ -60,9 +64,14 @@ def _from_keychain(name: str) -> str:
             ["security", "find-generic-password", "-s", name, "-w"],
             capture_output=True, text=True, timeout=3,
         )
-        value = r.stdout.strip() if r.returncode == 0 else ""
     except Exception:
         return ""          # not cached: a timeout may be transient
+    if r.returncode == 0:
+        value = r.stdout.strip()
+    elif r.returncode == _SECURITY_NOT_FOUND:
+        value = ""
+    else:
+        return ""          # locked / denied: transient, ask again next time
     _KEYCHAIN_CACHE[name] = value
     return value
 

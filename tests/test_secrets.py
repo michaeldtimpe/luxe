@@ -107,3 +107,24 @@ def test_keychain_is_asked_once_per_process_per_name(monkeypatch, tmp_path):
     # env still wins, live (not cached behind the keychain answer)
     monkeypatch.setenv("CACHE_PROBE_KEY", "late")
     assert secrets.resolve_api_key("CACHE_PROBE_KEY") == "late"
+
+
+def test_a_locked_keychain_is_not_cached(monkeypatch, tmp_path):
+    """Only exit 44 ("item not found") is a definitive miss. A locked
+    keychain (e.g. exit 36) is transient — the next call must ask again,
+    and a key found then is returned (and cached)."""
+    monkeypatch.setattr(secrets, "SECRETS_PATH", tmp_path / "absent.env")
+    monkeypatch.delenv("LOCKED_PROBE_KEY", raising=False)
+    monkeypatch.setattr(secrets, "_KEYCHAIN_CACHE", {})
+    answers = [(36, ""), (0, "unlocked-key\n")]
+    calls = []
+
+    def _run(argv, **kw):
+        calls.append(argv)
+        rc, out = answers.pop(0)
+        return type("R", (), {"returncode": rc, "stdout": out})()
+    monkeypatch.setattr(secrets.subprocess, "run", _run)
+    assert secrets.resolve_api_key("LOCKED_PROBE_KEY") == ""
+    assert secrets.resolve_api_key("LOCKED_PROBE_KEY") == "unlocked-key"
+    assert secrets.resolve_api_key("LOCKED_PROBE_KEY") == "unlocked-key"
+    assert len(calls) == 2
