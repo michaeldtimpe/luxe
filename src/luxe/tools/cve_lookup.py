@@ -237,4 +237,3 @@ def cve_lookup_def() -> ToolDef:
 
 
 TOOL_FNS: dict[str, ToolFn] = {"cve_lookup": cve_lookup_fn}
-CACHEABLE: set[str] = {"cve_lookup"}

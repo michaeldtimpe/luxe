@@ -606,6 +606,16 @@ logs still parse. Do not reintroduce any of them without new evidence.
   commit 57d3f6d, undocumented and untested) were removed with it; recover
   from git if that line of work reopens. Its tool was never in the default
   surface, so default-flag requests are unchanged.
+- **`ToolCache` + the `CACHEABLE` sets** (`tools/base.py`, and one set per
+  tool module). No caller ever constructed a cache, so `dispatch_tool` never
+  memoized. The per-module sets and `_build_full_tool_surface`'s third return
+  value are gone (it returns `(defs, fns)`); `dispatch_tool` lost its
+  `cache`/`cacheable` parameters. **`run_agent` still ACCEPTS `cache=` and
+  `cacheable=`, and `run_single` `cache=`, as ignored deprecated keywords** —
+  chat.sdd freezes `run_agent`'s signature for its callers, and that rule is
+  about caller compatibility, so the keywords stay while the plumbing goes.
+  `ToolCall.cached` stays (the `tool_call` event reports it; only the dedup
+  record sets it).
 
 ## Must not (reflect)
 

@@ -87,7 +87,7 @@ from luxe.context import (
 from luxe.run_state import append_event
 from luxe.spec import Spec
 from luxe.spec_validator import validate as spec_validate
-from luxe.tools.base import ToolCache, ToolDef, ToolCall, ToolFn, dispatch_tool, validate_args
+from luxe.tools.base import ToolDef, ToolCall, ToolFn, dispatch_tool, validate_args
 
 # DEBUG-only forensics (2026-07-31): dispatch-time tool lines + per-step ctx
 # pressure. In chat sessions these land in ~/.luxe/sessions/<id>/debug.log
@@ -255,7 +255,7 @@ def run_agent(
     task_prompt: str,
     tool_defs: list[ToolDef],
     tool_fns: dict[str, ToolFn],
-    cache: ToolCache | None = None,
+    cache: object | None = None,
     cacheable: set[str] | None = None,
     on_tool_event: OnToolEvent | None = None,
     run_id: str | None = None,
@@ -291,6 +291,12 @@ def run_agent(
     the only record was `events.jsonl`, which nobody reads mid-turn. Display
     only. It never influences control flow, is never consulted for a decision,
     and defaults to None, so the benchmark/maintain path is unchanged.
+
+    `cache` / `cacheable` are ACCEPTED AND IGNORED (deprecated 2026-09). They
+    fed a per-task `ToolCache` that no caller ever constructed, so every run
+    already dispatched uncached; the cache was removed but the keywords stay
+    because `run_agent`'s signature is frozen for its callers (chat.sdd
+    Must-not). Passing them has no effect.
     """
 
     result = AgentResult()
@@ -1349,10 +1355,7 @@ def run_agent(
             # 5bb630813c21: 9m40s on a curl with no trace of the command).
             logger.debug("tool dispatch step=%d name=%s args=%s",
                          step + 1, tc.name, _args_preview(tc.arguments))
-            executed = dispatch_tool(
-                tc.name, tc.arguments, tool_fns,
-                cache=cache, cacheable=cacheable,
-            )
+            executed = dispatch_tool(tc.name, tc.arguments, tool_fns)
             logger.debug("tool done name=%s wall_s=%.2f error=%s bytes_out=%d",
                          tc.name, getattr(executed, "wall_s", 0.0) or 0.0,
                          (getattr(executed, "error", None) or "")[:200] or None,

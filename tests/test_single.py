@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from luxe.agents import single as single_mod
 from luxe.agents.loop import AgentResult
@@ -18,7 +17,7 @@ from luxe.tools import fs
 
 
 def test_full_tool_surface_includes_read_write_shell_git_analysis():
-    defs, fns, cacheable = _build_full_tool_surface(
+    defs, fns = _build_full_tool_surface(
         languages=frozenset({"python"}),
         tool_allowlist=None,
     )
@@ -39,7 +38,7 @@ def test_full_tool_surface_includes_read_write_shell_git_analysis():
 
 
 def test_allowlist_strips_disallowed_tools():
-    defs, fns, _ = _build_full_tool_surface(
+    defs, fns = _build_full_tool_surface(
         languages=frozenset({"python"}),
         tool_allowlist=["read_file", "grep"],
     )
@@ -57,7 +56,7 @@ def test_cve_lookup_gated_to_manage_task_type():
     3/3 with identical 34913-char prose response). Gating restored 9/10.
     """
     for ttype in (None, "implement", "document", "bugfix", "review"):
-        defs, fns, _ = _build_full_tool_surface(
+        defs, fns = _build_full_tool_surface(
             languages=frozenset({"python"}),
             tool_allowlist=None,
             task_type=ttype,
@@ -66,7 +65,7 @@ def test_cve_lookup_gated_to_manage_task_type():
         assert "cve_lookup" not in names, f"cve_lookup leaked into task_type={ttype}"
         assert "cve_lookup" not in fns
 
-    defs, fns, _ = _build_full_tool_surface(
+    defs, fns = _build_full_tool_surface(
         languages=frozenset({"python"}),
         tool_allowlist=None,
         task_type="manage",
@@ -78,7 +77,7 @@ def test_cve_lookup_gated_to_manage_task_type():
 
 def test_cve_lookup_gating_respects_allowlist_intersection():
     """Even when task_type=manage, allowlist still applies."""
-    defs, _, _ = _build_full_tool_surface(
+    defs, _ = _build_full_tool_surface(
         languages=frozenset({"python"}),
         tool_allowlist=["read_file"],
         task_type="manage",
@@ -201,3 +200,31 @@ class TestStreamingSeam:
     def test_on_token_forwarded(self, monkeypatch):
         cb = lambda d: None
         assert self._captured_on_token(monkeypatch, on_token=cb) is cb
+
+
+def test_deprecated_cache_kwargs_are_still_accepted_and_ignored():
+    """`ToolCache` was never constructed by any caller and was removed
+    (2026-09), but `run_agent`'s signature is frozen for its callers
+    (chat.sdd Must-not): `cache=` / `cacheable=` must still be accepted, and
+    must not change what the model is sent."""
+    from luxe.agents.loop import run_agent
+    from luxe.backend import ChatResponse, GenerationTiming
+
+    class _Stub:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, messages, **kw):
+            self.calls.append(([dict(m) for m in messages], kw.get("tools")))
+            return ChatResponse(text="ok", tool_calls=[], finish_reason="stop",
+                                timing=GenerationTiming(prompt_tokens=1,
+                                                        completion_tokens=1))
+
+    role = RoleConfig(model_key="m", max_steps=2)
+    plain, legacy = _Stub(), _Stub()
+    run_agent(plain, role, system_prompt="s", task_prompt="t",
+              tool_defs=[], tool_fns={})
+    run_agent(legacy, role, system_prompt="s", task_prompt="t",
+              tool_defs=[], tool_fns={}, cache=object(), cacheable={"read_file"})
+    assert plain.calls == legacy.calls
+    run_single(_Stub(), role, goal="g", cache=object())  # still accepted

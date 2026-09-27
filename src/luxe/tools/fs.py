@@ -1110,5 +1110,3 @@ MUTATION_FNS: dict[str, ToolFn] = {
     "write_file": _write_file,
     "edit_file": _edit_file,
 }
-
-CACHEABLE = {"read_file", "list_dir", "glob", "grep"}

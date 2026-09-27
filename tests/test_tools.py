@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from luxe.tools import fs
-from luxe.tools.base import ToolCache, dispatch_tool, validate_args
+from luxe.tools.base import dispatch_tool, validate_args
 
 
 @pytest.fixture(autouse=True)
@@ -219,25 +219,6 @@ class TestFsTools:
         assert err is None
 
 
-class TestToolCache:
-    def test_cache_hit(self):
-        cache = ToolCache()
-        fn = lambda args: ("result", None)
-        r1, e1, cached1 = cache.get_or_run("test", {"a": 1}, fn)
-        r2, e2, cached2 = cache.get_or_run("test", {"a": 1}, fn)
-        assert not cached1
-        assert cached2
-        assert cache.hits == 1
-        assert cache.misses == 1
-
-    def test_cache_miss_different_args(self):
-        cache = ToolCache()
-        fn = lambda args: (str(args), None)
-        cache.get_or_run("test", {"a": 1}, fn)
-        _, _, cached = cache.get_or_run("test", {"a": 2}, fn)
-        assert not cached
-
-
 class TestDispatchToolErrorCapture:
     """Regression: tools that raise must NOT escape dispatch_tool.
 
@@ -295,28 +276,6 @@ class TestDispatchToolErrorCapture:
             assert tc.result == "ok"
             assert tc.name == "read_file"  # canonicalized
         assert called["n"] == 4
-
-    def test_cached_tool_exception_not_poisoned_into_cache(self):
-        """An exception during the first call must not be cached as a
-        successful result — the cache stays empty so retries can succeed."""
-        call_count = {"n": 0}
-        def flaky_fn(args):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                raise ValueError("transient")
-            return "ok", None
-        cache = ToolCache()
-        tc1 = dispatch_tool("read_file", {"path": "x"},
-                            {"read_file": flaky_fn},
-                            cache=cache, cacheable={"read_file"})
-        assert tc1.error and "ValueError" in tc1.error
-        # Retry should re-invoke fn (cache miss), now succeed.
-        tc2 = dispatch_tool("read_file", {"path": "x"},
-                            {"read_file": flaky_fn},
-                            cache=cache, cacheable={"read_file"})
-        assert tc2.error is None
-        assert tc2.result == "ok"
-        assert call_count["n"] == 2  # both calls hit fn, exception not cached
 
 
 class TestValidation:
