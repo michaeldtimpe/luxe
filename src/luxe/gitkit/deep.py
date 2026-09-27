@@ -2078,7 +2078,11 @@ def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None,
         goal = "Consolidate this batch of findings.\n\n" + prompts.GIT_DEEP_REDUCE_HINT
         res = pass_fn(goal, "".join(parts), f"reduce-{i + 1}", role=role)
         parsed = parse_chunk_notes((getattr(res, "final_text", "") or "").strip())
+        # an EMPTY findings list from a batch that had inputs is a miss, not
+        # "all duplicates": a merge pass cannot legitimately consolidate N
+        # real findings into zero, and accepting it dropped the whole batch
         if parsed and isinstance(parsed.get("findings"), list) \
+                and parsed["findings"] \
                 and not getattr(res, "aborted", False):
             # provenance-honest: a merged finding is only as good as the
             # weakest source that fed its batch

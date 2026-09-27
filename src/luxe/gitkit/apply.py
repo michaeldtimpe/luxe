@@ -56,15 +56,45 @@ def _current_branch(repo: Path) -> str:
     return _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
 
 
-def _revert_to_head(repo: Path) -> None:
-    """Throw away every uncommitted write since the last kept step. Kept steps
-    are commits, so HEAD is exactly "the plan so far". `reset --hard` (not
-    `checkout -- .`) also drops the intent-to-add entries `diff_against_base`
-    stages with `add -N` — a checkout restores those as EMPTY files that the
-    next kept step then commits. `clean -fd` leaves ignored/excluded files
-    (the mirror) alone."""
-    _git(repo, "reset", "-q", "--hard", "HEAD")
-    _git(repo, "clean", "-fdq")
+def _untracked(repo: Path) -> set[str]:
+    """Untracked, non-ignored files (the excluded mirror never appears).
+    Called only with a clean index (after `reset -q`): an `add -N`
+    intent-to-add entry is not "untracked" to git."""
+    r = _git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    return {p for p in r.stdout.split("\0") if p} if r.returncode == 0 else set()
+
+
+def _step_new_files(repo: Path, baseline: set[str]) -> list[str]:
+    """Drop `diff_against_base`'s `add -N` intent-to-add entries (mixed
+    reset — the working tree is untouched) and return the untracked files
+    that appeared since the step started: the step's own creations. Files
+    the OPERATOR had lying around (or created before the step) are in
+    `baseline` and are never this step's to delete or commit."""
+    _git(repo, "reset", "-q")
+    return sorted(_untracked(repo) - baseline)
+
+
+def _revert_to_head(repo: Path, new: list[str]) -> None:
+    """Throw away the in-flight step's writes. Kept steps are commits, so HEAD
+    is exactly "the plan so far": tracked files are restored from it, and
+    ONLY `new` — the untracked files the step's pass created — is removed. A
+    blanket `clean -fd` also deleted files the operator created mid-run
+    (irreversibly). The mixed reset clears the `add -N` entries, which a bare
+    `checkout -- .` restored as EMPTY files the next keep committed."""
+    _git(repo, "reset", "-q")
+    _git(repo, "checkout", "-q", "--", ".")
+    for k in range(0, len(new), 200):
+        _git(repo, "clean", "-fq", "--", *new[k:k + 200])
+    # directories the step created and that are now empty go too
+    root = repo.resolve()
+    for rel in new:
+        d = (repo / rel).parent.resolve()
+        while d != root and root in d.parents:
+            try:
+                d.rmdir()
+            except OSError:
+                break
+            d = d.parent
 
 
 def _exclude_mirror(repo: Path) -> None:
@@ -173,16 +203,27 @@ def _abort_branch(repo: Path, console, branch: str, orig_ref: str,
     console.print(f"[dim]· restored {label}; removed {branch}.[/]")
 
 
-def _commit_step(repo: Path, message: str) -> tuple[bool, str]:
-    """Stage + commit one kept step. (ok, error text). Hooks run, so stdin is
-    closed (a hook must not eat the operator's next answer) and each call is
-    bounded; the mirror is never staged."""
+def _commit_step(repo: Path, message: str,
+                 new: list[str]) -> tuple[bool, str]:
+    """Stage + commit one kept step. (ok, error text). Stages ONLY the step's
+    changes — tracked modifications/deletions plus the untracked files new
+    by the step's pass (`new`) — never an operator's untracked file
+    (`add -A` swept those in). Hooks run, so stdin is closed (a hook must not
+    eat the operator's next answer) and each call is bounded; the mirror is
+    never staged."""
     try:
-        add = gitcmd.run_in(repo, "add", "-A", "--", ".",
+        _git(repo, "reset", "-q")          # drop add -N intent-to-add entries
+        add = gitcmd.run_in(repo, "add", "-u", "--", ".",
                             f":(exclude){_MIRROR}", timeout=_COMMIT_TIMEOUT_S,
                             stdin=subprocess.DEVNULL)
         if add.returncode != 0:
             return False, (add.stderr or add.stdout).strip()
+        for k in range(0, len(new), 200):
+            add = gitcmd.run_in(repo, "add", "--", *new[k:k + 200],
+                                timeout=_COMMIT_TIMEOUT_S,
+                                stdin=subprocess.DEVNULL)
+            if add.returncode != 0:
+                return False, (add.stderr or add.stdout).strip()
         cm = gitcmd.run_in(repo, "commit", "-q", "-m", message,
                            timeout=_COMMIT_TIMEOUT_S, stdin=subprocess.DEVNULL)
         if cm.returncode != 0:
@@ -342,8 +383,19 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
     skipped: list[str] = []
     failed: list[str] = []
     interrupted = False
+    stopped = False
+    baseline: set[str] = set()
+    step_files: list[str] | None = None
+
+    def _this_step() -> list[str]:
+        # frozen after the pass; before that (a raise / Ctrl-C mid-pass),
+        # everything new since the step began
+        return step_files if step_files is not None \
+            else _step_new_files(repo, baseline)
+
     with indexed_target(str(repo), reuse=False, note=""):
         branch_head = pr.head_sha(repo)
+        baseline = _untracked(repo)
         try:
             for step in steps:
                 if any(d not in kept for d in step.get("depends_on", [])):
@@ -353,6 +405,11 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                     continue
                 console.print(f"\n[bold]· {step['id']}: {step['title']}[/]  "
                               f"(risk: {step.get('risk', '?')})")
+                # what is untracked NOW is not this step's (operator files,
+                # a stopped step's leftovers) — revert/keep never touch it
+                _git(repo, "reset", "-q")
+                baseline = _untracked(repo)
+                step_files = None
                 # ONE mono pass — no retry / repair loop (invariant 6: a raised
                 # pass is reverted and recorded, NEVER re-run).
                 try:
@@ -363,13 +420,16 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                         task_type="implement", languages=languages,
                         extra_context=_step_block(step, plan, survey),
                         run_id=f"gitchange-apply-{step['id']}", phase="main")
+                    # the step's creations = what appeared DURING its pass;
+                    # a file the operator adds while reviewing is not in it
+                    step_files = _step_new_files(repo, baseline)
                 except Exception as e:
                     console.print(f"[red]· step {step['id']} raised: "
                                   f"{type(e).__name__}: {e}[/]")
                     # Kept steps are already committed (keep => commit before
                     # the next pass starts), so this full-tree revert only
                     # ever discards the FAILED step's partial writes.
-                    _revert_to_head(repo)
+                    _revert_to_head(repo, _this_step())
                     failed.append(step["id"])
                     ans = reader("  [c]ontinue with next step / [a]bort? [c/A]: ").strip().lower()
                     if ans in ("c", "continue"):
@@ -383,12 +443,12 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                     # result cannot be shown must not be silently skipped past.
                     console.print(f"[red]· could not read the diff for step "
                                   f"{step['id']}: {e}[/]")
-                    _revert_to_head(repo)
+                    _revert_to_head(repo, _this_step())
                     failed.append(step["id"])
                     continue
                 if not diff.strip():
                     console.print("[yellow]· no changes produced — skipping.[/]")
-                    _revert_to_head(repo)
+                    _revert_to_head(repo, _this_step())
                     skipped.append(step["id"])
                     continue
                 from rich.syntax import Syntax
@@ -407,12 +467,13 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                 ans = reader(prompt).strip().lower()
                 keep = ans in ("k", "keep", "y", "yes") or (ans == "" and default_keep)
                 if not keep:
-                    _revert_to_head(repo)
+                    _revert_to_head(repo, _this_step())
                     discarded.append(step["id"])
                     console.print(f"[yellow]· discarded {step['id']}[/]")
                     continue
                 committed, err = _commit_step(
-                    repo, f"gitchange {step['id']}: {step['title']}")
+                    repo, f"gitchange {step['id']}: {step['title']}",
+                    step_files or [])
                 if not committed:
                     # NOT kept: a step reported "kept" while uncommitted would
                     # be wiped by the next discard's revert. Stop here with
@@ -424,6 +485,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                                   "uncommitted on the branch — fix the cause and "
                                   "commit them, or `git reset --hard` to drop "
                                   "them.[/]")
+                    stopped = True
                     break
                 branch_head = pr.head_sha(repo)
                 kept.append(step["id"])
@@ -431,18 +493,27 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
         except (KeyboardInterrupt, ChatCancelled):
             # Ctrl-C mid-step: the in-flight step's writes are reverted (kept
             # steps are commits and survive); the summary still prints.
-            _revert_to_head(repo)
+            _revert_to_head(repo, _this_step())
             interrupted = True
             console.print("\n[yellow]· interrupted — the in-flight step was "
                           "reverted; kept steps stay committed.[/]")
         except BaseException:
-            _revert_to_head(repo)
+            _revert_to_head(repo, _this_step())
             raise
 
-    console.print(f"\n[bold]· done.[/] kept={len(kept)} discarded={len(discarded)} "
-                  f"skipped={len(skipped)} failed={len(failed)} "
-                  f"on branch [cyan]{branch}[/]")
+    tally = (f"kept={len(kept)} discarded={len(discarded)} "
+             f"skipped={len(skipped)} failed={len(failed)}")
     back = orig_sha if orig_branch in ("", "HEAD") else orig_branch
+    if stopped:
+        # a failed commit is not a finished run: no merge instructions
+        console.print(f"\n[red]· stopped — a kept step could not be committed.[/] "
+                      f"{tally} on branch [cyan]{branch}[/]")
+        console.print(f"[dim]  the uncommitted step is still in the tree; to "
+                      f"abandon the run: git -C {repo} reset --hard && "
+                      f"git -C {repo} checkout {back} && "
+                      f"git -C {repo} branch -D {branch}[/]")
+        return 1
+    console.print(f"\n[bold]· done.[/] {tally} on branch [cyan]{branch}[/]")
     console.print(f"[dim]  review:  git -C {repo} log {back}..{branch}[/]")
     console.print(f"[dim]  merge:   git -C {repo} checkout {back} && "
                   f"git merge {branch}   (you do this — apply never merges)[/]")

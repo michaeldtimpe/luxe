@@ -87,10 +87,16 @@ in the front-end. Survey map + chunk plan persist per repo under
   >    the diff, run the step's `verify`, SHOW both, and require an interactive
   >    keep|discard. `keep` commits on the branch — add/commit exit codes are
   >    checked (stdin closed, bounded); a failed commit is NOT kept, is shown,
-  >    and stops the run with the work left in the tree. `discard` reverts
-  >    only that step via `reset --hard HEAD` + `clean -fd` (a `checkout -- .`
-  >    left `add -N` intent-to-add entries as empty files the next keep
-  >    committed). The step's `verify` is MODEL-WRITTEN shell: it is treated
+  >    and stops the run (exit 1, no merge advice) with the work left in the
+  >    tree. A step OWNS only tracked changes plus the untracked files that
+  >    appeared DURING its pass (snapshot at step start, frozen when the pass
+  >    returns): keep stages exactly those (`add -u` + the step's new files,
+  >    never `add -A`), and `discard` restores tracked files from HEAD and
+  >    removes only the step's new files — never an untracked file the
+  >    operator made (a blanket `clean -fd` deleted those irreversibly). The
+  >    `add -N` intent-to-add entries are cleared first (a bare `checkout --
+  >    .` left them as empty files the next keep committed). The step's
+  >    `verify` is MODEL-WRITTEN shell: it is treated
   >    as a command only by its FIRST token, is shown, and runs only after an
   >    explicit y (default N) — never unconfirmed.
   >    `depends_on` is honored (a dependent is skipped if its prerequisite wasn't kept).
