@@ -185,7 +185,8 @@ def init_cmd(path: str, config_path: str | None, dry_run: bool,
     if not keep_loaded:
         try:
             from luxe.backend import Backend
-            Backend(base_url=cfg.omlx_base_url, model="").unload_all_loaded()
+            with Backend(base_url=cfg.omlx_base_url, model="") as probe:
+                probe.unload_all_loaded()
         except Exception:
             pass
 

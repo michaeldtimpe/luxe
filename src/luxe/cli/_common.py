@@ -115,7 +115,8 @@ def _unload_unless(keep_loaded: bool, cfg=None) -> None:
         url = (getattr(cfg, "omlx_base_url", "")
                or _omlx_base_url_from_config())
         if is_loopback_url(url):
-            Backend(base_url=url, model="(unload-probe)").unload_all_loaded()
+            with Backend(base_url=url, model="(unload-probe)") as probe:
+                probe.unload_all_loaded()
     except Exception:
         pass
 

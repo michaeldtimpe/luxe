@@ -71,6 +71,18 @@ class _Backend:
     def thermal_guard(self, *a, **k):
         return True
 
+    # Short-lived construction sites scope the real Backend with `with`.
+    closed = False
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
 
 def _cfg() -> PipelineConfig:
     return PipelineConfig(models={"monolith": "Champ"},
@@ -566,11 +578,17 @@ class TestUnloadFollowsTheConfig:
         import luxe.backend as backend_mod
 
         made: list[str] = []
+        instances: list[_Backend] = []
 
         class B(_Backend):
             def __init__(self, base_url="", **kw):
                 super().__init__(base_url=base_url, **kw)
                 made.append(base_url)
+                instances.append(self)
+
+            def unload_all_loaded(self, *, except_for=None):
+                self.unloaded = True
+                return {}
 
         monkeypatch.setattr(backend_mod, "Backend", B)
         local = PipelineConfig(models={"monolith": "M"},
@@ -578,6 +596,9 @@ class TestUnloadFollowsTheConfig:
                                omlx_base_url="http://127.0.0.1:8080")
         cli._unload_unless(False, local)
         assert made == ["http://127.0.0.1:8080"]
+        # The one-shot probe really unloaded, and its client was closed.
+        assert getattr(instances[0], "unloaded", False)
+        assert instances[0].closed
         made.clear()
         remote = local.model_copy(
             update={"omlx_base_url": "http://m5.example.ts.net:8000"})

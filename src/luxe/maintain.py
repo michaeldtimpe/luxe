@@ -537,8 +537,8 @@ def maintain_pipeline(
         if not keep_loaded:
             try:
                 from luxe.backend import Backend as _UnloadBackend
-                _ub = _UnloadBackend(model="(unload-probe)")
-                results = _ub.unload_all_loaded()
+                with _UnloadBackend(model="(unload-probe)") as _ub:
+                    results = _ub.unload_all_loaded()
                 if results:
                     n_ok = sum(1 for v in results.values() if v)
                     console.print(
