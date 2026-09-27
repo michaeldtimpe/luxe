@@ -1910,6 +1910,7 @@ Stored at `acceptance/eval_suite_baseline/2026-05-27_6bit/`. Wall: ~13h 8min tot
 
 **Scratch (retained for any future re-use, outside repo):**
 - `~/Downloads/forge-luxe-research/` — forge venv, grading venv, all per-instance + grading dirs, comparator JSONs, harness scripts, full `NOTES.md` briefing.
+  **Moved 2026-09-27:** `NOTES.md`, `results/` and `scratch/` now live in `acceptance/forge_luxe_research_2026_05/` (local, on m1 + m5). The venvs and the upstream forge clone were deleted, since both can be recreated. The deluxe repo's gitignored dense-sweep results moved the same way to `acceptance/deluxe_m5max_dense*/`. The deluxe and extended-bench repos themselves remain on GitHub.
 
 ### Suggested cold-start sequence in the new session
 
