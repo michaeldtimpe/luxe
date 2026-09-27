@@ -1,4 +1,4 @@
-"""Tests for gitkit DEEP MODE — the staged map-reduce engine (gitkit/deep.py).
+"""Tests for gitkit DEEP MODE — the staged map-reduce engine (gitkit/deep/).
 
 Covers the deterministic, non-model pieces (chunker, footprint gate, JSON
 parsing, digest merge/compaction, estimate) plus the stage orchestration with a

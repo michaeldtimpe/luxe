@@ -26,7 +26,7 @@ git-change/gchange, and the deprecated gitsummary/gitreview/gitrefactor→gitaud
 gitplan→gitchange) over an arbitrary local path or git URL; and
 `/gitaudit|/gitchange` in `luxe chat` over the session's pinned repo.
 
-For large repos a STAGED DEEP MODE (gitkit/deep.py) replaces the single pass: the
+For large repos a STAGED DEEP MODE (the gitkit/deep/ package) replaces the single pass: the
 runner orchestrates multiple sequential read-only `run_single` passes (survey →
 plan/chunk → per-chunk notes → synthesis) in Python — the `compare/run_pair.py`
 front-end-orchestration precedent, NOT the retired in-agent swarm/phased modes.
@@ -111,7 +111,7 @@ in the front-end. Survey map + chunk plan persist per repo under
   >    prints the summary.
   > 5. NEVER pushes, NEVER merges, NEVER commits to the default branch, NEVER touches
   >    files outside the working tree.
-  > 6. Orchestration is front-end Python (the deep.py/compare precedent): multiple
+  > 6. Orchestration is front-end Python (the deep/ + compare precedent): multiple
   >    mono passes, each ONE call, NO in-agent repair loop / goal-runner / retry.
 - DIFF AUDIT is a FLAG, not a command: `gitaudit --base <ref>` / `--pr <N>`
   (mutually exclusive; `--pr` resolves the base via `gh`, and its failure message
@@ -210,6 +210,25 @@ in the front-end. Survey map + chunk plan persist per repo under
   imports written inside function bodies to hide the cycle;
   `tests/test_layering.py` now fails if one comes back.
 
+- Keep deep mode's STAGE SPLIT (`gitkit/deep/`, split from the single
+  `deep.py` 2026-09): `chunking.py` (window + footprint gate, enumeration,
+  partition, framing picker, estimate), `mapcache.py` (the `map/` cache, blob /
+  working-tree shas, notes cache, the pure `plan_incremental`), `digest.py`
+  (chunk-note parsing, digest, confidence, compaction, 2-level reduce),
+  `salvage.py` (ramble detector, transcription passes, heuristic salvage),
+  `render.py` (pure-data blocks + deterministic report render). The
+  orchestrator `run_deep_report` and its tunables live in `deep/__init__.py`,
+  which re-exports every name the old module had — `deep.X` keeps working.
+  A test that monkeypatches a name must patch the module that LOOKS IT UP
+  (`deep._CONTENT_BUDGET_FRAC` / `deep.enumerate_files` → the package, where
+  `run_deep_report` reads them; a submodule's own global → that submodule);
+  a re-export the code never reads makes the patch silently inert.
+- Keep the `map/` + notes on-disk format loadable across releases (v2
+  `mapped.json`, `chunks.json`, `survey.json`, `notes/<kind>/chunk-NN.json`):
+  `tests/test_gitkit_deep_map_compat.py` loads and byte-for-byte re-writes a
+  map saved by the pre-package code (`tests/golden/gitkit_deep_map_v2/`).
+  A format change must bump the breadcrumb version, never mutate v2.
+
 ## Must not
 - Write/edit the target repo, or require write mode — EXCEPT the `gitchange --apply`
   path, which is write-enabled under its six invariants above. Every other path
@@ -233,7 +252,8 @@ in the front-end. Survey map + chunk plan persist per repo under
 
 ## Owns
 - src/luxe/gitkit/** (incl. `plan.py` — plan JSON parse/normalize/render/save —
-  and `apply.py` — the gated executor)
+  `apply.py` — the gated executor — and the `deep/` package: `__init__`
+  orchestration, `chunking`, `mapcache`, `digest`, `salvage`, `render`)
 
 ## Forbids
 - Prompt/directive strings here — they live in `agents/prompts.py`
