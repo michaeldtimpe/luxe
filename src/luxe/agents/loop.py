@@ -1057,26 +1057,30 @@ def run_agent(
             # once per run, so a stuck model can't ping-pong forever.
             if spec is not None and tool_defs:
                 vr = spec_validate(spec, "", "", tool_calls=st.actual_tool_calls)
-                continue_for_spec = False
+                reprompts: list[str] = []
                 for rr in vr.unsatisfied:
                     if rr.requirement.id in st.spec_violations_reprompted:
                         continue
                     if rr.requirement.kind != "min_tool_calls":
                         continue
-                    st.messages.append({"role": "user", "content": rr.detail})
+                    reprompts.append(rr.detail)
                     st.spec_violations_reprompted.add(rr.requirement.id)
-                    continue_for_spec = True
                     emit(
                         "spec_reprompt_fired",
                         step=step,
                         requirement_id=rr.requirement.id,
                         requirement_kind=rr.requirement.kind,
                     )
-                if continue_for_spec:
-                    # Replay the assistant's final text so the conversation
-                    # history records the would-be exit before the reprompt.
+                if reprompts:
+                    # Replay the assistant's would-be final answer FIRST, then
+                    # the reprompt, so the model reads the correction after
+                    # its own exit. Appending in the other order (the pre-2026-09
+                    # behavior) ended the request on the stale answer, with the
+                    # correction buried above it.
                     if resp.text:
                         st.messages.append({"role": "assistant", "content": resp.text})
+                    for detail in reprompts:
+                        st.messages.append({"role": "user", "content": detail})
                     continue
             # TELEMETRY ONLY — additive, ungated, never touches control flow or
             # `messages` (agents.sdd "Tool-call telemetry events"). A run that
