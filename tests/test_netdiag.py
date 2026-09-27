@@ -470,3 +470,48 @@ def test_a_hung_rung_cannot_hold_the_ladder_past_its_budget(monkeypatch):
     assert _time.monotonic() - t0 < 5
     http = [p for p in report.probes if p.layer in ("http", "https")]
     assert http and all(not p.ok and "no result" in p.error for p in http)
+
+
+def test_ladder_budget_covers_the_worst_legitimate_probe():
+    """httpx applies HTTP_TIMEOUT_S to connect AND read; TLS connects then
+    handshakes. A slow-but-working probe must finish inside the budget."""
+    assert netdiag._LADDER_BUDGET_S > 2 * netdiag.HTTP_TIMEOUT_S
+    assert netdiag._LADDER_BUDGET_S > 2 * netdiag.TLS_TIMEOUT_S
+
+
+def test_slow_but_working_https_is_degraded_not_tls_blocked(monkeypatch):
+    """PR #14 review: with a 7s wall budget an https probe answering after
+    8s was abandoned as a FAILURE and classify said tls-blocked — the
+    in-flight Wi-Fi case, where main said degraded. Time is scaled down
+    (budget 1.0s, answer at 0.3s reporting 8s) so the test stays fast."""
+    import time as _time
+
+    _fake_ladder_probes(monkeypatch)
+
+    def _slow_https(url, timeout=0, layer=None):
+        _time.sleep(0.3)
+        return _P("https" if url.startswith("https") else "http", True, url,
+                  ms=8000.0)
+    monkeypatch.setattr(netdiag, "probe_http", _slow_https)
+    monkeypatch.setattr(netdiag, "_LADDER_BUDGET_S", 1.0)
+    assert netdiag.run_ladder("example.com").verdict == netdiag.V_DEGRADED
+
+
+def test_budget_timeout_is_inconclusive_not_a_tls_failure(monkeypatch):
+    import threading
+
+    _fake_ladder_probes(monkeypatch)
+    release = threading.Event()
+
+    def _hang(url, timeout=0, layer=None):
+        release.wait(30)
+        return _P("https", True, url)
+    monkeypatch.setattr(netdiag, "probe_http", _hang)
+    monkeypatch.setattr(netdiag, "_LADDER_BUDGET_S", 0.3)
+    try:
+        report = netdiag.run_ladder("example.com")
+    finally:
+        release.set()
+    https = next(p for p in report.probes if p.layer == "https")
+    assert https.inconclusive
+    assert report.verdict != netdiag.V_TLS_BLOCKED

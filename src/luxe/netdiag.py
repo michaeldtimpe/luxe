@@ -94,6 +94,11 @@ class Probe:
     ms: float
     detail: str = ""    # human-readable: IPs, status, TLS version, issuer …
     error: str = ""     # "" when ok
+    # True when the probe produced NO answer within the ladder's wall budget
+    # (abandoned, not refused/timed-out by its own deadline). `classify`
+    # treats it as missing evidence — never as a failed layer — so a slow
+    # link reads as degraded, not tls-blocked.
+    inconclusive: bool = False
 
 
 @dataclass
@@ -281,7 +286,15 @@ def probe_endpoint(name: str, base_url: str,
 #: held the ladder for ~15s against a 3s DNS budget. So the ladder joins its
 #: futures against this deadline and abandons stragglers (daemon-style, like
 #: `probe_dns`) rather than waiting them out.
-_LADDER_BUDGET_S = HTTP_TIMEOUT_S + 1.0
+#:
+#: Sized to the WORST LEGITIMATE probe, not a single timeout: httpx applies
+#: HTTP_TIMEOUT_S to connect and to read separately, and the TLS probe spends
+#: up to TLS_TIMEOUT_S connecting plus TLS_TIMEOUT_S handshaking. An https
+#: round-trip that answers in 8–12s is a working, SLOW link (in-flight Wi-Fi:
+#: the V_DEGRADED case) and must come back with its answer. A probe still
+#: running past this is `inconclusive`, which `classify` ignores.
+_LADDER_BUDGET_S = max(2 * HTTP_TIMEOUT_S, 2 * TLS_TIMEOUT_S,
+                       2 * TCP_TIMEOUT_S) + 1.0
 
 
 def _skipped(layer: str, target: str, why: str) -> Probe:
@@ -303,7 +316,8 @@ def _join(futs: dict, budget_s: float, targets: dict[str, tuple[str, str]]
             layer, target = targets[key]
             results[key] = Probe(layer, target, False, budget_s * 1000.0,
                                  error=f"no result in {budget_s:.0f}s "
-                                       "(blocked — name resolution?)")
+                                       "(blocked — name resolution?)",
+                                 inconclusive=True)
         except Exception as e:  # a probe must never take the ladder down
             layer, target = targets[key]
             results[key] = Probe(layer, target, False, 0.0,
@@ -364,19 +378,24 @@ def run_ladder(host: str = ANCHOR_HOST) -> LadderReport:
 
 
 def _get(probes: list[Probe], layer: str) -> Probe | None:
-    return next((p for p in probes if p.layer == layer), None)
+    """The probe for `layer`, or None — including when it is inconclusive
+    (abandoned at the wall budget): no answer is not evidence of failure."""
+    return next((p for p in probes
+                 if p.layer == layer and not p.inconclusive), None)
 
 
 def classify(probes: list[Probe]) -> str:
     """Decision tree over the ladder, most-broken verdict first. Pure — unit
     tested against synthetic probe lists."""
     dns = _get(probes, "dns")
-    tcp = _get(probes, "tcp")
+    tcp = next((p for p in probes if p.layer == "tcp" and not p.inconclusive
+                and not p.target.startswith(DNSLESS_IP)), None)
     tls = _get(probes, "tls")
     https = _get(probes, "https")
     portal = _get(probes, "portal")
     dnsless = next((p for p in probes if p.layer == "tcp"
-                    and p.target.startswith(DNSLESS_IP)), None)
+                    and p.target.startswith(DNSLESS_IP)
+                    and not p.inconclusive), None)
 
     dns_ok = dns is None or dns.ok
     tcp_ok = (tcp is not None and tcp.ok) or (dnsless is not None and dnsless.ok)
