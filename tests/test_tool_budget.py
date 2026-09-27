@@ -469,18 +469,20 @@ class TestTheBenchmarkPathCanReachTheSwitch:
         assert '"read_budget_applied"' in src
 
     def test_chat_keeps_its_own_wiring(self):
-        """`repl.py` stays the sole authority for chat turns (it re-sets the
-        budget every turn because `/ctx` moves num_ctx mid-session). The two
-        paths now spell the SAME opt-out grammar, but they are still two call
-        sites: the bench one must not be imported into the chat turn path, or a
-        chat turn would inherit maintain's once-per-pipeline scope."""
-        from luxe.chat import repl
+        """`chat/turn.py` (the shared turn core, moved out of `repl.py`) stays
+        the sole authority for chat turns (it re-sets the budget every turn
+        because `/ctx` moves num_ctx mid-session). The two paths now spell the
+        SAME opt-out grammar, but they are still two call sites: the bench one
+        must not be imported into the chat turn path, or a chat turn would
+        inherit maintain's once-per-pipeline scope."""
+        from luxe.chat import controller, repl, turn
 
         assert (
             'os.environ.get("LUXE_TOOL_BUDGET_CTX", "1") != "0"'
-            in inspect.getsource(repl)
+            in inspect.getsource(turn)
         )
-        assert "apply_ctx_read_budget" not in inspect.getsource(repl)
+        for mod in (turn, controller, repl):
+            assert "apply_ctx_read_budget" not in inspect.getsource(mod)
 
 
 class TestChatDefaultsTheBudgetOn:

@@ -13,6 +13,7 @@ from textual.widgets import Input, RichLog  # noqa: E402
 
 from luxe.chat import repl as _repl  # noqa: E402
 from luxe.chat import slots as slots_mod  # noqa: E402
+from luxe.chat import turn as turn_mod  # noqa: E402
 from luxe.chat.session import ChatSession  # noqa: E402
 from luxe.chat.tui import ChatApp, StatusBar  # noqa: E402
 from luxe.config import PipelineConfig, RoleConfig  # noqa: E402
@@ -78,7 +79,7 @@ def test_boots(tmp_path):
 
 
 def test_turn_renders_final(tmp_path, monkeypatch):
-    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
 
     async def scenario():
         app = _make_app(tmp_path)
@@ -109,7 +110,7 @@ def test_command_dispatch(tmp_path):
 
 
 def test_typeahead_queue(tmp_path, monkeypatch):
-    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
 
     async def scenario():
         from textual.widgets import Input
@@ -319,7 +320,7 @@ def test_paste_chip_expands_at_submit(tmp_path, monkeypatch):
         captured["goal"] = kw.get("goal")
         return _FakeResult()
 
-    monkeypatch.setattr(_repl, "run_single", fake_run_single)
+    monkeypatch.setattr(turn_mod, "run_single", fake_run_single)
 
     from textual import events
 
@@ -341,7 +342,7 @@ def test_paste_chip_expands_at_submit(tmp_path, monkeypatch):
 
 
 def test_paste_deleted_chip_still_appends_text(tmp_path, monkeypatch):
-    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
 
     async def scenario():
         app = _make_app(tmp_path)
@@ -419,7 +420,7 @@ def test_turn_crash_does_not_kill_the_app(tmp_path, monkeypatch):
     def _boom(*a, **k):
         raise OSError(60, "Operation timed out")
 
-    monkeypatch.setattr(_repl, "run_single", _boom)
+    monkeypatch.setattr(turn_mod, "run_single", _boom)
 
     async def scenario():
         app = _make_app(tmp_path)
@@ -469,7 +470,7 @@ def test_command_crash_does_not_kill_the_app(tmp_path, monkeypatch):
 def test_retry_runs_a_turn_from_the_command_worker(tmp_path, monkeypatch):
     """`/retry` hands a message back through CommandResult.submit; the TUI must
     run it as a real turn, not print it."""
-    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
 
     async def scenario():
         from luxe.chat.session import ChatTurn
@@ -687,7 +688,7 @@ def test_status_ctx_pressure_uses_server_truth(tmp_path, monkeypatch):
     chars/4 estimate misses tool schemas and reads a flat ~7%. The live
     buffer must carry the same value so _end_busy's final tick can't
     clobber it with the stale estimate."""
-    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _FakeResult())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
 
     async def scenario():
         app = _make_app(tmp_path)
@@ -718,7 +719,7 @@ def test_aborted_turn_renders_as_a_failure(tmp_path, monkeypatch):
         aborted = True
         abort_reason = "Backend error: ConnectError: [Errno 61] Connection refused"
 
-    monkeypatch.setattr(_repl, "run_single", lambda *a, **k: _Aborted())
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _Aborted())
 
     async def scenario():
         app = _make_app(tmp_path)

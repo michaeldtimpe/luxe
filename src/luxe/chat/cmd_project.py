@@ -27,7 +27,7 @@ def _project(args, ctx: CommandContext) -> CommandResult:
     how you give it a codebase without restarting.
     """
     from luxe import project as project_mod
-    from luxe.chat import repl as repl_mod
+    from luxe.chat import turn as turn_mod
 
     if not args:
         kind = ctx.session.project_kind
@@ -35,7 +35,7 @@ def _project(args, ctx: CommandContext) -> CommandResult:
         label = {"git": "git repo", "dir": "project", "none": "no project"}.get(
             kind, kind)
         ctx.console.print(f"[bold]Project[/] {escape(root)}  [dim]({label})[/]")
-        avail = repl_mod.index_tools_available()
+        avail = turn_mod.index_tools_available()
         for tool, ok in avail.items():
             mark = "[green]✓[/]" if ok else "[yellow]·[/]"
             ctx.console.print(f"  {mark} {tool}"
@@ -91,12 +91,12 @@ def _do_attach(ctx: CommandContext, target: str | None, *, verb: str) -> Command
                           f"{escape(str(e))}[/]")
         return CommandResult(handled=True)
 
-    from luxe.chat import repl as repl_mod
+    from luxe.chat import controller as controller_mod
 
     root, kind = summary["root"], summary["kind"]
     # Idempotent with the front-ends' hooks, which already applied it; a
     # context built with a bare hook (tests, embedders) still ends up right.
-    repl_mod.apply_project_summary(ctx.session, summary)
+    controller_mod.apply_project_summary(ctx.session, summary)
     if kind == "none":
         ctx.console.print(
             f"[yellow]· {escape(root)} isn't a project[/] [dim]— no index built. Read "

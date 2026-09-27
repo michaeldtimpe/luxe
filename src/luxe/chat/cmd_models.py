@@ -324,7 +324,7 @@ def _backend(args, ctx: CommandContext) -> CommandResult:
     # The new endpoint has its own window; the status bar reads this cached
     # value rather than asking the endpoint from a render (status.fields).
     if ctx.status is not None and hasattr(ctx.status, "ctx_ceiling"):
-        from luxe.chat.repl import startup_ctx_ceiling
+        from luxe.chat.controller import startup_ctx_ceiling
         ctx.status.ctx_ceiling = startup_ctx_ceiling(ctx.slots)
     return CommandResult(handled=True)
 
