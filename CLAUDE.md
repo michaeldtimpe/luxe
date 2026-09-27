@@ -212,7 +212,9 @@ session must not rediscover the hard way; mechanism lives in the `.sdd` + code.
   `stall_timeout_s` (1800s) before the first token, `decode_stall_timeout_s`
   (120s) once tokens flow; keepalives never count. **Raising `timeout_s` is
   not a fix.** The non-stream path is benchmark/maintain, which could
-  previously wedge forever. Numbers live in `backend.py`.
+  previously wedge forever. Numbers live in `backend.py`. A progress stall
+  is TERMINAL (not retried, 2026-09): one stall budget per request, not
+  `max_attempts ×` it; a stream that already emitted output is not retried.
 - **`/attach <path>`** stages file contents one-shot for the next turn (48KB/
   file, 128KB/turn, binary refused, injected as `<attached_files>`).
 - **TUI:** multi-line pastes → `[pasted N lines]` chip; `--resume`/`/resume`
