@@ -129,36 +129,12 @@ def _audit(event: str, args: tuple) -> None:
 sys.addaudithook(_audit)
 
 
-# TEMPORARY: these tests resolve public hostnames today; a separate change
-# makes them hermetic. Remove each entry when that lands — the guard then
-# covers them too.
-_TEMP_LIVE_NETWORK = (
-    "tests/test_web.py::test_allowlist_when_set_is_deny_by_default",
-    "tests/test_web_page.py::TestActions::test_click_by_css_selector_passes_through",
-    "tests/test_web_page.py::TestActions::test_click_by_index_uses_the_tagged_selector",
-    "tests/test_web_page.py::TestActions::test_missing_target_is_a_clean_error",
-    "tests/test_web_page.py::TestActions::test_type_with_submit_presses_enter",
-    "tests/test_web_page.py::TestEgress::test_navigation_to_private_space_hard_closes_the_session",
-    "tests/test_web_page.py::TestOwnership::test_close_is_idempotent_and_stops_the_driver",
-    "tests/test_web_page.py::TestOwnership::test_ops_from_different_threads_share_one_driver",
-    "tests/test_web_page.py::TestRendering::test_a_full_listing_says_it_may_have_been_cut",
-    "tests/test_web_page.py::TestRendering::test_a_short_listing_is_unannotated",
-    "tests/test_web_page.py::TestRendering::test_snapshot_renders_state_content_and_interactables",
-)
-
-
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
     report = yield
     if report.when == "call":
         item._luxe_call_failed = report.failed
     return report
-
-
-def pytest_collection_modifyitems(config, items):
-    for item in items:
-        if item.nodeid in _TEMP_LIVE_NETWORK:
-            item.add_marker(pytest.mark.live_network)
 
 
 @pytest.fixture
@@ -245,6 +221,10 @@ def config_path() -> Path:
 @pytest.fixture
 def stub_public_dns(monkeypatch):
     """Answer every hostname lookup with a public address, never real DNS.
+
+    Works WITH the autouse network guard above: the stub never reaches the
+    real resolver for a name, so no `socket.getaddrinfo` audit event fires
+    and web tests need no `live_network` exemption.
 
     The web egress guard resolves names before it allows them; tests that
     only need "a public name" must not depend on the network or the host's
