@@ -558,6 +558,21 @@ def _commit_body_excerpt(report_text: str, max_chars: int = 1200) -> str:
     return text[:max_chars].rstrip() + "\n\n…(truncated; full report attached to PR body)"
 
 
+def _commits_ahead_of_base(repo: Path, base_sha: str) -> int:
+    """Commits on HEAD that descend from `base_sha` (0 when HEAD is base,
+    unrelated to it, or base is unknown)."""
+    if not base_sha:
+        return 0
+    anc = _run(["git", "merge-base", "--is-ancestor", base_sha, "HEAD"], cwd=repo)
+    if not anc.ok:
+        return 0
+    cnt = _run(["git", "rev-list", "--count", f"{base_sha}..HEAD"], cwd=repo)
+    try:
+        return int(cnt.stdout.strip()) if cnt.ok else 0
+    except ValueError:
+        return 0
+
+
 def _do_commit(spec: RunSpec, state: PRState, report_text: str,
                task_type: str, goal: str) -> None:
     repo = Path(spec.repo_path)
@@ -566,7 +581,9 @@ def _do_commit(spec: RunSpec, state: PRState, report_text: str,
         return
 
     diff = _run(["git", "status", "--porcelain"], cwd=repo)
-    if not diff.stdout.strip():
+    dirty = bool(diff.stdout.strip())
+    agent_commits = 0 if dirty else _commits_ahead_of_base(repo, spec.base_sha)
+    if not dirty and not agent_commits:
         if task_type in _WRITE_TASK_TYPES:
             step.status = "failed"
             step.detail = "no diff produced (failed_no_mutations_produced)"
@@ -594,6 +611,19 @@ def _do_commit(spec: RunSpec, state: PRState, report_text: str,
         step.status = "failed"
         step.detail = f"git checkout failed: {co.stderr.strip()[:300]}"
         raise PRError(step.detail)
+
+    if not dirty:
+        # The agent committed its own work (e.g. `git commit` through bash)
+        # and left the tree clean. That work is the deliverable: the branch
+        # now points at it and the push step ships it. Declaring "no
+        # mutations" here dropped real output on the floor (2026-09 review:
+        # every deps-audit run scored on a commit luxe never pushed).
+        step.detail = (f"agent committed {agent_commits} commit(s) itself; "
+                       "shipping HEAD")
+        step.done = True
+        step.status = "done"
+        step.completed_at = time.time()
+        return
 
     add = _run(["git", "add", "-A"], cwd=repo)
     if not add.ok:
