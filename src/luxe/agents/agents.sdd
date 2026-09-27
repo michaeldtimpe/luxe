@@ -340,18 +340,6 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   from a chat-side drill (`acceptance/chat_bigread_2026_08_24/`), the way
   Phase 2's did.
 
-### forge-hybrid Phase 3 (B) respond-terminal invariants (pinned 2026-05-28, opt-in)
-
-- **`LUXE_RESPOND_TERMINAL` defaults OFF.** The B1+B2 smoke at n=14 confirmed the
-  champion does NOT call the respond tool organically (0/14 adoption) and does NOT
-  call it under explicit prompt guidance (0/14 adoption with `swebench_bugfix_respond`).
-  The lever is in-tree as infrastructure but does not engage on this champion; future
-  cycles may re-attempt if a different champion is fielded.
-- **4 watchdog gates** when the flag IS set: (1) compaction-phantom (Phase ≥2 + writes==0),
-  (2) early-respond (writes==0 + step<4), (3) no-writes-late (writes==0 + step≥4),
-  (4) passive-surrender (writes≥1 + step≤last_write_step). First match wins; non-terminal
-  gates inject typed reprompt + continue.
-
 ### forge-hybrid Phase 4 (D) trajectory-shape invariants (pinned 2026-05-28, opt-in)
 
 - **`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE` defaults OFF.** The D smoke at n=14 confirmed
@@ -454,7 +442,8 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   runs the guard already armed via the zero-byte path. Report:
   `acceptance/pwir_rerun_2026_08_10/REPORT.md`.
 - Disposition: keep in-tree, default OFF, documented as refuted — same as
-  `LUXE_RESPOND_TERMINAL` and the trajectory-shape suppressor. **Do not
+  the trajectory-shape suppressor (`LUXE_RESPOND_TERMINAL` was removed
+  outright in 2026-09; see "Removed mechanisms"). **Do not
   re-bench on maintain_suite**; two 3-rep A/Bs from opposite starting
   conditions (no opportunity, then opportunity) agree. Reviving it needs a
   workload where post-write repeat streaks reach 3 WITHOUT zero-byte calls
@@ -603,6 +592,20 @@ logs still parse. Do not reintroduce any of them without new evidence.
   step and then discarded every result by kind — pure wasted work, removed
   with no request-byte change (golden `spec_min_calls` / `spec_zero_calls`).
   The `min_tool_calls` reprompt at the would-be exit is unchanged.
+- **Respond terminal tool** (`LUXE_RESPOND_TERMINAL`, forge-hybrid Phase 3
+  B, pinned 2026-05-28 opt-in): `tools/respond.py`, the loop's pre-dispatch
+  intercept with its 4 watchdog gates (compaction-phantom, early-respond,
+  no-writes-late, passive-surrender; the `_RESPOND_*` constants, several of
+  which the loop never even read), the first/last-write-step bookkeeping only
+  the gates consumed, the `swebench_bugfix_respond` prompt variant +
+  `swebench_strict_respond_only` overlay, `configs/single_64gb_swebench_respond.yaml`,
+  and the swebench runner's `--respond-terminal`. REFUTED: the champion called
+  it 0/14 organically and 0/14 under explicit prompt guidance (lessons.md,
+  forge-hybrid closeout). The two exploratory spikes that used it as their
+  only termination mechanism (`benchmarks/{gsm8k,codeneedle}/agentic_run.py`,
+  commit 57d3f6d, undocumented and untested) were removed with it; recover
+  from git if that line of work reopens. Its tool was never in the default
+  surface, so default-flag requests are unchanged.
 
 ## Must not (reflect)
 

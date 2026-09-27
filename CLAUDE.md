@@ -500,7 +500,7 @@ means.
 
 ## Opt-in modes (default off, byte-identical when disabled)
 
-Six subsystems are gated by env vars and default to **off**. Each has
+Five subsystems are gated by env vars and default to **off**. Each has
 invariants in its `.sdd` you must read before enabling:
 
 - **Reflect / verify stage** (`LUXE_REFLECT=1`) — a separate `backend.chat`
@@ -513,9 +513,6 @@ invariants in its `.sdd` you must read before enabling:
 - **Cohort priors** (`LUXE_LOAD_PRIORS=1`) — reads
   `~/.luxe/cohort-history/<instance>.json`. **Log-only in v1.11** (does not
   influence intervention intensity); promotion deferred to v1.11.1+.
-- **Respond terminal tool** (`LUXE_RESPOND_TERMINAL=1`) — a `respond()` tool
-  with 4 watchdog gates. Champion 0/14 adoption (n=14 smoke 2026-05-28, with
-  or without prompt guidance); refute in `lessons.md`.
 - **Trajectory-shape early_bail suppression** (`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1`)
   — suppresses `early_bail` during deep localized reading with stable
   convergence. Fired 0/14 at n=14 (too narrow for this champion at

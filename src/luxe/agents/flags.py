@@ -114,9 +114,6 @@ class RunFlags:
     tiered_compact_threshold: float = DEFAULT_TIERED_COMPACT_THRESHOLD
     tiered_compact_phase_thresholds: tuple[float, float, float] | None = None
 
-    # forge-hybrid Phase 3 (B1)
-    respond_terminal: bool = False
-
     # v1.11 adaptive policy
     adaptive_policy: bool = False
     adaptive_no_write: bool = True
@@ -214,7 +211,6 @@ class RunFlags:
             tiered_compact=e.get("LUXE_TIERED_COMPACT", "1") != "0",
             tiered_compact_threshold=threshold,
             tiered_compact_phase_thresholds=phase_thresholds,
-            respond_terminal=e.get("LUXE_RESPOND_TERMINAL") == "1",
             adaptive_policy=e.get("LUXE_ADAPTIVE_POLICY") == "1",
             # Per-signal ablations: ON unless explicitly set to something
             # other than "1" (so `=0` disables, unset keeps them on).
