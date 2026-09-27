@@ -1,5 +1,25 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-09-27, m1 + m5) — full-project review closed: 18 PRs landed
+
+The first full review since the project started covered chat and the kit, the agent core, gitkit, the bench and
+the periphery. It landed PRs #10–#26 plus a CI fix: ripgrep on the runner, where main had been red for a month.
+
+- **Structural:**
+  - `cli/` and `gitkit/deep/` became packages.
+  - `ChatController` gives the line REPL and the TUI one engine.
+  - `run_agent` state lives in `LoopState`.
+  - The respond-terminal mechanism and two unreachable guards are gone.
+- **Benchmark-visible:**
+  - #20: MCP servers reach the bench only by opt-in. Bench numbers from 2026-08-25 to 2026-09-27 include 14
+    leaked tools.
+  - #26: dedup no longer refuses re-verification after a write.
+  - #17: harness and grader fixes.
+
+All benchmark verdicts and the open items are in `acceptance/review_2026_09/REPORT.md`, including the held
+compaction-marker change and two fixes that need cold-storage benchmarks. **Benchmarks now run on m5, not m1**
+(user preference). Use worktrees in `~/luxe-bench-tmp` there and an m5 baseline.
+
 ## ⇒ SESSION NOTE (2026-09-11, m1) — stale-oMLX self-repair landed (`luxe.repair`)
 
 `luxe smoke` found m1's oMLX 12 days stale across a `brew upgrade` (0.6.3rc3
