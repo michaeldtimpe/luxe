@@ -570,7 +570,7 @@ def test_deep_writes_timing_sidecar(big_repo, _gitkit_cfg, monkeypatch):
 
 def test_deep_frontmatter_carries_timing(big_repo, _gitkit_cfg, monkeypatch):
     import luxe.agents.single as single_mod
-    from luxe.gitkit import run_git_report, store
+    from luxe.gitkit import run_git_report
 
     monkeypatch.setattr(deep, "_CONTENT_BUDGET_FRAC", 0.0005)
     _stub_backend(monkeypatch)
@@ -1083,7 +1083,7 @@ def test_clean_note_logs_which_recovery_rung(monkeypatch):
     clean_report = ("# Repository audit\n**Findings: 1**\n\n"
                     "- **high** `a.py:3` — shadowed variable")
     out, src = deep._clean_note(rambly, "gitaudit",
-                                pass_fn=lambda g, c, l, role=None: _FakeResult(clean_report),
+                                pass_fn=lambda g, c, label, role=None: _FakeResult(clean_report),
                                 role=None, log=logs.append)
     assert out is not None and out.startswith("# Repository audit")
     assert src == "md_transcribed"
@@ -1092,7 +1092,7 @@ def test_clean_note_logs_which_recovery_rung(monkeypatch):
     # rung 2: transcription stays rambly → heuristic salvage, with line count
     logs2: list[str] = []
     out2, src2 = deep._clean_note(rambly, "gitaudit",
-                                  pass_fn=lambda g, c, l, role=None: _FakeResult(rambly),
+                                  pass_fn=lambda g, c, label, role=None: _FakeResult(rambly),
                                   role=None, log=logs2.append)
     assert out2 is not None and "a.py" in out2
     assert src2 == "heuristic"
