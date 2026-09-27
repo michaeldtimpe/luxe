@@ -459,7 +459,7 @@ class TestRemoteSmokeNeverEvicts:
         from luxe import cli as cli_mod
 
         _Backend.served = ["M5-Main", "M5-Fb"]
-        monkeypatch.setattr(cli_mod, "_chat_cfg", lambda p=None: _fleet_cfg())
+        monkeypatch.setattr(cli_mod.kit, "_chat_cfg", lambda p=None: _fleet_cfg())
         monkeypatch.setattr(backend_mod, "Backend", _Backend)
         res = CliRunner().invoke(cli_mod.main,
                                  ["smoke", "--backend", "m5", "--no-fix"])

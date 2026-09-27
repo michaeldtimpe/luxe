@@ -179,7 +179,7 @@ class TestRenderParity:
 class TestReadyCommand:
     def test_exit_zero_when_healthy(self, tmp_path, monkeypatch):
         _use_backend(monkeypatch)
-        monkeypatch.setattr(cli, "_default_chat_config",
+        monkeypatch.setattr(cli._common, "_default_chat_config",
                             lambda: str(_write_cfg(tmp_path)))
         res = CliRunner().invoke(cli.main, ["ready", "--repo",
                                             str(_repo(tmp_path))])
@@ -190,7 +190,7 @@ class TestReadyCommand:
     def test_exit_one_and_points_at_the_card_when_broken(self, tmp_path,
                                                          monkeypatch):
         _use_backend(monkeypatch, healthy=False)
-        monkeypatch.setattr(cli, "_default_chat_config",
+        monkeypatch.setattr(cli._common, "_default_chat_config",
                             lambda: str(_write_cfg(tmp_path)))
         res = CliRunner().invoke(cli.main, ["ready", "--repo",
                                             str(_repo(tmp_path))])
@@ -200,7 +200,7 @@ class TestReadyCommand:
 
     def test_unknown_backend_exits_two(self, tmp_path, monkeypatch):
         _use_backend(monkeypatch)
-        monkeypatch.setattr(cli, "_default_chat_config",
+        monkeypatch.setattr(cli._common, "_default_chat_config",
                             lambda: str(_write_cfg(tmp_path)))
         res = CliRunner().invoke(cli.main, ["ready", "--backend", "nope"])
         assert res.exit_code == 2 and "Unknown backend" in res.output
