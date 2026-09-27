@@ -1,0 +1,1422 @@
+{
+ "requests": [
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Let me look at the widget.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Let me look at the widget.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "a1",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"data/big.txt\"}"
+       }
+      },
+      {
+       "id": "a2",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a1",
+     "name": "read_file",
+     "content": "1\tline 0000: the quick brown fox jumps over the lazy dog\n2\tline 0001: the quick brown fox jumps over the lazy dog\n3\tline 0002: the quick brown fox jumps over the lazy dog\n4\tline 0003: the quick brown fox jumps over the lazy dog\n5\tline 0004: the quick brown fox jumps over the lazy dog\n6\tline 0005: the quick brown fox jumps over the lazy dog\n7\tline 0006: the quick brown fox jumps over the lazy dog\n8\tline 0007: the quick brown fox jumps over the lazy dog\n9\tline 0008: the quick brown fox jumps over the lazy dog\n10\tline 0009: the quick brown fox jumps over the lazy dog\n11\tline 0010: the quick brown fox jumps over the lazy dog\n12\tline 0011: the quick brown fox jumps over the lazy dog\n13\tline 0012: the quick brown fox jumps over the lazy dog\n14\tline 0013: the quick brown fox jumps over the lazy dog\n15\tline 0014: the quick brown fox jumps over the lazy dog\n16\tline 0015: the quick brown fox jumps over the lazy dog\n17\tline 0016: the quick brown fox jumps over the lazy dog\n18\tline 0017: the quick brown fox jumps over the lazy dog\n19\tline 0018: the quick brown fox jumps over the lazy dog\n20\tline 0019: the quick brown fox jumps over the lazy dog\n21\tline 0020: the quick brown fox jumps over the lazy dog\n22\tline 0021: the quick brown fox jumps over the lazy dog\n23\tline 0022: the quick brown fox jumps over the lazy dog\n24\tline 0023: the quick brown fox jumps over the lazy dog\n25\tline 0024: the quick brown fox jumps over the lazy dog\n26\tline 0025: the quick brown fox jumps over the lazy dog\n27\tline 0026: the quick brown fox jumps over the lazy dog\n28\tline 0027: the quick brown fox jumps over the lazy dog\n29\tline 0028: the quick brown fox jumps over the lazy dog\n30\tline 0029: the quick brown fox jumps over the lazy dog\n31\tline 0030: the quick brown fox jumps over the lazy dog\n32\tline 0031: the quick brown fox jumps over the lazy dog\n33\tline 0032: the quick brown fox jumps over the lazy dog\n34\tline 0033: the quick brown fox jumps over the lazy dog\n35\tline 0034: the quick brown fox jumps over the lazy dog\n36\tline 0035: the quick brown fox jumps over the lazy dog\n37\tline 0036: the quick brown fox jumps over the lazy dog\n38\tline 0037: the quick brown fox jumps over the lazy dog\n39\tline 0038: the quick brown fox jumps over the lazy dog\n40\tline 0039: the quick brown fox jumps over the lazy dog\n41\tline 0040: the quick brown fox jumps over the lazy dog\n42\tline 0041: the quick brown fox jumps over the lazy dog\n43\tline 0042: the quick brown fox jumps over the lazy dog\n44\tline 0043: the quick brown fox jumps over the lazy dog\n45\tline 0044: the quick brown fox jumps over the lazy dog\n46\tline 0045: the quick brown fox jumps over the lazy dog\n47\tline 0046: the quick brown fox jumps over the lazy dog\n48\tline 0047: the quick brown fox jumps over the lazy dog\n49\tline 0048: the quick brown fox jumps over the lazy dog\n50\tline 0049: the quick brown fox jumps over the lazy dog\n51\tline 0050: the quick brown fox jumps over the lazy dog\n52\tline 0051: the quick brown fox jumps over the lazy dog\n53\tline 0052: the quick brown fox jumps over the lazy dog\n54\tline 0053: the quick brown fox jumps over the lazy dog\n55\tline 0054: the quick brown fox jumps over the lazy dog\n56\tline 0055: the quick brown fox jumps over the lazy dog\n57\tline 0056: the quick brown fox jumps over the lazy dog\n58\tline 0057: the quick brown fox jumps over the lazy dog\n59\tline 0058: the quick brown fox jumps over the lazy dog\n60\tline 0059: the quick brown fox jumps over the lazy dog\n61\tline 0060: the quick brown fox jumps over the lazy dog\n62\tline 0061: the quick brown fox jumps over the lazy dog\n63\tline 0062: the quick brown fox jumps over the lazy dog\n64\tline 0063: the quick brown fox jumps over the lazy dog\n65\tline 0064: the quick brown fox jumps over the lazy dog\n66\tline 0065: the quick brown fox jumps over the lazy dog\n67\tline 0066: the quick brown fox jumps over the lazy dog\n68\tline 0067: the quick brown fox jumps over the lazy dog\n69\tline 0068: the quick brown fox jumps over the lazy dog\n70\tline 0069: the quick brown fox jumps over the lazy dog\n71\tline 0070: the quick brown fox jumps over the lazy dog\n72\tline 0071: the quick brown fox jumps over the lazy dog\n73\tline 0072: the quick brown fox jumps over the lazy dog\n74\tline 0073: the quick brown fox jumps over the lazy dog\n75\tline 0074: the quick brown fox jumps over the lazy dog\n76\tline 0075: the quick brown fox jumps over the lazy dog\n77\tline 0076: the quick brown fox jumps over the lazy dog\n78\tline 0077: the quick brown fox jumps over the lazy dog\n79\tline 0078: the quick brown fox jumps over the lazy dog\n80\tline 0079: the quick brown fox jumps over the lazy dog\n81\tline 0080: the quick brown fox jumps over the lazy dog\n82\tline 0081: the quick brown fox jumps over the lazy dog\n83\tline 0082: the quick brown fox jumps over the lazy dog\n84\tline 0083: the quick brown fox jumps over the lazy dog\n85\tline 0084: the quick brown fox jumps over the lazy dog\n86\tline 0085: the quick brown fox jumps over the lazy dog\n87\tline 0086: the quick brown fox jumps over the lazy dog\n88\tline 0087: the quick brown fox jumps over the lazy dog\n89\tline 0088: the quick brown fox jumps over the lazy dog\n90\tline 0089: the quick brown fox jumps over the lazy dog\n91\tline 0090: the quick brown fox jumps over the lazy dog\n92\tline 0091: the quick brown fox jumps over the lazy dog\n93\tline 0092: the quick brown fox jumps over the lazy dog\n94\tline 0093: the quick brown fox jumps over the lazy dog\n95\tline 0094: the quick brown fox jumps over the lazy dog\n96\tline 0095: the quick brown fox jumps over the lazy dog\n97\tline 0096: the quick brown fox jumps over the lazy dog\n98\tline 0097: the quick brown fox jumps over the lazy dog\n99\tline 0098: the quick brown fox jumps over the lazy dog\n100\tline 0099: the quick brown fox jumps over the lazy dog\n101\tline 0100: the quick brown fox jumps over the lazy dog\n102\tline 0101: the quick brown fox jumps over the lazy dog\n103\tline 0102: the quick brown fox jumps over the lazy dog\n104\tline 0103: the quick brown fox jumps over the lazy dog\n105\tline 0104: the quick brown fox jumps over the lazy dog\n106\tline 0105: the quick brown fox jumps over the lazy dog\n107\tline 0106: the quick brown fox jumps over the lazy dog\n108\tline 0107: the quick brown fox jumps over the lazy dog\n109\tline 0108: the quick brown fox jumps over the lazy dog\n110\tline 0109: the quick brown fox jumps over the lazy dog\n111\tline 0110: the quick brown fox jumps over the lazy dog\n112\tline 0111: the quick brown fox jumps over the lazy dog\n113\tline 0112: the quick brown fox jumps over the lazy dog\n114\tline 0113: the quick brown fox jumps over the lazy dog\n115\tline 0114: the quick brown fox jumps over the lazy dog\n116\tline 0115: the quick brown fox jumps over the lazy dog\n117\tline 0116: the quick brown fox jumps over the lazy dog\n118\tline 0117: the quick brown fox jumps over the lazy dog\n119\tline 0118: the quick brown fox jumps over the lazy dog\n120\tline 0119: the quick brown fox jumps over the lazy dog\n121\tline 0120: the quick brown fox jumps over the lazy dog\n122\tline 0121: the quick brown fox jumps over the lazy dog\n123\tline 0122: the quick brown fox jumps over the lazy dog\n124\tline 0123: the quick brown fox jumps over the lazy dog\n125\tline 0124: the quick brown fox jumps over the lazy dog\n126\tline 0125: the quick brown fox jumps over the lazy dog\n127\tline 0126: the quick brown fox jumps over the lazy dog\n128\tline 0127: the quick brown fox jumps over the lazy dog\n129\tline 0128: the quick brown fox jumps over the lazy dog\n130\tline 0129: the quick brown fox jumps over the lazy dog\n131\tline 0130: the quick brown fox jumps over the lazy dog\n132\tline 0131: the quick brown fox jumps over the lazy dog\n133\tline 0132: the quick brown fox jumps over the lazy dog\n134\tline 0133: the quick brown fox jumps over the lazy dog\n135\tline 0134: the quick brown fox jumps over the lazy dog\n136\tline 0135: the quick brown fox jumps over the lazy dog\n137\tline 0136: the quick brown fox jumps over the lazy dog\n138\tline 0137: the quick brown fox jumps over the lazy dog\n139\tline 0138: the quick brown fox jumps over the lazy dog\n140\tline 0139: the quick brown fox jumps over the lazy dog\n141\tline 0140: the quick brown fox jumps over the lazy dog\n142\tline 0141: the quick brown fox jumps over the lazy dog\n143\tline 0142: the quick brown fox jumps over the lazy dog\n144\tline 0143: the quick brown fox jumps over the lazy dog\n145\tline 0144: the quick brown fox jumps over the lazy dog\n146\tline 0145: the quick brown fox jumps over the lazy dog\n147\tline 0146: the quick brown fox jumps over the lazy dog\n148\tline 0147: the quick brown fox jumps over the lazy dog\n149\tline 0148: the quick brown fox jumps over the lazy dog\n150\tline 0149: the quick brown fox jumps over the lazy dog\n151\tline 0150: the quick brown fox jumps over the lazy dog\n152\tline 0151: the quick brown fox jumps over the lazy dog\n153\tline 0152: the quick brown fox jumps over the lazy dog\n154\tline 0153: the quick brown fox jumps over the lazy dog\n155\tline 0154: the quick brown fox jumps over the lazy dog\n156\tline 0155: the quick brown fox jumps over the lazy dog\n157\tline 0156: the quick brown fox jumps over the lazy dog\n158\tline 0157: the quick brown fox jumps over the lazy dog\n159\tline 0158: the quick brown fox jumps over the lazy dog\n160\tline 0159: the quick brown fox jumps over the lazy dog\n"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a2",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Let me look at the widget.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "a1",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"data/big.txt\"}"
+       }
+      },
+      {
+       "id": "a2",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a1",
+     "name": "read_file",
+     "content": "1\tline 0000: the quick brown fox jumps over the lazy dog\n2\tline 0001: the quick brown fox jumps over the lazy dog\n3\tline 0002: the quick brown fox jumps over the lazy dog\n4\tline 0003: the quick brown fox jumps over the lazy dog\n5\tline 0004: the quick brown fox jumps over the lazy dog\n6\tline 0005: the quick brown fox jumps over the lazy dog\n7\tline 0006: the quick brown fox jumps over the lazy dog\n8\tline 0007: the quick brown fox jumps over the lazy dog\n9\tline 0008: the quick brown fox jumps over the lazy dog\n10\tline 0009: the quick brown fox jumps over the lazy dog\n11\tline 0010: the quick brown fox jumps over the lazy dog\n12\tline 0011: the quick brown fox jumps over the lazy dog\n13\tline 0012: the quick brown fox jumps over the lazy dog\n14\tline 0013: the quick brown fox jumps over the lazy dog\n15\tline 0014: the quick brown fox jumps over the lazy dog\n16\tline 0015: the quick brown fox jumps over the lazy dog\n17\tline 0016: the quick brown fox jumps over the lazy dog\n18\tline 0017: the quick brown fox jumps over the lazy dog\n19\tline 0018: the quick brown fox jumps over the lazy dog\n20\tline 0019: the quick brown fox jumps over the lazy dog\n21\tline 0020: the quick brown fox jumps over the lazy dog\n22\tline 0021: the quick brown fox jumps over the lazy dog\n23\tline 0022: the quick brown fox jumps over the lazy dog\n24\tline 0023: the quick brown fox jumps over the lazy dog\n25\tline 0024: the quick brown fox jumps over the lazy dog\n26\tline 0025: the quick brown fox jumps over the lazy dog\n27\tline 0026: the quick brown fox jumps over the lazy dog\n28\tline 0027: the quick brown fox jumps over the lazy dog\n29\tline 0028: the quick brown fox jumps over the lazy dog\n30\tline 0029: the quick brown fox jumps over the lazy dog\n31\tline 0030: the quick brown fox jumps over the lazy dog\n32\tline 0031: the quick brown fox jumps over the lazy dog\n33\tline 0032: the quick brown fox jumps over the lazy dog\n34\tline 0033: the quick brown fox jumps over the lazy dog\n35\tline 0034: the quick brown fox jumps over the lazy dog\n36\tline 0035: the quick brown fox jumps over the lazy dog\n37\tline 0036: the quick brown fox jumps over the lazy dog\n38\tline 0037: the quick brown fox jumps over the lazy dog\n39\tline 0038: the quick brown fox jumps over the lazy dog\n40\tline 0039: the quick brown fox jumps over the lazy dog\n41\tline 0040: the quick brown fox jumps over the lazy dog\n42\tline 0041: the quick brown fox jumps over the lazy dog\n43\tline 0042: the quick brown fox jumps over the lazy dog\n44\tline 0043: the quick brown fox jumps over the lazy dog\n45\tline 0044: the quick brown fox jumps over the lazy dog\n46\tline 0045: the quick brown fox jumps over the lazy dog\n47\tline 0046: the quick brown fox jumps over the lazy dog\n48\tline 0047: the quick brown fox jumps over the lazy dog\n49\tline 0048: the quick brown fox jumps over the lazy dog\n50\tline 0049: the quick brown fox jumps over the lazy dog\n51\tline 0050: the quick brown fox jumps over the lazy dog\n52\tline 0051: the quick brown fox jumps over the lazy dog\n53\tline 0052: the quick brown fox jumps over the lazy dog\n54\tline 0053: the quick brown fox jumps over the lazy dog\n55\tline 0054: the quick brown fox jumps over the lazy dog\n56\tline 0055: the quick brown fox jumps over the lazy dog\n57\tline 0056: the quick brown fox jumps over the lazy dog\n58\tline 0057: the quick brown fox jumps over the lazy dog\n59\tline 0058: the quick brown fox jumps over the lazy dog\n60\tline 0059: the quick brown fox jumps over the lazy dog\n61\tline 0060: the quick brown fox jumps over the lazy dog\n62\tline 0061: the quick brown fox jumps over the lazy dog\n63\tline 0062: the quick brown fox jumps over the lazy dog\n64\tline 0063: the quick brown fox jumps over the lazy dog\n65\tline 0064: the quick brown fox jumps over the lazy dog\n66\tline 0065: the quick brown fox jumps over the lazy dog\n67\tline 0066: the quick brown fox jumps over the lazy dog\n68\tline 0067: the quick brown fox jumps over the lazy dog\n69\tline 0068: the quick brown fox jumps over the lazy dog\n70\tline 0069: the quick brown fox jumps over the lazy dog\n71\tline 0070: the quick brown fox jumps over the lazy dog\n72\tline 0071: the quick brown fox jumps over the lazy dog\n73\tline 0072: the quick brown fox jumps over the lazy dog\n74\tline 0073: the quick brown fox jumps over the lazy dog\n75\tline 0074: the quick brown fox jumps over the lazy dog\n76\tline 0075: the quick brown fox jumps over the lazy dog\n77\tline 0076: the quick brown fox jumps over the lazy dog\n78\tline 0077: the quick brown fox jumps over the lazy dog\n79\tline 0078: the quick brown fox jumps over the lazy dog\n80\tline 0079: the quick brown fox jumps over the lazy dog\n81\tline 0080: the quick brown fox jumps over the lazy dog\n82\tline 0081: the quick brown fox jumps over the lazy dog\n83\tline 0082: the quick brown fox jumps over the lazy dog\n84\tline 0083: the quick brown fox jumps over the lazy dog\n85\tline 0084: the quick brown fox jumps over the lazy dog\n86\tline 0085: the quick brown fox jumps over the lazy dog\n87\tline 0086: the quick brown fox jumps over the lazy dog\n88\tline 0087: the quick brown fox jumps over the lazy dog\n89\tline 0088: the quick brown fox jumps over the lazy dog\n90\tline 0089: the quick brown fox jumps over the lazy dog\n91\tline 0090: the quick brown fox jumps over the lazy dog\n92\tline 0091: the quick brown fox jumps over the lazy dog\n93\tline 0092: the quick brown fox jumps over the lazy dog\n94\tline 0093: the quick brown fox jumps over the lazy dog\n95\tline 0094: the quick brown fox jumps over the lazy dog\n96\tline 0095: the quick brown fox jumps over the lazy dog\n97\tline 0096: the quick brown fox jumps over the lazy dog\n98\tline 0097: the quick brown fox jumps over the lazy dog\n99\tline 0098: the quick brown fox jumps over the lazy dog\n100\tline 0099: the quick brown fox jumps over the lazy dog\n101\tline 0100: the quick brown fox jumps over the lazy dog\n102\tline 0101: the quick brown fox jumps over the lazy dog\n103\tline 0102: the quick brown fox jumps over the lazy dog\n104\tline 0103: the quick brown fox jumps over the lazy dog\n105\tline 0104: the quick brown fox jumps over the lazy dog\n106\tline 0105: the quick brown fox jumps over the lazy dog\n107\tline 0106: the quick brown fox jumps over the lazy dog\n108\tline 0107: the quick brown fox jumps over the lazy dog\n109\tline 0108: the quick brown fox jumps over the lazy dog\n110\tline 0109: the quick brown fox jumps over the lazy dog\n111\tline 0110: the quick brown fox jumps over the lazy dog\n112\tline 0111: the quick brown fox jumps over the lazy dog\n113\tline 0112: the quick brown fox jumps over the lazy dog\n114\tline 0113: the quick brown fox jumps over the lazy dog\n115\tline 0114: the quick brown fox jumps over the lazy dog\n116\tline 0115: the quick brown fox jumps over the lazy dog\n117\tline 0116: the quick brown fox jumps over the lazy dog\n118\tline 0117: the quick brown fox jumps over the lazy dog\n119\tline 0118: the quick brown fox jumps over the lazy dog\n120\tline 0119: the quick brown fox jumps over the lazy dog\n121\tline 0120: the quick brown fox jumps over the lazy dog\n122\tline 0121: the quick brown fox jumps over the lazy dog\n123\tline 0122: the quick brown fox jumps over the lazy dog\n124\tline 0123: the quick brown fox jumps over the lazy dog\n125\tline 0124: the quick brown fox jumps over the lazy dog\n126\tline 0125: the quick brown fox jumps over the lazy dog\n127\tline 0126: the quick brown fox jumps over the lazy dog\n128\tline 0127: the quick brown fox jumps over the lazy dog\n129\tline 0128: the quick brown fox jumps over the lazy dog\n130\tline 0129: the quick brown fox jumps over the lazy dog\n131\tline 0130: the quick brown fox jumps over the lazy dog\n132\tline 0131: the quick brown fox jumps over the lazy dog\n133\tline 0132: the quick brown fox jumps over the lazy dog\n134\tline 0133: the quick brown fox jumps over the lazy dog\n135\tline 0134: the quick brown fox jumps over the lazy dog\n136\tline 0135: the quick brown fox jumps over the lazy dog\n137\tline 0136: the quick brown fox jumps over the lazy dog\n138\tline 0137: the quick brown fox jumps over the lazy dog\n139\tline 0138: the quick brown fox jumps over the lazy dog\n140\tline 0139: the quick brown fox jumps over the lazy dog\n141\tline 0140: the quick brown fox jumps over the lazy dog\n142\tline 0141: the quick brown fox jumps over the lazy dog\n143\tline 0142: the quick brown fox jumps over the lazy dog\n144\tline 0143: the quick brown fox jumps over the lazy dog\n145\tline 0144: the quick brown fox jumps over the lazy dog\n146\tline 0145: the quick brown fox jumps over the lazy dog\n147\tline 0146: the quick brown fox jumps over the lazy dog\n148\tline 0147: the quick brown fox jumps over the lazy dog\n149\tline 0148: the quick brown fox jumps over the lazy dog\n150\tline 0149: the quick brown fox jumps over the lazy dog\n151\tline 0150: the quick brown fox jumps over the lazy dog\n152\tline 0151: the quick brown fox jumps over the lazy dog\n153\tline 0152: the quick brown fox jumps over the lazy dog\n154\tline 0153: the quick brown fox jumps over the lazy dog\n155\tline 0154: the quick brown fox jumps over the lazy dog\n156\tline 0155: the quick brown fox jumps over the lazy dog\n157\tline 0156: the quick brown fox jumps over the lazy dog\n158\tline 0157: the quick brown fox jumps over the lazy dog\n159\tline 0158: the quick brown fox jumps over the lazy dog\n160\tline 0159: the quick brown fox jumps over the lazy dog\n"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a2",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Checking again.",
+     "tool_calls": [
+      {
+       "id": "b1",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      },
+      {
+       "id": "b2",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{}"
+       }
+      },
+      {
+       "id": "b3",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "[\"x\"]"
+       }
+      },
+      {
+       "id": "b4",
+       "type": "function",
+       "function": {
+        "name": "no_such_tool",
+        "arguments": "{\"q\": 1}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b1",
+     "name": "list_dir",
+     "content": "You already called list_dir with these exact arguments and the result was provided above. Use a different tool, try different arguments, or summarize your findings."
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b2",
+     "name": "read_file",
+     "content": "Schema error: Missing required argument: path"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b3",
+     "name": "read_file",
+     "content": "Schema error: Arguments must be a JSON object, got list"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b4",
+     "name": "no_such_tool",
+     "content": "Unknown tool: no_such_tool"
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "a1",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"data/big.txt\"}"
+       }
+      },
+      {
+       "id": "a2",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a1",
+     "name": "read_file",
+     "content": "1\tline 0000: the quick brown fox jumps over the lazy dog\n2\tline 0001: the quick brown fox jumps over the lazy dog\n3\tline 0002: the quick brown fox jumps over the lazy dog\n4\tline 0003: the quick brown fox jumps over the lazy dog\n5\tline 0004: the quick brown fox jumps over the lazy dog\n6\tline 0005: the quick brown fox jumps over the lazy dog\n7\tline 0006: the quick brown fox jumps over the lazy dog\n8\tline 0007: the quick brown fox jumps over the lazy dog\n9\tline 0008: the quick brown fox jumps over the lazy dog\n10\tline 0009: the quick brown fox jumps over the lazy dog\n11\tline 0010: the quick brown fox jumps over the lazy dog\n12\tline 0011: the quick brown fox jumps over the lazy dog\n13\tline 0012: the quick brown fox jumps over the lazy dog\n14\tline 0013: the quick brown fox jumps over the lazy dog\n15\tline 0014: the quick brown fox jumps over the lazy dog\n16\tline 0015: the quick brown fox jumps over the lazy dog\n17\tline 0016: the quick brown fox jumps over the lazy dog\n18\tline 0017: the quick brown fox jumps over the lazy dog\n19\tline 0018: the quick brown fox jumps over the lazy dog\n20\tline 0019: the quick brown fox jumps over the lazy dog\n21\tline 0020: the quick brown fox jumps over the lazy dog\n22\tline 0021: the quick brown fox jumps over the lazy dog\n23\tline 0022: the quick brown fox jumps over the lazy dog\n24\tline 0023: the quick brown fox jumps over the lazy dog\n25\tline 0024: the quick brown fox jumps over the lazy dog\n26\tline 0025: the quick brown fox jumps over the lazy dog\n27\tline 0026: the quick brown fox jumps over the lazy dog\n28\tline 0027: the quick brown fox jumps over the lazy dog\n29\tline 0028: the quick brown fox jumps over the lazy dog\n30\tline 0029: the quick brown fox jumps over the lazy dog\n31\tline 0030: the quick brown fox jumps over the lazy dog\n32\tline 0031: the quick brown fox jumps over the lazy dog\n33\tline 0032: the quick brown fox jumps over the lazy dog\n34\tline 0033: the quick brown fox jumps over the lazy dog\n35\tline 0034: the quick brown fox jumps over the lazy dog\n36\tline 0035: the quick brown fox jumps over the lazy dog\n37\tline 0036: the quick brown fox jumps over the lazy dog\n38\tline 0037: the quick brown fox jumps over the lazy dog\n39\tline 0038: the quick brown fox jumps over the lazy dog\n40\tline 0039: the quick brown fox jumps over the lazy dog\n41\tline 0040: the quick brown fox jumps over the lazy dog\n42\tline 0041: the quick brown fox jumps over the lazy dog\n43\tline 0042: the quick brown fox jumps over the lazy dog\n44\tline 0043: the quick brown fox jumps over the lazy dog\n45\tline 0044: the quick brown fox jumps over the lazy dog\n46\tline 0045: the quick brown fox jumps over the lazy dog\n47\tline 0046: the quick brown fox jumps over the lazy dog\n48\tline 0047: the quick brown fox jumps over the lazy dog\n49\tline 0048: the quick brown fox jumps over the lazy dog\n50\tline 0049: the quick brown fox jumps over the lazy dog\n51\tline 0050: the quick brown fox jumps over the lazy dog\n52\tline 0051: the quick brown fox jumps over the lazy dog\n53\tline 0052: the quick brown fox jumps over the lazy dog\n54\tline 0053: the quick brown fox jumps over the lazy dog\n55\tline 0054: the quick brown fox jumps over the lazy dog\n56\tline 0055: the quick brown fox jumps over the lazy dog\n57\tline 0056: the quick brown fox jumps over the lazy dog\n58\tline 0057: the quick brown fox jumps over the lazy dog\n59\tline 0058: the quick brown fox jumps over the lazy dog\n60\tline 0059: the quick brown fox jumps over the lazy dog\n61\tline 0060: the quick brown fox jumps over the lazy dog\n62\tline 0061: the quick brown fox jumps over the lazy dog\n63\tline 0062: the quick brown fox jumps over the lazy dog\n64\tline 0063: the quick brown fox jumps over the lazy dog\n65\tline 0064: the quick brown fox jumps over the lazy dog\n66\tline 0065: the quick brown fox jumps over the lazy dog\n67\tline 0066: the quick brown fox jumps over the lazy dog\n68\tline 0067: the quick brown fox jumps over the lazy dog\n69\tline 0068: the quick brown fox jumps over the lazy dog\n70\tline 0069: the quick brown fox jumps over the lazy dog\n71\tline 0070: the quick brown fox jumps over the lazy dog\n72\tline 0071: the quick brown fox jumps over the lazy dog\n73\tline 0072: the quick brown fox jumps over the lazy dog\n74\tline 0073: the quick brown fox jumps over the lazy dog\n75\tline 0074: the quick brown fox jumps over the lazy dog\n76\tline 0075: the quick brown fox jumps over the lazy dog\n77\tline 0076: the quick brown fox jumps over the lazy dog\n78\tline 0077: the quick brown fox jumps over the lazy dog\n79\tline 0078: the quick brown fox jumps over the lazy dog\n80\tline 0079: the quick brown fox jumps over the lazy dog\n81\tline 0080: the quick brown fox jumps over the lazy dog\n82\tline 0081: the quick brown fox jumps over the lazy dog\n83\tline 0082: the quick brown fox jumps over the lazy dog\n84\tline 0083: the quick brown fox jumps over the lazy dog\n85\tline 0084: the quick brown fox jumps over the lazy dog\n86\tline 0085: the quick brown fox jumps over the lazy dog\n87\tline 0086: the quick brown fox jumps over the lazy dog\n88\tline 0087: the quick brown fox jumps over the lazy dog\n89\tline 0088: the quick brown fox jumps over the lazy dog\n90\tline 0089: the quick brown fox jumps over the lazy dog\n91\tline 0090: the quick brown fox jumps over the lazy dog\n92\tline 0091: the quick brown fox jumps over the lazy dog\n93\tline 0092: the quick brown fox jumps over the lazy dog\n94\tline 0093: the quick brown fox jumps over the lazy dog\n95\tline 0094: the quick brown fox jumps over the lazy dog\n96\tline 0095: the quick brown fox jumps over the lazy dog\n97\tline 0096: the quick brown fox jumps over the lazy dog\n98\tline 0097: the quick brown fox jumps over the lazy dog\n99\tline 0098: the quick brown fox jumps over the lazy dog\n100\tline 0099: the quick brown fox jumps over the lazy dog\n101\tline 0100: the quick brown fox jumps over the lazy dog\n102\tline 0101: the quick brown fox jumps over the lazy dog\n103\tline 0102: the quick brown fox jumps over the lazy dog\n104\tline 0103: the quick brown fox jumps over the lazy dog\n105\tline 0104: the quick brown fox jumps over the lazy dog\n106\tline 0105: the quick brown fox jumps over the lazy dog\n107\tline 0106: the quick brown fox jumps over the lazy dog\n108\tline 0107: the quick brown fox jumps over the lazy dog\n109\tline 0108: the quick brown fox jumps over the lazy dog\n110\tline 0109: the quick brown fox jumps over the lazy dog\n111\tline 0110: the quick brown fox jumps over the lazy dog\n112\tline 0111: the quick brown fox jumps over the lazy dog\n113\tline 0112: the quick brown fox jumps over the lazy dog\n114\tline 0113: the quick brown fox jumps over the lazy dog\n115\tline 0114: the quick brown fox jumps over the lazy dog\n116\tline 0115: the quick brown fox jumps over the lazy dog\n117\tline 0116: the quick brown fox jumps over the lazy dog\n118\tline 0117: the quick brown fox jumps over the lazy dog\n119\tline 0118: the quick brown fox jumps over the lazy dog\n120\tline 0119: the quick brown fox jumps over the lazy dog\n121\tline 0120: the quick brown fox jumps over the lazy dog\n122\tline 0121: the quick brown fox jumps over the lazy dog\n123\tline 0122: the quick brown fox jumps over the lazy dog\n124\tline 0123: the quick brown fox jumps over the lazy dog\n125\tline 0124: the quick brown fox jumps over the lazy dog\n126\tline 0125: the quick brown fox jumps over the lazy dog\n127\tline 0126: the quick brown fox jumps over the lazy dog\n128\tline 0127: the quick brown fox jumps over the lazy dog\n129\tline 0128: the quick brown fox jumps over the lazy dog\n130\tline 0129: the quick brown fox jumps over the lazy dog\n131\tline 0130: the quick brown fox jumps over the lazy dog\n132\tline 0131: the quick brown fox jumps over the lazy dog\n133\tline 0132: the quick brown fox jumps over the lazy dog\n134\tline 0133: the quick brown fox jumps over the lazy dog\n135\tline 0134: the quick brown fox jumps over the lazy dog\n136\tline 0135: the quick brown fox jumps over the lazy dog\n137\tline 0136: the quick brown fox jumps over the lazy dog\n138\tline 0137: the quick brown fox jumps over the lazy dog\n139\tline 0138: the quick brown fox jumps over the lazy dog\n140\tline 0139: the quick brown fox jumps over the lazy dog\n141\tline 0140: the quick brown fox jumps over the lazy dog\n142\tline 0141: the quick brown fox jumps over the lazy dog\n143\tline 0142: the quick brown fox jumps over the lazy dog\n144\tline 0143: the quick brown fox jumps over the lazy dog\n145\tline 0144: the quick brown fox jumps over the lazy dog\n146\tline 0145: the quick brown fox jumps over the lazy dog\n147\tline 0146: the quick brown fox jumps over the lazy dog\n148\tline 0147: the quick brown fox jumps over the lazy dog\n149\tline 0148: the quick brown fox jumps over the lazy dog\n150\tline 0149: the quick brown fox jumps over the lazy dog\n151\tline 0150: the quick brown fox jumps over the lazy dog\n152\tline 0151: the quick brown fox jumps over the lazy dog\n153\tline 0152: the quick brown fox jumps over the lazy dog\n154\tline 0153: the quick brown fox jumps over the lazy dog\n155\tline 0154: the quick brown fox jumps over the lazy dog\n156\tline 0155: the quick brown fox jumps over the lazy dog\n157\tline 0156: the quick brown fox jumps over the lazy dog\n158\tline 0157: the quick brown fox jumps over the lazy dog\n159\tline 0158: the quick brown fox jumps over the lazy dog\n160\tline 0159: the quick brown fox jumps over the lazy dog\n"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a2",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Checking again.",
+     "tool_calls": [
+      {
+       "id": "b1",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      },
+      {
+       "id": "b2",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{}"
+       }
+      },
+      {
+       "id": "b3",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "[\"x\"]"
+       }
+      },
+      {
+       "id": "b4",
+       "type": "function",
+       "function": {
+        "name": "no_such_tool",
+        "arguments": "{\"q\": 1}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b1",
+     "name": "list_dir",
+     "content": "You already called list_dir with these exact arguments and the result was provided above. Use a different tool, try different arguments, or summarize your findings."
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b2",
+     "name": "read_file",
+     "content": "Schema error: Missing required argument: path"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b3",
+     "name": "read_file",
+     "content": "Schema error: Arguments must be a JSON object, got list"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b4",
+     "name": "no_such_tool",
+     "content": "Unknown tool: no_such_tool"
+    },
+    {
+     "role": "assistant",
+     "content": "I will call <tool_call>{\"name\": \"frobnicate\", \"arguments\": {}}</tool_call> and then keep planning"
+    },
+    {
+     "role": "user",
+     "content": "Your previous response was CUT OFF at the token limit before you finished — it was not received as a complete answer, and no tool call was made, so nothing has changed on disk yet.\n\nStop planning and act now. Do not restate your analysis, do not summarise what you intend to do, and do not reproduce unchanged code. Make the edit with a tool call, changing only what the task requires.",
+     "_luxe_nudge": true,
+     "_luxe_nudge_type": "truncated_turn"
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "a1",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"data/big.txt\"}"
+       }
+      },
+      {
+       "id": "a2",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a1",
+     "name": "read_file",
+     "content": "1\tline 0000: the quick brown fox jumps over the lazy dog\n2\tline 0001: the quick brown fox jumps over the lazy dog\n3\tline 0002: the quick brown fox jumps over the lazy dog\n4\tline 0003: the quick brown fox jumps over the lazy dog\n5\tline 0004: the quick brown fox jumps over the lazy dog\n6\tline 0005: the quick brown fox jumps over the lazy dog\n7\tline 0006: the quick brown fox jumps over the lazy dog\n8\tline 0007: the quick brown fox jumps over the lazy dog\n9\tline 0008: the quick brown fox jumps over the lazy dog\n10\tline 0009: the quick brown fox jumps over the lazy dog\n11\tline 0010: the quick brown fox jumps over the lazy dog\n12\tline 0011: the quick brown fox jumps over the lazy dog\n13\tline 0012: the quick brown fox jumps over the lazy dog\n14\tline 0013: the quick brown fox jumps over the lazy dog\n15\tline 0014: the quick brown fox jumps over the lazy dog\n16\tline 0015: the quick brown fox jumps over the lazy dog\n17\tline 0016: the quick brown fox jumps over the lazy dog\n18\tline 0017: the quick brown fox jumps over the lazy dog\n19\tline 0018: the quick brown fox jumps over the lazy dog\n20\tline 0019: the quick brown fox jumps over the lazy dog\n21\tline 0020: the quick brown fox jumps over the lazy dog\n22\tline 0021: the quick brown fox jumps over the lazy dog\n23\tline 0022: the quick brown fox jumps over the lazy dog\n24\tline 0023: the quick brown fox jumps over the lazy dog\n25\tline 0024: the quick brown fox jumps over the lazy dog\n26\tline 0025: the quick brown fox jumps over the lazy dog\n27\tline 0026: the quick brown fox jumps over the lazy dog\n28\tline 0027: the quick brown fox jumps over the lazy dog\n29\tline 0028: the quick brown fox jumps over the lazy dog\n30\tline 0029: the quick brown fox jumps over the lazy dog\n31\tline 0030: the quick brown fox jumps over the lazy dog\n32\tline 0031: the quick brown fox jumps over the lazy dog\n33\tline 0032: the quick brown fox jumps over the lazy dog\n34\tline 0033: the quick brown fox jumps over the lazy dog\n35\tline 0034: the quick brown fox jumps over the lazy dog\n36\tline 0035: the quick brown fox jumps over the lazy dog\n37\tline 0036: the quick brown fox jumps over the lazy dog\n38\tline 0037: the quick brown fox jumps over the lazy dog\n39\tline 0038: the quick brown fox jumps over the lazy dog\n40\tline 0039: the quick brown fox jumps over the lazy dog\n41\tline 0040: the quick brown fox jumps over the lazy dog\n42\tline 0041: the quick brown fox jumps over the lazy dog\n43\tline 0042: the quick brown fox jumps over the lazy dog\n44\tline 0043: the quick brown fox jumps over the lazy dog\n45\tline 0044: the quick brown fox jumps over the lazy dog\n46\tline 0045: the quick brown fox jumps over the lazy dog\n47\tline 0046: the quick brown fox jumps over the lazy dog\n48\tline 0047: the quick brown fox jumps over the lazy dog\n49\tline 0048: the quick brown fox jumps over the lazy dog\n50\tline 0049: the quick brown fox jumps over the lazy dog\n51\tline 0050: the quick brown fox jumps over the lazy dog\n52\tline 0051: the quick brown fox jumps over the lazy dog\n53\tline 0052: the quick brown fox jumps over the lazy dog\n54\tline 0053: the quick brown fox jumps over the lazy dog\n55\tline 0054: the quick brown fox jumps over the lazy dog\n56\tline 0055: the quick brown fox jumps over the lazy dog\n57\tline 0056: the quick brown fox jumps over the lazy dog\n58\tline 0057: the quick brown fox jumps over the lazy dog\n59\tline 0058: the quick brown fox jumps over the lazy dog\n60\tline 0059: the quick brown fox jumps over the lazy dog\n61\tline 0060: the quick brown fox jumps over the lazy dog\n62\tline 0061: the quick brown fox jumps over the lazy dog\n63\tline 0062: the quick brown fox jumps over the lazy dog\n64\tline 0063: the quick brown fox jumps over the lazy dog\n65\tline 0064: the quick brown fox jumps over the lazy dog\n66\tline 0065: the quick brown fox jumps over the lazy dog\n67\tline 0066: the quick brown fox jumps over the lazy dog\n68\tline 0067: the quick brown fox jumps over the lazy dog\n69\tline 0068: the quick brown fox jumps over the lazy dog\n70\tline 0069: the quick brown fox jumps over the lazy dog\n71\tline 0070: the quick brown fox jumps over the lazy dog\n72\tline 0071: the quick brown fox jumps over the lazy dog\n73\tline 0072: the quick brown fox jumps over the lazy dog\n74\tline 0073: the quick brown fox jumps over the lazy dog\n75\tline 0074: the quick brown fox jumps over the lazy dog\n76\tline 0075: the quick brown fox jumps over the lazy dog\n77\tline 0076: the quick brown fox jumps over the lazy dog\n78\tline 0077: the quick brown fox jumps over the lazy dog\n79\tline 0078: the quick brown fox jumps over the lazy dog\n80\tline 0079: the quick brown fox jumps over the lazy dog\n81\tline 0080: the quick brown fox jumps over the lazy dog\n82\tline 0081: the quick brown fox jumps over the lazy dog\n83\tline 0082: the quick brown fox jumps over the lazy dog\n84\tline 0083: the quick brown fox jumps over the lazy dog\n85\tline 0084: the quick brown fox jumps over the lazy dog\n86\tline 0085: the quick brown fox jumps over the lazy dog\n87\tline 0086: the quick brown fox jumps over the lazy dog\n88\tline 0087: the quick brown fox jumps over the lazy dog\n89\tline 0088: the quick brown fox jumps over the lazy dog\n90\tline 0089: the quick brown fox jumps over the lazy dog\n91\tline 0090: the quick brown fox jumps over the lazy dog\n92\tline 0091: the quick brown fox jumps over the lazy dog\n93\tline 0092: the quick brown fox jumps over the lazy dog\n94\tline 0093: the quick brown fox jumps over the lazy dog\n95\tline 0094: the quick brown fox jumps over the lazy dog\n96\tline 0095: the quick brown fox jumps over the lazy dog\n97\tline 0096: the quick brown fox jumps over the lazy dog\n98\tline 0097: the quick brown fox jumps over the lazy dog\n99\tline 0098: the quick brown fox jumps over the lazy dog\n100\tline 0099: the quick brown fox jumps over the lazy dog\n101\tline 0100: the quick brown fox jumps over the lazy dog\n102\tline 0101: the quick brown fox jumps over the lazy dog\n103\tline 0102: the quick brown fox jumps over the lazy dog\n104\tline 0103: the quick brown fox jumps over the lazy dog\n105\tline 0104: the quick brown fox jumps over the lazy dog\n106\tline 0105: the quick brown fox jumps over the lazy dog\n107\tline 0106: the quick brown fox jumps over the lazy dog\n108\tline 0107: the quick brown fox jumps over the lazy dog\n109\tline 0108: the quick brown fox jumps over the lazy dog\n110\tline 0109: the quick brown fox jumps over the lazy dog\n111\tline 0110: the quick brown fox jumps over the lazy dog\n112\tline 0111: the quick brown fox jumps over the lazy dog\n113\tline 0112: the quick brown fox jumps over the lazy dog\n114\tline 0113: the quick brown fox jumps over the lazy dog\n115\tline 0114: the quick brown fox jumps over the lazy dog\n116\tline 0115: the quick brown fox jumps over the lazy dog\n117\tline 0116: the quick brown fox jumps over the lazy dog\n118\tline 0117: the quick brown fox jumps over the lazy dog\n119\tline 0118: the quick brown fox jumps over the lazy dog\n120\tline 0119: the quick brown fox jumps over the lazy dog\n121\tline 0120: the quick brown fox jumps over the lazy dog\n122\tline 0121: the quick brown fox jumps over the lazy dog\n123\tline 0122: the quick brown fox jumps over the lazy dog\n124\tline 0123: the quick brown fox jumps over the lazy dog\n125\tline 0124: the quick brown fox jumps over the lazy dog\n126\tline 0125: the quick brown fox jumps over the lazy dog\n127\tline 0126: the quick brown fox jumps over the lazy dog\n128\tline 0127: the quick brown fox jumps over the lazy dog\n129\tline 0128: the quick brown fox jumps over the lazy dog\n130\tline 0129: the quick brown fox jumps over the lazy dog\n131\tline 0130: the quick brown fox jumps over the lazy dog\n132\tline 0131: the quick brown fox jumps over the lazy dog\n133\tline 0132: the quick brown fox jumps over the lazy dog\n134\tline 0133: the quick brown fox jumps over the lazy dog\n135\tline 0134: the quick brown fox jumps over the lazy dog\n136\tline 0135: the quick brown fox jumps over the lazy dog\n137\tline 0136: the quick brown fox jumps over the lazy dog\n138\tline 0137: the quick brown fox jumps over the lazy dog\n139\tline 0138: the quick brown fox jumps over the lazy dog\n140\tline 0139: the quick brown fox jumps over the lazy dog\n141\tline 0140: the quick brown fox jumps over the lazy dog\n142\tline 0141: the quick brown fox jumps over the lazy dog\n143\tline 0142: the quick brown fox jumps over the lazy dog\n144\tline 0143: the quick brown fox jumps over the lazy dog\n145\tline 0144: the quick brown fox jumps over the lazy dog\n146\tline 0145: the quick brown fox jumps over the lazy dog\n147\tline 0146: the quick brown fox jumps over the lazy dog\n148\tline 0147: the quick brown fox jumps over the lazy dog\n149\tline 0148: the quick brown fox jumps over the lazy dog\n150\tline 0149: the quick brown fox jumps over the lazy dog\n151\tline 0150: the quick brown fox jumps over the lazy dog\n152\tline 0151: the quick brown fox jumps over the lazy dog\n153\tline 0152: the quick brown fox jumps over the lazy dog\n154\tline 0153: the quick brown fox jumps over the lazy dog\n155\tline 0154: the quick brown fox jumps over the lazy dog\n156\tline 0155: the quick brown fox jumps over the lazy dog\n157\tline 0156: the quick brown fox jumps over the lazy dog\n158\tline 0157: the quick brown fox jumps over the lazy dog\n159\tline 0158: the quick brown fox jumps over the lazy dog\n160\tline 0159: the quick brown fox jumps over the lazy dog\n"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a2",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Checking again.",
+     "tool_calls": [
+      {
+       "id": "b1",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      },
+      {
+       "id": "b2",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{}"
+       }
+      },
+      {
+       "id": "b3",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "[\"x\"]"
+       }
+      },
+      {
+       "id": "b4",
+       "type": "function",
+       "function": {
+        "name": "no_such_tool",
+        "arguments": "{\"q\": 1}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b1",
+     "name": "list_dir",
+     "content": "You already called list_dir with these exact arguments and the result was provided above. Use a different tool, try different arguments, or summarize your findings."
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b2",
+     "name": "read_file",
+     "content": "Schema error: Missing required argument: path"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b3",
+     "name": "read_file",
+     "content": "Schema error: Arguments must be a JSON object, got list"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b4",
+     "name": "no_such_tool",
+     "content": "Unknown tool: no_such_tool"
+    },
+    {
+     "role": "assistant",
+     "content": "I will call <tool_call>{\"name\": \"frobnicate\", \"arguments\": {}}</tool_call> and then keep planning"
+    },
+    {
+     "role": "user",
+     "content": "Your previous response was CUT OFF at the token limit before you finished — it was not received as a complete answer, and no tool call was made, so nothing has changed on disk yet.\n\nStop planning and act now. Do not restate your analysis, do not summarise what you intend to do, and do not reproduce unchanged code. Make the edit with a tool call, changing only what the task requires.",
+     "_luxe_nudge": true,
+     "_luxe_nudge_type": "truncated_turn"
+    },
+    {
+     "role": "user",
+     "content": "Your last reply was EMPTY — no text and no tool call reached the user, so from their side nothing happened.\n\nAnswer the user in plain text now. If you were thinking, put the conclusion in your reply; internal reasoning is not delivered.",
+     "_luxe_nudge": true,
+     "_luxe_nudge_type": "empty_turn"
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "a1",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"data/big.txt\"}"
+       }
+      },
+      {
+       "id": "a2",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a1",
+     "name": "read_file",
+     "content": "1\tline 0000: the quick brown fox jumps over the lazy dog\n2\tline 0001: the quick brown fox jumps over the lazy dog\n3\tline 0002: the quick brown fox jumps over the lazy dog\n4\tline 0003: the quick brown \n[Truncated — 9132 chars removed]"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "a2",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Checking again.",
+     "tool_calls": [
+      {
+       "id": "b1",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      },
+      {
+       "id": "b2",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{}"
+       }
+      },
+      {
+       "id": "b3",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "[\"x\"]"
+       }
+      },
+      {
+       "id": "b4",
+       "type": "function",
+       "function": {
+        "name": "no_such_tool",
+        "arguments": "{\"q\": 1}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b1",
+     "name": "list_dir",
+     "content": "You already called list_dir with these exact arguments and the result was provided above. Use a different tool, try different arguments, or summarize your findings."
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b2",
+     "name": "read_file",
+     "content": "Schema error: Missing required argument: path"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b3",
+     "name": "read_file",
+     "content": "Schema error: Arguments must be a JSON object, got list"
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "b4",
+     "name": "no_such_tool",
+     "content": "Unknown tool: no_such_tool"
+    },
+    {
+     "role": "assistant",
+     "content": "I will call <tool_call>{\"name\": \"frobnicate\", \"arguments\": {}}</tool_call> and then keep planning"
+    },
+    {
+     "role": "user",
+     "content": "Your previous response was CUT OFF at the token limit before you finished — it was not received as a complete answer, and no tool call was made, so nothing has changed on disk yet.\n\nStop planning and act now. Do not restate your analysis, do not summarise what you intend to do, and do not reproduce unchanged code. Make the edit with a tool call, changing only what the task requires.",
+     "_luxe_nudge": true,
+     "_luxe_nudge_type": "truncated_turn"
+    },
+    {
+     "role": "user",
+     "content": "Your last reply was EMPTY — no text and no tool call reached the user, so from their side nothing happened.\n\nAnswer the user in plain text now. If you were thinking, put the conclusion in your reply; internal reasoning is not delivered.",
+     "_luxe_nudge": true,
+     "_luxe_nudge_type": "empty_turn"
+    },
+    {
+     "role": "assistant",
+     "content": "Editing now.",
+     "tool_calls": [
+      {
+       "id": "call_5_0",
+       "type": "function",
+       "function": {
+        "name": "edit_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"old_string\": \"return 'widget'\", \"new_string\": \"return 'widget!'\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_5",
+     "name": "edit_file",
+     "content": "Edited src/widget.py (1 replacement)"
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "a1",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"data/big.txt\"}"
+       }
+      },
+      {
+       "id": "a2",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "b1",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      },
+      {
+       "id": "b2",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{}"
+       }
+      },
+      {
+       "id": "b3",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "[\"x\"]"
+       }
+      },
+      {
+       "id": "b4",
+       "type": "function",
+       "function": {
+        "name": "no_such_tool",
+        "arguments": "{\"q\": 1}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "I will call <tool_call>{\"name\": \"frobnicate\", \"arguments\": {}}</tool_call> and then keep planning"
+    },
+    {
+     "role": "user",
+     "content": "Your previous response was CUT OFF at the token limit before you finished — it was not received as a complete answer, and no tool call was made, so nothing has changed on disk yet.\n\nStop planning and act now. Do not restate your analysis, do not summarise what you intend to do, and do not reproduce unchanged code. Make the edit with a tool call, changing only what the task requires.",
+     "_luxe_nudge": true,
+     "_luxe_nudge_type": "truncated_turn"
+    },
+    {
+     "role": "user",
+     "content": "Your last reply was EMPTY — no text and no tool call reached the user, so from their side nothing happened.\n\nAnswer the user in plain text now. If you were thinking, put the conclusion in your reply; internal reasoning is not delivered.",
+     "_luxe_nudge": true,
+     "_luxe_nudge_type": "empty_turn"
+    },
+    {
+     "role": "assistant",
+     "content": "Editing now.",
+     "tool_calls": [
+      {
+       "id": "call_5_0",
+       "type": "function",
+       "function": {
+        "name": "edit_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"old_string\": \"return 'widget'\", \"new_string\": \"return 'widget!'\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_5",
+     "name": "edit_file",
+     "content": "Edited src/widget.py (1 replacement)"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_6_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/missing_a.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_6",
+     "name": "read_file",
+     "content": "File not found: src/missing_a.py"
+    }
+   ],
+   "max_tokens": 900,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 3000,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  }
+ ],
+ "events": [
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 0,
+   "name": "read_file",
+   "key_hash": "da0388c9",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 38,
+   "path": "src/widget.py"
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 0,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 1,
+   "completion_delta": 60,
+   "action_density": 0.016666666666666666,
+   "writes_seen": 0,
+   "tool_calls_total": 1,
+   "convergence_score": 0.25
+  },
+  {
+   "kind": "compaction_phase_reached",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 1,
+   "phase_reached": 2,
+   "tokens_before": 343,
+   "tokens_after": 343,
+   "tool_results_dropped": 0,
+   "effective": false,
+   "eligible_end": 2
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 1,
+   "name": "read_file",
+   "key_hash": "606eda59",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 9332,
+   "path": "data/big.txt"
+  },
+  {
+   "kind": "read_after_compact",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 1,
+   "name": "read_file",
+   "compaction_max_phase": 2
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 1,
+   "name": "list_dir",
+   "key_hash": "aa59ee6a",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 27,
+   "path": "src"
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 1,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "completion_delta": 120,
+   "action_density": 0.016666666666666666,
+   "writes_seen": 0,
+   "tool_calls_total": 3,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "compaction_phase_reached",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "phase_reached": 3,
+   "tokens_before": 2748,
+   "tokens_after": 2748,
+   "tool_results_dropped": 0,
+   "effective": false,
+   "eligible_end": 2
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "name": "list_dir",
+   "key_hash": "aa59ee6a",
+   "duplicate": true,
+   "cached": false,
+   "bytes_out": 0
+  },
+  {
+   "kind": "tool_reject",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "name": "read_file",
+   "reason": "schema",
+   "message": "Missing required argument: path"
+  },
+  {
+   "kind": "tool_reject",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "name": "read_file",
+   "reason": "schema",
+   "message": "Arguments must be a JSON object, got list"
+  },
+  {
+   "kind": "tool_reject",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "name": "no_such_tool",
+   "reason": "unknown_tool",
+   "message": "Unknown tool: no_such_tool"
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "name": "no_such_tool",
+   "key_hash": "295573f9",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 0,
+   "path": null
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "step_had_repeat": true,
+   "consecutive_repeat_steps": 1
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 3,
+   "completion_delta": 60,
+   "action_density": 0.029166666666666667,
+   "writes_seen": 0,
+   "tool_calls_total": 7,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "compaction_phase_reached",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 3,
+   "phase_reached": 3,
+   "tokens_before": 2938,
+   "tokens_after": 2938,
+   "tool_results_dropped": 0,
+   "effective": false,
+   "eligible_end": 2
+  },
+  {
+   "kind": "textfallback_drop",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 3,
+   "names": [
+    "frobnicate"
+   ],
+   "recovered": false
+  },
+  {
+   "kind": "truncated_turn_retry",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 3,
+   "retries_used": 1,
+   "max_retries": 2,
+   "completion_tokens": 900
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 4,
+   "completion_delta": 900,
+   "action_density": 0.0061403508771929825,
+   "writes_seen": 0,
+   "tool_calls_total": 7,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "compaction_phase_reached",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 4,
+   "phase_reached": 3,
+   "tokens_before": 3066,
+   "tokens_after": 3047,
+   "tool_results_dropped": 1,
+   "effective": true,
+   "eligible_end": 4
+  },
+  {
+   "kind": "empty_turn_retry",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 4,
+   "retries_used": 1,
+   "max_retries": 1,
+   "finish_reason": "stop",
+   "reasoning_chars": 11
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 5,
+   "completion_delta": 5,
+   "action_density": 0.00611353711790393,
+   "writes_seen": 0,
+   "tool_calls_total": 7,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "compaction_phase_reached",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 5,
+   "phase_reached": 3,
+   "tokens_before": 3110,
+   "tokens_after": 3110,
+   "tool_results_dropped": 0,
+   "effective": false,
+   "eligible_end": 3
+  },
+  {
+   "kind": "compaction_phase_at_first_write",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 5,
+   "phase_reached": 3
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 5,
+   "name": "edit_file",
+   "key_hash": "6bb65b32",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 36,
+   "path": "src/widget.py"
+  },
+  {
+   "kind": "edit_after_compact",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 5,
+   "name": "edit_file",
+   "compaction_max_phase": 3
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 5,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 6,
+   "completion_delta": 60,
+   "action_density": 0.006639004149377593,
+   "writes_seen": 1,
+   "tool_calls_total": 8,
+   "convergence_score": 0.013401342410703454
+  },
+  {
+   "kind": "compaction_phase_reached",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 6,
+   "phase_reached": 1,
+   "tokens_before": 3179,
+   "tokens_after": 904,
+   "tool_results_dropped": 1,
+   "effective": true,
+   "eligible_end": 6
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 6,
+   "name": "read_file",
+   "key_hash": "f00504c6",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 0,
+   "path": "src/missing_a.py"
+  },
+  {
+   "kind": "read_after_compact",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 6,
+   "name": "read_file",
+   "compaction_max_phase": 3
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 6,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "completion_delta": 60,
+   "action_density": 0.0071146245059288534,
+   "writes_seen": 1,
+   "tool_calls_total": 9,
+   "convergence_score": 0.013401342410703454
+  },
+  {
+   "kind": "compaction_phase_reached",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "phase_reached": 3,
+   "tokens_before": 951,
+   "tokens_after": 789,
+   "tool_results_dropped": 6,
+   "effective": true,
+   "eligible_end": 11
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "name": "read_file",
+   "key_hash": "cb1b4e00",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 0,
+   "path": "src/missing_b.py"
+  },
+  {
+   "kind": "read_after_compact",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "name": "read_file",
+   "compaction_max_phase": 3
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "name": "read_file",
+   "key_hash": "0222311e",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 0,
+   "path": "src/missing_c.py"
+  },
+  {
+   "kind": "read_after_compact",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "name": "read_file",
+   "compaction_max_phase": 3
+  },
+  {
+   "kind": "post_write_idle_exit",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "idle_tools": 3,
+   "writes_seen": 1
+  },
+  {
+   "kind": "compaction_phase_at_resolve",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "max_phase_reached": 3,
+   "phase_at_first_write": 3,
+   "tool_results_dropped_total": 8,
+   "total_tokens_dropped": 2456,
+   "ineffective_fires": 4,
+   "aborted": false
+  }
+ ],
+ "result": {
+  "final_text": "",
+  "steps": 8,
+  "tool_calls_total": 11,
+  "schema_rejects": 2,
+  "aborted": false,
+  "abort_reason": "",
+  "prompt_tokens": 35886,
+  "completion_tokens": 1325,
+  "last_prompt_tokens": 3131,
+  "step_texts": [
+   "Let me look at the widget.",
+   "Checking again.",
+   "Editing now."
+  ],
+  "peak_context_pressure": 6.542857143,
+  "final_context_pressure": 1.182835821,
+  "tool_calls": [
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "src/widget.py"
+    },
+    "result": "1\tdef render():\n2\t    return 'widget'\n",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 38
+   },
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "data/big.txt"
+    },
+    "result": "1\tline 0000: the quick brown fox jumps over the lazy dog\n2\tline 0001: the quick brown fox jumps over the lazy dog\n3\tline 0002: the quick brown fox jumps over the lazy dog\n4\tline 0003: the quick brown fox jumps over the lazy dog\n5\tline 0004: the quick brown fox jumps over the lazy dog\n6\tline 0005: the quick brown fox jumps over the lazy dog\n7\tline 0006: the quick brown fox jumps over the lazy dog\n8\tline 0007: the quick brown fox jumps over the lazy dog\n9\tline 0008: the quick brown fox jumps over the lazy dog\n10\tline 0009: the quick brown fox jumps over the lazy dog\n11\tline 0010: the quick brown fox jumps over the lazy dog\n12\tline 0011: the quick brown fox jumps over the lazy dog\n13\tline 0012: the quick brown fox jumps over the lazy dog\n14\tline 0013: the quick brown fox jumps over the lazy dog\n15\tline 0014: the quick brown fox jumps over the lazy dog\n16\tline 0015: the quick brown fox jumps over the lazy dog\n17\tline 0016: the quick brown fox jumps over the lazy dog\n18\tline 0017: the quick brown fox jumps over the lazy dog\n19\tline 0018: the quick brown fox jumps over the lazy dog\n20\tline 0019: the quick brown fox jumps over the lazy dog\n21\tline 0020: the quick brown fox jumps over the lazy dog\n22\tline 0021: the quick brown fox jumps over the lazy dog\n23\tline 0022: the quick brown fox jumps over the lazy dog\n24\tline 0023: the quick brown fox jumps over the lazy dog\n25\tline 0024: the quick brown fox jumps over the lazy dog\n26\tline 0025: the quick brown fox jumps over the lazy dog\n27\tline 0026: the quick brown fox jumps over the lazy dog\n28\tline 0027: the quick brown fox jumps over the lazy dog\n29\tline 0028: the quick brown fox jumps over the lazy dog\n30\tline 0029: the quick brown fox jumps over the lazy dog\n31\tline 0030: the quick brown fox jumps over the lazy dog\n32\tline 0031: the quick brown fox jumps over the lazy dog\n33\tline 0032: the quick brown fox jumps over the lazy dog\n34\tline 0033: the quick brown fox jumps over the lazy dog\n35\tline 0034: the quick brown fox jumps over the lazy dog\n36\tline 0035: the quick brown fox jumps over the lazy dog\n37\tline 0036: the quick brown fox jumps over the lazy dog\n38\tline 0037: the quick brown fox jumps over the lazy dog\n39\tline 0038: the quick brown fox jumps over the lazy dog\n40\tline 0039: the quick brown fox jumps over the lazy dog\n41\tline 0040: the quick brown fox jumps over the lazy dog\n42\tline 0041: the quick brown fox jumps over the lazy dog\n43\tline 0042: the quick brown fox jumps over the lazy dog\n44\tline 0043: the quick brown fox jumps over the lazy dog\n45\tline 0044: the quick brown fox jumps over the lazy dog\n46\tline 0045: the quick brown fox jumps over the lazy dog\n47\tline 0046: the quick brown fox jumps over the lazy dog\n48\tline 0047: the quick brown fox jumps over the lazy dog\n49\tline 0048: the quick brown fox jumps over the lazy dog\n50\tline 0049: the quick brown fox jumps over the lazy dog\n51\tline 0050: the quick brown fox jumps over the lazy dog\n52\tline 0051: the quick brown fox jumps over the lazy dog\n53\tline 0052: the quick brown fox jumps over the lazy dog\n54\tline 0053: the quick brown fox jumps over the lazy dog\n55\tline 0054: the quick brown fox jumps over the lazy dog\n56\tline 0055: the quick brown fox jumps over the lazy dog\n57\tline 0056: the quick brown fox jumps over the lazy dog\n58\tline 0057: the quick brown fox jumps over the lazy dog\n59\tline 0058: the quick brown fox jumps over the lazy dog\n60\tline 0059: the quick brown fox jumps over the lazy dog\n61\tline 0060: the quick brown fox jumps over the lazy dog\n62\tline 0061: the quick brown fox jumps over the lazy dog\n63\tline 0062: the quick brown fox jumps over the lazy dog\n64\tline 0063: the quick brown fox jumps over the lazy dog\n65\tline 0064: the quick brown fox jumps over the lazy dog\n66\tline 0065: the quick brown fox jumps over the lazy dog\n67\tline 0066: the quick brown fox jumps over the lazy dog\n68\tline 0067: the quick brown fox jumps over the lazy dog\n69\tline 0068: the quick brown fox jumps over the lazy dog\n70\tline 0069: the quick brown fox jumps over the lazy dog\n71\tline 0070: the quick brown fox jumps over the lazy dog\n72\tline 0071: the quick brown fox jumps over the lazy dog\n73\tline 0072: the quick brown fox jumps over the lazy dog\n74\tline 0073: the quick brown fox jumps over the lazy dog\n75\tline 0074: the quick brown fox jumps over the lazy dog\n76\tline 0075: the quick brown fox jumps over the lazy dog\n77\tline 0076: the quick brown fox jumps over the lazy dog\n78\tline 0077: the quick brown fox jumps over the lazy dog\n79\tline 0078: the quick brown fox jumps over the lazy dog\n80\tline 0079: the quick brown fox jumps over the lazy dog\n81\tline 0080: the quick brown fox jumps over the lazy dog\n82\tline 0081: the quick brown fox jumps over the lazy dog\n83\tline 0082: the quick brown fox jumps over the lazy dog\n84\tline 0083: the quick brown fox jumps over the lazy dog\n85\tline 0084: the quick brown fox jumps over the lazy dog\n86\tline 0085: the quick brown fox jumps over the lazy dog\n87\tline 0086: the quick brown fox jumps over the lazy dog\n88\tline 0087: the quick brown fox jumps over the lazy dog\n89\tline 0088: the quick brown fox jumps over the lazy dog\n90\tline 0089: the quick brown fox jumps over the lazy dog\n91\tline 0090: the quick brown fox jumps over the lazy dog\n92\tline 0091: the quick brown fox jumps over the lazy dog\n93\tline 0092: the quick brown fox jumps over the lazy dog\n94\tline 0093: the quick brown fox jumps over the lazy dog\n95\tline 0094: the quick brown fox jumps over the lazy dog\n96\tline 0095: the quick brown fox jumps over the lazy dog\n97\tline 0096: the quick brown fox jumps over the lazy dog\n98\tline 0097: the quick brown fox jumps over the lazy dog\n99\tline 0098: the quick brown fox jumps over the lazy dog\n100\tline 0099: the quick brown fox jumps over the lazy dog\n101\tline 0100: the quick brown fox jumps over the lazy dog\n102\tline 0101: the quick brown fox jumps over the lazy dog\n103\tline 0102: the quick brown fox jumps over the lazy dog\n104\tline 0103: the quick brown fox jumps over the lazy dog\n105\tline 0104: the quick brown fox jumps over the lazy dog\n106\tline 0105: the quick brown fox jumps over the lazy dog\n107\tline 0106: the quick brown fox jumps over the lazy dog\n108\tline 0107: the quick brown fox jumps over the lazy dog\n109\tline 0108: the quick brown fox jumps over the lazy dog\n110\tline 0109: the quick brown fox jumps over the lazy dog\n111\tline 0110: the quick brown fox jumps over the lazy dog\n112\tline 0111: the quick brown fox jumps over the lazy dog\n113\tline 0112: the quick brown fox jumps over the lazy dog\n114\tline 0113: the quick brown fox jumps over the lazy dog\n115\tline 0114: the quick brown fox jumps over the lazy dog\n116\tline 0115: the quick brown fox jumps over the lazy dog\n117\tline 0116: the quick brown fox jumps over the lazy dog\n118\tline 0117: the quick brown fox jumps over the lazy dog\n119\tline 0118: the quick brown fox jumps over the lazy dog\n120\tline 0119: the quick brown fox jumps over the lazy dog\n121\tline 0120: the quick brown fox jumps over the lazy dog\n122\tline 0121: the quick brown fox jumps over the lazy dog\n123\tline 0122: the quick brown fox jumps over the lazy dog\n124\tline 0123: the quick brown fox jumps over the lazy dog\n125\tline 0124: the quick brown fox jumps over the lazy dog\n126\tline 0125: the quick brown fox jumps over the lazy dog\n127\tline 0126: the quick brown fox jumps over the lazy dog\n128\tline 0127: the quick brown fox jumps over the lazy dog\n129\tline 0128: the quick brown fox jumps over the lazy dog\n130\tline 0129: the quick brown fox jumps over the lazy dog\n131\tline 0130: the quick brown fox jumps over the lazy dog\n132\tline 0131: the quick brown fox jumps over the lazy dog\n133\tline 0132: the quick brown fox jumps over the lazy dog\n134\tline 0133: the quick brown fox jumps over the lazy dog\n135\tline 0134: the quick brown fox jumps over the lazy dog\n136\tline 0135: the quick brown fox jumps over the lazy dog\n137\tline 0136: the quick brown fox jumps over the lazy dog\n138\tline 0137: the quick brown fox jumps over the lazy dog\n139\tline 0138: the quick brown fox jumps over the lazy dog\n140\tline 0139: the quick brown fox jumps over the lazy dog\n141\tline 0140: the quick brown fox jumps over the lazy dog\n142\tline 0141: the quick brown fox jumps over the lazy dog\n143\tline 0142: the quick brown fox jumps over the lazy dog\n144\tline 0143: the quick brown fox jumps over the lazy dog\n145\tline 0144: the quick brown fox jumps over the lazy dog\n146\tline 0145: the quick brown fox jumps over the lazy dog\n147\tline 0146: the quick brown fox jumps over the lazy dog\n148\tline 0147: the quick brown fox jumps over the lazy dog\n149\tline 0148: the quick brown fox jumps over the lazy dog\n150\tline 0149: the quick brown fox jumps over the lazy dog\n151\tline 0150: the quick brown fox jumps over the lazy dog\n152\tline 0151: the quick brown fox jumps over the lazy dog\n153\tline 0152: the quick brown fox jumps over the lazy dog\n154\tline 0153: the quick brown fox jumps over the lazy dog\n155\tline 0154: the quick brown fox jumps over the lazy dog\n156\tline 0155: the quick brown fox jumps over the lazy dog\n157\tline 0156: the quick brown fox jumps over the lazy dog\n158\tline 0157: the quick brown fox jumps over the lazy dog\n159\tline 0158: the quick brown fox jumps over the lazy dog\n160\tline 0159: the quick brown fox jumps over the lazy dog\n",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 9332
+   },
+   {
+    "id": "",
+    "name": "list_dir",
+    "arguments": {
+     "path": "src"
+    },
+    "result": "config.py\nutil.py\nwidget.py",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 27
+   },
+   {
+    "id": "b1",
+    "name": "list_dir",
+    "arguments": {
+     "path": "src"
+    },
+    "result": "You already called list_dir with these exact arguments and the result was provided above. Use a different tool, try different arguments, or summarize your findings.",
+    "error": null,
+    "cached": true,
+    "duplicate": true,
+    "bytes_out": 0
+   },
+   {
+    "id": "",
+    "name": "no_such_tool",
+    "arguments": {
+     "q": 1
+    },
+    "result": "",
+    "error": "Unknown tool: no_such_tool",
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 0
+   },
+   {
+    "id": "",
+    "name": "edit_file",
+    "arguments": {
+     "path": "src/widget.py",
+     "old_string": "return 'widget'",
+     "new_string": "return 'widget!'"
+    },
+    "result": "Edited src/widget.py (1 replacement)",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 36
+   },
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "src/missing_a.py"
+    },
+    "result": "",
+    "error": "File not found: src/missing_a.py",
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 0
+   },
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "src/missing_b.py"
+    },
+    "result": "",
+    "error": "File not found: src/missing_b.py",
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 0
+   },
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "src/missing_c.py"
+    },
+    "result": "",
+    "error": "File not found: src/missing_c.py",
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 0
+   }
+  ]
+ }
+}

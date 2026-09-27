@@ -1,0 +1,306 @@
+{
+ "requests": [
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You answer questions with the lookup tool."
+    },
+    {
+     "role": "user",
+     "content": "Question: what is x?"
+    }
+   ],
+   "max_tokens": 2048,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 8192,
+   "tools_sha256": "172460ac5c80df5b20949e76642e5d61a1fdf01df407f7c75c6ea134e15d9e82"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You answer questions with the lookup tool."
+    },
+    {
+     "role": "user",
+     "content": "Question: what is x?"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "lookup",
+        "arguments": "{\"q\": \"a\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "lookup",
+     "content": "result for a"
+    }
+   ],
+   "max_tokens": 2048,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 8192,
+   "tools_sha256": "172460ac5c80df5b20949e76642e5d61a1fdf01df407f7c75c6ea134e15d9e82"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You answer questions with the lookup tool."
+    },
+    {
+     "role": "user",
+     "content": "Question: what is x?"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "lookup",
+        "arguments": "{\"q\": \"a\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "lookup",
+     "content": "result for a"
+    },
+    {
+     "role": "user",
+     "content": "R1 agent emitted 1 tool calls, user's request appears to require ≥2. Continue with the remaining tool calls."
+    },
+    {
+     "role": "assistant",
+     "content": "Answer after one call."
+    }
+   ],
+   "max_tokens": 2048,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 8192,
+   "tools_sha256": "172460ac5c80df5b20949e76642e5d61a1fdf01df407f7c75c6ea134e15d9e82"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You answer questions with the lookup tool."
+    },
+    {
+     "role": "user",
+     "content": "Question: what is x?"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "lookup",
+        "arguments": "{\"q\": \"a\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "lookup",
+     "content": "result for a"
+    },
+    {
+     "role": "user",
+     "content": "R1 agent emitted 1 tool calls, user's request appears to require ≥2. Continue with the remaining tool calls."
+    },
+    {
+     "role": "assistant",
+     "content": "Answer after one call."
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_2_0",
+       "type": "function",
+       "function": {
+        "name": "lookup",
+        "arguments": "{\"q\": \"b\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_2",
+     "name": "lookup",
+     "content": "result for b"
+    }
+   ],
+   "max_tokens": 2048,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 8192,
+   "tools_sha256": "172460ac5c80df5b20949e76642e5d61a1fdf01df407f7c75c6ea134e15d9e82"
+  }
+ ],
+ "events": [
+  {
+   "kind": "tool_call",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 0,
+   "name": "lookup",
+   "key_hash": "da5696a4",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 12,
+   "path": null
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 0,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 1,
+   "completion_delta": 60,
+   "action_density": 0.016666666666666666,
+   "writes_seen": 0,
+   "tool_calls_total": 1,
+   "convergence_score": 0.25
+  },
+  {
+   "kind": "spec_reprompt_fired",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 1,
+   "requirement_id": "R1",
+   "requirement_kind": "min_tool_calls"
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 2,
+   "completion_delta": 60,
+   "action_density": 0.008333333333333333,
+   "writes_seen": 0,
+   "tool_calls_total": 1,
+   "convergence_score": 0.25
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 2,
+   "name": "lookup",
+   "key_hash": "0b5baad0",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 12,
+   "path": null
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 2,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 3,
+   "completion_delta": 60,
+   "action_density": 0.011111111111111112,
+   "writes_seen": 0,
+   "tool_calls_total": 2,
+   "convergence_score": 0.25
+  },
+  {
+   "kind": "compaction_phase_at_resolve",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "max_phase_reached": 0,
+   "phase_at_first_write": null,
+   "tool_results_dropped_total": 0,
+   "total_tokens_dropped": 0,
+   "ineffective_fires": 0,
+   "aborted": false
+  }
+ ],
+ "result": {
+  "final_text": "Answer after two calls.",
+  "steps": 4,
+  "tool_calls_total": 2,
+  "schema_rejects": 0,
+  "aborted": false,
+  "abort_reason": "",
+  "prompt_tokens": 966,
+  "completion_tokens": 240,
+  "last_prompt_tokens": 349,
+  "step_texts": [],
+  "peak_context_pressure": 0.045623521,
+  "final_context_pressure": 0.045623521,
+  "tool_calls": [
+   {
+    "id": "",
+    "name": "lookup",
+    "arguments": {
+     "q": "a"
+    },
+    "result": "result for a",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 12
+   },
+   {
+    "id": "",
+    "name": "lookup",
+    "arguments": {
+     "q": "b"
+    },
+    "result": "result for b",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 12
+   }
+  ]
+ }
+}

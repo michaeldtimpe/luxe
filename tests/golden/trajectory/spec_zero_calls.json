@@ -1,0 +1,97 @@
+{
+ "requests": [
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You answer questions with the lookup tool."
+    },
+    {
+     "role": "user",
+     "content": "Question: what is x?"
+    }
+   ],
+   "max_tokens": 2048,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 8192,
+   "tools_sha256": "172460ac5c80df5b20949e76642e5d61a1fdf01df407f7c75c6ea134e15d9e82"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You answer questions with the lookup tool."
+    },
+    {
+     "role": "user",
+     "content": "Question: what is x?"
+    },
+    {
+     "role": "assistant",
+     "content": "Let me look it up."
+    },
+    {
+     "role": "user",
+     "content": "Tool calls are not permitted for this request. The available tools cannot answer the user's question. Reply only in prose, briefly explaining why the request is out of scope."
+    }
+   ],
+   "max_tokens": 2048,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 8192,
+   "tools_sha256": "172460ac5c80df5b20949e76642e5d61a1fdf01df407f7c75c6ea134e15d9e82"
+  }
+ ],
+ "events": [
+  {
+   "kind": "spec_predispatch_blocked",
+   "run_id": "golden-spec_zero_calls",
+   "phase": "main",
+   "step": 0,
+   "blocked_tool_names": [
+    "lookup"
+   ],
+   "blocked_count": 1
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-spec_zero_calls",
+   "phase": "main",
+   "step": 1,
+   "completion_delta": 60,
+   "action_density": 0.0,
+   "writes_seen": 0,
+   "tool_calls_total": 0,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "compaction_phase_at_resolve",
+   "run_id": "golden-spec_zero_calls",
+   "phase": "main",
+   "max_phase_reached": 0,
+   "phase_at_first_write": null,
+   "tool_results_dropped_total": 0,
+   "total_tokens_dropped": 0,
+   "ineffective_fires": 0,
+   "aborted": false
+  }
+ ],
+ "result": {
+  "final_text": "That is out of scope for these tools.",
+  "steps": 2,
+  "tool_calls_total": 0,
+  "schema_rejects": 0,
+  "aborted": false,
+  "abort_reason": "",
+  "prompt_tokens": 353,
+  "completion_tokens": 120,
+  "last_prompt_tokens": 219,
+  "step_texts": [],
+  "peak_context_pressure": 0.055476529,
+  "final_context_pressure": 0.055476529,
+  "tool_calls": []
+ }
+}
