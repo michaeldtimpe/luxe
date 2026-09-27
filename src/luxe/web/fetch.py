@@ -174,6 +174,12 @@ def _canonical_host(raw: str, url: str) -> str:
     `ipaddress`, so they are refused rather than resolved.
     """
     host = raw.lower()
+    if "%" in host:
+        # An IPv6 zone id (`[fe80::1%25en0]`) or a percent-encoded name.
+        # Python 3.9+ `IPv6Address` ACCEPTS a scope id, so this cannot be
+        # left to the parse below.
+        raise WebError(f"refused host {raw!r} in {url!r} — zone ids and "
+                       "percent-encoded hosts are refused")
     if ":" in host:                       # IPv6 literal (brackets stripped)
         try:
             ipaddress.IPv6Address(host)
