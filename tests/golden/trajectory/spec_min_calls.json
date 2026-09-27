@@ -88,12 +88,12 @@
      "content": "result for a"
     },
     {
-     "role": "user",
-     "content": "R1 agent emitted 1 tool calls, user's request appears to require ≥2. Continue with the remaining tool calls."
-    },
-    {
      "role": "assistant",
      "content": "Answer after one call."
+    },
+    {
+     "role": "user",
+     "content": "R1 agent emitted 1 tool calls, user's request appears to require ≥2. Continue with the remaining tool calls."
     }
    ],
    "max_tokens": 2048,
@@ -134,12 +134,12 @@
      "content": "result for a"
     },
     {
-     "role": "user",
-     "content": "R1 agent emitted 1 tool calls, user's request appears to require ≥2. Continue with the remaining tool calls."
-    },
-    {
      "role": "assistant",
      "content": "Answer after one call."
+    },
+    {
+     "role": "user",
+     "content": "R1 agent emitted 1 tool calls, user's request appears to require ≥2. Continue with the remaining tool calls."
     },
     {
      "role": "assistant",
