@@ -30,6 +30,7 @@ RE_EXPORTED = [
     "_BREADTH_PROBE_ESCALATION_COUNT",
     "_CONVERGENCE_HIGH_THRESHOLD",
     "_CONVERGENCE_LOW_THRESHOLD",
+    "_DEDUP_MESSAGE_TEMPLATE",
     "_EARLY_BAIL_MESSAGE",
     "_EARLY_BAIL_MESSAGE_BREADTH_PROBE",
     "_EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE",
@@ -42,12 +43,14 @@ RE_EXPORTED = [
     "_HABITUATION_EXIT_MIN_STEP",
     "_MAX_CONSECUTIVE_REPEAT_STEPS",
     "_POST_WRITE_IDLE_MAX",
+    "_SPEC_ZERO_CALLS_DECLINE_MESSAGE",
     "_WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE",
     "_WRITE_PRESSURE_MESSAGE",
     "_WRITE_PRESSURE_MIN_STEP",
     "_WRITE_PRESSURE_MIN_TOKENS",
     "_WRITE_PRESSURE_MIN_TOOLS",
     "_v1105_synthesis_looping_signature",
+    "dedup_message",
 ]
 
 
@@ -93,3 +96,30 @@ def test_guardrails_defines_all_of_them() -> None:
     defined = _module_level_assignments(pathlib.Path(guardrails.__file__))
     missing = sorted(set(RE_EXPORTED) - defined)
     assert not missing, f"guardrails.py no longer defines {missing}"
+
+
+@pytest.mark.parametrize("name", [
+    "read_file", "grep", "list_dir", "edit_file\n", "{weird}", "a{0}b", "",
+    "mcp__srv__tool",
+])
+def test_dedup_message_is_byte_identical_to_the_old_inline_fstring(name):
+    """The duplicate-call tool result moved from an f-string in loop.py to
+    `guardrails.dedup_message` (2026-09). str.format substitutes the value
+    without re-reading braces in it, so even a name containing braces renders
+    exactly as the f-string did."""
+    old = (
+        f"You already called {name} with these exact arguments "
+        "and the result was provided above. "
+        "Use a different tool, try different arguments, "
+        "or summarize your findings."
+    )
+    assert guardrails.dedup_message(name) == old
+
+
+def test_spec_decline_message_is_the_old_inline_string():
+    assert guardrails._SPEC_ZERO_CALLS_DECLINE_MESSAGE == (
+        "Tool calls are not permitted for this request. The "
+        "available tools cannot answer the user's question. "
+        "Reply only in prose, briefly explaining why the request "
+        "is out of scope."
+    )

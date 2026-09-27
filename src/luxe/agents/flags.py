@@ -16,6 +16,8 @@ Two `LUXE_*` reads that deliberately do NOT live here:
 - `LUXE_LOAD_PRIORS` and `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`, read by
   `cohort_priors` and `guardrails` respectively — they belong to those
   modules' own contracts, not to the loop's preamble.
+(`LUXE_EARLY_BAIL_MODE` used to be a third — re-read by `EarlyBailGuard` up
+to three times per step. It moved here in 2026-09 as `early_bail_mode`.)
 """
 
 from __future__ import annotations
@@ -39,6 +41,9 @@ DEFAULT_TIERED_COMPACT_THRESHOLD = 0.75
 #: Default policy for the score<LOW early-bail suppression branch (v1.10.4).
 DEFAULT_BAND_RESPONSE = "breadth_probe_hybrid"
 
+#: LUXE_EARLY_BAIL_MODE when unset.
+DEFAULT_EARLY_BAIL_MODE = "default"
+
 
 @dataclass(frozen=True)
 class RunFlags:
@@ -54,6 +59,12 @@ class RunFlags:
     action_density_gate: bool = False
     convergence_gate: bool = False
     early_bail_band_response: str = DEFAULT_BAND_RESPONSE
+    # LUXE_EARLY_BAIL_MODE — which early_bail message variant fires
+    # (default/no_abstain/soft_anchor/...). Raw string, unvalidated: an unknown
+    # value selects the default message inside EarlyBailGuard, and the
+    # commit_only suppression event reports it verbatim as `configured_mode`.
+    # Read here once (2026-09) instead of by the guard on every step.
+    early_bail_mode: str = DEFAULT_EARLY_BAIL_MODE
 
     # Count a post-write REPEAT call (same tool + same args as an earlier call
     # this run) toward the post-write idle streak. Opt-in: default OFF keeps
@@ -207,6 +218,10 @@ class RunFlags:
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),
+            # Same `get(name, default)` the guard used: exported-but-empty is
+            # "" (-> default message), not the default string.
+            early_bail_mode=e.get("LUXE_EARLY_BAIL_MODE",
+                                  DEFAULT_EARLY_BAIL_MODE),
             # Default ON: only the exact string "0" disables it.
             tiered_compact=e.get("LUXE_TIERED_COMPACT", "1") != "0",
             tiered_compact_threshold=threshold,

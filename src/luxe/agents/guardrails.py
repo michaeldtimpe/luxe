@@ -215,12 +215,74 @@ class ActionDensityGateGuard:
     Convergence proxy (same_file_read_twice on/before this step) suppresses
     the gate when convergence_gate_enabled is off (v1.9 fallback). When
     convergence_gate_enabled is on, the v1.10 high-score branch suppresses
-    instead — that branch lives in loop.py because it emits a *different*
-    event (`action_density_gate_suppressed_converged`) and does NOT append
-    a message. This guard only handles the actual nudge case.
+    instead. `convergence_suppression()` computes both suppressions;
+    `suppressed_converged()` is the observability predicate for the v1.10
+    branch, which emits a *different* event
+    (`action_density_gate_suppressed_converged`) and appends no message.
+    `check()` handles the actual nudge case.
     """
 
     nudge_type = "action_density_gate"
+
+    @staticmethod
+    def convergence_suppression(
+        *,
+        convergence_gate_enabled: bool,
+        convergence_score: float,
+        same_file_read_twice_step: Optional[int],
+        step: int,
+    ) -> tuple[bool, bool]:
+        """(v110_suppress, v19_suppress) for `check()`.
+
+        v1.10 — convergence-score suppression replaces the v1.9 binary
+        same_file_read_twice skip. When the convergence gate is on AND the
+        model has converged (score >= HIGH), suppress the gate — the rescue
+        would interrupt a trajectory that's converging on its own. The v1.9
+        same_file_read_twice_step skip stays as the fallback when the
+        convergence gate is OFF (preserves v1.9 ablation semantics).
+        """
+        v110_suppress = (
+            convergence_gate_enabled
+            and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD
+        )
+        v19_suppress = (
+            not convergence_gate_enabled
+            and same_file_read_twice_step is not None
+            and same_file_read_twice_step <= step
+        )
+        return v110_suppress, v19_suppress
+
+    @staticmethod
+    def suppressed_converged(
+        *,
+        action_density_gate_enabled: bool,
+        action_density_gate_fired: bool,
+        v110_suppress: bool,
+        writes_seen: int,
+        step: int,
+        completion_tokens: int,
+        tool_calls_total: int,
+        convergence_score: float,
+    ) -> Optional[dict[str, Any]]:
+        """Payload for `action_density_gate_suppressed_converged`, or None.
+
+        Observability only: the gate WOULD have fired on its thresholds this
+        step but the v1.10 convergence suppression held it, so post-hoc
+        analysis can tell convergence-suppression from threshold-miss. The
+        caller evaluates this only on steps where `check()` did not fire.
+        """
+        if not (action_density_gate_enabled and not action_density_gate_fired
+                and v110_suppress):
+            return None
+        if (writes_seen == 0
+                and step >= _ACTION_DENSITY_GATE_MIN_STEP
+                and completion_tokens >= _ACTION_DENSITY_GATE_MIN_TOKENS
+                and tool_calls_total <= _ACTION_DENSITY_GATE_MAX_TOOLS):
+            return {
+                "convergence_score": convergence_score,
+                "threshold": _CONVERGENCE_HIGH_THRESHOLD,
+            }
+        return None
 
     @staticmethod
     def check(
@@ -514,6 +576,34 @@ class EmptyTurnGuard:
 
 # Consecutive-repeat guard constant.
 _MAX_CONSECUTIVE_REPEAT_STEPS = 2
+
+# The tool result the loop substitutes for a duplicate call (same name + same
+# arguments as an earlier call this run, for a tool outside the dedup
+# exemption). Loop-authored and literal apart from the tool name — which is
+# why the result clamp never needs to touch it. Moved verbatim from loop.py
+# (2026-09); `dedup_message` renders it byte-identically to the old f-string.
+_DEDUP_MESSAGE_TEMPLATE = (
+    "You already called {name} with these exact arguments "
+    "and the result was provided above. "
+    "Use a different tool, try different arguments, "
+    "or summarize your findings."
+)
+
+
+def dedup_message(name: str) -> str:
+    """The duplicate-call tool result for tool `name`."""
+    return _DEDUP_MESSAGE_TEMPLATE.format(name=name)
+
+
+# SpecDD Lever 1 pre-dispatch gate (v1.8 Track 2): the decline reprompt that
+# replaces a blocked tool call when the spec expects zero calls. Moved
+# verbatim from loop.py (2026-09).
+_SPEC_ZERO_CALLS_DECLINE_MESSAGE = (
+    "Tool calls are not permitted for this request. The "
+    "available tools cannot answer the user's question. "
+    "Reply only in prose, briefly explaining why the request "
+    "is out of scope."
+)
 
 
 class ConsecutiveRepeatGuard:
@@ -815,8 +905,8 @@ class EarlyBailGuard:
     Fires at step >= MIN_STEP with reads >= MIN_READS and zero writes. The
     actual variant selected depends on:
       - explicit `early_bail_message` kwarg (highest precedence; static)
-      - LUXE_EARLY_BAIL_MODE env (default/no_abstain/soft_anchor/...; static
-        for non-soft_anchor modes)
+      - LUXE_EARLY_BAIL_MODE (`early_bail_mode`, read once by RunFlags;
+        default/no_abstain/soft_anchor/...; static for non-soft_anchor modes)
       - convergence-gate score band when mode is soft_anchor:
           score < LOW: suppress (with optional breadth_probe hybrid first-
                       event + escalation count fire)
@@ -850,7 +940,12 @@ class EarlyBailGuard:
         recent_path_diversity: float,
         score_log: Optional[list[float]] = None,
         early_bail_step: Optional[int] = None,
+        early_bail_mode: str = "default",
     ) -> Optional[EarlyBailOutcome]:
+        """`early_bail_mode` is LUXE_EARLY_BAIL_MODE as `RunFlags` read it
+        once at run start (it used to be re-read from os.environ here up to
+        three times per step). Unknown values select the default message,
+        exactly as before."""
         if not early_bail_enabled:
             return None
         if early_bail_fired:
@@ -906,7 +1001,7 @@ class EarlyBailGuard:
             convergence_gate_enabled
             and convergence_score < _CONVERGENCE_LOW_THRESHOLD
             and early_bail_message is None
-            and os.environ.get("LUXE_EARLY_BAIL_MODE", "default") == "soft_anchor"
+            and early_bail_mode == "soft_anchor"
         )
 
         if suppress_for_convergence:
@@ -999,7 +1094,7 @@ class EarlyBailGuard:
             msg = early_bail_message
             msg_variant = "kwarg"
         else:
-            mode = os.environ.get("LUXE_EARLY_BAIL_MODE", "default")
+            mode = early_bail_mode
             if (convergence_gate_enabled
                     and mode == "soft_anchor"
                     and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
@@ -1041,7 +1136,7 @@ class EarlyBailGuard:
                 "completion_tokens": None,  # filled by loop
                 "reads": tool_calls_total - writes_seen,
                 "convergence_score": convergence_score,
-                "configured_mode": os.environ.get("LUXE_EARLY_BAIL_MODE", "default"),
+                "configured_mode": early_bail_mode,
             },
         )
         return EarlyBailOutcome(
