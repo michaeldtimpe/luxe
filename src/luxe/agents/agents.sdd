@@ -8,7 +8,7 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - `TaskOverlay` maps `task_type` to `PromptVariant` id; routing goes through `resolve_prompt_ids`
 - `run_agent` (loop.py) owns the inner tool-call loop; `single.py` is the entry
 - `guardrails.py` is the SOLE home of intervention thresholds + nudge bodies
-  (`_WRITE_PRESSURE_*`, `_PROSE_BURST_*`, `_ACTION_DENSITY_GATE_*`,
+  (`_WRITE_PRESSURE_*`, `_ACTION_DENSITY_GATE_*`,
   `_EARLY_BAIL_*`, `_HABITUATION_EXIT_*`, `_POST_WRITE_IDLE_MAX`,
   `_MAX_CONSECUTIVE_REPEAT_STEPS`, `_BREADTH_PROBE_ESCALATION_COUNT`,
   `_CONVERGENCE_{LOW,HIGH}_THRESHOLD`, `_v1105_synthesis_looping_signature`)
@@ -577,6 +577,23 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   0eb5998d8825 turn -7: 3 steps, 2 tool calls, the lead-in stranded in step 1).
   The JOIN is done in the chat layer only (`render.compose_answer`) — do not
   fold it into `final_text` here, or every grader's input changes.
+
+### Removed mechanisms (2026-09 agent-loop cleanup)
+
+Each was re-verified dead or refuted before deletion; the default-flag
+request bytes and `events.jsonl` records are pinned unchanged by
+`tests/test_golden_trajectory.py` (recorded on origin/main before the
+removal). `outcomes.py` keeps classifying their historical event names so old
+logs still parse. Do not reintroduce any of them without new evidence.
+
+- **Prose-burst detector** (`LUXE_PROSE_BURST`, `ProseBurstGuard`,
+  `_PROSE_BURST_*`, events `prose_burst_fired` / `prose_burst_clean_exit`).
+  It could only see a step with ZERO tool calls, and such a step leaves the
+  loop via `if not tool_calls: break` — the only way past that break is a
+  later-added continue (truncated/empty-turn retry, the `min_tool_calls`
+  reprompt), so it was reachable solely as an interaction with those, under
+  its own opt-in flag. 0 `prose_burst_fired` events in 3,240 recorded runs.
+  Default path unaffected (it was opt-in).
 
 ## Must not (reflect)
 
