@@ -67,6 +67,12 @@ single pipeline; new fixtures must declare their per-requirement spec.
   pr_state.json errors the fixture (the grade stays in result.json for
   inspection), and regrade_local reports a branch it cannot find as
   UNREGRADABLE (excluded from totals) instead of grading base_sha
+- A diff luxe never SHIPPED is an ERROR, never a score. If pr_state.json's
+  commit step failed with failed_no_mutations_produced while base_sha..HEAD
+  differs, the work was committed outside luxe's view. Luxe's commit step now
+  ships agent-made commits that descend from base_sha, so this guard catches
+  only a disagreement, not a normal run (2026-09: before that, every
+  deps-audit run scored 4/5 on an unpushed commit)
 - A fixture's reported outcome comes from its STATE: a fresh attempt deletes
   the previous result.json/diagnostics.json first; a SKIP_DONE replay of an
   ERROR state reports ERROR (never the stale file), and replays are flagged

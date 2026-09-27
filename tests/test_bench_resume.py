@@ -766,6 +766,49 @@ def test_push_failure_is_error_not_score(tmp_path, monkeypatch):
     assert br._verdict(fr2) == "ERROR"
 
 
+def test_unshipped_diff_is_error_not_score(tmp_path, monkeypatch):
+    """luxe reported failed_no_mutations_produced (nothing committed, nothing
+    pushed) but base_sha..HEAD differs: the agent committed outside luxe's
+    view. Grading that diff credited a deliverable nobody received (every
+    2026-09 deps-audit run scored 4/5 this way). It must ERROR."""
+    out = tmp_path / "acc"
+    monkeypatch.setattr(br, "_resolve_repo", lambda fix, wd: (Path("/tmp"), ""))
+    monkeypatch.setattr(br, "_head_sha", lambda repo: "ab" * 20)
+    monkeypatch.setattr(br, "_luxe_maintain",
+                        lambda repo, fix, log_dir, **_: (0, "rNOMUT", ""))
+    rd = tmp_path / "fake-luxe-runs" / "rNOMUT"
+    rd.mkdir(parents=True)
+    (rd / "pr_state.json").write_text(json.dumps({"steps": [
+        {"name": "commit", "done": False, "status": "failed",
+         "detail": "no diff produced (failed_no_mutations_produced)"},
+    ]}))
+    monkeypatch.setattr(br, "grade_fixture", lambda *a, **k: FixtureResult(
+        fixture_id="f1", score=4, diff_produced=True))
+    fr, _ = run_fixture(_f(), out, tmp_path / "wd")
+    assert br._verdict(fr) == "ERROR"
+    assert "never shipped" in fr.error
+    assert load_state(out, "f1").status == FixtureStatus.ERROR
+
+
+def test_no_mutations_without_a_diff_still_grades(tmp_path, monkeypatch):
+    """Control: a genuine no-output run (no diff anywhere) keeps its low score."""
+    out = tmp_path / "acc"
+    monkeypatch.setattr(br, "_resolve_repo", lambda fix, wd: (Path("/tmp"), ""))
+    monkeypatch.setattr(br, "_head_sha", lambda repo: "ab" * 20)
+    monkeypatch.setattr(br, "_luxe_maintain",
+                        lambda repo, fix, log_dir, **_: (0, "rNONE", ""))
+    rd = tmp_path / "fake-luxe-runs" / "rNONE"
+    rd.mkdir(parents=True)
+    (rd / "pr_state.json").write_text(json.dumps({"steps": [
+        {"name": "commit", "done": False, "status": "failed",
+         "detail": "no diff produced (failed_no_mutations_produced)"},
+    ]}))
+    monkeypatch.setattr(br, "grade_fixture", lambda *a, **k: FixtureResult(
+        fixture_id="f1", score=1, diff_produced=False))
+    fr, _ = run_fixture(_f(), out, tmp_path / "wd")
+    assert "never shipped" not in (fr.error or "")
+
+
 def _git(repo, *args):
     import subprocess
     return subprocess.run(["git", *args], cwd=repo, check=True,

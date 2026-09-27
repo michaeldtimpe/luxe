@@ -283,6 +283,7 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
         "blackboard_bytes_total": 0,
         "no_diff_warning": False,
         "push_error": "",
+        "no_mutations_reported": False,
     }
     pr_state = rd / "pr_state.json"
     if pr_state.is_file():
@@ -297,6 +298,9 @@ def _read_run_artefacts(run_id: str) -> dict[str, Any]:
             for step in data.get("steps") or []:
                 if step.get("name") == "push" and step.get("status") == "failed":
                     out["push_error"] = str(step.get("detail") or "push failed")
+                if (step.get("name") == "commit" and step.get("status") == "failed"
+                        and "no_mutations" in str(step.get("detail") or "")):
+                    out["no_mutations_reported"] = True
         except json.JSONDecodeError:
             pass
 
@@ -1367,6 +1371,17 @@ def run_fixture(
         # inspection but the fixture is ERRORED so it is neither a pass nor a
         # fail on the scoreboard (maintain_suite.sdd).
         fr.error = f"environment: {artefacts['push_error'][:300]}"
+        (fdir / "result.json").write_text(json.dumps(fr.to_dict(), indent=2))
+        state.status = FixtureStatus.ERROR
+        state.last_error = fr.error
+    elif artefacts.get("no_mutations_reported") and fr.diff_produced:
+        # luxe said it produced nothing and shipped nothing, yet base_sha..HEAD
+        # in the workspace differs: work was committed outside luxe's view
+        # (e.g. the agent's own `git commit` before luxe learned to ship it).
+        # Grading that diff credits a deliverable nobody received, so it is
+        # neither a pass nor a fail (2026-09 review, deps-audit).
+        fr.error = ("harness: luxe reported no mutations but the workspace "
+                    "differs from base_sha; the graded diff was never shipped")
         (fdir / "result.json").write_text(json.dumps(fr.to_dict(), indent=2))
         state.status = FixtureStatus.ERROR
         state.last_error = fr.error
