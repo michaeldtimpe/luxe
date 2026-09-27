@@ -43,9 +43,30 @@ auto-memory.
   `_chat_stream` mirrors the non-stream path's
   `logger.warning("backend … decision=…")` lines so an outage's retry
   history reaches any installed session log handler (chat debug.log — the
-  scenario the fallback kit exists for). `on_retry` stays callback-only;
-  never remove the log lines in favor of it, and keep the two paths' line
-  format identical (one parser in `scripts/toolcall_taxonomy.py` covers both)
+  scenario the fallback kit exists for). Keep the two paths' line format
+  identical (one parser in `scripts/toolcall_taxonomy.py` covers both). Since
+  2026-09-26 both paths run ONE loop, `Backend._with_retries`, which owns
+  both log lines — do not fork it back into per-path copies. The dead
+  `chat(on_retry=)` callback was removed then (no production caller); the
+  log lines and `ChatResponse.retries` are the observable record
+- Backend failure shapes that are TERMINAL by design (2026-09-26):
+  (a) a 200 whose body is an error object (`200-error-body`; oMLX delivers
+  post-keepalive failures this way, e.g. `incomplete_tool_call`) or is
+  unparseable / has no choices / no message (`200-malformed-body`) — the
+  BackendError carries the server's message and a body slice. Not retried:
+  it is the model's output failing and temp=0 reproduces it; these crashed
+  with `KeyError: 'choices'` before, so no benchmark outcome changes.
+  `usage: null` is tolerated, not an error. (b) A `ProgressStall` (the B6
+  progress deadline expiring, a `httpx.ReadTimeout` subclass) →
+  `progress-stall`, not retried: one budget (1800s) of keepalives without
+  progress is the bound, not `max_attempts ×` it. (c) Stream path only: once
+  any output left the process (content to `on_token`, reasoning to
+  `on_reasoning`, or a tool-call fragment), a transport failure is not
+  retried (reason suffixed `-after-output`) — a retry replayed the live tail
+  and re-billed metered providers; and an in-band `{"error": …}` chunk is
+  `stream-error-chunk`, never a completion. The empty-5xx warmup window is
+  the first `_WARMUP_WINDOW_S` of the BACKEND's life (`Backend._age_s`), not
+  of each request
 - Payload-suspect annotation (pinned 2026-08-24, opt-in, OBSERVE-ONLY,
   UNBENCHED). `LUXE_PAYLOAD_SUSPECT_RETRY=1` (opt-IN grammar — ONLY the exact
   string "1", `agents/flags.py`'s spelling for an unbenched lever; read at

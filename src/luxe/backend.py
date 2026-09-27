@@ -274,6 +274,23 @@ def _payload_suspect(request_chars: int | None, last_accepted_chars: int | None)
     return request_chars >= last_accepted_chars * _PAYLOAD_SUSPECT_GROWTH
 
 
+class ProgressStall(httpx.ReadTimeout):
+    """A request that stayed ALIVE (keepalives kept arriving) but made no
+    progress for a whole progress budget (`stall_timeout_s` /
+    `decode_stall_timeout_s`, the B6 deadlines).
+
+    A `ReadTimeout` subclass so every reader that already handles a read
+    timeout — callers, `except httpx.HTTPError`, message formats — keeps
+    working. Its own class so `classify_failure` can tell it apart from a
+    plain read timeout: a plain one means the socket went silent for
+    `timeout_s`, which a retry plausibly fixes; this one means the server
+    spent the full, deliberately generous budget (1800s by default) holding
+    the request open without producing anything. Retrying it bought up to
+    `max_attempts × stall_timeout_s` (90 minutes by default) of one wedged
+    request, with no evidence a retry ever rescued one (2026-09-26 review).
+    """
+
+
 @dataclass
 class RetryDecision:
     # Do NOT add fields here without checking `scripts/bigread_drill.py:241`,
@@ -309,12 +326,15 @@ def classify_failure(
     Retry on:
       - connection / read timeouts (httpx.RequestError, httpx.TimeoutException)
       - 5xx with body containing transient markers (loading / swapping / warming)
-      - 5xx with empty body during the warmup window (first 5s of a run)
+      - 5xx with empty body during the warmup window (the first 5s of the
+        BACKEND's life — `Backend` passes its own age, not the request's)
 
     Fail fast on:
       - 4xx (our request bug, retrying won't help) — EXCEPT 429, see below
       - 5xx with terminal markers (unavailable / crashed / OOM)
       - 5xx with empty body AFTER warmup window (assume terminal)
+      - a `ProgressStall` (a full progress budget spent on keepalives — see
+        the class for why that is not worth another budget)
       - any failure on the last attempt
 
     429 is the one 4xx that is not our bug (2026-08-17, openrouter): a rate
@@ -334,6 +354,10 @@ def classify_failure(
         return RetryDecision(retry=False, reason="exhausted-attempts")
 
     delay = _DEFAULT_BACKOFF_S[min(attempt, len(_DEFAULT_BACKOFF_S) - 1)]
+
+    # Before the transport branch: a ProgressStall IS a ReadTimeout.
+    if isinstance(exc, ProgressStall):
+        return RetryDecision(retry=False, reason="progress-stall")
 
     if isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
                         httpx.NetworkError, httpx.RemoteProtocolError)):
@@ -387,6 +411,59 @@ def classify_failure(
 
 class BackendError(Exception):
     """Raised when the backend gives up after retries."""
+
+
+class _StatusFailure(Exception):
+    """One attempt failed with an ANSWER rather than a transport error.
+
+    Either an HTTP error status (classified by `classify_failure` from the
+    status and body, as it always was) or a 200 whose body is itself an error
+    or unparseable — those carry a preset `decision` and their own `message`,
+    because `classify_failure`'s status table has no row for "200, but the
+    body says it failed". Internal to `Backend._with_retries`; never escapes.
+    """
+
+    def __init__(self, status_code: int, body: str, *,
+                 decision: RetryDecision | None = None, message: str = ""):
+        super().__init__(message or body[:200])
+        self.status_code = status_code
+        self.body = body
+        self.decision = decision
+        self.message = message
+
+
+@dataclass
+class _Attempt:
+    """Per-attempt state the retry loop reads after a failure."""
+    # Set once ANY generation reached this process on the stream path —
+    # content (already handed to `on_token`), reasoning (already handed to
+    # `on_reasoning`), or a tool-call fragment. After that a retry would
+    # replay the live tail from the start and, on a metered provider, bill
+    # the generation a second time.
+    output: bool = False
+
+
+#: Reasons for the two 200-body failure shapes. Both TERMINAL — see
+#: `Backend._parse_completion`.
+_ERROR_BODY_REASON = "200-error-body"
+_MALFORMED_BODY_REASON = "200-malformed-body"
+_STREAM_ERROR_CHUNK_REASON = "stream-error-chunk"
+
+
+def _error_text(err: Any) -> str:
+    """The human part of an OpenAI-style `error` value (dict or string)."""
+    if isinstance(err, dict):
+        msg = err.get("message")
+        code = err.get("code")
+        if msg and code not in (None, ""):
+            return f"{msg} [code={code}]"
+        if msg:
+            return str(msg)
+        try:
+            return json.dumps(err, ensure_ascii=False)[:200]
+        except (TypeError, ValueError):
+            return repr(err)[:200]
+    return str(err)[:200]
 
 
 #: Body fields `body_extras` may never set. Everything luxe assembles from the
@@ -559,6 +636,7 @@ class Backend:
             # deliberately routed through planeproxy's env vars sometimes.
             trust_env=not is_loopback_url(self.base_url),
         )
+        # Start of the empty-5xx warmup window (`_age_s`).
         self._created_at = time.monotonic()
         # Size (in prompt characters) of the last request THIS endpoint
         # accepted — the baseline the payload-suspect annotation measures
@@ -589,6 +667,32 @@ class Backend:
             self.cost_total_usd += cost
         return cost
 
+    def close(self) -> None:
+        """Close the HTTP client (its pooled connections). Idempotent.
+
+        A long-lived Backend (a chat session, a benchmark pipeline) is
+        reclaimed at exit; this is for the short-lived ones — a one-shot
+        unload probe — which otherwise leak a connection pool each.
+        """
+        self._client.close()
+
+    def __enter__(self) -> "Backend":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
+
+    def _age_s(self) -> float:
+        """Seconds since this Backend was built — the warmup-window clock.
+
+        `classify_failure`'s empty-5xx rule means "the server may still be
+        coming up": the first seconds of a RUN, which is this object's life.
+        Until 2026-09 the clock started at each REQUEST, so every fast empty
+        5xx fell inside the window and retried to exhaustion, and
+        `_created_at` was never read.
+        """
+        return time.monotonic() - self._created_at
+
     def chat(
         self,
         messages: list[dict[str, Any]],
@@ -598,7 +702,6 @@ class Backend:
         num_ctx: int | None = None,
         repeat_penalty: float | None = None,
         response_format: dict[str, Any] | None = None,
-        on_retry: Callable[[RetryDecision, int], None] | None = None,
         stream: bool = False,
         on_token: Callable[[str], None] | None = None,
     ) -> ChatResponse:
@@ -659,119 +762,84 @@ class Backend:
         # (stream=False) leaves the body byte-identical to the legacy request and
         # never touches `on_token` — the benchmark/maintain path is unchanged.
         if stream:
-            return self._chat_stream(body, on_token=on_token, on_retry=on_retry)
+            return self._chat_stream(body, on_token=on_token)
 
+        return self._with_retries(
+            body, lambda _progress: self._chat_once(body, tools),
+            failed="call failed", exhausted="retries exhausted")
+
+    def _with_retries(
+        self,
+        body: dict[str, Any],
+        run_once: Callable[[_Attempt], ChatResponse],
+        *,
+        failed: str,
+        exhausted: str,
+    ) -> ChatResponse:
+        """The ONE retry loop both response paths run: attempt → classify →
+        log → sleep or raise.
+
+        It was two hand-copied loops until 2026-09; they had already drifted
+        once (the stream path logged nothing until 2026-08-04). The two log
+        lines are byte-identical to what both loops emitted —
+        `scripts/toolcall_taxonomy.py` and `scripts/bigread_drill.py` parse
+        them out of debug.log (luxe.sdd) — and `failed`/`exhausted` carry the
+        only wording the two paths ever differed in.
+
+        `run_once` performs one attempt and returns the response, or raises:
+        `_StatusFailure` for an answered failure, `httpx.HTTPError`/`OSError`
+        for a transport one. Anything else propagates untouched, as before.
+        """
         attempt = 0
         last_decision: RetryDecision | None = None
-        request_t0 = time.monotonic()
         # Measured once (the body does not change between attempts) and ONLY
         # when the lever is on, so the default path never serialises the
-        # prompt a second time.
+        # prompt a second time. `_chat_stream` rewrites `stream`/
+        # `stream_options` only, so both paths measure the same `messages`.
         req_chars = prompt_chars(body) if payload_suspect_enabled() else None
 
         while attempt < self.max_attempts:
-            t0 = time.monotonic()
+            progress = _Attempt()
             try:
-                # Read via stream() rather than post() purely for visibility:
-                # post() hands back a fully-buffered body, which gives us no
-                # way to notice that the only thing arriving is keepalive
-                # whitespace. The REQUEST is unchanged (same method, URL and
-                # json=body), so the benchmark payload stays byte-identical —
-                # tests/test_golden_request.py pins that.
-                with self._client.stream(
-                    "POST", "/v1/chat/completions", json=body
-                ) as resp:
-                    if resp.status_code >= 400:
-                        resp.read()
-                    else:
-                        raw_body = self._read_body_with_progress(resp)
-                    wall = time.monotonic() - t0
-                if resp.status_code >= 400:
-                    decision = classify_failure(
-                        status_code=resp.status_code,
-                        body=resp.text,
-                        elapsed_since_start_s=time.monotonic() - request_t0,
-                        attempt=attempt,
-                        max_attempts=self.max_attempts,
-                    )
-                    last_decision = decision
-                    logger.warning(
-                        "backend %s status=%d body=%r decision=%s",
-                        self.model, resp.status_code, resp.text[:200], decision,
-                    )
-                    if not decision.retry:
-                        raise BackendError(
-                            f"{self.engine_label} returned {resp.status_code}: "
-                            f"{resp.text[:200]} "
-                            f"({decision.reason})"
-                        )
-                    if on_retry:
-                        on_retry(decision, attempt)
-                    time.sleep(decision.delay_s)
-                    attempt += 1
-                    continue
-                # Success path
-                data = json.loads(raw_body)
-                choice = data["choices"][0]
-                msg = choice["message"]
-                usage = data.get("usage", {})
-                # The server ingested this prompt and answered it: it becomes
-                # the baseline the next failure's growth is measured against.
-                if req_chars is not None:
-                    self._last_accepted_prompt_chars = req_chars
-
-                timing = GenerationTiming(
-                    prompt_tokens=usage.get("prompt_tokens", 0),
-                    completion_tokens=usage.get("completion_tokens", 0),
-                    total_s=wall,
-                    cost_usd=self._note_cost(_usage_cost(usage)),
+                resp = run_once(progress)
+            except _StatusFailure as fail:
+                decision = fail.decision or classify_failure(
+                    status_code=fail.status_code,
+                    body=fail.body,
+                    elapsed_since_start_s=self._age_s(),
+                    attempt=attempt,
+                    max_attempts=self.max_attempts,
                 )
-
-                tc_list: list[ToolCallResponse] = []
-                for tc in msg.get("tool_calls") or []:
-                    fn = tc["function"]
-                    args = fn.get("arguments", "{}")
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            args = {"_raw": args}
-                    tc_list.append(ToolCallResponse(
-                        id=tc.get("id", ""),
-                        name=fn["name"],
-                        arguments=args,
-                    ))
-
-                text = msg.get("content") or ""
-                # Reasoning is COUNTED, never merged into `text`. On this path
-                # there is nothing live to show, but the count is what lets a
-                # blank answer be reported as "thought and said nothing"
-                # rather than "returned nothing".
-                reasoning_chars = len(_reasoning_text(msg))
-                if not tc_list:
-                    # Native channel empty — check the text channel (see
-                    # recover_tool_calls_from_text above for why).
-                    tc_list = recover_tool_calls_from_text(text, tools)
-                    if tc_list:
-                        text = ""
-
-                return ChatResponse(
-                    text=text,
-                    tool_calls=tc_list,
-                    finish_reason=choice.get("finish_reason", ""),
-                    timing=timing,
-                    retries=attempt,
-                    reasoning_chars=reasoning_chars,
+                last_decision = decision
+                logger.warning(
+                    "backend %s status=%d body=%r decision=%s",
+                    self.model, fail.status_code, fail.body[:200], decision,
                 )
+                if not decision.retry:
+                    raise BackendError(
+                        fail.message
+                        or f"{self.engine_label} returned {fail.status_code}: "
+                           f"{fail.body[:200]} ({decision.reason})"
+                    ) from None
             except (httpx.HTTPError, OSError) as exc:
                 decision = classify_failure(
                     exc=exc,
-                    elapsed_since_start_s=time.monotonic() - request_t0,
+                    elapsed_since_start_s=self._age_s(),
                     attempt=attempt,
                     max_attempts=self.max_attempts,
                     request_chars=req_chars,
                     last_accepted_chars=self._last_accepted_prompt_chars,
                 )
+                if decision.retry and progress.output:
+                    # Output already left this process (live tail, reasoning
+                    # sink) and a metered provider already billed it: a retry
+                    # would replay the tail from the start and bill twice.
+                    # Fail the turn instead — chat keeps the REPL alive on a
+                    # BackendError and `/retry` resends deliberately. The
+                    # suffix keeps the `transient-<Exc>` prefix every reader
+                    # matches on.
+                    decision = RetryDecision(
+                        retry=False, reason=f"{decision.reason}-after-output")
                 last_decision = decision
                 logger.warning(
                     "backend %s exception=%s decision=%s",
@@ -779,19 +847,153 @@ class Backend:
                 )
                 if not decision.retry:
                     raise BackendError(
-                        f"{self.engine_label} call failed: {type(exc).__name__}: "
+                        f"{self.engine_label} {failed}: {type(exc).__name__}: "
                         f"{exc} ({decision.reason})"
                     ) from exc
-                if on_retry:
-                    on_retry(decision, attempt)
-                time.sleep(decision.delay_s)
-                attempt += 1
+            else:
+                # The server ingested this prompt and answered it: it becomes
+                # the baseline the next failure's growth is measured against.
+                if req_chars is not None:
+                    self._last_accepted_prompt_chars = req_chars
+                resp.retries = attempt
+                return resp
+            time.sleep(decision.delay_s)
+            attempt += 1
 
         # Loop exhausted without success
         reason = last_decision.reason if last_decision else "unknown"
         raise BackendError(
-            f"{self.engine_label} retries exhausted after "
+            f"{self.engine_label} {exhausted} after "
             f"{self.max_attempts} attempts ({reason})"
+        )
+
+    def _chat_once(
+        self, body: dict[str, Any], tools: list[dict[str, Any]] | None,
+    ) -> ChatResponse:
+        """One non-stream attempt (the benchmark/maintain path)."""
+        t0 = time.monotonic()
+        # Read via stream() rather than post() purely for visibility: post()
+        # hands back a fully-buffered body, which gives us no way to notice
+        # that the only thing arriving is keepalive whitespace. The REQUEST is
+        # unchanged (same method, URL and json=body), so the benchmark payload
+        # stays byte-identical — tests/test_golden_request.py pins that.
+        with self._client.stream(
+            "POST", "/v1/chat/completions", json=body
+        ) as resp:
+            if resp.status_code >= 400:
+                resp.read()
+            else:
+                raw_body = self._read_body_with_progress(resp)
+            wall = time.monotonic() - t0
+        if resp.status_code >= 400:
+            raise _StatusFailure(resp.status_code, resp.text)
+        return self._parse_completion(raw_body, tools, wall)
+
+    def _parse_completion(
+        self, raw_body: bytes, tools: list[dict[str, Any]] | None, wall: float,
+    ) -> ChatResponse:
+        """A non-stream 200 body → ChatResponse, or a TERMINAL `_StatusFailure`.
+
+        A 200 is not a success until its body says so. oMLX answers a
+        non-stream request 200 up front and pads it with keepalives, so an
+        error found AFTER that (e.g. "Model output contains an unrecoverable
+        tool call", code=incomplete_tool_call — live 2026-09-26) can only
+        arrive as an error object in the body. Indexing `data["choices"]`
+        blindly turned that into `KeyError: 'choices'`, which the loop
+        recorded as abort_reason "Backend error: 'choices'".
+
+        Both shapes are terminal, deliberately:
+          - retrying is SAFE here (oMLX warns that tool calls it already
+            delivered must not be re-executed on a retry; a non-stream
+            response delivered none) but not USEFUL: this is the model's
+            output failing, and the same prompt at the benchmark's temp=0
+            reproduces the same output, so a retry spends a full generation
+            to arrive at the same error;
+          - it keeps every outcome the benchmark path could produce what it
+            was — these responses aborted the run before, and still do; only
+            the abort_reason now says why.
+        `usage: null` is NOT a failure: usage is optional, and a response
+        with a message in it is an answer.
+        """
+        body_text = raw_body.decode("utf-8", "replace").strip()
+        snippet = body_text[:200]
+
+        def malformed(detail: str) -> _StatusFailure:
+            decision = RetryDecision(retry=False, reason=_MALFORMED_BODY_REASON)
+            return _StatusFailure(
+                200, body_text, decision=decision,
+                message=(f"{self.engine_label} returned a malformed 200 "
+                         f"response ({detail}): {snippet!r} "
+                         f"({decision.reason})"))
+
+        try:
+            data = json.loads(body_text)
+        except ValueError:
+            raise malformed("body is not JSON") from None
+        if isinstance(data, dict) and data.get("error"):
+            decision = RetryDecision(retry=False, reason=_ERROR_BODY_REASON)
+            raise _StatusFailure(
+                200, body_text, decision=decision,
+                message=(f"{self.engine_label} returned an error in a 200 "
+                         f"response: {_error_text(data['error'])} — body: "
+                         f"{snippet!r} ({decision.reason})"))
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise malformed("no choices")
+        choice = choices[0]
+        msg = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(msg, dict):
+            raise malformed("no message")
+        usage = data.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+
+        timing = GenerationTiming(
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_s=wall,
+            cost_usd=self._note_cost(_usage_cost(usage)),
+        )
+
+        tc_list: list[ToolCallResponse] = []
+        for tc in msg.get("tool_calls") or []:
+            try:
+                fn = tc["function"]
+                name = fn["name"]
+                args = fn.get("arguments", "{}")
+                call_id = tc.get("id", "")
+            except (KeyError, TypeError, AttributeError):
+                raise malformed("tool call without function.name") from None
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {"_raw": args}
+            tc_list.append(ToolCallResponse(
+                id=call_id,
+                name=name,
+                arguments=args,
+            ))
+
+        text = msg.get("content") or ""
+        # Reasoning is COUNTED, never merged into `text`. On this path
+        # there is nothing live to show, but the count is what lets a
+        # blank answer be reported as "thought and said nothing"
+        # rather than "returned nothing".
+        reasoning_chars = len(_reasoning_text(msg))
+        if not tc_list:
+            # Native channel empty — check the text channel (see
+            # recover_tool_calls_from_text above for why).
+            tc_list = recover_tool_calls_from_text(text, tools)
+            if tc_list:
+                text = ""
+
+        return ChatResponse(
+            text=text,
+            tool_calls=tc_list,
+            finish_reason=choice.get("finish_reason", ""),
+            timing=timing,
+            reasoning_chars=reasoning_chars,
         )
 
     def _read_body_with_progress(self, resp) -> bytes:
@@ -803,10 +1005,10 @@ class Backend:
         httpx's read timeout from ever firing, so we time the gap between
         bytes that carry actual content instead.
 
-        Raises `httpx.ReadTimeout` on stall so `classify_failure` treats it
-        exactly like any other read timeout — transient, therefore retried,
-        which is the right response when a model was swapped out underneath
-        us and the retry will simply reload it.
+        Raises `ProgressStall` (a `httpx.ReadTimeout`) on stall. It is NOT
+        retried (`classify_failure`): the budget is already the generous
+        "is this server still working" bound, and spending it again per
+        attempt is how one wedged request held a benchmark for 90 minutes.
         """
         if resp.is_stream_consumed:
             # Already materialised (e.g. httpx.MockTransport in tests, or any
@@ -820,7 +1022,7 @@ class Backend:
             if raw.strip():           # anything that isn't padding is progress
                 last_progress = now
             elif now - last_progress > self.stall_timeout_s:
-                raise httpx.ReadTimeout(
+                raise ProgressStall(
                     f"progress stall: {now - last_progress:.0f}s of keepalive "
                     f"padding with no response content "
                     f"(stall_timeout_s={self.stall_timeout_s:.0f})"
@@ -833,213 +1035,180 @@ class Backend:
         body: dict[str, Any],
         *,
         on_token: Callable[[str], None] | None = None,
-        on_retry: Callable[[RetryDecision, int], None] | None = None,
     ) -> ChatResponse:
         """SSE streaming path (chat front-end only).
 
         Reconstructs the same `ChatResponse` shape the non-stream path returns,
         firing `on_token(delta)` for each text fragment so the REPL can render
-        live. Retries only cover connection establishment (via classify_failure);
-        once tokens flow, a mid-stream error aborts the turn — acceptable for an
-        interactive front-end (the user just retypes). Never used by benchmarks.
+        live. Retries cover only failures BEFORE any output — connection
+        establishment, an error status, a transport error ahead of the first
+        content/reasoning/tool fragment. Once output has flowed, a mid-stream
+        error fails the turn with a BackendError instead of retrying (see
+        `_Attempt.output`): the user sees what arrived, and `/retry` resends.
+        An in-band `{"error": …}` chunk (OpenRouter's mid-stream failure
+        shape) is an error too, never a completion. Never used by benchmarks.
         """
         # Ask oMLX to include a usage block in the terminal chunk.
         body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+        return self._with_retries(
+            body, lambda progress: self._stream_once(body, progress, on_token),
+            failed="stream failed", exhausted="stream retries exhausted")
 
-        attempt = 0
-        last_decision: RetryDecision | None = None
-        request_t0 = time.monotonic()
-        # Same measurement as the non-stream path, same guard: only when the
-        # lever is on, once for the whole call. `messages` is untouched by the
-        # stream rewrite above, so the two paths measure the same thing.
-        req_chars = prompt_chars(body) if payload_suspect_enabled() else None
+    def _stream_once(
+        self,
+        body: dict[str, Any],
+        progress: _Attempt,
+        on_token: Callable[[str], None] | None,
+    ) -> ChatResponse:
+        """One streaming attempt. Marks `progress.output` as output leaves."""
+        t0 = time.monotonic()
+        text_parts: list[str] = []
+        tool_frags: dict[int, dict[str, Any]] = {}
+        finish_reason = ""
+        usage: dict[str, Any] = {}
+        reasoning_chars = 0
+        ttft = 0.0
+        started = False
+        # Distinct from `started` (which pins ttft to the first *content*
+        # token): tool-call fragments are progress too, and a tool-only
+        # turn must still get the tighter decode bound.
+        decoding = False
+        with self._client.stream("POST", "/v1/chat/completions", json=body) as resp:
+            if resp.status_code >= 400:
+                resp.read()
+                raise _StatusFailure(resp.status_code, resp.text)
 
-        while attempt < self.max_attempts:
-            t0 = time.monotonic()
-            text_parts: list[str] = []
-            tool_frags: dict[int, dict[str, Any]] = {}
-            finish_reason = ""
-            usage: dict[str, Any] = {}
-            reasoning_chars = 0
-            ttft = 0.0
-            started = False
-            # Distinct from `started` (which pins ttft to the first *content*
-            # token): tool-call fragments are progress too, and a tool-only
-            # turn must still get the tighter decode bound.
-            decoding = False
-            try:
-                with self._client.stream("POST", "/v1/chat/completions", json=body) as resp:
-                    if resp.status_code >= 400:
-                        resp.read()
-                        decision = classify_failure(
-                            status_code=resp.status_code,
-                            body=resp.text,
-                            elapsed_since_start_s=time.monotonic() - request_t0,
-                            attempt=attempt,
-                            max_attempts=self.max_attempts,
-                        )
-                        last_decision = decision
-                        logger.warning(
-                            "backend %s status=%d body=%r decision=%s",
-                            self.model, resp.status_code, resp.text[:200],
-                            decision,
-                        )
-                        if not decision.retry:
-                            raise BackendError(
-                                f"{self.engine_label} returned "
-                                f"{resp.status_code}: {resp.text[:200]} "
-                                f"({decision.reason})"
-                            )
-                        if on_retry:
-                            on_retry(decision, attempt)
-                        time.sleep(decision.delay_s)
-                        attempt += 1
-                        continue
-
+            last_progress = time.monotonic()
+            for line in resp.iter_lines():
+                # Checked BEFORE the blank-line skip, and before the
+                # keepalive chunks are discarded below: those are
+                # precisely the events that must not count as progress.
+                now = time.monotonic()
+                bound = (self.decode_stall_timeout_s if decoding
+                         else self.stall_timeout_s)
+                if now - last_progress > bound:
+                    raise ProgressStall(
+                        f"progress stall: {now - last_progress:.0f}s of "
+                        f"keepalive chunks with no "
+                        f"{'tokens' if decoding else 'first token'} "
+                        f"(bound={bound:.0f}s)"
+                    )
+                if not line:
+                    continue
+                if line.startswith("data: "):
+                    line = line[len("data: "):]
+                line = line.strip()
+                if not line or line == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk.get("error"):
+                    # In-band failure after a 200 (OpenRouter documents this
+                    # shape: `error` beside a `finish_reason: "error"`
+                    # choice). It used to be skipped, and the stream read as
+                    # an ordinary — empty or truncated — completion.
+                    # Terminal whether or not tokens preceded it: the
+                    # provider has already run (and billed) the attempt.
+                    decision = RetryDecision(
+                        retry=False, reason=_STREAM_ERROR_CHUNK_REASON)
+                    raise _StatusFailure(
+                        200, line, decision=decision,
+                        message=(f"{self.engine_label} stream returned an "
+                                 f"error: {_error_text(chunk['error'])} "
+                                 f"({decision.reason})"))
+                # Usage-only terminal chunk has empty choices.
+                if isinstance(chunk.get("usage"), dict):
+                    usage = chunk["usage"]
                     last_progress = time.monotonic()
-                    for line in resp.iter_lines():
-                        # Checked BEFORE the blank-line skip, and before the
-                        # keepalive chunks are discarded below: those are
-                        # precisely the events that must not count as progress.
-                        now = time.monotonic()
-                        bound = (self.decode_stall_timeout_s if decoding
-                                 else self.stall_timeout_s)
-                        if now - last_progress > bound:
-                            raise httpx.ReadTimeout(
-                                f"progress stall: {now - last_progress:.0f}s of "
-                                f"keepalive chunks with no "
-                                f"{'tokens' if decoding else 'first token'} "
-                                f"(bound={bound:.0f}s)"
-                            )
-                        if not line:
-                            continue
-                        if line.startswith("data: "):
-                            line = line[len("data: "):]
-                        line = line.strip()
-                        if not line or line == "[DONE]":
-                            continue
-                        try:
-                            chunk = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        # Usage-only terminal chunk has empty choices.
-                        if chunk.get("usage"):
-                            usage = chunk["usage"]
-                            last_progress = time.monotonic()
-                        for choice in chunk.get("choices", []):
-                            delta = choice.get("delta", {}) or {}
-                            # REASONING CHANNEL. Counts as progress — a
-                            # reasoning model can think for minutes before its
-                            # first content token, and those chunks used to be
-                            # invisible to both clocks, so a working request
-                            # looked like a stall and died as a "timeout".
-                            # It deliberately does NOT set `decoding`: no
-                            # answer token has arrived, so the generous
-                            # pre-first-token bound is still the right one.
-                            think = _reasoning_text(delta)
-                            if think:
-                                reasoning_chars += len(think)
-                                last_progress = time.monotonic()
-                                if self.on_reasoning:
-                                    self.on_reasoning(think)
-                            piece = delta.get("content") or ""
-                            if piece:
-                                if not started:
-                                    ttft = time.monotonic() - t0
-                                    started = True
-                                text_parts.append(piece)
-                                last_progress = time.monotonic()
-                                decoding = True
-                                if on_token:
-                                    on_token(piece)
-                            for tc in delta.get("tool_calls") or []:
-                                last_progress = time.monotonic()
-                                decoding = True
-                                idx = tc.get("index", 0)
-                                slot = tool_frags.setdefault(
-                                    idx, {"id": "", "name": "", "arguments": ""}
-                                )
-                                if tc.get("id"):
-                                    slot["id"] = tc["id"]
-                                fn = tc.get("function") or {}
-                                if fn.get("name"):
-                                    slot["name"] = fn["name"]
-                                if fn.get("arguments"):
-                                    slot["arguments"] += fn["arguments"]
-                            if choice.get("finish_reason"):
-                                finish_reason = choice["finish_reason"]
-                                last_progress = time.monotonic()
+                for choice in chunk.get("choices") or []:
+                    if not isinstance(choice, dict):
+                        continue
+                    delta = choice.get("delta", {}) or {}
+                    # REASONING CHANNEL. Counts as progress — a
+                    # reasoning model can think for minutes before its
+                    # first content token, and those chunks used to be
+                    # invisible to both clocks, so a working request
+                    # looked like a stall and died as a "timeout".
+                    # It deliberately does NOT set `decoding`: no
+                    # answer token has arrived, so the generous
+                    # pre-first-token bound is still the right one.
+                    think = _reasoning_text(delta)
+                    if think:
+                        reasoning_chars += len(think)
+                        last_progress = time.monotonic()
+                        progress.output = True
+                        if self.on_reasoning:
+                            self.on_reasoning(think)
+                    piece = delta.get("content") or ""
+                    if piece:
+                        if not started:
+                            ttft = time.monotonic() - t0
+                            started = True
+                        text_parts.append(piece)
+                        last_progress = time.monotonic()
+                        decoding = True
+                        progress.output = True
+                        if on_token:
+                            on_token(piece)
+                    for tc in delta.get("tool_calls") or []:
+                        last_progress = time.monotonic()
+                        decoding = True
+                        progress.output = True
+                        idx = tc.get("index", 0)
+                        slot = tool_frags.setdefault(
+                            idx, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            slot["arguments"] += fn["arguments"]
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+                        last_progress = time.monotonic()
 
-                wall = time.monotonic() - t0
-                # Stream completed: this prompt was accepted (see the
-                # non-stream path for why acceptance is the baseline).
-                if req_chars is not None:
-                    self._last_accepted_prompt_chars = req_chars
-                tc_list: list[ToolCallResponse] = []
-                for idx in sorted(tool_frags):
-                    frag = tool_frags[idx]
-                    raw = frag["arguments"] or "{}"
-                    try:
-                        args = json.loads(raw)
-                    except json.JSONDecodeError:
-                        args = {"_raw": raw}
-                    tc_list.append(ToolCallResponse(
-                        id=frag["id"], name=frag["name"], arguments=args,
-                    ))
+        wall = time.monotonic() - t0
+        tc_list: list[ToolCallResponse] = []
+        for idx in sorted(tool_frags):
+            frag = tool_frags[idx]
+            raw = frag["arguments"] or "{}"
+            try:
+                args = json.loads(raw)
+            except json.JSONDecodeError:
+                args = {"_raw": raw}
+            tc_list.append(ToolCallResponse(
+                id=frag["id"], name=frag["name"], arguments=args,
+            ))
 
-                text = "".join(text_parts)
-                if not tc_list:
-                    # Same text-channel salvage as the non-streaming path.
-                    # The raw JSON already streamed to `on_token` (the UI
-                    # showed it); what matters here is that the agent loop
-                    # sees a call, not prose.
-                    tc_list = recover_tool_calls_from_text(
-                        text, body.get("tools"))
-                    if tc_list:
-                        text = ""
+        text = "".join(text_parts)
+        if not tc_list:
+            # Same text-channel salvage as the non-streaming path.
+            # The raw JSON already streamed to `on_token` (the UI
+            # showed it); what matters here is that the agent loop
+            # sees a call, not prose.
+            tc_list = recover_tool_calls_from_text(
+                text, body.get("tools"))
+            if tc_list:
+                text = ""
 
-                return ChatResponse(
-                    text=text,
-                    tool_calls=tc_list,
-                    finish_reason=finish_reason,
-                    timing=GenerationTiming(
-                        prompt_tokens=usage.get("prompt_tokens", 0),
-                        completion_tokens=usage.get("completion_tokens", 0),
-                        total_s=wall,
-                        time_to_first_token_s=ttft,
-                        cost_usd=self._note_cost(_usage_cost(usage)),
-                    ),
-                    retries=attempt,
-                    reasoning_chars=reasoning_chars,
-                )
-            except (httpx.HTTPError, OSError) as exc:
-                decision = classify_failure(
-                    exc=exc,
-                    elapsed_since_start_s=time.monotonic() - request_t0,
-                    attempt=attempt,
-                    max_attempts=self.max_attempts,
-                    request_chars=req_chars,
-                    last_accepted_chars=self._last_accepted_prompt_chars,
-                )
-                last_decision = decision
-                logger.warning(
-                    "backend %s exception=%s decision=%s",
-                    self.model, type(exc).__name__, decision,
-                )
-                if not decision.retry:
-                    raise BackendError(
-                        f"{self.engine_label} stream failed: {type(exc).__name__}: "
-                        f"{exc} ({decision.reason})"
-                    ) from exc
-                if on_retry:
-                    on_retry(decision, attempt)
-                time.sleep(decision.delay_s)
-                attempt += 1
-
-        reason = last_decision.reason if last_decision else "unknown"
-        raise BackendError(
-            f"{self.engine_label} stream retries exhausted after "
-            f"{self.max_attempts} attempts ({reason})"
+        return ChatResponse(
+            text=text,
+            tool_calls=tc_list,
+            finish_reason=finish_reason,
+            timing=GenerationTiming(
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_s=wall,
+                time_to_first_token_s=ttft,
+                cost_usd=self._note_cost(_usage_cost(usage)),
+            ),
+            reasoning_chars=reasoning_chars,
         )
 
     def health(self, timeout_s: float | None = None) -> bool:
