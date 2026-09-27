@@ -1,0 +1,879 @@
+{
+ "requests": [
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    }
+   ],
+   "max_tokens": 8192,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 32768,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 0.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"limit\": 10}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    }
+   ],
+   "max_tokens": 8192,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 32768,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 0.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"limit\": 10}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 1.",
+     "tool_calls": [
+      {
+       "id": "call_1_0",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_1",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    }
+   ],
+   "max_tokens": 8192,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 32768,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 0.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"limit\": 10}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 1.",
+     "tool_calls": [
+      {
+       "id": "call_1_0",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_1",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 2.",
+     "tool_calls": [
+      {
+       "id": "call_2_0",
+       "type": "function",
+       "function": {
+        "name": "glob",
+        "arguments": "{\"pattern\": \"**/*2*\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_2",
+     "name": "glob",
+     "content": ""
+    }
+   ],
+   "max_tokens": 8192,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 32768,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 0.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"limit\": 10}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 1.",
+     "tool_calls": [
+      {
+       "id": "call_1_0",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_1",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 2.",
+     "tool_calls": [
+      {
+       "id": "call_2_0",
+       "type": "function",
+       "function": {
+        "name": "glob",
+        "arguments": "{\"pattern\": \"**/*2*\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_2",
+     "name": "glob",
+     "content": ""
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 3.",
+     "tool_calls": [
+      {
+       "id": "call_3_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/missing_3.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_3",
+     "name": "read_file",
+     "content": "File not found: src/missing_3.py"
+    }
+   ],
+   "max_tokens": 8192,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 32768,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 0.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"limit\": 10}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 1.",
+     "tool_calls": [
+      {
+       "id": "call_1_0",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_1",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 2.",
+     "tool_calls": [
+      {
+       "id": "call_2_0",
+       "type": "function",
+       "function": {
+        "name": "glob",
+        "arguments": "{\"pattern\": \"**/*2*\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_2",
+     "name": "glob",
+     "content": ""
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 3.",
+     "tool_calls": [
+      {
+       "id": "call_3_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/missing_3.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_3",
+     "name": "read_file",
+     "content": "File not found: src/missing_3.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 4.",
+     "tool_calls": [
+      {
+       "id": "call_4_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/util.py\", \"limit\": 14}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_4",
+     "name": "read_file",
+     "content": "1\tdef helper(x):\n2\t    return x + 1\n"
+    }
+   ],
+   "max_tokens": 8192,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 32768,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  },
+  {
+   "model": "golden-model",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a code maintenance specialist working on a single repository. Your job\nis to take a goal end-to-end: read what's relevant, plan the change, edit code\nwhen needed, run tests if available, and produce a final report.\n\nOperating principles:\n- Read first. Understand the repo before you edit it.\n- Make minimal, focused changes — only what the goal requires.\n- Cite every file you read with file:path syntax; cite every file you modify.\n- Preserve existing style and conventions.\n- When you finish, output a final report summarising what you changed,\n  what tests you ran, and any open questions.\n\nCitation contract:\n- Every file:line citation in your final report MUST resolve in the current\n  repo state. The post-synthesis citation linter will verify each one.\n- If you cite a line in a file you also edited, include a 1–3 line snippet of\n  the cited code verbatim alongside the citation; the linter uses fuzzy snippet\n  matching to forgive line-shift after edits.\n"
+    },
+    {
+     "role": "user",
+     "content": "Task type: implement\nGoal: Make render() return 'widget!'.\n\nBegin by reading what's relevant to plan your change. When you're done, end with a final report."
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 0.",
+     "tool_calls": [
+      {
+       "id": "call_0_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/widget.py\", \"limit\": 10}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_0",
+     "name": "read_file",
+     "content": "1\tdef render():\n2\t    return 'widget'\n"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 1.",
+     "tool_calls": [
+      {
+       "id": "call_1_0",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"src\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_1",
+     "name": "list_dir",
+     "content": "config.py\nutil.py\nwidget.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 2.",
+     "tool_calls": [
+      {
+       "id": "call_2_0",
+       "type": "function",
+       "function": {
+        "name": "glob",
+        "arguments": "{\"pattern\": \"**/*2*\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_2",
+     "name": "glob",
+     "content": ""
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 3.",
+     "tool_calls": [
+      {
+       "id": "call_3_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/missing_3.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_3",
+     "name": "read_file",
+     "content": "File not found: src/missing_3.py"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 4.",
+     "tool_calls": [
+      {
+       "id": "call_4_0",
+       "type": "function",
+       "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/util.py\", \"limit\": 14}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_4",
+     "name": "read_file",
+     "content": "1\tdef helper(x):\n2\t    return x + 1\n"
+    },
+    {
+     "role": "assistant",
+     "content": "Looking at step 5.",
+     "tool_calls": [
+      {
+       "id": "call_5_0",
+       "type": "function",
+       "function": {
+        "name": "list_dir",
+        "arguments": "{\"path\": \"docs\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_5",
+     "name": "list_dir",
+     "content": "guide.md"
+    }
+   ],
+   "max_tokens": 8192,
+   "temperature": 0.0,
+   "stream": false,
+   "num_ctx": 32768,
+   "tools_sha256": "8f79e94e76da607b8268c2649423628b4799d1d3103f07bc9cebc36e53a999cc"
+  }
+ ],
+ "events": [
+  {
+   "kind": "tool_call",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 0,
+   "name": "read_file",
+   "key_hash": "a87c67bb",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 38,
+   "path": "src/widget.py"
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 0,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 1,
+   "completion_delta": 200,
+   "action_density": 0.005,
+   "writes_seen": 0,
+   "tool_calls_total": 1,
+   "convergence_score": 0.25
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 1,
+   "name": "list_dir",
+   "key_hash": "aa59ee6a",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 27,
+   "path": "src"
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 1,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 2,
+   "completion_delta": 200,
+   "action_density": 0.005,
+   "writes_seen": 0,
+   "tool_calls_total": 2,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 2,
+   "name": "glob",
+   "key_hash": "888ac10a",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 0,
+   "path": null
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 2,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 3,
+   "completion_delta": 200,
+   "action_density": 0.005,
+   "writes_seen": 0,
+   "tool_calls_total": 3,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 3,
+   "name": "read_file",
+   "key_hash": "ec8d8ecc",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 0,
+   "path": "src/missing_3.py"
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 3,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "early_bail_suppressed_commit_only",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 4,
+   "tool_calls_total": 4,
+   "completion_tokens": 800,
+   "reads": 4,
+   "convergence_score": 0.0,
+   "configured_mode": "soft_anchor"
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 4,
+   "completion_delta": 200,
+   "action_density": 0.005,
+   "writes_seen": 0,
+   "tool_calls_total": 4,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 4,
+   "name": "read_file",
+   "key_hash": "5865f09f",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 36,
+   "path": "src/util.py"
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 4,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "early_bail_suppressed_commit_only",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 5,
+   "tool_calls_total": 5,
+   "completion_tokens": 1000,
+   "reads": 5,
+   "convergence_score": 0.0,
+   "configured_mode": "soft_anchor"
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 5,
+   "completion_delta": 200,
+   "action_density": 0.005,
+   "writes_seen": 0,
+   "tool_calls_total": 5,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "tool_call",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 5,
+   "name": "list_dir",
+   "key_hash": "d286bb65",
+   "duplicate": false,
+   "cached": false,
+   "bytes_out": 8,
+   "path": "docs"
+  },
+  {
+   "kind": "tool_step_done",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 5,
+   "step_had_repeat": false,
+   "consecutive_repeat_steps": 0
+  },
+  {
+   "kind": "early_bail_suppressed_commit_only",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 6,
+   "tool_calls_total": 6,
+   "completion_tokens": 1200,
+   "reads": 6,
+   "convergence_score": 0.0,
+   "configured_mode": "soft_anchor"
+  },
+  {
+   "kind": "action_density_sample",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 6,
+   "completion_delta": 200,
+   "action_density": 0.005,
+   "writes_seen": 0,
+   "tool_calls_total": 6,
+   "convergence_score": 0.0
+  },
+  {
+   "kind": "compaction_phase_at_resolve",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "max_phase_reached": 0,
+   "phase_at_first_write": null,
+   "tool_results_dropped_total": 0,
+   "total_tokens_dropped": 0,
+   "ineffective_fires": 0,
+   "aborted": false
+  }
+ ],
+ "result": {
+  "final_text": "All done.",
+  "steps": 7,
+  "tool_calls_total": 6,
+  "schema_rejects": 0,
+  "aborted": false,
+  "abort_reason": "",
+  "prompt_tokens": 18365,
+  "completion_tokens": 1260,
+  "last_prompt_tokens": 2895,
+  "step_texts": [
+   "Looking at step 0.",
+   "Looking at step 1.",
+   "Looking at step 2.",
+   "Looking at step 3.",
+   "Looking at step 4.",
+   "Looking at step 5."
+  ],
+  "peak_context_pressure": 0.092426187,
+  "final_context_pressure": 0.092426187,
+  "tool_calls": [
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "src/widget.py",
+     "limit": 10
+    },
+    "result": "1\tdef render():\n2\t    return 'widget'\n",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 38
+   },
+   {
+    "id": "",
+    "name": "list_dir",
+    "arguments": {
+     "path": "src"
+    },
+    "result": "config.py\nutil.py\nwidget.py",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 27
+   },
+   {
+    "id": "",
+    "name": "glob",
+    "arguments": {
+     "pattern": "**/*2*"
+    },
+    "result": "",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 0
+   },
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "src/missing_3.py"
+    },
+    "result": "",
+    "error": "File not found: src/missing_3.py",
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 0
+   },
+   {
+    "id": "",
+    "name": "read_file",
+    "arguments": {
+     "path": "src/util.py",
+     "limit": 14
+    },
+    "result": "1\tdef helper(x):\n2\t    return x + 1\n",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 36
+   },
+   {
+    "id": "",
+    "name": "list_dir",
+    "arguments": {
+     "path": "docs"
+    },
+    "result": "guide.md",
+    "error": null,
+    "cached": false,
+    "duplicate": false,
+    "bytes_out": 8
+   }
+  ]
+ }
+}
