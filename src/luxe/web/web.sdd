@@ -52,9 +52,15 @@ reintroduce any of them.
   userinfo, IPv6 zone ids) are refused, not interpreted
 - Guard the browser per REQUEST, not per navigation: every context comes
   from `browser.launch_guarded` — service workers blocked, `EgressGuard` on
-  `route("**/*")` (allowed requests fetched with `max_redirects=0` so each
-  redirect hop is routed again) and on `route_web_socket`, and any response
-  from non-public space is a hard stop. Chromium still does its own DNS, so
+  `route("**/*")` and on `route_web_socket`, and any response from
+  non-public space is a hard stop. Allowed requests are fetched with
+  `max_redirects=0` and EVERY 3xx `Location` is checked in the handler
+  before anything follows it (refused ⇒ abort). Handing the 3xx back is
+  safe only for subresources: Chromium follows a fulfilled NAVIGATION 3xx
+  without routing the next hop (live-verified, Playwright 1.62 — the
+  private target received a real GET), so a navigation hop is answered
+  with a client-side redirect page, which starts a new routed navigation.
+  `tests/test_web_browser_live.py` pins zero hits on a private server. Chromium still does its own DNS, so
   the browser path cannot pin; that residual is why `render=true` is opt-in
 - Bound every request twice: a per-read timeout AND a total-wall deadline.
   httpx timeouts are per-read, so a trickling response outlives any of them
