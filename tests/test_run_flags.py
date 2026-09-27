@@ -252,6 +252,37 @@ def test_band_response_empty_string_is_not_the_default():
                              ).early_bail_band_response == ""
 
 
+# --- early_bail mode: moved out of EarlyBailGuard's per-step env reads -------
+
+def test_early_bail_mode_defaults_to_default():
+    assert RunFlags.from_env({}).early_bail_mode == "default"
+
+
+@pytest.mark.parametrize("value", [
+    "default", "no_abstain", "soft_anchor", "commit_imperative",
+    "breadth_probe", "nonsense", "",
+])
+def test_early_bail_mode_passes_through_verbatim(value):
+    """Same `os.environ.get("LUXE_EARLY_BAIL_MODE", "default")` the guard
+    used to call every step: unvalidated (an unknown value selects the
+    default message in the guard and is reported verbatim as
+    `configured_mode`), and exported-but-empty stays ""."""
+    assert RunFlags.from_env(
+        {"LUXE_EARLY_BAIL_MODE": value}).early_bail_mode == value
+
+
+def test_early_bail_guard_no_longer_reads_the_environment():
+    """EarlyBailGuard takes the mode as a parameter; the only env read left
+    in guardrails is LUXE_EARLY_BAIL_TRAJECTORY_SHAPE (its own contract)."""
+    import inspect
+
+    from luxe.agents import guardrails
+
+    src = inspect.getsource(guardrails)
+    assert "LUXE_EARLY_BAIL_MODE\")" not in src
+    assert 'environ.get("LUXE_EARLY_BAIL_MODE"' not in src
+
+
 # --- the loop actually uses it ---------------------------------------------
 
 def test_run_agent_reads_its_switches_through_run_flags(monkeypatch):

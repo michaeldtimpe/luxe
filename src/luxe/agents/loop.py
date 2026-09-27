@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os as _os_for_logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -15,7 +16,6 @@ from typing import Any, Callable
 
 from luxe.agents.cohort_priors import load_prior_from_env
 from luxe.agents.convergence import (
-    _INTENSITY_NEUTRAL,
     apply_slew_rate,
     bias_to_modulation,
     compute_convergence_score,
@@ -46,6 +46,9 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _ACTION_DENSITY_GATE_MIN_TURNS_AFTER_BAIL,
     _BREADTH_PROBE_ESCALATION_COUNT,
     _CONVERGENCE_HIGH_THRESHOLD,
+    _DEDUP_MESSAGE_TEMPLATE,
+    _SPEC_ZERO_CALLS_DECLINE_MESSAGE,
+    dedup_message,
     _CONVERGENCE_LOW_THRESHOLD,
     _EARLY_BAIL_MESSAGE,
     _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
@@ -71,6 +74,7 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _v1105_synthesis_looping_signature,
 )
 from luxe.agents.flags import RunFlags
+from luxe.agents.loopstate import TOOL_HISTORY_MAX, LoopState
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import (
@@ -236,7 +240,6 @@ _COMPACTION_RECOVERY_EVENT_BY_TOOL: dict[str, str] = {
 # Emit a progress line each time cumulative completion tokens crosses a
 # multiple of this threshold. Useful for spotting bailout vs full-engagement
 # patterns mid-run. Set to 0 to disable. Configurable via env.
-import os as _os_for_logging
 try:
     _TOKEN_LOG_INTERVAL = int(_os_for_logging.environ.get("LUXE_TOKEN_LOG_INTERVAL", "5000"))
 except ValueError:  # malformed degrades silently, like every other knob —
@@ -245,6 +248,23 @@ except ValueError:  # malformed degrades silently, like every other knob —
 
 def _call_key(name: str, args: dict[str, Any]) -> str:
     return f"{name}:{json.dumps(args, sort_keys=True)}"
+
+
+def _event_emitter(run_id: str | None, phase: str,
+                   enabled: bool) -> Callable[..., None]:
+    """The one writer of a run's events.jsonl records.
+
+    `emit(kind, **fields)` is exactly the `if log_calls: append_event(run_id,
+    kind, phase=phase, **fields)` block it replaced, so every record keeps its
+    field names AND order (`phase` first, then the fields as passed) —
+    `scripts/toolcall_taxonomy.py` and `agents/outcomes.py` parse them.
+    `append_event` is resolved from this module at call time, so tests that
+    monkeypatch `luxe.agents.loop.append_event` still intercept every record.
+    """
+    def emit(kind: str, **fields: Any) -> None:
+        if enabled:
+            append_event(run_id, kind, phase=phase, **fields)
+    return emit
 
 
 def run_agent(
@@ -326,24 +346,28 @@ def run_agent(
     # the footgun the v1.10 audit caught. Opt out via LUXE_SUPPRESS_TOOL_LOG=1
     # (ablation parity for legacy callers).
     log_calls = bool(run_id) and not flags.suppress_tool_log
-
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": task_prompt},
-    ]
+    # Every events.jsonl record this run writes goes through `emit`, which
+    # owns the `log_calls` gate and the leading `phase=` field.
+    emit = _event_emitter(run_id, phase, log_calls)
 
     openai_tools = [td.to_openai() for td in tool_defs] if tool_defs else None
     tool_def_map = {td.name: td for td in tool_defs}
     known_names = set(tool_def_map.keys())
 
-    seen_calls: set[str] = set()
-    consecutive_repeat_steps = 0
-    next_token_log_threshold = _TOKEN_LOG_INTERVAL  # 0 = disabled
-    write_pressure_enabled = flags.write_pressure
-    write_pressure_fired = False
-    early_bail_enabled = flags.early_bail
-    early_bail_fired = False
-    early_bail_step: int | None = None  # v1.9: needed by post-bail rescue gate
+    # All mutable loop state (agents/loopstate.py). Field-by-field the same
+    # names and initial values the bare locals had.
+    st = LoopState(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": task_prompt},
+        ],
+        next_token_log_threshold=_TOKEN_LOG_INTERVAL,  # 0 = disabled
+        write_pressure_enabled=flags.write_pressure,
+        early_bail_enabled=flags.early_bail,
+        action_density_gate_enabled=flags.action_density_gate,
+        convergence_gate_enabled=flags.convergence_gate,
+    )
+
     # Refined port (2026-05-26 edit-quality investigation, project_track0_*) —
     # when LUXE_EARLY_BAIL_COMMIT_ONLY=1 AND mode=soft_anchor, suppress the
     # mid/low-convergence variants (breadth_probe, soft_anchor) and let only
@@ -355,56 +379,32 @@ def run_agent(
     # keeping the high-convergence imperative recovers the watchdog cleanly.
     # Default OFF (byte-identical with baseline).
     early_bail_commit_only = flags.early_bail_commit_only
-    # v1.9 — LUXE_ACTION_DENSITY_GATE (staged escalation second-stage rescue
-    # after early_bail stalls). See _ACTION_DENSITY_GATE_* constants above.
-    action_density_gate_enabled = flags.action_density_gate
-    action_density_gate_fired = False
-    # v1.10 — conditional intervention stacking via convergence score.
-    # When enabled:
-    #   - early_bail SUPPRESSED if score < _CONVERGENCE_LOW_THRESHOLD
-    #     (diffuse-recon; commitment pressure hurts exploratory recovery)
-    #   - early_bail MESSAGE swaps to commit_imperative when score >= HIGH
-    #     and the configured mode is "soft_anchor" (the dynamic variant)
-    #   - action_density_gate SUPPRESSED if score >= _CONVERGENCE_HIGH
-    #     (model has converged on its own; rescue would interrupt)
-    # Off by default; adapter wires it on for SWE-bench. Falls back to
-    # v1.9 semantics (no convergence-based gating) when disabled.
-    convergence_gate_enabled = flags.convergence_gate
+    # LUXE_EARLY_BAIL_MODE (default/no_abstain/soft_anchor/...), read once
+    # with the other switches instead of by EarlyBailGuard on every step.
+    early_bail_mode = flags.early_bail_mode
     post_write_idle_repeats = flags.post_write_idle_repeats
     truncated_turn_retry_enabled = flags.truncated_turn_retry
     truncated_turn_max_retries = flags.truncated_turn_max_retries
-    truncated_turn_retries_used = 0
     empty_turn_retry_enabled = flags.empty_turn_retry
-    empty_turn_retries_used = 0
-    # Server-truth context calibration (2026-08-11). `estimate_tokens` is
-    # chars//4 and reads ~1.9x low on code + JSON tool payloads, so every
-    # compaction threshold fired at roughly twice the context it named. Each
-    # response's `usage.prompt_tokens` corrects the next step's reading.
-    # 1.0 = uncalibrated, which is both the step-1 state and the ablation.
+    # Server-truth context calibration (2026-08-11); see LoopState.ctx_calibration.
     ctx_server_truth_enabled = flags.ctx_server_truth
-    ctx_calibration = 1.0
     # Damp that extrapolation when the prompt has outgrown the sample the
     # ratio was measured on (2026-08-24, OPT-IN, default OFF). The ratio
     # describes the PREVIOUS request; at step 1 that request is system prompt
     # + tool JSON (observed 1.79-2.64x) and the next one can be 96% prose
     # (1.21-1.27x in the same sessions), which is how a request at ~65% of a
     # 128K window reported 102.5% and was blamed on the endpoint. When the
-    # flag is unset `step_calibration is ctx_calibration` at every step and
+    # flag is unset `step_calibration is st.ctx_calibration` at every step and
     # nothing downstream can tell the difference.
-    # `est_at_calibration` is the size of the prompt the live ratio was
-    # measured on; 0 = never measured, which `damped_calibration` returns
-    # unchanged.
     ctx_cal_damp_enabled = flags.ctx_cal_damp
     # Sweepable for the promotion bench (LUXE_CTX_CAL_UNMEASURED_RATIO);
     # inert while the damping flag is off.
     ctx_cal_unmeasured_ratio = flags.ctx_cal_unmeasured_ratio
-    est_at_calibration = 0
     # Bound ONE tool result at insertion (2026-08-24, OPT-IN, default OFF).
     # See luxe.context.clamp_tool_result for why this is not a TieredCompact
     # change. `tool_result_clamp_chars` returning 0 means "no bound", so the
     # disabled path never even computes a limit.
     tool_result_clamp_enabled = flags.tool_result_clamp
-    tool_results_clamped = 0
     # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
     # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
     # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
@@ -426,12 +426,6 @@ def run_agent(
             phase_thresholds=_tc_phase_thresholds,
         ) if tiered_compact_enabled else None
     )
-    compaction_tool_results_dropped_total = 0
-    #: Phases that fired and changed nothing (2026-08-24, telemetry only).
-    compaction_ineffective_fires = 0
-    compaction_total_tokens_dropped = 0
-    compaction_max_phase_this_run = 0
-    compaction_phase_at_first_write: int | None = None
 
     # v1.11 Phase 1 — adaptive policy substrate. Computation + observability
     # ONLY in Phase 1; modulation does NOT yet influence intervention
@@ -446,32 +440,14 @@ def run_agent(
     # v1.11 Phase 3a — slew-rate limit; agents.sdd-pinned default 0.3.
     # Bounds per-step intensity-modifier change. Override for ablation.
     adaptive_max_delta = flags.adaptive_max_delta
-    # Modulation state per intervention kind; starts neutral (1.0 = no change).
-    # Updated each step (slew-rate-limited) when adaptive_policy_enabled.
-    # v1.11 status: ALL THREE modulations are computed + emitted for
-    # observability but NONE acts on dispatch. The Phase B soft_anchor collapse
-    # promotion was reverted (net-negative at n=75 — premature-commitment tier
-    # demotion). write_pressure/early_bail bias was retired in Phase A
-    # (no_write non-selective). soft_anchor bias is still computed (shows where a
-    # future, more-specific stall signal would fire) but no consumer remains.
-    intervention_modulation: dict[str, float] = {
-        "write_pressure": _INTENSITY_NEUTRAL,
-        "early_bail": _INTENSITY_NEUTRAL,
-        "soft_anchor": _INTENSITY_NEUTRAL,
-    }
-    # Bounded per-step score log; owned by loop.py per the agents.sdd
-    # composition boundary (convergence.py is the sole consumer, never
-    # mutates it).
-    score_log: list[float] = []
     # v1.11 Phase 2 — cross-cycle prior (log-only this cycle). Read once
     # at run start. Priors do NOT influence intervention intensity in
     # v1.11 per agents.sdd ("priors-log-only" invariant); deferred to
     # v1.11.1+. Loader is null-safe — missing/corrupt input returns None.
     cohort_prior = load_prior_from_env()
-    if cohort_prior is not None and log_calls:
-        append_event(
-            run_id, "prior_loaded",
-            phase=phase,
+    if cohort_prior is not None:
+        emit(
+            "prior_loaded",
             instance_id=cohort_prior.get("instance_id"),
             verdict=cohort_prior.get("verdict"),
             tiers_a=cohort_prior.get("tiers_a"),
@@ -489,47 +465,7 @@ def run_agent(
     # subsequent events to avoid the v1.10.1 wasted-runway shape that
     # broke matplotlib-14623.
     _band_response = flags.early_bail_band_response
-    suppression_count_in_trajectory = 0
-    breadth_probe_fire_count = 0
-    # v1.9 — convergence proxy. Track read_file call signatures so the gate
-    # can suppress itself when the model has revisited the same file (strong
-    # trajectories rerun reads ~3× more often than empties per the v18
-    # distribution; that's a "found my target" signal).
-    read_keys_seen: set[str] = set()
-    same_file_read_twice_step: int | None = None
-    # v1.9 — habituation telemetry. Records the most-recent intervention fire
-    # so the next step's action_density_sample can report whether the
-    # intervention shifted behavior (tool call vs another prose-only turn).
-    last_intervention_step: int | None = None
-    last_intervention_kind: str | None = None
-    # v1.10.1 — habituation clean-exit predicate state. Set tracks DISTINCT
-    # intervention kinds fired this run (not count of fires). When ≥3
-    # distinct kinds have fired AND first_write_step_after_intervention is
-    # still None AND step ≥ _HABITUATION_EXIT_MIN_STEP, exit cleanly instead
-    # of burning the remaining max_steps budget. Reads from existing
-    # post-intervention telemetry; no new instrumentation required.
-    intervention_kinds_fired: set[str] = set()
-    # v1.10 — convergence-score telemetry. tool_history is a bounded list of
-    # (name, path) entries for the convergence score (see
-    # luxe.agents.convergence). post-intervention behavior signals capture
-    # whether the model engaged after a fire (lag-to-write + sustained-write
-    # signals). All observability — no gating on these yet (Item 2 wires
-    # gating; Item 1 establishes the substrate).
-    TOOL_HISTORY_MAX = 20
-    tool_history: list[dict[str, Any]] = []
-    first_write_step_after_intervention: int | None = None
-    post_intervention_consecutive_writes = 0
-    post_intervention_write_burst_max = 0
-    prev_completion_tokens = 0
-    prev_tool_calls_total_at_sample = 0  # v1.9 — for next_action_was_tool_call
-    writes_seen = 0
-    post_write_idle_tools = 0
 
-    # SpecDD Lever 1 mid-loop state (v1.7). actual_tool_calls accumulates
-    # (name, args) for every dispatched call so the spec validator sees the
-    # same shape the BFCL adapter does. spec_violations_reprompted tracks
-    # which requirement ids have already triggered a reprompt so each fires
-    # at most once.
     spec_has_zero_calls = (
         spec is not None
         and any(r.kind == "expects_zero_calls" for r in spec.requirements)
@@ -542,12 +478,10 @@ def run_agent(
         # expectation. v1.10 convergence_gate has no effect when the
         # gated interventions are themselves disabled, but we mirror the
         # off-switch for clarity.
-        write_pressure_enabled = False
-        early_bail_enabled = False
-        action_density_gate_enabled = False
-        convergence_gate_enabled = False
-    actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
-    spec_violations_reprompted: set[str] = set()
+        st.write_pressure_enabled = False
+        st.early_bail_enabled = False
+        st.action_density_gate_enabled = False
+        st.convergence_gate_enabled = False
     # The previous iteration's response. Bound here (not just inside the loop)
     # because the pre-step clean-exit guards below read it before this step's
     # backend.chat runs; on step 0 there is nothing to read and `""` is right.
@@ -566,20 +500,20 @@ def run_agent(
         # on ONE prompt; apply only the share of it that prompt still covers.
         # `step_calibration is ctx_calibration` whenever the flag is off, so
         # `effective_ctx`, the debug line, and every consumer are unchanged.
-        step_calibration = ctx_calibration
-        if ctx_cal_damp_enabled and ctx_calibration != 1.0:
-            _est_now = estimate_messages_tokens(messages)
+        step_calibration = st.ctx_calibration
+        if ctx_cal_damp_enabled and st.ctx_calibration != 1.0:
+            _est_now = estimate_messages_tokens(st.messages)
             step_calibration = damped_calibration(
-                ctx_calibration, est_at_calibration, _est_now,
+                st.ctx_calibration, st.est_at_calibration, _est_now,
                 unmeasured=ctx_cal_unmeasured_ratio)
-            if step_calibration != ctx_calibration:
+            if step_calibration != st.ctx_calibration:
                 logger.debug("ctx calibration damped %.2fx -> %.2fx "
                              "(measured at est=%d, prompt now est=%d)",
-                             ctx_calibration, step_calibration,
-                             est_at_calibration, _est_now)
+                             st.ctx_calibration, step_calibration,
+                             st.est_at_calibration, _est_now)
         effective_ctx = calibrated_ctx_limit(role_cfg.num_ctx, step_calibration)
 
-        pressure = context_pressure(messages, effective_ctx)
+        pressure = context_pressure(st.messages, effective_ctx)
         result.peak_context_pressure = max(result.peak_context_pressure, pressure)
         result.final_context_pressure = pressure  # instantaneous; matches token-progress
         # Per-step ctx forensics. `est` is the raw chars/4 reading, `cal` the
@@ -589,9 +523,9 @@ def run_agent(
         logger.debug("step=%d ctx_pressure=%.1f%% (est=%.1f%% cal=%.2fx) "
                      "num_ctx=%d effective_ctx=%d msgs=%d",
                      step + 1, pressure * 100,
-                     context_pressure(messages, role_cfg.num_ctx) * 100,
+                     context_pressure(st.messages, role_cfg.num_ctx) * 100,
                      step_calibration, role_cfg.num_ctx, effective_ctx,
-                     len(messages))
+                     len(st.messages))
         # chat-only live ctx% (one source of truth, C2)
         _display(on_progress, pressure, "on_progress")
 
@@ -602,41 +536,40 @@ def run_agent(
         # evaluate every step. The score is the v1.10 replacement for the
         # v1.9 binary `same_file_read_twice_step` skip — see
         # luxe.agents.convergence module docstring for the design rationale.
-        convergence_score = compute_convergence_score(tool_history)
+        convergence_score = compute_convergence_score(st.tool_history)
         # v1.11 Phase 1 — append to score_log + compute adaptive state.
         # Guarded by LUXE_ADAPTIVE_POLICY to preserve disable-equivalence.
         # Phase 1 behavior: emit observability event only; state does NOT
         # influence intervention dispatch this phase.
         if adaptive_policy_enabled:
-            score_log.append(convergence_score)
+            st.score_log.append(convergence_score)
             # Bounded growth: cap at 64 entries (covers max_steps for current
             # configs with headroom). Drop oldest when over.
-            if len(score_log) > 64:
-                score_log[:] = score_log[-64:]
+            if len(st.score_log) > 64:
+                st.score_log[:] = st.score_log[-64:]
             adaptive_state = compute_within_run_state(
-                score_log, tool_history, step,
+                st.score_log, st.tool_history, step,
                 no_write_enabled=adaptive_no_write_enabled,
                 score_trend_enabled=adaptive_score_trend_enabled,
             )
             # v1.11 Phase 3a — compute bias → target modulation → slew-rate-limited update.
             bias = compute_intervention_bias(adaptive_state)
-            for kind, prev_mod in list(intervention_modulation.items()):
+            for kind, prev_mod in list(st.intervention_modulation.items()):
                 target = bias_to_modulation(bias.get(kind, 0.0))
-                intervention_modulation[kind] = apply_slew_rate(
+                st.intervention_modulation[kind] = apply_slew_rate(
                     prev_mod, target, max_delta=adaptive_max_delta,
                 )
-            if log_calls:
-                append_event(
-                    run_id, "adaptive_state",
-                    phase=phase, step=step,
-                    consecutive_no_write=adaptive_state.consecutive_no_write,
-                    score_trend=adaptive_state.score_trend,
-                    score_log_len=adaptive_state.score_log_len,
-                    convergence_score=convergence_score,
-                    modulation_write_pressure=intervention_modulation["write_pressure"],
-                    modulation_early_bail=intervention_modulation["early_bail"],
-                    modulation_soft_anchor=intervention_modulation["soft_anchor"],
-                )
+            emit(
+                "adaptive_state",
+                step=step,
+                consecutive_no_write=adaptive_state.consecutive_no_write,
+                score_trend=adaptive_state.score_trend,
+                score_log_len=adaptive_state.score_log_len,
+                convergence_score=convergence_score,
+                modulation_write_pressure=st.intervention_modulation["write_pressure"],
+                modulation_early_bail=st.intervention_modulation["early_bail"],
+                modulation_soft_anchor=st.intervention_modulation["soft_anchor"],
+            )
 
         # Mid-loop write-pressure injection (Mode B fix). Fires once per
         # run when the agent has done substantial reading + generation
@@ -650,33 +583,32 @@ def run_agent(
         # Loop owns state mutation (the *_fired flag, intervention tracking
         # vars, event emission) so behavior is unchanged on the wire.
         wp_decision = WritePressureGuard.check(
-            write_pressure_enabled=write_pressure_enabled,
-            write_pressure_fired=write_pressure_fired,
-            writes_seen=writes_seen,
+            write_pressure_enabled=st.write_pressure_enabled,
+            write_pressure_fired=st.write_pressure_fired,
+            writes_seen=st.writes_seen,
             step=step,
             tool_calls_total=result.tool_calls_total,
             completion_tokens=result.completion_tokens,
             adaptive_policy_enabled=adaptive_policy_enabled,
-            intervention_modulation_write_pressure=intervention_modulation["write_pressure"],
+            intervention_modulation_write_pressure=st.intervention_modulation["write_pressure"],
         )
         if wp_decision is not None:
-            messages.append({
+            st.messages.append({
                 "role": "user",
                 "content": wp_decision.message,
                 "_luxe_nudge": True,
                 "_luxe_nudge_type": WritePressureGuard.nudge_type,
             })
-            write_pressure_fired = True
-            last_intervention_step = step
-            last_intervention_kind = "write_pressure"
-            intervention_kinds_fired.add("write_pressure")
-            if log_calls:
-                append_event(
-                    run_id, "write_pressure_fired",
-                    phase=phase, step=step,
-                    tool_calls_total=result.tool_calls_total,
-                    completion_tokens=result.completion_tokens,
-                )
+            st.write_pressure_fired = True
+            st.last_intervention_step = step
+            st.last_intervention_kind = "write_pressure"
+            st.intervention_kinds_fired.add("write_pressure")
+            emit(
+                "write_pressure_fired",
+                step=step,
+                tool_calls_total=result.tool_calls_total,
+                completion_tokens=result.completion_tokens,
+            )
 
         # Early-bail intervention (v1.7 priority #1). Same checkpoint as
         # write_pressure but fires earlier — at step 4 with 4+ non-write
@@ -687,32 +619,33 @@ def run_agent(
         # compatible with WRITE_PRESSURE — both can fire in the same run
         # since they target different trajectory shapes.
         eb_outcome = EarlyBailGuard.evaluate(
-            early_bail_enabled=early_bail_enabled,
-            early_bail_fired=early_bail_fired,
-            writes_seen=writes_seen,
+            early_bail_enabled=st.early_bail_enabled,
+            early_bail_fired=st.early_bail_fired,
+            writes_seen=st.writes_seen,
             step=step,
             tool_calls_total=result.tool_calls_total,
             early_bail_message=early_bail_message,
             early_bail_commit_only=early_bail_commit_only,
-            convergence_gate_enabled=convergence_gate_enabled,
+            convergence_gate_enabled=st.convergence_gate_enabled,
             convergence_score=convergence_score,
             band_response=_band_response,
-            suppression_count_in_trajectory=suppression_count_in_trajectory,
-            tool_history=tool_history,
-            recent_path_diversity=recent_path_diversity(tool_history),
-            score_log=score_log,
-            early_bail_step=early_bail_step,
+            suppression_count_in_trajectory=st.suppression_count_in_trajectory,
+            tool_history=st.tool_history,
+            recent_path_diversity=recent_path_diversity(st.tool_history),
+            score_log=st.score_log,
+            early_bail_step=st.early_bail_step,
+            early_bail_mode=early_bail_mode,
         )
         if eb_outcome is not None:
             # Apply state mutations the loop owns. The guard tells us how
             # much to change suppression_count / breadth_probe_fire_count,
             # whether to set early_bail_fired, and which intervention-kind
             # to record on the trackers.
-            suppression_count_in_trajectory += eb_outcome.suppression_count_delta
-            breadth_probe_fire_count += eb_outcome.breadth_probe_fire_delta
+            st.suppression_count_in_trajectory += eb_outcome.suppression_count_delta
+            st.breadth_probe_fire_count += eb_outcome.breadth_probe_fire_delta
             if eb_outcome.sets_early_bail_fired:
-                early_bail_fired = True
-                early_bail_step = step
+                st.early_bail_fired = True
+                st.early_bail_step = step
             if eb_outcome.decision is not None:
                 msg_dict: dict[str, Any] = {
                     "role": "user",
@@ -721,35 +654,30 @@ def run_agent(
                 if eb_outcome.nudge_type is not None:
                     msg_dict["_luxe_nudge"] = True
                     msg_dict["_luxe_nudge_type"] = eb_outcome.nudge_type
-                messages.append(msg_dict)
+                st.messages.append(msg_dict)
             if eb_outcome.last_intervention_kind is not None:
-                last_intervention_step = step
-                last_intervention_kind = eb_outcome.last_intervention_kind
-                intervention_kinds_fired.add(eb_outcome.last_intervention_kind)
-            if log_calls:
-                if eb_outcome.suppress_event is not None:
-                    ev_name, ev_payload = eb_outcome.suppress_event
+                st.last_intervention_step = step
+                st.last_intervention_kind = eb_outcome.last_intervention_kind
+                st.intervention_kinds_fired.add(eb_outcome.last_intervention_kind)
+            # Suppression event first, then the fire event — the order the
+            # records have always been written in.
+            for event in (eb_outcome.suppress_event, eb_outcome.fire_event):
+                if event is not None:
+                    ev_name, ev_payload = event
                     # Loop owns the completion_tokens counter; fill it for
                     # events that carry it (commit_only suppression).
                     payload = {
                         k: (result.completion_tokens if k == "completion_tokens" and v is None else v)
                         for k, v in ev_payload.items()
                     }
-                    append_event(run_id, ev_name, phase=phase, step=step, **payload)
-                if eb_outcome.fire_event is not None:
-                    ev_name, ev_payload = eb_outcome.fire_event
-                    payload = {
-                        k: (result.completion_tokens if k == "completion_tokens" and v is None else v)
-                        for k, v in ev_payload.items()
-                    }
-                    append_event(run_id, ev_name, phase=phase, step=step, **payload)
+                    emit(ev_name, step=step, **payload)
 
         # Per-step deltas (v1.8 Track 1 plumbing). Used by
         # action_density_gate and the action_density_sample observability
         # event. completion_delta_last_step is the SIZE of the previous
         # step's response — we evaluate at the start of step N to catch a
         # step N-1 burst, leaving budget for the intervention to land.
-        completion_delta_last_step = result.completion_tokens - prev_completion_tokens
+        completion_delta_last_step = result.completion_tokens - st.prev_completion_tokens
         action_density = (
             (result.tool_calls_total / max(1, result.completion_tokens))
             if result.completion_tokens > 0 else 0.0
@@ -772,63 +700,64 @@ def run_agent(
         # own. Keep the v1.9 same_file_read_twice_step as a fallback skip
         # condition when the convergence gate is OFF (preserves v1.9
         # ablation semantics).
-        v110_suppress = (
-            convergence_gate_enabled
-            and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD
-        )
-        v19_suppress = (
-            not convergence_gate_enabled
-            and same_file_read_twice_step is not None
-            and same_file_read_twice_step <= step
+        v110_suppress, v19_suppress = ActionDensityGateGuard.convergence_suppression(
+            convergence_gate_enabled=st.convergence_gate_enabled,
+            convergence_score=convergence_score,
+            same_file_read_twice_step=st.same_file_read_twice_step,
+            step=step,
         )
         adg_decision = ActionDensityGateGuard.check(
-            action_density_gate_enabled=action_density_gate_enabled,
-            action_density_gate_fired=action_density_gate_fired,
-            writes_seen=writes_seen,
+            action_density_gate_enabled=st.action_density_gate_enabled,
+            action_density_gate_fired=st.action_density_gate_fired,
+            writes_seen=st.writes_seen,
             step=step,
             completion_tokens=result.completion_tokens,
             tool_calls_total=result.tool_calls_total,
             v110_suppress=v110_suppress,
             v19_suppress=v19_suppress,
-            early_bail_step=early_bail_step,
+            early_bail_step=st.early_bail_step,
         )
         if adg_decision is not None:
-            messages.append({
+            st.messages.append({
                 "role": "user",
                 "content": adg_decision.message,
                 "_luxe_nudge": True,
                 "_luxe_nudge_type": ActionDensityGateGuard.nudge_type,
             })
-            action_density_gate_fired = True
-            last_intervention_step = step
-            last_intervention_kind = "action_density_gate"
-            intervention_kinds_fired.add("action_density_gate")
-            if log_calls:
-                append_event(
-                    run_id, "action_density_gate_fired",
-                    phase=phase, step=step,
-                    fire_mode=adg_decision.metadata["fire_mode"],
-                    turns_since_bail=adg_decision.metadata["turns_since_bail"],
-                    tool_calls_total=result.tool_calls_total,
-                    completion_tokens=result.completion_tokens,
-                    action_density=action_density,
-                    same_file_read_twice_step=same_file_read_twice_step,
-                    convergence_score=convergence_score,
-                )
-        elif (action_density_gate_enabled and not action_density_gate_fired
-              and v110_suppress and log_calls):
-            # Observability — record the v1.10 suppression once when it
+            st.action_density_gate_fired = True
+            st.last_intervention_step = step
+            st.last_intervention_kind = "action_density_gate"
+            st.intervention_kinds_fired.add("action_density_gate")
+            emit(
+                "action_density_gate_fired",
+                step=step,
+                fire_mode=adg_decision.metadata["fire_mode"],
+                turns_since_bail=adg_decision.metadata["turns_since_bail"],
+                tool_calls_total=result.tool_calls_total,
+                completion_tokens=result.completion_tokens,
+                action_density=action_density,
+                same_file_read_twice_step=st.same_file_read_twice_step,
+                convergence_score=convergence_score,
+            )
+        else:
+            # Observability — record the v1.10 suppression when the gate
             # would otherwise have fired, so post-hoc analysis can tell
             # convergence-suppression from threshold-miss.
-            if (writes_seen == 0
-                    and step >= _ACTION_DENSITY_GATE_MIN_STEP
-                    and result.completion_tokens >= _ACTION_DENSITY_GATE_MIN_TOKENS
-                    and result.tool_calls_total <= _ACTION_DENSITY_GATE_MAX_TOOLS):
-                append_event(
-                    run_id, "action_density_gate_suppressed_converged",
-                    phase=phase, step=step,
-                    convergence_score=convergence_score,
-                    threshold=_CONVERGENCE_HIGH_THRESHOLD,
+            adg_suppressed = ActionDensityGateGuard.suppressed_converged(
+                action_density_gate_enabled=st.action_density_gate_enabled,
+                action_density_gate_fired=st.action_density_gate_fired,
+                v110_suppress=v110_suppress,
+                writes_seen=st.writes_seen,
+                step=step,
+                completion_tokens=result.completion_tokens,
+                tool_calls_total=result.tool_calls_total,
+                convergence_score=convergence_score,
+            )
+            if adg_suppressed is not None:
+                emit(
+                    "action_density_gate_suppressed_converged",
+                    step=step,
+                    **adg_suppressed,
                 )
 
         # v1.10.2 — post-exploratory escalation REMOVED before ship.
@@ -853,37 +782,36 @@ def run_agent(
         # all three distinct interventions by step 15, zero writes through
         # max_steps. `resp` is from the prior iteration's backend.chat call.
         hab_exit = HabituationExitGuard.should_exit(
-            intervention_kinds_fired=intervention_kinds_fired,
-            first_write_step_after_intervention=first_write_step_after_intervention,
+            intervention_kinds_fired=st.intervention_kinds_fired,
+            first_write_step_after_intervention=st.first_write_step_after_intervention,
             step=step,
-            last_intervention_step=last_intervention_step,
+            last_intervention_step=st.last_intervention_step,
             tool_calls_total=result.tool_calls_total,
             completion_tokens=result.completion_tokens,
         )
         if hab_exit is not None:
             result.final_text = (resp.text if resp else "") or ""
-            if log_calls:
-                append_event(
-                    run_id, "habituation_exit",
-                    phase=phase, step=step,
-                    **hab_exit,
-                )
+            emit(
+                "habituation_exit",
+                step=step,
+                **hab_exit,
+            )
             break
 
         # Observability: emit action_density per step regardless of gating.
         # Becomes the dataset for adaptive threshold tuning. Cheap.
-        if log_calls and step > 0:
+        if step > 0:
             # v1.9 habituation telemetry: when an intervention has fired,
             # report (a) how many steps since it fired, (b) which one, and
             # (c) whether the immediately-following step produced any tool
             # call. Lets us post-hoc measure whether text-level interventions
             # remain causally active or accumulate as ignorable background.
             habituation: dict[str, Any] = {}
-            if last_intervention_step is not None and step > last_intervention_step:
-                step_had_call = result.tool_calls_total > prev_tool_calls_total_at_sample
+            if st.last_intervention_step is not None and step > st.last_intervention_step:
+                step_had_call = result.tool_calls_total > st.prev_tool_calls_total_at_sample
                 habituation = {
-                    "since_intervention_step": step - last_intervention_step,
-                    "since_intervention_kind": last_intervention_kind,
+                    "since_intervention_step": step - st.last_intervention_step,
+                    "since_intervention_kind": st.last_intervention_kind,
                     "next_action_was_tool_call": step_had_call,
                     # v1.10 — post-intervention behavior signals. None
                     # until the first post-intervention write fires; once
@@ -893,35 +821,35 @@ def run_agent(
                     # writes — captures "stuck on cleanup" vs "real
                     # engagement" once the model commits.
                     "time_to_first_write_after_intervention":
-                        first_write_step_after_intervention,
-                    "write_burst_persistence": post_intervention_write_burst_max,
+                        st.first_write_step_after_intervention,
+                    "write_burst_persistence": st.post_intervention_write_burst_max,
                 }
             # v1.10 — convergence_score is already computed at top of
             # step (used by early_bail + action_density_gate predicates);
             # just emit it on the sample event for observability.
-            append_event(
-                run_id, "action_density_sample",
-                phase=phase, step=step,
+            emit(
+                "action_density_sample",
+                step=step,
                 completion_delta=completion_delta_last_step,
                 action_density=action_density,
-                writes_seen=writes_seen,
+                writes_seen=st.writes_seen,
                 tool_calls_total=result.tool_calls_total,
                 convergence_score=convergence_score,
                 **habituation,
             )
-        prev_tool_calls_total_at_sample = result.tool_calls_total
+        st.prev_tool_calls_total_at_sample = result.tool_calls_total
         # Capture cumulative tokens BEFORE this step's backend.chat so the
         # next iteration's delta correctly measures THIS step's response.
-        prev_completion_tokens = result.completion_tokens
+        st.prev_completion_tokens = result.completion_tokens
 
         if tiered_compact_enabled and _tiered_compactor is not None:
-            cr = _tiered_compactor.compact(messages, effective_ctx)
-            messages = cr.messages
+            cr = _tiered_compactor.compact(st.messages, effective_ctx)
+            st.messages = cr.messages
             if cr.phase_reached > 0:
-                compaction_tool_results_dropped_total += cr.tool_results_dropped
-                compaction_total_tokens_dropped += (cr.tokens_before - cr.tokens_after)
-                if cr.phase_reached > compaction_max_phase_this_run:
-                    compaction_max_phase_this_run = cr.phase_reached
+                st.compaction_tool_results_dropped_total += cr.tool_results_dropped
+                st.compaction_total_tokens_dropped += (cr.tokens_before - cr.tokens_after)
+                if cr.phase_reached > st.compaction_max_phase_this_run:
+                    st.compaction_max_phase_this_run = cr.phase_reached
                 # 2026-08-24 — ADDITIVE telemetry, no flag, no behaviour
                 # change: a phase can fire and achieve nothing (phase 3 with
                 # tokens_before == tokens_after == 71616 and zero drops, when
@@ -933,29 +861,28 @@ def run_agent(
                 # benchmarks/maintain_suite/run.py, tests/) — the two new keys
                 # cannot break a field-shape assumption that does not exist.
                 if not cr.effective:
-                    compaction_ineffective_fires += 1
-                if log_calls:
-                    append_event(
-                        run_id, "compaction_phase_reached",
-                        phase=phase, step=step,
-                        phase_reached=cr.phase_reached,
-                        tokens_before=cr.tokens_before,
-                        tokens_after=cr.tokens_after,
-                        tool_results_dropped=cr.tool_results_dropped,
-                        effective=cr.effective,
-                        eligible_end=cr.eligible_end,
-                    )
+                    st.compaction_ineffective_fires += 1
+                emit(
+                    "compaction_phase_reached",
+                    step=step,
+                    phase_reached=cr.phase_reached,
+                    tokens_before=cr.tokens_before,
+                    tokens_after=cr.tokens_after,
+                    tool_results_dropped=cr.tool_results_dropped,
+                    effective=cr.effective,
+                    eligible_end=cr.eligible_end,
+                )
         else:
-            messages = elide_old_tool_results(messages, effective_ctx)
+            st.messages = elide_old_tool_results(st.messages, effective_ctx)
 
         # What we are about to send, measured the same way the calibration
         # divides it — AFTER compaction, so the ratio describes the request the
         # server actually answers.
-        est_sent = estimate_messages_tokens(messages)
+        est_sent = estimate_messages_tokens(st.messages)
 
         try:
             resp = backend.chat(
-                messages,
+                st.messages,
                 tools=openai_tools,
                 max_tokens=role_cfg.max_tokens_per_turn,
                 temperature=role_cfg.temperature,
@@ -988,21 +915,21 @@ def run_agent(
         # a missing/zero usage report.
         if ctx_server_truth_enabled:
             new_cal = calibration_ratio(resp.timing.prompt_tokens, est_sent)
-            if new_cal != ctx_calibration:
+            if new_cal != st.ctx_calibration:
                 logger.debug("ctx calibration %.2fx -> %.2fx "
-                             "(server=%d est=%d)", ctx_calibration, new_cal,
+                             "(server=%d est=%d)", st.ctx_calibration, new_cal,
                              resp.timing.prompt_tokens, est_sent)
-            ctx_calibration = new_cal
+            st.ctx_calibration = new_cal
             # The prompt this ratio describes. Only meaningful while the
             # ratio is; read solely by the opt-in damping above.
-            est_at_calibration = est_sent
+            st.est_at_calibration = est_sent
 
         # Token-interval progress logging — fires when cumulative completion
         # tokens crosses each LUXE_TOKEN_LOG_INTERVAL multiple. Lets us see
         # whether a model is steadily generating with tool calls (engaged)
         # vs bursting prose without tools (bailing).
-        if (next_token_log_threshold > 0
-                and result.completion_tokens >= next_token_log_threshold):
+        if (st.next_token_log_threshold > 0
+                and result.completion_tokens >= st.next_token_log_threshold):
             print(
                 f"    [token-progress] step={step+1} "
                 f"completion_tokens={result.completion_tokens} "
@@ -1011,8 +938,8 @@ def run_agent(
                 f"ctx_pressure={pressure:.0%}",
                 flush=True,
             )
-            while next_token_log_threshold <= result.completion_tokens:
-                next_token_log_threshold += _TOKEN_LOG_INTERVAL
+            while st.next_token_log_threshold <= result.completion_tokens:
+                st.next_token_log_threshold += _TOKEN_LOG_INTERVAL
 
         tool_calls = resp.tool_calls
         if not tool_calls and resp.text and tool_defs:
@@ -1023,13 +950,12 @@ def run_agent(
                 logger.warning(
                     "text-fallback dropped unknown tool call(s): %s",
                     [d[:80] for d in text_drops])
-                if log_calls:
-                    append_event(
-                        run_id, "textfallback_drop",
-                        phase=phase, step=step,
-                        names=[d[:80] for d in text_drops],
-                        recovered=bool(tool_calls),
-                    )
+                emit(
+                    "textfallback_drop",
+                    step=step,
+                    names=[d[:80] for d in text_drops],
+                    recovered=bool(tool_calls),
+                )
 
         if not tool_calls:
             # Truncated-turn gate (2026-08-10). A response cut off at
@@ -1042,38 +968,37 @@ def run_agent(
                 truncated_turn_retry_enabled=truncated_turn_retry_enabled,
                 finish_reason=getattr(resp, "finish_reason", "") or "",
                 has_tool_calls=bool(tool_calls),
-                retries_used=truncated_turn_retries_used,
+                retries_used=st.truncated_turn_retries_used,
                 max_retries=truncated_turn_max_retries,
             )
             if tt is not None:
                 # Record the cut-off text before the nudge so the transcript
                 # shows what the model was mid-way through saying.
                 if resp.text:
-                    messages.append({"role": "assistant", "content": resp.text})
-                messages.append({
+                    st.messages.append({"role": "assistant", "content": resp.text})
+                st.messages.append({
                     "role": "user",
                     "content": _TRUNCATED_TURN_MESSAGE,
                     "_luxe_nudge": True,
                     "_luxe_nudge_type": TruncatedTurnGuard.nudge_type,
                 })
-                truncated_turn_retries_used += 1
-                if log_calls:
-                    append_event(
-                        run_id, "truncated_turn_retry",
-                        phase=phase, step=step,
-                        retries_used=truncated_turn_retries_used,
-                        max_retries=truncated_turn_max_retries,
-                        completion_tokens=resp.timing.completion_tokens,
-                    )
+                st.truncated_turn_retries_used += 1
+                emit(
+                    "truncated_turn_retry",
+                    step=step,
+                    retries_used=st.truncated_turn_retries_used,
+                    max_retries=truncated_turn_max_retries,
+                    completion_tokens=resp.timing.completion_tokens,
+                )
                 logger.debug(
                     "truncated turn retry step=%d retries_used=%d max=%d "
                     "completion_tokens=%d",
-                    step, truncated_turn_retries_used,
+                    step, st.truncated_turn_retries_used,
                     truncated_turn_max_retries, resp.timing.completion_tokens)
                 _notice(
                     f"answer cut off at the {resp.timing.completion_tokens:,}-token "
                     f"cap with no tool call — retrying "
-                    f"({truncated_turn_retries_used}/{truncated_turn_max_retries}); "
+                    f"({st.truncated_turn_retries_used}/{truncated_turn_max_retries}); "
                     f"each retry costs another full generation"
                 )
                 continue
@@ -1090,30 +1015,29 @@ def run_agent(
                 text=resp.text or "",
                 has_tool_calls=bool(tool_calls),
                 finish_reason=getattr(resp, "finish_reason", "") or "",
-                retries_used=empty_turn_retries_used,
+                retries_used=st.empty_turn_retries_used,
             )
             if et is not None:
-                messages.append({
+                st.messages.append({
                     "role": "user",
                     "content": _EMPTY_TURN_MESSAGE,
                     "_luxe_nudge": True,
                     "_luxe_nudge_type": EmptyTurnGuard.nudge_type,
                 })
-                empty_turn_retries_used += 1
+                st.empty_turn_retries_used += 1
                 reasoning_chars = getattr(resp, "reasoning_chars", 0)
-                if log_calls:
-                    append_event(
-                        run_id, "empty_turn_retry",
-                        phase=phase, step=step,
-                        retries_used=empty_turn_retries_used,
-                        max_retries=et["max_retries"],
-                        finish_reason=et["finish_reason"],
-                        reasoning_chars=reasoning_chars,
-                    )
+                emit(
+                    "empty_turn_retry",
+                    step=step,
+                    retries_used=st.empty_turn_retries_used,
+                    max_retries=et["max_retries"],
+                    finish_reason=et["finish_reason"],
+                    reasoning_chars=reasoning_chars,
+                )
                 logger.debug(
                     "empty turn retry step=%d retries_used=%d "
                     "finish_reason=%s reasoning_chars=%d",
-                    step, empty_turn_retries_used, et["finish_reason"],
+                    step, st.empty_turn_retries_used, et["finish_reason"],
                     reasoning_chars)
                 # Say WHY when we can: "it thought and said nothing" is a very
                 # different report from "it returned nothing", and the
@@ -1132,28 +1056,27 @@ def run_agent(
             # the loop instead of breaking. Each requirement fires at most
             # once per run, so a stuck model can't ping-pong forever.
             if spec is not None and tool_defs:
-                vr = spec_validate(spec, "", "", tool_calls=actual_tool_calls)
+                vr = spec_validate(spec, "", "", tool_calls=st.actual_tool_calls)
                 continue_for_spec = False
                 for rr in vr.unsatisfied:
-                    if rr.requirement.id in spec_violations_reprompted:
+                    if rr.requirement.id in st.spec_violations_reprompted:
                         continue
                     if rr.requirement.kind != "min_tool_calls":
                         continue
-                    messages.append({"role": "user", "content": rr.detail})
-                    spec_violations_reprompted.add(rr.requirement.id)
+                    st.messages.append({"role": "user", "content": rr.detail})
+                    st.spec_violations_reprompted.add(rr.requirement.id)
                     continue_for_spec = True
-                    if log_calls:
-                        append_event(
-                            run_id, "spec_reprompt_fired",
-                            phase=phase, step=step,
-                            requirement_id=rr.requirement.id,
-                            requirement_kind=rr.requirement.kind,
-                        )
+                    emit(
+                        "spec_reprompt_fired",
+                        step=step,
+                        requirement_id=rr.requirement.id,
+                        requirement_kind=rr.requirement.kind,
+                    )
                 if continue_for_spec:
                     # Replay the assistant's final text so the conversation
                     # history records the would-be exit before the reprompt.
                     if resp.text:
-                        messages.append({"role": "assistant", "content": resp.text})
+                        st.messages.append({"role": "assistant", "content": resp.text})
                     continue
             # TELEMETRY ONLY — additive, ungated, never touches control flow or
             # `messages` (agents.sdd "Tool-call telemetry events"). A run that
@@ -1161,37 +1084,37 @@ def run_agent(
             # finished; without this the records cannot tell the two apart,
             # which is how the strict-flag fixture read as a clean completion
             # for six identical runs.
-            if log_calls and (getattr(resp, "finish_reason", "") or "") == "length":
-                append_event(
-                    run_id, "terminal_turn_truncated",
-                    phase=phase, step=step,
+            if (getattr(resp, "finish_reason", "") or "") == "length":
+                emit(
+                    "terminal_turn_truncated",
+                    step=step,
                     completion_tokens=resp.timing.completion_tokens,
                     final_text_chars=len(resp.text or ""),
                     retry_enabled=truncated_turn_retry_enabled,
-                    retries_used=truncated_turn_retries_used,
+                    retries_used=st.truncated_turn_retries_used,
                 )
             # Same reason, the other failure: a run that ends HERE with no text
             # produced no answer at all. Ungated telemetry — this is the only
             # record distinguishing "answered" from "said nothing", exactly as
             # `terminal_turn_truncated` is for "finished" vs "cut off".
-            if log_calls and not (resp.text or "").strip():
-                append_event(
-                    run_id, "terminal_turn_empty",
-                    phase=phase, step=step,
+            if not (resp.text or "").strip():
+                emit(
+                    "terminal_turn_empty",
+                    step=step,
                     finish_reason=getattr(resp, "finish_reason", "") or "",
                     reasoning_chars=getattr(resp, "reasoning_chars", 0),
                     completion_tokens=resp.timing.completion_tokens,
                     retry_enabled=empty_turn_retry_enabled,
-                    retries_used=empty_turn_retries_used,
+                    retries_used=st.empty_turn_retries_used,
                 )
             if (getattr(resp, "finish_reason", "") or "") == "length":
                 _notice(
                     f"answer cut off at the {resp.timing.completion_tokens:,}-token "
                     f"cap — ending the turn "
-                    + (f"({truncated_turn_retries_used} retr"
-                       + ("y" if truncated_turn_retries_used == 1 else "ies")
+                    + (f"({st.truncated_turn_retries_used} retr"
+                       + ("y" if st.truncated_turn_retries_used == 1 else "ies")
                        + " already used)"
-                       if truncated_turn_retries_used
+                       if st.truncated_turn_retries_used
                        else "without retrying")
                 )
             result.final_text = resp.text
@@ -1212,20 +1135,15 @@ def run_agent(
             # next turn doesn't see a dangling "I tried to call X" without
             # a corresponding tool result.
             assistant_text = resp.text or ""
-            messages.append({"role": "assistant", "content": assistant_text})
-            messages.append({"role": "user", "content": (
-                "Tool calls are not permitted for this request. The "
-                "available tools cannot answer the user's question. "
-                "Reply only in prose, briefly explaining why the request "
-                "is out of scope."
-            )})
-            if log_calls:
-                append_event(
-                    run_id, "spec_predispatch_blocked",
-                    phase=phase, step=step,
-                    blocked_tool_names=[tc.name for tc in tool_calls],
-                    blocked_count=len(tool_calls),
-                )
+            st.messages.append({"role": "assistant", "content": assistant_text})
+            st.messages.append({"role": "user",
+                                "content": _SPEC_ZERO_CALLS_DECLINE_MESSAGE})
+            emit(
+                "spec_predispatch_blocked",
+                step=step,
+                blocked_tool_names=[tc.name for tc in tool_calls],
+                blocked_count=len(tool_calls),
+            )
             # Skip the dispatch loop entirely. Tool calls are dropped on
             # the floor — they never enter actual_tool_calls, so the BFCL
             # grader sees zero calls. Continue to next step.
@@ -1251,7 +1169,7 @@ def run_agent(
                 }
                 for i, tc in enumerate(resp.tool_calls)
             ]
-        messages.append(assistant_msg)
+        st.messages.append(assistant_msg)
 
         step_had_repeat = False
         for tc in tool_calls:
@@ -1279,13 +1197,12 @@ def run_agent(
                 err = None
             if err:
                 result.schema_rejects += 1
-                if log_calls:
-                    append_event(
-                        run_id, "tool_reject",
-                        phase=phase, step=step, name=tc.name,
-                        reason="schema", message=str(err)[:300],
-                    )
-                messages.append({
+                emit(
+                    "tool_reject",
+                    step=step, name=tc.name,
+                    reason="schema", message=str(err)[:300],
+                )
+                st.messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id or f"call_{step}",
                     "name": tc.name,
@@ -1302,24 +1219,19 @@ def run_agent(
             # gate. Tracked for read_file only — repeating a search/edit has
             # different semantics (revising, not converging on a candidate).
             if tc.name == "read_file":
-                if key in read_keys_seen and same_file_read_twice_step is None:
-                    same_file_read_twice_step = step
+                if key in st.read_keys_seen and st.same_file_read_twice_step is None:
+                    st.same_file_read_twice_step = step
                 else:
-                    read_keys_seen.add(key)
+                    st.read_keys_seen.add(key)
             # Captured BEFORE the dedup branch and before `seen_calls.add(key)`
             # further down, so it means "this exact call already ran this run".
             # Distinct from `step_had_repeat`, which the dedup exemption keeps
             # False for read_file — the very tool that produced the blind spot
             # this feeds (see the post-write idle branch below).
-            call_is_repeat = key in seen_calls
-            if key in seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
+            call_is_repeat = key in st.seen_calls
+            if key in st.seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
                 step_had_repeat = True
-                content = (
-                    f"You already called {tc.name} with these exact arguments "
-                    "and the result was provided above. "
-                    "Use a different tool, try different arguments, "
-                    "or summarize your findings."
-                )
+                content = dedup_message(tc.name)
                 dup = ToolCall(
                     id=tc.id or f"call_{step}",
                     name=tc.name,
@@ -1331,22 +1243,21 @@ def run_agent(
                     wall_s=0.0,
                 )
                 result.tool_calls.append(dup)
-                messages.append({
+                st.messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id or f"call_{step}",
                     "name": tc.name,
                     "content": content,
                 })
                 _display(on_tool_event, dup, "on_tool_event")
-                if log_calls:
-                    append_event(
-                        run_id, "tool_call",
-                        phase=phase, step=step, name=tc.name,
-                        key_hash=key_hash, duplicate=True, cached=False,
-                        bytes_out=0,
-                    )
-                if writes_seen > 0:
-                    post_write_idle_tools += 1
+                emit(
+                    "tool_call",
+                    step=step, name=tc.name,
+                    key_hash=key_hash, duplicate=True, cached=False,
+                    bytes_out=0,
+                )
+                if st.writes_seen > 0:
+                    st.post_write_idle_tools += 1
                 continue
 
             # Dispatch-time visibility: every other record (events.jsonl,
@@ -1360,11 +1271,10 @@ def run_agent(
                          tc.name, getattr(executed, "wall_s", 0.0) or 0.0,
                          (getattr(executed, "error", None) or "")[:200] or None,
                          getattr(executed, "bytes_out", 0) or 0)
-            if (log_calls and executed.error
-                    and executed.error.startswith("Unknown tool")):
-                append_event(
-                    run_id, "tool_reject",
-                    phase=phase, step=step, name=tc.name,
+            if executed.error and executed.error.startswith("Unknown tool"):
+                emit(
+                    "tool_reject",
+                    step=step, name=tc.name,
                     reason="unknown_tool", message=executed.error[:300],
                 )
             result.tool_calls.append(executed)
@@ -1373,47 +1283,46 @@ def run_agent(
             # cases — those don't represent a "real" call as far as the
             # agent-trajectory predicates are concerned.
             if not executed.error:
-                actual_tool_calls.append((tc.name, tc.arguments))
-            seen_calls.add(key)
+                st.actual_tool_calls.append((tc.name, tc.arguments))
+            st.seen_calls.add(key)
             # v1.10 — append to tool_history for the convergence score.
             # Bounded to the last TOOL_HISTORY_MAX entries; only
             # successfully-dispatched calls (errors don't represent observed
             # behavior). Path extraction is permissive — see
             # luxe.agents.convergence.extract_path.
             if not executed.error:
-                tool_history.append({
+                st.tool_history.append({
                     "step": step,
                     "name": tc.name,
                     "path": extract_path(tc.name, tc.arguments),
                 })
-                if len(tool_history) > TOOL_HISTORY_MAX:
-                    tool_history = tool_history[-TOOL_HISTORY_MAX:]
+                if len(st.tool_history) > TOOL_HISTORY_MAX:
+                    st.tool_history = st.tool_history[-TOOL_HISTORY_MAX:]
             if tc.name in _WRITE_TOOLS and not executed.error:
-                writes_seen += 1
-                post_write_idle_tools = 0
+                st.writes_seen += 1
+                st.post_write_idle_tools = 0
                 # forge-hybrid Phase 2 (A) — capture compaction phase at the
                 # first successful write. Used by the resolve-time telemetry
                 # to attribute write-step gating to compaction state. Fires
                 # at most once per run.
                 if (tiered_compact_enabled
-                        and compaction_phase_at_first_write is None):
-                    compaction_phase_at_first_write = compaction_max_phase_this_run
-                    if log_calls:
-                        append_event(
-                            run_id, "compaction_phase_at_first_write",
-                            phase=phase, step=step,
-                            phase_reached=compaction_phase_at_first_write,
-                        )
+                        and st.compaction_phase_at_first_write is None):
+                    st.compaction_phase_at_first_write = st.compaction_max_phase_this_run
+                    emit(
+                        "compaction_phase_at_first_write",
+                        step=step,
+                        phase_reached=st.compaction_phase_at_first_write,
+                    )
                 # v1.10 — post-intervention write telemetry. Capture
                 # time-to-first-write and sustained-write-burst signals
                 # for any trajectory where an intervention fired earlier.
-                if last_intervention_step is not None:
-                    if first_write_step_after_intervention is None:
-                        first_write_step_after_intervention = step - last_intervention_step
-                    post_intervention_consecutive_writes += 1
-                    if post_intervention_consecutive_writes > post_intervention_write_burst_max:
-                        post_intervention_write_burst_max = post_intervention_consecutive_writes
-            elif writes_seen > 0:
+                if st.last_intervention_step is not None:
+                    if st.first_write_step_after_intervention is None:
+                        st.first_write_step_after_intervention = step - st.last_intervention_step
+                    st.post_intervention_consecutive_writes += 1
+                    if st.post_intervention_consecutive_writes > st.post_intervention_write_burst_max:
+                        st.post_intervention_write_burst_max = st.post_intervention_consecutive_writes
+            elif st.writes_seen > 0:
                 # A repeat returns content, so without the opt-in it RESETS
                 # the streak and the guard never arms. Demonstrated on m1
                 # 2026-08-10 (Qwen3.6-35B-A3B-4bit code drill): step 1 reads
@@ -1425,13 +1334,13 @@ def run_agent(
                 if post_write_idle_repeats and call_is_repeat:
                     idle = True
                 if idle:
-                    post_write_idle_tools += 1
+                    st.post_write_idle_tools += 1
                 else:
-                    post_write_idle_tools = 0
+                    st.post_write_idle_tools = 0
                 # v1.10 — non-write after intervention breaks the burst
                 # (only matters once at least one write has occurred).
-                if last_intervention_step is not None:
-                    post_intervention_consecutive_writes = 0
+                if st.last_intervention_step is not None:
+                    st.post_intervention_consecutive_writes = 0
 
             content = executed.error or executed.result
             # LUXE_TOOL_RESULT_CLAMP (opt-in, default OFF). Bound ONE result
@@ -1458,19 +1367,18 @@ def run_agent(
                     path=extract_path(tc.name, tc.arguments),
                 )
                 if _clamp_dropped:
-                    tool_results_clamped += 1
+                    st.tool_results_clamped += 1
                     logger.debug("tool result clamped name=%s max_chars=%d "
                                  "dropped=%d", tc.name, _clamp_max,
                                  _clamp_dropped)
-                    if log_calls:
-                        append_event(
-                            run_id, "tool_result_clamped",
-                            phase=phase, step=step, name=tc.name,
-                            max_chars=_clamp_max,
-                            chars_dropped=_clamp_dropped,
-                            bytes_out=executed.bytes_out,
-                        )
-            messages.append({
+                    emit(
+                        "tool_result_clamped",
+                        step=step, name=tc.name,
+                        max_chars=_clamp_max,
+                        chars_dropped=_clamp_dropped,
+                        bytes_out=executed.bytes_out,
+                    )
+            st.messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id or f"call_{step}",
                 "name": tc.name,
@@ -1478,57 +1386,54 @@ def run_agent(
             })
 
             _display(on_tool_event, executed, "on_tool_event")
-            if log_calls:
-                append_event(
-                    run_id, "tool_call",
-                    phase=phase, step=step, name=tc.name,
-                    key_hash=key_hash, duplicate=False,
-                    cached=executed.cached, bytes_out=executed.bytes_out,
-                    # v1.10 — emit path arg so future convergence-score
-                    # mining can run against the trace. Cheap; falls
-                    # back to None for tools without a path-like arg.
-                    path=extract_path(tc.name, tc.arguments),
-                )
-                # forge-hybrid Phase 2 (A) — post-compact recovery markers.
-                # Emits one of three event types whenever a recovery-class
-                # tool runs after compaction has fired anywhere in the run.
-                # Used to characterize whether compaction is followed by
-                # productive read/grep/edit activity (the search-geometry
-                # signal flagged in the plan's risk register).
-                if compaction_max_phase_this_run > 0:
-                    recovery_event = _COMPACTION_RECOVERY_EVENT_BY_TOOL.get(tc.name)
-                    if recovery_event is not None:
-                        append_event(
-                            run_id, recovery_event,
-                            phase=phase, step=step, name=tc.name,
-                            compaction_max_phase=compaction_max_phase_this_run,
-                        )
+            emit(
+                "tool_call",
+                step=step, name=tc.name,
+                key_hash=key_hash, duplicate=False,
+                cached=executed.cached, bytes_out=executed.bytes_out,
+                # v1.10 — emit path arg so future convergence-score
+                # mining can run against the trace. Cheap; falls
+                # back to None for tools without a path-like arg.
+                path=extract_path(tc.name, tc.arguments),
+            )
+            # forge-hybrid Phase 2 (A) — post-compact recovery markers.
+            # Emits one of three event types whenever a recovery-class
+            # tool runs after compaction has fired anywhere in the run.
+            # Used to characterize whether compaction is followed by
+            # productive read/grep/edit activity (the search-geometry
+            # signal flagged in the plan's risk register).
+            if st.compaction_max_phase_this_run > 0:
+                recovery_event = _COMPACTION_RECOVERY_EVENT_BY_TOOL.get(tc.name)
+                if recovery_event is not None:
+                    emit(
+                        recovery_event,
+                        step=step, name=tc.name,
+                        compaction_max_phase=st.compaction_max_phase_this_run,
+                    )
 
         pwi_exit = PostWriteIdleExitGuard.should_exit(
-            post_write_idle_tools=post_write_idle_tools,
-            writes_seen=writes_seen,
+            post_write_idle_tools=st.post_write_idle_tools,
+            writes_seen=st.writes_seen,
         )
         if pwi_exit is not None:
             result.final_text = resp.text or ""
-            if log_calls:
-                append_event(
-                    run_id, "post_write_idle_exit",
-                    phase=phase, step=step,
-                    **pwi_exit,
-                )
+            emit(
+                "post_write_idle_exit",
+                step=step,
+                **pwi_exit,
+            )
             break
 
         if step_had_repeat:
-            consecutive_repeat_steps += 1
-            if log_calls:
-                append_event(
-                    run_id, "tool_step_done",
-                    phase=phase, step=step,
-                    step_had_repeat=True,
-                    consecutive_repeat_steps=consecutive_repeat_steps,
-                )
+            st.consecutive_repeat_steps += 1
+            emit(
+                "tool_step_done",
+                step=step,
+                step_had_repeat=True,
+                consecutive_repeat_steps=st.consecutive_repeat_steps,
+            )
             cr_abort = ConsecutiveRepeatGuard.should_abort(
-                consecutive_repeat_steps=consecutive_repeat_steps,
+                consecutive_repeat_steps=st.consecutive_repeat_steps,
             )
             if cr_abort is not None:
                 result.final_text = resp.text or ""
@@ -1536,14 +1441,13 @@ def run_agent(
                 result.abort_reason = cr_abort["abort_reason"]
                 break
         else:
-            consecutive_repeat_steps = 0
-            if log_calls:
-                append_event(
-                    run_id, "tool_step_done",
-                    phase=phase, step=step,
-                    step_had_repeat=False,
-                    consecutive_repeat_steps=0,
-                )
+            st.consecutive_repeat_steps = 0
+            emit(
+                "tool_step_done",
+                step=step,
+                step_had_repeat=False,
+                consecutive_repeat_steps=0,
+            )
     else:
         result.final_text = resp.text if resp else ""
         result.aborted = True
@@ -1553,21 +1457,20 @@ def run_agent(
     # final per-run cumulative state so post-hoc analysis can attribute
     # outcomes to compaction state. Fires regardless of resolve/abort/max_steps
     # — all paths route through this single return.
-    if tiered_compact_enabled and log_calls:
-        append_event(
-            run_id, "compaction_phase_at_resolve",
-            phase=phase,
-            max_phase_reached=compaction_max_phase_this_run,
-            phase_at_first_write=compaction_phase_at_first_write,
-            tool_results_dropped_total=compaction_tool_results_dropped_total,
-            total_tokens_dropped=compaction_total_tokens_dropped,
+    if tiered_compact_enabled:
+        emit(
+            "compaction_phase_at_resolve",
+            max_phase_reached=st.compaction_max_phase_this_run,
+            phase_at_first_write=st.compaction_phase_at_first_write,
+            tool_results_dropped_total=st.compaction_tool_results_dropped_total,
+            total_tokens_dropped=st.compaction_total_tokens_dropped,
             # Additive 2026-08-24: how many of those fires achieved nothing.
-            ineffective_fires=compaction_ineffective_fires,
+            ineffective_fires=st.compaction_ineffective_fires,
             aborted=result.aborted,
         )
 
-    if tool_results_clamped:
-        logger.debug("tool results clamped this run: %d", tool_results_clamped)
+    if st.tool_results_clamped:
+        logger.debug("tool results clamped this run: %d", st.tool_results_clamped)
 
     result.wall_s = time.monotonic() - t0
     return result

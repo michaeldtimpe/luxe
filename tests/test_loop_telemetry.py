@@ -249,3 +249,35 @@ class TestNonObjectArguments:
         result = _run(_ScriptedBackend([bad]), "tel-nonobj-unknown")
         assert not result.aborted
         assert result.schema_rejects == 1
+
+
+def test_emit_is_the_only_events_writer_in_run_agent():
+    """2026-09: every events.jsonl record `run_agent` writes goes through the
+    `emit` helper (`_event_emitter`), which owns the `log_calls` gate and the
+    leading `phase=` field. A bare `append_event(` or `if log_calls:` block
+    creeping back into the body would bypass both."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(loop_mod.run_agent))
+    direct = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == "append_event"
+    ]
+    assert not direct, "run_agent calls append_event directly — use emit()"
+    reads = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and n.id == "log_calls"
+        and isinstance(n.ctx, ast.Load)
+    ]
+    # Exactly one read is allowed: handing it to _event_emitter.
+    assert len(reads) == 1, "log_calls gates something other than emit()"
+
+
+def test_suppress_tool_log_silences_every_record(monkeypatch, events):
+    monkeypatch.setenv("LUXE_SUPPRESS_TOOL_LOG", "1")
+    call = _resp(tool_calls=[
+        ToolCallResponse(id="c", name="read_file", arguments={"path": "a"})])
+    _run(_ScriptedBackend([call, _resp("done")]), "tel-suppressed")
+    assert events == []

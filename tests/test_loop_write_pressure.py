@@ -875,12 +875,15 @@ def test_action_density_gate_holds_during_bail_grace_period(monkeypatch):
     gate must NOT fire even if other predicates are met. Verifies the
     staged-escalation semantics: don't double-fire immediately on top of
     a fresh intervention."""
-    import luxe.agents.loop as _loop
+    # Patch guardrails — the module ActionDensityGateGuard actually reads.
+    # (This used to patch loop.py's RE-EXPORTED names, which the guard never
+    # consults, so the lowered thresholds were silently inert.)
+    import luxe.agents.guardrails as _guardrails
     # Lower the gate MIN_STEP and MIN_TOKENS so the gate becomes EVALUABLE
     # at step 5 (one turn after early_bail at step 4). The grace-period
     # check (turns_since_bail < 2) is what should keep it from firing.
-    monkeypatch.setattr(_loop, "_ACTION_DENSITY_GATE_MIN_STEP", 4)
-    monkeypatch.setattr(_loop, "_ACTION_DENSITY_GATE_MIN_TOKENS", 200)
+    monkeypatch.setattr(_guardrails, "_ACTION_DENSITY_GATE_MIN_STEP", 4)
+    monkeypatch.setattr(_guardrails, "_ACTION_DENSITY_GATE_MIN_TOKENS", 200)
     monkeypatch.setenv("LUXE_EARLY_BAIL", "1")
     monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
     monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)

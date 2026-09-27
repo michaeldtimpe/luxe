@@ -7,11 +7,31 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - All mono prompt strings live in `src/luxe/agents/prompts.py` `PROMPT_REGISTRY`
 - `TaskOverlay` maps `task_type` to `PromptVariant` id; routing goes through `resolve_prompt_ids`
 - `run_agent` (loop.py) owns the inner tool-call loop; `single.py` is the entry
+- `run_agent`'s mutable per-run state lives in ONE record, `LoopState`
+  (`agents/loopstate.py`, 2026-09): same field names and initial values the
+  bare locals had. Configuration read once from `RunFlags` and per-step
+  scratch values stay locals. `loop.py` remains the sole mutator; the counter
+  discipline below applies to the fields unchanged
+- Every `events.jsonl` record `run_agent` writes goes through `emit(kind,
+  **fields)` (`loop._event_emitter`), which owns the `log_calls` gate and the
+  leading `phase=` field, so field names AND order match what
+  `scripts/toolcall_taxonomy.py` / `outcomes.py` parse. `emit` resolves
+  `append_event` from `luxe.agents.loop` at call time (tests monkeypatch it
+  there). No bare `append_event(` / `if log_calls:` in the body —
+  `tests/test_loop_telemetry.py` pins it
+- `tests/test_golden_trajectory.py` pins ten scripted multi-step trajectories
+  byte-for-byte (every request body, every events record in order, the
+  AgentResult). A change to what the model sees or what telemetry records
+  must regenerate a snapshot deliberately, in the same commit as its cause
 - `guardrails.py` is the SOLE home of intervention thresholds + nudge bodies
   (`_WRITE_PRESSURE_*`, `_ACTION_DENSITY_GATE_*`,
   `_EARLY_BAIL_*`, `_HABITUATION_EXIT_*`, `_POST_WRITE_IDLE_MAX`,
   `_MAX_CONSECUTIVE_REPEAT_STEPS`, `_BREADTH_PROBE_ESCALATION_COUNT`,
-  `_CONVERGENCE_{LOW,HIGH}_THRESHOLD`, `_v1105_synthesis_looping_signature`)
+  `_CONVERGENCE_{LOW,HIGH}_THRESHOLD`, `_v1105_synthesis_looping_signature`,
+  and since 2026-09 the loop-authored `_DEDUP_MESSAGE_TEMPLATE` /
+  `dedup_message` and `_SPEC_ZERO_CALLS_DECLINE_MESSAGE`, plus the
+  action-density gate's convergence predicates
+  `ActionDensityGateGuard.convergence_suppression` / `.suppressed_converged`)
   together with their calibration rationale. `loop.py` RE-EXPORTS them so the
   loop test modules' `from luxe.agents.loop import _X` keeps resolving;
   `tests/test_guardrails_identity.py` pins `loop.X is guardrails.X`. Never
@@ -28,7 +48,11 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   contains no `os.environ` access. Three reads deliberately stay outside:
   `LUXE_TOKEN_LOG_INTERVAL` (loop.py module constant, read at import),
   `LUXE_LOAD_PRIORS` (cohort_priors) and `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`
-  (guardrails) — those belong to their own modules' contracts
+  (guardrails) — those belong to their own modules' contracts.
+  `LUXE_EARLY_BAIL_MODE` is NOT one of them any more: `EarlyBailGuard` used to
+  re-read it from os.environ up to three times per step; since 2026-09 it is
+  `RunFlags.early_bail_mode` (verbatim string, same `"default"` default,
+  exported-but-empty stays `""`) passed in as `early_bail_mode=`
 - SpecDD Lever 2 chain block (`_build_sdd_block`) is appended after the variant's `task_prefix`
 
 ### Reflection / verify stage invariants (Track 1, pinned 2026-05-24)
