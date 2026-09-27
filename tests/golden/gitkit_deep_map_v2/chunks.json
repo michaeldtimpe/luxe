@@ -1,0 +1,41 @@
+{
+  "content_budget": 12,
+  "framing": [
+    "README.md",
+    "src/app.py"
+  ],
+  "chunks": [
+    {
+      "index": 0,
+      "files": [
+        "src/app.py",
+        "README.md",
+        "lib/core.py"
+      ],
+      "dirs": [
+        ".",
+        "lib",
+        "src"
+      ],
+      "label": ".",
+      "est_tokens": 12,
+      "loc": 5,
+      "symbols": [],
+      "oversized": []
+    },
+    {
+      "index": 1,
+      "files": [
+        "src/util.py"
+      ],
+      "dirs": [
+        "src"
+      ],
+      "label": "src",
+      "est_tokens": 8,
+      "loc": 2,
+      "symbols": [],
+      "oversized": []
+    }
+  ]
+}

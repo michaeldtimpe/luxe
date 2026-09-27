@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "head": "3c382480e5435873f052175a0d01d64458751a36",
+  "n_chunks": 2,
+  "content_budget": 12,
+  "mapped_at": 1790469660,
+  "files": {
+    "README.md": "fc72a5c1094e203eefcd1c710f060957ebbbaac4",
+    "lib/core.py": "8262d5e4bf9fda5c20bb6ad8b0288504df681754",
+    "src/app.py": "b3eb7257065e6a12459eeed33fe3c9f7a4a8c0f2",
+    "src/util.py": "0049ebf5110ce020a4534c1302b6bc5dcab1fb0a"
+  },
+  "baseline": {
+    "orig_n_chunks": 2,
+    "orig_corpus_tokens": 20,
+    "delta_chunks": 0,
+    "delta_tokens": 0
+  }
+}

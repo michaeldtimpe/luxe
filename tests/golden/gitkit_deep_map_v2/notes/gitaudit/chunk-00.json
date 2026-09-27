@@ -1,0 +1,32 @@
+{
+ "head": "3c382480e5435873f052175a0d01d64458751a36",
+ "files": [
+  "src/app.py",
+  "README.md",
+  "lib/core.py"
+ ],
+ "file_shas": {
+  "src/app.py": "b3eb7257065e6a12459eeed33fe3c9f7a4a8c0f2",
+  "README.md": "fc72a5c1094e203eefcd1c710f060957ebbbaac4",
+  "lib/core.py": "8262d5e4bf9fda5c20bb6ad8b0288504df681754"
+ },
+ "contribution": {
+  "parsed": {
+   "findings": [
+    {
+     "title": "t0",
+     "severity": "high",
+     "evidence": [
+      "src/app.py:1"
+     ]
+    }
+   ]
+  },
+  "note": {
+   "label": ".",
+   "md": "- **high** `src/app.py:1` x",
+   "source": "md_clean"
+  }
+ },
+ "wall_s": 1.5
+}

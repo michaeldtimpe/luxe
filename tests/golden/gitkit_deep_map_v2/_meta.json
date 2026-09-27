@@ -1,0 +1,9 @@
+{
+ "head": "3c382480e5435873f052175a0d01d64458751a36",
+ "files": {
+  "README.md": "# demo\n",
+  "src/app.py": "def main():\n    return 1\n",
+  "src/util.py": "def helper(x):\n    return x * 2\n",
+  "lib/core.py": "class Core:\n    pass\n"
+ }
+}
