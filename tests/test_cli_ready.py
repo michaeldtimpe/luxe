@@ -518,6 +518,40 @@ class TestUnloadFollowsTheConfig:
         assert res.exit_code == 0, res.output
         assert made == ["http://127.0.0.1:8080"]
 
+    def test_unload_refuses_a_shared_default_backend_without_force(
+            self, tmp_path, monkeypatch):
+        """PR #14 review: `unload` follows the config now, so a config whose
+        default entry is m5 would evict that server's models. Refuse."""
+        import luxe.backend as backend_mod
+
+        unloaded: list[str] = []
+
+        class B(_Backend):
+            def health(self, timeout_s=None):
+                return True
+
+            def loaded_models(self):
+                return ["Theirs"]
+
+            def unload_all_loaded(self, *, except_for=None):
+                unloaded.append(self.base_url)
+                return {"Theirs": True}
+
+        monkeypatch.setattr(backend_mod, "Backend", B)
+        p = tmp_path / "m5.yaml"
+        p.write_text(
+            "models:\n  monolith: Q\n"
+            "roles:\n  monolith:\n    model_key: monolith\n"
+            "backends:\n  m5:\n    base_url: http://m5.example.ts.net:8000\n"
+            "    default: true\n")
+        monkeypatch.setenv("LUXE_CONFIG", str(p))
+        res = CliRunner().invoke(cli.main, ["unload"])
+        assert res.exit_code == 2 and "shared" in res.output
+        assert unloaded == []
+        res = CliRunner().invoke(cli.main, ["unload", "--force"])
+        assert res.exit_code == 0, res.output
+        assert unloaded == ["http://m5.example.ts.net:8000"]
+
     def test_teardown_uses_the_commands_cfg_and_never_a_remote(
             self, tmp_path, monkeypatch):
         import luxe.backend as backend_mod
