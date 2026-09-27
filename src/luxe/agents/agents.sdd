@@ -641,6 +641,19 @@ logs still parse. Do not reintroduce any of them without new evidence.
   `ToolCall.cached` stays (the `tool_call` event reports it; only the dedup
   record sets it).
 
+**Reviewed and deliberately KEPT (2026-09): the adaptive-policy modulation
+pipeline.** `compute_intervention_bias` pins `write_pressure`/`early_bail` at
+0.0, so under `LUXE_ADAPTIVE_POLICY=1` their modulations are exactly 1.0 every
+step and `WritePressureGuard`'s adaptive `effective_min_step` always equals the
+static 5 — that half is numerically dead. It was NOT collapsed: the
+`soft_anchor` bias is live, and its slew-rate-limited modulation is emitted on
+every `adaptive_state` record (golden `guards_static_habituation` /
+`guards_soft_anchor_diffuse` record 0.7 / 1.0 / 1.25), so the
+bias -> modulation -> slew pipeline has to run anyway, and the Stage 3
+invariants (bias-not-lock, slew-rate, disable-equivalence) are written against
+it. Special-casing two of its three keys would save a few lines at the cost of
+the one shape those invariants describe.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —
