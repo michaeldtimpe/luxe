@@ -457,13 +457,23 @@ apply_aliases(main, {
 @main.command(name="unload")
 @click.option("--except", "except_for", multiple=True,
               help="Model ID(s) to keep resident (repeatable). Default: unload all.")
-def unload_models(except_for: tuple[str, ...]):
+@click.option("--force", is_flag=True, default=False,
+              help="Unload even when the default backend is SHARED (another "
+                   "host's live models go too).")
+def unload_models(except_for: tuple[str, ...], force: bool):
     """Unload all currently-loaded models from the configured endpoint to
     free RAM (the chat config's default backend — `$LUXE_CONFIG` honoured)."""
     from luxe.chat.inspection import endpoint_fixes
 
     cfg = _chat_cfg()
     entry = cfg.backend_entry(cfg.default_backend_name())
+    if entry.is_shared() and not force:
+        # B5: a shared endpoint's residents are other clients' live
+        # sessions. Evicting them is never a default.
+        console.print(f"[red]✗ {cfg.default_backend_name()} ({entry.base_url}) "
+                      "is a shared endpoint — unloading would evict other "
+                      "hosts' models. Unload on that host, or pass --force.[/]")
+        sys.exit(2)
     b = entry.build_backend("(unload-cli)")
     if not b.health(timeout_s=10.0):
         console.print(f"[red]{entry.engine_label()} unreachable at "
