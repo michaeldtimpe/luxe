@@ -92,7 +92,7 @@ def purge_session(session_id: str, repo_path: str = "") -> list[str]:
         if not sd.exists():
             removed.append(str(sd))
 
-    # Run ids are "<session_id>-<n>" (chat/repl.py), so the session's runs are
+    # Run ids are "<session_id>-<n>" (chat/turn.py), so the session's runs are
     # exactly the directories carrying that prefix.
     root = runs_root()
     if root.is_dir():

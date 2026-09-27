@@ -117,7 +117,7 @@ _LARGE_FILE_FRACTION = 0.5
 #: return), not by fixture luck. The refusal bracket above it is
 #: unconditional and unaffected by this toggle either way.
 #:
-#: Chat owns turning it on, and does: `chat/repl.py`'s `prepare_turn` calls
+#: Chat owns turning it on, and does: `chat/turn.py`'s `prepare_turn` calls
 #: `set_large_file_notes(True)` per turn, beside the `set_read_budget` block
 #: and for the same reason (`/ctx` moves `num_ctx` mid-session). `maintain.py`
 #: deliberately has no such call, which is what keeps the benchmark path
@@ -129,7 +129,7 @@ def set_large_file_notes(enabled: bool) -> None:
     """Turn the large-but-readable bracket of `_oversize_note` on/off for this
     process. `False` (default) restores pre-bracket behaviour exactly — the
     benchmark/maintain path never calls this. Chat's turn-loop is the caller
-    (`chat/repl.py` `prepare_turn`; see the toggle's docstring above)."""
+    (`chat/turn.py` `prepare_turn`; see the toggle's docstring above)."""
     global _LARGE_FILE_NOTES
     _LARGE_FILE_NOTES = bool(enabled)
 
