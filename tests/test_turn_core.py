@@ -12,6 +12,7 @@ from rich.console import Console
 from luxe.chat import repl
 from luxe.chat import slots as slots_mod
 from luxe.chat import turn as turn_mod
+from luxe.chat.controller import ChatController
 from luxe.chat.session import ChatSession
 from luxe.config import PipelineConfig, RoleConfig
 from luxe.memory import session as session_store
@@ -239,13 +240,19 @@ def test_finalize_turn_stamps_backend_on_assistant_record(_ctx, monkeypatch):
     assert assistant and assistant[-1]["backend"] == "local"
 
 
+def _line_turn(message, session, sm, cfg, console):
+    """One line-REPL turn through the controller (was `repl._run_turn`)."""
+    ctl = ChatController(cfg, session=session, slots=sm,
+                         infer=lambda m: "review")
+    return ctl.run_turn(message, repl.LineSink(ctl, console))
+
+
 def test_line_run_turn_still_works_headless(_ctx, monkeypatch):
     """The non-terminal line path runs end-to-end through the new core."""
     cfg, session, sm = _ctx
     monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
-    outcome = repl._run_turn("hi", session, sm, cfg, frozenset(), out,
-                             repl.CancelToken(), lambda m: "review")
+    outcome = _line_turn("hi", session, sm, cfg, out)
     assert outcome.final_text == "the answer"
     assert not outcome.interrupted
 
@@ -449,8 +456,7 @@ def test_aborted_turn_is_reported_and_recorded(_ctx, monkeypatch):
     monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _AbortedResult())
     out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
 
-    outcome = repl._run_turn("hi", session, sm, cfg, frozenset(), out,
-                             repl.CancelToken(), lambda m: "review")
+    outcome = _line_turn("hi", session, sm, cfg, out)
 
     assert not outcome.interrupted
     printed = out.file.getvalue()
@@ -501,8 +507,7 @@ def test_healthy_turn_writes_no_error_record(_ctx, monkeypatch):
     cfg, session, sm = _ctx
     monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _FakeResult())
     out = Console(file=__import__("io").StringIO(), force_terminal=False, width=100)
-    repl._run_turn("hi", session, sm, cfg, frozenset(), out,
-                   repl.CancelToken(), lambda m: "review")
+    _line_turn("hi", session, sm, cfg, out)
     assert not _errors(session)
 
 
