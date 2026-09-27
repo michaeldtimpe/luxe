@@ -963,29 +963,6 @@ def run_agent(
         # next iteration's delta correctly measures THIS step's response.
         prev_completion_tokens = result.completion_tokens
 
-        # SpecDD Lever 1 mid-loop reprompt gate (v1.7). Fires expects_zero_calls
-        # reprompts here — the predicate's violation is immediate (any tool
-        # call is a violation), so the reprompt lands at the start of the
-        # next step after the offending call. min_tool_calls reprompts fire
-        # at loop-break, not here, because their natural fire-point is when
-        # the model is about to terminate without enough calls.
-        if spec is not None and actual_tool_calls:
-            vr = spec_validate(spec, "", "", tool_calls=actual_tool_calls)
-            for rr in vr.unsatisfied:
-                if rr.requirement.id in spec_violations_reprompted:
-                    continue
-                if rr.requirement.kind != "expects_zero_calls":
-                    continue
-                messages.append({"role": "user", "content": rr.detail})
-                spec_violations_reprompted.add(rr.requirement.id)
-                if log_calls:
-                    append_event(
-                        run_id, "spec_reprompt_fired",
-                        phase=phase, step=step,
-                        requirement_id=rr.requirement.id,
-                        requirement_kind=rr.requirement.kind,
-                    )
-
         if tiered_compact_enabled and _tiered_compactor is not None:
             cr = _tiered_compactor.compact(messages, effective_ctx)
             messages = cr.messages

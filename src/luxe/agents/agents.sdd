@@ -594,6 +594,15 @@ logs still parse. Do not reintroduce any of them without new evidence.
   reprompt), so it was reachable solely as an interaction with those, under
   its own opt-in flag. 0 `prose_burst_fired` events in 3,240 recorded runs.
   Default path unaffected (it was opt-in).
+- **Top-of-step `expects_zero_calls` spec reprompt** (v1.7). Unreachable
+  since v1.8's PRE-DISPATCH gate: whenever a spec holds an
+  `expects_zero_calls` requirement the gate `continue`s before
+  `dispatch_tool`, so `actual_tool_calls` stays empty and the block's
+  `if spec is not None and actual_tool_calls` never held for such a spec. For
+  every other spec (BFCL `min_tool_calls`) it still ran `spec_validate` each
+  step and then discarded every result by kind — pure wasted work, removed
+  with no request-byte change (golden `spec_min_calls` / `spec_zero_calls`).
+  The `min_tool_calls` reprompt at the would-be exit is unchanged.
 
 ## Must not (reflect)
 
