@@ -379,6 +379,13 @@ class HabituationExitGuard:
             return None
         if step < _HABITUATION_EXIT_MIN_STEP:
             return None
+        # The latest intervention has to reach the model before the run can
+        # be called intervention-resistant. The exit check runs after this
+        # step's nudge guards, so an intervention appended THIS step has not
+        # been answered yet; exiting now drops it unsent (4 of 46 historical
+        # habituation exits had since_last_intervention=0).
+        if last_intervention_step is not None and step <= last_intervention_step:
+            return None
         return {
             "interventions_fired": sorted(intervention_kinds_fired),
             "since_last_intervention": (
