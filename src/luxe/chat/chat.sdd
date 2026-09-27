@@ -680,11 +680,19 @@ never touches this module.
 - SESSION WORKING NOTES (`chat/notes.py`, 2026-08-04): luxe remembers what it
   did. On session end — the `finally` of BOTH front-ends, BEFORE the model
   unload so the backend is still usable (the TUI's quit action therefore
-  never unloads itself; quitting MID-TURN sets the cancel token and leaves the
-  models loaded for the unwinding request) — and on demand via `/note`, ONE
+  never unloads itself) — and on demand via `/note`, ONE
   non-agentic `backend.chat` call (never `run_single`; no tools are needed;
   bounded at session end by `notes.EXIT_TIMEOUT_S` on a daemon thread, `/note`
-  unbounded)
+  unbounded).
+  Quitting the TUI MID-TURN sets the cancel token (`action_quit_app`) and
+  flags the app `_exiting`, so the unwinding worker drops its UI calls
+  instead of recording the resulting `RuntimeError('App is not running')` as
+  a failed turn. It is NOT an instant exit: `App.run()` returns only after the
+  worker thread finishes (asyncio.run joins executor threads), and the token
+  is polled only at the next streamed token or tool dispatch — a quit during
+  a long prefill still waits for the first token. The session-end finally
+  therefore always runs with the turn over, and unloads as usual unless
+  `--keep-loaded`. The notes step
   distils the DETERMINISTIC FOLD of the conversation (`chat/summarize.py`,
   never the raw transcript) into 3–6 bullets using the registry's
   `SESSION_NOTES_HINT`, RECOVERS the bullet list from the reply in Python

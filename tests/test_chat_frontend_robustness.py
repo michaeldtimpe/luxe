@@ -289,9 +289,60 @@ def test_4_quitting_mid_turn_cancels_the_turn(tmp_path):
             app._busy = True
             app.action_quit_app()
             assert app.cancel.requested is True
-            assert app.quit_while_busy is True
+            assert app._exiting is True
             app._busy = False
     asyncio.run(scenario())
+
+
+def test_4_a_mid_turn_quit_still_unloads_at_session_end(monkeypatch):
+    """Review follow-up: `App.run()` returns only after the worker finished,
+    so the finally must unload as usual — skipping it left models resident on
+    every mid-turn quit."""
+    from luxe.chat import notes as notes_mod
+    from luxe.chat import tui as tui_mod
+
+    unloads = []
+    monkeypatch.setattr(slots_mod.SlotManager, "unload_all",
+                        lambda self: unloads.append(1))
+    monkeypatch.setattr(notes_mod, "run_session_notes", lambda *a, **k: None)
+
+    def _run(self):
+        self._busy = True           # quit arrives mid-turn
+        self.action_quit_app()
+
+    monkeypatch.setattr(tui_mod.ChatApp, "run", _run)
+    monkeypatch.setattr(tui_mod.ChatApp, "exit", lambda self, *a, **k: None)
+    # Not mounted: no screen stack to look at for an open modal.
+    monkeypatch.setattr(tui_mod.ChatApp, "screen", property(lambda self: None))
+    tui_mod.run_chat_app(_cfg(), "", frozenset(), keep_loaded=False)
+    assert unloads == [1]
+
+
+def test_4_worker_unwinding_after_quit_records_no_crash(tmp_path):
+    """After exit every `call_from_thread` raises RuntimeError('App is not
+    running'); that used to land as a kind="error" transcript record."""
+    app = _app(tmp_path, keep_loaded=True)
+    app._exiting = True
+    try:
+        raise RuntimeError("App is not running")
+    except RuntimeError:
+        app._report_turn_crash()
+    recs = session_store.load_session(app.session.session_id)[1]
+    assert not any(r["kind"] == "error" for r in recs)
+    # and a UI call from a worker after exit is dropped, not raised
+    import threading
+    errors = []
+
+    def _worker():
+        try:
+            app._call_ui(lambda: None)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=_worker)
+    t.start()
+    t.join()
+    assert errors == []
 
 
 # --- 5. history fold + current_request echo are capped ----------------------
@@ -374,6 +425,25 @@ def _goal_session():
                     goal_max_rounds=10)
     s.session_id = session_store.new_session().session_id
     return s
+
+
+def test_8_a_refused_planning_turn_is_not_a_plan():
+    """Review follow-up: _run_plan took a spend-cap refusal's text as the
+    plan and offered to save/execute it."""
+    s = ChatSession(plan_pending="design it")
+    s.session_id = session_store.new_session().session_id
+    asked = []
+
+    def _turn(*a, **k):
+        return repl_mod.TurnOutcome(crashed=True, final_text="spend cap reached")
+
+    console, out = _console()
+    repl_mod._run_plan(s, slots_mod.SlotManager(_cfg()), _cfg(), frozenset(),
+                       console, None, lambda m: "review", None,
+                       run_turn=_turn, reader=lambda q: asked.append(q) or "b")
+    assert asked == []
+    assert s.plan_text == "" and s.goal_active is False
+    assert "Plan ready" not in out.getvalue()
 
 
 def test_8_a_refused_turn_stops_the_goal_at_once():
