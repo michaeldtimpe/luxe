@@ -197,6 +197,14 @@ def maintain_pipeline(
 
     from luxe.mcp.client import MCPClientManager, load_mcp_config
     mcp_cfg = load_mcp_config()
+    # OPT-IN per task: a server reaches the maintain/benchmark tool surface
+    # only when its `enabled_for` names this task. An empty list used to mean
+    # "every task", so registering the chat-oriented codex_one + cpa servers
+    # (1925950, 2026-08-25) silently added 14 tools to every bench run since.
+    # Servers without an opt-in are not even started here; `luxe chat --mcp`
+    # attaches by name and is unaffected.
+    mcp_cfg.servers = [s for s in mcp_cfg.servers
+                       if detected_task in s.enabled_for]
     mcp_mgr: MCPClientManager | None = None
     extra_tool_defs: list = []
     extra_tool_fns: dict = {}

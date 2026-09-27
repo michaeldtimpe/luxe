@@ -337,6 +337,35 @@ def test_discover_tools_skips_session_less_runtime():
         mgr.close()
 
 
+def test_task_filter_is_opt_in():
+    """The maintain/bench path passes `only_for_task`: a server reaches it only
+    when `enabled_for` NAMES the task. An empty list used to mean "every task",
+    which leaked the chat-oriented codex_one + cpa tools into every bench run
+    from 2026-08-25 (2026-09 review). No filter (chat --mcp) sees everything."""
+    open_srv = _server("open", behavior="ok")               # enabled_for=[]
+    opted = _server("opted", behavior="ok")
+    opted.cfg.enabled_for = ["implement"]
+    listed: list[str] = []
+    for name, rt in (("open", open_srv), ("opted", opted)):
+        orig = rt.session.list_tools
+
+        async def _spy(_orig=orig, _name=name):
+            listed.append(_name)
+            return await _orig()
+        rt.session.list_tools = _spy
+    mgr = _bootstrap_manager_with_servers({"open": open_srv, "opted": opted})
+    try:
+        mgr.discover_tools(only_for_task="implement")
+        assert listed == ["opted"]
+        listed.clear()
+        mgr.discover_tools(only_for_task="document")
+        assert listed == []
+        mgr.discover_tools()                                # chat --mcp
+        assert sorted(listed) == ["open", "opted"]
+    finally:
+        mgr.close()
+
+
 def test_exc_text_flattens_exception_groups_and_names_bare_cancels():
     from luxe.mcp.client import _exc_text
 
