@@ -11,7 +11,6 @@ textual = pytest.importorskip("textual")
 
 from textual.widgets import Input, RichLog  # noqa: E402
 
-from luxe.chat import repl as _repl  # noqa: E402
 from luxe.chat import slots as slots_mod  # noqa: E402
 from luxe.chat import turn as turn_mod  # noqa: E402
 from luxe.chat.session import ChatSession  # noqa: E402

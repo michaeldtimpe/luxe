@@ -1169,7 +1169,7 @@ class TestSpendCapIsEnforcedBeforeDispatch:
 
     Refusing mid-turn would waste money already spent, and refusing in
     `prepare_turn` would persist a user record and open a run for a turn that
-    never happened. So `_run_turn` checks first and returns without touching
+    never happened. So `ChatController.run_turn` checks first and returns without touching
     `prepare_turn` at all — which is exactly what these assert.
     """
 
@@ -1184,6 +1184,7 @@ class TestSpendCapIsEnforcedBeforeDispatch:
         )
 
     def _run(self, cfg, session, monkeypatch):
+        from luxe.chat import controller as controller_mod
         from luxe.chat import repl as repl_mod
 
         out = io.StringIO()
@@ -1191,12 +1192,12 @@ class TestSpendCapIsEnforcedBeforeDispatch:
         slots = slots_mod.SlotManager(cfg)
         called: list = []
         monkeypatch.setattr(
-            repl_mod, "prepare_turn",
+            controller_mod, "prepare_turn",
             lambda *a, **k: called.append(1) or (_ for _ in ()).throw(
                 AssertionError("prepare_turn ran past the cap")))
-        outcome = repl_mod._run_turn(
-            "hello", session, slots, cfg, frozenset(), console,
-            repl_mod.CancelToken(), lambda m: "review")
+        ctl = controller_mod.ChatController(cfg, session=session, slots=slots,
+                                            infer=lambda m: "review")
+        outcome = ctl.run_turn("hello", repl_mod.LineSink(ctl, console))
         return outcome, out.getvalue(), called
 
     def test_a_session_at_the_cap_is_refused_and_never_dispatches(

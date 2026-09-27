@@ -21,6 +21,7 @@ from luxe.chat import commands as cmd
 from luxe.chat import repl as repl_mod
 from luxe.chat import slots as slots_mod
 from luxe.chat import turn as turn_mod
+from luxe.chat import controller as controller_mod
 from luxe.chat.render import ChatCancelled
 from luxe.chat.session import ChatSession, ChatTurn
 from luxe.config import PipelineConfig, RoleConfig
@@ -421,6 +422,12 @@ def test_7_project_switch_moves_languages_for_the_next_turn(monkeypatch, tmp_pat
 
 # --- 8. /goal: one failure path; a refused turn stops the loop -------------
 
+def _controller(session, slots=None):
+    return controller_mod.ChatController(
+        _cfg(), session=session, slots=slots or slots_mod.SlotManager(_cfg()),
+        infer=lambda m: "review")
+
+
 def _goal_session():
     s = ChatSession(write_enabled=True, goal="do it", goal_active=True,
                     goal_max_rounds=10)
@@ -429,7 +436,7 @@ def _goal_session():
 
 
 def test_8_a_refused_planning_turn_is_not_a_plan():
-    """Review follow-up: _run_plan took a spend-cap refusal's text as the
+    """Review follow-up: /plan took a spend-cap refusal's text as the
     plan and offered to save/execute it."""
     s = ChatSession(plan_pending="design it")
     s.session_id = session_store.new_session().session_id
@@ -439,9 +446,10 @@ def test_8_a_refused_planning_turn_is_not_a_plan():
         return repl_mod.TurnOutcome(crashed=True, final_text="spend cap reached")
 
     console, out = _console()
-    repl_mod._run_plan(s, slots_mod.SlotManager(_cfg()), _cfg(), frozenset(),
-                       console, None, lambda m: "review", None,
-                       run_turn=_turn, reader=lambda q: asked.append(q) or "b")
+    ctl = _controller(s)
+    sink = repl_mod.LineSink(ctl, console)
+    sink.choose = lambda choices, default: asked.append(choices) or "b"
+    ctl.run_plan(sink, run_turn=_turn)
     assert asked == []
     assert s.plan_text == "" and s.goal_active is False
     assert "Plan ready" not in out.getvalue()
@@ -456,9 +464,8 @@ def test_8_a_refused_turn_stops_the_goal_at_once():
         return repl_mod.TurnOutcome(crashed=True, final_text="spend cap")
 
     console, _ = _console()
-    repl_mod._run_goal_loop(s, slots_mod.SlotManager(_cfg()), _cfg(),
-                            frozenset(), console, None, lambda m: "review",
-                            None, run_turn=_turn)
+    ctl = _controller(s)
+    ctl.run_goal(repl_mod.LineSink(ctl, console), run_turn=_turn)
     assert calls == [1]
     assert s.goal_active is False
 
@@ -474,8 +481,8 @@ def test_8_a_backend_error_round_runs_the_recovery_and_records_it(monkeypatch):
         raise BackendError("oMLX returned 500: No module named 'x'")
 
     console, out = _console()
-    repl_mod._run_goal_loop(s, sm, _cfg(), frozenset(), console, None,
-                            lambda m: "review", None, run_turn=_turn)
+    ctl = _controller(s, sm)
+    ctl.run_goal(repl_mod.LineSink(ctl, console), run_turn=_turn)
     assert recovered, "degrade/repair never ran for a failed goal round"
     loaded = session_store.load_session(s.session_id)
     assert any(r["kind"] == "error" for r in loaded[1])
@@ -751,7 +758,8 @@ def test_21_session_gc_runs_at_start_but_not_when_ephemeral(monkeypatch):
 
 def test_21_repl_start_invokes_session_gc(monkeypatch):
     called = []
-    monkeypatch.setattr(repl_mod, "start_session_gc", lambda: called.append(1))
+    monkeypatch.setattr(controller_mod, "start_session_gc",
+                        lambda: called.append(1))
     _repl([])
     assert called == [1]
 

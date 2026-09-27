@@ -6,9 +6,12 @@ Layout (Claude-CLI style): a scrollable `RichLog` transcript that grows, a
 Textual thread worker; the synchronous run_single callbacks coalesce on the
 worker and a UI-thread timer renders them (never per-token marshaling).
 
-Reuses the UI-agnostic core (`prepare_turn`/`finalize_turn`), `commands.dispatch`,
-`status.fields/fit/to_rich_text`, `theme`, and `build_final_renderable`. The line
-REPL (`repl.run_chat_repl`) remains the non-TTY / textual-absent fallback.
+Everything that is not drawing or input — the session, the turn pipeline,
+containment, /plan + /goal, teardown — is `controller.ChatController`; this
+module renders it (`TuiSink`) and owns the Textual app. Reuses
+`commands.dispatch`, `status.fields/fit/to_rich_text`, `theme`, and
+`build_final_renderable`. The line REPL (`repl.run_chat_repl`) remains the
+non-TTY / textual-absent fallback.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import logging
 import threading
 import time
 from collections import Counter
+from contextlib import contextmanager
 
 from rich.errors import MarkupError
 from rich.markup import escape as _escape
@@ -30,25 +34,25 @@ from textual.widgets import Input, RichLog, Static
 
 from luxe.chat import commands as cmd
 from luxe.chat import cost as cost_mod
-from luxe.chat import origin as origin_mod
-from luxe.chat import repl as _repl
 from luxe.chat import status as status_mod
+from luxe.chat.controller import (
+    ChatController,
+    TurnHooks,
+    apply_project_summary,
+    banner_markup,
+    build_hint_markup,
+    ephemeral_notice_markup,
+    initial_status,
+    model_origin_notice,
+)
 from luxe.chat.render import (
-    ChatCancelled,
     build_final_renderable,
     format_tool_call_verbose,
-    raise_if_cancelled,
-    rainbow_banner,
     render_footer_text,
 )
-from luxe.chat.render import CancelToken
-from luxe.chat.session import (
-    ChatSession,
-    aborted_ctx_line,
-    ctx_suggestion,
-)
+from luxe.chat.session import ChatSession
 from luxe.chat.status import StatusState
-from luxe.memory import session as session_store
+from luxe.chat.turn import TurnOutcome, TurnPrep, attachments_kept_note
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -237,38 +241,34 @@ class ChatApp(App):
         Binding("end", "scroll_end", "To bottom", show=False),
     ]
 
-    def __init__(self, cfg, repo_path, languages, *, session, slots, infer,
-                 keep_loaded=False, resume_session_id=None, on_project=None,
-                 dbglog=None):
+    def __init__(self, cfg, repo_path=None, languages=None, *, session=None,
+                 slots=None, infer=None, keep_loaded=False,
+                 resume_session_id=None, on_project=None, dbglog=None,
+                 controller: ChatController | None = None):
+        """`controller` is the session (run_chat_app builds and starts one).
+        Without it — tests, embedders — one is made around the given
+        `session`/`slots`/`infer`, with the status bar seeded from the window
+        the FIRST turn will use (`controller.initial_status`). The live
+        project is the session's: `repo_path`/`languages` are read from it."""
         super().__init__()
-        # `/ephemeral` must detach this before removing the session directory
-        # the handler has debug.log open inside.
-        self._dbglog = dbglog
+        if controller is None:
+            controller = ChatController(
+                cfg, session=session, slots=slots, infer=infer,
+                status=initial_status(slots), keep_loaded=keep_loaded,
+                dbglog=dbglog, log=logger)
+        self.controller = controller
+        self.sink = TuiSink(self)
         self._resume_id = resume_session_id
         self._on_project = on_project
-        self.cfg = cfg
-        self.repo_path = repo_path
-        self.languages = languages
-        self.session: ChatSession = session
-        self.slots = slots
-        self.infer = infer
-        self.keep_loaded = keep_loaded
-        self.cancel = CancelToken()
-        # Seeded from the window the FIRST turn will use, not the role's — a
-        # billable endpoint starts wider (repl.py has the same seed).
-        self.status = StatusState(opened_at=time.time(),
-                                  num_ctx=slots.default_num_ctx("chat"),
-                                  ctx_ceiling=_repl.startup_ctx_ceiling(slots))
         self._busy = False
         # Set by `action_quit_app`. A worker still unwinding after the app is
         # gone gets `RuntimeError('App is not running')` from every
         # `call_from_thread`; this flag lets it skip the UI work — and the
         # kind="error" crash record that RuntimeError used to produce.
         self._exiting = False
-        # live-turn coalescing buffers (written on the worker, read by the timer).
-        # Chunks, not `+=` on one str — that was O(n²) over a long generation;
-        # the timer only ever shows the bounded tail.
-        self._stream_parts: list[str] = []
+        # live-turn coalescing buffers (written on the worker, read by the
+        # timer). The streamed chunks themselves are the controller's
+        # (`_stream_parts`); the timer only ever shows the bounded tail.
         self._stream_tail = ""
         self._tool_counts: Counter = Counter()
         self._gen_started = 0.0
@@ -281,7 +281,6 @@ class ChatApp(App):
         self._paste_chunks: list[tuple[str, str]] = []  # (chip, full text) pending
         self._session_in = 0               # session cumulative prompt tokens
         self._session_out = 0              # session cumulative completion tokens
-        self.ctx: cmd.CommandContext | None = None
         # Cached widget refs (set in on_mount). We hold references rather than
         # query_one() each tick because `App.query_one` only searches the ACTIVE
         # screen — once a PromptScreen modal is pushed the base-screen widgets are
@@ -290,6 +289,57 @@ class ChatApp(App):
         self._status_bar: StatusBar | None = None
         self._transcript: RichLog | None = None
         self._input: Input | None = None
+
+    # -- the session, as the controller holds it ----------------------------
+    @property
+    def cfg(self):
+        return self.controller.cfg
+
+    @property
+    def session(self) -> ChatSession:
+        return self.controller.session
+
+    @property
+    def slots(self):
+        return self.controller.slots
+
+    @property
+    def infer(self):
+        return self.controller.infer
+
+    @property
+    def keep_loaded(self) -> bool:
+        return self.controller.keep_loaded
+
+    @property
+    def cancel(self):
+        return self.controller.cancel
+
+    @property
+    def status(self) -> StatusState:
+        return self.controller.status
+
+    @property
+    def ctx(self) -> cmd.CommandContext | None:
+        return self.controller.ctx
+
+    @property
+    def repo_path(self) -> str:
+        return self.controller.repo_path
+
+    @property
+    def languages(self) -> frozenset:
+        return self.controller.languages
+
+    @property
+    def _dbglog(self):
+        # `/ephemeral` must detach this before removing the session directory
+        # the handler has debug.log open inside.
+        return self.controller.dbglog
+
+    @property
+    def _stream_parts(self) -> list[str]:
+        return self.controller.stream_parts
 
     # -- layout -------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -302,29 +352,22 @@ class ChatApp(App):
             yield ChatInput(id="prompt", placeholder="message luxe — /help for commands")
 
     def on_mount(self) -> None:
-        from luxe.buildinfo import build_status_hint, version_parts
-
         log = self._log()
-        sha, dirty = version_parts()
-        state = "[yellow](dirty)[/]" if dirty else "[dim green](clean)[/]"
-        log.write(rainbow_banner("luxe")
-                  + f"  [dim]· version {sha}[/] {state} "
-                  + f"[dim]· session {self.session.session_id} · /help[/]")
+        # Shared banner format with the line REPL (controller.banner_markup).
+        log.write(banner_markup(self.session.session_id))
         # The alt-screen TUI is invisible to terminal/tmux scrollback — say so
         # once, with the keys that ARE the scrollback (plus ↑/↓ input history).
         log.write("[dim]· scroll: PgUp/PgDn · shift+↑/↓ · Home/End · mouse "
                   "wheel (terminal scrollback can't see the TUI) · "
                   "↑/↓ recall your prior inputs · ctrl+c clears the input "
                   "(esc interrupts a turn)[/]")
-        from luxe import ephemeral
-        if (eph_notice := ephemeral.startup_notice()):
-            log.write(f"[yellow]·[/] [dim]{_escape(eph_notice)}[/]")
-        hint = build_status_hint()
-        if hint:
-            log.write(f"[yellow]\\[hint][/] [dim]{_escape(hint)}[/]")
+        if (eph_notice := ephemeral_notice_markup()):
+            log.write(eph_notice)
+        if (hint := build_hint_markup()):
+            log.write(hint)
         # Model provenance (local disk / network volume / remote host), stated
         # once — same notice the line REPL prints.
-        log.write(_repl.model_origin_notice(self.slots, self.status))
+        log.write(model_origin_notice(self.slots, self.status))
         # Route SlotManager notices (weight swaps, auto-degrade) into the
         # transcript. run_chat_app constructs slots before the app exists, so
         # the binding lands here; self.write is thread-safe, and the degrade
@@ -337,7 +380,7 @@ class ChatApp(App):
         self._transcript = self.query_one("#transcript", RichLog)
         self._input = self.query_one("#prompt", Input)
         self._gen.display = False
-        self.ctx = cmd.CommandContext(
+        self.controller.ctx = cmd.CommandContext(
             console=LogConsole(self),
             session=self.session,
             slots=self.slots,
@@ -574,8 +617,8 @@ class ChatApp(App):
 
     def _reset_gen(self) -> None:
         """Reset the per-turn live buffers (called at the start of each turn so
-        goal-loop rounds restart the spinner/preview)."""
-        self._stream_parts = []
+        goal-loop rounds restart the spinner/preview). The streamed chunks
+        themselves are reset by the controller as the turn starts."""
         self._stream_tail = ""
         self._tool_counts = Counter()
         self._gen_started = time.time()
@@ -637,156 +680,41 @@ class ChatApp(App):
             return
         self.refresh_status()
 
-    def _execute_turn_blocking(self, message: str, *, plan_mode: bool = False):
-        """Run ONE turn on the current worker thread, rendering into the RichLog.
-        Owns no busy/timer state (the outer worker does) so it's reusable by the
-        single-turn worker AND the goal/plan loops (which call it per round via
-        `_tui_run_turn`)."""
-        self._call_ui(self._reset_gen)
-
-        # HARD spend cap (billable backends only), same rule as the line REPL:
-        # refuse BEFORE dispatch, never mid-turn, and name the raise command.
-        refusal = cost_mod.refusal(self.session, self.slots)
-        if refusal:
-            self._call_ui(self.write, Text(f"✗ {refusal}", style="red"))
-            return _repl.TurnOutcome(crashed=True, final_text=refusal)
-
-        def _on_tool_start(command: str) -> None:
-            # Worker thread; the UI timer (_tick) reads the plain str — no
-            # marshalling needed for a display-only field.
-            self._running_cmd = command
-
-        prep = _repl.prepare_turn(message, self.session, self.slots, self.cfg,
-                                  self.session.languages, self.infer,
-                                  plan_mode=plan_mode,
-                                  cancel=self.cancel,
-                                  on_tool_start=_on_tool_start)
-        # Reflect the window this turn actually uses (incl. a /ctx override).
-        self.status.num_ctx = prep.role_cfg.num_ctx
-        self.status.ctx_ceiling = prep.ctx_ceiling
-        self._call_ui(
-            self.write, Text(f"slot: {prep.slot} · model: {prep.model}", style="dim"))
-
-        def _on_event(tc):
-            self._running_cmd = ""  # completed — back to counts-only
-            self._tool_counts[getattr(tc, "name", "?")] += 1
-            prep.note_tool(tc)
-            # Per-tool transcript lines only under /verbose (else the live counts
-            # on the activity line suffice — avoids the UI-thread write flood).
-            if self.session.verbose_level in ("diff", "full"):
-                self._call_ui(
-                    self.write, format_tool_call_verbose(tc, self.session.verbose_level))
-            raise_if_cancelled(self.cancel)
-
-        def _on_token(delta):
-            raise_if_cancelled(self.cancel)
-            self._stream_parts.append(delta)
-            self._stream_tail = (self._stream_tail + delta)[-400:]
-            self._reasoning_since = 0.0     # answer tokens: it stopped thinking
-
-        def _on_reasoning(delta):
-            # Counter only — the reasoning TEXT never reaches the transcript,
-            # the fold, or (by default) the screen.
-            if not self._reasoning_since:
-                self._reasoning_since = time.time()
-
-        def _on_progress(pressure):
-            self._ctx_pressure = pressure  # rendered live by the timer
-
-        def _on_notice(text):
-            # The loop acting on its own (truncated-turn retry). Goes to the
-            # transcript, not the activity line: it must survive the turn, and
-            # a retry silently costs minutes of spinner otherwise.
-            self._call_ui(self.write, Text(f"· {text}", style="yellow"))
-
-        started = time.time()
-        interrupted = False
-        result = None
-        # Reasoning sink on the Backend instance chat owns; the loop's
-        # `backend.chat` call site is frozen (chat.sdd), so the channel is
-        # wired here and unwired below.
-        turn_backend = self.slots.backend
-        turn_backend.on_reasoning = _on_reasoning
-        try:
-            result = prep.call(_on_event, _on_token, _on_progress, _on_notice)
-        except (ChatCancelled, KeyboardInterrupt):
-            interrupted = True
-        finally:
-            turn_backend.on_reasoning = None
-            self._reasoning_since = 0.0
-            # Whatever happened, bill what the Backend was billed (repl.py).
-            _repl.settle_turn_cost(self.session, prep, self.status)
-        ended = time.time()
-        outcome = _repl.finalize_turn(self.session, prep, result,
-                                      interrupted=interrupted, message=message,
-                                      started_at=started, ended_at=ended,
-                                      partial_text="".join(self._stream_parts))
-        self._call_ui(self._render_outcome, outcome, prep, interrupted)
-        return outcome
-
-    def _tui_run_turn(self, message, session=None, slots=None, cfg=None,
-                      languages=None, console=None, cancel=None, infer=None,
-                      status=None, plan_mode=False):
-        """Adapter matching `_run_turn`'s signature so `repl._run_goal_loop` /
-        `_run_plan` drive TUI turns (uses the app's own session/slots/etc)."""
-        return self._execute_turn_blocking(message, plan_mode=plan_mode)
-
     @work(thread=True, exclusive=True, group="turn")
     def _run_turn(self, message: str) -> None:
-        from luxe.backend import BackendError
-
         self.cancel.reset()
         self.call_from_thread(self._begin_busy)
         try:
-            self._execute_turn_blocking(message)
-        except BackendError as e:
-            self._report_backend_error(e)
-        except Exception:
             # A turn must never take the app down. Textual's default is to let
             # a worker exception unwind into WorkerFailed and kill the session
             # (losing the conversation) — that is how one uncaught
             # OSError(ETIMEDOUT) from a repo walk ended a chat on 2026-07-29.
-            self._report_turn_crash()
+            self.controller.contain("turn", self.controller.run_turn, message,
+                                    self.sink, sink=self.sink)
         finally:
             self._call_ui(self._end_busy)
 
     def _report_backend_error(self, e) -> None:
-        """Mirror the line REPL: a dead endpoint fails the turn, not the app.
-        Record + recovery (repair → degrade → /backend hint) are the shared
-        `repl.note_backend_error`; only the rendering lives here. Text(), not
-        markup: the message is an exception string."""
-        text, hint = _repl.note_backend_error(self.session, self.slots, e)
-        self.write(Text(f"✗ {text}", style="red"))
-        if hint:
-            self.write(Text(f"· {hint}", style="yellow"))
-        if (kept := _repl.attachments_kept_note(self.session)):
-            self.write(Text(kept, style="dim"))
+        """A dead endpoint fails the turn, not the app: record + recovery
+        (repair → degrade → /backend hint), rendered into the transcript
+        (`ChatController.report_backend_error`)."""
+        self.controller.report_backend_error(e, self.sink)
 
     def _report_turn_crash(self, what: str = "turn") -> None:
         """Render an unexpected worker exception into the transcript instead of
-        letting it kill the app. The full traceback goes to the log so the
-        session stays usable and the failure is still diagnosable.
-
-        Once the user has quit, an exception unwinding the worker is the app
-        going away (typically `RuntimeError('App is not running')` from a UI
-        call), not a failed turn: logged, never recorded as one."""
-        if self._exiting:
-            logger.debug("chat %s ended after quit", what, exc_info=True)
-            return
-        exc_line = _repl.note_turn_crash(self.session, what)
-        self.write(Text(f"✗ {what} failed: {exc_line}", style="red"))
-        self.write("[yellow]· the session is still alive — retry, or "
-                   "`/quit` if it repeats[/]")
-        if (kept := _repl.attachments_kept_note(self.session)):
-            self.write(Text(kept, style="dim"))
+        letting it kill the app; after quit it is only logged
+        (`ChatController.report_crash`). Call from inside the `except`."""
+        self.controller.report_crash(what, self.sink)
 
     def _render_outcome(self, outcome, prep, interrupted) -> None:
+        """UI thread (`TuiSink.render_outcome` marshals here)."""
+        ctl = self.controller
         log = self._log()
         if interrupted:
             ran = outcome.tool_calls
             note = f" ({ran} tool call{'s' if ran != 1 else ''} completed)" if ran else ""
             log.write(f"[yellow]· interrupted — partial turn saved{note}[/]")
-            if (kept := _repl.attachments_kept_note(self.session)):
+            if (kept := attachments_kept_note(self.session)):
                 log.write(Text(kept, style="dim"))
             return
         result = outcome.result
@@ -797,8 +725,8 @@ class ChatApp(App):
         log.write(build_final_renderable(outcome.final_text, mode=mode))
         self._session_in += result.prompt_tokens
         self._session_out += result.completion_tokens
-        # Spend was already settled in `_execute_turn_blocking` (before this
-        # render), so the footer and status bar read the running total.
+        # Spend was already settled by the controller (before this render), so
+        # the footer and status bar read the running total.
         footer = (render_footer_text(prep.slot, prep.model, result,
                                      num_ctx=outcome.num_ctx,
                                      ended_at=time.time())
@@ -806,109 +734,67 @@ class ChatApp(App):
         if self.session.session_cost_usd > 0:
             footer += f" · session cost: {cost_mod.fmt(self.session.session_cost_usd)}"
         log.write(Text(footer, style="dim"))
-        # update persistent status from the completed turn
-        s = self.status
-        s.slot, s.model = prep.slot, prep.model
-        s.model_origin = origin_mod.cached_origin_for(
-            self.slots.backend, prep.model).kind
-        s.wall_s = result.wall_s
-        s.tok_per_s = (result.completion_tokens / result.wall_s
-                       if result.wall_s > 0 else 0.0)
-        # Server-truth context fill, same rule as the line REPL (repl.py): the
-        # chars/4 estimate misses tool schemas and reads a flat ~7% at a real
-        # ~12%. Also mirror into the live buffer — _end_busy's final _tick
-        # would otherwise overwrite this with the stale live estimate.
-        if result.last_prompt_tokens and outcome.num_ctx:
-            s.ctx_pressure = result.last_prompt_tokens / outcome.num_ctx
-        else:
-            s.ctx_pressure = result.final_context_pressure
-        self._ctx_pressure = s.ctx_pressure
-        s.num_ctx = outcome.num_ctx
-        s.prompt_tokens = result.prompt_tokens
-        s.steps = result.steps
-        s.has_turn = True
-        # Same display gate as the line REPL (repl.py): offer a bigger window
-        # only when a bigger window is plausibly the answer — not when one tool
-        # result ate this one, not on an abort more headroom cannot fix, and
-        # not for a tier this host has no RAM for (session.ctx_suggestion,
-        # 2026-08-24). Nothing dispatched changes; CTX_SUGGEST_PRESSURE and the
-        # compaction thresholds keep their values.
-        nxt = ctx_suggestion(
-            result, outcome.num_ctx, prep.ctx_ceiling,
-            # The RAM floors describe the box holding the KV cache, which a
-            # remote endpoint is not. Mirrors `cmd_toggles._ctx_on_local_ram`.
-            local_weights=(s.model_origin != "remote"),
-        )
+        # Update the persistent status from the completed turn, then mirror the
+        # fill into the live buffer — _end_busy's final _tick would otherwise
+        # overwrite it with the stale live estimate.
+        ctl.apply_turn_status(outcome)
+        self._ctx_pressure = self.status.ctx_pressure
+        nxt = ctl.suggest_ctx(outcome)
         if nxt:
             log.write(f"[dim]· context pressure {result.peak_context_pressure:.0%} "
                       f"— `/ctx {nxt[0]}` gives more headroom[/]")
-        # Mirror the line REPL: a turn the agent loop ABORTED (backend failure
-        # contained into the result rather than raised) is a failed turn and
-        # must look like one — it used to render as a successful empty reply.
-        # Text(), not markup: the reason is an exception string.
-        noted = _repl.note_aborted_turn(self.session, self.slots, result)
-        if noted:
-            reason, hint = noted
-            log.write(Text(f"✗ {reason}", style="red"))
-            # Name which step each context number describes — the footer's
-            # `ctx:` is the last ACCEPTED step, the pressure figure is the step
-            # that FAILED (EVIDENCE.md 2026-08-24, finding 4).
-            ctx_line = aborted_ctx_line(result, outcome.num_ctx)
-            if ctx_line:
-                log.write(Text(f"· {ctx_line}", style="dim"))
-            if hint:
-                log.write(Text(f"· {hint}", style="yellow"))
-            if (kept := _repl.attachments_kept_note(self.session)):
-                log.write(Text(kept, style="dim"))
+        # A turn the agent loop ABORTED (backend failure contained into the
+        # result rather than raised) is a failed turn and must look like one —
+        # it used to render as a successful empty reply. Text(), not markup:
+        # the reason is an exception string.
+        rep = ctl.aborted_report(outcome)
+        if rep:
+            log.write(Text(f"✗ {rep.reason}", style="red"))
+            if rep.ctx_line:
+                log.write(Text(f"· {rep.ctx_line}", style="dim"))
+            if rep.hint:
+                log.write(Text(f"· {rep.hint}", style="yellow"))
+            if rep.kept:
+                log.write(Text(rep.kept, style="dim"))
 
     # -- command worker -----------------------------------------------------
     @work(thread=True, exclusive=True, group="turn")
     def _run_command(self, line: str) -> None:
-        from luxe.backend import BackendError
-
         self.cancel.reset()
         self.call_from_thread(self._begin_busy)
         try:
-            res = cmd.dispatch(line, self.ctx)
-            if line.strip().lower().startswith("/clear"):
-                # The footer's cumulative session tokens describe the cleared
-                # conversation too — zero them with the status bar.
-                self._session_in = self._session_out = 0
-            if getattr(res, "exit", False):
-                self.call_from_thread(self.action_quit_app)
-                return
-            # /retry hands a message back to be run as a turn (same worker, so
-            # the busy state and cancel token still cover it).
-            if getattr(res, "submit", ""):
-                self._execute_turn_blocking(res.submit)
-                return
-            console = LogConsole(self)
-            # /plan and /goal set session flags the line loop would act on; here we
-            # run their routines on this worker, driving TUI turns + a modal prompt.
-            if self.session.plan_pending:
-                _repl._run_plan(self.session, self.slots, self.cfg,
-                                self.session.languages,
-                                console, self.cancel, self.infer, None,
-                                run_turn=self._tui_run_turn, reader=self.prompt_user)
-            if self.session.goal_active:
-                _repl._run_goal_loop(self.session, self.slots, self.cfg,
-                                     self.session.languages,
-                                     console, self.cancel, self.infer, None,
-                                     run_turn=self._tui_run_turn)
-        except (ChatCancelled, KeyboardInterrupt):
-            self.write("[yellow]· interrupted[/]")
-        except BackendError as e:
-            # /retry's turn or a /plan draft that raised.
-            self._report_backend_error(e)
-        except Exception:
             # Same contract as the turn worker: a failing command reports and
-            # the session survives.
-            self._report_turn_crash("command")
+            # the session survives (a /retry turn or /plan draft that raised
+            # included).
+            self.controller.contain("command", self._command_body, line,
+                                    sink=self.sink)
         finally:
             # The supervisor only returns once the goal is inactive; if
             # something escaped it instead, don't leave it marked active.
             self.session.goal_active = False
             self._call_ui(self._end_busy)
+
+    def _command_body(self, line: str) -> None:
+        """One slash command on the command worker (contained by the caller)."""
+        res = cmd.dispatch(line, self.ctx)
+        if line.strip().lower().startswith("/clear"):
+            # The footer's cumulative session tokens describe the cleared
+            # conversation too — zero them with the status bar.
+            self._session_in = self._session_out = 0
+        if getattr(res, "exit", False):
+            self.call_from_thread(self.action_quit_app)
+            return
+        # /retry hands a message back to be run as a turn (same worker, so
+        # the busy state and cancel token still cover it).
+        if getattr(res, "submit", ""):
+            self.controller.run_turn(res.submit, self.sink)
+            return
+        # /plan and /goal set session flags the line loop would act on; here we
+        # run their supervisors on this worker, driving TUI turns + a modal prompt.
+        if self.session.plan_pending:
+            self.controller.run_plan(self.sink)
+        if self.session.goal_active:
+            self.controller.run_goal(self.sink)
 
     # -- prompt_user seam ---------------------------------------------------
     def prompt_user(self, question: str, default: str = "") -> str:
@@ -940,10 +826,10 @@ class ChatApp(App):
         if self._on_project is None:
             raise RuntimeError("this session cannot switch projects")
         summary = self._on_project(target)
-        # The SESSION is the single live source (repl.apply_project_summary):
-        # the status bar, turn setup, and compare all read it at use time.
-        _repl.apply_project_summary(self.session, summary)
-        self.repo_path = summary["root"]
+        # The SESSION is the single live source (controller.apply_project_summary):
+        # the status bar, turn setup, compare, and `self.repo_path` all read it
+        # at use time.
+        apply_project_summary(self.session, summary)
         self.refresh_status()
         return summary
 
@@ -1065,6 +951,100 @@ class LogConsole:
         return _noop
 
 
+class TuiSink:
+    """The Textual app's `TurnSink` (controller.py).
+
+    Called on the turn WORKER thread. Transcript writes go through
+    `ChatApp.write` (thread-safe; looked up per call, never captured) or an
+    explicit `_call_ui`; everything the live `#generating` line shows is a
+    plain field the UI timer reads — tokens and tool events coalesce there and
+    are never marshalled one by one (chat.sdd: flood/deadlock)."""
+
+    crash_hint = ("[yellow]· the session is still alive — retry, or "
+                  "`/quit` if it repeats[/]")
+
+    def __init__(self, app: ChatApp) -> None:
+        self._app = app
+
+    @property
+    def closing(self) -> bool:
+        return self._app._exiting
+
+    def print(self, renderable) -> None:
+        self._app.write(renderable)
+
+    def choose(self, choices: tuple[str, ...], default: str) -> str:
+        raw = (self._app.prompt_user(f"choose [{'/'.join(choices)}]: ")
+               or default).strip().lower()
+        return raw[:1] if raw[:1] in choices else default
+
+    # -- per-turn lifecycle --------------------------------------------------
+    def turn_starting(self) -> None:
+        self._app._call_ui(self._app._reset_gen)
+
+    def refused(self, text: str) -> None:
+        # HARD spend cap (billable backends only), same rule as the line REPL:
+        # refused BEFORE dispatch, never mid-turn, naming the raise command.
+        self._app._call_ui(self._app.write, Text(f"✗ {text}", style="red"))
+
+    def on_tool_start(self, command: str) -> None:
+        # Worker thread; the UI timer (_tick) reads the plain str — no
+        # marshalling needed for a display-only field.
+        self._app._running_cmd = command
+
+    def turn_prepared(self, prep: TurnPrep) -> None:
+        app = self._app
+        # Reflect the window this turn actually uses (incl. a /ctx override).
+        app.status.num_ctx = prep.role_cfg.num_ctx
+        app.status.ctx_ceiling = prep.ctx_ceiling
+        app._call_ui(
+            app.write, Text(f"slot: {prep.slot} · model: {prep.model}", style="dim"))
+
+    @contextmanager
+    def running(self, prep: TurnPrep, started_at: float):
+        app = self._app
+        session = app.session
+
+        def _on_tool(tc):
+            app._running_cmd = ""  # completed — back to counts-only
+            app._tool_counts[getattr(tc, "name", "?")] += 1
+            # Per-tool transcript lines only under /verbose (else the live counts
+            # on the activity line suffice — avoids the UI-thread write flood).
+            if session.verbose_level in ("diff", "full"):
+                app._call_ui(
+                    app.write, format_tool_call_verbose(tc, session.verbose_level))
+
+        def _on_token(delta):
+            app._stream_tail = (app._stream_tail + delta)[-400:]
+            app._reasoning_since = 0.0     # answer tokens: it stopped thinking
+
+        def _on_reasoning(delta):
+            # Counter only — the reasoning TEXT never reaches the transcript,
+            # the fold, or (by default) the screen.
+            if not app._reasoning_since:
+                app._reasoning_since = time.time()
+
+        def _on_progress(pressure):
+            app._ctx_pressure = pressure  # rendered live by the timer
+
+        def _on_notice(text):
+            # The loop acting on its own (truncated-turn retry). Goes to the
+            # transcript, not the activity line: it must survive the turn, and
+            # a retry silently costs minutes of spinner otherwise.
+            app._call_ui(app.write, Text(f"· {text}", style="yellow"))
+
+        try:
+            yield TurnHooks(on_tool=_on_tool, on_token=_on_token,
+                            on_progress=_on_progress, on_notice=_on_notice,
+                            on_reasoning=_on_reasoning)
+        finally:
+            app._reasoning_since = 0.0
+
+    def render_outcome(self, outcome: TurnOutcome, prep: TurnPrep) -> None:
+        self._app._call_ui(self._app._render_outcome, outcome, prep,
+                           outcome.interrupted)
+
+
 def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
                  resume_session_id=None, dev_mode=False, start_web=False,
                  start_write=False,
@@ -1074,94 +1054,34 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
                  startup_ctx_tier=None,
                  infer_task_type=None, on_project=None,
                  project_kind="git") -> None:
-    """Entry point: build the session + app and run it. Mirrors run_chat_repl's
-    startup-flag handling so the two front-ends are interchangeable."""
-    from luxe.chat.slots import SlotManager
-    from luxe.agents.tasktype import infer_task_type as _infer_task_type
-    from luxe.gitkit.health import current_head
-    from luxe.memory import project as project_mem
-
-    if theme_name:
-        from luxe.chat import theme as theme_mod
-        theme_mod.set_palette(theme_name)
-
-    infer = infer_task_type or _infer_task_type
-    slots = SlotManager(cfg, on_status=lambda m: None)
-    session = ChatSession(
-        repo_path=repo_path,
-        project_hash=project_mem.project_hash(repo_path) if repo_path else "",
-        languages=languages,
-        project_kind=project_kind,
+    """Entry point: build + start the session (`ChatController`, the same
+    startup-flag handling as run_chat_repl, so the two front-ends are
+    interchangeable), then run the app."""
+    # SlotManager notices are routed into the transcript once the app mounts
+    # (ChatApp.on_mount); nothing is on screen to print to before that.
+    ctl = ChatController.build(
+        cfg, repo_path, languages, on_status=lambda m: None,
+        keep_loaded=keep_loaded, infer_task_type=infer_task_type,
+        theme_name=theme_name, project_kind=project_kind, log=logger,
+        dev_mode=dev_mode, start_web=start_web, start_write=start_write,
+        startup_verbose=startup_verbose,
+        startup_show_reasoning=startup_show_reasoning,
+        startup_no_terse=startup_no_terse, startup_debug=startup_debug,
+        startup_compact=startup_compact, startup_ctx_tier=startup_ctx_tier,
     )
-    # Same one-time stat as run_chat_repl: hint the planeproxy tool when the
-    # binary exists on this machine (session.planeproxy_present → PLANEPROXY_HINT).
-    from luxe.planeproxy import binary_present as _pp_present
-    session.planeproxy_present = _pp_present()
-    if dev_mode:
-        session.write_enabled = True
-        session.unrestricted_bash = True
-    if start_web:
-        session.web_enabled = True
-    if start_write:
-        # `luxe code` posture: write tools ON from turn one; bash stays gated.
-        session.write_enabled = True
-    if startup_debug:
-        session.verbose_level = "full"
-        session.show_reasoning = True
-    elif startup_verbose:
-        session.verbose_level = startup_verbose
-    if startup_show_reasoning:
-        session.show_reasoning = True
-    if startup_no_terse:
-        session.terse = False
-    if startup_compact:
-        session.compact = True
-    if startup_ctx_tier:
-        from luxe.chat.session import CTX_TIERS
-        if startup_ctx_tier in CTX_TIERS:
-            # `--ctx <tier>` = /ctx before the first turn (clamped per-turn).
-            session.num_ctx_override = CTX_TIERS[startup_ctx_tier]
-
-    meta = session_store.new_session(repo_path=repo_path,
-                                     project_hash=session.project_hash,
-                                     slot_models=slots.slot_models(),
-                                     backend_name=slots.backend_name,
-                                     base_url=slots.backend.base_url)
-    session.session_id = meta.session_id
-    session.index_head = current_head(repo_path) if repo_path else ""
-
     # Always-on per-session debug log — the TUI owns the screen, so without
-    # this every logger.error traceback was simply lost (chat.sdd).
-    from luxe.chat import debuglog
-    dbglog = debuglog.install(session_store.session_dir(meta.session_id))
-    logger.info("session %s start · repo=%s · backend=%s (%s) · slots=%s",
-                meta.session_id, repo_path or "(none)", slots.backend_name,
-                slots.backend.base_url, slots.slot_models())
-    _repl.start_session_gc()
+    # it every logger.error traceback was simply lost (chat.sdd).
+    ctl.start()
 
-    app = ChatApp(cfg, repo_path, languages, session=session, slots=slots,
-                  infer=infer, keep_loaded=keep_loaded,
-                  resume_session_id=resume_session_id, on_project=on_project,
-                  dbglog=dbglog)
+    app = ChatApp(cfg, controller=ctl, resume_session_id=resume_session_id,
+                  on_project=on_project)
     try:
         app.run()
     finally:
-        # Session working notes — BEFORE the unload (the backend must still be
-        # usable) and AFTER the app has released the screen, so its one line
-        # lands on the real terminal rather than a torn-down alternate screen.
-        # Never raises, never retries (chat/notes.py).
-        from luxe.chat import notes as notes_mod
+        # Teardown runs AFTER the app has released the screen, so the notes'
+        # one line lands on the real terminal rather than a torn-down
+        # alternate screen. No mid-turn special case: `app.run()` returns only
+        # after the worker thread has finished (asyncio.run joins the default
+        # executor), so no request is in flight here.
         from rich.console import Console as _Console
-        _console = _Console()
-        notes_mod.run_session_notes(session, slots, cfg, _console,
-                                    timeout_s=notes_mod.EXIT_TIMEOUT_S)
-        # No mid-turn special case: `app.run()` returns only after the worker
-        # thread has finished (asyncio.run joins the default executor), so no
-        # request is in flight here.
-        if not keep_loaded:
-            try:
-                slots.unload_all()
-            except Exception:
-                pass
-        logger.info("session %s end", session.session_id)
-        debuglog.uninstall(dbglog)
+        ctl.shutdown(_Console(), quiet=True)
