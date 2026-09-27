@@ -260,9 +260,11 @@ class ChatApp(App):
                                   num_ctx=slots.default_num_ctx("chat"),
                                   ctx_ceiling=_repl.startup_ctx_ceiling(slots))
         self._busy = False
-        # Set when the user quits while a turn is still unwinding: the model
-        # it is using must not be unloaded out from under it (run_chat_app).
-        self.quit_while_busy = False
+        # Set by `action_quit_app`. A worker still unwinding after the app is
+        # gone gets `RuntimeError('App is not running')` from every
+        # `call_from_thread`; this flag lets it skip the UI work — and the
+        # kind="error" crash record that RuntimeError used to produce.
+        self._exiting = False
         # live-turn coalescing buffers (written on the worker, read by the timer).
         # Chunks, not `+=` on one str — that was O(n²) over a long generation;
         # the timer only ever shows the bounded tail.
@@ -378,7 +380,17 @@ class ChatApp(App):
         if threading.current_thread() is threading.main_thread():
             log.write(renderable)
         else:
-            self.call_from_thread(log.write, renderable)
+            self._call_ui(log.write, renderable)
+
+    def _call_ui(self, fn, *args):
+        """`call_from_thread`, except that once the app is exiting a UI that
+        no longer exists is not an error — the call is dropped (None)."""
+        if self._exiting:
+            try:
+                return self.call_from_thread(fn, *args)
+            except RuntimeError:
+                return None
+        return self.call_from_thread(fn, *args)
 
     def git_updated(self) -> None:
         """Background git refresh finished (any thread): repaint the bar."""
@@ -538,11 +550,15 @@ class ChatApp(App):
         finally runs session notes FIRST (they need the loaded model — unloading
         here forced a full reload just to distil) and unloads after.
 
-        Quitting mid-turn cancels the turn: the worker thread cannot be killed,
-        and without the token it kept running tools after the screen closed
-        and held the process open until the turn finished on its own."""
+        Quitting mid-turn sets the cancel token: the worker thread cannot be
+        killed, and without the token it kept running tools after the screen
+        closed. `App.run()` still returns only once the worker has finished
+        (asyncio.run waits for executor threads), and the token is polled only
+        at the next streamed token or tool dispatch — so a quit during a long
+        prefill waits for the first token. By the time `run_chat_app`'s finally
+        runs, the turn is over, so its unload is safe."""
+        self._exiting = True
         if self._busy:
-            self.quit_while_busy = True
             self.cancel.requested = True
             if isinstance(self.screen, PromptScreen):
                 self.screen.dismiss(self.screen._default)
@@ -626,13 +642,13 @@ class ChatApp(App):
         Owns no busy/timer state (the outer worker does) so it's reusable by the
         single-turn worker AND the goal/plan loops (which call it per round via
         `_tui_run_turn`)."""
-        self.call_from_thread(self._reset_gen)
+        self._call_ui(self._reset_gen)
 
         # HARD spend cap (billable backends only), same rule as the line REPL:
         # refuse BEFORE dispatch, never mid-turn, and name the raise command.
         refusal = cost_mod.refusal(self.session, self.slots)
         if refusal:
-            self.call_from_thread(self.write, Text(f"✗ {refusal}", style="red"))
+            self._call_ui(self.write, Text(f"✗ {refusal}", style="red"))
             return _repl.TurnOutcome(crashed=True, final_text=refusal)
 
         def _on_tool_start(command: str) -> None:
@@ -648,7 +664,7 @@ class ChatApp(App):
         # Reflect the window this turn actually uses (incl. a /ctx override).
         self.status.num_ctx = prep.role_cfg.num_ctx
         self.status.ctx_ceiling = prep.ctx_ceiling
-        self.call_from_thread(
+        self._call_ui(
             self.write, Text(f"slot: {prep.slot} · model: {prep.model}", style="dim"))
 
         def _on_event(tc):
@@ -658,7 +674,7 @@ class ChatApp(App):
             # Per-tool transcript lines only under /verbose (else the live counts
             # on the activity line suffice — avoids the UI-thread write flood).
             if self.session.verbose_level in ("diff", "full"):
-                self.call_from_thread(
+                self._call_ui(
                     self.write, format_tool_call_verbose(tc, self.session.verbose_level))
             raise_if_cancelled(self.cancel)
 
@@ -681,7 +697,7 @@ class ChatApp(App):
             # The loop acting on its own (truncated-turn retry). Goes to the
             # transcript, not the activity line: it must survive the turn, and
             # a retry silently costs minutes of spinner otherwise.
-            self.call_from_thread(self.write, Text(f"· {text}", style="yellow"))
+            self._call_ui(self.write, Text(f"· {text}", style="yellow"))
 
         started = time.time()
         interrupted = False
@@ -705,7 +721,7 @@ class ChatApp(App):
                                       interrupted=interrupted, message=message,
                                       started_at=started, ended_at=ended,
                                       partial_text="".join(self._stream_parts))
-        self.call_from_thread(self._render_outcome, outcome, prep, interrupted)
+        self._call_ui(self._render_outcome, outcome, prep, interrupted)
         return outcome
 
     def _tui_run_turn(self, message, session=None, slots=None, cfg=None,
@@ -732,7 +748,7 @@ class ChatApp(App):
             # OSError(ETIMEDOUT) from a repo walk ended a chat on 2026-07-29.
             self._report_turn_crash()
         finally:
-            self.call_from_thread(self._end_busy)
+            self._call_ui(self._end_busy)
 
     def _report_backend_error(self, e) -> None:
         """Mirror the line REPL: a dead endpoint fails the turn, not the app.
@@ -749,7 +765,14 @@ class ChatApp(App):
     def _report_turn_crash(self, what: str = "turn") -> None:
         """Render an unexpected worker exception into the transcript instead of
         letting it kill the app. The full traceback goes to the log so the
-        session stays usable and the failure is still diagnosable."""
+        session stays usable and the failure is still diagnosable.
+
+        Once the user has quit, an exception unwinding the worker is the app
+        going away (typically `RuntimeError('App is not running')` from a UI
+        call), not a failed turn: logged, never recorded as one."""
+        if self._exiting:
+            logger.debug("chat %s ended after quit", what, exc_info=True)
+            return
         exc_line = _repl.note_turn_crash(self.session, what)
         self.write(Text(f"✗ {what} failed: {exc_line}", style="red"))
         self.write("[yellow]· the session is still alive — retry, or "
@@ -885,7 +908,7 @@ class ChatApp(App):
             # The supervisor only returns once the goal is inactive; if
             # something escaped it instead, don't leave it marked active.
             self.session.goal_active = False
-            self.call_from_thread(self._end_busy)
+            self._call_ui(self._end_busy)
 
     # -- prompt_user seam ---------------------------------------------------
     def prompt_user(self, question: str, default: str = "") -> str:
@@ -1132,14 +1155,10 @@ def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
         _console = _Console()
         notes_mod.run_session_notes(session, slots, cfg, _console,
                                     timeout_s=notes_mod.EXIT_TIMEOUT_S)
-        if app.quit_while_busy:
-            # The cancelled turn may still be unwinding on its worker thread;
-            # pulling its model out from under the in-flight request helps
-            # nobody. Leave it loaded and say so.
-            _console.print("[dim]· models left loaded — a turn was still "
-                           "unwinding at quit (`/unload` next session, or "
-                           "they idle out)[/]")
-        elif not keep_loaded:
+        # No mid-turn special case: `app.run()` returns only after the worker
+        # thread has finished (asyncio.run joins the default executor), so no
+        # request is in flight here.
+        if not keep_loaded:
             try:
                 slots.unload_all()
             except Exception:

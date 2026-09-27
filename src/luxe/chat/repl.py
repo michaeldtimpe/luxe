@@ -1685,6 +1685,21 @@ def _run_plan(
         console.print("[yellow]· planning interrupted.[/]")
         return
 
+    # A turn refused before dispatch (the spend cap) carries its REFUSAL as
+    # `final_text`, and an interrupted or aborted draft carries a fragment;
+    # none of them is a plan to save or execute. Same rule as /goal.
+    if outcome.crashed:
+        console.print("[yellow]· no plan — the planning turn was refused "
+                      "(see above).[/]")
+        return
+    if outcome.interrupted:
+        console.print("[yellow]· planning interrupted.[/]")
+        return
+    if getattr(outcome.result, "aborted", False):
+        console.print("[yellow]· no plan — the planning turn aborted "
+                      "(see above).[/]")
+        return
+
     plan_text = (outcome.final_text or "").strip()
     if not plan_text:
         console.print("[yellow]· no plan was produced.[/]")
