@@ -84,3 +84,42 @@ def test_non_empty_diff_commits_branch(git_repo: Path, monkeypatch, tmp_path):
     log = subprocess.run(["git", "log", "--oneline", "-1"],
                          cwd=git_repo, capture_output=True, text=True, check=True)
     assert "bugfix: fix x" in log.stdout
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+def test_agent_made_commit_is_shipped_not_no_mutations(git_repo: Path):
+    """The agent committed its own work through bash on a detached HEAD and
+    left the tree clean. That is a deliverable: the commit step must put the
+    branch on it (so push ships it), not raise NoMutationsError — every
+    2026-09 deps-audit run lost its SECURITY-AUDIT.md this way."""
+    base = _git(git_repo, "rev-parse", "HEAD")
+    _git(git_repo, "checkout", "-q", "--detach", base)
+    (git_repo / "SECURITY-AUDIT.md").write_text("# audit\n")
+    _git(git_repo, "add", ".")
+    _git(git_repo, "commit", "-q", "-m", "agent's own commit")
+    agent_head = _git(git_repo, "rev-parse", "HEAD")
+
+    state = PRState(branch_name="luxe/manage/audit")
+    spec = RunSpec(run_id="t", goal="g", task_type="manage",
+                   repo_path=str(git_repo), base_sha=base, base_branch="main")
+    pr_mod._do_commit(spec, state, report_text="r", task_type="manage", goal="g")
+
+    step = state.step("commit")
+    assert step.done and step.status == "done"
+    assert "agent committed 1 commit(s)" in step.detail
+    assert _git(git_repo, "rev-parse", "--abbrev-ref", "HEAD") == "luxe/manage/audit"
+    assert _git(git_repo, "rev-parse", "HEAD") == agent_head
+
+
+def test_head_unrelated_to_base_is_still_no_mutations(git_repo: Path):
+    """Only commits that DESCEND from base_sha count; an unknown base keeps
+    the old behavior."""
+    state = PRState(branch_name="luxe/manage/x")
+    spec = RunSpec(run_id="t", goal="g", task_type="manage",
+                   repo_path=str(git_repo), base_sha="", base_branch="main")
+    with pytest.raises(NoMutationsError):
+        pr_mod._do_commit(spec, state, report_text="r", task_type="manage", goal="g")
