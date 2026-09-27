@@ -335,10 +335,13 @@ class _Route:
         self.fetch_kw = kw
         if self._fetch_error:
             raise RuntimeError("net down")
-        return "RESP"
+        return self.response
 
-    def fulfill(self, response=None):
-        self.outcome = ("fulfill", response)
+    response = type("R", (), {"status": 200, "headers": {}})()
+
+    def fulfill(self, response=None, **kw):
+        self.outcome = (("fulfill", response) if response is not None
+                        else ("fulfill-page", kw))
 
 
 class _WS:
@@ -381,12 +384,42 @@ class TestBrowserEgressGuard:
             assert r.outcome == ("abort", "blockedbyclient"), url
         ok = _Route("https://example.com/app.js")
         g.on_route(ok)
-        assert ok.outcome == ("fulfill", "RESP")
+        assert ok.outcome == ("fulfill", _Route.response)
         # Redirects come back to the browser as a NEW (routed) request.
         assert ok.fetch_kw == {"max_redirects": 0}
         down = _Route("https://example.com/x", fetch_error=True)
         g.on_route(down)
         assert down.outcome == ("abort", "failed")
+
+    @staticmethod
+    def _redirecting(url, location, navigation):
+        r = _Route(url)
+        r.response = type("R", (), {"status": 302,
+                                    "headers": {"location": location}})()
+        r.request.is_navigation_request = lambda: navigation
+        return r
+
+    def test_a_3xx_into_private_space_is_aborted_not_handed_back(self):
+        from luxe.web.browser import EgressGuard
+        for nav in (True, False):
+            r = self._redirecting("https://example.com/r",
+                                  "http://127.0.0.1:8000/admin", nav)
+            EgressGuard().on_route(r)
+            assert r.outcome == ("abort", "blockedbyclient"), nav
+
+    def test_a_navigation_3xx_becomes_a_new_routed_navigation(self):
+        """Chromium follows a fulfilled navigation 3xx WITHOUT routing the
+        next hop, so a public->public->private chain escaped. The allowed hop
+        is answered with a client redirect — a new, routed navigation."""
+        from luxe.web.browser import EgressGuard
+        r = self._redirecting("https://example.com/r", "/next", True)
+        EgressGuard().on_route(r)
+        kind, kw = r.outcome
+        assert kind == "fulfill-page" and kw["status"] == 200
+        assert "https://example.com/next" in kw["body"]
+        sub = self._redirecting("https://example.com/img", "/next.png", False)
+        EgressGuard().on_route(sub)
+        assert sub.outcome == ("fulfill", sub.response)
 
     def test_websockets_are_guarded(self):
         from luxe.web.browser import EgressGuard

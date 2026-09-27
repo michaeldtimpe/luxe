@@ -118,6 +118,23 @@ _USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                "Chrome/120.0 Safari/537.36 luxe/1.0")
 
 
+def _is_navigation(request) -> bool:
+    try:
+        return bool(request.is_navigation_request())
+    except Exception:  # noqa: BLE001 — a request without the method: assume yes
+        return True
+
+
+def _client_redirect(target: str) -> str:
+    """A page that replaces itself with `target` (no history entry)."""
+    import html
+    import json
+
+    return ("<!doctype html><meta http-equiv=\"refresh\" content=\"0;url="
+            f"{html.escape(target, quote=True)}\">"
+            f"<script>location.replace({json.dumps(target)})</script>")
+
+
 class EgressGuard:
     """The egress guard applied INSIDE the browser, to every request.
 
@@ -133,8 +150,11 @@ class EgressGuard:
     - service workers are blocked at context creation (their fetches bypass
       routing entirely);
     - Playwright routes only the FIRST url of a redirect chain, so allowed
-      requests are fetched with `max_redirects=0` and the 3xx is handed back
-      to the browser: each hop becomes a new, routed, checked request;
+      requests are fetched with `max_redirects=0` and every 3xx's Location is
+      checked here before anything follows it. A subresource 3xx is handed
+      back (its next hop is re-routed); a NAVIGATION 3xx is not re-routed by
+      Chromium, so it is answered with a client-side redirect page, which
+      starts a new — routed, checked — navigation;
     - any response that still arrives from non-public space is recorded in
       `escaped`, and the caller treats an entry there as a hard stop.
 
@@ -188,14 +208,34 @@ class EgressGuard:
             route.abort("blockedbyclient")
             return
         # route.continue_() would let Chromium follow a redirect chain on its
-        # own, and Playwright never routes the later hops. Fetching with
-        # max_redirects=0 hands the 3xx back to the browser, whose follow-up
-        # request is a NEW request — routed, and so checked, like any other.
+        # own, and Playwright never routes the later hops, so the request is
+        # fetched with max_redirects=0 and every 3xx is decided HERE:
         try:
             response = route.fetch(max_redirects=0)
         except Exception:  # noqa: BLE001 — network failure: fail the request
             route.abort("failed")
             return
+        if 300 <= response.status < 400:
+            location = (response.headers or {}).get("location", "")
+            if location:
+                from urllib.parse import urljoin
+                target = urljoin(url, location)
+                if self.verdict(target):
+                    self.blocked.append(target)
+                    route.abort("blockedbyclient")
+                    return
+                if _is_navigation(route.request):
+                    # A fulfilled 3xx on a NAVIGATION is followed by Chromium
+                    # without routing the next hop (live-verified, Playwright
+                    # 1.62): a public→public→private chain reached the private
+                    # host before any check. Answer with a client-side
+                    # redirect instead — that starts a NEW navigation, which
+                    # is routed and checked like the first. (Subresource
+                    # redirects are re-routed and keep the plain fulfill.)
+                    route.fulfill(status=200,
+                                  content_type="text/html; charset=utf-8",
+                                  body=_client_redirect(target))
+                    return
         route.fulfill(response=response)
 
     def on_websocket(self, ws) -> None:
@@ -277,8 +317,16 @@ def render_url(url: str, *, timeout_s: float = DEFAULT_RENDER_TIMEOUT_S,
         browser, context, guard = launch_guarded(p)
         try:
             page = context.new_page()
-            page.goto(target.url, timeout=timeout_ms,
-                      wait_until="domcontentloaded")
+            try:
+                page.goto(target.url, timeout=timeout_ms,
+                          wait_until="domcontentloaded")
+            except Exception as e:  # noqa: BLE001 — playwright's own Error
+                if guard.blocked:
+                    raise WebError(
+                        f"refused: loading {target.url} led to "
+                        f"{guard.blocked[-1]}, which the egress guard "
+                        "blocked (non-public address)") from e
+                raise WebError(f"could not load {target.url}: {e}") from e
             try:
                 page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 10_000))
             except Exception:
