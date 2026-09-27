@@ -1,7 +1,7 @@
 """Chat-only registry for MCP tools injected into interactive turns.
 
 `luxe chat --mcp <name>` starts an MCPClientManager (cli) and publishes the
-discovered tool surface here; `prepare_turn` (repl.py — shared by both
+discovered tool surface here; `prepare_turn` (turn.py — shared by both
 front-ends) reads it and extends the turn's extra-tool seam. Module-level like
 `search.set_index` so the surface doesn't have to thread through both
 front-end signatures.

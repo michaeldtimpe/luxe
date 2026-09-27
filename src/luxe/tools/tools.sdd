@@ -162,7 +162,7 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
 
 - **Both paths are default ON, each on its OWN dated evidence, and they share
   one grammar.** `maintain.apply_ctx_read_budget` (2026-08-12) and
-  `chat/repl.py` (2026-08-24) each read
+  `chat/turn.py` (2026-08-24; moved from `chat/repl.py`) each read
   `os.environ.get("LUXE_TOOL_BUDGET_CTX", "1")` and only the EXACT string
   `"0"` disables (unset → on; "", "true", "01", " 1" → on). That is the same
   opt-out grammar as `LUXE_TRUNCATED_TURN_RETRY` in `agents/flags.py`, and all
@@ -192,7 +192,7 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   same console line, same event — the announce string still reads
   `LUXE_TOOL_BUDGET_CTX=1` for exactly that reason
 - TWO call sites own the budget, one per path, and they never overlap:
-  `chat/repl.py` sets it PER TURN (`/ctx` moves num_ctx mid-session, so the
+  `chat/turn.py` sets it PER TURN (`/ctx` moves num_ctx mid-session, so the
   turn is the only correct scope), and `maintain.apply_ctx_read_budget` sets
   it ONCE per `maintain_pipeline`, from `cfg.role("monolith").num_ctx` — the
   same role config the run executes with, never a hardcoded window
@@ -210,12 +210,12 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   guarantee: with `=0`, `maintain_pipeline` runs byte-identically to before
   the wiring existed, and nothing can be re-ordered into a regression later.
   `read_limit()` stays `_MAX_FILE_SIZE`. That rule is the BENCH path's:
-  `chat/repl.py`'s off branch deliberately does call `set_read_budget(None)`,
+  `chat/turn.py`'s off branch deliberately does call `set_read_budget(None)`,
   because a chat turn must land on a known limit rather than inherit whatever
   the process last set
 - The two paths still cannot reach each other. `maintain_pipeline` is not on
   the chat path (chat enters via `chat/launch.py` → `_run_interactive`), and
-  even in a hypothetical shared process `repl.py` re-sets the budget on EVERY
+  even in a hypothetical shared process `turn.py` re-sets the budget on EVERY
   turn in BOTH branches, so its value is the one in force when that turn's
   tools run
 - When ON the run says so — a `read_budget_applied` event in `events.jsonl`

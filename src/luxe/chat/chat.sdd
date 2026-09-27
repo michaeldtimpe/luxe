@@ -81,7 +81,7 @@ never touches this module.
   footer, `/status`, and `/usage`. The SESSION total is billed from
   `Backend.cost_total_usd` — a per-request running sum on the instance chat
   owns, read-only bookkeeping that nothing on the wire consults — as a DELTA
-  across each turn (`repl.settle_turn_cost`, in a `finally`), so requests
+  across each turn (`turn.settle_turn_cost`, in `ChatController.run_turn`'s `finally`), so requests
   billed by a turn that then errored, aborted, or was interrupted still count
   against the cap (2026-09 review: only completed turns used to). (b) SPEND IS BOUNDED: `budget_usd` on the
   entry is a HARD cap — a turn is refused BEFORE dispatch once the session
@@ -267,14 +267,17 @@ never touches this module.
   exception is contained the same way — in the line REPL that now includes
   `cmd.dispatch`, `/plan` and the `/goal` supervisor, which used to run bare
   inside the loop's try/finally (one exception, or ctrl+c mid-`/pull`, ended
-  the session). The record + recovery live in ONE place both front-ends call
-  (`repl.note_backend_error` / `note_turn_crash` / `recover_backend_failure`),
+  the session). The containment is ONE method both front-ends run every
+  turn and command under (`ChatController.contain`), and the record + recovery
+  live in ONE place (`turn.note_backend_error` / `note_turn_crash` /
+  `recover_backend_failure`),
   and a failed `/goal` round goes through the same sequence (last traceback line to the transcript,
   full traceback to the logger, session stays up) — a crashed turn is a
   message, never an exit. A turn the agent loop ABORTED instead of raising
   (`AgentResult.aborted`, e.g. a contained backend ConnectError or max steps)
   gets the SAME treatment in both front-ends — the reason on screen in red
-  plus a kind="error" transcript record (`repl.note_aborted_turn`) — because
+  plus a kind="error" transcript record (`turn.note_aborted_turn`, via
+  `ChatController.aborted_report`) — because
   an aborted turn returns empty text and otherwise renders as a successful
   blank reply (session 3aabb18b0e07, five of them against a dead proxy). An
   aborted turn whose reason is a backend error ALSO runs the kit's recovery
@@ -414,14 +417,40 @@ never touches this module.
   line when bash STARTS, and the TUI activity line names the currently
   executing command via `make_bash_fn(on_start=…)` — a hung command
   identifies itself instead of hiding behind counts of finished calls.
-- The per-turn pipeline is UI-agnostic: `prepare_turn` (slot/role/tool/ledger
-  setup + the verbatim `run_single` closure) and `finalize_turn` (persistence +
-  `TurnOutcome`) are shared by BOTH front-ends; `run_single`'s call args are
-  assembled identically so the benchmark path stays byte-identical. Interactive
-  sub-prompts (/plan choice, gitkit clone URL, compare vote) go through one
-  `reader`/`prompt_user` seam — `console.input` on the line path, a modal on the
-  TUI. `_run_plan`/`_run_goal_loop` take injectable `run_turn`/`reader` so the
-  supervisor logic is single-sourced.
+- ONE CONTROLLER, TWO RENDERERS (2026-09). `controller.ChatController` owns
+  the session, `SlotManager`, status-bar state, cancel token, debug log, command
+  context, and the live project view (`repo_path`/`languages` read from the
+  session), and everything a session does that is not drawing:
+  `build()`/`start()` (session construction + startup flags, transcript, debug
+  log, session GC, index HEAD), `run_turn(message, sink)` (spend refusal →
+  `turn.prepare_turn` → reasoning sink on the Backend → the ONE `run_single`
+  call → spend settlement in a `finally` → `turn.finalize_turn`),
+  `contain()`/`dispatch()` (interrupt / BackendError record + self-repair →
+  degrade → hint / crash record, "the session is still alive"),
+  `run_plan(sink)`/`run_goal(sink)` (the /plan and /goal supervisors), the
+  post-turn decisions both renderers show (`apply_turn_status`, `suggest_ctx`,
+  `aborted_report`), and `shutdown(console)` — always cancel → session notes →
+  unload unless keep_loaded → debug log, the log detached even if an earlier
+  step raised. A front-end is a `TurnSink`: `print`, `choose` (the /plan
+  choice — `Prompt.ask` on the line path, a modal in the TUI), the per-turn
+  lifecycle (`turn_starting`, `refused`, `on_tool_start`, `turn_prepared`,
+  `render_outcome`), `crash_hint`/`closing`, and a `running(prep, started_at)`
+  context manager that lends `TurnHooks` (`on_tool`, `on_token`,
+  `on_progress`, `on_notice`, `on_reasoning`) to that one call — None hooks
+  are passed through as None, exactly what that front-end always passed.
+  `repl.py` (`LineSink` + the read loop) and `tui.py` (`TuiSink` + the Textual
+  app) keep ONLY rendering and input: a decision that both front-ends make
+  belongs in the controller, because two copies of it drifted repeatedly. The
+  UI-agnostic turn core itself is `chat/turn.py`: `prepare_turn`
+  (slot/role/tool/ledger setup + the verbatim `run_single` closure) and
+  `finalize_turn` (persistence + `TurnOutcome`); `run_single`'s call args are
+  assembled identically for both front-ends so the benchmark path stays
+  byte-identical. Other interactive sub-prompts (gitkit clone URL, compare
+  vote) go through the `reader`/`prompt_user` seam — `console.input` on the
+  line path, a modal on the TUI. `repl` re-exports the moved names
+  (`repl.prepare_turn` etc. keep working), but code that stubs a lookup must
+  patch the module that performs it: `turn.run_single`,
+  `controller.prepare_turn`, `controller.start_session_gc`.
 - `prepare_turn` is also the sole chat call site for `tools/fs.py`'s two
   process-global sizing toggles, both set EVERY turn because `/ctx` moves
   `num_ctx` mid-session and because any other caller in the process may have
@@ -494,7 +523,7 @@ never touches this module.
   history), then cleared on consumption — later turns recall it only via
   conversation history. Consumption is provisional until the turn completes:
   a turn that fails (BackendError, crash, abort, interrupt) RE-STAGES the
-  payload (`session.consumed_attachments` → `repl.restore_attachments`) and
+  payload (`session.consumed_attachments` → `turn.restore_attachments`) and
   says so, so `/retry` resends it instead of it vanishing with the request. Each attach appends a kind="attachment" transcript
   record (path, size, sha256, truncated, capped content); resume pairing
   ignores unknown kinds, so old readers are unaffected
@@ -664,7 +693,7 @@ never touches this module.
   the session exactly where it was. The hook re-indexes, re-points
   `set_repo_root`, invalidates the `.sdd` scan cache, and returns a summary the
   command renders; both front-ends then apply it through ONE helper
-  (`repl.apply_project_summary`: `repo_path` / `project_kind` /
+  (`controller.apply_project_summary`: `repo_path` / `project_kind` /
   `project_hash` / `index_head` / `languages`). The SESSION is the single
   live source: turn setup, the status bar, and `/compare` read
   `session.repo_path` / `session.languages` at use time — never a value
@@ -985,7 +1014,7 @@ never touches this module.
   `_atomic_write_text` funnel; the cost is a non-incremental next run, same as
   `--rebuild-map`), `~/.luxe/cve_cache/`, and `~/.luxe/mcp_audit.jsonl`. The
   ledger is the sharp one: `update_ledger` is exposed on EVERY chat turn
-  (repl.py), so leaving it unguarded lets any session recreate the directory
+  (turn.py `prepare_turn`), so leaving it unguarded lets any session recreate the directory
   the mode just declined to make.
 - Boundaries, all contract: READS are untouched (config, secrets, existing
   project memory); the write TOOLS are unaffected — `/write` still gates them
@@ -1046,7 +1075,8 @@ never touches this module.
   tail is reachable retroactively (full text always lives in session history;
   no re-run).
 - Status-bar ctx% derives from SERVER-reported `last_prompt_tokens /
-  effective num_ctx` in BOTH front-ends (repl.py AND tui.py — the tui missed
+  effective num_ctx` in BOTH front-ends (one rule since 2026-09:
+  `ChatController.apply_turn_status`; before that repl.py AND tui.py — the tui missed
   the 2026-07-30 fix and read a flat ~7% from the chars/4 estimate, which
   misses tool schemas). The estimate is the fallback only when the server
   reported no usage. The TUI must mirror the corrected value into its live
@@ -1178,6 +1208,13 @@ never touches this module.
   |--------------------------------------------|--------------------|
   | stdout is a TTY AND `textual` installed    | Textual TUI        |
   | otherwise (CI, pipes, textual-absent)      | line REPL (`repl.py`) |
+
+  Both are renderers over the same `ChatController` (see "ONE CONTROLLER, TWO
+  RENDERERS"). TUI thread rules hold through it: the controller runs the turn
+  on the Textual worker; `TuiSink` marshals every transcript write through
+  `ChatApp.write`/`call_from_thread`, feeds the live line through plain fields
+  the UI timer reads, and hands the final render to the UI thread
+  (`ChatApp._render_outcome`).
 
   `--resume <id>` rides EITHER front-end: the TUI takes a `resume_session_id`
   kwarg and replays the prior transcript into the RichLog on mount

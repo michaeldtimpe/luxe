@@ -10,7 +10,7 @@ has *decided* and *done* instead of buying those facts back with tokens.
 
 Two channels feed it:
   * deterministic — files written/edited, observed from the tool-event stream
-    (``repl.py`` accumulates paths and calls :func:`record_files`). This works
+    (``chat/turn.py`` accumulates paths and calls :func:`record_files`). This works
     even if the model never touches the tool.
   * model-driven — the ``update_ledger`` tool (see :func:`make_update_ledger_tool`)
     lets the model record decisions, in-progress items, blockers, and
