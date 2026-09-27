@@ -30,7 +30,7 @@ See `docs/luxe-markers-audit.md` for the full marker classification.
 Two interface shapes coexist for guard outputs:
 
 1. `Decision` — the standard shape for "fire a nudge" guards (WritePressureGuard,
-   ProseBurstGuard, ActionDensityGateGuard). Carries the message body + per-fire
+   ActionDensityGateGuard). Carries the message body + per-fire
    metadata for the *_fired event payload. The loop appends the message and emits
    the event.
 2. `should_exit(...) -> Optional[dict[str, Any]]` — sibling method for "exit the
@@ -158,87 +158,19 @@ class WritePressureGuard:
         )
 
 
-# v1.8 Track 1 — per-step prose-burst detector. Targets the short-trace
-# bailer class identified in the B.1 audit (3/18 v3 empties unreachable by
-# early_bail's step≥4 rule because the model exited at step ≤3 with 8000+
-# completion tokens — prose burst without action). The composite invariant
-# is fired-once at the same checkpoint as early_bail/write_pressure:
-#   step <= _PROSE_BURST_MAX_STEP (4)
-#   AND tool_calls_total == 0
-#   AND writes_seen == 0
-#   AND completion_tokens_delta_last_step >= _PROSE_BURST_MIN_DELTA (1500)
-# 1500 is materially below the observed pathological range (3000-4000/step
-# in the v17 B.5 short-trace cases) so legitimate planning traces have
-# margin. Anti-oscillation: if the model's RESPONSE to the intervention is
-# ALSO a prose burst with zero tool calls, exit cleanly (not aborted) —
-# the trajectory is non-steerable. Off by default; enable with
-# LUXE_PROSE_BURST=1.
-
-_PROSE_BURST_MAX_STEP = 4
-_PROSE_BURST_MIN_DELTA = 1500
-
-_PROSE_BURST_MESSAGE = (
-    "Mid-loop notice: your previous response generated significant text "
-    "without invoking any tool. The deliverable for this task is a "
-    "concrete action, not a written explanation. Your next response must "
-    "either (a) emit a tool call to gather information you need, or "
-    "(b) emit a write/edit tool call to commit your solution. Reasoning "
-    "in text without calling a tool is not progress."
-)
-
-
-class ProseBurstGuard:
-    """v1.8 Track 1 prose-burst intervention.
-
-    Fires at most once per run when a step <= MAX_STEP has produced no tool
-    calls, no writes, and a per-step completion-token burst above MIN_DELTA.
-    The composite invariant catches the short-trace bailer class (B.1 audit
-    archetype) where the model exited at step <=3 with 8000+ completion
-    tokens — prose burst without action.
-
-    The anti-oscillation "clean exit on second burst" branch STAYS in
-    loop.py — it depends on the same predicate but does not append a
-    nudge; instead it breaks the loop with aborted=False. The loop owns
-    that branch and computes `prose_burst_now` independently for it.
-    """
-
-    nudge_type = "prose_burst"
-
-    @staticmethod
-    def check(
-        *,
-        prose_burst_enabled: bool,
-        prose_burst_fired: bool,
-        step: int,
-        tool_calls_total: int,
-        writes_seen: int,
-        completion_delta_last_step: int,
-    ) -> Optional[Decision]:
-        if not prose_burst_enabled:
-            return None
-        if prose_burst_fired:
-            return None
-        prose_burst_now = (
-            step <= _PROSE_BURST_MAX_STEP
-            and tool_calls_total == 0
-            and writes_seen == 0
-            and completion_delta_last_step >= _PROSE_BURST_MIN_DELTA
-        )
-        if not prose_burst_now:
-            return None
-        return Decision(
-            message=_PROSE_BURST_MESSAGE,
-            metadata={
-                "completion_delta": completion_delta_last_step,
-            },
-        )
+# v1.8 Track 1 prose-burst detector (LUXE_PROSE_BURST) — REMOVED 2026-09.
+# It could only see a step that made zero tool calls, and such a step leaves
+# the loop through `if not tool_calls: break` unless a later-added retry
+# (truncated/empty turn, min_tool_calls) continues it; 0 `prose_burst_fired`
+# events in 3,240 recorded runs. See agents.sdd "Removed mechanisms".
+# outcomes.py still classifies `prose_burst_fired` in historical logs.
 
 
 # v1.9 — LUXE_ACTION_DENSITY_GATE. Staged-escalation predicate that catches
 # the post-bail short-stall class (model accepted early_bail at step 4 but
 # produced no edit) AND the standalone "diffuse-reconnaissance" class
-# (many tools, many tokens, no commit) that PROSE_BURST's zero-tool-call
-# rule cannot reach. Thresholds derived from
+# (many tools, many tokens, no commit) that the (since-removed) prose_burst
+# detector's zero-tool-call rule could not reach. Thresholds derived from
 # scripts/mine_action_density.py over v17 + v18 SWE-bench n=75 traces;
 # see acceptance/v19_mining/THRESHOLD_DECISION.md.
 #
@@ -453,7 +385,7 @@ class PostWriteIdleExitGuard:
 # completion tokens (the cap), and was cut off at "construct a `PEInfo".
 # maintain_suite scored it 1/5 for "produced no diff" while reporting a clean
 # completion. Neither write_pressure (needs >=10 tool calls; had 3) nor
-# prose_burst (needs 0 tool calls; had 3) can see this shape.
+# prose_burst (needs 0 tool calls; had 3; removed 2026-09) could see this shape.
 #
 # Two nudges, then stop. The nudge is cheap and the failure is recoverable —
 # the model has already done the analysis, it just never emitted the edit — but

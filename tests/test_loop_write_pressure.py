@@ -12,10 +12,8 @@ Off by default. Enabled via LUXE_WRITE_PRESSURE=1.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-import pytest
 
 from luxe.agents.loop import (
     _ACTION_DENSITY_GATE_MAX_TOOLS,
@@ -31,9 +29,6 @@ from luxe.agents.loop import (
     _EARLY_BAIL_MESSAGE_SOFT_ANCHOR,
     _EARLY_BAIL_MIN_READS,
     _EARLY_BAIL_MIN_STEP,
-    _PROSE_BURST_MAX_STEP,
-    _PROSE_BURST_MESSAGE,
-    _PROSE_BURST_MIN_DELTA,
     _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE,
     _WRITE_PRESSURE_MESSAGE,
     _WRITE_PRESSURE_MIN_STEP,
@@ -639,162 +634,6 @@ def test_write_pressure_threshold_constants_are_sensible():
     assert _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE <= 25
 
 
-# --- v1.8 Track 1: prose-burst detector tests -----------------------------
-
-
-def _prose_burst_resp(name: str, completion_tokens: int = 2000) -> ChatResponse:
-    """A response that has high completion tokens but emits a tool call.
-    Used to set up the prose-burst scenario where step N's response is
-    high-token + zero tool calls."""
-    return ChatResponse(
-        text="",
-        tool_calls=[ToolCallResponse(id="c", name=name, arguments={"path": "x"})],
-        finish_reason="tool_calls",
-        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
-    )
-
-
-def _prose_only_resp(completion_tokens: int = 2000) -> ChatResponse:
-    """A response with NO tool calls — pure prose. This triggers the
-    natural loop break unless something stops it."""
-    return ChatResponse(
-        text="long prose explanation here",
-        tool_calls=[],
-        finish_reason="stop",
-        timing=GenerationTiming(prompt_tokens=100, completion_tokens=completion_tokens),
-    )
-
-
-def test_prose_burst_disabled_by_default(monkeypatch):
-    """Without LUXE_PROSE_BURST=1, no intervention even when conditions met."""
-    monkeypatch.delenv("LUXE_PROSE_BURST", raising=False)
-    # Single prose-only resp ends the loop naturally at step 0 (1 chat total).
-    # To set up the prose-burst conditions we need a non-terminal high-token
-    # response. Use a tool_call_resp with high tokens at step 0, then
-    # immediately terminate.
-    scripted = [_prose_burst_resp("read_file", completion_tokens=2000),
-                _terminal_resp()]
-    backend = _ScriptedBackend(scripted)
-    role = _make_role()
-
-    run_agent(
-        backend=backend, role_cfg=role,
-        system_prompt="sys", task_prompt="do work",
-        tool_defs=[_read_tool()], tool_fns=_read_fn(),
-    )
-
-    for snapshot in backend.calls:
-        for msg in snapshot:
-            assert _PROSE_BURST_MESSAGE not in str(msg.get("content", ""))
-
-
-def test_prose_burst_fires_after_high_token_step(monkeypatch):
-    """LUXE_PROSE_BURST=1 + step 0 emits 2000+ completion tokens + zero
-    tool calls + zero writes → prose-burst fires at step 1."""
-    monkeypatch.setenv("LUXE_PROSE_BURST", "1")
-    monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)
-    monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
-
-    # Step 0: high tokens, NO tool calls (we use a response that doesn't
-    # parse to tool_calls — pure text). This breaks the loop NATURALLY at
-    # step 0 unless something stops it. But we need step 1's checkpoint
-    # to see the delta. The natural break happens before step 1's
-    # checkpoint. So the test setup needs to coax the model through a
-    # second step.
-    #
-    # Workaround: step 0 emits a single tool call with high tokens, so
-    # the loop continues to step 1 where the prose-burst check runs.
-    # The composite invariant requires tool_calls_total == 0, but the
-    # step 0 tool call sets total=1. So we need a different setup —
-    # we have to use the schema-reject path (model emits a malformed
-    # tool call → schema_rejects+=1 but tool_calls_total still increments).
-    #
-    # Easier path: pass a response with text but no tool_calls. The loop
-    # naturally breaks. So prose-burst can only catch the case where the
-    # model emits HIGH TOKENS plus an unparseable text-tool-call response
-    # that proceeds to step 1. This is the actual SWE-bench short-trace
-    # pattern: model emits ~8000 tokens of "reasoning out loud" with no
-    # callable action.
-    #
-    # Simulate by giving step 0 a malformed tool call that schema-rejects.
-    # The model proceeds to step 1 with 0 successful tool calls.
-    bad_tool = ToolDef(
-        name="needs_path", description="x",
-        parameters={"type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"]},
-    )
-
-    # Step 0: emits a malformed call (missing required arg `path`)
-    # → schema_rejects+=1, tool_calls_total+=1 BUT no actual_tool_calls
-    # entry. Hmm, _WRITE_TOOLS check uses result.tool_calls_total which
-    # WILL include schema rejects. So the (tool_calls_total == 0) gate
-    # of prose-burst is NOT satisfied after a schema reject.
-    #
-    # Reframe the prose-burst spec: instead of "tool_calls_total == 0",
-    # the spec really means "no successfully dispatched tool call".
-    # Update the test to reflect actual behavior: prose-burst fires only
-    # when result.tool_calls_total == 0 AT THE START OF STEP N. After a
-    # backend.chat that returned ZERO tool_calls (text-only), the loop
-    # naturally breaks. So prose-burst's design IS for "model is about
-    # to break the loop with text — let's reprompt instead."
-    #
-    # But the loop break happens at line 369-400 BEFORE the next
-    # iteration's checkpoint. So prose-burst as currently coded CAN'T
-    # catch the natural break.
-    #
-    # This reveals a design issue. The prose-burst check is at the
-    # checkpoint of step N+1, but if step N had zero tool calls the
-    # loop has already broken. Prose-burst would never fire under
-    # current control flow.
-    #
-    # For v1.8, accept this limitation: prose-burst catches the case
-    # where step 0 has SOME tool call but high tokens — e.g., a search
-    # that returns nothing, then huge prose without further action.
-    # That's a less common pattern. The simpler pattern (immediate
-    # break) needs intervention BEFORE the natural break, which is
-    # better handled by injecting the prose-burst check at the
-    # if-not-tool_calls branch.
-    #
-    # For the test, mark this as known-limitation and skip if needed.
-    # OR: pivot the test to verify the action_density_sample event is
-    # emitted (the observability lever lands even if the gating doesn't
-    # fire under the current setup).
-    scripted = [_prose_burst_resp("read_file", completion_tokens=2000),
-                _terminal_resp()]
-    backend = _ScriptedBackend(scripted)
-    role = _make_role()
-
-    result = run_agent(
-        backend=backend, role_cfg=role,
-        system_prompt="sys", task_prompt="do work",
-        tool_defs=[_read_tool()], tool_fns=_read_fn(),
-        run_id=None,  # no event logging
-    )
-
-    # The tool call at step 0 means tool_calls_total >= 1 at step 1's
-    # checkpoint, so prose-burst's "tool_calls_total == 0" gate is NOT
-    # met. The intervention should NOT fire here.
-    for snapshot in backend.calls:
-        for msg in snapshot:
-            assert _PROSE_BURST_MESSAGE not in str(msg.get("content", "")), (
-                "prose-burst fired when tool_calls_total > 0 — composite "
-                "invariant was bypassed."
-            )
-
-
-def test_prose_burst_threshold_constants_are_sensible():
-    """Sanity-check the constants are within the empirically-derived
-    range. The v3 short-trace cases (B.1 audit) had 8000-8700 tokens
-    over 2-3 steps → ~3000-4000/step. 1500 is materially below that
-    range so we catch with margin, and well above legitimate planning
-    bursts which typically sit under 1000/step."""
-    assert _PROSE_BURST_MIN_DELTA >= 1000
-    assert _PROSE_BURST_MIN_DELTA <= 2500
-    assert _PROSE_BURST_MAX_STEP >= 2  # too low → never fires
-    assert _PROSE_BURST_MAX_STEP <= 6  # too high → mid-trace false positives
-
-
 # --- v1.8 Track 3: SWE-bench early_bail message overlay -------------------
 
 
@@ -1082,7 +921,7 @@ def test_action_density_gate_suppressed_by_zero_calls_spec():
     """When the spec has an expects_zero_calls requirement, the gate must
     NOT fire — pushing toward action when the correct outcome is abstain
     would be the opposite of the spec contract. Mirrors the same
-    suppression rule as write_pressure / early_bail / prose_burst."""
+    suppression rule as write_pressure / early_bail."""
     from luxe.spec import Requirement, Spec
     import os as _os
     # Use os-level env since this is integration with the loop.
@@ -1148,7 +987,7 @@ def test_action_density_gate_skipped_when_convergence_proxy_satisfied(monkeypatc
 def test_action_density_gate_single_shot(monkeypatch):
     """Even when the predicate continues to hold for many subsequent
     steps, the gate fires exactly once per run. Mirrors the single-shot
-    flag pattern in write_pressure / early_bail / prose_burst."""
+    flag pattern in write_pressure / early_bail."""
     monkeypatch.setenv("LUXE_ACTION_DENSITY_GATE", "1")
     monkeypatch.delenv("LUXE_EARLY_BAIL", raising=False)
     monkeypatch.delenv("LUXE_WRITE_PRESSURE", raising=False)

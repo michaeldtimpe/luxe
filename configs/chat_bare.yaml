@@ -6,8 +6,7 @@ omlx_base_url: "http://127.0.0.1:8000"
 # (system_prompt_id: baseline, task_prompt_id: baseline, no overlay) — i.e.
 # no SDD/prompt-shaping enhancements. Pair with the bare-substrate env flags
 # (LUXE_TIERED_COMPACT=0 LUXE_REFLECT=0 LUXE_ADAPTIVE_POLICY=0
-#  LUXE_WRITE_PRESSURE=0 LUXE_EARLY_BAIL=0 LUXE_PROSE_BURST=0
-#  LUXE_ACTION_DENSITY_GATE=0) to fully disable the loop.py substrate.
+#  LUXE_WRITE_PRESSURE=0 LUXE_EARLY_BAIL=0 LUXE_ACTION_DENSITY_GATE=0) to fully disable the loop.py substrate.
 # This mirrors compare mode-1's "bare champion" side (_BARE_SUBSTRATE_ENV +
 # system_prompt_id="baseline").
 

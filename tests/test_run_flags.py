@@ -35,7 +35,6 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.write_pressure is False
     assert f.early_bail is False
     assert f.early_bail_commit_only is False
-    assert f.prose_burst is False
     assert f.action_density_gate is False
     assert f.convergence_gate is False
     assert f.post_write_idle_repeats is False
@@ -75,7 +74,6 @@ OPT_IN = [
     ("LUXE_WRITE_PRESSURE", "write_pressure"),
     ("LUXE_EARLY_BAIL", "early_bail"),
     ("LUXE_EARLY_BAIL_COMMIT_ONLY", "early_bail_commit_only"),
-    ("LUXE_PROSE_BURST", "prose_burst"),
     ("LUXE_ACTION_DENSITY_GATE", "action_density_gate"),
     ("LUXE_CONVERGENCE_GATE", "convergence_gate"),
     ("LUXE_RESPOND_TERMINAL", "respond_terminal"),

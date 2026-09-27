@@ -51,7 +51,6 @@ class RunFlags:
     write_pressure: bool = False
     early_bail: bool = False
     early_bail_commit_only: bool = False
-    prose_burst: bool = False
     action_density_gate: bool = False
     convergence_gate: bool = False
     early_bail_band_response: str = DEFAULT_BAND_RESPONSE
@@ -190,7 +189,6 @@ class RunFlags:
             write_pressure=e.get("LUXE_WRITE_PRESSURE") == "1",
             early_bail=e.get("LUXE_EARLY_BAIL") == "1",
             early_bail_commit_only=e.get("LUXE_EARLY_BAIL_COMMIT_ONLY") == "1",
-            prose_burst=e.get("LUXE_PROSE_BURST") == "1",
             action_density_gate=e.get("LUXE_ACTION_DENSITY_GATE") == "1",
             convergence_gate=e.get("LUXE_CONVERGENCE_GATE") == "1",
             post_write_idle_repeats=(

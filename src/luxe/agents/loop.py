@@ -30,7 +30,6 @@ from luxe.agents.guardrails import (
     EarlyBailGuard,
     HabituationExitGuard,
     PostWriteIdleExitGuard,
-    ProseBurstGuard,
     WritePressureGuard,
 )
 
@@ -64,9 +63,6 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _TRUNCATED_TURN_MESSAGE,
     EmptyTurnGuard,
     TruncatedTurnGuard,
-    _PROSE_BURST_MAX_STEP,
-    _PROSE_BURST_MESSAGE,
-    _PROSE_BURST_MIN_DELTA,
     _WRITE_PRESSURE_MAX_TOOLS_BEFORE_FIRE,
     _WRITE_PRESSURE_MESSAGE,
     _WRITE_PRESSURE_MIN_STEP,
@@ -398,8 +394,6 @@ def run_agent(
     # keeping the high-convergence imperative recovers the watchdog cleanly.
     # Default OFF (byte-identical with baseline).
     early_bail_commit_only = flags.early_bail_commit_only
-    prose_burst_enabled = flags.prose_burst
-    prose_burst_fired = False
     # v1.9 — LUXE_ACTION_DENSITY_GATE (staged escalation second-stage rescue
     # after early_bail stalls). See _ACTION_DENSITY_GATE_* constants above.
     action_density_gate_enabled = flags.action_density_gate
@@ -590,8 +584,8 @@ def run_agent(
         and any(r.kind == "expects_zero_calls" for r in spec.requirements)
     )
     if spec_has_zero_calls:
-        # Suppression: the four tool-eagerness amplifiers (write_pressure,
-        # early_bail, prose_burst, action_density_gate) would push the
+        # Suppression: the three tool-eagerness amplifiers (write_pressure,
+        # early_bail, action_density_gate) would push the
         # model toward action exactly when the correct outcome is to
         # decline. Disable all when the spec contains a zero-call
         # expectation. v1.10 convergence_gate has no effect when the
@@ -599,7 +593,6 @@ def run_agent(
         # off-switch for clarity.
         write_pressure_enabled = False
         early_bail_enabled = False
-        prose_burst_enabled = False
         action_density_gate_enabled = False
         convergence_gate_enabled = False
     actual_tool_calls: list[tuple[str, dict[str, Any]]] = []
@@ -800,8 +793,8 @@ def run_agent(
                     }
                     append_event(run_id, ev_name, phase=phase, step=step, **payload)
 
-        # Per-step deltas (v1.8 Track 1 plumbing). Used by prose_burst,
-        # action_density_gate, and the action_density_sample observability
+        # Per-step deltas (v1.8 Track 1 plumbing). Used by
+        # action_density_gate and the action_density_sample observability
         # event. completion_delta_last_step is the SIZE of the previous
         # step's response — we evaluate at the start of step N to catch a
         # step N-1 burst, leaving budget for the intervention to land.
@@ -900,66 +893,12 @@ def run_agent(
         # observability-only (no model-behavior change beyond the
         # diversity gate's minimal-trajectory fallback).
 
-        # v1.8 Track 1 — prose-burst detector. Composite invariant fires at
-        # most once per run; on second consecutive burst (intervention
-        # produced no response change), exit cleanly.
-        prose_burst_now = (
-            step <= _PROSE_BURST_MAX_STEP
-            and result.tool_calls_total == 0
-            and writes_seen == 0
-            and completion_delta_last_step >= _PROSE_BURST_MIN_DELTA
-        )
-        pb_decision = ProseBurstGuard.check(
-            prose_burst_enabled=prose_burst_enabled,
-            prose_burst_fired=prose_burst_fired,
-            step=step,
-            tool_calls_total=result.tool_calls_total,
-            writes_seen=writes_seen,
-            completion_delta_last_step=completion_delta_last_step,
-        )
-        if pb_decision is not None:
-            messages.append({
-                "role": "user",
-                "content": pb_decision.message,
-                "_luxe_nudge": True,
-                "_luxe_nudge_type": ProseBurstGuard.nudge_type,
-            })
-            prose_burst_fired = True
-            last_intervention_step = step
-            last_intervention_kind = "prose_burst"
-            intervention_kinds_fired.add("prose_burst")
-            if log_calls:
-                append_event(
-                    run_id, "prose_burst_fired",
-                    phase=phase, step=step,
-                    completion_delta=completion_delta_last_step,
-                    completion_tokens=result.completion_tokens,
-                    action_density=action_density,
-                )
-        elif prose_burst_enabled and prose_burst_fired and prose_burst_now:
-            # Anti-oscillation: intervention fired last step; this step is
-            # ALSO a prose burst with no action. Trajectory is non-steerable.
-            # Clean exit (not aborted) to preserve trace + evaluation
-            # semantics; the model has demonstrated unresponsiveness to the
-            # control layer. `resp` is the prior iteration's response (the
-            # second burst), still bound in local scope here.
-            result.final_text = (resp.text if resp else "") or ""
-            if log_calls:
-                append_event(
-                    run_id, "prose_burst_clean_exit",
-                    phase=phase, step=step,
-                    completion_delta=completion_delta_last_step,
-                    completion_tokens=result.completion_tokens,
-                )
-            break
-
         # v1.10.1 — habituation clean-exit. When ≥3 distinct interventions
         # have fired this run AND the model has produced ZERO post-intervention
         # writes AND step ≥ _HABITUATION_EXIT_MIN_STEP, the trajectory is
         # intervention-resistant. Burning the remaining max_steps budget
         # yields no further information. Exit cleanly to preserve trace +
-        # evaluation semantics (mirrors prose_burst_clean_exit and
-        # post_write_idle_exit shapes). Founding instance: sympy-13031 fired
+        # evaluation semantics (mirrors the post_write_idle_exit shape). Founding instance: sympy-13031 fired
         # all three distinct interventions by step 15, zero writes through
         # max_steps. `resp` is from the prior iteration's backend.chat call.
         hab_exit = HabituationExitGuard.should_exit(
