@@ -394,7 +394,7 @@ def test_web_tools_are_absent_from_the_benchmark_tool_surface():
     from luxe.agents.single import _build_full_tool_surface
 
     for task_type in ("implement", "bugfix", "manage", "review"):
-        defs, fns, _cacheable = _build_full_tool_surface(
+        defs, fns = _build_full_tool_surface(
             frozenset({"python"}), None, task_type)
         names = {d.name for d in defs} | set(fns)
         assert "web_fetch" not in names, task_type

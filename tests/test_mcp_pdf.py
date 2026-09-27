@@ -562,7 +562,7 @@ def test_pdf_tools_are_not_in_the_benchmark_tool_surface():
     """The module is chat-only. A benchmark that could reach a print queue or
     a local PDF binary would no longer be reproducible."""
     from luxe.agents.single import _build_full_tool_surface
-    defs, fns, _ = _build_full_tool_surface(None, None)
+    defs, fns = _build_full_tool_surface(None, None)
     surface = {d.name for d in defs} | set(fns)
     leaked = sorted(n for n in surface
                     if n.startswith("pdf_") or n == "images_to_pdf")

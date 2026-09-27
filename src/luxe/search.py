@@ -203,4 +203,3 @@ def _bm25_search_fn(args: dict[str, Any]) -> tuple[str, str | None]:
 
 
 TOOL_FNS: dict[str, ToolFn] = {"bm25_search": _bm25_search_fn}
-CACHEABLE = {"bm25_search"}

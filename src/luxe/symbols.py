@@ -342,4 +342,3 @@ def _find_symbol_fn(args: dict[str, Any]) -> tuple[str, str | None]:
 
 
 TOOL_FNS: dict[str, ToolFn] = {"find_symbol": _find_symbol_fn}
-CACHEABLE = {"find_symbol"}

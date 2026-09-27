@@ -22,7 +22,7 @@ from luxe.sdd import SddParseError
 from luxe.spec_resolver import find_all_sdd, format_sdd_block
 
 from luxe.tools import analysis, cve_lookup as cve_lookup_mod, fs, git, shell
-from luxe.tools.base import ToolCache, ToolDef, ToolFn
+from luxe.tools.base import ToolDef, ToolFn
 from luxe import search as search_mod
 from luxe import symbols as symbols_mod
 
@@ -31,7 +31,7 @@ def _build_full_tool_surface(
     languages: frozenset[str] | None,
     tool_allowlist: list[str] | None,
     task_type: str | None = None,
-) -> tuple[list[ToolDef], dict[str, ToolFn], set[str]]:
+) -> tuple[list[ToolDef], dict[str, ToolFn]]:
     """Assemble the full read+write+analyze+shell+git tool surface.
 
     `tool_allowlist` (typically from the role config) restricts which of these
@@ -46,26 +46,21 @@ def _build_full_tool_surface(
     """
     defs: list[ToolDef] = []
     fns: dict[str, ToolFn] = {}
-    cacheable: set[str] = set()
 
     defs.extend(fs.read_only_defs())
     fns.update(fs.READ_ONLY_FNS)
-    cacheable.update(fs.CACHEABLE)
 
     defs.append(search_mod.bm25_search_def())
     fns.update(search_mod.TOOL_FNS)
-    cacheable.update(search_mod.CACHEABLE)
 
     defs.append(symbols_mod.find_symbol_def())
     fns.update(symbols_mod.TOOL_FNS)
-    cacheable.update(symbols_mod.CACHEABLE)
 
     defs.extend(fs.mutation_defs())
     fns.update(fs.MUTATION_FNS)
 
     defs.extend(git.tool_defs())
     fns.update(git.TOOL_FNS)
-    cacheable.update(git.CACHEABLE)
 
     defs.extend(shell.tool_defs())
     fns.update(shell.TOOL_FNS)
@@ -74,7 +69,6 @@ def _build_full_tool_surface(
     a_fns = analysis.tool_fns(languages)
     defs.extend(a_defs)
     fns.update(a_fns)
-    cacheable.update(analysis.CACHEABLE)
 
     # cve_lookup — language-agnostic; queries OSV.dev for any ecosystem.
     # Closes the audit-hallucination gap from v1.1's deps-audit by giving
@@ -84,15 +78,13 @@ def _build_full_tool_surface(
     if task_type == "manage":
         defs.append(cve_lookup_mod.cve_lookup_def())
         fns.update(cve_lookup_mod.TOOL_FNS)
-        cacheable.update(cve_lookup_mod.CACHEABLE)
 
     if tool_allowlist is not None:
         allowed = set(tool_allowlist)
         defs = [d for d in defs if d.name in allowed]
         fns = {n: f for n, f in fns.items() if n in allowed}
-        cacheable = cacheable & allowed
 
-    return defs, fns, cacheable
+    return defs, fns
 
 
 def run_single(
@@ -104,7 +96,7 @@ def run_single(
     languages: frozenset[str] | None = None,
     extra_tool_defs: list[ToolDef] | None = None,
     extra_tool_fns: dict[str, ToolFn] | None = None,
-    cache: ToolCache | None = None,
+    cache: object | None = None,
     on_tool_event: OnToolEvent | None = None,
     on_token: Callable[[str], None] | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -125,8 +117,11 @@ def run_single(
     every existing caller (maintain, benchmarks) produces a byte-identical
     `task_prompt`; only `luxe chat` passes a non-empty block. It is NOT a
     registry prompt (see agents.sdd / chat.sdd: prompts stay in the registry).
+
+    `cache` is accepted and ignored (deprecated 2026-09 with `ToolCache`,
+    which nothing ever constructed); kept so existing callers keep working.
     """
-    defs, fns, cacheable = _build_full_tool_surface(
+    defs, fns = _build_full_tool_surface(
         languages, role_cfg.tools or None, task_type=task_type
     )
 
@@ -162,8 +157,6 @@ def run_single(
         task_prompt=task_prompt,
         tool_defs=defs,
         tool_fns=fns,
-        cache=cache,
-        cacheable=cacheable,
         on_tool_event=on_tool_event,
         on_token=on_token,
         on_progress=on_progress,

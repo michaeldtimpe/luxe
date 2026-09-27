@@ -392,6 +392,3 @@ def tool_fns(languages: frozenset[str] | None = None) -> dict[str, ToolFn]:
             continue
         fns[name] = info["fn"]
     return fns
-
-
-CACHEABLE = set(_ANALYZERS.keys())

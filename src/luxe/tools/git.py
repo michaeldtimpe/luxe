@@ -130,5 +130,3 @@ TOOL_FNS: dict[str, ToolFn] = {
     "git_log": _git_log,
     "git_show": _git_show,
 }
-
-CACHEABLE = {"git_log", "git_show"}

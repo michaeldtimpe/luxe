@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 ToolFn = Callable[[dict[str, Any]], tuple[str, str | None]]
@@ -35,51 +35,17 @@ class ToolCall:
     error: str | None = None
     wall_s: float = 0.0
     bytes_out: int = 0
+    # True only on the loop's dedup short-circuit record; dispatch never
+    # memoizes (the unused ToolCache was removed 2026-09). Kept because the
+    # `tool_call` event reports it.
     cached: bool = False
     duplicate: bool = False
-
-
-@dataclass
-class ToolCache:
-    """Per-task memoization for read-only tools.
-
-    INERT in production: no caller constructs one, so `run_single`/`run_agent`
-    always pass `cache=None` and `dispatch_tool` never memoizes. Kept because
-    it is the type of `run_agent`'s `cache` parameter, and that signature is
-    frozen (chat.sdd) — removing the plumbing is a signature change, not a
-    cleanup. The per-module `CACHEABLE` sets only matter if one is ever
-    passed."""
-    _store: dict[str, tuple[str, str | None]] = field(default_factory=dict)
-    hits: int = 0
-    misses: int = 0
-
-    def _key(self, name: str, args: dict[str, Any]) -> str:
-        import json
-        return f"{name}:{json.dumps(args, sort_keys=True)}"
-
-    def get_or_run(
-        self,
-        name: str,
-        args: dict[str, Any],
-        fn: ToolFn,
-    ) -> tuple[str, str | None, bool]:
-        key = self._key(name, args)
-        if key in self._store:
-            self.hits += 1
-            result, err = self._store[key]
-            return result, err, True
-        self.misses += 1
-        result, err = fn(args)
-        self._store[key] = (result, err)
-        return result, err, False
 
 
 def dispatch_tool(
     name: str,
     args: dict[str, Any],
     tool_fns: dict[str, ToolFn],
-    cache: ToolCache | None = None,
-    cacheable: set[str] | None = None,
 ) -> ToolCall:
     # Tolerate stray whitespace in the tool name. GLM-4.5-Air-4bit emits
     # `"read_file\n"` / `"bash\n\n"` etc.; without normalization the lookup
@@ -100,11 +66,7 @@ def dispatch_tool(
     # entirely; now the model sees a normal tool-error message and can
     # self-correct on the next turn.
     try:
-        if cache and cacheable and name in cacheable:
-            result, err, was_cached = cache.get_or_run(name, args, fn)
-            tc.cached = was_cached
-        else:
-            result, err = fn(args)
+        result, err = fn(args)
     except Exception as e:
         result, err = "", f"{type(e).__name__}: {e}"
 
