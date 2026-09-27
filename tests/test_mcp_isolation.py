@@ -342,26 +342,26 @@ def test_task_filter_is_opt_in():
     when `enabled_for` NAMES the task. An empty list used to mean "every task",
     which leaked the chat-oriented codex_one + cpa tools into every bench run
     from 2026-08-25 (2026-09 review). No filter (chat --mcp) sees everything."""
+    class _Tool:
+        name = "t"
+        description = "d"
+        inputSchema = {"type": "object", "properties": {}}
+
     open_srv = _server("open", behavior="ok")               # enabled_for=[]
     opted = _server("opted", behavior="ok")
     opted.cfg.enabled_for = ["implement"]
-    listed: list[str] = []
-    for name, rt in (("open", open_srv), ("opted", opted)):
-        orig = rt.session.list_tools
-
-        async def _spy(_orig=orig, _name=name):
-            listed.append(_name)
-            return await _orig()
-        rt.session.list_tools = _spy
+    for rt in (open_srv, opted):
+        rt.tools = [_Tool()]
     mgr = _bootstrap_manager_with_servers({"open": open_srv, "opted": opted})
+
+    def servers(**kw) -> list[str]:
+        defs, _ = mgr.discover_tools(**kw)
+        return sorted(d.name.split("__")[1] for d in defs)
+
     try:
-        mgr.discover_tools(only_for_task="implement")
-        assert listed == ["opted"]
-        listed.clear()
-        mgr.discover_tools(only_for_task="document")
-        assert listed == []
-        mgr.discover_tools()                                # chat --mcp
-        assert sorted(listed) == ["open", "opted"]
+        assert servers(only_for_task="implement") == ["opted"]
+        assert servers(only_for_task="document") == []
+        assert servers() == ["open", "opted"]               # chat --mcp
     finally:
         mgr.close()
 
