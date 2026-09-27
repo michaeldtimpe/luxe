@@ -493,8 +493,9 @@ class MCPClientManager:
         for name, runtime in self._servers.items():
             if runtime.is_down:
                 continue
-            if only_for_task and runtime.cfg.enabled_for and \
-                    only_for_task not in runtime.cfg.enabled_for:
+            # `only_for_task` (the maintain path) is OPT-IN: an empty
+            # `enabled_for` means "no task", not "every task".
+            if only_for_task and only_for_task not in runtime.cfg.enabled_for:
                 continue
             if runtime.session is None:
                 # Belt-and-braces against the start() sweep ever missing one:

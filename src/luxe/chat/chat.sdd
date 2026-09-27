@@ -1110,7 +1110,10 @@ never touches this module.
   failed: Cancelled via cancel scope 0x…" tells an operator nothing during an
   outage, which is when this path matters. `/tools` lists the MCP surface
   with its gating. The benchmark/maintain path reads `enabled_for` from
-  configs/mcp.yaml as before and never touches `chat/mcptools.py`.
+  configs/mcp.yaml — OPT-IN since the 2026-09 review (a server with an empty
+  `enabled_for` is never started there; the old "empty = every task" reading
+  leaked codex_one + cpa into every bench run from 2026-08-25) — and never
+  touches `chat/mcptools.py`.
 - Web tools (2026-07-31, `/web` + `--web`, default OFF; package `src/luxe/web/`,
   contract `web/web.sdd`). `web_fetch` (bounded HTTP GET → stdlib HTML→markdown
   extraction, `render=true` for headless Chromium) and `web_search` (provider
