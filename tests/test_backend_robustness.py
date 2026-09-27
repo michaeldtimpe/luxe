@@ -11,8 +11,9 @@ Each section pins one failure a live run or the review found:
      `on_token` — the live tail replayed from the start and a metered
      provider billed the generation twice. An OpenRouter mid-stream
      `{"error": …}` chunk was ignored and read as a normal completion.
-  3. The empty-5xx warmup window was measured from each REQUEST's start, so
-     every fast empty 5xx retried to exhaustion; `_created_at` was never read.
+  3. (Kept, deliberately) the empty-5xx warmup window is per REQUEST, so a
+     fast empty 5xx retries at any Backend age — pinned so it is not "fixed"
+     to a per-Backend clock by accident.
   4. A progress stall was retryable, so a keepalive-sending wedged server held
      one request for up to max_attempts × stall_timeout_s.
   5. `Backend` never closed its httpx client.
@@ -261,30 +262,29 @@ class TestStreamErrorChunk:
         assert t.calls == 1
 
 
-# --- 3. the warmup window is the Backend's first seconds -------------------
+# --- 3. the warmup window is per request, at any Backend age --------------
 
 
-class TestWarmupWindow:
-    def test_a_fresh_backend_retries_an_empty_5xx(self):
+class TestWarmupWindowIsPerRequest:
+    def test_a_long_lived_backend_still_retries_a_fast_empty_5xx(self, monkeypatch):
         t = _Seq([httpx.Response(503, text=""), _ok("up")])
-        resp = _backend(t, max_attempts=3).chat(MSG)
+        b = _backend(t, max_attempts=3)
+        real = time.monotonic
+        # The Backend has existed "an hour"; the request itself is fresh.
+        monkeypatch.setattr("luxe.backend.time.monotonic", lambda: real() + 3600)
+        resp = b.chat(MSG)
         assert resp.text == "up" and t.calls == 2
 
-    def test_an_established_backend_fails_fast_on_an_empty_5xx(self):
-        t = _Seq([httpx.Response(503, text=""), _ok("never")])
-        b = _backend(t, max_attempts=3)
-        b._created_at -= 60.0                       # a minute into its life
-        with pytest.raises(BackendError, match="5xx-empty-post-warmup"):
-            b.chat(MSG)
-        assert t.calls == 1
-
     def test_the_same_holds_on_the_stream_path(self):
-        t = _Seq([httpx.Response(503, text="")])
-        b = _backend(t, max_attempts=3)
-        b._created_at -= 60.0
-        with pytest.raises(BackendError, match="5xx-empty-post-warmup"):
-            b.chat(MSG, stream=True, on_token=lambda s: None)
-        assert t.calls == 1
+        t = _Seq([
+            httpx.Response(503, text=""),
+            httpx.Response(200, content=_sse(
+                _content("up"),
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]})),
+        ])
+        resp = _backend(t, max_attempts=3).chat(
+            MSG, stream=True, on_token=lambda s: None)
+        assert resp.text == "up" and t.calls == 2
 
 
 # --- 4. a progress stall is not retried ------------------------------------

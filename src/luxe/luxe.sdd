@@ -64,9 +64,12 @@ auto-memory.
   `on_reasoning`, or a tool-call fragment), a transport failure is not
   retried (reason suffixed `-after-output`) — a retry replayed the live tail
   and re-billed metered providers; and an in-band `{"error": …}` chunk is
-  `stream-error-chunk`, never a completion. The empty-5xx warmup window is
-  the first `_WARMUP_WINDOW_S` of the BACKEND's life (`Backend._age_s`), not
-  of each request
+  `stream-error-chunk`, never a completion. NOT changed, deliberately: the
+  empty-5xx warmup window is measured from each REQUEST's first attempt, so a
+  fast empty 5xx retries until attempts run out (only a request that already
+  spent `_WARMUP_WINDOW_S` fails fast). Availability beats a stricter reading
+  for the fallback kit, and every bench to date ran this way — do not "fix" it
+  to a per-Backend clock without a bench
 - Payload-suspect annotation (pinned 2026-08-24, opt-in, OBSERVE-ONLY,
   UNBENCHED). `LUXE_PAYLOAD_SUSPECT_RETRY=1` (opt-IN grammar — ONLY the exact
   string "1", `agents/flags.py`'s spelling for an unbenched lever; read at

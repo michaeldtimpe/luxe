@@ -326,13 +326,18 @@ def classify_failure(
     Retry on:
       - connection / read timeouts (httpx.RequestError, httpx.TimeoutException)
       - 5xx with body containing transient markers (loading / swapping / warming)
-      - 5xx with empty body during the warmup window (the first 5s of the
-        BACKEND's life — `Backend` passes its own age, not the request's)
+      - 5xx with empty body within `_WARMUP_WINDOW_S` of `elapsed_since_start_s`.
+        `Backend` measures that from the REQUEST's first attempt, not from its
+        own creation, so in practice a FAST empty 5xx retries until attempts
+        run out; only a request that has already spent 5s fails fast. That is
+        deliberate (2026-09-26 decision): availability beats a stricter
+        reading for the fallback kit, and every bench to date ran this way
 
     Fail fast on:
       - 4xx (our request bug, retrying won't help) — EXCEPT 429, see below
       - 5xx with terminal markers (unavailable / crashed / OOM)
-      - 5xx with empty body AFTER warmup window (assume terminal)
+      - 5xx with empty body once the request has spent the window (assume
+        terminal)
       - a `ProgressStall` (a full progress budget spent on keepalives — see
         the class for why that is not worth another budget)
       - any failure on the last attempt
@@ -636,8 +641,6 @@ class Backend:
             # deliberately routed through planeproxy's env vars sometimes.
             trust_env=not is_loopback_url(self.base_url),
         )
-        # Start of the empty-5xx warmup window (`_age_s`).
-        self._created_at = time.monotonic()
         # Size (in prompt characters) of the last request THIS endpoint
         # accepted — the baseline the payload-suspect annotation measures
         # growth against. Instance state, not a `chat()` kwarg, for three
@@ -647,8 +650,8 @@ class Backend:
         # (2) `agents/loop.py`'s `backend.chat` call site and `run_agent`'s
         # signature are frozen (chat.sdd Must-not), so a parameter could never
         # be threaded from the path where the failure actually happens;
-        # (3) it follows the precedent already set by `on_reasoning` and
-        # `_created_at`. It stays None on every process that has not set
+        # (3) it follows the precedent already set by `on_reasoning`.
+        # It stays None on every process that has not set
         # `LUXE_PAYLOAD_SUSPECT_RETRY=1` — nothing measures it when off.
         self._last_accepted_prompt_chars: int | None = None
         # Running USD this instance has been billed, summed per REQUEST as
@@ -681,17 +684,6 @@ class Backend:
 
     def __exit__(self, *exc_info: Any) -> None:
         self.close()
-
-    def _age_s(self) -> float:
-        """Seconds since this Backend was built — the warmup-window clock.
-
-        `classify_failure`'s empty-5xx rule means "the server may still be
-        coming up": the first seconds of a RUN, which is this object's life.
-        Until 2026-09 the clock started at each REQUEST, so every fast empty
-        5xx fell inside the window and retried to exhaustion, and
-        `_created_at` was never read.
-        """
-        return time.monotonic() - self._created_at
 
     def chat(
         self,
@@ -792,6 +784,9 @@ class Backend:
         """
         attempt = 0
         last_decision: RetryDecision | None = None
+        # The empty-5xx warmup clock: from this request's first attempt (see
+        # classify_failure — kept per-request on purpose).
+        request_t0 = time.monotonic()
         # Measured once (the body does not change between attempts) and ONLY
         # when the lever is on, so the default path never serialises the
         # prompt a second time. `_chat_stream` rewrites `stream`/
@@ -806,7 +801,7 @@ class Backend:
                 decision = fail.decision or classify_failure(
                     status_code=fail.status_code,
                     body=fail.body,
-                    elapsed_since_start_s=self._age_s(),
+                    elapsed_since_start_s=time.monotonic() - request_t0,
                     attempt=attempt,
                     max_attempts=self.max_attempts,
                 )
@@ -824,7 +819,7 @@ class Backend:
             except (httpx.HTTPError, OSError) as exc:
                 decision = classify_failure(
                     exc=exc,
-                    elapsed_since_start_s=self._age_s(),
+                    elapsed_since_start_s=time.monotonic() - request_t0,
                     attempt=attempt,
                     max_attempts=self.max_attempts,
                     request_chars=req_chars,
