@@ -1,9 +1,9 @@
 # luxe — session resume document
 
-## ⇒ SESSION HANDOFF (2026-09-27, m1 + m5) — full-project review closed: 18 PRs landed
+## ⇒ SESSION HANDOFF (2026-09-27, m1 + m5) — full-project review closed: 20 PRs landed
 
 The first full review since the project started covered chat and the kit, the agent core, gitkit, the bench and
-the periphery. It landed PRs #10–#26 plus a CI fix: ripgrep on the runner, where main had been red for a month.
+the periphery. It landed PRs #10–#28 plus a CI fix: ripgrep on the runner, where main had been red for a month.
 
 - **Structural:**
   - `cli/` and `gitkit/deep/` became packages.
