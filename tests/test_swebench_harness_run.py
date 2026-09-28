@@ -99,3 +99,46 @@ def test_setup_failed_is_not_cached_or_predicted(tmp_path, monkeypatch):
                                                  model_patch="diff\n"))
     swe_run.main()
     assert ran == ["a__b-1"]
+
+
+def _fake_docker_modules(monkeypatch, local: set[str], pulls: list):
+    """Stub `docker` + swebench's make_test_spec (neither is a luxe dep)."""
+    import types
+
+    class ImageNotFound(Exception):
+        pass
+
+    class _Images:
+        def get(self, key):
+            if key not in local:
+                raise ImageNotFound(key)
+
+        def pull(self, repo, tag=None, platform=None):
+            pulls.append((repo, tag, platform))
+
+    docker_mod = types.ModuleType("docker")
+    docker_mod.errors = types.SimpleNamespace(ImageNotFound=ImageNotFound)
+    docker_mod.from_env = lambda: types.SimpleNamespace(images=_Images())
+    monkeypatch.setitem(sys.modules, "docker", docker_mod)
+
+    spec_mod = types.ModuleType("swebench.harness.test_spec.test_spec")
+    spec_mod.make_test_spec = lambda inst, namespace=None: types.SimpleNamespace(
+        instance_image_key=f"{namespace}/sweb.eval.x86_64.{inst['instance_id']}:latest")
+    for name in ("swebench", "swebench.harness", "swebench.harness.test_spec"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "swebench.harness.test_spec.test_spec", spec_mod)
+
+
+def test_prepull_pins_amd64_and_skips_local_and_empty(monkeypatch):
+    """The eval images are amd64-only; an arm64-native daemon (colima) 404s on
+    a platform-less pull. Pre-pull pins linux/amd64, skips images already
+    present, and skips empty patches the harness never runs."""
+    pulls: list = []
+    _fake_docker_modules(monkeypatch, local={"swebench/sweb.eval.x86_64.have:latest"},
+                         pulls=pulls)
+    instances = [{"instance_id": i} for i in ("need", "have", "empty")]
+    preds = {"need": {"model_patch": "diff"}, "have": {"model_patch": "diff"},
+             "empty": {"model_patch": "  "}}
+    pulled = harness.prepull_amd64_images(instances, preds)
+    assert pulls == [("swebench/sweb.eval.x86_64.need", "latest", "linux/amd64")]
+    assert pulled == ["swebench/sweb.eval.x86_64.need:latest"]
