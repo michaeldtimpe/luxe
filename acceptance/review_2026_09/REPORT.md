@@ -18,9 +18,10 @@ The raw data lives in local, gitignored sibling directories: `review_2026_09_ab/
 | #20 MCP opt-in (14 leaked tools off the bench surface) | m1 batch 2 | 30/30 | 21/9/0 vs main 26/3/1 | **landed on user decision** — −27% tokens, −20% wall; THINs are 2 deterministic fixtures, doc-config improved |
 | #26 dedup after write (split from fb50510) | m5 batch 3 | 30/30 | 26/4/0 vs base 24/6/0 | **landed** — no harm; fired once in 30 runs and did not change that doc |
 | #17 bench harness + graders | m5 batch 3 | 30/30 | 25/5/0 vs base 24/6/0 | **landed** — byte-identical to base on 8/10 fixtures |
+| #29 SWE-bench harness amd64 pre-pull (colima on m5) | m5 live grading | 6/6 patches applied, 0 errors | reports for every instance | **landed** — m5 can run the full harness |
 | #28 ship agent-made commits; unshipped diff = ERROR | m5, deps-audit ×3 | 3/3 push ok | 85-line audit reaches the cache | **landed**. Not model-visible |
 | #27 BFCL reprompt order | m5 BFCL agent, 1,240 problems | 1,134 → **1,137** | 1,228 byte-identical; 12 differ (4 won, 1 lost, 7 fail both) | **landed** — parallel_multiple 85.5% → 87.0% |
-| #27 habituation exit | m5 SWE-bench preds-only, 4 hab instances | empty 1/4 both | 25775 empty ×6 in both arms | **landed, inert here** — the same-step case did not recur on current code (all 6 exits since=5) |
+| #27 habituation exit | m5 SWE-bench preds-only, 4 hab instances | empty 1/4 both | 25775 empty ×6 in both arms | **landed, inert here** — the same-step case did not recur on current code (all 6 exits since=5). Docker harness on m5 (#29): both arms resolve 1/4 (matplotlib-14623), identical |
 
 ## Findings that outlive this review
 
