@@ -15,6 +15,11 @@ Workflow:
    - Emits `<run_id>.<model_name>.json` with per-instance `resolved`
 4. Aggregate results, write a luxe-format `harness_summary.json`.
 
+Runtimes: Docker Desktop (m1), or colima on m5 (2026-09-28: `colima start`,
+a vz VM with Rosetta, `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`,
+swebench 4.1.0 in the isolated `~/.venvs/swebench-grading`). An arm64-native
+daemon needs `prepull_amd64_images`, which `run_harness` always runs.
+
 Apple Silicon caveat: SWE-bench env images are amd64, so they run under
 Rosetta. Adds ~30% overhead and rare flakes on numpy/scipy native-
 extension instances. If >5% of n=75 are harness-flaky, switch to a
@@ -86,6 +91,8 @@ def run_harness(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    prepull_amd64_images(instances, predictions)
+
     run_instances(
         predictions=predictions,
         instances=instances,
@@ -100,6 +107,45 @@ def run_harness(
     # The harness writes per-instance reports under the cwd by default;
     # collect them into our output_dir for downstream aggregation.
     return collect_results(run_id, output_dir, predictions=predictions)
+
+
+def prepull_amd64_images(
+    instances: list[dict[str, Any]],
+    predictions: dict[str, dict[str, Any]],
+    *,
+    namespace: str = "swebench",
+) -> list[str]:
+    """Pull each graded instance's env image as linux/amd64 before the harness
+    asks for it.
+
+    The published `sweb.eval.x86_64.*` images carry only an amd64 manifest.
+    swebench's `build_container` pulls with no platform, so a daemon whose
+    native platform is arm64 (colima on m5, 2026-09-28) answers "no matching
+    manifest for linux/arm64/v8" and every instance ERRORs in under a second.
+    Docker Desktop happened to fall back to amd64, which is why m1 never saw
+    it. build_container uses a local image when one exists, so pulling here
+    with the platform pinned is enough. Returns the image keys pulled.
+    Instances with an empty patch are skipped, since the harness never runs them.
+    """
+    import docker
+    from swebench.harness.test_spec.test_spec import make_test_spec
+
+    client = docker.from_env()
+    pulled: list[str] = []
+    for inst in instances:
+        pred = predictions.get(inst["instance_id"], {})
+        if not (pred.get("model_patch") or "").strip():
+            continue
+        key = make_test_spec(inst, namespace=namespace).instance_image_key
+        try:
+            client.images.get(key)
+            continue
+        except docker.errors.ImageNotFound:
+            pass
+        repo, _, tag = key.partition(":")
+        client.images.pull(repo, tag=tag or "latest", platform="linux/amd64")
+        pulled.append(key)
+    return pulled
 
 
 def collect_results(
