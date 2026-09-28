@@ -1,0 +1,309 @@
+{
+ "run_id": "m5_n75_rep2",
+ "n": 75,
+ "resolved": 36,
+ "empty_patch": 12,
+ "resolved_rate": 0.48,
+ "per_instance": {
+  "astropy__astropy-12907": {
+   "resolved": true,
+   "error": ""
+  },
+  "astropy__astropy-13033": {
+   "resolved": false,
+   "error": ""
+  },
+  "astropy__astropy-13236": {
+   "resolved": false,
+   "error": ""
+  },
+  "astropy__astropy-13453": {
+   "resolved": false,
+   "error": ""
+  },
+  "astropy__astropy-13977": {
+   "resolved": false,
+   "error": ""
+  },
+  "astropy__astropy-14096": {
+   "resolved": false,
+   "error": ""
+  },
+  "astropy__astropy-14182": {
+   "resolved": false,
+   "error": ""
+  },
+  "astropy__astropy-8707": {
+   "resolved": true,
+   "error": ""
+  },
+  "django__django-10097": {
+   "resolved": true,
+   "error": ""
+  },
+  "django__django-10880": {
+   "resolved": true,
+   "error": ""
+  },
+  "django__django-10914": {
+   "resolved": true,
+   "error": ""
+  },
+  "django__django-10973": {
+   "resolved": false,
+   "error": ""
+  },
+  "django__django-10999": {
+   "resolved": false,
+   "error": ""
+  },
+  "django__django-11333": {
+   "resolved": false,
+   "error": ""
+  },
+  "django__django-11532": {
+   "resolved": true,
+   "error": ""
+  },
+  "django__django-11734": {
+   "resolved": false,
+   "error": ""
+  },
+  "matplotlib__matplotlib-13989": {
+   "resolved": true,
+   "error": ""
+  },
+  "matplotlib__matplotlib-14623": {
+   "resolved": true,
+   "error": ""
+  },
+  "matplotlib__matplotlib-20488": {
+   "resolved": false,
+   "error": ""
+  },
+  "matplotlib__matplotlib-20676": {
+   "resolved": false,
+   "error": ""
+  },
+  "matplotlib__matplotlib-20826": {
+   "resolved": true,
+   "error": ""
+  },
+  "matplotlib__matplotlib-24870": {
+   "resolved": false,
+   "error": ""
+  },
+  "matplotlib__matplotlib-25479": {
+   "resolved": false,
+   "error": ""
+  },
+  "matplotlib__matplotlib-25775": {
+   "resolved": false,
+   "error": ""
+  },
+  "mwaskom__seaborn-3069": {
+   "resolved": false,
+   "error": ""
+  },
+  "mwaskom__seaborn-3187": {
+   "resolved": false,
+   "error": ""
+  },
+  "pallets__flask-5014": {
+   "resolved": true,
+   "error": ""
+  },
+  "psf__requests-1142": {
+   "resolved": true,
+   "error": ""
+  },
+  "psf__requests-1724": {
+   "resolved": true,
+   "error": ""
+  },
+  "psf__requests-1766": {
+   "resolved": true,
+   "error": ""
+  },
+  "psf__requests-1921": {
+   "resolved": true,
+   "error": ""
+  },
+  "psf__requests-2317": {
+   "resolved": true,
+   "error": ""
+  },
+  "psf__requests-2931": {
+   "resolved": false,
+   "error": ""
+  },
+  "psf__requests-5414": {
+   "resolved": false,
+   "error": ""
+  },
+  "psf__requests-6028": {
+   "resolved": false,
+   "error": ""
+  },
+  "pydata__xarray-2905": {
+   "resolved": true,
+   "error": ""
+  },
+  "pydata__xarray-3095": {
+   "resolved": false,
+   "error": ""
+  },
+  "pydata__xarray-3151": {
+   "resolved": true,
+   "error": ""
+  },
+  "pydata__xarray-3305": {
+   "resolved": true,
+   "error": ""
+  },
+  "pydata__xarray-3677": {
+   "resolved": true,
+   "error": ""
+  },
+  "pydata__xarray-6938": {
+   "resolved": false,
+   "error": ""
+  },
+  "pylint-dev__pylint-4604": {
+   "resolved": false,
+   "error": ""
+  },
+  "pylint-dev__pylint-4661": {
+   "resolved": false,
+   "error": ""
+  },
+  "pylint-dev__pylint-4970": {
+   "resolved": false,
+   "error": ""
+  },
+  "pylint-dev__pylint-6386": {
+   "resolved": false,
+   "error": ""
+  },
+  "pylint-dev__pylint-6528": {
+   "resolved": false,
+   "error": ""
+  },
+  "pytest-dev__pytest-10051": {
+   "resolved": false,
+   "error": ""
+  },
+  "pytest-dev__pytest-10081": {
+   "resolved": true,
+   "error": ""
+  },
+  "pytest-dev__pytest-5262": {
+   "resolved": true,
+   "error": ""
+  },
+  "pytest-dev__pytest-5631": {
+   "resolved": true,
+   "error": ""
+  },
+  "pytest-dev__pytest-5809": {
+   "resolved": true,
+   "error": ""
+  },
+  "pytest-dev__pytest-5840": {
+   "resolved": false,
+   "error": ""
+  },
+  "pytest-dev__pytest-8399": {
+   "resolved": true,
+   "error": ""
+  },
+  "scikit-learn__scikit-learn-10297": {
+   "resolved": true,
+   "error": ""
+  },
+  "scikit-learn__scikit-learn-10844": {
+   "resolved": true,
+   "error": ""
+  },
+  "scikit-learn__scikit-learn-10908": {
+   "resolved": true,
+   "error": ""
+  },
+  "scikit-learn__scikit-learn-11310": {
+   "resolved": true,
+   "error": ""
+  },
+  "scikit-learn__scikit-learn-11578": {
+   "resolved": true,
+   "error": ""
+  },
+  "scikit-learn__scikit-learn-12682": {
+   "resolved": false,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-10323": {
+   "resolved": false,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-10435": {
+   "resolved": false,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-10449": {
+   "resolved": false,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-10466": {
+   "resolved": true,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-10614": {
+   "resolved": false,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-10673": {
+   "resolved": false,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-7462": {
+   "resolved": false,
+   "error": ""
+  },
+  "sphinx-doc__sphinx-8120": {
+   "resolved": true,
+   "error": ""
+  },
+  "sympy__sympy-11618": {
+   "resolved": true,
+   "error": ""
+  },
+  "sympy__sympy-12096": {
+   "resolved": true,
+   "error": ""
+  },
+  "sympy__sympy-12419": {
+   "resolved": true,
+   "error": ""
+  },
+  "sympy__sympy-12481": {
+   "resolved": true,
+   "error": ""
+  },
+  "sympy__sympy-13031": {
+   "resolved": false,
+   "error": ""
+  },
+  "sympy__sympy-13091": {
+   "resolved": false,
+   "error": ""
+  },
+  "sympy__sympy-13877": {
+   "resolved": true,
+   "error": ""
+  },
+  "sympy__sympy-17318": {
+   "resolved": false,
+   "error": ""
+  }
+ }
+}
