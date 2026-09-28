@@ -1,5 +1,32 @@
 # SWE-bench Verified n=75 baseline — m5, 2026-09-28
 
+## 3-rep summary (added after reps 2–3)
+
+| Rep | Resolved | Empty patch | Harness errors |
+|---|---|---|---|
+| rep1 | 38/75 (50.7%) | 11 | 0 |
+| rep2 | 36/75 (48.0%) | 12 | 0 |
+| rep3 | 35/75 (46.7%) | 12 | 0 |
+| **mean** | **36.3/75 (48.4%)**, sd 1.5 | **11.7** | 0 |
+
+- **Stable core:** 34 instances resolve in all 3 reps, 39 in at least one, 36 in none.
+- **5 flippers:**
+  - matplotlib-13989: 0 1 1 (empty in rep1)
+  - xarray-3095: 1 0 0
+  - sphinx-10449: 1 0 0
+  - sympy-12481: 1 1 0
+  - sympy-13031: 1 0 0
+- **Empty in all 3 reps (9):** astropy-14096, django-11734, matplotlib-20488/20676/25775, seaborn-3069,
+  xarray-6938, pylint-4604/6386. 15 instances were empty in at least one rep.
+- **Integrity:** every non-empty patch in every rep applied. Every resolved instance passes FAIL_TO_PASS with no
+  PASS_TO_PASS failures.
+
+**Verdict:** rep1's 38 was the top of the range; the confirmed baseline is about 36/75 (48%). That is level with
+v1.6's single-rep 36/75, not better. The empty-patch drop holds (11–12 per rep, against 18–19 in May). Reps 2–3
+are in `rep2/` and `rep3/`, graded together, with each instance's image pulled once.
+
+## Rep 1 detail
+
 - **Code:** luxe main `1693d06`, after the 2026-09 review (PRs #10–#29).
 - **Model:** champion `Qwen3.6-35B-A3B-6bit` on m5 (M5 Max, 128 GB).
 - **Config:** default `configs/single_64gb_swebench.yaml`, with the full intervention stack on (the runner defaults).
@@ -31,9 +58,10 @@ Earlier harness-graded n=75 runs were on m1, with older code and different inter
 |---|---|---|
 | v1.6 (2026-05-09) | 36/75 = 48.0% | 18 |
 | v1.9 (2026-05-13) | 34/75 = 45.3% | 19 (full stack) |
-| **this run** | **38/75 = 50.7%** | **11** |
+| **this run, rep1** | **38/75 = 50.7%** | **11** |
+| **this run, 3-rep mean** | **36.3/75 = 48.4%** | **11.7** |
 
-The resolved count is the best on record, but with one rep and a changed host, ±2 is noise. Empty patches are
+Rep1 alone looked like the best on record. The 3-rep mean puts it level with v1.6. Empty patches are
 the clearer movement: 11, against 18–19 in May.
 
 ## By repo

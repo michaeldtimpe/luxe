@@ -1,13 +1,14 @@
 # luxe — session resume document
 
-## ⇒ SESSION NOTE (2026-09-28, m5) — SWE-bench n=75 baseline: 38/75 = 50.7% harness-resolved
+## ⇒ SESSION NOTE (2026-09-28, m5) — SWE-bench n=75 baseline: 36.3/75 = 48.4% harness-resolved (3 reps: 38/36/35)
 
 This is the first full SWE-bench run since the 2026-09 review and the first graded on m5 (colima + Rosetta,
 swebench 4.1.0 in `~/.venvs/swebench-grading`; setup in `benchmarks/swebench/harness.py`'s docstring).
 
 - **Code:** main `1693d06`, default config, full intervention stack.
 - **Result:** 38/75 resolved (59.4% of non-empty patches). Empty patches: 11 (18–19 in May). Harness errors: 0.
-  This is the best on record (v1.6: 36/75), but it's one rep on a new host.
+  That was rep 1. Reps 2–3 gave 36 and 35, for a mean of 36.3 (sd 1.5), which is level with v1.6's 36/75.
+  34 instances resolve in every rep, 5 flip, and 9 are empty in all 3.
 - **Weak spots:** matplotlib and pylint, 2/13 resolved, holding 6 of the 11 empty patches.
 - **Cost:** predictions 1h38m, grading 49m.
 - **Report:** `acceptance/swebench/m5_baseline_2026_09_28/REPORT.md`.
