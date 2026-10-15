@@ -335,6 +335,20 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         if effective_ctx != role_cfg.num_ctx:
             role_cfg = role_cfg.model_copy(update={"num_ctx": effective_ctx})
 
+    # /steps, /maxtokens, /loopguard — session overrides of the loop's limits.
+    # Only fields that differ are copied, so a session that never typed them
+    # runs exactly the role it always ran.
+    limits: dict = {}
+    if session.max_steps_override and session.max_steps_override != role_cfg.max_steps:
+        limits["max_steps"] = session.max_steps_override
+    if (session.max_tokens_override
+            and session.max_tokens_override != role_cfg.max_tokens_per_turn):
+        limits["max_tokens_per_turn"] = session.max_tokens_override
+    if not session.loop_guard:
+        limits["stuck_loop_abort"] = False
+    if limits:
+        role_cfg = role_cfg.model_copy(update=limits)
+
     # Ctx-derived tool-output budget. The fixed 256 KB read cap predates the
     # /ctx tiers and is 480% of the DEFAULT 32K window measured in real tokens,
     # so one oversized read can blow the context in a single call. Set per turn

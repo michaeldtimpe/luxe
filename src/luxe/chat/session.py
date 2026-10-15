@@ -333,6 +333,11 @@ class ChatSession:
     web_enabled: bool = False
     pinned_slot: str | None = None  # set by /use; consumed on the next turn
     num_ctx_override: int | None = None  # set by /ctx; clamped per-turn to num_ctx_max
+    # Per-session agent-loop limits (chat-only; never persisted, like /ctx).
+    # None/True = the role's configured value, i.e. the turn is unchanged.
+    max_steps_override: int | None = None    # set by /steps
+    max_tokens_override: int | None = None   # set by /maxtokens (per model call)
+    loop_guard: bool = True                  # /loopguard off → stuck_loop_abort=False
     turns: list[ChatTurn] = field(default_factory=list)
 
     # -- spend (billable backends only; chat/cost.py) -------------------------
