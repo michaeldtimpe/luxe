@@ -66,7 +66,7 @@ backends:
     # which OpenRouter does not serve, so a session opening here would sit
     # pointed at a model the provider has never heard of. Yields to `/model`
     # and to the `--chat/plan/code-model` startup flags.
-    default_model: moonshotai/kimi-k3
+    default_model: deepseek/deepseek-v4-flash-0731
 
 # Chat color palette (D2): the default is 'auto' — it tracks your ACTIVE
 # terminal/YASL statusline theme. Resolved as `--theme` flag → LUXE_THEME env →
