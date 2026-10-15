@@ -80,3 +80,18 @@ def test_loopback_stays_allowed():
         socket.create_connection(srv.getsockname(), timeout=2).close()
     finally:
         srv.close()
+
+
+def test_interpreter_bytecode_under_home_is_not_an_escape(monkeypatch):
+    """CI's uv Python lives under the runner's home; a first stdlib import
+    writes `__pycache__/*.pyc` there. That is the import system, not the
+    test — but any OTHER write into the interpreter tree still counts."""
+    import sys
+    c = sys.modules["tests.conftest"]  # pytest's loaded copy, not a re-import
+
+    prefix = os.path.join(os.path.realpath(sys.base_prefix), "")
+    monkeypatch.setattr(c, "_REAL_HOME_PREFIXES", (prefix,))
+    monkeypatch.setattr(c, "_REPO_ROOT", "/nonexistent-repo-root/")
+    pyc = os.path.join(prefix, "lib", "__pycache__", "tty.cpython-311.pyc.1234")
+    assert not c._under_real_home(pyc)
+    assert c._under_real_home(os.path.join(prefix, "lib", "evil.py"))
