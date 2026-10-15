@@ -35,6 +35,18 @@ _REAL_HOME_PREFIXES = tuple(
 # The checkout itself (and its .venv) may live under $HOME; writing there is
 # the normal business of pytest and of the interpreter's bytecode cache.
 _REPO_ROOT = os.path.join(os.path.realpath(Path(__file__).resolve().parents[1]), "")
+# The interpreter's own install. On CI, uv puts it under the runner's home
+# (/home/runner/work/_temp/uv-python-dir/…), and the FIRST import of a stdlib
+# module there writes its bytecode cache — the import system, not the test.
+# Only `__pycache__` writes are exempt; anything else there is still refused.
+_INTERPRETER_PREFIXES = tuple(
+    {os.path.join(os.path.realpath(p), "")
+     for p in (sys.base_prefix, sys.prefix, sys.exec_prefix)})
+
+
+def _is_interpreter_bytecode(p: str) -> bool:
+    return (p.startswith(_INTERPRETER_PREFIXES)
+            and f"{os.sep}__pycache__{os.sep}" in p)
 
 _REAL_BFCL_DATA = os.path.join(_REAL_HOME, ".luxe", "bfcl-data")
 
@@ -69,7 +81,8 @@ def _under_real_home(path) -> bool:
     except (TypeError, ValueError):
         return False
     p = os.path.join(p, "")
-    return p.startswith(_REAL_HOME_PREFIXES) and not p.startswith(_REPO_ROOT)
+    return (p.startswith(_REAL_HOME_PREFIXES) and not p.startswith(_REPO_ROOT)
+            and not _is_interpreter_bytecode(p))
 
 
 def _is_local_host(host) -> bool:
