@@ -82,6 +82,9 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/full", "", "re-show the last answer without the display cap"),
     ("/copy", "", "copy the last answer to the system clipboard"),
     ("/ctx", "[small|medium|large|xlarge|huge]", "show or set context window size"),
+    ("/steps", "[n|default]", "max agent steps per turn (config default 30)"),
+    ("/maxtokens", "[n|default]", "output-token cap per model call (incl. reasoning)"),
+    ("/loopguard", "[on|off]", "abort a turn that repeats the same tool calls (default on)"),
     ("/write", "", "toggle write tools (default: read-only)"),
     ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
     ("/web", "", "toggle web tools: web_fetch (+render), web_search/web_answer, and the "
@@ -122,6 +125,7 @@ _HIDDEN_COMMANDS: frozenset[str] = frozenset({
     "/cc", "/claude-code",                            # /claude spellings
     "/git-audit", "/gaudit",                          # /gitaudit spellings
     "/git-change", "/gchange",                        # /gitchange spellings
+    "/max-tokens",                                    # /maxtokens spelling
     # pre-2026-06-07 gitkit names, kept working
     "/gitsummary", "/gsum", "/gitreview", "/grev",
     "/gitrefactor", "/gref", "/gitplan", "/gplan",
@@ -232,6 +236,10 @@ def _build_handlers() -> dict:
         "/full": cmd_transcript._full,
         "/use": cmd_toggles._use,
         "/ctx": cmd_toggles._ctx,
+        "/steps": cmd_toggles._steps,
+        "/maxtokens": cmd_toggles._maxtokens,
+        "/max-tokens": cmd_toggles._maxtokens,
+        "/loopguard": cmd_toggles._loopguard,
         "/write": cmd_toggles._write,
         "/bash": cmd_toggles._bash_mode,
         "/web": cmd_toggles._web_mode,

@@ -1137,6 +1137,16 @@ never touches this module.
 - `--ctx <tier>` (chat/code startup flag) = `/ctx` before the first turn: sets
   `session.num_ctx_override`, clamped per-turn to the box/model ceiling exactly
   as `/ctx` is. Benchmark/maintain unaffected.
+- `/steps [n|default]`, `/maxtokens [n|default]` (alias `/max-tokens`),
+  `/loopguard [on|off]` (2026-10-15) are per-session overrides of the turn
+  role's `max_steps`, `max_tokens_per_turn`, and `stuck_loop_abort`, held on
+  `ChatSession` (never persisted, like `/ctx`) and applied in `prepare_turn`
+  by `model_copy` of ONLY the fields that differ — nothing typed ⇒ the role
+  the turn always ran. Bounds (1–500 steps, 256–262144 tokens) are typo rails,
+  not policy. `/loopguard off` stops the consecutive-repeat ABORT only: the
+  dedup "already called" substitution still answers repeats and `max_steps`
+  still bounds the turn (the guard rescues local models; hosted near-frontier
+  ones trip it legitimately). `/status` shows all three on its `limits` row.
 - Defaults stay safe (read-only + allowlisted bash) but the state must be VISIBLE
   and flag-gated failures must be SELF-EXPLAINING: write mode (non-dev) injects
   `restricted_bash_def()` + `make_bash_fn(restricted_hint=True)` so an

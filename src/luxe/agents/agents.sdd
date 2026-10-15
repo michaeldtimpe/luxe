@@ -654,6 +654,17 @@ invariants (bias-not-lock, slew-rate, disable-equivalence) are written against
 it. Special-casing two of its three keys would save a few lines at the cost of
 the one shape those invariants describe.
 
+### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
+
+- `RoleConfig.stuck_loop_abort` (default **True**) gates whether
+  `ConsecutiveRepeatGuard` may abort the run. Every YAML-loaded role keeps
+  True, so benchmark/maintain are byte-identical (golden trajectories pass
+  unchanged). Only `luxe chat`'s `/loopguard off` sets False, per turn.
+- When False and the guard WOULD fire, the loop emits `stuck_loop_suppressed`
+  (step, consecutive_repeat_steps) and continues; dedup substitution and the
+  repeat counter are untouched, and `max_steps` remains the bound. The
+  threshold `_MAX_CONSECUTIVE_REPEAT_STEPS` stays in `guardrails.py`.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —

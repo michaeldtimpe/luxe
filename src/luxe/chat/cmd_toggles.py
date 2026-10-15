@@ -235,6 +235,92 @@ def _ctx(args, ctx: CommandContext) -> CommandResult:
     return CommandResult(handled=True)
 
 
+# /steps and /maxtokens bounds. Wide on purpose — these are sanity rails
+# against typos (`/steps 3000`), not policy; the spend cap is the real bound
+# on a billable backend and wall time is on a local one.
+_STEPS_RANGE = (1, 500)
+_MAXTOKENS_RANGE = (256, 262144)
+
+
+def _limit_command(args, ctx: CommandContext, *, name: str, attr: str,
+                   role_field: str, bounds: tuple[int, int], unit: str,
+                   hint: str) -> CommandResult:
+    """Shared body of `/steps` and `/maxtokens`: show, set, or reset one
+    session override of a RoleConfig integer (applied per turn, turn.py)."""
+    configured = getattr(ctx.slots.role_for("chat"), role_field)
+    current = getattr(ctx.session, attr)
+    if not args:
+        if current:
+            ctx.console.print(f"{name}: [cyan]{current}[/] {unit} "
+                              f"[dim](session override; config {configured})[/]")
+        else:
+            ctx.console.print(f"{name}: [cyan]{configured}[/] {unit} [dim](config)[/]")
+        ctx.console.print(f"[dim]{hint} `/{name} <n>` to set, "
+                          f"`/{name} default` to reset.[/]")
+        return CommandResult(handled=True)
+
+    arg = args[0].lower()
+    if arg in ("default", "reset"):
+        setattr(ctx.session, attr, None)
+        ctx.console.print(f"[green]✓[/] {name} → [cyan]{configured}[/] "
+                          f"[dim](config default; applies next turn)[/]")
+        return CommandResult(handled=True)
+
+    value = parse_ctx_size(arg)   # accepts 16384, 16k, 1.5k
+    lo, hi = bounds
+    if value is None or not lo <= value <= hi:
+        ctx.console.print(f"[yellow]Expected a number from {lo} to {hi} "
+                          f"(or `default`), got {args[0]!r}.[/]")
+        return CommandResult(handled=True)
+    setattr(ctx.session, attr, value)
+    ctx.console.print(f"[green]✓[/] {name} → [cyan]{value}[/] {unit} "
+                      f"[dim](config {configured}; applies next turn)[/]")
+    return CommandResult(handled=True)
+
+
+def _steps(args, ctx: CommandContext) -> CommandResult:
+    """`/steps [n|default]` — max agent steps (model calls) per turn."""
+    return _limit_command(
+        args, ctx, name="steps", attr="max_steps_override",
+        role_field="max_steps", bounds=_STEPS_RANGE, unit="steps per turn",
+        hint="A turn that runs out ends with 'Max steps reached'; say "
+             "'continue' to resume it.")
+
+
+def _maxtokens(args, ctx: CommandContext) -> CommandResult:
+    """`/maxtokens [n|default]` — output cap for each model call."""
+    return _limit_command(
+        args, ctx, name="maxtokens", attr="max_tokens_override",
+        role_field="max_tokens_per_turn", bounds=_MAXTOKENS_RANGE,
+        unit="tokens per model call",
+        hint="Includes reasoning tokens on a thinking model; a call that hits "
+             "it is retried (up to 2×), each retry a full generation.")
+
+
+def _loopguard(args, ctx: CommandContext) -> CommandResult:
+    """`/loopguard [on|off]` — whether repeating the same tool calls on
+    consecutive steps aborts the turn ("Stuck in loop"). ON by default: it
+    rescues local models; stronger hosted models trip it legitimately."""
+    if not args:
+        state = "[green]ON[/]" if ctx.session.loop_guard else "[yellow]OFF[/]"
+        ctx.console.print(f"loopguard: {state} [dim](aborts a turn that repeats "
+                          "the same tool calls on consecutive steps)[/]")
+        return CommandResult(handled=True)
+    arg = args[0].lower()
+    if arg not in ("on", "off"):
+        ctx.console.print("[yellow]Usage: /loopguard [on|off][/]")
+        return CommandResult(handled=True)
+    ctx.session.loop_guard = arg == "on"
+    if ctx.session.loop_guard:
+        ctx.console.print("loopguard: [green]ON[/] [dim](repeat streaks abort "
+                          "the turn; applies next turn)[/]")
+    else:
+        ctx.console.print("loopguard: [yellow]OFF[/] [dim](repeats are still "
+                          "answered 'already called'; /steps is the only "
+                          "bound now; applies next turn)[/]")
+    return CommandResult(handled=True)
+
+
 # Five commands were the same eight lines with different words: flip one bool
 # on the session, print `<name>: [<style>]<LABEL>[/] [dim](<hint>)[/]`. The
 # factory below reproduces that line BYTE FOR BYTE — the styles are per-command

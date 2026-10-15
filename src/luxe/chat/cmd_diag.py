@@ -50,6 +50,9 @@ def _status(args, ctx: CommandContext) -> CommandResult:
                  f"bash {'unrestricted' if s.unrestricted_bash else 'allowlisted'} · "
                  f"terse {'on' if s.terse else 'off'} · "
                  f"verbose {s.verbose_level}"),
+        ("limits", f"steps {s.max_steps_override or sm.role_for('chat').max_steps} · "
+                   f"maxtokens {s.max_tokens_override or sm.role_for('chat').max_tokens_per_turn} · "
+                   f"loopguard {'on' if s.loop_guard else 'off'}"),
         ("turns", str(len(s.turns))),
         ("swaps", f"{sm.stats.count} ({sm.stats.seconds:.0f}s)"),
     ]

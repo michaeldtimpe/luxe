@@ -1449,7 +1449,15 @@ def run_agent(
             cr_abort = ConsecutiveRepeatGuard.should_abort(
                 consecutive_repeat_steps=st.consecutive_repeat_steps,
             )
-            if cr_abort is not None:
+            if cr_abort is not None and not role_cfg.stuck_loop_abort:
+                # `/loopguard off` (chat-only): record that the guard WOULD
+                # have fired, then keep going. Never reached on a YAML config.
+                emit(
+                    "stuck_loop_suppressed",
+                    step=step,
+                    consecutive_repeat_steps=st.consecutive_repeat_steps,
+                )
+            elif cr_abort is not None:
                 result.final_text = resp.text or ""
                 result.aborted = True
                 result.abort_reason = cr_abort["abort_reason"]

@@ -276,6 +276,13 @@ class RoleConfig(BaseModel):
     num_ctx_max: int = 0
     max_steps: int = 12
     max_tokens_per_turn: int = 2048
+    # Whether the consecutive-repeat guard (guardrails.ConsecutiveRepeatGuard)
+    # may ABORT the run. True everywhere a config is read from YAML; only
+    # `luxe chat`'s `/loopguard off` flips it, per turn, via model_copy —
+    # the guard rescues local models that re-issue the same call, and is a
+    # false stop for stronger hosted ones. The dedup substitution and the
+    # step counter still run either way; max_steps remains the bound.
+    stuck_loop_abort: bool = True
     temperature: float = 0.2
     tools: list[str] = Field(default_factory=list)
     # Prompt-shaping bake-off levers (default to baseline-equivalent).
