@@ -442,6 +442,25 @@ def fields(session, slots, repo: str, state: StatusState, *,
                              _S("on", theme_mod.styles_for("warning"))],
                             priority=1))
 
+    # loop limits (/steps, /maxtokens, /loopguard, /frontier) — shown ONLY when
+    # a session override is in force, like eph: the config defaults are what
+    # every ordinary turn runs, so a permanent chip would be noise. When the
+    # three match the /frontier preset, it is labelled as such.
+    from luxe.chat.session import frontier_active
+    limit_bits: list[str] = []
+    if getattr(session, "max_steps_override", None):
+        limit_bits.append(f"steps {session.max_steps_override}")
+    if getattr(session, "max_tokens_override", None):
+        limit_bits.append(f"tok {_human(session.max_tokens_override)}")
+    if not getattr(session, "loop_guard", True):
+        limit_bits.append("loopguard off")
+    if limit_bits:
+        label = "frontier " if frontier_active(session) else "limits "
+        segs.append(Segment([_S(label, _DEFAULT),
+                             _S(" ".join(limit_bits),
+                                theme_mod.styles_for("warning"))],
+                            priority=3))
+
     # backend name — only when the config offers >1 endpoint (multi-backend is
     # the exception, not the rule; single-backend bars stay untouched). Mid
     # drop-priority: nice to see, not protected like git/ctx/model.

@@ -1147,6 +1147,14 @@ never touches this module.
   dedup "already called" substitution still answers repeats and `max_steps`
   still bounds the turn (the guard rescues local models; hosted near-frontier
   ones trip it legitimately). `/status` shows all three on its `limits` row.
+- `/frontier [on|off]` (2026-10-15) sets those same three overrides to the
+  hosted-model preset (`FRONTIER_STEPS` 500, `FRONTIER_MAX_TOKENS` 16384,
+  loopguard off — constants in chat/session.py); `off` clears all three. It is
+  VALUES, not a mode flag: adjusting any one afterwards simply leaves the
+  preset. The status bar shows a `limits …` chip (`frontier …` when the
+  preset matches exactly) ONLY while an override is in force — at defaults
+  the bar is unchanged. `/help` ends with an OpenRouter block (how to opt in,
+  `/model find`, `/usage budget`, `/reasoning`, `/frontier`).
 - Defaults stay safe (read-only + allowlisted bash) but the state must be VISIBLE
   and flag-gated failures must be SELF-EXPLAINING: write mode (non-dev) injects
   `restricted_bash_def()` + `make_bash_fn(restricted_hint=True)` so an

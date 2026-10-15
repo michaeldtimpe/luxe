@@ -17,6 +17,8 @@ from luxe.chat.commands import _SLOTS, CommandContext, CommandResult
 from luxe.chat.session import (
     CTX_TIER_MIN_RAM_GB,
     CTX_TIERS,
+    FRONTIER_MAX_TOKENS,
+    FRONTIER_STEPS,
     ctx_tier_ram_warning,
     parse_ctx_size,
     tier_label,
@@ -318,6 +320,33 @@ def _loopguard(args, ctx: CommandContext) -> CommandResult:
         ctx.console.print("loopguard: [yellow]OFF[/] [dim](repeats are still "
                           "answered 'already called'; /steps is the only "
                           "bound now; applies next turn)[/]")
+    return CommandResult(handled=True)
+
+
+def _frontier(args, ctx: CommandContext) -> CommandResult:
+    """`/frontier [on|off]` — on: /steps 500, /maxtokens 16k, /loopguard off;
+    off: all three back to the config defaults."""
+    arg = args[0].lower() if args else "on"
+    s = ctx.session
+    if arg == "on":
+        s.max_steps_override = FRONTIER_STEPS
+        s.max_tokens_override = FRONTIER_MAX_TOKENS
+        s.loop_guard = False
+        ctx.console.print(
+            f"frontier: [yellow]ON[/] [dim](steps {FRONTIER_STEPS} · maxtokens "
+            f"{FRONTIER_MAX_TOKENS} · loopguard off; applies next turn — "
+            "`/frontier off` to restore defaults)[/]")
+    elif arg in ("off", "default", "reset"):
+        role = ctx.slots.role_for("chat")
+        s.max_steps_override = None
+        s.max_tokens_override = None
+        s.loop_guard = True
+        ctx.console.print(
+            f"frontier: [green]OFF[/] [dim](steps {role.max_steps} · maxtokens "
+            f"{role.max_tokens_per_turn} · loopguard on — config defaults; "
+            "applies next turn)[/]")
+    else:
+        ctx.console.print("[yellow]Usage: /frontier [on|off][/]")
     return CommandResult(handled=True)
 
 

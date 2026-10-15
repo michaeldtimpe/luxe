@@ -60,7 +60,7 @@ class CommandContext:
 _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/help", "", "show this help"),
     ("/model", "[slot|all] [model_id]", "show slots, or repoint chat|plan|code (all = every slot)"),
-    ("/backend", "[name|n]", "list configured oMLX backends, or switch to one"),
+    ("/backend", "[name|n]", "list configured backends (local oMLX, m5, OpenRouter cloud), or switch to one"),
     ("/pull", "[repo|name] [--search q] [--yes]", "fetch model weights (mount → HF)"),
     ("/use", "<slot>", "pin the next turn to chat|plan|code"),
     ("/unload", "", "free oMLX RAM (unload resident weights) without quitting"),
@@ -85,6 +85,8 @@ _HELP_ROWS: list[tuple[str, str, str]] = [
     ("/steps", "[n|default]", "max agent steps per turn (config default 30)"),
     ("/maxtokens", "[n|default]", "output-token cap per model call (incl. reasoning)"),
     ("/loopguard", "[on|off]", "abort a turn that repeats the same tool calls (default on)"),
+    ("/frontier", "[on|off]", "hosted-model limits in one go: /steps 500, /maxtokens 16k, "
+                              "/loopguard off (off = config defaults)"),
     ("/write", "", "toggle write tools (default: read-only)"),
     ("/bash", "", "toggle unrestricted shell (default: allowlisted)"),
     ("/web", "", "toggle web tools: web_fetch (+render), web_search/web_answer, and the "
@@ -240,6 +242,7 @@ def _build_handlers() -> dict:
         "/maxtokens": cmd_toggles._maxtokens,
         "/max-tokens": cmd_toggles._maxtokens,
         "/loopguard": cmd_toggles._loopguard,
+        "/frontier": cmd_toggles._frontier,
         "/write": cmd_toggles._write,
         "/bash": cmd_toggles._bash_mode,
         "/web": cmd_toggles._web_mode,
@@ -314,7 +317,24 @@ def _help(args, ctx: CommandContext) -> CommandResult:
             sig += f" [dim]{escape(cmd_args)}[/]"
         table.add_row(sig, escape(desc))
     ctx.console.print(table)
+    ctx.console.print(_HELP_OPENROUTER)
     return CommandResult(handled=True)
+
+
+# The cloud backend is opt-in and billable, so /help says how to reach it and
+# what bounds it — the commands above don't name it on their own.
+_HELP_OPENROUTER = (
+    "\n[bold]OpenRouter (cloud, billable)[/]\n"
+    "  [cyan]luxe chat --backend openrouter[/] [dim]or[/] [cyan]/backend openrouter[/]"
+    " [dim]— opt in per session; key from OPENROUTER_API_KEY[/]\n"
+    "  [cyan]/model[/] [dim]lists the shortlist ·[/] [cyan]/model find <text>[/]"
+    " [dim]searches the live catalog ·[/] [cyan]/model all <id>[/] [dim]pins one[/]\n"
+    "  [cyan]/usage[/] [dim]spend vs the hard cap (budget_usd) ·[/]"
+    " [cyan]/usage budget <usd>[/] [dim]raises it for this session[/]\n"
+    "  [cyan]/reasoning low|medium|high[/] [dim]— reasoning tokens are billed;"
+    " the backend defaults to low[/]\n"
+    "  [cyan]/frontier[/] [dim]— long autonomous turns for a strong hosted model[/]"
+)
 
 
 def _retry(args, ctx: CommandContext) -> CommandResult:

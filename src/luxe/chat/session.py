@@ -305,6 +305,22 @@ class ChatTurn:
     run_id: str = ""
 
 
+# `/frontier` — the three loop limits set together for a hosted near-frontier
+# model (OpenRouter): long autonomous turns, room to reason, no repeat-abort
+# (strong models trip it legitimately). Values, not a mode: the session holds
+# the same overrides /steps, /maxtokens and /loopguard set, so any one can be
+# adjusted afterwards. Here (not cmd_toggles) so the status bar can read it.
+FRONTIER_STEPS = 500
+FRONTIER_MAX_TOKENS = 16384
+
+
+def frontier_active(session) -> bool:
+    """True when the session's limits are exactly the `/frontier` preset."""
+    return (getattr(session, "max_steps_override", None) == FRONTIER_STEPS
+            and getattr(session, "max_tokens_override", None) == FRONTIER_MAX_TOKENS
+            and not getattr(session, "loop_guard", True))
+
+
 @dataclass
 class ChatSession:
     repo_path: str = ""
