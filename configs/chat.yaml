@@ -41,7 +41,7 @@ backends:
     # HARD session spend cap. The session refuses a turn BEFORE dispatching it
     # once accumulated cost reaches this; `/usage budget <usd>` raises it for
     # the session only. Remove the key to run uncapped (and unwatched).
-    budget_usd: 5.00
+    budget_usd: 15.00
     # What makes per-request cost come back: OpenRouter only fills
     # `usage.cost` when the body asks for it. Merged at the TOP LEVEL of the
     # chat body (never `extra_body` — see backend.py 2026-08-11).
@@ -59,6 +59,8 @@ backends:
     # live catalog and `/model all <exact-id>` pins anything in it.
     visible_models:
       - moonshotai/kimi-k3
+      - deepseek/deepseek-v4-flash-0731
+      - deepseek/deepseek-v4-pro-0813
     # What every unpinned slot resolves to while this backend is active. Slot
     # defaults otherwise come from this host's manifest — LOCAL weight ids —
     # which OpenRouter does not serve, so a session opening here would sit
