@@ -185,3 +185,58 @@ def test_loopguard_toggle(ctx):
     assert ctx.session.loop_guard is True
     cmd.dispatch("/loopguard maybe", ctx)
     assert "Usage" in ctx._out.getvalue()
+
+
+def test_frontier_sets_and_resets_all_three(ctx):
+    from luxe.chat.session import frontier_active
+    cmd.dispatch("/frontier", ctx)
+    s = ctx.session
+    assert (s.max_steps_override, s.max_tokens_override, s.loop_guard) \
+        == (500, 16384, False)
+    assert frontier_active(s)
+    cmd.dispatch("/steps 200", ctx)                      # tweak one: no longer the preset
+    assert not frontier_active(s)
+    cmd.dispatch("/frontier off", ctx)
+    assert (s.max_steps_override, s.max_tokens_override, s.loop_guard) \
+        == (None, None, True)
+    cmd.dispatch("/frontier sideways", ctx)
+    assert "Usage" in ctx._out.getvalue()
+
+
+def test_frontier_preset_reaches_the_turn(setup):
+    _, session, _ = setup
+    session.max_steps_override, session.max_tokens_override = 500, 16384
+    session.loop_guard = False
+    role = _prep(setup).role_cfg
+    assert (role.max_steps, role.max_tokens_per_turn, role.stuck_loop_abort) \
+        == (500, 16384, False)
+
+
+# -- status bar ----------------------------------------------------------------
+
+def _bar(setup) -> str:
+    from luxe.chat import status
+    _, session, sm = setup
+    segs = status.fields(session, sm, session.repo_path, status.StatusState())
+    return " · ".join(status._seg_text(s) for s in segs)
+
+
+def test_status_bar_hides_limits_at_defaults(setup):
+    bar = _bar(setup)
+    assert "limits " not in bar and "frontier " not in bar
+
+
+def test_status_bar_shows_overrides_and_frontier(setup):
+    _, session, _ = setup
+    session.max_steps_override = 60
+    assert "limits steps 60" in _bar(setup)
+    session.max_steps_override, session.max_tokens_override = 500, 16384
+    session.loop_guard = False
+    assert "frontier steps 500 tok 16k loopguard off" in _bar(setup)
+
+
+def test_help_names_frontier_and_openrouter(ctx):
+    cmd.dispatch("/help", ctx)
+    out = ctx._out.getvalue()
+    assert "/frontier" in out
+    assert "--backend openrouter" in out and "/model find" in out
