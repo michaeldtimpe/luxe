@@ -15,9 +15,10 @@ features, fixes bugs, updates docs, or audits maintenance — and opens a PR.
 > previous shipped tag. See `RESUME.md` for active state.
 >
 > **Extended benchmark suite (2026-05-28):** MMLU / ARC-Challenge /
-> GSM8K / CodeNeedle / Perplexity added as a broad-capability layer on
+> GSM8K / CodeNeedle added as a broad-capability layer on
 > top of the agentic suite. Implementation in
-> `benchmarks/{gsm8k,codeneedle,mmlu,arc_challenge,perplexity}/`; shared
+> `benchmarks/{gsm8k,codeneedle,mmlu,arc_challenge}/` (Perplexity retired
+> 2026-10-15); shared
 > utilities in `benchmarks/_eval_common/`; suite runner at
 > `scripts/run_eval_suite.sh`. See `benchmarks/EXTENDED_BENCH.md` for
 > design + usage. 102 offline tests added; existing agentic-suite code

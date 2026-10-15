@@ -43,10 +43,9 @@ analyzers = ["ruff>=0.4", "mypy>=1.8", "bandit>=1.7", "pip-audit>=2.7"]
 # Do NOT add bfcl_eval here — it pins tree_sitter==0.21.3 and breaks symbols.py
 # (the multi_turn eval is vendored under benchmarks/bfcl/multi_turn/ instead).
 bfcl = ["mpmath>=1.3"]
-# Extended-benchmark suite (MMLU / ARC-Challenge / GSM8K / CodeNeedle /
-# Perplexity). esprima parses JS for the codeneedle needle-extractor;
+# Extended-benchmark suite (MMLU / ARC-Challenge / GSM8K / CodeNeedle). esprima parses JS for the codeneedle needle-extractor;
 # mlx_lm loads model weights in-process for logprob-based scoring
-# (oMLX drops logprobs); datasets fetches MMLU/ARC/GSM8K/WikiText.
+# (oMLX drops logprobs); datasets fetches MMLU/ARC/GSM8K.
 extended-bench = [
     "esprima>=4.0",
     "mlx_lm>=0.31",

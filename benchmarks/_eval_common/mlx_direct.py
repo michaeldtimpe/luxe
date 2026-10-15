@@ -2,19 +2,19 @@
 
 The oMLX HTTP server (Backend in src/luxe/backend.py) silently drops the
 `logprobs` / `top_logprobs` parameters on both /v1/chat/completions and
-/v1/completions, so MMLU / ARC / perplexity cannot use it. This module
+/v1/completions, so MMLU / ARC cannot use it. This module
 loads the same model weights via mlx_lm directly so we can read logits.
 
 **Sequencing constraint:** loading the 35B 6-bit weights here costs
 ~20-25 GB of RAM. If the oMLX server is also running with the same model
 loaded, total memory will be roughly double. On the 64GB single-machine
-configuration: run mlx-direct benchmarks (MMLU/ARC/perplexity) when oMLX
+configuration: run mlx-direct benchmarks (MMLU/ARC) when oMLX
 is idle, or stop the oMLX server first. The eval suite runner sequences
 HTTP-Backend benchmarks (BFCL/swebench/maintain_suite/GSM8K/CodeNeedle)
 before mlx-direct benchmarks to avoid contention.
 
 **Chat-template handling:** `MLXDirectBackend` is template-agnostic.
-Callers either pass raw completion prompts (perplexity over WikiText)
+Callers either pass raw completion prompts (`token_logprobs`)
 or pre-templated chat strings (MMLU/ARC must apply the tokenizer's
 chat_template explicitly via `apply_chat_template()` before scoring).
 """
@@ -43,7 +43,8 @@ class MLXDirectBackend:
     """Thin wrapper over an mlx_lm-loaded model exposing logprob helpers.
 
     Two public methods:
-      - `token_logprobs(text)` — per-token logprob of `text`. Used by perplexity.
+      - `token_logprobs(text)` — per-token logprob of `text` (live smoke tests;
+        its perplexity consumer was retired 2026-10-15).
       - `first_token_top_logprobs(prompt, top_k)` — top-K candidates for the
         next token after `prompt`. Used by MMLU/ARC.
 
@@ -73,8 +74,7 @@ class MLXDirectBackend:
         """Per-token logprobs given pre-tokenized IDs.
 
         Returns a list of length len(ids)-1; entry i is the logprob of
-        ids[i+1] conditioned on ids[0..i]. Used by perplexity, which
-        tokenizes the corpus once and slides windows over the ID array.
+        ids[i+1] conditioned on ids[0..i].
         """
         if len(ids) < 2:
             return []
