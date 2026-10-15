@@ -64,6 +64,11 @@ backends:
       - deepseek/deepseek-v4.1-flash
       - z-ai/glm-5.3
       - xiaomi/mimo-v2.6-pro
+      - google/gemini-4-argon
+      - google/gemini-3.8-flash
+      - meta/muse-wonder
+      - meta/muse-spark-1.3
+      - mistralai/mistral-large-4-0
     # What every unpinned slot resolves to while this backend is active. Slot
     # defaults otherwise come from this host's manifest — LOCAL weight ids —
     # which OpenRouter does not serve, so a session opening here would sit
