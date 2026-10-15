@@ -171,6 +171,18 @@
  ],
  "events": [
   {
+   "kind": "step_usage",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 0,
+   "prompt_tokens": 134,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-spec_min_calls",
    "phase": "main",
@@ -202,6 +214,18 @@
    "convergence_score": 0.25
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 1,
+   "prompt_tokens": 209,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "spec_reprompt_fired",
    "run_id": "golden-spec_min_calls",
    "phase": "main",
@@ -219,6 +243,18 @@
    "writes_seen": 0,
    "tool_calls_total": 1,
    "convergence_score": 0.25
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 2,
+   "prompt_tokens": 274,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -250,6 +286,18 @@
    "writes_seen": 0,
    "tool_calls_total": 2,
    "convergence_score": 0.25
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-spec_min_calls",
+   "phase": "main",
+   "step": 3,
+   "prompt_tokens": 349,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "compaction_phase_at_resolve",

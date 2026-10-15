@@ -4416,6 +4416,18 @@
    "modulation_soft_anchor": 1.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 0,
+   "prompt_tokens": 2345,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -4458,6 +4470,18 @@
    "writes_seen": 0,
    "tool_calls_total": 1,
    "convergence_score": 0.25
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 1,
+   "prompt_tokens": 2448,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -4504,6 +4528,18 @@
    "convergence_score": 0.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 2,
+   "prompt_tokens": 2537,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -4546,6 +4582,18 @@
    "writes_seen": 0,
    "tool_calls_total": 3,
    "convergence_score": 0.0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 3,
+   "prompt_tokens": 2616,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -4603,6 +4651,18 @@
    "convergence_score": 0.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 4,
+   "prompt_tokens": 2867,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -4650,6 +4710,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 5,
+   "prompt_tokens": 2969,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -4709,6 +4781,18 @@
    "convergence_score": 0.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 6,
+   "prompt_tokens": 3222,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -4756,6 +4840,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 7,
+   "prompt_tokens": 3301,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -4807,6 +4903,18 @@
    "write_burst_persistence": 0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 8,
+   "prompt_tokens": 3396,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -4854,6 +4962,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 9,
+   "prompt_tokens": 3498,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -4908,6 +5028,18 @@
    "convergence_score": 0.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 10,
+   "prompt_tokens": 3737,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -4955,6 +5087,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 11,
+   "prompt_tokens": 3817,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -5006,6 +5150,18 @@
    "write_burst_persistence": 0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 12,
+   "prompt_tokens": 3914,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -5053,6 +5209,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 13,
+   "prompt_tokens": 4021,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -5104,6 +5272,18 @@
    "write_burst_persistence": 0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 14,
+   "prompt_tokens": 4111,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -5151,6 +5331,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 15,
+   "prompt_tokens": 4191,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -5202,6 +5394,18 @@
    "write_burst_persistence": 0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 16,
+   "prompt_tokens": 4288,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -5249,6 +5453,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 17,
+   "prompt_tokens": 4401,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -5300,6 +5516,18 @@
    "write_burst_persistence": 0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 18,
+   "prompt_tokens": 4485,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_static_habituation",
    "phase": "main",
@@ -5347,6 +5575,18 @@
    "next_action_was_tool_call": true,
    "time_to_first_write_after_intervention": null,
    "write_burst_persistence": 0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_static_habituation",
+   "phase": "main",
+   "step": 19,
+   "prompt_tokens": 4566,
+   "cached_tokens": null,
+   "completion_tokens": 420,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",

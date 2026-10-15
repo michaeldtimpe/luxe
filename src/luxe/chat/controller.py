@@ -550,6 +550,10 @@ class ChatController:
             s.ctx_pressure = result.final_context_pressure
         s.num_ctx = outcome.num_ctx
         s.prompt_tokens = result.prompt_tokens
+        from luxe.chat.perf import turn_perf
+        perf = turn_perf(result)
+        s.prefill_tps, s.decode_tps, s.cache_hit = (
+            perf.prefill_tps, perf.decode_tps, perf.cache)
         s.steps = result.steps
         s.has_turn = True
 

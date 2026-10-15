@@ -76,6 +76,30 @@ class GenerationTiming:
     # facts, and the chat cost surfaces must not render a confident $0.00 for
     # an endpoint that simply never said.
     cost_usd: float | None = None
+    # SERVER-reported prefill/decode accounting (2026-10-15). None = the
+    # server did not say, which is different from 0: oMLX reports all three
+    # in `usage` (`prompt_tokens_details.cached_tokens`, `prompt_eval_duration`,
+    # `generation_duration`); llama-server reports them in a top-level
+    # `timings` block (`cache_n`, `prompt_ms`, `predicted_ms`); OpenRouter
+    # reports none. Display + telemetry only — no loop logic reads them.
+    cached_tokens: int | None = None
+    prefill_s: float | None = None
+    decode_s: float | None = None
+
+    @property
+    def prefill_tok_per_s(self) -> float | None:
+        """Prompt tokens actually COMPUTED per second — cached prefix tokens
+        were restored, not prefilled, so they are excluded (oMLX's own rule)."""
+        if not self.prefill_s or self.prefill_s <= 0:
+            return None
+        computed = max(self.prompt_tokens - (self.cached_tokens or 0), 0)
+        return computed / self.prefill_s if computed else None
+
+    @property
+    def gen_tok_per_s(self) -> float | None:
+        if not self.decode_s or self.decode_s <= 0 or self.completion_tokens <= 0:
+            return None
+        return self.completion_tokens / self.decode_s
 
     @property
     def decode_tok_per_s(self) -> float:
@@ -107,6 +131,44 @@ class ChatResponse:
     # (live evidence 2026-08-17: content=255 chars vs reasoning=3568 on a
     # one-sentence question, 792 completion tokens billed).
     reasoning_chars: int = 0
+    # The reasoning TEXT itself, kept only so the agent loop can hand it back
+    # to the model as `reasoning_content` on the assistant message when
+    # LUXE_REASONING_ROUNDTRIP=1 (model-facing history only — still never the
+    # answer, the transcript, or the history fold). Empty when the server
+    # split none off.
+    reasoning_text: str = ""
+
+
+def _server_perf(usage: dict[str, Any], timings: Any) -> dict[str, Any]:
+    """`cached_tokens`/`prefill_s`/`decode_s` from whichever shape the server
+    used, as GenerationTiming kwargs. Absent fields stay None.
+
+    oMLX: `usage.prompt_tokens_details.cached_tokens`, `usage.prompt_eval_duration`
+    and `usage.generation_duration` (seconds). llama-server: a top-level
+    `timings` block with `cache_n`, `prompt_ms`, `predicted_ms`. Malformed
+    values are dropped, never raised — this is reporting, not control flow.
+    """
+    out: dict[str, Any] = {}
+
+    def num(v: Any) -> float | None:
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
+
+    details = usage.get("prompt_tokens_details") if isinstance(usage, dict) else None
+    if isinstance(details, dict) and num(details.get("cached_tokens")) is not None:
+        out["cached_tokens"] = int(details["cached_tokens"])
+    if isinstance(usage, dict):
+        if num(usage.get("prompt_eval_duration")) is not None:
+            out["prefill_s"] = float(usage["prompt_eval_duration"])
+        if num(usage.get("generation_duration")) is not None:
+            out["decode_s"] = float(usage["generation_duration"])
+    if isinstance(timings, dict):
+        if "cached_tokens" not in out and num(timings.get("cache_n")) is not None:
+            out["cached_tokens"] = int(timings["cache_n"])
+        if "prefill_s" not in out and num(timings.get("prompt_ms")) is not None:
+            out["prefill_s"] = float(timings["prompt_ms"]) / 1000.0
+        if "decode_s" not in out and num(timings.get("predicted_ms")) is not None:
+            out["decode_s"] = float(timings["predicted_ms"]) / 1000.0
+    return out
 
 
 # --- Text-channel tool-call recovery -----------------------------------------
@@ -948,6 +1010,7 @@ class Backend:
             completion_tokens=usage.get("completion_tokens", 0),
             total_s=wall,
             cost_usd=self._note_cost(_usage_cost(usage)),
+            **_server_perf(usage, data.get("timings")),
         )
 
         tc_list: list[ToolCallResponse] = []
@@ -975,7 +1038,8 @@ class Backend:
         # there is nothing live to show, but the count is what lets a
         # blank answer be reported as "thought and said nothing"
         # rather than "returned nothing".
-        reasoning_chars = len(_reasoning_text(msg))
+        reasoning_text = _reasoning_text(msg)
+        reasoning_chars = len(reasoning_text)
         if not tc_list:
             # Native channel empty — check the text channel (see
             # recover_tool_calls_from_text above for why).
@@ -989,6 +1053,7 @@ class Backend:
             finish_reason=choice.get("finish_reason", ""),
             timing=timing,
             reasoning_chars=reasoning_chars,
+            reasoning_text=reasoning_text,
         )
 
     def _read_body_with_progress(self, resp) -> bytes:
@@ -1061,6 +1126,8 @@ class Backend:
         tool_frags: dict[int, dict[str, Any]] = {}
         finish_reason = ""
         usage: dict[str, Any] = {}
+        timings: dict[str, Any] | None = None
+        reasoning_parts: list[str] = []
         reasoning_chars = 0
         ttft = 0.0
         started = False
@@ -1119,6 +1186,9 @@ class Backend:
                 if isinstance(chunk.get("usage"), dict):
                     usage = chunk["usage"]
                     last_progress = time.monotonic()
+                if isinstance(chunk.get("timings"), dict):
+                    # llama-server's per-request accounting (final chunk).
+                    timings = chunk["timings"]
                 for choice in chunk.get("choices") or []:
                     if not isinstance(choice, dict):
                         continue
@@ -1133,6 +1203,7 @@ class Backend:
                     # pre-first-token bound is still the right one.
                     think = _reasoning_text(delta)
                     if think:
+                        reasoning_parts.append(think)
                         reasoning_chars += len(think)
                         last_progress = time.monotonic()
                         progress.output = True
@@ -1202,8 +1273,10 @@ class Backend:
                 total_s=wall,
                 time_to_first_token_s=ttft,
                 cost_usd=self._note_cost(_usage_cost(usage)),
+                **_server_perf(usage, timings),
             ),
             reasoning_chars=reasoning_chars,
+            reasoning_text="".join(reasoning_parts),
         )
 
     def health(self, timeout_s: float | None = None) -> bool:

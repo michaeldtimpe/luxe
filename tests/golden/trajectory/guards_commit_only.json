@@ -549,6 +549,18 @@
  ],
  "events": [
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 0,
+   "prompt_tokens": 2345,
+   "cached_tokens": null,
+   "completion_tokens": 200,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_commit_only",
    "phase": "main",
@@ -578,6 +590,18 @@
    "writes_seen": 0,
    "tool_calls_total": 1,
    "convergence_score": 0.25
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 1,
+   "prompt_tokens": 2448,
+   "cached_tokens": null,
+   "completion_tokens": 200,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -611,6 +635,18 @@
    "convergence_score": 0.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 2,
+   "prompt_tokens": 2537,
+   "cached_tokens": null,
+   "completion_tokens": 200,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_commit_only",
    "phase": "main",
@@ -640,6 +676,18 @@
    "writes_seen": 0,
    "tool_calls_total": 3,
    "convergence_score": 0.0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 3,
+   "prompt_tokens": 2616,
+   "cached_tokens": null,
+   "completion_tokens": 200,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -684,6 +732,18 @@
    "convergence_score": 0.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 4,
+   "prompt_tokens": 2711,
+   "cached_tokens": null,
+   "completion_tokens": 200,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_commit_only",
    "phase": "main",
@@ -726,6 +786,18 @@
    "convergence_score": 0.0
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 5,
+   "prompt_tokens": 2813,
+   "cached_tokens": null,
+   "completion_tokens": 200,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-guards_commit_only",
    "phase": "main",
@@ -766,6 +838,18 @@
    "writes_seen": 0,
    "tool_calls_total": 6,
    "convergence_score": 0.0
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-guards_commit_only",
+   "phase": "main",
+   "step": 6,
+   "prompt_tokens": 2895,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "compaction_phase_at_resolve",

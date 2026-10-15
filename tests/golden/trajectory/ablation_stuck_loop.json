@@ -117,6 +117,18 @@
  ],
  "events": [
   {
+   "kind": "step_usage",
+   "run_id": "golden-ablation_stuck_loop",
+   "phase": "main",
+   "step": 0,
+   "prompt_tokens": 2345,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-ablation_stuck_loop",
    "phase": "main",
@@ -148,6 +160,18 @@
    "convergence_score": 0.25
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-ablation_stuck_loop",
+   "phase": "main",
+   "step": 1,
+   "prompt_tokens": 2428,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-ablation_stuck_loop",
    "phase": "main",
@@ -176,6 +200,18 @@
    "writes_seen": 0,
    "tool_calls_total": 2,
    "convergence_score": 0.25
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-ablation_stuck_loop",
+   "phase": "main",
+   "step": 2,
+   "prompt_tokens": 2556,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",

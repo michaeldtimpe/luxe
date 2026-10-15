@@ -285,7 +285,7 @@ session must not rediscover the hard way; mechanism lives in the `.sdd` + code.
 - **`/bash` toggles unrestricted shell (chat-only; default OFF = hardened
   allowlist).** ON + write → `make_bash_fn(unrestricted=True)`. The default
   `TOOL_FNS["bash"]` and the benchmark path stay allowlisted (tools.sdd).
-- **Status bar (`chat/status.py`):** order `path·git·ctx·cache·start·last·
+- **Status bar (`chat/status.py`):** order `path·git·ctx·cache·pp/tg·start·last·
   write·bash·web·[eph]·slot·model`. Provenance glyph (`chat/origin.py`): `⌂`
   local disk · `☁` network/cloud-sync · `⇅` remote. Colours follow the ACTIVE
   Claude statusline theme via `chat/theme.py`, which reads ONLY

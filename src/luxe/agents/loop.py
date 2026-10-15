@@ -140,6 +140,20 @@ class AgentResult:
     # benchmark grader reads this. The chat layer joins it ahead of the final
     # answer so a reply stops starting mid-thought (see loop body).
     step_texts: list[str] = field(default_factory=list)
+    # SERVER-reported cache + prefill/decode accounting, summed over the steps
+    # whose response carried it (oMLX `usage`, llama-server `timings`; see
+    # backend._server_perf). Additive reporting fields only — no loop logic
+    # reads them. `perf_prompt_tokens` is the prompt-token denominator for
+    # `cached_tokens` (steps that reported a cache count); `first_step_*` is
+    # the turn's opening request — the one a cross-turn cache would serve.
+    cached_tokens: int = 0
+    perf_prompt_tokens: int = 0
+    prefill_s: float = 0.0
+    prefill_tokens: int = 0
+    decode_s: float = 0.0
+    decode_tokens: int = 0
+    first_step_prompt_tokens: int = 0
+    first_step_cached_tokens: int | None = None
     wall_s: float = 0.0
     peak_context_pressure: float = 0.0
     final_context_pressure: float = 0.0  # last per-step pressure (matches token-progress)
@@ -346,6 +360,16 @@ def run_agent(
     # the footgun the v1.10 audit caught. Opt out via LUXE_SUPPRESS_TOOL_LOG=1
     # (ablation parity for legacy callers).
     log_calls = bool(run_id) and not flags.suppress_tool_log
+
+    def _assistant(resp: ChatResponse, content: str) -> dict[str, Any]:
+        """The assistant message the model's output becomes in `messages`.
+        With LUXE_REASONING_ROUNDTRIP=1 it carries the reasoning the server
+        split off, so the template renders the model's real `<think>` block
+        instead of an empty one. Off: exactly the legacy dict."""
+        msg: dict[str, Any] = {"role": "assistant", "content": content}
+        if flags.reasoning_roundtrip and resp.reasoning_text:
+            msg["reasoning_content"] = resp.reasoning_text
+        return msg
     # Every events.jsonl record this run writes goes through `emit`, which
     # owns the `log_calls` gate and the leading `phase=` field.
     emit = _event_emitter(run_id, phase, log_calls)
@@ -424,6 +448,7 @@ def run_agent(
         TieredCompact(
             compact_threshold=_tc_threshold,
             phase_thresholds=_tc_phase_thresholds,
+            cache_friendly=flags.compact_cache_friendly,
         ) if tiered_compact_enabled else None
     )
 
@@ -902,6 +927,31 @@ def run_agent(
         result.completion_tokens += resp.timing.completion_tokens
         if resp.timing.prompt_tokens:
             result.last_prompt_tokens = resp.timing.prompt_tokens
+        _t = resp.timing
+        if _t.cached_tokens is not None:
+            result.cached_tokens += _t.cached_tokens
+            result.perf_prompt_tokens += _t.prompt_tokens
+        if _t.prefill_s:
+            result.prefill_s += _t.prefill_s
+            result.prefill_tokens += max(_t.prompt_tokens - (_t.cached_tokens or 0), 0)
+        if _t.decode_s:
+            result.decode_s += _t.decode_s
+            result.decode_tokens += _t.completion_tokens
+        if step == 0:
+            result.first_step_prompt_tokens = _t.prompt_tokens
+            result.first_step_cached_tokens = _t.cached_tokens
+        # Per-step cache/prefill record (2026-10-15, additive telemetry): the
+        # only place a run's prefix-cache behaviour is visible client-side.
+        emit(
+            "step_usage",
+            step=step,
+            prompt_tokens=_t.prompt_tokens,
+            cached_tokens=_t.cached_tokens,
+            completion_tokens=_t.completion_tokens,
+            prefill_s=_t.prefill_s,
+            decode_s=_t.decode_s,
+            reasoning_chars=resp.reasoning_chars,
+        )
         if resp.timing.cost_usd:
             # SUM, not last-wins: a multi-step turn bills once per step, and a
             # cap that only ever saw the final step's cost would undercount by
@@ -975,7 +1025,7 @@ def run_agent(
                 # Record the cut-off text before the nudge so the transcript
                 # shows what the model was mid-way through saying.
                 if resp.text:
-                    st.messages.append({"role": "assistant", "content": resp.text})
+                    st.messages.append(_assistant(resp, resp.text))
                 st.messages.append({
                     "role": "user",
                     "content": _TRUNCATED_TURN_MESSAGE,
@@ -1078,7 +1128,7 @@ def run_agent(
                     # behavior) ended the request on the stale answer, with the
                     # correction buried above it.
                     if resp.text:
-                        st.messages.append({"role": "assistant", "content": resp.text})
+                        st.messages.append(_assistant(resp, resp.text))
                     for detail in reprompts:
                         st.messages.append({"role": "user", "content": detail})
                     continue
@@ -1139,7 +1189,7 @@ def run_agent(
             # next turn doesn't see a dangling "I tried to call X" without
             # a corresponding tool result.
             assistant_text = resp.text or ""
-            st.messages.append({"role": "assistant", "content": assistant_text})
+            st.messages.append(_assistant(resp, assistant_text))
             st.messages.append({"role": "user",
                                 "content": _SPEC_ZERO_CALLS_DECLINE_MESSAGE})
             emit(
@@ -1163,7 +1213,7 @@ def run_agent(
         # grader sees anything new. Only the chat layer reads this.
         if (resp.text or "").strip():
             result.step_texts.append(resp.text)
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": resp.text or ""}
+        assistant_msg: dict[str, Any] = _assistant(resp, resp.text or "")
         if resp.tool_calls:
             assistant_msg["tool_calls"] = [
                 {

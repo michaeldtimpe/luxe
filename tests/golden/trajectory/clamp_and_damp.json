@@ -209,6 +209,18 @@
  ],
  "events": [
   {
+   "kind": "step_usage",
+   "run_id": "golden-clamp_and_damp",
+   "phase": "main",
+   "step": 0,
+   "prompt_tokens": 2344,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-clamp_and_damp",
    "phase": "main",
@@ -250,6 +262,18 @@
    "tool_results_dropped": 0,
    "effective": false,
    "eligible_end": 2
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-clamp_and_damp",
+   "phase": "main",
+   "step": 1,
+   "prompt_tokens": 2436,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_result_clamped",
@@ -313,6 +337,18 @@
    "eligible_end": 2
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-clamp_and_damp",
+   "phase": "main",
+   "step": 2,
+   "prompt_tokens": 5377,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-clamp_and_damp",
    "phase": "main",
@@ -374,6 +410,18 @@
    "tool_results_dropped": 0,
    "effective": false,
    "eligible_end": 2
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-clamp_and_damp",
+   "phase": "main",
+   "step": 3,
+   "prompt_tokens": 5544,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "compaction_phase_at_resolve",

@@ -5,8 +5,10 @@ separated, model pinned last).
 WHAT PORTED (applies to luxe): home-relative path · state-coloured git label
 `git <branch>/<commit> +U ~M -D RN ↑a ↓b ✓` · `ctx N%` (zone-coloured) · gen rate
 · `start <date time> · last <HH:MM>` session timing · `<slot>:<model>` last.
-WHAT DIDN'T (Claude-Code-subscription specifics): 5h/7d plan quotas, cache-read
-tokens, $ cost, thinking-effort pill. Plus luxe-specific WRITE/BASH/READ-ONLY
+WHAT DIDN'T (Claude-Code-subscription specifics): 5h/7d plan quotas,
+thinking-effort pill. (Cache-read share and server-measured prefill/decode
+rates arrived 2026-10-15 as `cache N%` and `pp · tg t/s`; `$` arrived with the
+OpenRouter backend.) Plus luxe-specific WRITE/BASH/READ-ONLY
 mode chips (chat.sdd requires write-mode visibility every turn).
 
 LIGHTWEIGHT variant: a static bar pinned under the input line, refreshed from
@@ -299,6 +301,11 @@ class StatusState:
     # `slots.ctx_ceiling` from a render could GET the endpoint's catalog.
     # 0 = not known yet → the override is shown unclamped.
     ctx_ceiling: int = 0
+    # Server-measured rates + prefix-cache hit rate of the last turn
+    # (chat/perf.py). None = the server didn't report it → no segment.
+    prefill_tps: float | None = None
+    decode_tps: float | None = None
+    cache_hit: float | None = None
 
 
 # Model-provenance markers (chat/origin.ModelOrigin.kind). Only a WIRE CROSSING
@@ -348,7 +355,7 @@ def fields(session, slots, repo: str, state: StatusState, *,
            on_git_update: Callable[[], None] | None = None,
            background_git: bool | None = None) -> list[Segment]:
     """Ordered status segments. THE place to change the bar's format. Order (user
-    spec): path · git · ctx · cache · [$spend] · start · last · write · bash · model.
+    spec): path · git · ctx · cache · [pp/tg] · [$spend] · start · last · write · bash · model.
     The `$` segment exists only on a billable backend (chat/cost.py).
     `priority` drives responsive drop order (higher = dropped first); path/git/
     ctx/model are protected (1-2). git keeps the active theme's role colours; the
@@ -391,11 +398,28 @@ def fields(session, slots, repo: str, state: StatusState, *,
     ctx_spans.append(_S(_ctx_size(eff_win) if eff_win else "default", _GREY))
     segs.append(Segment(ctx_spans, priority=2))
 
-    # cache: resident prompt size (luxe has no cross-turn prompt cache — each turn
-    # is a fresh run_single; this is the prompt/KV size processed last turn)
+    # cache: prompt tokens processed last turn, prefixed by the share the
+    # server served from its prefix cache when it reported one (oMLX does).
     if state.has_turn:
-        segs.append(Segment([_S("cache ", _GREY), _S(_human(state.prompt_tokens), _DEFAULT)],
-                            priority=8))
+        cache_spans: list[Span] = [_S("cache ", _GREY)]
+        if state.cache_hit is not None:
+            cache_spans.append(_S(f"{state.cache_hit:.0%} ", _DEFAULT))
+        cache_spans.append(_S(_human(state.prompt_tokens), _GREY
+                              if state.cache_hit is not None else _DEFAULT))
+        segs.append(Segment(cache_spans, priority=8))
+
+    # pp/tg: server-measured prefill and decode tokens/s of the last turn.
+    if state.has_turn and (state.prefill_tps or state.decode_tps):
+        from luxe.chat.perf import rate
+        rate_spans: list[Span] = []
+        if state.prefill_tps:
+            rate_spans += [_S("pp ", _GREY), _S(rate(state.prefill_tps), _DEFAULT)]
+        if state.decode_tps:
+            if rate_spans:
+                rate_spans.append(_S(" ", _GREY))
+            rate_spans += [_S("tg ", _GREY), _S(rate(state.decode_tps), _DEFAULT)]
+        rate_spans.append(_S(" t/s", _GREY))
+        segs.append(Segment(rate_spans, priority=6))
 
     # $ spent this session — only on a BILLABLE backend (or once real cost data
     # has arrived), mirroring the `backend` segment's gate below. On every local
