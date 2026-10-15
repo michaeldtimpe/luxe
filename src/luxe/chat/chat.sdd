@@ -306,7 +306,11 @@ never touches this module.
   said nothing" and "returned nothing" are different failures — that count is
   what `terminal_turn_empty` reports and what the empty-turn notice says out
   loud. `/reasoning show` is the opt-in display, unchanged in spirit from the
-  old bare toggle.
+  old bare toggle. (2026-10-15: `ChatResponse.reasoning_text` now carries the
+  text too, for ONE consumer — the agent loop's opt-in
+  `LUXE_REASONING_ROUNDTRIP`, which puts it back on the model-facing assistant
+  message as `reasoning_content`. Everything above still holds: no answer,
+  transcript, fold or screen path reads that field.)
   (3) THE LIVE SINK IS AN INSTANCE ATTRIBUTE, NOT A SIGNATURE.
   `Backend.on_reasoning` is set by the front-end on the Backend chat owns, for
   the duration of one turn, and cleared in a `finally`. `agents/loop.py`'s

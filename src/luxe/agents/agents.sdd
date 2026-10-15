@@ -665,6 +665,38 @@ the one shape those invariants describe.
   repeat counter are untouched, and `max_steps` remains the bound. The
   threshold `_MAX_CONSECUTIVE_REPEAT_STEPS` stays in `guardrails.py`.
 
+### Prefix-cache accounting + the two cache experiments (2026-10-15)
+
+Evidence: oMLX's own logs on m1 (Qwen3.6 is a hybrid model, so its prefix
+cache resumes only at boundary snapshots: every 4,096 tokens plus the tail of
+each prompt). Within a run, step N+1 reuses step N's whole prompt. Two things
+break that:
+(a) the model's reasoning is dropped from history, so the template renders an
+empty `<think>` for every earlier step instead of what the model actually
+generated; (b) TieredCompact rewrites a message just upstream of the
+`keep_recent` window on EVERY step once pressure passes phase 1, and phase 1
+re-truncates its own output once more (`[Truncated — 33 chars removed]`, a
+false count). Each rewrite forces everything after it to be prefilled again.
+
+- `step_usage` event (ADDITIVE, ungated like the tool-call events): per step
+  `prompt_tokens`, `cached_tokens`, `completion_tokens`, `prefill_s`,
+  `decode_s`, `reasoning_chars` — the server's numbers (oMLX `usage` /
+  llama-server `timings`, `backend._server_perf`), None when unreported. No
+  wall-clock fields: golden trajectories pin these records.
+- `AgentResult.cached_tokens / perf_prompt_tokens / prefill_s / prefill_tokens
+  / decode_s / decode_tokens / first_step_*`: reporting only; no loop logic
+  reads them (chat's `pp · tg` and `cache N%` chips do).
+- `LUXE_REASONING_ROUNDTRIP=1` (opt-in, default OFF = byte-identical): every
+  assistant message the loop appends carries `reasoning_content` when the
+  server split reasoning off. Costs prompt tokens per step; the question is
+  whether the model's tool loops improve.
+- `LUXE_COMPACT_CACHE_FRIENDLY=1` (opt-in, default OFF = byte-identical, the
+  re-truncation included): phase 1 never re-truncates a result already
+  carrying its marker, and below phase-2 pressure it waits until
+  `CACHE_FRIENDLY_BATCH` (4) eligible results are pending, so the prefix is
+  rewritten once per batch instead of once per step. Phases 2/3 unchanged.
+- Bench verdicts for both: `acceptance/cache_ab_2026_10/REPORT.md`.
+
 ## Must not (reflect)
 
 - Encode benchmark semantics in verifier prompts (e.g. "a tool call was warranted") —

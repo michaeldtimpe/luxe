@@ -425,6 +425,16 @@ class TieredCompact:
     """
 
     TRUNCATE_CHARS = 200
+    # Marker phase 1 leaves on a truncated result. Cache-friendly mode keys
+    # idempotence on it: without that, the NEXT firing re-truncates the
+    # already-truncated text (it is still > TRUNCATE_CHARS) and rewrites its
+    # suffix to "[Truncated — 33 chars removed]" — a false count, and a second
+    # rewrite of a message far upstream of the tail (2026-10-15).
+    TRUNCATE_MARKER = "\n[Truncated — "
+    # Cache-friendly mode: phase 1 waits until this many eligible results are
+    # pending truncation (or phase 2 pressure arrives), so the prefix is
+    # rewritten once per batch instead of once per step.
+    CACHE_FRIENDLY_BATCH = 4
 
     # Default phase_thresholds (0.50, 0.85, 0.95) — shipped 2026-05-28 as the
     # forge-hybrid cycle's only Pareto-positive default. n=75 rep-1+rep-2
@@ -442,7 +452,9 @@ class TieredCompact:
         keep_recent: int = 3,
         compact_threshold: float = 0.75,
         phase_thresholds: tuple[float, float, float] | None = None,
+        cache_friendly: bool = False,
     ) -> None:
+        self.cache_friendly = cache_friendly
         self.keep_recent = keep_recent
         self.compact_threshold = compact_threshold
         if phase_thresholds is not None:
@@ -498,6 +510,19 @@ class TieredCompact:
 
         eligible_end = self._find_eligible_end(messages, self.keep_recent)
 
+        if (self.cache_friendly and tokens_before < t2
+                and self._pending_truncations(messages, eligible_end)
+                < self.CACHE_FRIENDLY_BATCH):
+            # Below phase-2 pressure with too few results to truncate: hold
+            # the prefix still (one rewrite per batch, not per step).
+            return CompactionResult(
+                messages=list(messages),
+                phase_reached=0,
+                tokens_before=tokens_before,
+                tokens_after=tokens_before,
+                tool_results_dropped=0,
+            )
+
         result, dropped = self._phase1(messages, eligible_end)
         tokens_after = estimate_messages_tokens(result)
         if tokens_after < t2:
@@ -547,7 +572,7 @@ class TieredCompact:
                     continue
                 if _is_tool_result(msg):
                     content = msg.get("content", "") or ""
-                    if len(content) > self.TRUNCATE_CHARS:
+                    if self._needs_truncation(content):
                         kept = content[: self.TRUNCATE_CHARS]
                         removed = len(content) - self.TRUNCATE_CHARS
                         result.append({
@@ -558,6 +583,21 @@ class TieredCompact:
                         continue
             result.append(msg)
         return result, dropped
+
+    def _needs_truncation(self, content: str) -> bool:
+        if len(content) <= self.TRUNCATE_CHARS:
+            return False
+        # Legacy (default) mode keeps its exact behaviour, re-truncation
+        # included, so the benchmark path stays byte-identical.
+        return not (self.cache_friendly
+                    and self.TRUNCATE_MARKER in content[self.TRUNCATE_CHARS:])
+
+    def _pending_truncations(self, messages: list[dict[str, Any]],
+                             eligible_end: int) -> int:
+        return sum(
+            1 for i, msg in enumerate(messages)
+            if 2 <= i < eligible_end and _is_tool_result(msg)
+            and self._needs_truncation(msg.get("content", "") or ""))
 
     def _phase2(
         self,

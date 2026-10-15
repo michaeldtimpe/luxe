@@ -120,6 +120,18 @@ class RunFlags:
     # otherwise. See agents.sdd "Single tool-result clamp".
     tool_result_clamp: bool = False
 
+    # Hand the model's own reasoning back on its assistant messages
+    # (`reasoning_content`), as the Qwen3.6 template expects within an agent
+    # turn. Opt-in: default OFF keeps the benchmark path byte-identical until
+    # a maintain_suite run says otherwise. See agents.sdd "Reasoning round-trip".
+    reasoning_roundtrip: bool = False
+
+    # Cache-friendly compaction: phase 1 batches its truncations and never
+    # re-truncates an already-truncated result, so the server's prefix cache
+    # is invalidated less often. Opt-in: default OFF keeps the benchmark path
+    # byte-identical. See agents.sdd "Cache-friendly compaction".
+    compact_cache_friendly: bool = False
+
     # Context compaction (default ON since 2026-05-28)
     tiered_compact: bool = True
     tiered_compact_threshold: float = DEFAULT_TIERED_COMPACT_THRESHOLD
@@ -216,6 +228,9 @@ class RunFlags:
             ctx_cal_unmeasured_ratio=unmeasured,
             # Opt-in: only the exact string "1" enables it.
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
+            # Opt-in: only the exact string "1" enables either.
+            reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
+            compact_cache_friendly=e.get("LUXE_COMPACT_CACHE_FRIENDLY") == "1",
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),
             # Same `get(name, default)` the guard used: exported-but-empty is

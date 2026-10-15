@@ -859,6 +859,18 @@
  ],
  "events": [
   {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 0,
+   "prompt_tokens": 2344,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-default_flags",
    "phase": "main",
@@ -900,6 +912,18 @@
    "tool_results_dropped": 0,
    "effective": false,
    "eligible_end": 2
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 1,
+   "prompt_tokens": 2445,
+   "cached_tokens": null,
+   "completion_tokens": 120,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -963,6 +987,18 @@
    "tool_results_dropped": 0,
    "effective": false,
    "eligible_end": 2
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 2,
+   "prompt_tokens": 5800,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",
@@ -1046,6 +1082,18 @@
    "eligible_end": 2
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 3,
+   "prompt_tokens": 6125,
+   "cached_tokens": null,
+   "completion_tokens": 900,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "textfallback_drop",
    "run_id": "golden-default_flags",
    "phase": "main",
@@ -1088,6 +1136,18 @@
    "eligible_end": 4
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 4,
+   "prompt_tokens": 6282,
+   "cached_tokens": null,
+   "completion_tokens": 5,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 11
+  },
+  {
    "kind": "empty_turn_retry",
    "run_id": "golden-default_flags",
    "phase": "main",
@@ -1119,6 +1179,18 @@
    "tool_results_dropped": 0,
    "effective": false,
    "eligible_end": 3
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 5,
+   "prompt_tokens": 6388,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "compaction_phase_at_first_write",
@@ -1179,6 +1251,18 @@
    "eligible_end": 6
   },
   {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 6,
+   "prompt_tokens": 3371,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
+  },
+  {
    "kind": "tool_call",
    "run_id": "golden-default_flags",
    "phase": "main",
@@ -1228,6 +1312,18 @@
    "tool_results_dropped": 6,
    "effective": true,
    "eligible_end": 11
+  },
+  {
+   "kind": "step_usage",
+   "run_id": "golden-default_flags",
+   "phase": "main",
+   "step": 7,
+   "prompt_tokens": 3131,
+   "cached_tokens": null,
+   "completion_tokens": 60,
+   "prefill_s": null,
+   "decode_s": null,
+   "reasoning_chars": 0
   },
   {
    "kind": "tool_call",

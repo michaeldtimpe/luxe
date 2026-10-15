@@ -417,6 +417,15 @@ def _tok_per_s(result) -> float:
     return result.completion_tokens / result.wall_s
 
 
+def _rate_bits(result) -> list[str]:
+    """Server-measured prefill/decode/cache bits (chat/perf.py); the blended
+    `tok/s` over model wall only when the server reported no timings."""
+    from luxe.chat import perf as perf_mod
+
+    bits = perf_mod.footer_bits(result)
+    return bits or [f"{_tok_per_s(result):.0f} tok/s"]
+
+
 def _clock(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
@@ -456,7 +465,7 @@ def render_footer_text(slot: str, model: str, result, *, num_ctx: int = 0,
     bits = [
         f"slot: {slot}", f"model: {model}", f"steps: {result.steps}",
         f"tools: {result.tool_calls_total}", f"{result.wall_s:.1f}s",
-        f"{_tok_per_s(result):.0f} tok/s",
+        *_rate_bits(result),
         f"tok: {result.prompt_tokens}+{result.completion_tokens}",
         ctx,
     ]
@@ -490,7 +499,7 @@ def render_footer(
         f"steps: {result.steps}",
         f"tools: {result.tool_calls_total}",
         f"{result.wall_s:.1f}s",
-        f"{_tok_per_s(result):.0f} tok/s",
+        *_rate_bits(result),
         f"tok: {result.prompt_tokens}+{result.completion_tokens}",
         f"ctx: {_ctx_fill(result, num_ctx):.0%}"
         + (f" of {num_ctx // 1024}K" if num_ctx else ""),
