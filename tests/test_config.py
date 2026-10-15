@@ -562,7 +562,7 @@ def test_chat_yaml_ships_the_openrouter_entry():
     assert e.is_openrouter() and e.is_billable()
     assert e.base_url == "https://openrouter.ai/api"
     assert e.api_key_env == "OPENROUTER_API_KEY"
-    assert e.budget_usd == 5.00
+    assert e.budget_usd == 15.00
     assert e.body_extras == {"usage": {"include": True}}
     assert e.visible_models          # a shortlist, whatever it holds today
     assert e.default is False
