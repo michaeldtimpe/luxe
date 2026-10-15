@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     for variant in ("gsm8k", "gsm8k_think", "gsm8k_nothink"):
         if (run_dir / variant / "summary.json").exists():
             bench_dirs.append(("gsm8k", variant))
-    for bench in ("codeneedle", "mmlu", "arc_challenge", "perplexity"):
+    for bench in ("codeneedle", "mmlu", "arc_challenge"):
         bench_dirs.append((bench, bench))
     for bench, subdir in bench_dirs:
         bench_dir = run_dir / subdir
@@ -101,11 +101,6 @@ def _render_results(bench: str, results: dict) -> list[str]:
             lines.append(f"  - primary_match_rate: {_pct(s.get('primary_match_rate'))}")
             lines.append(f"  - hallucinations: {s.get('hallucinated')}")
             lines.append(f"  - bonus_matched: {s.get('bonus_matched')}")
-    elif bench == "perplexity":
-        ppl = results.get("perplexity")
-        lines.append(f"- perplexity (internal metric, NOT leaderboard-comparable): **{ppl:.4f}**" if ppl else "- perplexity: ?")
-        lines.append(f"- tokens_evaluated: {results.get('tokens_evaluated'):,}" if results.get("tokens_evaluated") else "")
-        lines.append(f"- num_windows: {results.get('num_windows')}")
     return lines
 
 

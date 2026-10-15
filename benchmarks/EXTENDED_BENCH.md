@@ -14,13 +14,12 @@ miss until they cascade into a downstream task failure.
 | **ARC-Challenge** | Grade-school science reasoning, 0-shot | First-token logprob over A/B/C/D/E | mlx_lm (in-process) |
 | **GSM8K** | Multi-step grade-school math, 8-shot CoT | Generation + numeric extraction | HTTP oMLX |
 | **CodeNeedle** | Long-context positional recall on code | Verbatim line-match (vendored upstream scorer) | HTTP oMLX |
-| **Perplexity** | Held-out LM quality (internal regression metric) | Sliding-window logprob aggregation | mlx_lm (in-process) |
 
 Two access paths exist because **oMLX silently drops `logprobs` / `top_logprobs`** on both `/v1/chat/completions` and `/v1/completions` (verified 2026-05-27). Benchmarks that need logprobs load `mlx_lm` directly via `benchmarks/_eval_common/mlx_direct.py`.
 
-**Sequencing constraint:** the mlx_lm path loads the 35B 6-bit weights (~25 GB) into this process. On a 64 GB machine, stop the oMLX server before running MMLU / ARC / Perplexity, or schedule them after the HTTP-Backend benchmarks. `scripts/run_eval_suite.sh` does this in the right order.
+**Sequencing constraint:** the mlx_lm path loads the 35B 6-bit weights (~25 GB) into this process. On a 64 GB machine, stop the oMLX server before running MMLU / ARC, or schedule them after the HTTP-Backend benchmarks. `scripts/run_eval_suite.sh` does this in the right order.
 
-**Perplexity caveat:** treated as an *internal longitudinal regression metric*, not leaderboard-comparable. Quantized local inference, chat-template wrapping, and tokenizer specifics make apples-to-apples comparison to published WikiText PPL papers unreliable. Useful for tracking *changes* over time on a fixed setup.
+**Perplexity was retired 2026-10-15** (WikiText-103 sliding-window, internal-only metric); its runner, `_eval_common/logprob.py` and the WikiText fetcher were removed (`git log -- benchmarks/perplexity` recovers them). No results were ever recorded under `acceptance/`.
 
 ## Architecture
 
@@ -31,7 +30,6 @@ benchmarks/
     extract.py               # extract_gsm8k_answer, extract_choice_letter, strip_think_blocks
     choices.py               # format_mc_prompt for variable-choice-count MCQs
     fewshot.py               # deterministic sampler + canonical GSM8K 8-shot
-    logprob.py               # plan_sliding_windows + perplexity aggregator
     meta.py                  # build_run_meta — embeds version/sha/timestamp in every summary
     mlx_direct.py            # in-process mlx_lm Backend (logprob path)
   gsm8k/                     # run.py + adapter.py + grade.py
@@ -41,7 +39,6 @@ benchmarks/
     manifest.json            # frozen 11+16 sampled needle functions (seed=42)
   mmlu/                      # 5-shot per-subject, with category breakdown
   arc_challenge/             # 0-shot, variable choice count (3/4/5)
-  perplexity/                # sliding-window over WikiText-103 test split
 ```
 
 `HTTP Backend` (`src/luxe/backend.py`) is **unchanged** — no risk to existing BFCL / SWE-bench / maintain_suite. Pre-existing tests still pass.
@@ -78,7 +75,6 @@ pip install -e .[extended-bench]
 python scripts/fetch_gsm8k_data.py
 python scripts/fetch_arc_data.py
 python scripts/fetch_mmlu_data.py
-python scripts/fetch_wikitext_data.py
 
 # Run the suite
 bash scripts/run_eval_suite.sh                       # everything
@@ -93,7 +89,6 @@ python -m benchmarks.gsm8k.run --output acceptance/gsm8k/<run_id>
 python -m benchmarks.codeneedle.run --output acceptance/codeneedle/<run_id>
 python -m benchmarks.mmlu.run --output acceptance/mmlu/<run_id>
 python -m benchmarks.arc_challenge.run --output acceptance/arc/<run_id>
-python -m benchmarks.perplexity.run --output acceptance/perplexity/<run_id>
 ```
 
 Output: per-item JSONs + `summary.json` with the meta block. `scripts/aggregate_eval_suite.py` reads all per-bench summaries and writes a unified `summary.md`.
@@ -108,13 +103,12 @@ Treat these as ballpark, not parity targets. Quantization + chat template + few-
 | ARC-Challenge (0-shot, logprob) | 75–85% | <60% → check variable-choice-count handling |
 | GSM8K (8-shot CoT) | 70–85% | <50% → check `<think>`-stripping or `####` regex |
 | CodeNeedle | baseline-relative | first run = baseline |
-| Perplexity | baseline-relative | first run = baseline |
 
 ARC at 0-shot will be 3–8 points below published 25-shot leaderboard numbers — this is expected, not a bug. Calibrate against lm-eval-harness 0-shot, not the leaderboard.
 
 ## Test discipline
 
-102 offline unit tests (`tests/test_eval_common_*`, `tests/test_{gsm8k,codeneedle,mmlu,arc_challenge}.py`). All pure-function; no Backend imports, no network. Run in ~0.1s.
+Offline unit tests (`tests/test_eval_common_*`, `tests/test_{gsm8k,codeneedle,mmlu,arc_challenge}.py`). All pure-function; no Backend imports, no network. Run in ~0.1s.
 
 Live-model smoke tests (`tests/test_mlx_direct_smoke.py`) are gated by `@pytest.mark.live_model` — skipped by default. Run manually after stopping oMLX:
 
@@ -127,7 +121,6 @@ pytest -m live_model
 - Local 35B inference makes full runs slow (~hours). On-demand CLI, not CI-gated.
 - Single-quant evaluation only (per CLAUDE.md's single-champion policy).
 - CodeNeedle measures *positional recall*, not long-context reasoning or multi-hop tracking.
-- Perplexity is internal-only; do not publish.
 
 ## Out of scope
 

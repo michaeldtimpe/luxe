@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Extended-benchmark suite runner. Sequences HTTP-Backend benchmarks
 # (GSM8K, CodeNeedle — talk to oMLX over HTTP) before mlx_lm-direct
-# benchmarks (MMLU, ARC, Perplexity — load model in-process).
+# benchmarks (MMLU, ARC — load model in-process).
 #
 # Memory note: the mlx_lm-direct phase loads the 35B 6-bit weights into
 # this process (~25 GB). On the 64 GB machine, stop the oMLX server
@@ -25,7 +25,7 @@ out_root="acceptance/eval_suite/${ts}"
 mkdir -p "$out_root"
 
 # Defaults
-benches="gsm8k,codeneedle,mmlu,arc,perplexity"
+benches="gsm8k,codeneedle,mmlu,arc"
 limit=""
 prompt_for_oMLX=1
 mem_tier="auto"   # auto | low | high
@@ -93,7 +93,7 @@ fi
 
 # --- Phase B: mlx_lm-direct benchmarks (require oMLX-free memory) ---
 phase_b=0
-for b in mmlu arc perplexity; do
+for b in mmlu arc; do
   has_bench "$b" && phase_b=1
 done
 
@@ -125,10 +125,6 @@ fi
 if has_bench arc; then
   echo "--- ARC-Challenge ---"
   python -m benchmarks.arc_challenge.run --output "${out_root}/arc_challenge" $limit
-fi
-if has_bench perplexity; then
-  echo "--- Perplexity ---"
-  python -m benchmarks.perplexity.run --output "${out_root}/perplexity"
 fi
 
 echo "--- aggregating ---"
