@@ -61,6 +61,9 @@ backends:
       - moonshotai/kimi-k3
       - deepseek/deepseek-v4-flash-0731
       - deepseek/deepseek-v4-pro-0813
+      - deepseek/deepseek-v4.1-flash
+      - z-ai/glm-5.3
+      - xiaomi/mimo-v2.6-pro
     # What every unpinned slot resolves to while this backend is active. Slot
     # defaults otherwise come from this host's manifest — LOCAL weight ids —
     # which OpenRouter does not serve, so a session opening here would sit
