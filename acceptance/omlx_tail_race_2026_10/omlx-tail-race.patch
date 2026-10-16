@@ -1,0 +1,41 @@
+--- a/omlx/scheduler.py	2026-09-30 17:27:28
++++ b/omlx/scheduler.py	2026-10-15 23:06:32
+@@ -533,6 +533,9 @@
+     extra_keys: tuple[Any, ...] | None = None
+     extra_key_token_start: int | None = None
+     extra_key_ranges: list[tuple[int, tuple[Any, ...]]] | None = None
++    # Token count of the tail-terminal boundary snapshot this store ends
++    # with (off the block grid), or None when it ends on a block.
++    tail_terminal_tokens: int | None = None
+ 
+ 
+ @dataclass
+@@ -9151,7 +9154,15 @@
+                     restorable = max(0, restorable - block)
+                 elif self._detect_boundary_snapshot_need():
+                     restorable = 0
+-            if restorable < block:
++            # A tail-terminal store ends OFF the block grid, and its snapshot
++            # is restorable whenever this prompt extends the stored sequence.
++            # Counting only whole blocks skipped every store shorter than one
++            # block, so the next request raced the async store and missed.
++            tail = info.tail_terminal_tokens
++            tail_ok = bool(tail) and tail <= common and tail < len(prompt)
++            if tail_ok:
++                restorable = max(restorable, tail)
++            if restorable < block and not tail_ok:
+                 continue
+             if (
+                 len(info.tokens)
+@@ -12714,6 +12725,11 @@
+                                         ),
+                                         extra_key_ranges=(
+                                             request.vlm_extra_key_ranges_for_cache
++                                        ),
++                                        tail_terminal_tokens=getattr(
++                                            intermediate_snapshots,
++                                            "tail_terminal_token_count",
++                                            None,
+                                         ),
+                                     )
+                                 )
