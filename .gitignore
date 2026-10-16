@@ -173,3 +173,6 @@ acceptance/omlx_tail_race_2026_10/*
 !acceptance/omlx_tail_race_2026_10/REPORT.md
 !acceptance/omlx_tail_race_2026_10/omlx-tail-race.patch
 !acceptance/omlx_tail_race_2026_10/race_probe.py
+!acceptance/m5max_moe_r2_2026_10/
+acceptance/m5max_moe_r2_2026_10/*
+!acceptance/m5max_moe_r2_2026_10/*.md

@@ -1,0 +1,37 @@
+# m5max_moe_r2 — six-arm bake-off, weekend of 2026-10-16. Plan:
+# acceptance/m5max_moe_r2_2026_10/PLAN.md.
+#
+# Explicit user request for a re-bench (clears the single-champion carve-out).
+# The champion pin (configs/single_64gb.yaml) is untouched; nothing here
+# promotes anything.
+#
+# Arm 1 is the QUANT REFERENCE for preflight.py (first arm wins): every other
+# arm's {bits, group_size, mode} + per-layer override widths are compared to
+# it. All arms are 6-bit affine g64 by design.
+#
+# model_id CAVEAT: arms 3-6 are the EXPECTED oMLX registrations (oMLX derives
+# the id from the repo/dir basename). Preflight's catalog check fails with a
+# "similar:" hint if one differs — correct this file, don't rename weights.
+# Arm 4 is self-converted (PLAN.md § P1); its id is the --mlx-path basename.
+#
+# Order: references first, then the arms we'd least like to lose. LFM2.5 is
+# last — the newest and the one whose verdict matters least for m5.
+#
+# Preflight, then R1, ON m5:
+#
+#   cd ~/Downloads/luxe && set -a && . ~/.luxe/secrets.env && set +a
+#   .venv/bin/python -m benchmarks.maintain_suite.preflight \
+#       --variants benchmarks/maintain_suite/variants_m5max_moe_r2.yaml \
+#       --drill --out acceptance/m5max_moe_r2_2026_10/preflight
+#   .venv/bin/python -m benchmarks.maintain_suite.run \
+#       --variants benchmarks/maintain_suite/variants_m5max_moe_r2.yaml \
+#       --output acceptance/m5max_moe_r2_2026_10/r1 \
+#       --work-dir ~/.luxe/bench-workspace \
+#       --per-fixture-timeout 1800 --all
+variants:
+  - {model_label: qwen3.6-35b-a3b-6bit-ref, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: qwen3.6-27b-6bit-ref, model_id: Qwen3.6-27B-6bit}
+  - {model_label: k2-horizon-mova-36b-a4b-6bit, model_id: K2-Horizon-MoVA-36B-A4B-6bit}
+  - {model_label: laguna-xs-2.1-6bit, model_id: Laguna-XS-2.1-6bit}
+  - {model_label: muse-glimmer-30b-6bit, model_id: Muse-Glimmer-30B-6bit}
+  - {model_label: lfm2.5-24b-a2b-6bit, model_id: LFM2.5-24B-A2B-MLX-6bit}
