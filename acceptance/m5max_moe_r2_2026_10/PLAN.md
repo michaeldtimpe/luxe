@@ -80,8 +80,11 @@ Tests in `tests/test_bench_preflight.py`, no oMLX dependency.
      `mlx_lm.convert --hf-path <bf16> -q --q-bits 6 --q-group-size 64
      --mlx-path <stage>/K2-Horizon-MoVA-36B-A4B-6bit`
    - **verify parity:** `quantization` block = `{bits:6, group_size:64,
-     mode:affine}` with router gates at 8-bit like the champion's; if gates
-     came out 6-bit, re-run with the matching quant predicate
+     mode:affine}` with both routers (`mlp.gate`, `self_attn.v_router`)
+     left **BF16** by the model's own `quant_predicate` and `expert_bias`
+     fp32 (`cast_predicate`). K2's `router_logits` refuses quantized routers,
+     so the champion's 8-bit-gate recipe is impossible here; BF16 is the
+     closest parity and the preflight quant WARN on arm 4 is expected
    - verify the `chat_template.jinja` + tokenizer files came across byte-equal
      to upstream (conversion has dropped templates before)
    - import via `luxe pull --from <stage>`; `luxe pull --list` shows it real
@@ -117,6 +120,21 @@ goal text → REAL / THIN / VACUOUS, plus the tool-mix (lint/typecheck/git_diff
 counts) vs the references. `HAND-VERIFY.md`.
 **Advance to R2 only if:** ≥9 REAL of 10, no fixture left worse than
 `base_sha`, verification calls present.
+
+### P4b — gated 4-bit track (added 2026-10-16, user decision)
+The m1/m4 manifests run 4-bit, which the 6-bit arms can't speak to. Weights
+are pulled during R1 (`~/luxe-bench-tmp/r2/provision4.sh`, queued behind the
+6-bit chain): `Qwen3.6-35B-A3B-4bit` + `Qwen3.6-27B-4bit` (the m1/m4
+main/fallback, as references), `Laguna-XS-2.1-4bit`, `Muse-Glimmer-30B-4bit`
+(the 2026-08-10 conversion — its `embed_norm` concern is moot: the layer is
+`RMSNormNoScale`, no weights), `LiquidAI/LFM2.5-24B-A2B-MLX-4bit`, and K2
+self-converted to 4-bit g64 from the same bf16 with the same recipe.
+**Gate:** 4-bit R1 runs only for challengers that SURVIVE the 6-bit P4
+hand-verify, plus both 4-bit references. A model that fails at 6-bit is not
+rescued by 4-bit. The 4-bit arms' own quant reference is the 4-bit champion
+(first arm of their variants file). Results bear on quality only — a 4-bit
+survivor still needs a `luxe smoke --chat --code` drill on m1 itself before
+any m1/m4 manifest change.
 
 ### P5 — R2 confirmation (Sat night → Sun, ~12–20 h)
 Survivors + both references × 3 reps × 10. If more than two challengers
