@@ -23,7 +23,26 @@ never touches this module.
   behaving as before
 - Every user turn drives exactly ONE `run_single()` call; conversation state
   lives in `ChatSession`, folded into `goal=` + a tagged `extra_context` block —
-  never by forking `run_agent`'s message loop or changing its signature
+  never by forking `run_agent`'s message loop. ONE sanctioned exception
+  (2026-10-16, user-approved): **turn carry**. A freeform turn may pass the
+  previous turn's conversation as `run_single(prior_messages=)` (additive,
+  default None — benchmark/maintain never pass it), so its prompt EXTENDS the
+  last request and the server's end-of-prompt snapshot serves it. Without it
+  every turn re-prefilled from zero: the shared prefix (system + tools,
+  2.6–3.0k tokens) never reaches oMLX's 4,096-token hybrid-model cache block
+  on m1, ~11s TTFT per turn. Rules (`turn._carry_for_turn`): freeform only
+  (never /plan, /goal, /use); only from the turn immediately before
+  (`TurnCarry.turn_count == len(session.turns)` — retires it on /clear,
+  /retry, /resume, and after any interrupted/aborted turn); only under an
+  identical `ChatSession.carry_frame` (model, backend, persona ids, tool
+  names, write/bash/web, memory, constraints, terse, plan); only while the
+  last request is under `turn_carry_max_fraction` (0.5) of the window.
+  Anything else re-folds into a fresh prompt exactly as before. A carried
+  turn's message is the bare request + `build_followup_context` (a staged
+  `/attach` only) — the `Task type`/`Goal`/`<conversation_history>` frame is
+  already in the conversation. Never persisted. `turn_carry: false` in
+  chat.yaml restores the fold-every-turn behaviour. Measured on m1 (4bit,
+  2026-10-16): turns 2–4 at 97–99% cached / 1.7–5.8s vs 0–33% / 9.5–19.9s
 - Context precedence (highest wins): current user turn > project memory >
   conversation summary. `extra_context` is tagged `<project_memory>` /
   `<conversation_history>` / `<current_request>` so history can't read as commands
@@ -1288,7 +1307,8 @@ never touches this module.
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature
-  (preserves benchmark determinism)
+  (preserves benchmark determinism) — beyond additive, default-off keywords
+  the benchmark path never passes (`on_notice`, `prior_messages`)
 - Introduce any system/task prompt strings here — those stay in
   `agents/prompts.py`. `extra_context` is runtime conversation framing, not a
   registry prompt

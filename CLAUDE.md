@@ -193,8 +193,13 @@ before editing anything here.** This section lists only the invariants a
 session must not rediscover the hard way; mechanism lives in the `.sdd` + code.
 
 - **`luxe chat`** — REPL. Each turn = one `run_single` call; conversation +
-  project memory inject ONLY via the `run_single(extra_context="")` seam
+  project memory inject via the `run_single(extra_context="")` seam
   (default `""` = byte-identical). Read-only tools by default (`/write` toggles).
+  **Turn carry (2026-10-16):** a freeform turn continues the previous turn's
+  real conversation via `run_single(prior_messages=)` so the server's prefix
+  cache serves it (turn starts went 0% → ~98% cached, ~10s → ~2s on m1);
+  re-folds whenever the frame changes or the conversation passes half the
+  window. `turn_carry: false` in chat.yaml turns it off. Rules in chat.sdd.
 - **Conversation by default (2026-07-29 fix).** Freeform turns get the
   `chat_conversational` persona; the maintenance persona applies only to
   `/plan`, `/goal`, `/use <slot>`. Do NOT re-key the persona on the routed

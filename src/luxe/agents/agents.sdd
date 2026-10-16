@@ -704,6 +704,14 @@ false count). Each rewrite forces everything after it to be prefilled again.
   had anything to re-truncate. `TieredCompact(cache_friendly=False)` stays
   the constructor default (the loop passes the flag); don't flip that too.
 - Bench verdicts for both: `acceptance/cache_ab_2026_10/REPORT.md`.
+- `run_agent(prior_messages=)` (2026-10-16, chat-only turn carry — chat.sdd):
+  the run starts from those messages plus `task_prompt` as a new user
+  message. `prior_messages[0]` must equal this run's system message or the
+  carry is ignored (`turn_carry_rejected` event, fresh start); a used carry
+  emits `turn_carry` and sets `AgentResult.carried`. `AgentResult.messages`
+  is the conversation as last sent (post-compaction) plus the final answer
+  on a clean finish — additive, read only by chat. None/unused on every
+  benchmark/maintain call: their message list is built exactly as before.
 
 ## Must not (reflect)
 
