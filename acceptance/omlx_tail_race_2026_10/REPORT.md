@@ -1,8 +1,9 @@
 # oMLX 0.7.0 — cache-freshness wait skips sub-block tail stores
 
 **Date:** 2026-10-16 · **Host:** m1 (M1 Max 64 GB, oMLX 0.7.0 brew,
-`Qwen3.6-35B-A3B-4bit`) · **Status:** patched LOCALLY on m1; upstream issue
-drafted below, not filed.
+`Qwen3.6-35B-A3B-4bit`) · **Status:** patched LOCALLY on m1; **already fixed
+upstream** (jundot/omlx#4492, fix #4428 + c756df2, both in `v0.7.1rc1`) — not
+re-filed.
 
 ## The bug
 
@@ -70,13 +71,24 @@ READY, `luxe smoke --chat --code` READY.
 - Patched file: `/opt/homebrew/Cellar/omlx/0.7.0/libexec/lib/python3.11/site-packages/omlx/scheduler.py`
 - Original kept beside it: `scheduler.py.orig-race-2026-10-16`
 - Undo: `cp <that>.orig-race-2026-10-16 <that>` then `brew services restart omlx`.
-- **A `brew upgrade omlx` / reinstall silently drops the patch** — re-run
-  `race_probe.py` after any upgrade (`uv run python race_probe.py
-  Qwen3.6-35B-A3B-4bit 12 1800 0`; any MISS = unpatched).
+- **A `brew upgrade omlx` / reinstall silently drops the patch.** An upgrade
+  to **0.7.1 or later is the intended exit** — it carries the upstream fix. A
+  reinstall of 0.7.0 is the only way to lose the fix. Either way re-run
+  `race_probe.py` after (`uv run python race_probe.py Qwen3.6-35B-A3B-4bit 12
+  1800 0`; any MISS = the race is back).
 - m5 is not patched (its server is parked, and 2,048-token blocks make the
   race rarer there — only prompts under 2,048).
 
-## Upstream issue draft (jundot/omlx) — NOT FILED
+## Upstream status (checked 2026-10-16)
+
+Already reported as jundot/omlx#4492 (2026-10-12, same root cause, 4,096-token
+block on an M2 Max) and closed 2026-10-13 by #4428 ("admit sub-block prompts so
+the freshness gate defers for a tail" — maintainer measured 0/12 → 12/12 hits)
+plus c756df2 (sub-block requests ended by a parser/stop string were never
+stored). Both are in `v0.7.1rc1`; Homebrew stable is still 0.7.0. Our draft
+below was therefore not filed; kept for the record.
+
+### Draft (superseded — not filed)
 
 > **Cache-freshness wait skips sub-block tail stores, so the next agent step
 > misses the prefix cache (hybrid models)**
