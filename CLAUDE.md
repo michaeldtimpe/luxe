@@ -495,8 +495,25 @@ means.
 - **Disable for ablation**: `LUXE_CTX_SERVER_TRUTH=0` restores the
   pre-2026-08-11 estimate reading exactly.
 - **Shared first-things-to-try** when a workload behaves unexpectedly: disable
-  the three default-ON levers — `LUXE_TIERED_COMPACT=0`,
-  `LUXE_TRUNCATED_TURN_RETRY=0`, `LUXE_CTX_SERVER_TRUTH=0`.
+  the default-ON levers — `LUXE_TIERED_COMPACT=0`,
+  `LUXE_TRUNCATED_TURN_RETRY=0`, `LUXE_CTX_SERVER_TRUTH=0`,
+  `LUXE_COMPACT_CACHE_FRIENDLY=0`.
+
+## Default-ON: cache-friendly compaction
+
+`LUXE_COMPACT_CACHE_FRIENDLY` defaults to **ON** as of 2026-10-15. Legacy
+phase 1 re-truncated its own output every step past 50% pressure (a false
+`[Truncated — 33 chars removed]`), rewriting the prompt just upstream of the
+`keep_recent` window, so the server's prefix cache was invalidated once per
+step. Now phase 1 truncates each result once and in batches of 4.
+
+- **Benched** on m5, 3 reps × 10 × 4 arms: **30/30**, compaction fires 66→27,
+  prefill −16%, wall −8%; trajectories identical to legacy wherever
+  compaction never fires. `acceptance/cache_ab_2026_10/REPORT.md`.
+- **Disable for ablation**: `LUXE_COMPACT_CACHE_FRIENDLY=0` (exact string).
+- Its sibling `LUXE_REASONING_ROUNDTRIP=1` (send reasoning back) was benched
+  in the same A/B at −28% wall but changed trajectories (29/30): **opt-in,
+  not promoted**.
 
 ## Opt-in modes (default off, byte-identical when disabled)
 

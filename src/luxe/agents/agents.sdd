@@ -688,13 +688,21 @@ false count). Each rewrite forces everything after it to be prefilled again.
   reads them (chat's `pp · tg` and `cache N%` chips do).
 - `LUXE_REASONING_ROUNDTRIP=1` (opt-in, default OFF = byte-identical): every
   assistant message the loop appends carries `reasoning_content` when the
-  server split reasoning off. Costs prompt tokens per step; the question is
-  whether the model's tool loops improve.
-- `LUXE_COMPACT_CACHE_FRIENDLY=1` (opt-in, default OFF = byte-identical, the
-  re-truncation included): phase 1 never re-truncates a result already
-  carrying its marker, and below phase-2 pressure it waits until
-  `CACHE_FRIENDLY_BATCH` (4) eligible results are pending, so the prefix is
-  rewritten once per batch instead of once per step. Phases 2/3 unchanged.
+  server split reasoning off. **Benched, NOT promoted (2026-10-15):** −28%
+  wall via −32% completion tokens, but it changes the trajectory (29/30, one
+  write-avoidant `document-config`, a THIN architecture doc). Needs a wider
+  run (RC vs C) before any default change.
+- `LUXE_COMPACT_CACHE_FRIENDLY` — **default ON since 2026-10-15**; only the
+  exact string `0` restores the legacy (re-truncating) phase 1. Phase 1
+  never re-truncates a result already carrying its marker, and below
+  phase-2 pressure it waits until `CACHE_FRIENDLY_BATCH` (4) eligible
+  results are pending, so the prefix is rewritten once per batch instead of
+  once per step. Phases 2/3 unchanged. Benched 30/30 (= base), fires 66→27,
+  prefill −16%, trajectories identical to legacy wherever compaction never
+  fires. Golden trajectories did not move: their scenarios compact at
+  phase 2/3 with tool results under the truncation size, so phase 1 never
+  had anything to re-truncate. `TieredCompact(cache_friendly=False)` stays
+  the constructor default (the loop passes the flag); don't flip that too.
 - Bench verdicts for both: `acceptance/cache_ab_2026_10/REPORT.md`.
 
 ## Must not (reflect)
