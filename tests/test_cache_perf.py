@@ -6,7 +6,8 @@
 - `chat/perf.py` turns a turn's sums into the status-bar/footer rates.
 - `LUXE_REASONING_ROUNDTRIP=1` hands the model's reasoning back on its
   assistant messages; off, the message dict is exactly the legacy one.
-- `LUXE_COMPACT_CACHE_FRIENDLY=1` makes phase 1 idempotent and batched; off,
+- `LUXE_COMPACT_CACHE_FRIENDLY` (default ON since 2026-10-15; `=0` disables)
+  makes phase 1 idempotent and batched; off,
   the legacy (re-truncating) behaviour is unchanged.
 """
 
@@ -17,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from luxe.agents.flags import RunFlags
 from luxe.agents.loop import run_agent
 from luxe.backend import (
     ChatResponse,
@@ -218,3 +220,21 @@ def test_loop_sums_the_servers_cache_accounting(monkeypatch):
     assert result.first_step_cached_tokens == 0
     assert result.first_step_prompt_tokens == 100
     assert result.prefill_s == pytest.approx(0.6)
+
+
+# --- defaults ----------------------------------------------------------------
+
+class TestFlagDefaults:
+    """C is default-ON since 2026-10-15; R stays opt-in."""
+
+    def test_cache_friendly_compaction_is_on_by_default(self):
+        assert RunFlags.from_env({}).compact_cache_friendly is True
+
+    @pytest.mark.parametrize("value,expected", [
+        ("0", False), ("1", True), ("", True), ("false", True)])
+    def test_only_the_exact_string_zero_disables_it(self, value, expected):
+        flags = RunFlags.from_env({"LUXE_COMPACT_CACHE_FRIENDLY": value})
+        assert flags.compact_cache_friendly is expected
+
+    def test_reasoning_roundtrip_stays_opt_in(self):
+        assert RunFlags.from_env({}).reasoning_roundtrip is False

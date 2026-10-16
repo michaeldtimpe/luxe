@@ -128,9 +128,11 @@ class RunFlags:
 
     # Cache-friendly compaction: phase 1 batches its truncations and never
     # re-truncates an already-truncated result, so the server's prefix cache
-    # is invalidated less often. Opt-in: default OFF keeps the benchmark path
-    # byte-identical. See agents.sdd "Cache-friendly compaction".
-    compact_cache_friendly: bool = False
+    # is invalidated less often. Default ON since 2026-10-15 (m5 A/B: 30/30,
+    # fires 66->27, prefill -16%, inert where compaction never fires —
+    # acceptance/cache_ab_2026_10/REPORT.md). `LUXE_COMPACT_CACHE_FRIENDLY=0`
+    # restores the legacy re-truncating phase 1. See agents.sdd.
+    compact_cache_friendly: bool = True
 
     # Context compaction (default ON since 2026-05-28)
     tiered_compact: bool = True
@@ -228,9 +230,12 @@ class RunFlags:
             ctx_cal_unmeasured_ratio=unmeasured,
             # Opt-in: only the exact string "1" enables it.
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
-            # Opt-in: only the exact string "1" enables either.
+            # Opt-in: only the exact string "1" enables it.
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
-            compact_cache_friendly=e.get("LUXE_COMPACT_CACHE_FRIENDLY") == "1",
+            # Default ON: only the exact string "0" disables it.
+            compact_cache_friendly=(
+                e.get("LUXE_COMPACT_CACHE_FRIENDLY", "1") != "0"
+            ),
             early_bail_band_response=e.get("LUXE_EARLY_BAIL_BAND_RESPONSE",
                                            DEFAULT_BAND_RESPONSE),
             # Same `get(name, default)` the guard used: exported-but-empty is
