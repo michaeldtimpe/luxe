@@ -81,6 +81,12 @@ single pipeline; new fixtures must declare their per-requirement spec.
   `reset --hard` on the checked-out branch, which rewound the previous run's
   `luxe/...` branch to base
 - The per-fixture timeout kills luxe's whole process group
+- A model bake-off clears `preflight.py` on the bench host before the run
+  (2026-10): static (weights/shards, arch resolvable by the installed oMLX,
+  engine, quant parity vs the FIRST arm, tool template) + `--live`
+  structured tool call. The live tool call is the authoritative parser
+  gate — oMLX picks parsers through several layers, so preflight never
+  guesses one statically. A FAIL drops that arm, never the bake-off
 
 ## Must not
 - Run bench without `--keep-loaded` (post-run unload fires by default)
