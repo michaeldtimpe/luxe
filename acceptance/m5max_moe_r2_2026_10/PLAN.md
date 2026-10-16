@@ -136,6 +136,15 @@ rescued by 4-bit. The 4-bit arms' own quant reference is the 4-bit champion
 survivor still needs a `luxe smoke --chat --code` drill on m1 itself before
 any m1/m4 manifest change.
 
+### 3-rep rule (added 2026-10-16, user request)
+Every comparison where variance is a factor gets ≥3 reps. At temp=0 ~8/10
+diffs are byte-identical across reps; variance concentrates in doc-config,
+strict-flag and neon-rain — exactly the eliminating fixtures. So: the 6-bit
+challengers eliminated on one R1 run (K2, Laguna, LFM) and Glimmer-4bit get
+reps 2-3; H1/H2 and the P4d head-to-head run ×3. A verdict cites its rep
+count; an elimination that does not recur in ≥2 of 3 reps is re-opened.
+Queue: `~/luxe-bench-tmp/r2/phase_next.sh` (after R2 + R2-4bit).
+
 ### P4c — harness-fairness ablation (added 2026-10-16, user request)
 User: "are we sure the failures are not from tool calls or other things the
 model needs?" Attribution audit (`attrib.py` over every fixture's events):
