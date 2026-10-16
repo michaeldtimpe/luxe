@@ -211,3 +211,16 @@ updated either way.
   firing counts.
 - **Weekend overrun** — R1 alone is decisive enough to report on if R2 can't
   finish; R2 trims to one survivor before it trims reps.
+
+## P4e — determinism test (queued after PHASE-NEXT, user-approved 2026-10-16)
+
+Rep-to-rep divergence is a single near-tie fork at one step (identical prompt
+size and tool-call hashes up to that step), not tool failure and not content
+leakage. Suspected cause: oMLX's persistent cross-run SSD prefix cache — reused
+blocks were computed under different chunking, so the rounding differs. One
+fixture (deps-audit) also has a tool output that changes run to run.
+Test: champion × doc-config, 3 reps on the shared cache (warm) vs 3 reps each on
+a fresh empty `ssd_cache_dir` + server restart (cold); `diverge.py` compares.
+The real `~/.omlx/cache` is untouched; the setting is restored on exit.
+Use: a reproducible mode for harness A/Bs only — the bake-off keeps sampling variance.
+Queue: `~/luxe-bench-tmp/r2/det.sh` → `determinism/{warm,cold}/rep{1,2,3}`.
