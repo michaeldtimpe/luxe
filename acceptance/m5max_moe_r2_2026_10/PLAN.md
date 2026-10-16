@@ -136,6 +136,34 @@ rescued by 4-bit. The 4-bit arms' own quant reference is the 4-bit champion
 survivor still needs a `luxe smoke --chat --code` drill on m1 itself before
 any m1/m4 manifest change.
 
+### P4c — harness-fairness ablation (added 2026-10-16, user request)
+User: "are we sure the failures are not from tool calls or other things the
+model needs?" Attribution audit (`attrib.py` over every fixture's events):
+zero schema rejects / unknown-tool rejects / text-fallback drops / tool
+errors in ANY arm — plumbing is clean. But every `context_overflow` bailout
+is really `Max steps reached (30)` at 50–68% context, after phase-1
+compaction forced 11–20 re-reads (`read_after_compact`). The harness (step
+budget, compaction thresholds, read cap, prompts) was tuned on the champion,
+so a different reading style pays a tax. Measured, not assumed — every arm,
+references included, on the three step-limit fixtures (neon-rain reset,
+doc-config, strict-flag):
+- **H1** `max_steps: 60` (new per-variant knob, variant_id `__ms60`) → `h1_steps60/`
+- **H2** `LUXE_TIERED_COMPACT=0` at 30 steps → `h2_nocompact/`
+A challenger whose failures convert while the champion gains nothing has a
+harness-fit gap; the report states both the as-shipped and relaxed results.
+Code-correctness defects (K2 TypeError, LFM ImportError) are not budget
+artifacts — those eliminations stand regardless.
+
+### P4d — ungated 4-bit head-to-head (added 2026-10-16, user request)
+"Make sure the 4-bit champs earn their place." The P4b gate meant the m1/m4
+incumbents never faced most challengers at 4-bit. Full R1 for
+Laguna-4bit, LFM2.5-4bit and K2-4bit (self-converted, same recipe) against the
+incumbents already in `r1_4bit/`; both incumbents get 2 extra reps
+(`r2_4bit/`). Run on m5 (user: function on m1 is identical, only slower).
+**If within one REAL of each other, differentiate on:** rep consistency,
+wall + tokens, engine (Qwen3.6 = vlm slow path), long multi-turn chat with turn
+carry (cache hit, turn-time drift), big-read drill, and fit on m4 (48 GB).
+
 ### P5 — R2 confirmation (Sat night → Sun, ~12–20 h)
 Survivors + both references × 3 reps × 10. If more than two challengers
 survive, R2 the two best by hand-verified REAL count, then wall.
