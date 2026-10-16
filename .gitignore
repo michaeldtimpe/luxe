@@ -159,3 +159,12 @@ acceptance/splash_engine_ab_2026_09/*
 !acceptance/splash_engine_ab_2026_09/suite/
 acceptance/splash_engine_ab_2026_09/suite/*
 !acceptance/splash_engine_ab_2026_09/suite/FACTS.md
+!acceptance/cache_ab_2026_10/
+acceptance/cache_ab_2026_10/*
+!acceptance/cache_ab_2026_10/REPORT.md
+!acceptance/cache_ab_2026_10/analysis.md
+!acceptance/cache_ab_2026_10/steps.txt
+!acceptance/cache_ab_2026_10/run_id_manifest.tsv
+!acceptance/cache_ab_2026_10/*.py
+!acceptance/cache_ab_2026_10/run_arms.sh
+!acceptance/cache_ab_2026_10/variants_3rep.yaml
