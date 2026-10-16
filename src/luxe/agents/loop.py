@@ -157,6 +157,13 @@ class AgentResult:
     wall_s: float = 0.0
     peak_context_pressure: float = 0.0
     final_context_pressure: float = 0.0  # last per-step pressure (matches token-progress)
+    # The conversation as the server last saw it (post-compaction) plus the
+    # final answer — what a chat turn hands the NEXT turn as `prior_messages`
+    # so its prompt extends this one and the server's prefix cache serves it
+    # (chat/turn.py turn carry). Additive reporting field: no loop logic and
+    # no benchmark grader reads it. `carried` = this run started from one.
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    carried: bool = False
 
 
 OnToolEvent = Callable[[ToolCall], None]
@@ -299,6 +306,7 @@ def run_agent(
     on_token: Callable[[str], None] | None = None,
     on_progress: Callable[[float], None] | None = None,
     on_notice: Callable[[str], None] | None = None,
+    prior_messages: list[dict[str, Any]] | None = None,
 ) -> AgentResult:
     """Run the agent loop: chat → tool calls → dispatch → repeat.
 
@@ -325,6 +333,14 @@ def run_agent(
     the only record was `events.jsonl`, which nobody reads mid-turn. Display
     only. It never influences control flow, is never consulted for a decision,
     and defaults to None, so the benchmark/maintain path is unchanged.
+
+    `prior_messages` (2026-10-16, chat-only) continues an earlier run's
+    conversation: the run starts from those messages plus `task_prompt` as a
+    new user message, instead of a fresh `[system, user]` pair, so the prompt
+    EXTENDS the previous run's last request and the server's prefix cache
+    resumes from it. `prior_messages[0]` must be the same system message; a
+    mismatch is ignored (fresh start, `turn_carry_rejected` event). None —
+    every benchmark/maintain caller — is the unchanged fresh start.
 
     `cache` / `cacheable` are ACCEPTED AND IGNORED (deprecated 2026-09). They
     fed a per-task `ToolCache` that no caller ever constructed, so every run
@@ -380,11 +396,19 @@ def run_agent(
 
     # All mutable loop state (agents/loopstate.py). Field-by-field the same
     # names and initial values the bare locals had.
+    initial_messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": task_prompt},
+    ]
+    if prior_messages:
+        if prior_messages[0] == initial_messages[0]:
+            initial_messages = [*prior_messages, initial_messages[1]]
+            result.carried = True
+            emit("turn_carry", prior_messages=len(prior_messages))
+        else:
+            emit("turn_carry_rejected", reason="system_prompt_changed")
     st = LoopState(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": task_prompt},
-        ],
+        messages=initial_messages,
         next_token_log_threshold=_TOKEN_LOG_INTERVAL,  # 0 = disabled
         write_pressure_enabled=flags.write_pressure,
         early_bail_enabled=flags.early_bail,
@@ -1544,5 +1568,8 @@ def run_agent(
     if st.tool_results_clamped:
         logger.debug("tool results clamped this run: %d", st.tool_results_clamped)
 
+    result.messages = list(st.messages)
+    if not result.aborted and result.final_text:
+        result.messages.append({"role": "assistant", "content": result.final_text})
     result.wall_s = time.monotonic() - t0
     return result

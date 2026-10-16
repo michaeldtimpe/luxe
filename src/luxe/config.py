@@ -424,6 +424,14 @@ class PipelineConfig(BaseModel):
     # (chat/notes.py). `/note` works regardless — an explicit invocation is
     # consent. Benchmark/maintain never read it.
     notes: bool = True
+    # Chat-only turn carry (chat/turn.py): a freeform turn continues the
+    # previous turn's conversation instead of re-sending a folded summary, so
+    # its prompt extends the last one and the server's prefix cache serves it
+    # (every turn otherwise started cold). Falls back to the fold whenever the
+    # frame changed or the carried conversation reaches
+    # `turn_carry_max_fraction` of the window. Benchmark/maintain never read it.
+    turn_carry: bool = True
+    turn_carry_max_fraction: float = 0.5
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:

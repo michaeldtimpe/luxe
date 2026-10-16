@@ -322,6 +322,22 @@ def frontier_active(session) -> bool:
 
 
 @dataclass
+class TurnCarry:
+    """What the last freeform turn hands the next one (chat/turn.py turn
+    carry): the conversation as the server last saw it plus the final answer,
+    and the frame it was built under. In memory only — never persisted, so
+    `/resume` and a restart begin a fresh segment."""
+    messages: list[dict]
+    frame: str
+    # len(session.turns) right after the turn that produced this carry. A
+    # carry is valid only while that still holds, which is what retires it on
+    # `/clear`, `/retry`, `/resume` and any turn that ended without one.
+    turn_count: int
+    # Server-reported size of the last request, the budget check's input.
+    prompt_tokens: int = 0
+
+
+@dataclass
 class ChatSession:
     repo_path: str = ""
     session_id: str = ""
@@ -402,6 +418,9 @@ class ChatSession:
     goal_round: int = 0          # rounds issued so far this goal
     goal_max_rounds: int = 20    # hard budget
     consecutive_crashes: int = 0  # reset to 0 on any clean round
+
+    # -- turn carry (chat/turn.py) ------------------------------------------
+    carry: TurnCarry | None = None
 
     # -- history --------------------------------------------------------------
 
@@ -508,6 +527,45 @@ class ChatSession:
         parts.append(f"<current_request>\n{cap_echo(current_user_message)}"
                      "\n</current_request>")
         return "\n\n" + "\n\n".join(parts), fold_version
+
+    def carry_frame(self, *extra: object) -> str:
+        """Fingerprint of everything the first message of a carried
+        conversation was built from, other than the history and the request
+        itself: mode hints' inputs, project memory, constraints, style, plan.
+        `extra` is the turn's own frame (model, persona ids, tool names) from
+        prepare_turn. Two turns may share one conversation only when this is
+        equal — otherwise the next turn re-folds and starts fresh."""
+        import hashlib
+        import json as _json
+
+        memory_block = ""
+        if self.repo_path:
+            memory_block = project_mem.render_block(project_mem.load_memory(self.repo_path))
+        frame = [
+            self.repo_path, self.project_kind, self.tools_withheld,
+            self.write_enabled, self.unrestricted_bash, self.web_enabled,
+            self.planeproxy_present, self.terse, list(self.system_constraints),
+            memory_block, self.goal_active,
+            self.plan_text if self.goal_active else "",
+            [str(x) for x in extra],
+        ]
+        return hashlib.sha256(_json.dumps(frame, default=str).encode()).hexdigest()
+
+    def build_followup_context(self) -> str:
+        """The extra blocks a CARRIED turn's message gets. Everything else
+        (mode, memory, constraints, history) is already in the conversation;
+        only a staged `/attach` payload is new. Consumed exactly as
+        `build_extra_context` consumes it, so failure re-staging still works."""
+        if not self.attachments:
+            return ""
+        file_blocks = "\n".join(
+            f'<file path="{a["path"]}">\n{a["content"]}\n</file>'
+            for a in self.attachments
+        )
+        self.consumed_attachments = list(self.attachments)
+        self.attachments = []
+        return ("\n\n<attached_files>\nThe user attached these files for this "
+                f"turn:\n{file_blocks}\n</attached_files>")
 
     def add_turn(self, turn: ChatTurn) -> None:
         self.turns.append(turn)

@@ -104,6 +104,7 @@ def run_single(
     run_id: str | None = None,
     phase: str = "main",
     extra_context: str = "",
+    prior_messages: list[dict] | None = None,
 ) -> AgentResult:
     """Run the single-mode agent end-to-end on a goal.
 
@@ -117,6 +118,14 @@ def run_single(
     every existing caller (maintain, benchmarks) produces a byte-identical
     `task_prompt`; only `luxe chat` passes a non-empty block. It is NOT a
     registry prompt (see agents.sdd / chat.sdd: prompts stay in the registry).
+
+    `prior_messages` (chat-only, 2026-10-16) continues the previous turn's
+    conversation (`run_agent`'s seam of the same name). The `Task type` /
+    `Goal` / task-prefix / `.sdd` frame already sits in that conversation's
+    first user message, so a continued turn's message is just `goal` plus
+    `extra_context` (the caller's follow-up blocks). If `run_agent` rejects
+    the prior messages it starts fresh from that same short message — callers
+    only pass them when the frame they were built under is unchanged.
 
     `cache` is accepted and ignored (deprecated 2026-09 with `ToolCache`,
     which nothing ever constructed); kept so existing callers keep working.
@@ -142,14 +151,17 @@ def run_single(
     )
     sys_variant = get_prompt(sys_id)
     task_variant = get_prompt(task_id)
-    sdd_block = _build_sdd_block()
-    task_prompt = (
-        f"Task type: {task_type}\n"
-        f"Goal: {goal}\n\n"
-        f"{task_variant.task_prefix}"
-        f"{sdd_block}"
-        f"{extra_context}"
-    )
+    if prior_messages:
+        task_prompt = f"{goal}{extra_context}"
+    else:
+        sdd_block = _build_sdd_block()
+        task_prompt = (
+            f"Task type: {task_type}\n"
+            f"Goal: {goal}\n\n"
+            f"{task_variant.task_prefix}"
+            f"{sdd_block}"
+            f"{extra_context}"
+        )
 
     return run_agent(
         backend, role_cfg,
@@ -163,6 +175,7 @@ def run_single(
         on_notice=on_notice,
         run_id=run_id,
         phase=phase,
+        prior_messages=prior_messages,
     )
 
 

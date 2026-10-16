@@ -26,7 +26,7 @@ from luxe.chat import cost as cost_mod
 from luxe.chat import mcptools
 from luxe.chat import modelcaps
 from luxe.chat.render import compose_answer, strip_leaked_reasoning
-from luxe.chat.session import ChatTurn
+from luxe.chat.session import ChatTurn, TurnCarry
 from luxe.config import RoleConfig
 from luxe.memory import session as session_store
 from luxe.state import ledger as ledger_mod
@@ -137,6 +137,37 @@ class TurnPrep:
     # per-result sum only ever saw completed turns).
     backend: object | None = None
     cost_start: float = 0.0
+    # Turn carry (see `_carry_for_turn`): the frame this turn was built
+    # under, and whether it continued the previous turn's conversation.
+    carry_frame: str = ""
+    carried: bool = False
+
+
+def _carry_for_turn(session, cfg, frame: str, num_ctx: int, *,
+                    eligible: bool):
+    """The previous turn's conversation if THIS turn may continue it, else None.
+
+    Turn carry (2026-10-16): each chat turn used to be a fresh `run_single`
+    whose prompt diverged from every earlier one right after the system
+    prompt + tools — under one 4,096-token cache block on m1 — so every turn
+    re-prefilled from zero (~11s TTFT). Continuing the previous turn's actual
+    message list makes the new prompt an EXTENSION of the last request, which
+    the server resumes from its end-of-prompt snapshot.
+
+    Only freeform turns carry (`eligible`: not /plan, /goal or /use), only
+    from the turn immediately before (`turn_count`), only under an identical
+    frame, and only while the carried conversation is under
+    `turn_carry_max_fraction` of the window; anything else re-folds history
+    into a fresh prompt, exactly as before, and the turn after that carries."""
+    carry = getattr(session, "carry", None)
+    if not (eligible and carry is not None and getattr(cfg, "turn_carry", False)):
+        return None
+    if carry.turn_count != len(session.turns) or carry.frame != frame:
+        return None
+    limit = getattr(cfg, "turn_carry_max_fraction", 0.5) * (num_ctx or 0)
+    if not carry.prompt_tokens or carry.prompt_tokens >= limit:
+        return None
+    return carry
 
 
 # Tools that are useless without a resident index (chat/project.py "none" mode).
@@ -396,15 +427,32 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     # byte-identical by construction — it never turns this on.
     fs_mod.set_large_file_notes(True)
 
-    extra_context, fold_version = session.build_extra_context(message)
+    from luxe.agents.single import _build_full_tool_surface
+    surface, _ = _build_full_tool_surface(languages, role_cfg.tools or None,
+                                          task_type=task_type)
+    carry_frame = session.carry_frame(
+        model, getattr(slots, "backend_name", ""), role_cfg.system_prompt_id,
+        role_cfg.task_prompt_id, role_cfg.task_overlay_id,
+        sorted(d.name for d in surface), sorted(d.name for d in extra_tool_defs),
+    )
+    carry = _carry_for_turn(
+        session, cfg, carry_frame, role_cfg.num_ctx,
+        eligible=pinned is None and not plan_mode and not session.goal_active)
+    prior_messages = carry.messages if carry is not None else None
+    if carry is not None:
+        extra_context, fold_version = session.build_followup_context(), "carry"
+    else:
+        extra_context, fold_version = session.build_extra_context(message)
 
     turn_idx = len(session.turns)
     # Not `len(session.turns)` alone: `/clear` empties the list, and a run id
     # reused after it would overwrite the earlier run's events on disk.
     run_id = f"{session.session_id}-{turn_idx + session.turn_offset}"
     session_store.append_turn(session.session_id, "user", text=message, slot=slot)
-    if extra_context:
+    if extra_context and carry is None:
         session_store.append_fold(session.session_id, turn_idx, fold_version, extra_context)
+    logger.debug("turn carry run_id=%s carried=%s prior_messages=%d",
+                 run_id, carry is not None, len(prior_messages or []))
 
     # Per-turn collectors feeding the ledger (B0/B5) and the goal supervisor (B4):
     # files actually written/edited, and a fingerprint of tool calls (name + the
@@ -441,6 +489,7 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
             extra_tool_fns=extra_tool_fns, on_tool_event=on_event,
             on_token=on_token, on_progress=on_progress, on_notice=on_notice,
             run_id=run_id, phase="chat", extra_context=extra_context,
+            prior_messages=prior_messages,
         )
 
     return TurnPrep(
@@ -452,6 +501,8 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
         observed_calls=observed_calls,
         backend=backend,
         cost_start=cost_mod.backend_spend(backend),
+        carry_frame=carry_frame,
+        carried=carry is not None,
     )
 
 
@@ -527,6 +578,18 @@ def finalize_turn(session, prep: TurnPrep, result, *, interrupted: bool,
         user=message, assistant=assistant_text, slot=prep.slot,
         model=prep.model, run_id=prep.run_id,
     ))
+    # Turn carry: only a turn that finished cleanly hands its conversation on.
+    # An interrupted/aborted turn leaves None, so the next turn re-folds.
+    messages = getattr(result, "messages", None) if result is not None else None
+    if (not interrupted and result is not None
+            and not getattr(result, "aborted", False) and messages):
+        session.carry = TurnCarry(
+            messages=list(messages), frame=prep.carry_frame,
+            turn_count=len(session.turns),
+            prompt_tokens=getattr(result, "last_prompt_tokens", 0) or 0,
+        )
+    else:
+        session.carry = None
     return TurnOutcome(
         tool_calls=tool_calls_total,
         files_changed=len(set(prep.changed_files)),

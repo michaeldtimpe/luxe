@@ -95,6 +95,15 @@ profile:
 # setting. Set false to turn the automatic write off.
 notes: true
 
+# Turn carry (chat-only, 2026-10-16): each freeform turn continues the
+# previous turn's real conversation, so its prompt extends the last request
+# and the server's prefix cache serves it — without it every turn started
+# cold (~11s TTFT on m1). Falls back to the folded-history prompt when the
+# frame changes (model, tools, /write, persona, memory, constraints) or the
+# carried conversation reaches this fraction of the window.
+turn_carry: true
+turn_carry_max_fraction: 0.5
+
 # Per-host model manifests (2026-07-30 fallback-kit pivot): each fleet host
 # declares its interactive main + fallback pair, keyed by short hostname.
 # `main` drives every slot by default; `fallback` is what the session
