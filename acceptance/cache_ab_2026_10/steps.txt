@@ -1,0 +1,44 @@
+base steps/run 13.6 compl/run 4688 prompt/run 132119 compactions 66
+   isomer-document-quickstart                 steps   6.0 compl   2185 rchars   1231 comp 1.0
+   isomer-implement-healthcheck               steps  21.0 compl   2860 rchars   3653 comp 0.0
+   lpe-rope-calc-document-typing              steps  10.0 compl   2903 rchars   4565 comp 1.0
+   lpe-rope-calc-implement-strict-flag        steps  25.0 compl  15980 rchars   3415 comp 12.0
+   neon-rain-document-modules                 steps  10.0 compl   2483 rchars   2450 comp 0.0
+   neon-rain-implement-reset-shortcut         steps  17.0 compl   4142 rchars   7090 comp 4.0
+   nothing-ever-happens-document-config       steps  19.0 compl   8950 rchars   8197 comp 3.0
+   nothing-ever-happens-manage-deps-audit     steps  12.0 compl   4166 rchars   3341 comp 1.0
+   the-game-document-architecture             steps   7.0 compl   2075 rchars   3002 comp 0.0
+   the-game-implement-shuffle-shortcut        steps   9.0 compl   1139 rchars   1272 comp 0.0
+R steps/run 12.2 compl/run 3197 prompt/run 121626 compactions 33
+   isomer-document-quickstart                 steps   7.0 compl   2235 rchars   2724 comp 1.0
+   isomer-implement-healthcheck               steps  12.3 compl   1795 rchars   3070 comp 0.0
+   lpe-rope-calc-document-typing              steps  13.0 compl   2516 rchars   4075 comp 2.0
+   lpe-rope-calc-implement-strict-flag        steps  24.0 compl   8348 rchars   9165 comp 2.0
+   neon-rain-document-modules                 steps   8.0 compl   2516 rchars   3364 comp 0.0
+   neon-rain-implement-reset-shortcut         steps  15.7 compl   3557 rchars   4788 comp 2.0
+   nothing-ever-happens-document-config       steps  19.3 compl   4153 rchars   5375 comp 2.0
+   nothing-ever-happens-manage-deps-audit     steps   9.0 compl   3945 rchars   3072 comp 0.0
+   the-game-document-architecture             steps   4.0 compl   1214 rchars   2030 comp 0.0
+   the-game-implement-shuffle-shortcut        steps  10.0 compl   1691 rchars   2255 comp 2.0
+C steps/run 13.3 compl/run 4354 prompt/run 130764 compactions 27
+   isomer-document-quickstart                 steps   6.0 compl   2185 rchars   1231 comp 0.0
+   isomer-implement-healthcheck               steps  21.0 compl   2860 rchars   3653 comp 0.0
+   lpe-rope-calc-document-typing              steps  10.0 compl   2903 rchars   4565 comp 0.0
+   lpe-rope-calc-implement-strict-flag        steps  27.0 compl  14723 rchars   5027 comp 4.0
+   neon-rain-document-modules                 steps  10.0 compl   2483 rchars   2450 comp 0.0
+   neon-rain-implement-reset-shortcut         steps  17.0 compl   4142 rchars   7090 comp 4.0
+   nothing-ever-happens-document-config       steps  14.0 compl   6710 rchars   7681 comp 1.0
+   nothing-ever-happens-manage-deps-audit     steps  12.0 compl   4315 rchars   3562 comp 0.0
+   the-game-document-architecture             steps   7.0 compl   2075 rchars   3002 comp 0.0
+   the-game-implement-shuffle-shortcut        steps   9.0 compl   1139 rchars   1272 comp 0.0
+RC steps/run 12.2 compl/run 3439 prompt/run 123223 compactions 27
+   isomer-document-quickstart                 steps   7.0 compl   2235 rchars   2724 comp 0.0
+   isomer-implement-healthcheck               steps  12.3 compl   1803 rchars   3098 comp 0.0
+   lpe-rope-calc-document-typing              steps  14.0 compl   2674 rchars   4620 comp 1.0
+   lpe-rope-calc-implement-strict-flag        steps  26.3 compl   9228 rchars   9089 comp 2.0
+   neon-rain-document-modules                 steps   8.0 compl   2516 rchars   3364 comp 0.0
+   neon-rain-implement-reset-shortcut         steps  16.7 compl   3596 rchars   4684 comp 2.7
+   nothing-ever-happens-document-config       steps  14.7 compl   5490 rchars   5519 comp 1.3
+   nothing-ever-happens-manage-deps-audit     steps   9.0 compl   3945 rchars   3072 comp 0.0
+   the-game-document-architecture             steps   4.0 compl   1214 rchars   2030 comp 0.0
+   the-game-implement-shuffle-shortcut        steps  10.0 compl   1691 rchars   2255 comp 2.0

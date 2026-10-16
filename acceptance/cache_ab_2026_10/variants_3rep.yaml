@@ -1,0 +1,7 @@
+# Cache A/B (2026-10-15): baseline vs LUXE_REASONING_ROUNDTRIP (R) vs
+# LUXE_COMPACT_CACHE_FRIENDLY (C) vs both (RC). Arms differ only by env;
+# run sequentially. 3 reps x 10 fixtures x 4 arms = 120 runs.
+variants:
+  - {model_label: rep1, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: rep2, model_id: Qwen3.6-35B-A3B-6bit}
+  - {model_label: rep3, model_id: Qwen3.6-35B-A3B-6bit}
