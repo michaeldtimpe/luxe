@@ -117,6 +117,7 @@ class Variant:
       - system_prompt_id / task_prompt_id select PromptVariants from
         `src/luxe/agents/prompts.py`
       - temperature / repeat_penalty override the role's sampling params
+      - max_steps overrides the monolith step budget (harness ablation)
     Cells that vary any of these get a distinct `variant_id` namespace
     so the resumable runner doesn't collide cached results.
     """
@@ -127,6 +128,9 @@ class Variant:
     task_overlay_id: str = ""
     temperature: float | None = None
     repeat_penalty: float | None = None
+    # Harness-fairness ablation (2026-10-16): raise/lower the monolith step
+    # budget per cell. None = the config's own max_steps (byte-identical).
+    max_steps: int | None = None
 
     @property
     def variant_id(self) -> str:
@@ -144,6 +148,8 @@ class Variant:
         if self.repeat_penalty is not None:
             # 1.05 → "rp105"; keeps filenames sortable + filesystem-safe
             parts.append(f"rp{int(round(self.repeat_penalty * 100))}")
+        if self.max_steps is not None:
+            parts.append(f"ms{self.max_steps}")
         return "__".join(parts)
 
 
@@ -183,6 +189,8 @@ def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
         cfg["roles"]["monolith"]["temperature"] = variant.temperature
     if variant.repeat_penalty is not None:
         cfg["roles"]["monolith"]["repeat_penalty"] = variant.repeat_penalty
+    if variant.max_steps is not None:
+        cfg["roles"]["monolith"]["max_steps"] = variant.max_steps
 
     out_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     return out_path
@@ -1450,6 +1458,7 @@ def _load_variants(path: Path) -> list[Variant]:
         task_prompt_id:   baseline | cot | sot | hads_persona | combined
         temperature:      float
         repeat_penalty:   float
+        max_steps:        int   (harness ablation; suffixes variant_id `ms<N>`)
 
     Legacy entries with `mode: mono|single` are accepted (mode is ignored;
     luxe is mono-only as of v1.0). Entries with mode in {swarm, micro,
@@ -1475,6 +1484,8 @@ def _load_variants(path: Path) -> list[Variant]:
                           if v.get("temperature") is not None else None),
             repeat_penalty=(float(v["repeat_penalty"])
                              if v.get("repeat_penalty") is not None else None),
+            max_steps=(int(v["max_steps"])
+                       if v.get("max_steps") is not None else None),
         ))
     return out
 
