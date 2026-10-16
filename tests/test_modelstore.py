@@ -420,6 +420,39 @@ class TestOmlxAdmin:
         final = _admin(handler).wait_for("gone", sleep=lambda s: None)
         assert final.task_id == "gone"      # returns instead of looping forever
 
+    def test_wait_for_rides_out_a_transient_poll_failure(self):
+        # 2026-10-16: one connection reset while oMLX loaded a model killed a
+        # 70 GB pull at 90% — the server kept downloading, luxe gave up.
+        polls = iter(["reset", "reset", "completed"])
+        logins = [0]
+
+        def handler(request):
+            if request.url.path == "/admin/api/login":
+                logins[0] += 1
+                return httpx.Response(200, json={"success": True})
+            step = next(polls)
+            if step == "reset":
+                raise httpx.ReadError("Connection reset by peer")
+            return httpx.Response(200, json={"tasks": [
+                {"task_id": "t1", "repo_id": "r", "status": "completed",
+                 "progress": 100, "total_size": 1, "downloaded_size": 1}]})
+
+        final = _admin(handler).wait_for("t1", sleep=lambda s: None)
+        assert final.status == "completed"
+        assert logins[0] == 3               # re-login after each failure
+
+    def test_wait_for_raises_after_the_grace_window(self):
+        def handler(request):
+            if request.url.path == "/admin/api/login":
+                return httpx.Response(200, json={"success": True})
+            raise httpx.ReadError("Connection reset by peer")
+
+        sleeps: list[float] = []
+        with pytest.raises(ms.ModelStoreError, match="reset"):
+            _admin(handler).wait_for("t1", poll_s=2.0, poll_grace_s=10.0,
+                                     sleep=sleeps.append)
+        assert len(sleeps) == 4             # 5 consecutive failures, 4 waits
+
 
 # --- source resolution ------------------------------------------------------
 

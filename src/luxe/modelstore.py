@@ -663,11 +663,31 @@ class OmlxAdmin:
 
     def wait_for(self, task_id: str, *, poll_s: float = 2.0,
                  on_progress: Callable[[DownloadTask], None] | None = None,
-                 sleep: Callable[[float], None] = time.sleep) -> DownloadTask:
-        """Poll until the task finishes; report each observation."""
+                 sleep: Callable[[float], None] = time.sleep,
+                 poll_grace_s: float = 300.0) -> DownloadTask:
+        """Poll until the task finishes; report each observation.
+
+        The download runs SERVER-side; a failed poll says nothing about it.
+        A busy server (loading a model) can reset the admin connection, and
+        giving up there abandoned a 70 GB pull at 90% while oMLX kept
+        downloading (2026-10-16). So a poll failure is retried — re-logging
+        in, in case the server restarted and the session cookie died — and
+        only `poll_grace_s` of CONSECUTIVE failures raises.
+        """
         last = DownloadTask(task_id=task_id, status="pending")
+        failures = 0
+        max_failures = max(1, int(poll_grace_s / poll_s))
         while True:
-            found = self.task(task_id)
+            try:
+                found = self.task(task_id)
+            except ModelStoreError:
+                failures += 1
+                if failures >= max_failures:
+                    raise
+                self._logged_in = False
+                sleep(poll_s)
+                continue
+            failures = 0
             if found is None:
                 # Task list rotates completed entries out — treat a vanished
                 # task as finished rather than looping forever.
