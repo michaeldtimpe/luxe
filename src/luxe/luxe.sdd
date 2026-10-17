@@ -23,7 +23,8 @@ auto-memory.
   fallback pair sized to its RAM, with loud auto-degrade (chat.sdd). The
   champion pin above is a BENCHMARK pin: `single_64gb.yaml` still selects it
   and m1 keeps its weights (manifest `keep:`), but the interactive default on
-  m1/m4 is deliberately NOT the champion. A host with no `hosts:` entry is
+  m1 is deliberately NOT the champion (m4 retired 2026-10). `luxe code` on
+  m1 starts on the dense 27B-4bit (`code_main`, 2026-10-17). A host with no `hosts:` entry is
   champion-everywhere, byte-identical to the pre-manifest behaviour
 - Multi-backend endpoint selection (`backends:` map + `/backend`/`--backend`)
   joins the slots carve-out: chat-only, config-sourced (BackendEntry =

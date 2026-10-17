@@ -249,6 +249,11 @@ def _run_interactive(
     # can point a slot at any oMLX-loadable model without editing YAML.
     _apply_slot_overrides(cfg, chat_model, plan_model, code_model)
 
+    # `luxe code` runs under the host's code pair (HostManifest.code_main),
+    # set before anything resolves a model.
+    if require_project:
+        cfg.apply_code_posture()
+
     # `--backend <name>` picks the startup endpoint by re-flagging the config's
     # default entry (chat-only; SlotManager reads default_backend_name()).
     _select_backend(cfg, backend_name)

@@ -355,14 +355,32 @@ class HostManifest(BaseModel):
     # extra cap. Applies live: a session degraded to the fallback clamps to
     # the fallback's cap on its next turn.
     ctx_max: dict[str, int] = Field(default_factory=dict)
+    # Optional main for `luxe code` sessions only (2026-10-17, m5max_moe_r2:
+    # on m1 the 4-bit MoE main is 23/30 hand-verified on code fixtures, the
+    # 4-bit dense fallback 30/30). Empty = code sessions use `main` like chat.
+    # See `for_code`.
+    code_main: str = ""
 
     def all_models(self) -> list[str]:
-        """main + fallback + keep, deduped, order-preserving."""
+        """main + fallback + code_main + keep, deduped, order-preserving."""
         out: list[str] = []
-        for mid in [self.main, self.fallback, *self.keep]:
+        for mid in [self.main, self.fallback, self.code_main, *self.keep]:
             if mid and mid not in out:
                 out.append(mid)
         return out
+
+    def for_code(self) -> "HostManifest":
+        """The manifest a `luxe code` session runs under.
+
+        With a `code_main` that differs from `main`, the pair is reordered:
+        code_main becomes the main and the chat main becomes its fallback, so
+        auto-degrade still lands on a model this host keeps. Otherwise self.
+        """
+        if not self.code_main or self.code_main == self.main:
+            return self
+        return self.model_copy(update={"main": self.code_main,
+                                       "fallback": self.main,
+                                       "code_main": ""})
 
 
 def short_hostname() -> str:
@@ -489,6 +507,14 @@ class PipelineConfig(BaseModel):
             if key.split(".")[0].lower() == name:
                 return manifest
         return None
+
+    def apply_code_posture(self) -> None:
+        """Re-point every host manifest at its `luxe code` pair (`for_code`).
+
+        Called once at `luxe code` startup, before the session resolves a
+        model, so slots, auto-degrade, `/doctor` and the status bar all see
+        the same pair. `luxe chat` never calls it."""
+        self.hosts = {k: m.for_code() for k, m in self.hosts.items()}
 
     def slot_config(self, slot: str) -> SlotConfig:
         """Return the SlotConfig for `slot`, defaulting to an empty SlotConfig

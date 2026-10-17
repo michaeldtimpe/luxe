@@ -149,10 +149,9 @@ def test_chat_yaml_default_follows_host_manifest(monkeypatch):
     champ = cfg.model_for_role("monolith")
 
     # Fleet hosts resolve to their declared mains, uniformly across slots.
-    # (m1/m4 main is the MoE — flipped 2026-07-30; dense-27B prefill is ~65
-    # tok/s on oMLX's vlm engine, unusable interactively.)
-    for host, expected in (("m5", champ), ("m1", "Qwen3.6-35B-A3B-4bit"),
-                           ("m4", "Qwen3.6-35B-A3B-4bit")):
+    # (m1 main is the MoE — flipped 2026-07-30; dense-27B prefill is ~65
+    # tok/s on oMLX's vlm engine, unusable interactively. m4 retired 2026-10.)
+    for host, expected in (("m5", champ), ("m1", "Qwen3.6-35B-A3B-4bit")):
         monkeypatch.setattr(config_mod, "short_hostname", lambda h=host: h)
         for slot in ("chat", "plan", "code"):
             assert cfg.model_for_slot(slot) == expected, (host, slot)
@@ -168,7 +167,7 @@ def test_chat_yaml_manifests_declare_fallbacks():
     champion on disk (the bench exception)."""
     chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
     cfg = load_config(chat_cfg)
-    assert set(cfg.hosts) == {"m1", "m4", "m5"}
+    assert set(cfg.hosts) == {"m1", "m5"}   # m4 retired 2026-10
     for name, m in cfg.hosts.items():
         assert m.main and m.fallback and m.fallback != m.main, name
     assert "Qwen3.6-35B-A3B-6bit" in cfg.hosts["m1"].keep
@@ -177,8 +176,36 @@ def test_chat_yaml_manifests_declare_fallbacks():
     # the m1 bench champion clamps at 128K (28.4 GiB weights leave ~7.6 GiB).
     assert cfg.hosts["m1"].ctx_max["Qwen3.6-27B-4bit"] == 32768
     assert cfg.hosts["m1"].ctx_max["Qwen3.6-35B-A3B-6bit"] == 131072
-    assert cfg.hosts["m4"].ctx_max["Qwen3.6-27B-4bit"] == 32768
     assert "Qwen3.6-35B-A3B-4bit" not in cfg.hosts["m1"].ctx_max  # MoE uncapped
+
+
+def test_luxe_code_posture_puts_dense_first_on_m1(monkeypatch):
+    """2026-10-17 (m5max_moe_r2, user decision): `luxe code` on m1 starts on
+    the dense 27B-4bit and degrades to the MoE; `luxe chat` is unchanged; a
+    host without `code_main` (m5) is identical under both postures."""
+    import luxe.config as config_mod
+
+    chat_cfg = Path(__file__).parent.parent / "configs" / "chat.yaml"
+    cfg = load_config(chat_cfg)
+    m5_before = cfg.hosts["m5"]
+    cfg.apply_code_posture()
+    m1 = cfg.hosts["m1"]
+    assert (m1.main, m1.fallback) == ("Qwen3.6-27B-4bit", "Qwen3.6-35B-A3B-4bit")
+    assert "Qwen3.6-35B-A3B-6bit" in m1.keep
+    assert cfg.hosts["m5"] == m5_before
+    monkeypatch.setattr(config_mod, "short_hostname", lambda: "m1")
+    for slot in ("chat", "plan", "code"):
+        assert cfg.model_for_slot(slot) == "Qwen3.6-27B-4bit"
+
+
+def test_for_code_without_code_main_is_identity():
+    m = HostManifest(main="A", fallback="B")
+    assert m.for_code() is m
+    same = HostManifest(main="A", fallback="B", code_main="A")
+    assert same.for_code() is same
+    swapped = HostManifest(main="A", fallback="B", code_main="B").for_code()
+    assert (swapped.main, swapped.fallback, swapped.code_main) == ("B", "A", "")
+    assert HostManifest(main="A", fallback="B", code_main="C").all_models() == ["A", "B", "C"]
 
 
 def test_host_manifest_normalizes_hostnames():
