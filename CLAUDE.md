@@ -43,6 +43,10 @@ and dropped-`tools` blockers are gone) and there is no vlm-engine penalty —
 so the refutation is about verification behavior, not capability plumbing.
 Evidence: `acceptance/gemma4_r1_2026_08_19/HAND-VERIFY.md`, lessons.md
 2026-08-19. Don't re-open without new information.
+**Also benched and NOT promoted (2026-10-17, m5max_moe_r2):** K2-Horizon-MoVA-36B-A4B,
+Laguna-XS-2.1, LFM2.5-24B-A2B, muse-glimmer-30B, at 6-bit and 4-bit. Each has a
+recurring defect (3-rep rule), and step-budget/compaction ablations converted
+none. `acceptance/m5max_moe_r2_2026_10/REPORT.md`.
 
 **Sanctioned exceptions — `luxe chat` slots + per-host manifests.** The
 interactive front-end (`src/luxe/chat/`) has two sanctioned carve-outs from

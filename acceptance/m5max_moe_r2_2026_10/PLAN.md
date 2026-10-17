@@ -224,3 +224,8 @@ a fresh empty `ssd_cache_dir` + server restart (cold); `diverge.py` compares.
 The real `~/.omlx/cache` is untouched; the setting is restored on exit.
 Use: a reproducible mode for harness A/Bs only — the bake-off keeps sampling variance.
 Queue: `~/luxe-bench-tmp/r2/det.sh` → `determinism/{warm,cold}/rep{1,2,3}`.
+
+**Result (2026-10-17): hypothesis refuted.** Cold reps diverge from each other at
+step 3 with identical prompts AND identical cache-hit counts — the server's greedy
+decode is non-deterministic at near-ties regardless of cache. No reproducible mode
+exists at the cache layer; the 3-rep rule stays. Detail: HAND-VERIFY.md § P4e.
