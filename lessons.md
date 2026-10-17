@@ -30,6 +30,46 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-10-17] m5max_moe_r2 — no challenger, and four ways the grading itself lied first
+
+**What happened**: Six-arm 6-bit + six-arm 4-bit bake-off on m5 (K2-Horizon,
+Laguna-XS, LFM2.5, muse-glimmer vs the Qwen3.6 incumbents), 3 reps wherever
+variance mattered, plus harness ablations and a determinism test. No change:
+every challenger's elimination recurred in ≥2 of 3 runs, mostly byte-identical.
+Report: `acceptance/m5max_moe_r2_2026_10/REPORT.md`.
+
+**Root cause** of the detours along the way:
+- **Bench branch names are first-free and get reused.** A run that commits
+  nothing frees its name; the next arm takes it. `base..<branch name>` after the
+  fact showed another run's diff for 14, then 30, of 310 reviews.
+- **A doc checker that only counted `backticked` names** under-credited docs
+  that list variables in **bold**.
+- **`bailout_type: context_overflow` means "max steps reached"** in
+  `_classify_bailout` (run.py); those runs peaked at ~0.55 context pressure.
+  It sent one round of analysis after a context problem that did not exist.
+- **The warm prefix cache was blamed for rep-to-rep divergence** (a plausible
+  story: reused KV blocks computed under different chunking). The cold-cache
+  test refuted it: fresh-cache reps diverge at the same step with identical
+  prompts AND identical cache-hit counts.
+
+**Fix / takeaway**:
+- Resolve each run's commit from the clone's HEAD reflog at the pr_state
+  commit time, and check every collected diff's +/- against result.json
+  before reading it (`m5:~/luxe-bench-tmp/r2/{collect,attrcheck}.py`).
+- Test a grading checker against one doc in each format before trusting it.
+- Read `bailout_reason`, not `bailout_type`. Relabeling is a follow-up (it
+  breaks history comparability).
+- oMLX greedy decode is non-deterministic at near-ties; no cache setting makes
+  runs reproducible. Multi-rep is the only answer — don't build a "cold mode".
+- Harness levers (60 steps, compaction off) converted zero challenger failures;
+  "the harness is unfair to model X" needs an ablation, and here it was refuted.
+- 4-bit is not free for the 35B MoE (neon reset VACUOUS 3/3, 6-bit REAL 4/4)
+  but is for the 27B dense — relevant to the m1/m4 MoE-first manifest.
+
+**Affected files**: none in `src/luxe/`; `benchmarks/maintain_suite/run.py`
+gained the per-variant `max_steps` knob (4cb6590). Evidence in
+`acceptance/m5max_moe_r2_2026_10/`.
+
 ### [2026-09-11] the fallback kit diagnosed itself perfectly and stayed down — detection is not recovery
 
 **What happened**: `luxe smoke` on m1 printed the exact cause (`oMLX build —
