@@ -754,3 +754,15 @@ class TestChatSelfIdentity:
         v = get("baseline")
         assert v.system.startswith("You are a code maintenance specialist")
         assert "luxe" not in v.system
+
+
+def test_commit_first_is_baseline_plus_appendix():
+    """2026-10-17 tuning-pass variant: opt-in, the baseline system verbatim plus
+    a commit-discipline appendix that names no fixture."""
+    from luxe.agents.prompts import _BASELINE_SYSTEM, _COMMIT_FIRST_APPENDIX
+    v = get("commit_first")
+    assert v.system == _BASELINE_SYSTEM + _COMMIT_FIRST_APPENDIX
+    assert v.task_prefix == get("baseline").task_prefix
+    assert "Commit discipline" in v.system
+    for word in ("PM_NH", "Shift+R", "CONFIG.md", "persona", "neon"):
+        assert word not in _COMMIT_FIRST_APPENDIX
