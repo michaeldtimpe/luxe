@@ -212,12 +212,14 @@ _READONLY_DROP = _DRILL_TOOL_DROP | {"write_file", "edit_file", "bash"}
 
 def _resolve_drill_backend(cfg, backend_name: str | None,
                            base_url: str | None,
-                           model_override: str | None = None):
+                           model_override: str | None = None,
+                           code: bool = False):
     """(Backend, model, entry) for a drill. The model comes from the manifest
     of the host the URL POINTS AT — a drill against the m5 must run an m5
     model (it serves the 6-bit pair, not this host's 4-bit pair).
     `model_override` (`--model`) drills a specific cached model instead —
-    e.g. the m5 capacity model, which is a `keep:`, never a `main`."""
+    e.g. the m5 capacity model, which is a `keep:`, never a `main`.
+    `code=True` (the code drill) drills the host's `luxe code` main."""
     from luxe.chat.origin import host_for_endpoint
 
     entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
@@ -228,6 +230,8 @@ def _resolve_drill_backend(cfg, backend_name: str | None,
     if model_override:
         model = model_override
     else:
+        if manifest and code:
+            manifest = manifest.for_code()
         model = manifest.main if manifest else cfg.model_for_slot("code")
     backend = entry.build_backend(model, base_url=url, backend_cls=Backend)
     return backend, model
@@ -359,7 +363,8 @@ def run_code_drill(cfg, *, backend_name: str | None = None,
     import sys
 
     report = SmokeReport()
-    backend, model = _resolve_drill_backend(cfg, backend_name, base_url, model)
+    backend, model = _resolve_drill_backend(cfg, backend_name, base_url, model,
+                                            code=True)
     repo = _make_drill_repo("code", {"calc.py": _DRILL_CALC_BUGGY,
                                      "test_calc.py": _DRILL_TEST})
     report.add("drill repo", "pass", str(repo))

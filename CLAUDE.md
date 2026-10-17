@@ -55,18 +55,20 @@ benchmark/maintain path (luxe.sdd):
 (a) opt-in `chat`/`plan`/`code` model slots via `configs/chat.yaml` `slots:`;
 (b) **per-host manifests** (`hosts:` in chat.yaml, 2026-07-30 fallback-kit
 pivot): each fleet host declares an interactive main + fallback pair sized to
-its RAM — m5 (128 GB) = champion + 27B-6bit; m1 (64 GB) and m4 (48 GB) =
-35B-A3B-4bit main + 27B-4bit fallback (MoE-first, flipped 2026-07-30: Qwen3.6
+its RAM — m5 (128 GB) = champion + 27B-6bit; m1 (64 GB) =
+35B-A3B-4bit main + 27B-4bit fallback, **but `luxe code` on m1 starts on the
+27B-4bit** (manifest `code_main`, 2026-10-17 user decision after
+m5max_moe_r2: 30/30 vs 23/30 hand-verified, ~3.5× the wall; m4 retired 2026-10) (MoE-first, flipped 2026-07-30: Qwen3.6
 is multimodal so oMLX runs it on the slow vlm engine — dense-27B prefills at
 ~65 tok/s with no cache reuse; the MoE holds ~10s turns). **The interactive
-default on m1/m4 is deliberately NOT the champion** — do not "restore" it. The champion pin is a benchmark pin:
+default on m1 is deliberately NOT the champion** — do not "restore" it. The champion pin is a benchmark pin:
 `single_64gb.yaml` still selects it and m1 keeps its weights via the
 manifest's `keep:` list. A host with no `hosts:` entry behaves exactly as
 before (champion everywhere). (c) **The m5-only capacity model**
 (2026-08-03/04): `GLM-4.5-Air-4bit` (106B-A12B, bake-off-passing) lives in
 m5's `keep:` + `visible_models` for capacity-over-speed sessions — opt-in
 per session via `/model all GLM-4.5-Air-4bit`, never a slot default, never
-a manifest main/fallback, never on m1/m4 (60 GB doesn't fit), never the
+a manifest main/fallback, never on m1 (60 GB doesn't fit), never the
 bench champion. Overnight drill verdict 9/9 at ~2× wall:
 `acceptance/glm_capacity_drills/REPORT.md` (local),
 `scripts/capacity_drills.py` to re-run. (d) **The OpenRouter chat backend**
@@ -83,7 +85,7 @@ catalog. Do not extend fan-out beyond these.
 ## Fallback kit (2026-07-30 pivot — read this before touching chat)
 
 Luxe's mission narrowed after the 2026-07-29 Anthropic outage: it is the
-**local fallback dev tool** for the fleet (m1 · m4 · m5), and it has to WORK
+**local fallback dev tool** for the fleet (m1 · m5; m4 retired 2026-10), and it has to WORK
 when reached for — availability over capability. Concretely:
 
 - **Two entry points, one engine**: `luxe chat` (anywhere, read-only,

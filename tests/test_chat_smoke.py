@@ -290,6 +290,21 @@ def test_drill_backend_resolves_remote_manifest(monkeypatch):
     assert model == "Local-M"
 
 
+def test_code_drill_runs_the_hosts_code_main():
+    """The --code drill exercises what `luxe code` will start on (code_main);
+    the --chat drill keeps the chat main."""
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        hosts={"here": HostManifest(main="Moe-M", fallback="Dense-M",
+                                    code_main="Dense-M")},
+    )
+    _, model = smoke_mod._resolve_drill_backend(cfg, None, None, code=True)
+    assert model == "Dense-M"
+    _, model = smoke_mod._resolve_drill_backend(cfg, None, None)
+    assert model == "Moe-M"
+
+
 def test_drill_backend_model_override_beats_the_manifest(monkeypatch):
     """`--model` drills a specific cached model (e.g. the m5 capacity model,
     which is a keep:, never a main) — it must beat manifest resolution."""

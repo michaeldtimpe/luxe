@@ -135,6 +135,11 @@ hosts:
   m1:                                  # M1 Max MBP, 64 GB (36 GB wired cap)
     main: "Qwen3.6-35B-A3B-4bit"
     fallback: "Qwen3.6-27B-4bit"
+    # `luxe code` starts on the dense 27B instead (user decision 2026-10-17,
+    # m5max_moe_r2): hand-verified on the code fixtures it was 30/30 vs the
+    # 4-bit MoE's 23/30 (Shift+R shortcut VACUOUS 3/3, config doc THIN 3/3) —
+    # at ~3.5x the wall. Code sessions degrade to the MoE; chat is unchanged.
+    code_main: "Qwen3.6-27B-4bit"
     keep:
       # Benchmark champion (single_64gb.yaml) — bench exception, kept on
       # disk so the maintain/bench path stays runnable. Not a chat default.
@@ -148,12 +153,8 @@ hosts:
     ctx_max:
       "Qwen3.6-27B-4bit": 32768
       "Qwen3.6-35B-A3B-6bit": 131072
-  m4:                                  # M4 Pro MBP, 48 GB
-    main: "Qwen3.6-35B-A3B-4bit"
-    fallback: "Qwen3.6-27B-4bit"
-    # Same dense-27B story as m1, on a smaller box.
-    ctx_max:
-      "Qwen3.6-27B-4bit": 32768
+  # m4 (M4 Pro, 48 GB) — RETIRED from the fleet 2026-10; its manifest entry
+  # was removed. A host with no entry here behaves as before (champion).
 
 # Chat-only roster: the ONLY models `/model` offers and slots may resolve to
 # (this host's manifest models are always allowed on top). gemma dropped
@@ -164,11 +165,11 @@ hosts:
 visible_models:
   - Qwen3.6-35B-A3B-6bit              # bench champion · m5 main
   - Qwen3.6-27B-6bit                  # m5 fallback
-  - Qwen3.6-35B-A3B-4bit              # m1/m4 main (MoE — fast on vlm engine)
-  - Qwen3.6-27B-4bit                  # m1/m4 fallback (dense — slow prefill)
+  - Qwen3.6-35B-A3B-4bit              # m1 main (MoE — fast on vlm engine)
+  - Qwen3.6-27B-4bit                  # m1 fallback + `luxe code` main (dense — slow prefill)
   # Capacity model (2026-08-03): 106B-A12B MoE, 10/10 on the m5max_moe
   # bake-off gate. m5-only weights (~60 GB) — the roster is intersected with
-  # each host's server catalog, so m1/m4 never offer it. Pin per session:
+  # each host's server catalog, so m1 never offers it. Pin per session:
   # `/model chat GLM-4.5-Air-4bit` (or plan|code) when depth beats speed.
   - GLM-4.5-Air-4bit
 
@@ -182,7 +183,7 @@ models:
   moe_4bit: "Qwen3.6-35B-A3B-4bit"
   # m5-only capacity model (see visible_models note). A handle for ad-hoc
   # slot pointing; deliberately NOT wired into `slots:` — that block is
-  # fleet-shared and m1/m4 can't hold 60 GB of weights.
+  # fleet-shared and m1 can't hold 60 GB of weights.
   glm_air: "GLM-4.5-Air-4bit"
 
 roles:
