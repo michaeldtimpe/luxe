@@ -503,6 +503,19 @@ GIT_WORKFLOW_HINT = (
 )
 
 
+# LUXE_STEP_LIMIT_FINISH (opt-in, unbenched; luxe/steplimit.py). Goal for the
+# bounded pass after a run stops at max steps with a change on disk. Positive
+# imperatives only (lessons: "rather than X" framing reads as wrap-up).
+STEP_LIMIT_FINISH_TEMPLATE = (
+    "You ran out of steps before finishing this goal:\n  {goal}\n\n"
+    "This is the change on disk so far:\n```diff\n{diff}\n```\n\n"
+    "You have {steps} steps to leave this change complete and working. Check "
+    "the diff first: every function, method, variable, import and event it "
+    "references must exist, and every edit must be fully applied. Complete "
+    "whatever is missing with edit_file or write_file. When the change is "
+    "complete, stop calling tools and reply with one sentence saying so."
+)
+
 # LUXE_CLEANUP_TURN (default ON since 2026-10-18; luxe/cleanup.py). One tool-less chat
 # call after the agent's work, before the commit: the model sees the files it
 # created that nothing else references (plus generated caches) and says which

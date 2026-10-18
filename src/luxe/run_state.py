@@ -63,6 +63,9 @@ class PRState:
     test_passed: bool | None = None  # None = not yet run, True/False after
     test_output_tail: str = ""
     is_draft: bool = False
+    # The run stopped at its step limit with a change on disk
+    # (luxe/steplimit.py): open as a draft, never auto-promote on green CI.
+    incomplete: bool = False
     steps: list[PRStep] = field(default_factory=list)
 
     def step(self, name: str) -> PRStep:

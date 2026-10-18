@@ -735,7 +735,8 @@ def _do_create(spec: RunSpec, state: PRState, report_text: str,
 
     title = _short_subject(task_type, goal)
     body = _format_pr_body(spec, state, report_text, task_type)
-    is_draft = bool(state.test_passed is False and cfg.draft_on_test_failure)
+    is_draft = bool(state.incomplete
+                    or (state.test_passed is False and cfg.draft_on_test_failure))
     state.is_draft = is_draft
     args = ["gh", "pr", "create", "--title", title, "--body", body,
             "--base", spec.base_branch, "--head", state.branch_name]
@@ -813,7 +814,7 @@ def _do_watch_ci(spec: RunSpec, state: PRState, cfg: PRConfig) -> None:
         time.sleep(cfg.watch_ci_poll_interval_s)
 
     if final_state == "passed":
-        if cfg.convert_to_ready_on_green and state.is_draft:
+        if cfg.convert_to_ready_on_green and state.is_draft and not state.incomplete:
             _run_net(["gh", "pr", "ready", str(state.pr_number)], cwd=repo)
             state.is_draft = False
         step.detail = "ci passed"
@@ -845,6 +846,7 @@ def open_pr(
     cfg: PRConfig | None = None,
     watch_ci: bool = False,
     on_event: Callable[[str, dict], None] | None = None,
+    incomplete: bool = False,
 ) -> PRState:
     """Run the full post-pipeline PR cycle. Each step writes pr_state.json
     so a partial failure can be resumed via `luxe pr <run-id>`.
@@ -857,6 +859,8 @@ def open_pr(
     state = load_pr_state(spec.run_id) or PRState()
     state.branch_name = state.branch_name or branch_name
     state.test_command = state.test_command or test_command
+    # Sticky: a resumed cycle keeps the label its first run recorded.
+    state.incomplete = state.incomplete or incomplete
 
     def _emit(kind: str, **data) -> None:
         append_event(spec.run_id, kind, **data)

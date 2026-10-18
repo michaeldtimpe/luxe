@@ -492,6 +492,61 @@ def maintain_pipeline(
                              checkpoint="after_reprompt_pass",
                              additions=_ds[0], deletions=_ds[1])
 
+        # Step limit with a change on disk (luxe/steplimit.py). The opt-in
+        # finish pass (LUXE_STEP_LIMIT_FINISH=1) gets one bounded pass to
+        # complete a half-applied edit; whatever still ends at the limit is
+        # LABELLED (default ON; LUXE_STEP_LIMIT_LABEL=0 disables): report +
+        # commit body note, draft PR, `step_limit_incomplete` event.
+        from luxe import steplimit as _sl
+        step_limited = False
+        if detected_task in _WRITE_TASKS and _sl.hit_step_limit(single_result):
+            try:
+                _sl_diff = _diff_against_base(repo_path, prep.base_sha)
+            except GitDiffError:
+                _sl_diff = None
+            if _sl_diff is not None and (_sl_diff[0] or _sl_diff[1]):
+                step_limited = True
+                if _sl.finish_enabled():
+                    console.print("\n[bold cyan]▶ Step-limit finish pass[/]")
+                    append_event(spec.run_id, "step_limit_finish_begin",
+                                 additions=_sl_diff[0], deletions=_sl_diff[1])
+                    _fin = run_single(
+                        backend,
+                        cfg.role("monolith").model_copy(
+                            update={"max_steps": _sl.FINISH_MAX_STEPS}),
+                        goal=_sl.finish_goal(goal, _sl_diff[2]),
+                        task_type=detected_task,
+                        languages=languages,
+                        extra_tool_defs=extra_tool_defs or None,
+                        extra_tool_fns=extra_tool_fns or None,
+                        run_id=spec.run_id,
+                        phase="step_limit_finish",
+                    )
+                    single_result.tool_calls_total += _fin.tool_calls_total
+                    single_result.schema_rejects += _fin.schema_rejects
+                    single_result.prompt_tokens += _fin.prompt_tokens
+                    single_result.completion_tokens += _fin.completion_tokens
+                    single_result.wall_s += _fin.wall_s
+                    single_result.tool_calls.extend(_fin.tool_calls)
+                    append_event(spec.run_id, "step_limit_finish_done",
+                                 aborted=_fin.aborted,
+                                 abort_reason=_fin.abort_reason,
+                                 tool_calls=_fin.tool_calls_total)
+                    if not _fin.aborted:
+                        step_limited = False
+                if step_limited and _sl.label_enabled():
+                    append_event(spec.run_id, "step_limit_incomplete",
+                                 additions=_sl_diff[0], deletions=_sl_diff[1],
+                                 abort_reason=single_result.abort_reason)
+                    console.print("[yellow]· stopped at the step limit with a "
+                                  "change on disk — labelled incomplete "
+                                  "(draft PR)[/]")
+                    final_report = _sl.label_report(final_report)
+                    (run_dir(spec.run_id) / "synthesizer.md").write_text(
+                        final_report)
+                else:
+                    step_limited = False
+
         # LUXE_CLEANUP_TURN (default ON since 2026-10-18; only the exact
         # string "0" disables it): one tool-less call that lets the model
         # drop scratch files it created, before the commit. It reaches the
@@ -526,6 +581,7 @@ def maintain_pipeline(
                     on_event=lambda kind, data: console.print(
                         f"[dim]· pr {kind}: {data}[/]"
                     ),
+                    incomplete=step_limited,
                 )
                 if pr_state.pr_url:
                     console.print(f"\n[bold green]✓ PR opened:[/] {pr_state.pr_url}"

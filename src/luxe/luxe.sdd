@@ -248,6 +248,15 @@ auto-memory.
   imports the module. Benched: Qwen3.8 healthcheck 0/3 → 3/3; champion
   no-harm 10×3, 0 candidates in 30 runs (acceptance/tuning_2026_10).
 
+- **Step limit with a change on disk is labelled, not shipped as finished
+  (2026-10-18; `steplimit.py`).** A write task whose run ends at max steps
+  with a non-empty diff gets a report/commit-body note, a draft PR that is
+  never auto-promoted on green CI (`PRState.incomplete`, sticky across
+  resume), and a `step_limit_incomplete` event. Labelling is default ON and
+  makes no model call (`LUXE_STEP_LIMIT_LABEL=0` disables). The finish pass
+  (`LUXE_STEP_LIMIT_FINISH=1`, ≤8 steps, shows the model its diff) is
+  OPT-IN and unbenched; a finish pass that ends on its own clears the label.
+
 ## Must not
 - No cloud provider backends on the BENCHMARK/MAINTAIN path — that path reads
   `omlx_base_url` and talks to MLX/oMLX endpoints only. Reproducibility is the

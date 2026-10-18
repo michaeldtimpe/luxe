@@ -9,6 +9,11 @@ single pipeline; new fixtures must declare their per-requirement spec.
   is swapped for an unparseable body in the base worktree and the command
   re-run; still rc 0 means the command never loads it → reported as
   `unwired` in the outcome detail, no penalty
+- A run luxe labels `step_limit_incomplete` (stopped at max steps with a
+  change on disk; luxe/steplimit.py) is NOT gated and its score is
+  unchanged — a complete change can also run out of steps. The bench prints
+  a ⚠ on the row and `diagnostics.json` `events_kinds` carries the count;
+  hand-verify before crediting (tuning_2026_10: one such PASS was broken)
 - `gates_triggered` entries use ONE key, `name` (vacuous_test/orphan_file
   wrote `gate` until 2026-09 — readers of old result.json accept both)
 - Diffs that feed grading run with `-M` and include the OLD side of every
