@@ -166,6 +166,7 @@ def run_cleanup_turn(backend: Any, *, goal: str, repo: Path, base_sha: str,
                      max_tokens: int = 8192) -> dict[str, Any]:
     """Offer the candidates, apply the DELETE lines. Never raises: any failure
     is reported in the returned record and leaves the tree untouched."""
+    repo = Path(repo)
     cands = find_candidates(repo, base_sha)
     rec: dict[str, Any] = {"candidates": [c.path for c in cands],
                            "deleted": [], "error": None}
