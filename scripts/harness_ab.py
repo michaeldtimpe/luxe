@@ -71,7 +71,7 @@ _spec.loader.exec_module(oh)
 
 from benchmarks.maintain_suite.grade import Fixture, grade_fixture  # noqa: E402
 
-HARNESSES = ("opencode", "qwen", "codex", "claude")
+HARNESSES = ("opencode", "qwen", "codex", "claude", "codex-cat")
 # oMLX's max_context_window. The outside harnesses are sized for frontier
 # windows (Qwen Code holds back a fixed ~23K reserve, so at 65536 it hard-stops
 # at 42536 tokens), so each runs at the server's ceiling, not luxe's window.
@@ -419,9 +419,10 @@ def parse_qwen_events(lines: Iterable[str]) -> dict[str, Any]:
             "tokens": tokens, "malformed_lines": bad}
 
 
-def make_codex_config(model: str, base_url: str) -> str:
+def make_codex_config(model: str, base_url: str, catalog: str | None = None) -> str:
     return "\n".join([
         f'model = "{model}"',
+        *([f"model_catalog_json = {json.dumps(catalog)}"] if catalog else []),
         'model_provider = "luxeab"',
         'approval_policy = "never"',
         'check_for_update_on_startup = false',
@@ -456,6 +457,44 @@ class CodexAdapter(Adapter):
 
     def parse(self, lines):
         return parse_codex_events(lines)
+
+
+# Codex on a slug it does not know runs on fallback metadata, with no
+# apply_patch tool (it then pipes "*** Begin Patch" through the shell). The
+# codex-cat arm hands it a catalog entry instead: Codex's own gpt-5.5 entry
+# (extracted from the pinned 0.163.0 binary's embedded catalog, prompt and all)
+# re-pointed at the local model. Overrides strip what oMLX cannot serve:
+# websockets, Responses-lite, freeform (custom-grammar) tools, images,
+# reasoning summaries, verbosity, service tiers.
+CODEX_MODEL_TEMPLATE = ROOT / "scripts" / "harness_ab_codex_model.json"
+
+
+def make_codex_catalog(model: str, template: Path = CODEX_MODEL_TEMPLATE) -> dict[str, Any]:
+    m = json.loads(template.read_text())
+    m.update({
+        "slug": model, "display_name": model, "description": "local model (harness_ab)",
+        "prefer_websockets": False, "use_responses_lite": False,
+        "apply_patch_tool_type": "function", "input_modalities": ["text"],
+        "supports_image_detail_original": False,
+        "support_verbosity": False, "default_verbosity": None,
+        "supports_reasoning_summaries": False,
+        "supports_reasoning_summary_parameter": False,
+        "context_window": CONTEXT_LIMIT, "max_context_window": CONTEXT_LIMIT,
+        "upgrade": None, "service_tiers": [], "additional_speed_tiers": [],
+        "default_service_tier": None, "visibility": "list",
+    })
+    return {"models": [m]}
+
+
+class CodexCatalogAdapter(CodexAdapter):
+    def setup(self, model, base_url, env_root, base_env, api_key):
+        env = _iso_env(base_env, env_root, api_key)
+        cat = self._write(env_root, "codex_home/models.json",
+                          json.dumps(make_codex_catalog(model), indent=1))
+        self._write(env_root, "codex_home/config.toml",
+                    make_codex_config(model, base_url, catalog=str(cat)))
+        env["CODEX_HOME"] = str(env_root / "codex_home")
+        return env
 
 
 def parse_codex_events(lines: Iterable[str]) -> dict[str, Any]:
@@ -575,12 +614,12 @@ class ClaudeAdapter(Adapter):
 
 
 ADAPTERS = {"opencode": OpencodeAdapter, "qwen": QwenAdapter, "codex": CodexAdapter,
-            "claude": ClaudeAdapter}
+            "claude": ClaudeAdapter, "codex-cat": CodexCatalogAdapter}
 
 
 def resolve_binary(harness: str, bin_dir: Path) -> str:
     exe = {"opencode": "opencode", "qwen": "qwen", "codex": "codex",
-           "claude": "claude"}[harness]
+           "claude": "claude", "codex-cat": "codex"}[harness]
     p = bin_dir / exe
     if p.exists():
         return str(p)

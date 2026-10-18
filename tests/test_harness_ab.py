@@ -199,3 +199,20 @@ def test_iso_env_drops_inherited_claude_session_vars(tmp_path):
     env = ha._iso_env(base, tmp_path, "k")
     for k in ("CLAUDECODE", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"):
         assert k not in env
+
+
+def test_codex_catalog_points_codex_entry_at_the_local_model(tmp_path):
+    cat = ha.make_codex_catalog("M")
+    (m,) = cat["models"]
+    assert m["slug"] == "M" and m["apply_patch_tool_type"] == "function"
+    assert m["prefer_websockets"] is False and m["use_responses_lite"] is False
+    assert m["context_window"] == m["max_context_window"] == ha.CONTEXT_LIMIT
+    assert m["input_modalities"] == ["text"] and m["upgrade"] is None
+    assert m["model_messages"]["instructions_template"]  # Codex's own prompt kept
+    t = ha.make_codex_config("M", "http://127.0.0.1:9/v1", catalog=str(tmp_path / "m.json"))
+    assert f'model_catalog_json = "{tmp_path / "m.json"}"' in t
+    assert "model_catalog_json" not in ha.make_codex_config("M", "http://127.0.0.1:9/v1")
+    env = ha.CodexCatalogAdapter("codex-cat", "codex").setup(
+        "M", "http://127.0.0.1:9/v1", tmp_path, {"PATH": "/usr/bin"}, "k")
+    assert json.loads((tmp_path / "codex_home" / "models.json").read_text())["models"][0]["slug"] == "M"
+    assert env["CODEX_HOME"] == str(tmp_path / "codex_home")
