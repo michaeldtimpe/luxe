@@ -237,6 +237,14 @@ auto-memory.
   `secrets.SECRETS_PATH` and `theme._PREF_PATH` bind it at import time, so a
   redirect would be honoured or ignored depending on import order
 
+- **Cleanup turn is opt-in (`LUXE_CLEANUP_TURN=1`, 2026-10-17; `cleanup.py`).**
+  After the main/reprompt pass of a write task and before the PR commit, ONE
+  tool-less temp-0 `backend.chat` is shown the files the change added that
+  look like scratch (generated caches; code/test files whose stem nothing
+  else references) and answers DELETE/KEEP per file. Python deletes only
+  offered paths, inside the repo; any failure leaves the tree untouched.
+  Unset ⇒ `maintain` never imports the module (byte-identical).
+
 ## Must not
 - No cloud provider backends on the BENCHMARK/MAINTAIN path — that path reads
   `omlx_base_url` and talks to MLX/oMLX endpoints only. Reproducibility is the
