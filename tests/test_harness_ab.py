@@ -23,6 +23,12 @@ def test_patch_body_forces_temperature_only_when_absent():
     assert json.loads(body)["temperature"] == 0.0
     assert rec["forced_temperature"] is True and rec["temperature_sent"] is None
 
+    body, rec = ha.patch_body(json.dumps({"model": "m", "input": "hi"}).encode())
+    assert json.loads(body)["max_output_tokens"] == ha.OUTPUT_LIMIT  # Responses spelling
+    assert rec["forced_max_tokens"] is True
+    body, _ = ha.patch_body(json.dumps({"model": "m", "messages": [], "temperature": 0}).encode())
+    assert json.loads(body)["max_tokens"] == ha.OUTPUT_LIMIT  # chat spelling
+
     raw = json.dumps({"model": "m", "temperature": 0.7, "max_tokens": 5}).encode()
     body, rec = ha.patch_body(raw)
     assert body == raw  # a sent temperature is never overridden, bytes untouched
@@ -40,6 +46,7 @@ def test_opencode_config_denies_web():
     c = ha.make_opencode_config("M", "http://127.0.0.1:9/v1")
     assert c["permission"] == {"webfetch": "deny", "websearch": "deny"}
     assert c["provider"]["luxeab"]["models"]["M"]["options"]["temperature"] == 0
+    assert c["provider"]["luxeab"]["models"]["M"]["limit"]["context"] == ha.CONTEXT_LIMIT
 
 
 def test_qwen_settings_shape():
@@ -58,6 +65,23 @@ def test_codex_config_shape():
     assert 'web_search = "disabled"' in t
     assert "check_for_update_on_startup = false" in t
     assert f'env_key = "{ha.KEY_ENV}"' in t  # key by env name, never a literal
+
+
+def test_iso_env_strips_luxe_venv(tmp_path):
+    venv_bin = str(ha.ROOT / ".venv" / "bin")
+    base = {"PATH": f"{venv_bin}:/opt/homebrew/bin:/usr/bin", "VIRTUAL_ENV": str(ha.ROOT / ".venv"),
+            "UV_PROJECT_ENVIRONMENT": "x", "PYTHONPATH": "y"}
+    env = ha._iso_env(base, tmp_path, "k")
+    assert env["PATH"] == "/opt/homebrew/bin:/usr/bin"
+    for k in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"):
+        assert k not in env
+
+
+def test_offline_cmd_wraps_in_sandbox(tmp_path):
+    prof = tmp_path / "offline.sb"
+    assert ha.offline_cmd(["qwen", "p"], prof) == ["/usr/bin/sandbox-exec", "-f", str(prof), "qwen", "p"]
+    assert "(deny network-outbound)" in ha.OFFLINE_PROFILE
+    assert '(remote ip "localhost:*")' in ha.OFFLINE_PROFILE
 
 
 def test_iso_env_drops_inherited_provider_vars(tmp_path):
