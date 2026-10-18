@@ -45,6 +45,58 @@ m5 (M5 Max 128 GB, oMLX 0.7.0), shipped defaults. Per-run grades:
 
 No champion, fallback, or manifest change.
 
+## Harness levers (2026-10-17, opt-in, 2f34af7 + fix 166c319)
+
+User request: "try the cleanup turn harness change on Qwen3.8 and the
+repeat-read for glimmer." Both flags are default-OFF; golden trajectories
+are unchanged. 3 reps each, 60-min cap. Grades:
+[HAND-VERIFY.md](HAND-VERIFY.md#harness-levers-2f34af7--fix-166c319).
+
+6. **Cleanup turn (`LUXE_CLEANUP_TURN=1`) does what it was built for.**
+   - Qwen3.8 healthcheck: 0/3 → **3/3 REAL**. Typing: REAL* (litter) →
+     **3/3 REAL, clean**.
+   - In 4 of 6 runs it offered exactly the model's own scratch files
+     (`health_check_tmp.py`, `test_smoke_typing.py`, pyc) and the model
+     answered DELETE for each. In the other runs Qwen3.8 left no litter and
+     nothing was offered.
+   - 0 legitimate files were offered in any run. The new
+     `KeyboardInputHandler.js` is imported, so it was correctly never a
+     candidate.
+   - Cost: one tool-less call (a few seconds).
+   - The first attempt was invalid: every cleanup turn raised on a `str`
+     repo (`q38_cleanup_bug/`). Fixed and re-run.
+   - **Caveat: neon reset went 1/3 REAL (2 BROKEN), against 3/3 in
+     q38full.** The cleanup turn had 0 candidates in all three neon runs and
+     runs after the agent loop, so it cannot have changed those
+     trajectories. These are Qwen3.8 defects the earlier 3 reps didn't
+     surface:
+     - a method bound but never defined, with the first edit at step 29/30
+       before the max-steps abort, so the partial edit was committed;
+     - a call to a nonexistent `_restart()`.
+
+     Both printed PASS because `npm test` never constructs the handler.
+     Qwen3.8 on this arm: 7/9 REAL vs 6/9 baseline on the same fixtures.
+   - **Status: candidate, not promoted.** A default-ON flip would need the
+     champion no-harm 10×3. It is cheap and model-agnostic, since it fires
+     only when a new unreferenced code file exists.
+7. **Repeat-read stub (`LUXE_REPEAT_READ_STUB=1`) is near-inert on
+   Glimmer.**
+   - 2/6 REAL: neon 1/3, doc-config 1/3. Baseline was neon 0/10, doc-config
+     2/4.
+   - It fired once in 6 runs, and not in either pass, so the passes are
+     variance.
+   - Why: Glimmer's loop re-reads come after compaction has rewritten the
+     earlier result (5–6 `read_after_compact` per failing run). The stub
+     declines by design unless the earlier result is intact.
+   - A variant that names the compacted earlier read is the next idea. It is
+     not built.
+   - **Status: inert for this model, not promoted.**
+8. **Harness gap surfaced (not fixed):** a run that aborts at max steps still
+   commits its partial edit (neon rep2). Together with test suites that don't
+   exercise the change, that yields printed PASS on broken code. This is
+   another instance of the printed-pass lesson; worth a separate
+   look.
+
 ## Harness notes (failures that were not the model)
 
 - 30-min per-fixture cap killed two Qwen3.8 runs at step 14/23 — throughput,
@@ -60,3 +112,6 @@ No champion, fallback, or manifest change.
 | `dev1/` | Glimmer+cf, Qwen3.8, Qwen3.8+cf × {neon reset, doc-config}, 30-min cap |
 | `dev1b/` | Qwen3.8, Qwen3.8+cf × same, 60-min cap |
 | `q38full/rep{1,2,3}/` | Qwen3.8-27B-8bit baseline, all 10 fixtures |
+| `glim_stub/rep{1,2,3}/` | Glimmer-6bit + repeat-read stub × {neon reset, doc-config} |
+| `q38_cleanup/rep{1,2,3}/`, `rep1_neon/` | Qwen3.8 + cleanup turn × {healthcheck, typing, neon reset} |
+| `q38_cleanup_bug/` | invalid first attempt (cleanup turn raised; kept for the record) |
