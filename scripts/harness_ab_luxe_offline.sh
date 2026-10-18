@@ -27,8 +27,21 @@ cat >"$profile" <<EOF
 (deny file-read-data (subpath "$cache"))
 (deny file-write* (subpath "$cache"))
 EOF
+# luxe maintain's write-task preflight probes `gh api user`, which needs
+# GitHub. A stub on PATH answers that probe only and fails every other gh
+# call -- the same outcome PR creation has online against a local fixture
+# remote. The agent's own network stays blocked.
+stub="$dest/_ghstub"
+mkdir -p "$stub"
+cat >"$stub/gh" <<'GH'
+#!/bin/sh
+if [ "$1 $2" = "api user" ]; then echo luxe-offline-control; exit 0; fi
+echo "gh: offline stub (harness_ab luxe-offline control)" >&2
+exit 1
+GH
+chmod +x "$stub/gh"
 # .venv's python directly: `uv run` may try to reach the index offline.
-/usr/bin/sandbox-exec -f "$profile" .venv/bin/python -m benchmarks.maintain_suite.run \
+PATH="$stub:$PATH" /usr/bin/sandbox-exec -f "$profile" .venv/bin/python -m benchmarks.maintain_suite.run \
   --id nothing-ever-happens-manage-deps-audit \
   --variants benchmarks/maintain_suite/variants_baseline_3rep.yaml \
   --output "$dest" --per-fixture-timeout 1800
