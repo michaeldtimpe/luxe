@@ -72,7 +72,10 @@ _spec.loader.exec_module(oh)
 from benchmarks.maintain_suite.grade import Fixture, grade_fixture  # noqa: E402
 
 HARNESSES = ("opencode", "qwen", "codex")
-CONTEXT_LIMIT = oh.CONTEXT_LIMIT
+# oMLX's max_context_window. The outside harnesses are sized for frontier
+# windows (Qwen Code holds back a fixed ~23K reserve, so at 65536 it hard-stops
+# at 42536 tokens), so each runs at the server's ceiling, not luxe's window.
+CONTEXT_LIMIT = 131072
 OUTPUT_LIMIT = oh.OUTPUT_LIMIT
 KEY_ENV = oh.API_KEY_ENV_IN_CHILD
 DEFAULT_BIN_DIR = Path.home() / "luxe-bench-tmp" / "harnesses" / "node_modules" / ".bin"
@@ -87,8 +90,10 @@ QWEN_EXCLUDE_TOOLS = ["web_fetch", "web_search", "cron_create", "cron_list",
 # --- wire shim -------------------------------------------------------------
 
 def patch_body(body: bytes) -> tuple[bytes, dict]:
-    """Set temperature 0 on a JSON request that omits it; report what the
-    request asked for. Non-JSON / non-object bodies pass through untouched."""
+    """Set temperature 0 and an OUTPUT_LIMIT cap on a JSON request that omits
+    them (Codex sends neither; oMLX would sample at 1.0 with a 32K cap);
+    report what the request asked for. Non-JSON / non-object bodies pass
+    through untouched."""
     try:
         d = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -101,13 +106,20 @@ def patch_body(body: bytes) -> tuple[bytes, dict]:
         "temperature_sent": d.get("temperature"),
         "forced_temperature": "temperature" not in d,
         "max_tokens": d.get("max_tokens", d.get("max_output_tokens")),
+        "forced_max_tokens": False,
         "stream": d.get("stream"),
         "n_tools": len(d.get("tools") or []),
     }
+    changed = False
     if "temperature" not in d:
         d["temperature"] = 0.0
-        return json.dumps(d).encode(), rec
-    return body, rec
+        changed = True
+    cap_key = "max_output_tokens" if "input" in d else "max_tokens"
+    if d.get("max_tokens") is None and d.get("max_output_tokens") is None:
+        d[cap_key] = OUTPUT_LIMIT
+        rec["forced_max_tokens"] = True
+        changed = True
+    return (json.dumps(d).encode() if changed else body), rec
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -208,7 +220,8 @@ class WireShim:
 
 
 def wire_summary(path: Path) -> dict:
-    out = {"requests": 0, "forced_temperature": 0, "temperatures_sent": {},
+    out = {"requests": 0, "forced_temperature": 0, "forced_max_tokens": 0,
+           "temperatures_sent": {},
            "non_200": 0, "errors": 0}
     temps: Counter[str] = Counter()
     if not path.is_file():
@@ -222,6 +235,7 @@ def wire_summary(path: Path) -> dict:
             continue
         out["requests"] += 1
         out["forced_temperature"] += int(bool(r.get("forced_temperature")))
+        out["forced_max_tokens"] += int(bool(r.get("forced_max_tokens")))
         temps[repr(r.get("temperature_sent"))] += 1
         out["non_200"] += int(r.get("status") not in (200, None))
         out["errors"] += int("error" in r)
@@ -245,6 +259,14 @@ def _iso_env(base_env: dict[str, str], env_root: Path, api_key: str) -> dict[str
         "GIT_CONFIG_KEY_0": "commit.gpgsign",
         "GIT_CONFIG_VALUE_0": "false",
     })
+    # The driver runs under `uv run`: strip luxe's venv so an agent's
+    # `pip install` can't land in it (the 2026-10-18 pilot's deps-audit did).
+    venv = env.pop("VIRTUAL_ENV", None)
+    drop = {str(ROOT / ".venv" / "bin")} | ({str(Path(venv) / "bin")} if venv else set())
+    env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
+                                  if p and p not in drop)
+    for k in [k for k in env if k.startswith("UV_")] + ["PYTHONPATH", "PYTHONHOME"]:
+        env.pop(k, None)
     # never let an inherited provider/config steer a child
     for k in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODEX_HOME",
               "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT",
@@ -305,6 +327,7 @@ class OpencodeAdapter(Adapter):
 
 def make_opencode_config(model: str, base_url: str) -> dict:
     cfg = oh.make_opencode_config(model, base_url)
+    cfg["provider"][oh.PROVIDER_ID]["models"][model]["limit"]["context"] = CONTEXT_LIMIT
     cfg["permission"] = {"webfetch": "deny", "websearch": "deny"}
     return cfg
 
@@ -481,6 +504,21 @@ def parse_codex_events(lines: Iterable[str]) -> dict[str, Any]:
             "tokens": tokens, "malformed_lines": bad}
 
 
+# Outage conditions: the agent process tree may reach loopback (the wire shim)
+# and unix sockets, nothing else. luxe's bench has no web either; the pilot's
+# Codex curled osv.dev from its shell, Qwen Code tried to.
+OFFLINE_PROFILE = """(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+"""
+
+
+def offline_cmd(cmd: list[str], profile_path: Path) -> list[str]:
+    return ["/usr/bin/sandbox-exec", "-f", str(profile_path), *cmd]
+
+
 ADAPTERS = {"opencode": OpencodeAdapter, "qwen": QwenAdapter, "codex": CodexAdapter}
 
 
@@ -507,6 +545,7 @@ class RunCtx:
     timeout_s: float
     env: dict
     shim: WireShim
+    profile_path: Path | None = None
     walls: list[float] = field(default_factory=list)
 
 
@@ -522,6 +561,8 @@ def run_one(fx: Fixture, ctx: RunCtx) -> dict:
     base_sha = fx.base_sha or oh._git(["rev-parse", "HEAD"], repo).stdout.strip()
     prompt = oh.build_prompt(fx)
     cmd = ctx.adapter.cmd(ctx.model, repo, prompt)
+    if ctx.profile_path is not None:
+        cmd = offline_cmd(cmd, ctx.profile_path)
     wire = fdir / "wire.jsonl"
     wire.unlink(missing_ok=True)
     ctx.shim.set_log(wire)
@@ -615,6 +656,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timeout", type=float, default=oh.DEFAULT_TIMEOUT_S)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--label", default="")
+    ap.add_argument("--allow-network", action="store_true",
+                    help="skip the sandbox-exec network deny (default: offline)")
     args = ap.parse_args(argv)
 
     fixtures = {f.id: f for f in oh.load_fixtures()}
@@ -636,16 +679,21 @@ def main(argv: list[str] | None = None) -> int:
 
     with WireShim(args.base_url, output / "wire.preflight.jsonl") as shim:
         env = adapter.setup(args.model, shim.base_url, env_root, os.environ.copy(), key)
+        profile_path = None
+        if not args.allow_network:
+            profile_path = env_root / "offline.sb"
+            profile_path.write_text(OFFLINE_PROFILE)
         ctx = RunCtx(harness=args.harness, adapter=adapter, model=args.model,
                      output=output, work_dir=work_dir, timeout_s=args.timeout,
-                     env=env, shim=shim)
+                     env=env, shim=shim, profile_path=profile_path)
         extra = {
             "harness": args.harness, "harness_version": version, "label": args.label,
             "model": args.model, "upstream_base_url": args.base_url,
             "api_key_env": args.api_key_env, "api_key_present": bool(key),
             "config_files": adapter.files,
             "limits": {"context": CONTEXT_LIMIT, "output": OUTPUT_LIMIT},
-            "temperature": 0.0, "timeout_s": args.timeout, "work_dir": str(work_dir),
+            "temperature": 0.0, "offline": not args.allow_network,
+            "timeout_s": args.timeout, "work_dir": str(work_dir),
             "neutral_line": oh.NEUTRAL_LINE, "env_root": str(env_root),
         }
         state_path = output / "state.json"
