@@ -492,11 +492,13 @@ def maintain_pipeline(
                              checkpoint="after_reprompt_pass",
                              additions=_ds[0], deletions=_ds[1])
 
-        # LUXE_CLEANUP_TURN (opt-in, default OFF): one tool-less call that
-        # lets the model drop scratch files it created, before the commit.
-        # Off => never imported, never called: byte-identical. luxe/cleanup.py.
+        # LUXE_CLEANUP_TURN (default ON since 2026-10-18; only the exact
+        # string "0" disables it): one tool-less call that lets the model
+        # drop scratch files it created, before the commit. It reaches the
+        # model only when a candidate exists — 0 of 30 champion runs had one
+        # (acceptance/tuning_2026_10/REPORT.md §6, §9). luxe/cleanup.py.
         if (detected_task in _WRITE_TASKS
-                and os.environ.get("LUXE_CLEANUP_TURN") == "1"):
+                and os.environ.get("LUXE_CLEANUP_TURN", "1") != "0"):
             from luxe.cleanup import run_cleanup_turn
             _cl = run_cleanup_turn(backend, goal=goal, repo=repo_path,
                                    base_sha=prep.base_sha,

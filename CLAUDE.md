@@ -508,7 +508,7 @@ means.
 - **Shared first-things-to-try** when a workload behaves unexpectedly: disable
   the default-ON levers — `LUXE_TIERED_COMPACT=0`,
   `LUXE_TRUNCATED_TURN_RETRY=0`, `LUXE_CTX_SERVER_TRUTH=0`,
-  `LUXE_COMPACT_CACHE_FRIENDLY=0`.
+  `LUXE_COMPACT_CACHE_FRIENDLY=0`, `LUXE_CLEANUP_TURN=0`.
 
 ## Default-ON: cache-friendly compaction
 
@@ -525,6 +525,24 @@ step. Now phase 1 truncates each result once and in batches of 4.
 - Its sibling `LUXE_REASONING_ROUNDTRIP=1` (send reasoning back) was benched
   in the same A/B at −28% wall but changed trajectories (29/30): **opt-in,
   not promoted**.
+
+## Default-ON: cleanup turn
+
+`LUXE_CLEANUP_TURN` defaults to **ON** as of 2026-10-18 (`src/luxe/cleanup.py`,
+gate in `maintain.py`). After a write task's agent pass and before the
+commit, files the change ADDED that look like scratch (generated caches;
+code/test files whose stem nothing else references — the `orphan_file`
+gate's test) are shown to the model in ONE tool-less temp-0 call. It answers
+DELETE/KEEP per file, and Python deletes only offered paths. No candidate ⇒ no
+model call. Docs/config are never candidates.
+
+- **Benched** (`acceptance/tuning_2026_10/REPORT.md` §6, §9): Qwen3.8-27B
+  healthcheck 0/3 → 3/3 and typing litter gone, with 0 legitimate files
+  offered. Champion no-harm 10×3: 0 candidates in 30 runs, so it is inert
+  there by construction. **The evidence it helps comes from a non-champion
+  model only**: it is insurance for models that verify with throwaway
+  scripts.
+- **Disable for ablation**: `LUXE_CLEANUP_TURN=0` (exact string).
 
 ## Opt-in modes (default off, byte-identical when disabled)
 

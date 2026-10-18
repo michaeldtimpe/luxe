@@ -237,13 +237,16 @@ auto-memory.
   `secrets.SECRETS_PATH` and `theme._PREF_PATH` bind it at import time, so a
   redirect would be honoured or ignored depending on import order
 
-- **Cleanup turn is opt-in (`LUXE_CLEANUP_TURN=1`, 2026-10-17; `cleanup.py`).**
+- **Cleanup turn is default-ON (2026-10-18; `LUXE_CLEANUP_TURN=0` disables;
+  `cleanup.py`).**
   After the main/reprompt pass of a write task and before the PR commit, ONE
   tool-less temp-0 `backend.chat` is shown the files the change added that
   look like scratch (generated caches; code/test files whose stem nothing
   else references) and answers DELETE/KEEP per file. Python deletes only
   offered paths, inside the repo; any failure leaves the tree untouched.
-  Unset ⇒ `maintain` never imports the module (byte-identical).
+  No candidate ⇒ no model call, tree untouched. `=0` ⇒ `maintain` never
+  imports the module. Benched: Qwen3.8 healthcheck 0/3 → 3/3; champion
+  no-harm 10×3, 0 candidates in 30 runs (acceptance/tuning_2026_10).
 
 ## Must not
 - No cloud provider backends on the BENCHMARK/MAINTAIN path — that path reads

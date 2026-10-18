@@ -503,7 +503,7 @@ GIT_WORKFLOW_HINT = (
 )
 
 
-# LUXE_CLEANUP_TURN (opt-in, default OFF; luxe/cleanup.py). One tool-less chat
+# LUXE_CLEANUP_TURN (default ON since 2026-10-18; luxe/cleanup.py). One tool-less chat
 # call after the agent's work, before the commit: the model sees the files it
 # created that nothing else references (plus generated caches) and says which
 # are scratch. Python deletes only paths from that list — detection is the

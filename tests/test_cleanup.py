@@ -1,4 +1,4 @@
-"""Cleanup turn (LUXE_CLEANUP_TURN, opt-in, 2026-10-17; luxe/cleanup.py).
+"""Cleanup turn (LUXE_CLEANUP_TURN, default ON since 2026-10-18; luxe/cleanup.py).
 
 Qwen3.8-27B verified its /health route with a throwaway `health_check_tmp.py`
 ("delete after use") and left it, failing the `orphan_file` gate 3/3 on an
@@ -108,6 +108,9 @@ def test_backend_failure_leaves_the_tree_alone(repo):
     assert (r / "health_check_tmp.py").exists()
 
 
-def test_maintain_never_imports_cleanup_when_off():
+def test_maintain_gate_is_default_on_and_exact_zero_disables():
+    """Default ON since 2026-10-18; only the exact string "0" turns it off
+    (the default-ON grammar every promoted lever uses)."""
     src = Path(cleanup.__file__).with_name("maintain.py").read_text()
-    assert 'os.environ.get("LUXE_CLEANUP_TURN") == "1"' in src
+    assert 'os.environ.get("LUXE_CLEANUP_TURN", "1") != "0"' in src
+
