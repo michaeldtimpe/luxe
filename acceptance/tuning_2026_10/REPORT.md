@@ -97,6 +97,24 @@ are unchanged. 3 reps each, 60-min cap. Grades:
    another instance of the printed-pass lesson; worth a separate
    look.
 
+9. **Cleanup turn — champion no-harm passed (10×3, `champ_cleanup/`).**
+   - 0 candidates in 30 runs, so the turn never reached the model and the
+     champion's trajectories are untouched.
+   - Hand-verified 27 REAL / 3 THIN. All 3 THIN are doc-config, which is the
+     champion's own variance (rep2 is byte-identical to r2's THIN rep2).
+   - 25/30 diffs are byte-identical to hand-verified r2 diffs.
+   - **Eligible for default-ON on the user's call.** Evidence for help is
+     Qwen3.8 only (healthcheck 0/3 → 3/3, typing litter removed); evidence
+     for no harm is the champion 30 + Qwen3.8 9.
+10. **Re-read note (`LUXE_REREAD_NOTE=1`, 60fb596) — refuted on Glimmer.**
+    - The line-coverage key does catch Glimmer's loop: 10–12 notes per
+      failing run, against 1 stub firing in 6 runs.
+    - Glimmer re-reads the same lines right after each note.
+    - 2/6 REAL (neon 1/3, doc-config 1/3), the same as the stub arm.
+    - With the prompt appendix, the write-pressure notice, the exact-repeat
+      stub and the line-coverage note all ignored, **Glimmer is closed**: no
+      in-loop text lever moves it. Not promoted; the flag stays opt-in.
+
 ## Harness notes (failures that were not the model)
 
 - 30-min per-fixture cap killed two Qwen3.8 runs at step 14/23 — throughput,
@@ -114,4 +132,6 @@ are unchanged. 3 reps each, 60-min cap. Grades:
 | `q38full/rep{1,2,3}/` | Qwen3.8-27B-8bit baseline, all 10 fixtures |
 | `glim_stub/rep{1,2,3}/` | Glimmer-6bit + repeat-read stub × {neon reset, doc-config} |
 | `q38_cleanup/rep{1,2,3}/`, `rep1_neon/` | Qwen3.8 + cleanup turn × {healthcheck, typing, neon reset} |
+| `champ_cleanup/rep{1,2,3}/` | champion 10×3 + cleanup turn (no-harm) |
+| `glim_reread/rep{1,2,3}/` | Glimmer-6bit + re-read note × {neon reset, doc-config} |
 | `q38_cleanup_bug/` | invalid first attempt (cleanup turn raised; kept for the record) |
