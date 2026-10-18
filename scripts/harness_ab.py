@@ -89,7 +89,138 @@ QWEN_EXCLUDE_TOOLS = ["web_fetch", "web_search", "cron_create", "cron_list",
 
 # --- wire shim -------------------------------------------------------------
 
-def patch_body(body: bytes) -> tuple[bytes, dict]:
+FREEFORM_NOTE = "This is a FREEFORM tool, so do not wrap the patch in JSON."
+
+
+def custom_tools_to_functions(d: dict) -> list[str]:
+    """oMLX serves only function tools and silently drops `custom` (freeform,
+    grammar-constrained) ones, which is the only shape Codex 0.163 offers
+    apply_patch in. Rewrite each custom tool as a function taking one
+    `input` string (its grammar appended to the description), and the
+    request's history items to match. Returns the translated names, which
+    the response side maps back. Mutates `d`."""
+    names: list[str] = []
+    tools = []
+    for t in d.get("tools") or []:
+        if isinstance(t, dict) and t.get("type") == "custom" and t.get("name"):
+            desc = (t.get("description") or "").replace(
+                FREEFORM_NOTE, "Pass the whole patch as the `input` string.")
+            fmt = t.get("format") or {}
+            if fmt.get("definition"):
+                desc += f"\n\nThe input must match this {fmt.get('syntax', '')} grammar:\n{fmt['definition']}"
+            tools.append({"type": "function", "name": t["name"], "description": desc,
+                          "parameters": {"type": "object",
+                                         "properties": {"input": {"type": "string"}},
+                                         "required": ["input"]}})
+            names.append(t["name"])
+        else:
+            tools.append(t)
+    if not names:
+        return names
+    d["tools"] = tools
+    items = d.get("input")
+    if isinstance(items, list):
+        for i, it in enumerate(items):
+            if not isinstance(it, dict):
+                continue
+            if it.get("type") == "custom_tool_call":
+                items[i] = {"type": "function_call", "call_id": it.get("call_id"),
+                            "name": it.get("name"),
+                            "arguments": json.dumps({"input": it.get("input", "")})}
+            elif it.get("type") == "custom_tool_call_output":
+                items[i] = {"type": "function_call_output", "call_id": it.get("call_id"),
+                            "output": it.get("output", "")}
+    return names
+
+
+def _custom_input(arguments: str) -> str:
+    try:
+        a = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        return arguments or ""  # model sent the raw patch: pass it on as-is
+    return a.get("input", "") if isinstance(a, dict) else str(a)
+
+
+def function_item_to_custom(item: Any, names: set[str]) -> Any:
+    if (isinstance(item, dict) and item.get("type") == "function_call"
+            and item.get("name") in names):
+        return {"type": "custom_tool_call", "id": item.get("id"),
+                "call_id": item.get("call_id"), "name": item["name"],
+                "input": _custom_input(item.get("arguments") or ""),
+                "status": item.get("status", "completed")}
+    return item
+
+
+class SSECustomTranslator:
+    """Map oMLX's function-call Responses events for translated tools back to
+    Codex's custom-tool events. oMLX emits each call as four whole events
+    (item added, args delta with the full arguments, args done, item done),
+    so per-event rewriting is enough; nothing is reassembled."""
+
+    def __init__(self, names: Iterable[str]):
+        self.names = set(names)
+        self.ids: set[str] = set()
+        self.calls = 0
+        self._buf = b""
+
+    def feed(self, chunk: bytes) -> bytes:
+        self._buf += chunk
+        out = []
+        while b"\n\n" in self._buf:
+            block, self._buf = self._buf.split(b"\n\n", 1)
+            out.append(self._event(block) + b"\n\n")
+        return b"".join(out)
+
+    def flush(self) -> bytes:
+        rest, self._buf = self._buf, b""
+        return self._event(rest) if rest.strip() else rest
+
+    def _event(self, block: bytes) -> bytes:
+        lines = block.split(b"\n")
+        data_i = next((i for i, l in enumerate(lines) if l.startswith(b"data:")), None)
+        if data_i is None:
+            return block
+        try:
+            ev = json.loads(lines[data_i][5:])
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return block
+        if not isinstance(ev, dict):
+            return block
+        new = self.rewrite(ev)
+        if new is None:
+            return b""  # dropped event: an empty block is a no-op for SSE parsers
+        if new is ev:
+            return block
+        return (f"event: {new['type']}\n".encode() if any(l.startswith(b"event:") for l in lines)
+                else b"") + b"data: " + json.dumps(new).encode()
+
+    def rewrite(self, ev: dict) -> dict | None:
+        typ = ev.get("type")
+        if typ in ("response.output_item.added", "response.output_item.done"):
+            item = ev.get("item")
+            new = function_item_to_custom(item, self.names)
+            if new is not item:
+                self.ids.add(item.get("id"))
+                if typ.endswith(".done"):
+                    self.calls += 1
+                return {**ev, "item": new}
+        elif typ == "response.function_call_arguments.delta" and ev.get("item_id") in self.ids:
+            return None
+        elif typ == "response.function_call_arguments.done" and ev.get("item_id") in self.ids:
+            return {"type": "response.custom_tool_call_input.done", "item_id": ev["item_id"],
+                    "output_index": ev.get("output_index"),
+                    "input": _custom_input(ev.get("arguments") or ""),
+                    "sequence_number": ev.get("sequence_number")}
+        elif typ in ("response.completed", "response.failed", "response.incomplete"):
+            r = ev.get("response")
+            if isinstance(r, dict) and isinstance(r.get("output"), list):
+                out = [function_item_to_custom(i, self.names) for i in r["output"]]
+                if any(a is not b for a, b in zip(out, r["output"])):
+                    return {**ev, "response": {**r, "output": out}}
+        return ev
+
+
+def patch_body(body: bytes, translate_custom: bool = False) -> tuple[bytes, dict]:
     """Set temperature 0 and an OUTPUT_LIMIT cap on a JSON request that omits
     them (Codex sends neither; oMLX would sample at 1.0 with a 32K cap);
     report what the request asked for. Non-JSON / non-object bodies pass
@@ -109,8 +240,17 @@ def patch_body(body: bytes) -> tuple[bytes, dict]:
         "forced_max_tokens": False,
         "stream": d.get("stream"),
         "n_tools": len(d.get("tools") or []),
+        # type:name per tool, so an arm's surface (e.g. Codex's freeform
+        # apply_patch) is visible on the wire, not inferred from a count.
+        "tools": [f"{t.get('type')}:{t.get('name') or (t.get('function') or {}).get('name')}"
+                  for t in (d.get("tools") or []) if isinstance(t, dict)],
     }
     changed = False
+    if translate_custom:
+        names = custom_tools_to_functions(d)
+        if names:
+            rec["custom_translated"] = names
+            changed = True
     if "temperature" not in d:
         d["temperature"] = 0.0
         changed = True
@@ -134,7 +274,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(n) if n else b""
         rec: dict = {}
         if self.command == "POST" and body:
-            body, rec = patch_body(body)
+            body, rec = patch_body(body, translate_custom=self.server.translate_custom)
+        tr = SSECustomTranslator(rec["custom_translated"]) if rec.get("custom_translated") else None
         up = self.server.upstream
         conn_cls = http.client.HTTPSConnection if up.scheme == "https" else http.client.HTTPConnection
         conn = conn_cls(up.hostname, up.port, timeout=7200)
@@ -163,8 +304,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if not chunk:
                     break
                 nbytes += len(chunk)
+                if tr is not None:
+                    chunk = tr.feed(chunk)
+                    if not chunk:
+                        continue
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                 self.wfile.flush()
+            tail = tr.flush() if tr is not None else b""
+            if tail:
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(tail), tail))
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -174,7 +322,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.server.log({"ts": round(t0, 3), "method": self.command,
                          "path": self.path, "status": resp.status,
                          "wall_s": round(time.time() - t0, 2),
-                         "resp_bytes": nbytes, **rec})
+                         "resp_bytes": nbytes, **rec,
+                         **({"custom_calls": tr.calls} if tr is not None else {})})
 
     do_GET = do_POST = do_DELETE = do_PUT = _proxy
 
@@ -183,8 +332,9 @@ class _ShimServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, upstream: str, log_path: Path):
+    def __init__(self, upstream: str, log_path: Path, translate_custom: bool = False):
         super().__init__(("127.0.0.1", 0), _Handler)
+        self.translate_custom = translate_custom
         self.upstream = urllib.parse.urlsplit(upstream)
         self.log_path = log_path
         self._lock = threading.Lock()
@@ -197,9 +347,9 @@ class _ShimServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 class WireShim:
     """Local forwarder in front of the model server; see module docstring."""
 
-    def __init__(self, upstream_base_url: str, log_path: Path):
+    def __init__(self, upstream_base_url: str, log_path: Path, translate_custom: bool = False):
         u = urllib.parse.urlsplit(upstream_base_url)
-        self._srv = _ShimServer(f"{u.scheme}://{u.netloc}", log_path)
+        self._srv = _ShimServer(f"{u.scheme}://{u.netloc}", log_path, translate_custom)
         self._path = u.path.rstrip("/")  # e.g. /v1
         self._t = threading.Thread(target=self._srv.serve_forever, daemon=True)
 
@@ -279,6 +429,7 @@ def _iso_env(base_env: dict[str, str], env_root: Path, api_key: str) -> dict[str
 
 @dataclass
 class Adapter:
+    translate_custom = False  # class attribute (unannotated), not a dataclass field
     name: str
     binary: str
     files: dict[str, str] = field(default_factory=dict)  # rel path -> content
@@ -464,7 +615,7 @@ class CodexAdapter(Adapter):
 # codex-cat arm hands it a catalog entry instead: Codex's own gpt-5.5 entry
 # (extracted from the pinned 0.163.0 binary's embedded catalog, prompt and all)
 # re-pointed at the local model. Overrides strip what oMLX cannot serve:
-# websockets, Responses-lite, freeform (custom-grammar) tools, images,
+# websockets, Responses-lite, images,
 # reasoning summaries, verbosity, service tiers.
 CODEX_MODEL_TEMPLATE = ROOT / "scripts" / "harness_ab_codex_model.json"
 
@@ -474,7 +625,7 @@ def make_codex_catalog(model: str, template: Path = CODEX_MODEL_TEMPLATE) -> dic
     m.update({
         "slug": model, "display_name": model, "description": "local model (harness_ab)",
         "prefer_websockets": False, "use_responses_lite": False,
-        "apply_patch_tool_type": "function", "input_modalities": ["text"],
+        "apply_patch_tool_type": "freeform", "input_modalities": ["text"],
         "supports_image_detail_original": False,
         "support_verbosity": False, "default_verbosity": None,
         "supports_reasoning_summaries": False,
@@ -487,6 +638,10 @@ def make_codex_catalog(model: str, template: Path = CODEX_MODEL_TEMPLATE) -> dic
 
 
 class CodexCatalogAdapter(CodexAdapter):
+    # Its apply_patch is a custom (freeform) tool, which oMLX drops: the shim
+    # serves it as a function and maps the calls back (custom_tools_to_functions).
+    translate_custom = True
+
     def setup(self, model, base_url, env_root, base_env, api_key):
         env = _iso_env(base_env, env_root, api_key)
         cat = self._write(env_root, "codex_home/models.json",
@@ -773,7 +928,8 @@ def main(argv: list[str] | None = None) -> int:
     adapter = ADAPTERS[args.harness](args.harness, resolve_binary(args.harness, args.bin_dir))
     version = adapter.version()
 
-    with WireShim(args.base_url, output / "wire.preflight.jsonl") as shim:
+    with WireShim(args.base_url, output / "wire.preflight.jsonl",
+                  translate_custom=adapter.translate_custom) as shim:
         env = adapter.setup(args.model, shim.base_url, env_root, os.environ.copy(), key)
         profile_path = None
         if not args.allow_network:
