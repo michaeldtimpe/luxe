@@ -131,6 +131,11 @@ class RunFlags:
     # that result instead of the full text again. Opt-in: default OFF keeps
     # the benchmark path byte-identical. See agents.sdd "Repeat-read stub".
     repeat_read_stub: bool = False
+    # Append a note to a `read_file` result whose every line was already
+    # returned since the last write (overlapping re-reads, any arguments).
+    # The content is still served. Opt-in: default OFF keeps the benchmark
+    # path byte-identical. See agents.sdd "Re-read note".
+    reread_note: bool = False
 
     # Cache-friendly compaction: phase 1 batches its truncations and never
     # re-truncates an already-truncated result, so the server's prefix cache
@@ -240,6 +245,8 @@ class RunFlags:
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
             # Opt-in: only the exact string "1" enables it.
             repeat_read_stub=e.get("LUXE_REPEAT_READ_STUB") == "1",
+            # Opt-in: only the exact string "1" enables it.
+            reread_note=e.get("LUXE_REREAD_NOTE") == "1",
             # Default ON: only the exact string "0" disables it.
             compact_cache_friendly=(
                 e.get("LUXE_COMPACT_CACHE_FRIENDLY", "1") != "0"

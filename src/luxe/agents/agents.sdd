@@ -739,6 +739,23 @@ false count). Each rewrite forces everything after it to be prefilled again.
 - **Default OFF; with it unset the loop is byte-identical** (golden
   trajectory + `test_loop_repeat_read_stub.py`).
 
+### Re-read note (2026-10-18, OPT-IN, UNBENCHED until tuning_2026_10)
+
+- `LUXE_REREAD_NOTE=1` (`RunFlags.reread_note`): for each `read_file` result
+  that shows numbered lines, the loop records the (first, last) line range per
+  path. When a new result's range lies entirely inside the union of ranges
+  already returned for that path since the last successful write, the result
+  is served IN FULL with `guardrails.reread_note_message(...)` appended, and a
+  `reread_note` event is emitted. Coverage and counts clear on every
+  successful write.
+- Unlike the repeat-read stub it keys on LINES, not arguments, and never
+  withholds content (compaction may have dropped the earlier copy).
+- Why: the stub fired once in six Glimmer runs. Glimmer's loop re-reads
+  sub-windows of Game.js it has already read in full, with new arguments each
+  time (tuning_2026_10 REPORT §7).
+- **Default OFF; with it unset the loop is byte-identical** (golden
+  trajectory + `test_loop_reread_note.py`).
+
 ### Stage 3 / v1.11 adaptive-policy invariants (pinned 2026-05-20)
 
 - **score_log ownership**: `loop.py` owns the per-step convergence-score deque; `convergence.py` (`compute_convergence_score`) stays stateless. Composition boundary is the `_compute_within_run_state(score_log, tool_history, step)` signature — loop.py is the sole writer, convergence.py is the sole consumer

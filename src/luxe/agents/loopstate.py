@@ -137,6 +137,11 @@ class LoopState:
     # at append time). The stub is served only while that exact message is
     # still in `messages` with that content (compaction has not touched it).
     read_results: dict[str, tuple[dict[str, Any], str]] = field(default_factory=dict)
+    # LUXE_REREAD_NOTE: path -> line ranges `read_file` has returned since
+    # the last write, and path -> reads of it since the last write. Both are
+    # cleared on every successful write.
+    read_coverage: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    read_counts: dict[str, int] = field(default_factory=dict)
     same_file_read_twice_step: int | None = None
 
     # v1.9 — habituation telemetry. Records the most-recent intervention fire

@@ -49,7 +49,10 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     _DEDUP_MESSAGE_TEMPLATE,
     _SPEC_ZERO_CALLS_DECLINE_MESSAGE,
     dedup_message,
+    read_result_line_range,
+    range_is_covered,
     repeat_read_stub_message,
+    reread_note_message,
     _CONVERGENCE_LOW_THRESHOLD,
     _EARLY_BAIL_MESSAGE,
     _EARLY_BAIL_MESSAGE_BREADTH_PROBE,
@@ -433,6 +436,7 @@ def run_agent(
     early_bail_mode = flags.early_bail_mode
     post_write_idle_repeats = flags.post_write_idle_repeats
     repeat_read_stub_enabled = flags.repeat_read_stub
+    reread_note_enabled = flags.reread_note
     truncated_turn_retry_enabled = flags.truncated_turn_retry
     truncated_turn_max_retries = flags.truncated_turn_max_retries
     empty_turn_retry_enabled = flags.empty_turn_retry
@@ -1432,6 +1436,9 @@ def run_agent(
                 # identical write is still deduplicated as before.
                 st.seen_calls = {k for k in st.seen_calls
                                  if k.partition(":")[0] in _WRITE_TOOLS}
+                if reread_note_enabled:
+                    st.read_coverage.clear()
+                    st.read_counts.clear()
                 # forge-hybrid Phase 2 (A) — capture compaction phase at the
                 # first successful write. Used by the resolve-time telemetry
                 # to attribute write-step gating to compaction state. Fires
@@ -1509,6 +1516,26 @@ def run_agent(
                         chars_dropped=_clamp_dropped,
                         bytes_out=executed.bytes_out,
                     )
+            # LUXE_REREAD_NOTE (opt-in, default OFF). Glimmer's loop re-reads
+            # sub-windows of lines it was already shown, with fresh arguments
+            # each time, so the exact-key stub above never sees it
+            # (acceptance/tuning_2026_10). Coverage is by line number, since
+            # the last write; the content is still served in full.
+            if (reread_note_enabled and tc.name == "read_file"
+                    and not executed.error):
+                _rpath = extract_path(tc.name, tc.arguments) or ""
+                _rng = read_result_line_range(content)
+                if _rpath and _rng is not None:
+                    _seen = st.read_coverage.setdefault(_rpath, [])
+                    _n = st.read_counts.get(_rpath, 0) + 1
+                    st.read_counts[_rpath] = _n
+                    if range_is_covered(_seen, *_rng):
+                        content = (content + "\n\n"
+                                   + reread_note_message(_rpath, *_rng, _n))
+                        emit("reread_note", step=step, name=tc.name,
+                             key_hash=key_hash, path=_rpath,
+                             lo=_rng[0], hi=_rng[1], reads=_n)
+                    _seen.append(_rng)
             _tool_msg = {
                 "role": "tool",
                 "tool_call_id": tc.id or f"call_{step}",
