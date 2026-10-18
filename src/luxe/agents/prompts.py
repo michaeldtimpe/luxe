@@ -503,6 +503,32 @@ GIT_WORKFLOW_HINT = (
 )
 
 
+# LUXE_CLEANUP_TURN (opt-in, default OFF; luxe/cleanup.py). One tool-less chat
+# call after the agent's work, before the commit: the model sees the files it
+# created that nothing else references (plus generated caches) and says which
+# are scratch. Python deletes only paths from that list — detection is the
+# model's, the deletion is deterministic (the gitkit packaging lesson).
+CLEANUP_TURN_SYSTEM = (
+    "You are reviewing the files an agent created while working on a coding "
+    "task, just before its change is committed. Some may be scratch work: "
+    "throwaway verification scripts, temporary tests, debug output, or "
+    "generated caches. Others are part of the deliverable. Decide for each "
+    "file. Keep every file the goal asks for or that the change needs, "
+    "including new tests meant to stay in the project."
+)
+
+CLEANUP_TURN_TEMPLATE = (
+    "Goal of the task:\n{goal}\n\n"
+    "These files are new in this change and nothing else in the repository "
+    "references them:\n\n{files}\n\n"
+    "For each file, answer with exactly one line, either\n"
+    "DELETE <path>\n"
+    "or\n"
+    "KEEP <path> -- <short reason>\n"
+    "Answer with those lines only."
+)
+
+
 NO_TOOLS_MODEL_HINT = (
     "The model serving this turn cannot call tools: its chat template has no "
     "tool support, so luxe has withheld the tool surface rather than send tools "

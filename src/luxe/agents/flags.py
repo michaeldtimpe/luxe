@@ -126,6 +126,12 @@ class RunFlags:
     # a maintain_suite run says otherwise. See agents.sdd "Reasoning round-trip".
     reasoning_roundtrip: bool = False
 
+    # Answer a repeated, unchanged `read_file` (same arguments, no write since,
+    # earlier result still intact in context) with a short pointer back to
+    # that result instead of the full text again. Opt-in: default OFF keeps
+    # the benchmark path byte-identical. See agents.sdd "Repeat-read stub".
+    repeat_read_stub: bool = False
+
     # Cache-friendly compaction: phase 1 batches its truncations and never
     # re-truncates an already-truncated result, so the server's prefix cache
     # is invalidated less often. Default ON since 2026-10-15 (m5 A/B: 30/30,
@@ -232,6 +238,8 @@ class RunFlags:
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
             # Opt-in: only the exact string "1" enables it.
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
+            # Opt-in: only the exact string "1" enables it.
+            repeat_read_stub=e.get("LUXE_REPEAT_READ_STUB") == "1",
             # Default ON: only the exact string "0" disables it.
             compact_cache_friendly=(
                 e.get("LUXE_COMPACT_CACHE_FRIENDLY", "1") != "0"

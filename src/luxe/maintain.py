@@ -492,6 +492,24 @@ def maintain_pipeline(
                              checkpoint="after_reprompt_pass",
                              additions=_ds[0], deletions=_ds[1])
 
+        # LUXE_CLEANUP_TURN (opt-in, default OFF): one tool-less call that
+        # lets the model drop scratch files it created, before the commit.
+        # Off => never imported, never called: byte-identical. luxe/cleanup.py.
+        if (detected_task in _WRITE_TASKS
+                and os.environ.get("LUXE_CLEANUP_TURN") == "1"):
+            from luxe.cleanup import run_cleanup_turn
+            _cl = run_cleanup_turn(backend, goal=goal, repo=repo_path,
+                                   base_sha=prep.base_sha,
+                                   num_ctx=cfg.role("monolith").num_ctx)
+            append_event(spec.run_id, "cleanup_turn",
+                         candidates=_cl["candidates"], deleted=_cl["deleted"],
+                         error=_cl["error"], reply=_cl.get("reply"))
+            if _cl["candidates"]:
+                console.print(
+                    f"[dim]· cleanup turn: {len(_cl['candidates'])} candidate(s), "
+                    f"deleted {_cl['deleted'] or 'none'}"
+                    f"{' — ' + _cl['error'] if _cl['error'] else ''}[/]")
+
         if detected_task in _WRITE_TASKS:
             try:
                 pr_state = pr_mod.open_pr(

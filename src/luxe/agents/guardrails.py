@@ -602,6 +602,22 @@ def dedup_message(name: str) -> str:
     return _DEDUP_MESSAGE_TEMPLATE.format(name=name)
 
 
+# LUXE_REPEAT_READ_STUB (opt-in): the tool result for a repeated, unchanged
+# read_file. Positive imperatives only (lessons: "rather than X" framing reads
+# as wrap-up).
+_REPEAT_READ_STUB_TEMPLATE = (
+    "You already read {path} with these exact arguments earlier in this run, "
+    "and no file has been written since, so that result above is still "
+    "current. Work from it: take your next step on the goal (for a change, "
+    "that means edit_file or write_file), or read lines you have not seen yet."
+)
+
+
+def repeat_read_stub_message(path: str) -> str:
+    """The short result for an unchanged repeat read of `path`."""
+    return _REPEAT_READ_STUB_TEMPLATE.format(path=path or "this file")
+
+
 # SpecDD Lever 1 pre-dispatch gate (v1.8 Track 2): the decline reprompt that
 # replaces a blocked tool call when the spec expects zero calls. Moved
 # verbatim from loop.py (2026-09).

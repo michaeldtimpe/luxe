@@ -721,6 +721,24 @@ false count). Each rewrite forces everything after it to be prefilled again.
 - Let verify-only mutate the generation transcript, or let Phase 2 repair invoke tools
   outside the original trajectory's tool surface (pre-registered repair budget).
 
+### Repeat-read stub (2026-10-17, OPT-IN, UNBENCHED until tuning_2026_10)
+
+- `LUXE_REPEAT_READ_STUB=1` (`RunFlags.repeat_read_stub`): a `read_file` call
+  whose key is already in `seen_calls` (so: same arguments AND no write since
+  — a write prunes every non-write key) is answered with
+  `guardrails.repeat_read_stub_message(path)` instead of re-running the tool,
+  PROVIDED the earlier tool message is still in `messages` by identity with
+  the content it was appended with. Compaction that truncated or dropped it
+  ⇒ the read runs normally (a stub must never point at nothing).
+- The stub is recorded `duplicate=True, cached=True, bytes_out=0`, emits a
+  `repeat_read_stub` event, counts toward `post_write_idle_tools` like the
+  dedup short-circuit, and does NOT set `step_had_repeat` — the lever under
+  test is the reply, not an earlier repeat-streak abort.
+- Why: muse-glimmer-30B re-read Game.js 227–256 at steps 19/24/29 of a run it
+  had solved in its reasoning, then hit max steps (both prompt levers ignored).
+- **Default OFF; with it unset the loop is byte-identical** (golden
+  trajectory + `test_loop_repeat_read_stub.py`).
+
 ### Stage 3 / v1.11 adaptive-policy invariants (pinned 2026-05-20)
 
 - **score_log ownership**: `loop.py` owns the per-step convergence-score deque; `convergence.py` (`compute_convergence_score`) stays stateless. Composition boundary is the `_compute_within_run_state(score_log, tool_history, step)` signature — loop.py is the sole writer, convergence.py is the sole consumer
