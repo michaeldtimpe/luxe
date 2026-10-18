@@ -766,6 +766,17 @@ def _diagnose_no_tool_calls(diag, result, log_dir: Path) -> list[str]:
     return notes
 
 
+def _diagnose_step_limit(diag) -> list[str]:
+    """luxe labelled the run incomplete: it stopped at the step limit with a
+    change on disk (luxe/steplimit.py). Not a gate and no score change — a
+    complete change can also run out of steps — but a printed PASS here was
+    a broken diff in tuning_2026_10, so read it before crediting."""
+    if diag.events_kinds.get("step_limit_incomplete", 0) > 0:
+        return ["stopped at the step limit with a change on disk — luxe "
+                "labelled it incomplete; hand-verify before crediting a PASS"]
+    return []
+
+
 def _extract_run_id(text: str) -> str:
     m = re.search(r"run_id=([0-9a-f]{8,})", text)
     return m.group(1) if m else ""
@@ -1752,6 +1763,8 @@ def main() -> int:
             # tool calls, or workers ran but didn't commit edits.
             for note in _diagnose_no_tool_calls(d, r, fdir):
                 print(f"        ⓘ {note}")
+            for note in _diagnose_step_limit(d):
+                print(f"        ⚠ {note}")
 
         # Multi-variant runs gate per cell, not in aggregate. Pass the
         # per-variant breakdown to summarize so the v1_release_gate flag
