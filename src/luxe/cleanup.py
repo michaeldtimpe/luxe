@@ -1,7 +1,8 @@
 """Cleanup turn — let the model drop its own scratch files before the commit.
 
-Opt-in via `LUXE_CLEANUP_TURN=1` (default OFF: `maintain` never calls in here,
-so the benchmark path is byte-identical). Why it exists: on the 2026-10
+Default ON since 2026-10-18; `LUXE_CLEANUP_TURN=0` (exact string) disables
+it, and then `maintain` never calls in here. With no candidate, no model call
+is made and the tree is untouched. Why it exists: on the 2026-10
 tuning pass Qwen3.8-27B verified its work by writing throwaway scripts and
 running them, then left them behind (`health_check_tmp.py`, "delete after
 use"), and the `orphan_file` gate failed an otherwise-correct change 3/3
