@@ -71,7 +71,7 @@ _spec.loader.exec_module(oh)
 
 from benchmarks.maintain_suite.grade import Fixture, grade_fixture  # noqa: E402
 
-HARNESSES = ("opencode", "qwen", "codex")
+HARNESSES = ("opencode", "qwen", "codex", "claude")
 # oMLX's max_context_window. The outside harnesses are sized for frontier
 # windows (Qwen Code holds back a fixed ~23K reserve, so at 65536 it hard-stops
 # at 42536 tokens), so each runs at the server's ceiling, not luxe's window.
@@ -80,7 +80,7 @@ OUTPUT_LIMIT = oh.OUTPUT_LIMIT
 KEY_ENV = oh.API_KEY_ENV_IN_CHILD
 DEFAULT_BIN_DIR = Path.home() / "luxe-bench-tmp" / "harnesses" / "node_modules" / ".bin"
 DEFAULT_WORK_DIR = Path.home() / ".luxe" / "harness-ab-workspace"
-EXCLUDE_ENTRIES = [".opencode/", ".qwen/", ".codex/"]
+EXCLUDE_ENTRIES = [".opencode/", ".qwen/", ".codex/", ".claude/"]
 # Qwen Code tools that reach the web, or only make sense in a long-lived
 # interactive session (a one-shot run would wait on them).
 QWEN_EXCLUDE_TOOLS = ["web_fetch", "web_search", "cron_create", "cron_list",
@@ -270,7 +270,9 @@ def _iso_env(base_env: dict[str, str], env_root: Path, api_key: str) -> dict[str
     # never let an inherited provider/config steer a child
     for k in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODEX_HOME",
               "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT",
-              "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"):
+              "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+              "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN",
+              "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         env.pop(k, None)
     return env
 
@@ -519,11 +521,66 @@ def offline_cmd(cmd: list[str], profile_path: Path) -> list[str]:
     return ["/usr/bin/sandbox-exec", "-f", str(profile_path), *cmd]
 
 
-ADAPTERS = {"opencode": OpencodeAdapter, "qwen": QwenAdapter, "codex": CodexAdapter}
+# Claude Code tools that reach the web or only work in a long-lived session
+# (same rule as QWEN_EXCLUDE_TOOLS); the rest of its surface is kept.
+CLAUDE_DISALLOWED_TOOLS = ["WebFetch", "WebSearch", "CronCreate", "CronDelete",
+                           "CronList", "ScheduleWakeup"]
+
+
+def make_claude_env(model: str, base_url: str, api_key: str) -> dict[str, str]:
+    """Point Claude Code at the shim's Anthropic-format endpoint (oMLX serves
+    /v1/messages; Claude Code appends /v1 itself). Every model alias resolves
+    to the one model under test, so background/subagent calls use it too."""
+    root = base_url[: -len("/v1")] if base_url.endswith("/v1") else base_url
+    env = {"ANTHROPIC_BASE_URL": root,
+           "ANTHROPIC_AUTH_TOKEN": api_key or "sk-no-key",
+           "ANTHROPIC_MODEL": model,
+           "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(OUTPUT_LIMIT),
+           # it assumes a 200K window; compact against the server's real one
+           "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(CONTEXT_LIMIT),
+           "CLAUDE_CODE_MAX_CONTEXT_TOKENS": str(CONTEXT_LIMIT),
+           "DISABLE_TELEMETRY": "1",
+           "DISABLE_AUTOUPDATER": "1",
+           "DISABLE_ERROR_REPORTING": "1",
+           "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+    for alias in ("ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                  "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+                  "CLAUDE_CODE_SUBAGENT_MODEL"):
+        env[alias] = model
+    return env
+
+
+class ClaudeAdapter(Adapter):
+    def setup(self, model, base_url, env_root, base_env, api_key):
+        env = _iso_env(base_env, env_root, api_key)
+        cfg = env_root / "claude_config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        env["CLAUDE_CONFIG_DIR"] = str(cfg)
+        claude_env = make_claude_env(model, base_url, api_key)
+        env.update(claude_env)
+        self.files["claude.env"] = "\n".join(
+            f"{k}={'<key>' if k == 'ANTHROPIC_AUTH_TOKEN' else v}"
+            for k, v in sorted(claude_env.items()))
+        return env
+
+    def cmd(self, model, repo, prompt):
+        return [self.binary, "-p", prompt, "--model", model,
+                "--output-format", "stream-json", "--verbose",
+                "--dangerously-skip-permissions",
+                "--disallowedTools", *CLAUDE_DISALLOWED_TOOLS]
+
+    def parse(self, lines):
+        # Qwen Code's stream-json is a copy of Claude Code's: same envelope.
+        return parse_qwen_events(lines)
+
+
+ADAPTERS = {"opencode": OpencodeAdapter, "qwen": QwenAdapter, "codex": CodexAdapter,
+            "claude": ClaudeAdapter}
 
 
 def resolve_binary(harness: str, bin_dir: Path) -> str:
-    exe = {"opencode": "opencode", "qwen": "qwen", "codex": "codex"}[harness]
+    exe = {"opencode": "opencode", "qwen": "qwen", "codex": "codex",
+           "claude": "claude"}[harness]
     p = bin_dir / exe
     if p.exists():
         return str(p)
