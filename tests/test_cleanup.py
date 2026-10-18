@@ -67,7 +67,7 @@ def test_delete_lines_apply_only_to_offered_paths(repo):
     r, base = repo
     backend = _Reply("DELETE health_check_tmp.py\nDELETE app.py\n"
                      "KEEP __pycache__/app.cpython-314.pyc -- cache\n")
-    rec = cleanup.run_cleanup_turn(backend, goal="add /health", repo=r, base_sha=base)
+    rec = cleanup.run_cleanup_turn(backend, goal="add /health", repo=str(r), base_sha=base)  # maintain passes a str
     assert rec["deleted"] == ["health_check_tmp.py"]
     assert not (r / "health_check_tmp.py").exists()
     assert (r / "app.py").exists(), "a path the turn did not offer is untouchable"
