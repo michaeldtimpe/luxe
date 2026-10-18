@@ -204,7 +204,7 @@ def test_iso_env_drops_inherited_claude_session_vars(tmp_path):
 def test_codex_catalog_points_codex_entry_at_the_local_model(tmp_path):
     cat = ha.make_codex_catalog("M")
     (m,) = cat["models"]
-    assert m["slug"] == "M" and m["apply_patch_tool_type"] == "function"
+    assert m["slug"] == "M" and m["apply_patch_tool_type"] == "freeform"
     assert m["prefer_websockets"] is False and m["use_responses_lite"] is False
     assert m["context_window"] == m["max_context_window"] == ha.CONTEXT_LIMIT
     assert m["input_modalities"] == ["text"] and m["upgrade"] is None
@@ -216,3 +216,71 @@ def test_codex_catalog_points_codex_entry_at_the_local_model(tmp_path):
         "M", "http://127.0.0.1:9/v1", tmp_path, {"PATH": "/usr/bin"}, "k")
     assert json.loads((tmp_path / "codex_home" / "models.json").read_text())["models"][0]["slug"] == "M"
     assert env["CODEX_HOME"] == str(tmp_path / "codex_home")
+
+
+_CUSTOM_REQ = {
+    "model": "M", "stream": True,
+    "tools": [{"type": "function", "name": "exec_command", "parameters": {}},
+              {"type": "custom", "name": "apply_patch",
+               "description": "Edit files. " + ha.FREEFORM_NOTE,
+               "format": {"type": "grammar", "syntax": "lark", "definition": "start: x"}}],
+    "input": [{"type": "message", "role": "user", "content": "hi"},
+              {"type": "custom_tool_call", "id": "ctc_1", "call_id": "c1",
+               "name": "apply_patch", "input": "*** Begin Patch\n*** End Patch\n"},
+              {"type": "custom_tool_call_output", "call_id": "c1", "output": "Done"}],
+}
+
+
+def test_patch_body_translates_custom_tools_only_when_asked():
+    raw = json.dumps(_CUSTOM_REQ).encode()
+    _, rec = ha.patch_body(raw)
+    assert "custom_translated" not in rec and "custom:apply_patch" in rec["tools"]
+    body, rec = ha.patch_body(raw, translate_custom=True)
+    d = json.loads(body)
+    assert rec["custom_translated"] == ["apply_patch"]
+    fn = d["tools"][1]
+    assert fn["type"] == "function" and fn["parameters"]["required"] == ["input"]
+    assert ha.FREEFORM_NOTE not in fn["description"] and "start: x" in fn["description"]
+    assert d["tools"][0] == _CUSTOM_REQ["tools"][0]
+    call, out = d["input"][1], d["input"][2]
+    assert call["type"] == "function_call" and call["call_id"] == "c1"
+    assert json.loads(call["arguments"]) == {"input": "*** Begin Patch\n*** End Patch\n"}
+    assert out == {"type": "function_call_output", "call_id": "c1", "output": "Done"}
+
+
+def _sse(ev):
+    return f"event: {ev['type']}\ndata: {json.dumps(ev)}\n\n".encode()
+
+
+def test_sse_translator_maps_function_call_events_back_to_custom():
+    args = json.dumps({"input": "PATCH"})
+    fc = {"type": "function_call", "id": "fc_1", "call_id": "c9", "name": "apply_patch"}
+    other = {"type": "function_call", "id": "fc_2", "call_id": "c8", "name": "exec_command",
+             "arguments": "{}", "status": "completed"}
+    stream = b"".join([
+        _sse({"type": "response.output_item.added", "item": {**fc, "arguments": "", "status": "in_progress"}}),
+        _sse({"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": args}),
+        _sse({"type": "response.function_call_arguments.done", "item_id": "fc_1", "arguments": args}),
+        _sse({"type": "response.output_item.done", "item": {**fc, "arguments": args, "status": "completed"}}),
+        _sse({"type": "response.output_item.done", "item": other}),
+        _sse({"type": "response.completed", "response": {"output": [
+            {**fc, "arguments": args, "status": "completed"}, other]}}),
+    ])
+    tr = ha.SSECustomTranslator(["apply_patch"])
+    out = b"".join(tr.feed(stream[i:i + 7]) for i in range(0, len(stream), 7)) + tr.flush()
+    evs = [json.loads(l[5:]) for l in out.split(b"\n") if l.startswith(b"data:")]
+    types = [e["type"] for e in evs]
+    assert "response.function_call_arguments.delta" not in types
+    assert types.count("response.custom_tool_call_input.done") == 1
+    done = [e for e in evs if e["type"] == "response.output_item.done"]
+    assert done[0]["item"] == {"type": "custom_tool_call", "id": "fc_1", "call_id": "c9",
+                               "name": "apply_patch", "input": "PATCH", "status": "completed"}
+    assert done[1]["item"] == other  # untranslated tools untouched
+    assert evs[-1]["response"]["output"][0]["type"] == "custom_tool_call"
+    assert tr.calls == 1
+    assert b"event: response.custom_tool_call_input.done\n" in out
+
+
+def test_custom_input_falls_back_to_raw_arguments():
+    assert ha._custom_input("*** Begin Patch") == "*** Begin Patch"
+    assert ha._custom_input(json.dumps({"input": "P"})) == "P"
