@@ -102,3 +102,47 @@ for the record; fixed in 166c319.
 **Qwen3.8 + cleanup turn: 7/9 REAL** (healthcheck 3/3, typing 3/3, neon
 1/3). The baseline q38full had the same three fixtures at 6/9 (healthcheck
 0/3, typing REAL* 3/3, neon 3/3).
+
+## champ_cleanup — champion Qwen3.6-35B-A3B-6bit + `LUXE_CLEANUP_TURN=1`, 10 × 3 (no-harm)
+
+All 30 printed PASS; 0 attribution mismatches. **The cleanup turn found 0
+candidates in all 30 runs**, so it never called the model or touched the
+tree. Its record is the only difference from a flag-off run.
+
+- 25/30 diffs are byte-identical to an r2 champion diff that was already
+  hand-verified REAL (every fixture except doc-config and deps-audit). One of
+  those 25 is doc-config rep2, which is identical to r2 rep2 — graded THIN
+  there.
+- deps-audit ×3: identical across reps. It differs from r2 only because
+  `cve_lookup` is live (new 2026 advisories). All 3 cited GHSAs were
+  confirmed against OSV with matching package and aliases: aiohttp
+  GHSA-cq5v-8q36-5273, web3 GHSA-5hr4-253g-cpx2, python-dotenv
+  GHSA-mf9w-mj56-hr94. REAL ×3.
+- doc-config:
+  - rep1 REAL (27/27; `SIGNATURE_TYPE` extra).
+  - rep2 THIN (byte-identical to r2 rep2: invents CLOB_*/HOST, misses
+    `FUNDER_ADDRESS`).
+  - rep3 THIN (misses `DRY_RUN`, `LIVE_TRADING_ENABLED`).
+
+  The champion's own doc-config variance: it misses `FUNDER_ADDRESS` in 4 of
+  12 reference runs (r2 + determinism).
+
+**27 REAL / 3 THIN.** Every non-REAL result is on a fixture the lever cannot
+have touched (0 candidates; it runs after the loop).
+
+## glim_reread — Glimmer-30B-6bit + `LUXE_REREAD_NOTE=1` (60fb596), 3 reps
+
+| Fixture | rep1 | rep2 | rep3 | Notes fired (rep1/2/3) |
+|---|---|---|---|---|
+| neon-rain-implement-reset-shortcut | FAIL — max steps, no diff | FAIL — identical trajectory to rep1 | REAL | 12 / 12 / 1 |
+| nothing-ever-happens-document-config | REAL — envcheck 27/27 | FAIL — max steps, no diff | FAIL — max steps, no diff | 4 / 10 / 10 |
+
+- rep3 neon: Shift+R keydown in `HtmlInputHandler` (removed in `dispose`)
+  emits `action:request {__restart}`, which uses the existing confirm-and-
+  restart path (`_handleAction`, base line 290).
+- **The note fires and is ignored.** neon rep1 got 12 notes, including
+  `Game.js` 228–257 at steps 22, 26 and 29, each re-read immediately after a
+  note saying those lines were already shown.
+- Both passes look like the ordinary Glimmer pass rate (stub arm 2/6,
+  baseline doc-config 2/4). The two passes are not clearly attributable to
+  the note.
