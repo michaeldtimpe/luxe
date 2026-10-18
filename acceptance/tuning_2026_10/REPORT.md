@@ -91,11 +91,23 @@ are unchanged. 3 reps each, 60-min cap. Grades:
    - A variant that names the compacted earlier read is the next idea. It is
      not built.
    - **Status: inert for this model, not promoted.**
-8. **Harness gap surfaced (not fixed):** a run that aborts at max steps still
-   commits its partial edit (neon rep2). Together with test suites that don't
-   exercise the change, that yields printed PASS on broken code. This is
-   another instance of the printed-pass lesson; worth a separate
-   look.
+8. **Harness gap: step-limited runs shipped as finished. FIXED 2026-10-18
+   (0f04e9a).**
+   - A run that aborts at max steps used to commit its partial edit like a
+     finished one (neon rep2 printed PASS on a constructor that throws).
+   - Across m5's corpus, 111 runs ended at max steps with a diff: ~4 of ~600
+     champion runs, and frequently on challengers (GLM 12/75, Laguna 12/39).
+   - Now labelled, default ON (no model call): report and commit-body note,
+     a draft PR never auto-promoted on green CI, a `step_limit_incomplete`
+     event, and a bench ⚠ on the row.
+   - Opt-in `LUXE_STEP_LIMIT_FINISH=1` adds one ≤8-step pass that shows the
+     model its diff.
+   - E2E on m5 with the champion at `max_steps: 6` (`steplimit_e2e/`):
+     - labelling fired on both diff-producing runs and not on the no-diff
+       run;
+     - the finish pass ended on its own on shuffle (label cleared);
+     - on healthcheck the finish pass used all 8 steps (label kept).
+   - The finish pass is unbenched for help.
 
 9. **Cleanup turn — champion no-harm passed (10×3, `champ_cleanup/`).**
    - 0 candidates in 30 runs, so the turn never reached the model and the
@@ -134,4 +146,5 @@ are unchanged. 3 reps each, 60-min cap. Grades:
 | `q38_cleanup/rep{1,2,3}/`, `rep1_neon/` | Qwen3.8 + cleanup turn × {healthcheck, typing, neon reset} |
 | `champ_cleanup/rep{1,2,3}/` | champion 10×3 + cleanup turn (no-harm) |
 | `glim_reread/rep{1,2,3}/` | Glimmer-6bit + re-read note × {neon reset, doc-config} |
+| `steplimit_e2e/{label,finish}/` | champion at max_steps 6 — step-limit labelling + finish-pass E2E |
 | `q38_cleanup_bug/` | invalid first attempt (cleanup turn raised; kept for the record) |

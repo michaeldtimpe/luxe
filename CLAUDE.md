@@ -544,6 +544,19 @@ model call. Docs/config are never candidates.
   scripts.
 - **Disable for ablation**: `LUXE_CLEANUP_TURN=0` (exact string).
 
+## Default-ON: step-limit labelling
+
+A write task that ends at **max steps with a change on disk** is labelled
+incomplete (2026-10-18, `src/luxe/steplimit.py`): a note at the top of the
+report and commit body, a **draft PR never auto-promoted on green CI**
+(`PRState.incomplete`), a `step_limit_incomplete` event, and a ⚠ on the bench
+row. It makes no model call and changes no score. Why: tuning_2026_10 shipped
+a half-applied edit (a method bound at step 29/30 and never written) as a
+printed PASS. `LUXE_STEP_LIMIT_LABEL=0` disables it.
+`LUXE_STEP_LIMIT_FINISH=1` is the **opt-in, unbenched** repair: one ≤8-step
+pass that shows the model its diff. A finish pass that ends on its own clears
+the label.
+
 ## Opt-in modes (default off, byte-identical when disabled)
 
 Five subsystems are gated by env vars and default to **off**. Each has
