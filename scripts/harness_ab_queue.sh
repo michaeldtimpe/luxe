@@ -7,13 +7,13 @@
 #   OUT=acceptance/harness_ab_2026_10 nohup scripts/harness_ab_queue.sh > $OUT/queue.log 2>&1 &
 #
 # Env: OUT (required), REPS (default "1 2 3"), HARNESSES (default
-# "opencode qwen codex"), MODELS (default: champion, Qwen3.8-27B-8bit,
+# "opencode qwen codex claude"), MODELS (default: champion, Qwen3.8-27B-8bit,
 # Muse-Glimmer-30B-6bit).
 set -u
 cd "$(dirname "$0")/.."
 : "${OUT:?set OUT to the acceptance dir}"
 REPS=${REPS:-"1 2 3"}
-HARNESSES=${HARNESSES:-"opencode qwen codex"}
+HARNESSES=${HARNESSES:-"opencode qwen codex claude"}
 MODELS=${MODELS:-"Qwen3.6-35B-A3B-6bit:champ:1200 Qwen3.8-27B-8bit:q38:3600 Muse-Glimmer-30B-6bit:glim:3600"}
 
 for rep in $REPS; do

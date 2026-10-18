@@ -178,3 +178,24 @@ def test_wire_shim_round_trip(tmp_path):
     assert path == "/v1/responses" and body["temperature"] == 0.0
     w = ha.wire_summary(log)
     assert w["requests"] == 1 and w["forced_temperature"] == 1 and w["non_200"] == 0
+
+
+def test_claude_env_points_every_alias_at_the_model_under_test():
+    env = ha.make_claude_env("M", "http://127.0.0.1:5/v1", "k")
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:5"  # Claude Code appends /v1
+    for k in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+              "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+              "CLAUDE_CODE_SUBAGENT_MODEL"):
+        assert env[k] == "M", k
+    assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(ha.OUTPUT_LIMIT)
+    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == str(ha.CONTEXT_LIMIT)
+    assert env["DISABLE_TELEMETRY"] == "1" and env["DISABLE_AUTOUPDATER"] == "1"
+    assert {"WebFetch", "WebSearch"} <= set(ha.CLAUDE_DISALLOWED_TOOLS)
+
+
+def test_iso_env_drops_inherited_claude_session_vars(tmp_path):
+    base = {"PATH": "/usr/bin", "CLAUDECODE": "1", "CLAUDE_CONFIG_DIR": "/Users/real/.claude",
+            "CLAUDE_CODE_OAUTH_TOKEN": "t", "ANTHROPIC_AUTH_TOKEN": "t"}
+    env = ha._iso_env(base, tmp_path, "k")
+    for k in ("CLAUDECODE", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"):
+        assert k not in env
