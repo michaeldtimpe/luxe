@@ -18,3 +18,15 @@
   (oMLX drops custom tools). Probe in _probe_codex_cat/ (champion,
   isomer-healthcheck + lpe-typing): 7 apply_patch calls, 3 applied, 4
   rejected by the Codex verifier as malformed.
+
+## 2026-10-19 05:40 — cve_cache denied for outside harnesses (user decision)
+
+Glimmer rep1's Claude Code deps-audit subagent read `~/.luxe/cve_cache`
+(report used none of it). 9c0de33 adds a read/write deny on the cache to the
+outside-harness offline profile, matching the luxe control. Pulled on m5 at
+05:39:35; rep2 champ codex-cat had started at 05:39:22 with the old profile,
+so its `_env/offline.sb` was appended in place at 05:40 (original kept as
+`offline.sb.pre-cvedeny`) — sandbox-exec reads the profile per fixture, and
+only the first fixture (typing) had launched. Every cell before it (rep1 all,
+rep2 champ opencode/qwen/codex/claude) ran without the deny. Verified on m5:
+`cat`/`ls` of the cache → "Operation not permitted" under the profile.
