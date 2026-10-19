@@ -39,9 +39,13 @@ Cross-cutting:
   fails, then CVE IDs written from memory and presented as sourced. NOT yet
   comparable to luxe — luxe's reference runs were online and luxe has a
   manage-gated `cve_lookup` tool. Open: run luxe's deps-audit offline.
-- **Every outside harness invented the same nonexistent "cleanup" phase** in
-  neon-rain-document-modules (PHASE is draw/planning/job) — a model prior none
-  of these loops checks against source.
+- **Every outside harness wrote the same nonexistent "cleanup" phase** in
+  neon-rain-document-modules (PHASE is draw/planning/job). Correction
+  (q38 hand-verify): it is not a model prior — the base repo's own
+  `ARCHITECTURE.md` is stale (`PLANNING → JOB → CLEANUP`,
+  `PhaseManager.enterCleanup()`; neither "cleanup" nor `enterCleanup` occurs
+  anywhere in `src/`). The defect is copying the stale doc without checking
+  `src/constants.js`, which none of these loops did.
 - Verification is shallow in all four: doc tasks never cross-checked; code
   checks are compile/import or the existing suites, which miss the defects
   above. Two harnesses (opencode, Qwen Code) tried `pip install
@@ -63,6 +67,52 @@ Cross-cutting:
   `agent_message` items in `--json` events; the reasons are in stderr.
 - Claude Code spawned background subagents twice; on neon-rain the subagent
   never reported back and ~170 s went to SendMessage/ListAgents/`sleep` polls.
+
+## Qwen3.8-27B-8bit (q38) — rep1, offline
+
+| fixture | opencode | Qwen Code | Codex | Claude Code | codex-cat |
+|---|---|---|---|---|---|
+| lpe-rope-calc-implement-strict-flag | REAL — empty + truncated flagged, LM Studio path passes failures, non-strict byte-identical; `.pyc` committed | REAL — 4 planted bad files flagged, return types kept | REAL | REAL (`.pyc`) | REAL — return types kept (no champion-style crash) |
+| neon-rain-implement-reset-shortcut | REAL — `HtmlInputHandler`, Shift+R, removed in `dispose()` | REAL — reuses `__restart` confirm path, modifier + repeat guard, added a test | REAL — no Ctrl/Meta guard; Restart now keeps persona | REAL — `__restart` path; no Ctrl/Meta guard | REAL — modifier/repeat/input guards, `__restart` |
+| nothing-ever-happens-document-config | REAL — 27/27 | **FAIL** — 21 reads, never wrote; "no visible progress" ×8, exit 1, 46 min | REAL — 27/27 | REAL — 27/27 | REAL — 27/27 |
+| isomer-implement-healthcheck | REAL | REAL | REAL | REAL | REAL |
+| the-game-implement-shuffle-shortcut | REAL — bound once via ref, modifier guard, skips inputs | REAL | REAL (+ loading guard) | REAL (+ loading guard) | REAL |
+| lpe-rope-calc-document-typing | REAL (`BinaryIO`; `.pyc`) | REAL (`.pyc`) | REAL | REAL (`.pyc`) | REAL |
+| the-game-document-architecture | REAL | REAL | REAL | REAL | REAL |
+| neon-rain-document-modules | THIN — stale cleanup phase; event direction reversed; read no source | THIN — stale cleanup; ServerAI priority wrong | THIN — same + EventBus reversed | THIN — same | THIN — stale cleanup, omits draw |
+| isomer-document-quickstart | REAL | REAL | REAL (grader `destructive_diff` false positive, printed 1/5) | REAL | REAL |
+| nothing-ever-happens-manage-deps-audit | **FAIL** — 8192-token length stop mid-reasoning, opencode ends on `length`, empty diff | **FAIL** — 41K reasoning tokens, "no visible progress", empty; reasoning already mis-attributing CVE-2024-27351 (Django) | **FAIL** — `max_output_tokens` turn failure; reasoning enumerating invented CVE-2025-538xx | VACUOUS — discloses no network, still cites memory CVEs with NVD links; Jinja2 CVE under aiohttp, invented CVE-2025-69224…69269 batch | VACUOUS — "checked against NVD/GHSA" after curl failed; Jinja2 CVEs under aiohttp/SQLAlchemy |
+| **tally** | **8 / 1 / 0 / 0 / 1** | **7 / 1 / 0 / 0 / 2** | **8 / 1 / 0 / 0 / 1** | **8 / 1 / 1 / 0 / 0** | **8 / 1 / 1 / 0 / 0** |
+| printed | 9/10 | 8/10 | 8/10 | 10/10 | 10/10 |
+| wall (10 fixtures) | 68.1 min | 177.6 min | 71.4 min | 98.8 min | 53.6 min |
+
+luxe reference (not re-run): Qwen3.8-27B-8bit 24/30 REAL (`acceptance/tuning_2026_10`).
+
+Observations:
+- **On every code fixture Qwen3.8 is REAL under every harness** (24/25; the
+  miss is Qwen Code doc-config, a write-avoidance FAIL — the same failure
+  mode this model shows in luxe). The champion went 15/25 REAL on the same
+  five fixtures across the outside harnesses: the dense model is the better
+  coder outside luxe, at ~2–8× the wall.
+- **Harness barely matters for this model:** four of five cells are 8 REAL,
+  identical per-fixture except deps-audit. Doc fixtures are identical in all
+  five (typing/architecture/quickstart REAL, modules THIN).
+- **deps-audit splits on the harness's output-limit handling, not on
+  honesty.** Under opencode/Qwen Code/Codex the model's reasoning was already
+  fabricating IDs when the turn hit a length/progress limit and the harness
+  ended it — FAIL by accident. Claude Code and codex-cat let it finish, and
+  it fabricated like the champion.
+- **codex-cat works for this model:** 13 apply_patch calls, 13 accepted, no
+  sed fallback, no junk (the champion: ~20 rejected / 2 accepted). Fastest
+  q38 cell.
+- **Sandbox reach (fairness note, all models):** the offline profile blocks
+  network, not reads. Qwen Code and Claude Code found earlier hand-verify
+  venvs under `~/luxe-bench-tmp/` (Claude via `mdfind`) to run Flask; Codex
+  used the real `~/.npm` cache to `npm install` and run a real `vite build`.
+  `node_modules` landed in the workspace clone but is gitignored, and
+  `_resolve_repo`'s `git clean -fdxq` scrubs it before the next run — no
+  cross-run contamination. It does mean "could the agent verify" depends on
+  what lives on the host.
 
 ## luxe control — deps-audit offline (`luxe-offline/champ`), 3 reps
 
