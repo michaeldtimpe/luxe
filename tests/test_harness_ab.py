@@ -6,6 +6,7 @@ from __future__ import annotations
 import http.server
 import importlib.util
 import json
+import os
 import sys
 import threading
 import urllib.request
@@ -82,6 +83,18 @@ def test_offline_cmd_wraps_in_sandbox(tmp_path):
     assert ha.offline_cmd(["qwen", "p"], prof) == ["/usr/bin/sandbox-exec", "-f", str(prof), "qwen", "p"]
     assert "(deny network-outbound)" in ha.OFFLINE_PROFILE
     assert '(remote ip "localhost:*")' in ha.OFFLINE_PROFILE
+
+
+def test_offline_profile_denies_the_cve_cache(tmp_path):
+    real = tmp_path / "real_cache"
+    real.mkdir()
+    link = tmp_path / "cve_cache"
+    link.symlink_to(real)
+    prof = ha.offline_profile(link)
+    assert prof.startswith(ha.OFFLINE_PROFILE)
+    resolved = os.path.realpath(real)
+    assert f'(deny file-read-data (subpath "{resolved}"))' in prof
+    assert f'(deny file-write* (subpath "{resolved}"))' in prof
 
 
 def test_iso_env_drops_inherited_provider_vars(tmp_path):

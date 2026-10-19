@@ -711,6 +711,21 @@ OFFLINE_PROFILE = """(version 1)
 """
 
 
+def offline_profile(cve_cache: Path | None = None) -> str:
+    """OFFLINE_PROFILE, plus a read/write deny on luxe's cve_lookup cache.
+
+    The cache holds real advisory data from online runs; a Claude Code
+    subagent read it during Glimmer rep1's offline deps-audit. Denied from
+    rep2 champ on (user decision 2026-10-19), as the luxe control already does.
+    sandbox-exec matches resolved paths, so the path is realpath'd."""
+    if cve_cache is None:
+        cve_cache = Path.home() / ".luxe" / "cve_cache"
+    real = os.path.realpath(cve_cache)
+    return (OFFLINE_PROFILE
+            + f'(deny file-read-data (subpath {json.dumps(real)}))\n'
+            + f'(deny file-write* (subpath {json.dumps(real)}))\n')
+
+
 def offline_cmd(cmd: list[str], profile_path: Path) -> list[str]:
     return ["/usr/bin/sandbox-exec", "-f", str(profile_path), *cmd]
 
@@ -934,7 +949,7 @@ def main(argv: list[str] | None = None) -> int:
         profile_path = None
         if not args.allow_network:
             profile_path = env_root / "offline.sb"
-            profile_path.write_text(OFFLINE_PROFILE)
+            profile_path.write_text(offline_profile())
         ctx = RunCtx(harness=args.harness, adapter=adapter, model=args.model,
                      output=output, work_dir=work_dir, timeout_s=args.timeout,
                      env=env, shim=shim, profile_path=profile_path)
