@@ -114,6 +114,54 @@ Observations:
   cross-run contamination. It does mean "could the agent verify" depends on
   what lives on the host.
 
+## Muse-Glimmer-30B-6bit (glim) — rep1, offline
+
+| fixture | opencode | Qwen Code | Codex | Claude Code | codex-cat |
+|---|---|---|---|---|---|
+| lpe-rope-calc-implement-strict-flag | REAL (`.pyc`) | REAL | REAL — 75 steps of GNU/BSD `sed` flailing, clean result | REAL | **DAMAGING** — a python `re.sub` fallback deleted the `if __name__ == "__main__"` guard: `python3 pe_scan.py` now prints nothing, exit 0 (base prints its report; reproduced). Logic correct when `main()` is called by hand. Agent saw empty `--help`, spent ~70 commands, claimed success |
+| neon-rain-implement-reset-shortcut | REAL — `HtmlInputHandler`, `__restart` confirm path, disposed (node fake-DOM run: 1 listener after re-create) | REAL | REAL — 5 failed shell `apply_patch`, then heredoc rewrite | REAL | REAL — 8 apply_patch rejects / 2 accepts |
+| nothing-ever-happens-document-config | REAL — 27/27 | REAL — 27/27 | REAL — 27/27 | REAL — 27/27 | REAL — 27/27 |
+| isomer-implement-healthcheck | REAL | REAL | REAL | REAL | REAL |
+| the-game-implement-shuffle-shortcut | THIN — no modifier guard | THIN — no modifier guard | THIN — no modifier / repeat guard | THIN — no modifier guard, `preventDefault` hijacks Cmd/Ctrl+R | THIN — no modifier / repeat guard |
+| lpe-rope-calc-document-typing | THIN — `io.BinaryIO` (doesn't exist); masked by `from __future__ import annotations`, `get_type_hints` raises; `.pyc` | REAL (`.pyc`) | **DAMAGING** — `from io import BinaryIO`: `ImportError` on import and `--help` under every python on m5 (reproduced); its `py_compile` check can't see it | REAL (`.pyc`) | REAL |
+| the-game-document-architecture | REAL (borderline; grader 1/5 on min-lines gate) | REAL (borderline) | REAL | REAL | REAL — wrote via python heredoc after 2 rejects |
+| neon-rain-document-modules | THIN — stale cleanup, EventBus reversed | THIN — same, ServerAI misdescribed | THIN — stale cleanup; new section inside an open code fence | THIN — stale cleanup; read no `src/` | THIN — stale cleanup, EventBus reversed; read no `src/` |
+| isomer-document-quickstart | REAL (grader 1/5 on min-lines gate) | REAL | REAL (minimal) | REAL | REAL (minimal) |
+| nothing-ever-happens-manage-deps-audit | VACUOUS — literal `CVE-2023-...`/`GHSA-xxxx` placeholders, invented advisories; tried `pip --break-system-packages` | VACUOUS — placeholder IDs, fake fix versions, nonexistent httpx 0.24.2 | VACUOUS — HTTP/2 Rapid Reset CVE on aiohttp, `GHSA-xxxx` placeholders | VACUOUS — placeholders, JS `dotenv` advisory link; 12 subagent launches | VACUOUS — invented aiohttp CVE/GHSA, placeholders, invented CVSS |
+| **tally** | **6 / 3 / 1 / 0 / 0** | **7 / 2 / 1 / 0 / 0** | **6 / 2 / 1 / 1 / 0** | **7 / 2 / 1 / 0 / 0** | **5 / 3 / 1 / 1 / 0** |
+| printed | 8/10 | 9/10 | 9/10 | 9/10 | 10/10 |
+| wall (10 fixtures) | 53.7 min | 65.1 min | 76.2 min | 71.1 min | 94.0 min |
+
+luxe reference (not re-run): Glimmer-6bit 34/40 REAL, neon-rain-implement
+0/4 (`acceptance/m5max_moe_r2_2026_10`).
+
+Observations:
+- **Glimmer is worse outside luxe, not better:** 50–70% REAL vs luxe's 85%,
+  and both DAMAGING grades (a broken import, a deleted `__main__` guard)
+  passed the agent's own `py_compile`-level check and printed as passes.
+- **The exception is neon-rain-implement: REAL under all five harnesses,
+  0/4 inside luxe.** That one fixture is a genuine luxe-loop × Glimmer
+  interaction worth tracing (it is the "recurring defect" that kept
+  Glimmer out in m5max_moe_r2).
+- **Shuffle THIN 5/5** (no modifier guard) — a model trait, harness-independent.
+- **deps-audit VACUOUS 5/5, often with literal placeholder IDs**
+  (`GHSA-xxxx-xxxx-xxxx`) presented as findings, no disclosure.
+- **codex-cat doesn't rescue it:** apply_patch 20 rejected / 11 accepted
+  across the cell (wrong grammar: unified-diff `@@` headers, `+ ` prefixes),
+  python-heredoc fallbacks, and the fallback produced the DAMAGING.
+- **Sandbox reach, sharper than q38's:** the codex-cat deps-audit agent ran
+  `find /` / `grep -r CVE-2024 ~/.luxe/harness-ab-workspace` (the other live
+  clones) and located `~/.luxe/cve_cache/pypi__aiohttp__*.json` after writing
+  its report — it did not read it, but nothing stopped it. Open: the
+  outside-harness profile denies network only; the luxe control already
+  denies `~/.luxe/cve_cache`. Grep of all rep1 events: only Glimmer's
+  deps-audit touched it — codex-cat listed the files, and a Claude Code
+  subagent **read** three of them (`aiohttp__any`, `python-json-logger`).
+  Neither report contains a real cached ID (Claude's cites invented
+  CVE-2023-43101 + placeholders), so the VACUOUS grades stand and no other
+  rep1 cell is affected — but reps 2–3 can leak real advisory data into the
+  outside harnesses unless the profile denies the cache too.
+
 ## luxe control — deps-audit offline (`luxe-offline/champ`), 3 reps
 
 luxe maintain, champion, same loopback-only sandbox, `~/.luxe/cve_cache`
