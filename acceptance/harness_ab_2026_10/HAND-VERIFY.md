@@ -68,6 +68,57 @@ Cross-cutting:
 - Claude Code spawned background subagents twice; on neon-rain the subagent
   never reported back and ~170 s went to SendMessage/ListAgents/`sleep` polls.
 
+## Champion — rep2 + rep3, offline (`~/.luxe/cve_cache` denied from rep2 codex-cat on)
+
+Same method: two verifier agents per cell (code half / doc half), every
+DAMAGING and FAIL re-checked by hand. Grades are R/T/V/D/F.
+
+| fixture | opencode r2 · r3 | Qwen Code r2 · r3 | Codex r2 · r3 | Claude Code r2 · r3 | codex-cat r2 · r3 |
+|---|---|---|---|---|---|
+| strict-flag | R (`.pyc`) · T — a file truncated mid-value parses to `{}` and escapes `--strict` (32/256 cut points) | R · R | **F** — empty diff, turn ended `max_output_tokens` at 84 s · **D** — reproduced: fake HOME with `~/.lmstudio/models`, base "Total: 0 models" rc 0, patched `AttributeError: 'list' object has no attribute 'source'` (same tuple-return defect as codex-cat r1) | R (`.pyc`) · R (`.pyc`) | R · R |
+| neon-reset | **F** — empty diff; an 8192-cap turn ended on `length` with no tool call, opencode exited 0 · R — `HtmlInputHandler`, disposed | **V** — listener on `<main id="game-board">`, which has no focusable descendant (buttons live in `#action-panel`/overlays), so Shift+R never reaches it · T — raw `document` listener | R — `HtmlInputHandler` → EventBus, disposed · **V** — fires a DOM `CustomEvent` while the only listener is on the JS EventBus: never runs (node sim: 0 calls) | T — raw `document` listener, never removed, restart drops persona · T — same | T — `document` listener never disposed; restarts double per press (1,2,4,8 in node) · T — same doubling via `_wireKeyboard()` on every new game |
+| doc-config | R 27/27 · R | R · R | T — 26/27, `PM_NH_FIXED_TRADE_AMOUNT` (missing `_USD`), invented `DASHBOARD_PORT` default, precedence inverted · R | R · R | R · R |
+| healthcheck | R · R | R · R | R · R | R · R | R · R |
+| shuffle | T — no modifier guard · T | R · T — Cmd/Ctrl+R `preventDefault`ed | T · **V** — guard `!document.activeElement?.contentEditable` is always false (the property is always a non-empty string): never fires | R · T | **F** — 1200 s timeout, apply_patch rejected 124× with the same hunk error, never fell back to the shell · T |
+| typing | R (`.pyc`) · R (`.pyc`) | R (`.pyc`) · R | R · R (`IO[bytes]`) | R · R (`.pyc`; caught its own `io.BinaryIO` ImportError) | R (sed collapsed every double blank line) · R (`Any`) |
+| architecture | R · R | T — replaced the existing "What It Does" section · R | R · R | R · R | R · R |
+| modules | T · T | T · T (EventBus direction inverted too) | T · T | T · T | T · T |
+| quickstart | R · R | R · R | R · R | R · R | **F** — empty diff, `max_output_tokens` after 3 rejected patches · R |
+| deps-audit | V · V | V · V | V · V | V · V | V · V |
+| **tally r2** | **6/2/1/0/1** | **6/2/2/0/0** | **5/3/1/0/1** | **7/2/1/0/0** | **5/2/1/0/2** |
+| **tally r3** | **6/3/1/0/0** | **6/3/1/0/0** | **5/1/3/1/0** | **6/3/1/0/0** | **6/3/1/0/0** |
+| printed r2 · r3 | 9 · 10 | 10 · 10 | 9 · 10 | 10 · 10 | 7 · 10 |
+| wall r2 · r3 (min) | 10.5 · 9.0 | 9.4 · 10.7 | 6.0 · 7.9 | 16.4 · 13.5 | 31.7 · 19.0 |
+
+**Champion, 3 reps, REAL out of 30:** opencode 18 · Qwen Code 20 · Codex 16 ·
+Claude Code 19 · codex-cat 16. luxe reference: 38/40 (95%). Best outside
+harness: 67%.
+
+Observations (reps 2–3):
+- **Three VACUOUS code grades are new in reps 2–3.** All three are keyboard
+  shortcuts that pass the printed grader, survive syntax checks and existing
+  tests, and can never fire: wrong element, wrong event bus, inverted guard.
+  None of the agents exercised the key path; their self-checks were green.
+- **The deps-audit is VACUOUS 10/10 again, now with the cache denied.** No run
+  touched `cve_cache` (grep of events/wire/stderr: 0 hits). The fabrication is
+  the model's own. Every run claims an NVD/OSV/PyPI method; one Codex run did
+  disclose the outage but asserted invented IDs anyway. opencode, Qwen Code
+  and Claude Code each tried `pip install --break-system-packages` on host
+  Python; only the network block stopped it.
+- **The modules THIN is 10/10:** every run copied the stale cleanup phase, and
+  most opened no file under `src/`.
+- **codex-cat's apply_patch is the problem, not the model's code.** r2: 1
+  accepted / 139 rejected (124 in one timed-out run); r3: 2 / 13. Twice an
+  "accepted" patch deleted a file (`*** Move to:` the same name removed
+  ARCHITECTURE.md; an update removed `app.py`). Both times the agent noticed
+  and restored it with git.
+- **Silent no-ops count as FAILs here but exit 0:** opencode r2 neon (a cut-off
+  turn, no retry) is the case luxe's truncated-turn retry exists for.
+- Claude Code's subagent polling recurs (204 `ListAgents` calls on r2 neon).
+- Shared host `/tmp` is not isolated between runs. A Claude Code strict-flag
+  self-test picked up another run's planted `.gguf` files and then `rm -rf`ed
+  the directory. It did not change any grade.
+
 ## Qwen3.8-27B-8bit (q38) — rep1, offline
 
 | fixture | opencode | Qwen Code | Codex | Claude Code | codex-cat |
