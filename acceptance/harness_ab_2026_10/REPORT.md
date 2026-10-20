@@ -194,13 +194,53 @@ helped only the model that already speaks its grammar.
   - false failures: a `destructive_diff` on a correct quickstart, and
     min-lines gates on correct docs.
 
+## MCP arm: luxe's tools, not its loop
+
+The champion was re-run under Qwen Code and Claude Code with luxe's tool
+layer attached over MCP: `bm25_search`, `find_symbol`, ruff, mypy, bandit,
+pip-audit, and `cve_lookup` on manage. Each tool appears exactly when luxe
+would offer it. Conditions are otherwise identical, 3 reps.
+
+| | REAL / 27 non-audit | without MCP | luxe |
+|---|---|---|---|
+| Qwen Code + luxe tools | 21 (78%) | 20 (74%) | 34/36 (94%) |
+| Claude Code + luxe tools | 21 (78%) | 19 (70%) | |
+
+**luxe's tools do not carry luxe's advantage; its loop does.**
+
+- **The models barely used the tools.** Any luxe tool was called on 3/27
+  (Qwen Code) and 9/27 (Claude Code) non-audit fixtures. Across 30 implement
+  runs an analyzer checked the change once: ruff, on Claude Code r3
+  strict-flag, after the edit, finding nothing new. Bandit never ran outside
+  deps-audit.
+- **The failures luxe avoids stayed put:**
+  - stale-doc modules: THIN 6/6. `bm25_search` / `find_symbol` were never
+    pointed at `src/`.
+  - shuffle modifier-guard misses: 3/6.
+  - neon-reset non-REAL: 3/6, including one shortcut that can never fire.
+- **On deps-audit the tools failed offline exactly as they do inside luxe.**
+  The difference is what happened next. luxe's loop aborted with nothing
+  written. Both outside loops wrote the audit from memory and attributed it
+  to OSV / published advisories, 6/6.
+- **Harness quirk:** Qwen Code hides MCP tools behind a
+  tool_search/tool_call bridge unless the server sets `alwaysLoadTools`.
+  With the bridge, the champion reached a luxe tool on 1 fixture of 10.
+  Anyone attaching luxe's MCP server to Qwen Code needs that setting.
+
+So the plan from the fallback-harness discussion — make luxe's layers 1–2
+harness-independent and let the loop be replaceable — holds for the *ops
+kit*. But for this model, the measured value is in layer 3: the loop's
+nudges, gates, retries and stop conditions. A mainstream loop with luxe's
+tools attached is still a mainstream loop.
+
 ## Next
 
-- **MCP arm** (agreed): attach luxe's tools over MCP to the best outside
-  harness and re-run with the champion. This separates "luxe's tools" from
-  "luxe's loop".
 - Not requested, but cheap and worth doing: trace Glimmer neon-reset in luxe
   (0/4 in luxe, 14/15 outside). It is the one fixture where luxe's loop is
   clearly the problem.
-- Optional: `rm -rf /tmp/isomer-venv /tmp/pe_test` on m5, which bench agents
-  left behind.
+- If luxe's tools are to be served to outside harnesses for real, the
+  server needs instructions that make the model use them. A prompt-level
+  nudge would be a new arm: unbenched, and a change to the neutral task
+  text.
+- Optional: on m5, `rm -rf /tmp/isomer-venv /tmp/pe_test /tmp/test_gguf
+  /tmp/empty_gguf /tmp/audit-venv`. Bench agents left these behind.
