@@ -306,19 +306,19 @@ def test_luxe_mcp_attach_claude_and_qwen(tmp_path):
 
     claude = ha.ClaudeAdapter("claude", "claude")
     assert "--mcp-config" not in claude.cmd("m", Path("/r"), "p")  # off by default
-    claude.attach_mcp(srv, tmp_path, ["lint"])
+    claude.attach_mcp(srv, tmp_path)
     cmd = claude.cmd("m", Path("/r"), "p")
     cfg = json.loads(cmd[cmd.index("--mcp-config") + 1])
     assert cfg["mcpServers"]["luxe"] == srv and "--strict-mcp-config" in cmd
 
     qwen = ha.QwenAdapter("qwen", "qwen")
     qwen.setup("m", "http://x/v1", tmp_path, {"PATH": "/usr/bin"}, "")
-    qwen.attach_mcp(srv, tmp_path, ["bm25_search", "lint"])
+    qwen.attach_mcp(srv, tmp_path)
     s = json.loads((tmp_path / "home/.qwen/settings.json").read_text())
     assert s["mcpServers"]["luxe"]["command"] == srv["command"]
     assert s["mcpServers"]["luxe"]["trust"] is True
-    assert s["tools"]["eager"] == [*ha.QWEN_EAGER_BUILTINS,
-                                   "mcp__luxe__bm25_search", "mcp__luxe__lint"]
+    assert s["mcpServers"]["luxe"]["alwaysLoadTools"] is True
+    assert "eager" not in s["tools"]  # a global allowlist: would defer built-ins
     assert s["model"]["name"] == "m" and s["tools"]["exclude"] == ha.QWEN_EXCLUDE_TOOLS
 
 
@@ -350,12 +350,3 @@ def test_luxe_mcp_tool_list_matches_server():
     spec.loader.exec_module(mod)
     assert tuple(mod.LAYER2) == ha.LUXE_MCP_TOOLS
 
-
-def test_luxe_mcp_offered_is_task_and_language_gated(tmp_path):
-    (tmp_path / "a.py").write_text("def f():\n    return 1\n")
-    assert "cve_lookup" not in ha.luxe_mcp_offered(tmp_path, "implement")
-    assert "cve_lookup" in ha.luxe_mcp_offered(tmp_path, "manage")
-    js = tmp_path / "js"
-    js.mkdir()
-    (js / "a.js").write_text("export const x = 1;\n")
-    assert ha.luxe_mcp_offered(js, "implement") == ["bm25_search", "find_symbol"]
