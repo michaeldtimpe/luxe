@@ -297,3 +297,43 @@ def test_sse_translator_maps_function_call_events_back_to_custom():
 def test_custom_input_falls_back_to_raw_arguments():
     assert ha._custom_input("*** Begin Patch") == "*** Begin Patch"
     assert ha._custom_input(json.dumps({"input": "P"})) == "P"
+
+
+def test_luxe_mcp_attach_claude_and_qwen(tmp_path):
+    srv = ha.luxe_mcp_server(Path("/r"), "manage", tmp_path / "l.jsonl", "/usr/bin")
+    assert srv["args"][-4:] == ["--task-type", "manage", "--log", str(tmp_path / "l.jsonl")]
+    assert srv["env"]["PATH"].startswith(str(ha.ROOT / ".venv" / "bin"))
+
+    claude = ha.ClaudeAdapter("claude", "claude")
+    assert "--mcp-config" not in claude.cmd("m", Path("/r"), "p")  # off by default
+    claude.attach_mcp(srv, tmp_path)
+    cmd = claude.cmd("m", Path("/r"), "p")
+    cfg = json.loads(cmd[cmd.index("--mcp-config") + 1])
+    assert cfg["mcpServers"]["luxe"] == srv and "--strict-mcp-config" in cmd
+
+    qwen = ha.QwenAdapter("qwen", "qwen")
+    qwen.setup("m", "http://x/v1", tmp_path, {"PATH": "/usr/bin"}, "")
+    qwen.attach_mcp(srv, tmp_path)
+    s = json.loads((tmp_path / "home/.qwen/settings.json").read_text())
+    assert s["mcpServers"]["luxe"]["command"] == srv["command"]
+    assert s["mcpServers"]["luxe"]["trust"] is True
+    assert s["model"]["name"] == "m" and s["tools"]["exclude"] == ha.QWEN_EXCLUDE_TOOLS
+
+
+def test_luxe_mcp_usage_counts_calls_and_errors(tmp_path):
+    log = tmp_path / "l.jsonl"
+    assert ha.luxe_mcp_usage(log)["started"] is False
+    log.write_text("\n".join(json.dumps(r) for r in [
+        {"event": "start", "tools": ["bm25_search", "lint"]},
+        {"tool": "lint", "error": None}, {"tool": "lint", "error": "boom"},
+        {"tool": "bm25_search", "error": None}]) + "\nnot json\n")
+    u = ha.luxe_mcp_usage(log)
+    assert u == {"started": True, "offered": ["bm25_search", "lint"],
+                 "calls": {"lint": 2, "bm25_search": 1}, "errors": {"lint": 1}}
+
+
+def test_luxe_mcp_rejects_other_harnesses():
+    import pytest
+    with pytest.raises(SystemExit):
+        ha.main(["--harness", "opencode", "--model", "m", "--output", "/tmp/x",
+                 "--all", "--luxe-mcp"])

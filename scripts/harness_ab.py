@@ -33,6 +33,12 @@ and, above all, on hand-verify. Sandboxing: all three run unsandboxed with
 auto-approve (opencode --auto, qwen yolo, codex bypass), i.e. each agent's
 shell has the same reach.
 
+MCP arm (`--luxe-mcp`, Qwen Code and Claude Code only): attaches
+scripts/harness_ab_luxe_mcp.py — luxe's search/symbol/analyzer tools, plus
+cve_lookup on manage — as a stdio MCP server started per fixture inside the
+same sandbox. Task text is unchanged; whether the model reaches for the tools
+is part of the measurement (each call is logged to <fixture>/luxe_mcp.jsonl).
+
 Isolation: per-run HOME + XDG_* (+ CODEX_HOME) under <output>/_env/, so no
 harness reads the user's global config, auth, skills or ~/.claude, and none
 writes the user's session stores. Update checks, telemetry and model-catalog
@@ -85,6 +91,10 @@ EXCLUDE_ENTRIES = [".opencode/", ".qwen/", ".codex/", ".claude/"]
 # interactive session (a one-shot run would wait on them).
 QWEN_EXCLUDE_TOOLS = ["web_fetch", "web_search", "cron_create", "cron_list",
                       "cron_delete", "loop_wakeup", "monitor"]
+LUXE_MCP_SCRIPT = ROOT / "scripts" / "harness_ab_luxe_mcp.py"
+LUXE_MCP_HARNESSES = ("qwen", "claude")
+# Index build + first analyzer import; both harnesses default far lower.
+LUXE_MCP_TIMEOUT_MS = 120_000
 
 
 # --- wire shim -------------------------------------------------------------
@@ -444,6 +454,10 @@ class Adapter:
     def parse(self, lines: Iterable[str]) -> dict[str, Any]:
         raise NotImplementedError
 
+    def attach_mcp(self, server: dict, env_root: Path) -> None:
+        """Attach one stdio MCP server (`luxe_mcp_server`) for the next run."""
+        raise NotImplementedError(f"{self.name}: no MCP arm")
+
     def version(self) -> str:
         try:
             r = subprocess.run([self.binary, "--version"], capture_output=True,
@@ -501,7 +515,10 @@ def make_qwen_settings(model: str) -> dict:
 
 
 class QwenAdapter(Adapter):
+    model = ""
+
     def setup(self, model, base_url, env_root, base_env, api_key):
+        self.model = model
         env = _iso_env(base_env, env_root, api_key)
         self._write(env_root, "home/.qwen/settings.json",
                     json.dumps(make_qwen_settings(model), indent=2))
@@ -510,6 +527,14 @@ class QwenAdapter(Adapter):
                     "OPENAI_MODEL": model,
                     "QWEN_CODE_SUPPRESS_YOLO_WARNING": "1"})
         return env
+
+    def attach_mcp(self, server, env_root):
+        # Qwen Code reads servers from settings; the per-cell HOME is ours, so
+        # rewrite it per fixture (the server's --repo/--log change each run).
+        settings = make_qwen_settings(self.model)
+        settings["mcpServers"] = {"luxe": {**server, "timeout": LUXE_MCP_TIMEOUT_MS,
+                                           "trust": True}}
+        self._write(env_root, "home/.qwen/settings.json", json.dumps(settings, indent=2))
 
     def cmd(self, model, repo, prompt):
         return [self.binary, prompt, "--model", model, "--approval-mode", "yolo",
@@ -760,6 +785,8 @@ def make_claude_env(model: str, base_url: str, api_key: str) -> dict[str, str]:
 
 
 class ClaudeAdapter(Adapter):
+    mcp_config = ""
+
     def setup(self, model, base_url, env_root, base_env, api_key):
         env = _iso_env(base_env, env_root, api_key)
         cfg = env_root / "claude_config"
@@ -772,10 +799,16 @@ class ClaudeAdapter(Adapter):
             for k, v in sorted(claude_env.items()))
         return env
 
+    def attach_mcp(self, server, env_root):
+        self.mcp_config = json.dumps({"mcpServers": {"luxe": server}})
+        self.files["mcp-config.json"] = self.mcp_config
+
     def cmd(self, model, repo, prompt):
+        mcp = (["--mcp-config", self.mcp_config, "--strict-mcp-config"]
+               if self.mcp_config else [])
         return [self.binary, "-p", prompt, "--model", model,
                 "--output-format", "stream-json", "--verbose",
-                "--dangerously-skip-permissions",
+                "--dangerously-skip-permissions", *mcp,
                 "--disallowedTools", *CLAUDE_DISALLOWED_TOOLS]
 
     def parse(self, lines):
@@ -799,6 +832,41 @@ def resolve_binary(harness: str, bin_dir: Path) -> str:
     return found
 
 
+def luxe_mcp_server(repo: Path, task_type: str, log: Path, agent_path: str) -> dict:
+    """Stdio server spec (Claude Code / Qwen Code `mcpServers` entry shape).
+    luxe's venv python runs it by absolute path, and its bin dir leads the
+    SERVER's PATH so the analyzers resolve ruff/mypy/bandit as luxe's loop
+    does; the agent's own PATH stays scrubbed (`_iso_env`)."""
+    return {"command": str(ROOT / ".venv" / "bin" / "python"),
+            "args": [str(LUXE_MCP_SCRIPT), "--repo", str(repo),
+                     "--task-type", task_type, "--log", str(log)],
+            "env": {"PATH": os.pathsep.join([str(ROOT / ".venv" / "bin"), agent_path])}}
+
+
+def luxe_mcp_usage(log: Path) -> dict[str, Any]:
+    """Digest luxe_mcp.jsonl: did the server start, which tools did it offer,
+    and how often was each called (errors separately)."""
+    out: dict[str, Any] = {"started": False, "offered": [], "calls": {}, "errors": {}}
+    if not log.is_file():
+        return out
+    calls: Counter[str] = Counter()
+    errors: Counter[str] = Counter()
+    for line in log.read_text().splitlines():
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if r.get("event") == "start":
+            out["started"] = True
+            out["offered"] = r.get("tools") or []
+        elif "tool" in r:
+            calls[r["tool"]] += 1
+            if r.get("error"):
+                errors[r["tool"]] += 1
+    out["calls"], out["errors"] = dict(calls), dict(errors)
+    return out
+
+
 # --- run loop --------------------------------------------------------------
 
 @dataclass
@@ -812,6 +880,7 @@ class RunCtx:
     env: dict
     shim: WireShim
     profile_path: Path | None = None
+    luxe_mcp: bool = False
     walls: list[float] = field(default_factory=list)
 
 
@@ -826,6 +895,12 @@ def run_one(fx: Fixture, ctx: RunCtx) -> dict:
     oh._exclude(repo, EXCLUDE_ENTRIES)
     base_sha = fx.base_sha or oh._git(["rev-parse", "HEAD"], repo).stdout.strip()
     prompt = oh.build_prompt(fx)
+    mcp_log = fdir / "luxe_mcp.jsonl"
+    if ctx.luxe_mcp:
+        mcp_log.unlink(missing_ok=True)
+        ctx.adapter.attach_mcp(
+            luxe_mcp_server(repo, fx.task_type, mcp_log, ctx.env.get("PATH", "")),
+            ctx.output / "_env")
     cmd = ctx.adapter.cmd(ctx.model, repo, prompt)
     if ctx.profile_path is not None:
         cmd = offline_cmd(cmd, ctx.profile_path)
@@ -856,11 +931,14 @@ def run_one(fx: Fixture, ctx: RunCtx) -> dict:
         "fixture_id": fx.id, "task_type": fx.task_type, "harness": ctx.harness,
         "model": ctx.model, "prompt": prompt,
         "command": [c if c != prompt else "<prompt>" for c in cmd],
+        "luxe_mcp_enabled": ctx.luxe_mcp,
         "repo": str(repo), "base_sha": base_sha, "head_sha": head,
         "harness_committed": committed, "wall_s": round(wall, 2),
         "exit_code": rc, "timed_out": timed_out, "timeout_s": ctx.timeout_s,
         "wire": wire_summary(wire), **digest,
     }
+    if ctx.luxe_mcp:
+        meta["luxe_mcp"] = luxe_mcp_usage(mcp_log)
     (fdir / "meta.json").write_text(json.dumps(meta, indent=2))
     return {"result": res, "meta": meta}
 
@@ -883,6 +961,8 @@ def write_summary(ctx: RunCtx, ids: list[str], state: dict, extra: dict) -> dict
                        wall_s=m["wall_s"], timed_out=m["timed_out"],
                        exit_code=m["exit_code"], tool_calls_total=m["tool_calls_total"],
                        tokens=m["tokens"], wire=m.get("wire"))
+            if "luxe_mcp" in m:
+                row["luxe_mcp"] = m["luxe_mcp"]
             tot["score"] += r["score"]
             tot["max_score"] += 5
             tot["outcome_points"] += r["outcome_points"]
@@ -924,7 +1004,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label", default="")
     ap.add_argument("--allow-network", action="store_true",
                     help="skip the sandbox-exec network deny (default: offline)")
+    ap.add_argument("--luxe-mcp", action="store_true",
+                    help="MCP arm: attach luxe's tool layer (qwen/claude only)")
     args = ap.parse_args(argv)
+    if args.luxe_mcp and args.harness not in LUXE_MCP_HARNESSES:
+        ap.error(f"--luxe-mcp supports {', '.join(LUXE_MCP_HARNESSES)} only")
 
     fixtures = {f.id: f for f in oh.load_fixtures()}
     if args.all == bool(args.ids):
@@ -952,7 +1036,10 @@ def main(argv: list[str] | None = None) -> int:
             profile_path.write_text(offline_profile())
         ctx = RunCtx(harness=args.harness, adapter=adapter, model=args.model,
                      output=output, work_dir=work_dir, timeout_s=args.timeout,
-                     env=env, shim=shim, profile_path=profile_path)
+                     env=env, shim=shim, profile_path=profile_path,
+                     luxe_mcp=args.luxe_mcp)
+        if args.luxe_mcp:
+            env.setdefault("MCP_TIMEOUT", str(LUXE_MCP_TIMEOUT_MS))
         extra = {
             "harness": args.harness, "harness_version": version, "label": args.label,
             "model": args.model, "upstream_base_url": args.base_url,
@@ -962,6 +1049,7 @@ def main(argv: list[str] | None = None) -> int:
             "temperature": 0.0, "offline": not args.allow_network,
             "timeout_s": args.timeout, "work_dir": str(work_dir),
             "neutral_line": oh.NEUTRAL_LINE, "env_root": str(env_root),
+            "luxe_mcp": args.luxe_mcp,
         }
         state_path = output / "state.json"
         state = oh.load_state(state_path)
@@ -1021,7 +1109,10 @@ def main(argv: list[str] | None = None) -> int:
                                   run_outcome=run_out, run_outcome_max=run_out_max,
                                   walls=ctx.walls, left=n - i, timed_out=m["timed_out"])
                   + f" tools={m['tool_calls_total']} wire={m['wire']['requests']}"
-                  f"(forced_t0={m['wire']['forced_temperature']})", flush=True)
+                  f"(forced_t0={m['wire']['forced_temperature']})"
+                  + (f" luxe_mcp={sum(m['luxe_mcp']['calls'].values())}"
+                     f"{'' if m['luxe_mcp']['started'] else '(NOT STARTED)'}"
+                     if "luxe_mcp" in m else ""), flush=True)
             write_summary(ctx, ids, state, extra)
 
         s = write_summary(ctx, ids, state, extra)
