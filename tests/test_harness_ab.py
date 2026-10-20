@@ -317,6 +317,7 @@ def test_luxe_mcp_attach_claude_and_qwen(tmp_path):
     s = json.loads((tmp_path / "home/.qwen/settings.json").read_text())
     assert s["mcpServers"]["luxe"]["command"] == srv["command"]
     assert s["mcpServers"]["luxe"]["trust"] is True
+    assert s["tools"]["eager"] == [f"mcp__luxe__{t}" for t in ha.LUXE_MCP_TOOLS]
     assert s["model"]["name"] == "m" and s["tools"]["exclude"] == ha.QWEN_EXCLUDE_TOOLS
 
 
@@ -326,10 +327,12 @@ def test_luxe_mcp_usage_counts_calls_and_errors(tmp_path):
     log.write_text("\n".join(json.dumps(r) for r in [
         {"event": "start", "tools": ["bm25_search", "lint"]},
         {"tool": "lint", "error": None}, {"tool": "lint", "error": "boom"},
-        {"tool": "bm25_search", "error": None}]) + "\nnot json\n")
+        {"tool": "bm25_search", "error": None},
+        {"tool": "deps_audit", "error": None, "status": "error"}]) + "\nnot json\n")
     u = ha.luxe_mcp_usage(log)
     assert u == {"started": True, "offered": ["bm25_search", "lint"],
-                 "calls": {"lint": 2, "bm25_search": 1}, "errors": {"lint": 1}}
+                 "calls": {"lint": 2, "bm25_search": 1, "deps_audit": 1},
+                 "errors": {"lint": 1, "deps_audit": 1}}
 
 
 def test_luxe_mcp_rejects_other_harnesses():
@@ -337,3 +340,11 @@ def test_luxe_mcp_rejects_other_harnesses():
     with pytest.raises(SystemExit):
         ha.main(["--harness", "opencode", "--model", "m", "--output", "/tmp/x",
                  "--all", "--luxe-mcp"])
+
+
+def test_luxe_mcp_tool_list_matches_server():
+    import importlib.util as iu
+    spec = iu.spec_from_file_location("lmcp", ROOT / "scripts" / "harness_ab_luxe_mcp.py")
+    mod = iu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert tuple(mod.LAYER2) == ha.LUXE_MCP_TOOLS

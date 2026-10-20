@@ -93,6 +93,9 @@ QWEN_EXCLUDE_TOOLS = ["web_fetch", "web_search", "cron_create", "cron_list",
                       "cron_delete", "loop_wakeup", "monitor"]
 LUXE_MCP_SCRIPT = ROOT / "scripts" / "harness_ab_luxe_mcp.py"
 LUXE_MCP_HARNESSES = ("qwen", "claude")
+# Every tool scripts/harness_ab_luxe_mcp.py can offer (its LAYER2).
+LUXE_MCP_TOOLS = ("bm25_search", "find_symbol", "lint", "typecheck", "security_scan",
+                  "deps_audit", "cve_lookup")
 # Index build + first analyzer import; both harnesses default far lower.
 LUXE_MCP_TIMEOUT_MS = 120_000
 
@@ -531,9 +534,14 @@ class QwenAdapter(Adapter):
     def attach_mcp(self, server, env_root):
         # Qwen Code reads servers from settings; the per-cell HOME is ours, so
         # rewrite it per fixture (the server's --repo/--log change each run).
+        # It also defers MCP tools behind a tool_search/tool_call bridge by
+        # default; in the first MCP rep1 the champion fumbled the bridge and
+        # reached a luxe tool on 1 fixture of 10. `tools.eager` puts them in
+        # the tool list as ordinary functions, as Claude Code does unasked.
         settings = make_qwen_settings(self.model)
         settings["mcpServers"] = {"luxe": {**server, "timeout": LUXE_MCP_TIMEOUT_MS,
                                            "trust": True}}
+        settings["tools"]["eager"] = [f"mcp__luxe__{t}" for t in LUXE_MCP_TOOLS]
         self._write(env_root, "home/.qwen/settings.json", json.dumps(settings, indent=2))
 
     def cmd(self, model, repo, prompt):
@@ -861,7 +869,7 @@ def luxe_mcp_usage(log: Path) -> dict[str, Any]:
             out["offered"] = r.get("tools") or []
         elif "tool" in r:
             calls[r["tool"]] += 1
-            if r.get("error"):
+            if r.get("error") or r.get("status") == "error":
                 errors[r["tool"]] += 1
     out["calls"], out["errors"] = dict(calls), dict(errors)
     return out

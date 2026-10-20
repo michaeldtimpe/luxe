@@ -61,6 +61,17 @@ def _log(path: Path | None, record: dict) -> None:
         fh.write(json.dumps(record) + "\n")
 
 
+def _payload_status(result: str | None) -> str | None:
+    """The analyzers report a failed run (e.g. pip-audit offline) as a normal
+    result whose JSON says `"status": "error"` — record it so the usage
+    digest doesn't count those calls as clean."""
+    try:
+        doc = json.loads(result or "")
+    except ValueError:
+        return None
+    return doc.get("status") if isinstance(doc, dict) else None
+
+
 def make_server(defs, fns, log: Path | None):
     from mcp import types
     from mcp.server.lowlevel import Server
@@ -80,6 +91,7 @@ def make_server(defs, fns, log: Path | None):
         tc = await asyncio.to_thread(dispatch_tool, name, arguments or {}, fns)
         _log(log, {"ts": t0, "tool": name, "args": arguments,
                    "wall_s": round(time.time() - t0, 3), "error": tc.error,
+                   "status": _payload_status(tc.result),
                    "bytes_out": len(tc.result or "")})
         if tc.error:
             raise RuntimeError(tc.error)  # surfaces as isError=True
