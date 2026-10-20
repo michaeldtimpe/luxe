@@ -96,12 +96,6 @@ LUXE_MCP_HARNESSES = ("qwen", "claude")
 # Every tool scripts/harness_ab_luxe_mcp.py can offer (its LAYER2).
 LUXE_MCP_TOOLS = ("bm25_search", "find_symbol", "lint", "typecheck", "security_scan",
                   "deps_audit", "cve_lookup")
-# Qwen Code 0.25.2's eager (non-deferred) built-ins, read off the no-MCP
-# wire.jsonl of every fixture. `tools.eager` REPLACES this set rather than
-# adding to it, so the MCP arm must restate it (tool_search/tool_call are
-# exempt and always present).
-QWEN_EAGER_BUILTINS = ("edit", "glob", "grep_search", "notebook_edit", "read_file",
-                       "run_shell_command", "skill", "write_file")
 # Index build + first analyzer import; both harnesses default far lower.
 LUXE_MCP_TIMEOUT_MS = 120_000
 
@@ -463,9 +457,8 @@ class Adapter:
     def parse(self, lines: Iterable[str]) -> dict[str, Any]:
         raise NotImplementedError
 
-    def attach_mcp(self, server: dict, env_root: Path, offered: list[str]) -> None:
-        """Attach one stdio MCP server (`luxe_mcp_server`) for the next run;
-        `offered` = the tool names it will list (`luxe_mcp_offered`)."""
+    def attach_mcp(self, server: dict, env_root: Path) -> None:
+        """Attach one stdio MCP server (`luxe_mcp_server`) for the next run."""
         raise NotImplementedError(f"{self.name}: no MCP arm")
 
     def version(self) -> str:
@@ -538,21 +531,18 @@ class QwenAdapter(Adapter):
                     "QWEN_CODE_SUPPRESS_YOLO_WARNING": "1"})
         return env
 
-    def attach_mcp(self, server, env_root, offered):
+    def attach_mcp(self, server, env_root):
         # Qwen Code reads servers from settings; the per-cell HOME is ours, so
         # rewrite it per fixture (the server's --repo/--log change each run).
         # It also defers MCP tools behind a tool_search/tool_call bridge by
         # default; in the first MCP rep1 the champion fumbled the bridge and
-        # reached a luxe tool on 1 fixture of 10. `tools.eager` puts them in
-        # the tool list as ordinary functions, as Claude Code does unasked.
-        # It is an allowlist: every entry must match a discovered tool (one
-        # miss and nothing is eager), and unlisted built-ins get deferred —
-        # hence the exact per-fixture `offered` plus the default built-ins.
+        # reached a luxe tool on 1 fixture of 10. The server's
+        # `alwaysLoadTools` lists them as ordinary functions, as Claude Code
+        # does unasked. (`tools.eager` is NOT that: it is a global allowlist
+        # that defers every built-in it doesn't name — probed 2026-10-20.)
         settings = make_qwen_settings(self.model)
         settings["mcpServers"] = {"luxe": {**server, "timeout": LUXE_MCP_TIMEOUT_MS,
-                                           "trust": True}}
-        settings["tools"]["eager"] = [*QWEN_EAGER_BUILTINS,
-                                      *(f"mcp__luxe__{t}" for t in offered)]
+                                           "trust": True, "alwaysLoadTools": True}}
         self._write(env_root, "home/.qwen/settings.json", json.dumps(settings, indent=2))
 
     def cmd(self, model, repo, prompt):
@@ -818,7 +808,7 @@ class ClaudeAdapter(Adapter):
             for k, v in sorted(claude_env.items()))
         return env
 
-    def attach_mcp(self, server, env_root, offered):
+    def attach_mcp(self, server, env_root):
         self.mcp_config = json.dumps({"mcpServers": {"luxe": server}})
         self.files["mcp-config.json"] = self.mcp_config
 
@@ -860,16 +850,6 @@ def luxe_mcp_server(repo: Path, task_type: str, log: Path, agent_path: str) -> d
             "args": [str(LUXE_MCP_SCRIPT), "--repo", str(repo),
                      "--task-type", task_type, "--log", str(log)],
             "env": {"PATH": os.pathsep.join([str(ROOT / ".venv" / "bin"), agent_path])}}
-
-
-def luxe_mcp_offered(repo: Path, task_type: str) -> list[str]:
-    """The tool names the server will list for this repo + task, from the
-    server's own `build_surface` (language- and task-gated as in luxe)."""
-    spec = importlib.util.spec_from_file_location("harness_ab_luxe_mcp", LUXE_MCP_SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    defs, _ = mod.build_surface(str(repo), task_type)
-    return [d.name for d in defs]
 
 
 def luxe_mcp_usage(log: Path) -> dict[str, Any]:
@@ -929,7 +909,7 @@ def run_one(fx: Fixture, ctx: RunCtx) -> dict:
         mcp_log.unlink(missing_ok=True)
         ctx.adapter.attach_mcp(
             luxe_mcp_server(repo, fx.task_type, mcp_log, ctx.env.get("PATH", "")),
-            ctx.output / "_env", luxe_mcp_offered(repo, fx.task_type))
+            ctx.output / "_env")
     cmd = ctx.adapter.cmd(ctx.model, repo, prompt)
     if ctx.profile_path is not None:
         cmd = offline_cmd(cmd, ctx.profile_path)
