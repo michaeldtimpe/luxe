@@ -314,6 +314,55 @@ Observations:
 - Two runs (Codex) did `find /` across the host filesystem. The listing
   included Chrome profile paths. These were reads only.
 
+## Muse-Glimmer-30B-6bit (glim) — rep3, offline (cve_cache denied)
+
+| fixture | opencode | Qwen Code | Codex | Claude Code | codex-cat |
+|---|---|---|---|---|---|
+| strict-flag | R | R | R — but committed a junk `pe_scan.py.bak`; ~40 no-op `echo` calls | R — planted empty/truncated files caught in `--path` and both LM Studio dirs; non-strict byte-identical | R — 9/11 apply_patch accepted |
+| neon-reset | R | T — raw listener, no Cmd/Ctrl guard (blocks hard reload), live after quit | R | R — `HtmlInputHandler` → `__restart`, disposed; no Cmd guard | R — `HtmlInputHandler` → `game:reset`, disposed; 4 rejects, then shell rewrites |
+| doc-config | R | R | R | R 27/27 | R 27/27 (every line has a stray leading space) |
+| healthcheck | R | R | R | R | R |
+| shuffle | T — no modifier guard | T | T | T — Cmd/Ctrl+R `preventDefault`ed + shuffled (node run) | R — skips Meta/Ctrl/Alt, inputs, contentEditable; stable `useCallback` |
+| typing | T — `io.BinaryIO`, hidden by `from __future__ import annotations`; `get_type_hints` raises; `.pyc` | **D** — reproduced: `from io import BinaryIO` → ImportError | R (1226 s, 78 steps for two lines) | **D** — reproduced: `from io import BinaryIO`, `--help` rc 1 (base rc 0); `.pyc` | R — `typing.BinaryIO`; ast self-check |
+| architecture | R | R | R | R | R |
+| modules | T | T | T (draw omitted) | T — cleanup; "one action per turn" false; renderers don't subscribe to EventBus | T |
+| quickstart | R | R (minimal) | R | R (minimal)¹ | R (borderline)² |
+| deps-audit | V — placeholders | V — placeholders | V — CVE-2023-43102 misattributed, then `max_output_tokens` | V — CVE-2023-44487 / CVE-2024-23334 described wrongly with invented ranges, SQLAlchemy placeholders, no disclosure (12 subagents, 1233 s) | V — placeholders; claims OSV/PyPI were checked |
+| **tally** | **6/3/1/0/0** | **5/3/1/1/0** | **7/2/1/0/0** | **6/2/1/1/0** | **8/1/1/0/0** |
+| printed | 9/10 | 8/10 | 6/10 | 9/10 | 8/10 |
+| wall | 55.0 min | 59.5 min | 75.4 min | 73.1 min | 76.3 min |
+
+¹ The verifier graded it FAIL because the added paragraph credits
+`app.run(port=27001)` while the container actually serves through gunicorn. I
+regraded it REAL (minimal): the goal explicitly asks to "reference
+docker-compose.yml and the default port from app.py", and the paragraph does
+that, with the correct port. ² The "Flask development server" claim is wrong
+for the same reason. The steps work as written.
+
+**Glimmer, 3 reps, REAL out of 30:** opencode 19 · Qwen Code 19 · Codex 20 ·
+Claude Code 20 · codex-cat 19. luxe reference: 34/40, or 30/36 without
+deps-audit (luxe's deps-audit runs were online).
+
+Observations (rep3):
+- **The `io.BinaryIO` prior shipped twice more.** Qwen Code and Claude Code
+  were both reproduced as ImportError, and opencode's was masked. Over three
+  reps that is 4 DAMAGING (Codex r1, Qwen Code r2/r3, Claude Code r3).
+  Claude Code caught it in r2 only because it ran `--help` that time.
+- **neon-reset 14/15 REAL outside luxe** (rep3's one miss: Qwen Code THIN)
+  vs 0/4 inside luxe.
+- **codex-cat's best Glimmer cell:** 8 REAL, and the only modifier-guarded
+  shuffle of the Glimmer cells. apply_patch was accepted 16/31 here, against
+  far fewer accepted in reps 1–2. It still fell back to shell rewrites
+  after unified-diff `@@` rejections on neon and quickstart.
+- The printed grader undercounted Codex (6 printed, 7 REAL) and overcounted
+  Claude Code (9 printed, 6 REAL).
+- **Host reach:** codex-cat's deps-audit ran `find /Users/mtimpe -name
+  "*.json"`, which listed `~/.config/planeproxy/config.json`, and `find /
+  -name "*vuln*"`. Claude Code's deps-audit grepped the sibling clones in
+  `~/.luxe/harness-ab-workspace`. All reads, no cache hits. Writes to
+  host `/tmp` (`/tmp/pe_test`, `/tmp/test_gguf`, `/tmp/empty_gguf`) are
+  still there.
+
 ## luxe control — deps-audit offline (`luxe-offline/champ`), 3 reps
 
 luxe maintain, champion, same loopback-only sandbox, `~/.luxe/cve_cache`
