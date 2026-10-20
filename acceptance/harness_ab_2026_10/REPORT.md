@@ -233,11 +233,83 @@ kit*. But for this model, the measured value is in layer 3: the loop's
 nudges, gates, retries and stop conditions. A mainstream loop with luxe's
 tools attached is still a mainstream loop.
 
+## Glimmer neon-reset in luxe: traced (2026-10-20)
+
+Glimmer is 0/4 on neon-reset in luxe (and 0/6 under the r2 ablations) but
+14/15 REAL under the outside harnesses. Traced with `diagrun.sh` (bench
+invocation, full per-turn trace) on m5. Raw runs:
+`m5:~/luxe-bench-tmp/r2/diag/glim-neon-*`, launchers `neon_arms{,2,3,4}.sh`.
+
+**What differs.** Outside, Glimmer reads `src/Game.js` (34 KB) whole, once,
+and edits `HtmlInputHandler.js` within 12–22 tool calls. In luxe it reads
+`Game.js` 13 times in 30 steps (40 times at 60 steps), mostly the same
+`_startNewGame` region (227–256). Its reasoning keeps saying "let's check
+`_startNewGame` code again" about lines it already read. On most steps it
+calls a tool with no reasoning at all; under Claude Code it reasons before
+every call.
+
+**Three luxe conditions feed the loop.**
+1. **The read cap.** 13,653 bytes at `num_ctx` 32768, so `Game.js` arrives
+   in windows.
+2. **Compaction, triggered by a miscalibrated ratio.** luxe divides the
+   server's `prompt_tokens` by its own message estimate, which leaves out
+   the tool definitions. Early in a run that ratio is inflated: 2,225 / 320
+   ≈ 7× at step 0, and 3,184 / 1,125 = 2.83× at step 4. With uncapped reads,
+   the whole `Game.js` lands at step 5: estimate 9,884 × 2.83 ≈ 27.97k, just
+   over phase 2's 85% line (27.85k). Phase 2 drops the file one step after
+   it was read. The server's real count was 11.7k tokens (36%).
+3. **Dropped reasoning.** Glimmer's chat template renders `reasoning_content`
+   on every prior assistant turn. luxe sends none
+   (`LUXE_REASONING_ROUNDTRIP` is off by default). Qwen Code sends it back,
+   confirmed in its source.
+
+**Arms (Glimmer-30B-6bit, 3 reps each, every diff read).**
+
+| Arm | Result | `Game.js` reads/run |
+|---|---|---|
+| baseline (r1/r2/tuning) | 0/4 REAL, no write | ~13 |
+| `max_steps` 60 (r2 H1) | 0/3, no write | 40 |
+| `LUXE_TIERED_COMPACT=0` (r2 H2) | 0/3, no write | 7–9 |
+| `LUXE_TOOL_BUDGET_CTX=0` | 0/3, no write | ~13 |
+| `LUXE_REASONING_ROUNDTRIP=1` | 1 REAL (step-limited), 2 no write | — |
+| `LUXE_CTX_CAL_DAMP=1` | 0/3, no write | — |
+| `LUXE_CTX_SERVER_TRUTH=0` | 0/3, no write | — |
+| all three: compact off + reads uncapped + roundtrip, 30 steps | 1 REAL, 1 **BROKEN**, 1 no write | 3–5 |
+| **all three, 60 steps** | **3/3 REAL**, each finished unforced (23 / 36 / 43 turns) | 1–6 |
+
+- The 30-step BROKEN (all1) bound `this._onKeyDown` at step 29 and never
+  wrote the method. Constructing the class throws `TypeError: Cannot read
+  properties of undefined (reading 'bind')`. Proven by running it
+  (`m5:~/luxe-bench-tmp/hv_neon_all1/probe.mjs`). The step-limit label
+  flagged it, as designed.
+- The 60-step diffs are the reference shape: a document keydown handler,
+  Shift+R (`toLowerCase` or `'R'||'r'`) → `action:request {__restart}` →
+  `_handleAction`'s existing confirm-and-restart path. The listener is
+  removed in `dispose`. Two of the three also skip input and textarea
+  focus. `node --check` and construction pass.
+
+**Verdict.** No single lever converts it. Each one alone is 0–1/3, which is
+Glimmer's run-to-run variance. With all three removed, Glimmer reads `Game.js`
+3–5 times instead of 13 and edits at step 15–27 instead of never. The
+30-step cap then binds, and at 60 steps it passes 3/3. That is the
+outside-harness condition: whole reads kept in context, reasoning
+round-tripped, no tight step cap. It is a real harness-fit gap, not
+something Glimmer can't do. It costs the champion nothing to know: none of
+these is a default change, and the champion passes neon-reset on shipped
+defaults.
+
+**Side finding: the calibration ratio overshoots early in a run.**
+`estimate_messages_tokens` omits the tool JSON. So the early-run ratio is
+system-prompt-plus-tools / messages, several times the true body-text ratio.
+That is what fired phase 2 at 36% real usage here. `LUXE_CTX_CAL_DAMP=1`
+(dormant since the 2026-08-24 big-read incident) is the existing mitigation,
+but it didn't stop compaction in this arm (2 phases per run). Counting the
+`tools` array in the estimate is the direct fix. It would be model-agnostic
+and change champion trajectories wherever a large file lands early, so it
+needs its own champion no-harm 10×3 before it could ship. Not done here.
+
 ## Next
 
-- Not requested, but cheap and worth doing: trace Glimmer neon-reset in luxe
-  (0/4 in luxe, 14/15 outside). It is the one fixture where luxe's loop is
-  clearly the problem.
 - If luxe's tools are to be served to outside harnesses for real, the
   server needs instructions that make the model use them. A prompt-level
   nudge would be a new arm: unbenched, and a change to the neutral task
