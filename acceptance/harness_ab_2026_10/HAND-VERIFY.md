@@ -165,6 +165,67 @@ Observations:
   cross-run contamination. It does mean "could the agent verify" depends on
   what lives on the host.
 
+## Qwen3.8-27B-8bit (q38) — rep2 + rep3, offline (cve_cache denied)
+
+| fixture | opencode r2 · r3 | Qwen Code r2 · r3 | Codex r2 · r3 | Claude Code r2 · r3 | codex-cat r2 · r3 |
+|---|---|---|---|---|---|
+| strict-flag | R (`.pyc`) · R (`.pyc`) | **F** — 5 identical reasoning-only 8192-cap requests, "no visible progress" abort, 2385 s · R (`.pyc`) | R · R | R (`.pyc`) · R | **F** — `max_output_tokens` on a 471 s planning request · R |
+| neon-reset | R · R | R · R | R · R | R · R | R · R |
+| doc-config | R · R | R · R | R · R | R · R | R · R |
+| healthcheck | R · R | R · R | R · R | R · R | R · R |
+| shuffle | R · R | R · R | R · R | R · R | R · R |
+| typing | R (`.pyc`) · R (`.pyc`) | R (`.pyc`) · R (`.pyc`) | R · R | R (`.pyc`) · R (`.pyc`) | R · R |
+| architecture | R · R | R · R | R · R | R · R | R · R |
+| modules | T · T | T · T | T · T | T · T | T · T |
+| quickstart | R · R | R · R | **F** (`max_output_tokens`, empty) · R | R · R | R · R |
+| deps-audit | **F** (length, 1053 s) · **F** (length) | **F** (thinking-only loop, 2339 s) · **F** (same) | **F** (`max_output_tokens`) · **F** (final message degenerates into a countdown of invented CVE-2025-69xxx IDs; nothing written, exit 0) | V · V | V · **F** (`max_output_tokens`) |
+| **tally r2** | **8/1/0/0/1** | **7/1/0/0/2** | **7/1/0/0/2** | **8/1/1/0/0** | **7/1/1/0/1** |
+| **tally r3** | **8/1/0/0/1** | **8/1/0/0/1** | **8/1/0/0/1** | **8/1/1/0/0** | **8/1/0/0/1** |
+| printed r2 · r3 | 9 · 9 | 8 · 9 | 8 · 9 | 10 · 10 | 8 · 9 |
+| wall r2 · r3 (min) | 59.0 · 66.4 | 165.7 · 151.3 | 84.3 · 79.7 | 106.3 · 101.7 | 48.7 · 45.5 |
+
+Every FAIL above was confirmed by hand: empty `diff.patch`, plus a
+length-limit or abort record in events/wire.
+
+**Qwen3.8, 3 reps, REAL out of 30:** opencode 24 · Qwen Code 22 · Codex 23 ·
+Claude Code 24 · codex-cat 23. luxe reference: 24/30. **Qwen3.8 is the model
+the outside harnesses do best with, and it ties luxe there.**
+
+Observations (reps 2–3):
+- **Code fixtures: 48 of 50 runs REAL, 0 THIN/VACUOUS/DAMAGING.** The two
+  misses are strict-flag FAILs where the model produced no output. Every
+  failure the champion showed on these fixtures is gone: modifier guards,
+  listeners routed through `src/input/` and disposed, refs instead of
+  re-binding effects, unchanged return types. Self-checks are also stronger:
+  the model builds GGUF fixtures, fake-DOM harnesses, and its own test files.
+- **Every miss is either deps-audit or a length kill on a doc task.** The
+  dense 27B can spend a whole 8192-token turn reasoning without emitting
+  anything. No outside harness recovers from that: opencode and Codex end the
+  run (Codex sometimes with exit 0), and Qwen Code retries five identical
+  temp-0 requests before aborting. luxe's truncated-turn retry targets exactly
+  this failure.
+- **deps-audit:** VACUOUS where a report got written (Claude Code ×3,
+  codex-cat r2). Those reports disclose the outage but still claim an
+  NVD/GHSA method and misattribute IDs (urllib3's CVE-2024-37891 filed under
+  websockets, Keycloak's CVE-2024-10973 under psycopg2). Everywhere else it
+  FAILed at a length limit before writing anything. No `cve_cache` access in
+  any run.
+- **modules THIN 10/10.** Besides the stale cleanup phase, Qwen3.8 also gets
+  ServerAI's priority order wrong and inverts the EventBus direction in most
+  runs. Most runs never opened `src/`.
+- **Reading outside the sandbox is routine for this model when blocked.**
+  Examples: `find /` and a listing of `~/.cache/uv` and `~/Downloads/*/.venv`
+  (opencode r2 deps-audit), `node_modules` searches through
+  `~/.luxe/harness-ab-workspace/*` and `fixture-cache` (Codex, codex-cat),
+  and `ls ~/.luxe`. All read-only, and none changed a grade. Writes went to
+  host `/tmp` (`/tmp/isomer-venv` left behind by several runs).
+- codex-cat apply_patch works for this model: r2 10/11 accepted, r3 13/14.
+  The champion managed 5/194 over the same two reps.
+- Qwen Code persists its own memory files in the cell's sandbox HOME
+  (`.qwen/projects/<clone>/memory/`). Two fixtures on the same repo within a
+  cell can therefore share state. HOME is per cell, so state does not carry
+  across reps.
+
 ## Muse-Glimmer-30B-6bit (glim) — rep1, offline
 
 | fixture | opencode | Qwen Code | Codex | Claude Code | codex-cat |
