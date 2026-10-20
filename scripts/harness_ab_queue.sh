@@ -10,13 +10,15 @@
 # "opencode qwen codex claude codex-cat"), MODELS (default: champion,
 # Qwen3.8-27B-8bit, Muse-Glimmer-30B-6bit), LUXE_CONTROL (default 1: run
 # luxe's own offline deps-audit control first; resumable, so a restart that
-# finds it done moves straight on).
+# finds it done moves straight on), EXTRA_ARGS (passed to every harness_ab.py
+# run, e.g. "--luxe-mcp" for the MCP arm under its own OUT).
 set -u
 cd "$(dirname "$0")/.."
 : "${OUT:?set OUT to the acceptance dir}"
 REPS=${REPS:-"1 2 3"}
 HARNESSES=${HARNESSES:-"opencode qwen codex claude codex-cat"}
 MODELS=${MODELS:-"Qwen3.6-35B-A3B-6bit:champ:1200 Qwen3.8-27B-8bit:q38:3600 Muse-Glimmer-30B-6bit:glim:3600"}
+read -r -a EXTRA <<<"${EXTRA_ARGS:-}"
 
 if [ "${LUXE_CONTROL:-1}" = 1 ]; then
   echo "=== $(date '+%F %T') luxe-offline control (deps-audit x3)"
@@ -31,7 +33,7 @@ for rep in $REPS; do
       dir="$OUT/$h/$tag/rep$rep"
       echo "=== $(date '+%F %T') rep$rep $tag $h -> $dir"
       uv run python scripts/harness_ab.py --harness "$h" --model "$model" \
-        --output "$dir" --all --timeout "$timeout" --label "$h/$tag/rep$rep"
+        --output "$dir" --all --timeout "$timeout" --label "$h/$tag/rep$rep" ${EXTRA[@]+"${EXTRA[@]}"}
       echo "=== $(date '+%F %T') rc=$? rep$rep $tag $h"
     done
   done
