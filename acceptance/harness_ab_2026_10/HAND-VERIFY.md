@@ -363,6 +363,83 @@ Observations (rep3):
   host `/tmp` (`/tmp/pe_test`, `/tmp/test_gguf`, `/tmp/empty_gguf`) are
   still there.
 
+## MCP arm — champion + luxe's tool layer over MCP, 3 reps (`mcp/`)
+
+The champion was run under Qwen Code and Claude Code with
+`scripts/harness_ab_luxe_mcp.py` attached (c2e8b6e). That script serves luxe's
+`bm25_search`, `find_symbol`, `lint` (ruff), `typecheck` (mypy),
+`security_scan` (bandit), `deps_audit` (pip-audit), and on manage only
+`cve_lookup`. It builds them with the same `_build_full_tool_surface` call
+luxe's loop makes, so the tools appear exactly when luxe would offer them.
+Everything else is held as in the main arms: same sandbox, same task text,
+`cve_cache` denied. Each call is logged to `<fixture>/luxe_mcp.jsonl`.
+
+The first Qwen Code rep1 is **superseded**, kept in `mcp/_qwen_deferred/`.
+Qwen Code hides MCP tools behind its `tool_search` / `tool_call` bridge, and
+the champion fumbled the bridge, so it reached a luxe tool on only 1 fixture
+of 10. That run graded 7/2/1/0/0. Two fixes were needed:
+- `tools.eager` turned out to be a global allowlist. It deferred Qwen Code's
+  own built-ins, and the probe went out with 2 tools on the wire (0d3e1da).
+- The per-server `alwaysLoadTools` worked (50baeae). On the wire, the 10
+  default built-ins were unchanged and the 6 `mcp__luxe__*` tools sat beside
+  them.
+
+Claude Code lists MCP tools directly with no setting needed.
+
+| fixture | Qwen Code + luxe MCP r1 · r2 · r3 | Claude Code + luxe MCP r1 · r2 · r3 |
+|---|---|---|
+| strict-flag | R · R · R (`.pyc` r3) | R · R (`.pyc`) · R (`.pyc`) |
+| neon-reset | R (`HtmlInputHandler`, disposed) · **V** — `e.shiftKey && e.key === 'r'`: Shift+R reports `'R'`, never fires (read the diff myself) · T — raw `document` listener, never removed | T — raw `document` listener; bm25 surfaced `HtmlInputHandler`, which it read and then didn't use · R · R (`'R'`, disposed; node harness) |
+| doc-config | R · R · R | R · R · R |
+| healthcheck | R · R · R | R · R · R |
+| shuffle | R (modifier guard) · T (no modifier guard) · R | T · R · T |
+| typing | R · R · R | R (`.pyc`) · R · R (`.pyc`) |
+| architecture | R · R · R | R · R · R |
+| modules | T · T · T (stale cleanup phase; no `src/` read) | T · T · T |
+| quickstart | R · R · R | R · R · R |
+| deps-audit | V · V · V | V · V · V |
+| **tally** | **8/1/1/0/0 · 6/2/2/0/0 · 7/2/1/0/0** | **6/3/1/0/0 · 8/1/1/0/0 · 7/2/1/0/0** |
+| printed | 10 · 10 · 10 | 10 · 10 · 10 |
+| wall (min) | 9.8 · 9.2 · 10.1 | 9.1 · 9.3 · 8.6 |
+
+**3 reps, REAL out of 30:** Qwen Code + MCP 21 (no MCP: 20). Claude Code +
+MCP 21 (no MCP: 19). luxe: 38/40.
+
+luxe tool use over 3 reps:
+
+| harness | non-audit fixtures that called any luxe tool | calls |
+|---|---|---|
+| Qwen Code | 3/27 | `typecheck` 3, `lint` 3, all on the typing fixture |
+| Claude Code | 9/27 | `bm25_search` 10, `find_symbol` 6 (both of rep1's returned "no matches": dotted/builtin names), `typecheck` 1, `lint` 1 |
+
+- Across the 30 implement runs an analyzer checked the change once: Claude
+  Code r3 strict-flag ran `lint` after its edit, and found nothing new.
+  `security_scan` ran only on deps-audit.
+- On deps-audit, both harnesses called `deps_audit` and `cve_lookup` every
+  rep (21 `cve_lookup` calls each). Every one failed offline
+  ("Operation not permitted"; pip-audit could not reach PyPI), exactly as
+  in the luxe control.
+
+Observations:
+- **No grade moved because of a luxe tool.** The four fixtures whose failure
+  a luxe tool targets kept their no-MCP pattern:
+  - modules: THIN 6/6. Neither harness ran `bm25_search` / `find_symbol`
+    over `src/`.
+  - shuffle: modifier-guard misses 3/6.
+  - neon-reset: 3/6 not REAL.
+  - deps-audit: VACUOUS 6/6.
+  The +1 / +2 REAL against the no-MCP cells is inside rep-to-rep variance
+  (no-MCP Qwen Code went 8 · 6 · 6).
+- **The tools failed exactly as luxe's own did, but the outcome differed.**
+  The tools behaved identically to luxe's offline control: lookups errored.
+  luxe's loop then ended the run (stuck-loop guard, FAIL, nothing written).
+  Both outside loops kept going and wrote the audit from memory. Every report
+  claimed an OSV / "published advisories" method or source, including one
+  literal `CVE-2025-XXXX`, and Qwen Code twice tried
+  `pip install --break-system-packages` on host Python. So the honesty
+  difference on this fixture comes from luxe's loop, not its tools.
+- Wall is unchanged (8.6–10.1 min against 7.4–16.4 no-MCP).
+
 ## luxe control — deps-audit offline (`luxe-offline/champ`), 3 reps
 
 luxe maintain, champion, same loopback-only sandbox, `~/.luxe/cve_cache`
