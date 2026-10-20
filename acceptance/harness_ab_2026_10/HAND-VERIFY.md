@@ -274,6 +274,46 @@ Observations:
   rep1 cell is affected — but reps 2–3 can leak real advisory data into the
   outside harnesses unless the profile denies the cache too.
 
+## Muse-Glimmer-30B-6bit (glim) — rep2, offline (cve_cache denied)
+
+| fixture | opencode | Qwen Code | Codex | Claude Code | codex-cat |
+|---|---|---|---|---|---|
+| strict-flag | R (`.pyc`) | R | R | R | R |
+| neon-reset | R — `HtmlInputHandler`, disposed; no Cmd guard | R | R | R | R — but committed a junk `test_patch.txt`; 27 apply_patch rejections |
+| doc-config | R 27/27 | R | R (`DASHBOARD_PORT` precedence stated backwards) | R | **F** — empty; the final message looped on the same `os.getenv` lines until `max_output_tokens` |
+| healthcheck | R | R | R | R | R |
+| shuffle | T — no modifier guard | R | T | T | T |
+| typing | R (`.pyc`) | **D** — reproduced: `from io import BinaryIO` → ImportError, `--help` rc 1 (base rc 0) | R | R (`.pyc`; caught its own `io` import) | R |
+| architecture | R | R | R | R | R |
+| modules | T | T | T (no cleanup phase, but EventBus inverted) | T | T |
+| quickstart | R (minimal) | R (minimal) | R | R (minimal) | R (minimal) |
+| deps-audit | V — placeholders (`GHSA-xxxx`) | V | V | **F** — unfilled `[Package] - [CVE]` template; methodology falsely claims databases were checked | V |
+| **tally** | **7/2/1/0/0** | **7/1/1/1/0** | **7/2/1/0/0** | **7/2/0/0/1** | **6/2/1/0/1** |
+| printed | 9/10 | 10/10 | 8/10 | 8/10 | 7/10 |
+| wall | 53.3 min | 66.5 min | 92.5 min | 60.8 min | 79.2 min |
+
+Observations:
+- **The `io.BinaryIO` defect is a Glimmer prior.** It appeared under Codex
+  in rep1, under Qwen Code in reps 2 and 3 (both reproduced: ImportError),
+  and under opencode in rep3 (where `from __future__ import annotations`
+  hides it). Claude Code's runs caught it only because they ran `--help`.
+  `py_compile`, which most agents use as their check, cannot see it.
+- **neon-reset went 5/5 REAL here** (rep1 was also 5/5). Inside luxe,
+  Glimmer was 0/4 on this fixture. That interaction remains untraced.
+- **Glimmer's offline deps-audit uses visible placeholders** (`CVE-2024-...`,
+  `GHSA-xxxx-xxxx-xxxx`) and misnames upstream repos (`eth-brownie/web3.py`,
+  `motdotla/dotenv` for python-dotenv). It never discloses that it was
+  offline, and it claims "no CVE found in current advisory databases" for
+  packages it never checked.
+- apply_patch with Glimmer: codex-cat 3/23 on the doc fixtures and about 30
+  rejections on the code fixtures (unified-diff headers inside the
+  envelope). Plain Codex has no apply_patch tool, yet Glimmer keeps calling
+  it (about 17 steps lost on neon).
+- Claude Code fanned the deps-audit out to 8 subagents (100 requests,
+  1101 s), and the result was an empty template.
+- Two runs (Codex) did `find /` across the host filesystem. The listing
+  included Chrome profile paths. These were reads only.
+
 ## luxe control — deps-audit offline (`luxe-offline/champ`), 3 reps
 
 luxe maintain, champion, same loopback-only sandbox, `~/.luxe/cve_cache`
