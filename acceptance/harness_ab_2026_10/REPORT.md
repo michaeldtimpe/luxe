@@ -306,7 +306,36 @@ That is what fired phase 2 at 36% real usage here. `LUXE_CTX_CAL_DAMP=1`
 but it didn't stop compaction in this arm (2 phases per run). Counting the
 `tools` array in the estimate is the direct fix. It would be model-agnostic
 and change champion trajectories wherever a large file lands early, so it
-needs its own champion no-harm 10×3 before it could ship. Not done here.
+needs its own champion no-harm 10×3 before it could ship. **Done the same
+day:** `LUXE_CTX_CAL_TOOLS`, default-ON in 0b5749f after a clean champion 10×3
+(`acceptance/ctx_cal_tools_2026_10/REPORT.md`).
+
+### Follow-up: which conditions are necessary (2026-10-20)
+
+Three more arms at 60 steps, 3 reps each. Every diff was read and every run's
+`npm test` passes. Raw runs: `glim-neon-{all60calt,cmp60calt,cmp60nocal}_*`,
+launchers `neon_arms5.sh` and `neon_arms6.sh`.
+
+| Arm (60 steps, reads uncapped, roundtrip on) | Result | Steps | Compaction |
+|---|---|---|---|
+| compaction off, no flag (all60, above) | 3/3 REAL | 43 / 36 / 23 | none |
+| compaction off + `CTX_CAL_TOOLS` | 3/3 REAL | 42 / 37 / 36 | none |
+| **compaction ON**, flag off | **3/3 REAL** (one hit step 60; edit complete) | 60 / 54 / 34 | phases 1–2, 3–6 per run |
+| compaction ON + flag | 3/3 REAL | 51 / 50 / 41 | phases 1–3, 5–7 per run |
+| flag alone, 30 steps (shipped defaults now) | 1/3 REAL (step-limited) | 30 | — |
+
+Eleven of the twelve 60-step diffs use the reference shape: Shift+R →
+`action:request {__restart}` → the existing confirm-and-restart. A few add an
+input/textarea guard. `cmp60nocal_1` adds a `game:reset` event instead, which
+restarts with the current persona; it is also correct.
+
+**Correction to the verdict above.** Compaction is not a necessary condition.
+With uncapped reads and the reasoning roundtrip, Glimmer passes 3/3 at 60
+steps with compaction on, with or without the calibration fix. The flag earns
+no credit here: n=3 per arm, and the only visible difference is one control
+run that used every step. What Glimmer needs from luxe is **whole reads +
+reasoning round-tripped + a longer budget than 30 steps**. All three are
+model-fit settings, not defaults the champion needs, so none is proposed.
 
 ## Next
 
