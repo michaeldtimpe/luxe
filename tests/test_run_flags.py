@@ -39,7 +39,6 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.convergence_gate is False
     assert f.post_write_idle_repeats is False
     assert f.ctx_cal_damp is False                        # opt-in 2026-08-24
-    assert f.ctx_cal_tools is False                       # opt-in 2026-10-20
     assert f.ctx_cal_unmeasured_ratio == CALIBRATION_UNMEASURED_RATIO
     assert f.tool_result_clamp is False                   # opt-in 2026-08-24
     assert f.repeat_read_stub is False                    # opt-in 2026-10-17
@@ -50,6 +49,7 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.truncated_turn_retry is True                 # default-ON 2026-08-10
     assert f.ctx_server_truth is True                     # default-ON 2026-08-11
     assert f.empty_turn_retry is True                     # default-ON 2026-08-17
+    assert f.ctx_cal_tools is True                        # default-ON 2026-10-20
     assert f.adaptive_no_write is True
     assert f.adaptive_score_trend is True
     assert f.truncated_turn_max_retries == _TRUNCATED_TURN_MAX_RETRIES
@@ -88,8 +88,6 @@ OPT_IN = [
     # 2026-10-17 (acceptance/tuning_2026_10): no default-ON arm benched.
     ("LUXE_REPEAT_READ_STUB", "repeat_read_stub"),
     ("LUXE_REREAD_NOTE", "reread_note"),
-    # 2026-10-20 (acceptance/harness_ab_2026_10 Glimmer trace): no-harm pending.
-    ("LUXE_CTX_CAL_TOOLS", "ctx_cal_tools"),
 ]
 
 
@@ -133,6 +131,17 @@ def test_ctx_server_truth_is_on_unless_it_is_exactly_zero(value, expected):
     # tool JSON, so compaction fired at roughly double the context it named.
     got = RunFlags.from_env({"LUXE_CTX_SERVER_TRUTH": value})
     assert got.ctx_server_truth is expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("0", False),          # the ONLY disabling value
+    ("1", True), ("", True), ("no", True), ("false", True),
+])
+def test_ctx_cal_tools_is_on_unless_it_is_exactly_zero(value, expected):
+    # Default-ON 2026-10-20 (acceptance/ctx_cal_tools_2026_10): the tool
+    # schemas are real prompt the messages-only estimate never saw.
+    got = RunFlags.from_env({"LUXE_CTX_CAL_TOOLS": value})
+    assert got.ctx_cal_tools is expected
 
 
 @pytest.mark.parametrize("value,expected", [

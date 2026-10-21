@@ -1618,8 +1618,8 @@
    "Reading widget, pass 7.",
    "Reading widget, pass 8."
   ],
-  "peak_context_pressure": 0.108604017,
-  "final_context_pressure": 0.108604017,
+  "peak_context_pressure": 0.040677966,
+  "final_context_pressure": 0.040677966,
   "tool_calls": [
    {
     "id": "",

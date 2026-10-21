@@ -155,8 +155,7 @@ class TestDefaultPathIsUntouched:
                             if m.get("role") == "tool"]
 
     @pytest.mark.parametrize("var", ["LUXE_TOOL_RESULT_CLAMP",
-                                     "LUXE_CTX_CAL_DAMP",
-                                     "LUXE_CTX_CAL_TOOLS"])
+                                     "LUXE_CTX_CAL_DAMP"])
     @pytest.mark.parametrize("value", NEAR_MISSES)
     def test_every_near_miss_spelling_leaves_the_run_byte_identical(
             self, monkeypatch, var, value):
@@ -175,8 +174,7 @@ class TestDefaultPathIsUntouched:
         assert result.steps == base_result.steps
 
     @pytest.mark.parametrize("var", ["LUXE_TOOL_RESULT_CLAMP",
-                                     "LUXE_CTX_CAL_DAMP",
-                                     "LUXE_CTX_CAL_TOOLS"])
+                                     "LUXE_CTX_CAL_DAMP"])
     def test_the_exact_string_one_is_the_only_thing_that_changes_anything(
             self, monkeypatch, var):
         baseline, base_result = self._baseline(monkeypatch)
@@ -380,6 +378,10 @@ class TestCalibrationDamping:
 
     def _run_replay(self, monkeypatch, damp: bool):
         _clear(monkeypatch)
+        # The replayed ratio is the 2026-08-24 one, measured with the schemas
+        # outside the estimate; LUXE_CTX_CAL_TOOLS (default-ON since) would
+        # remove its cause, so the damping lever is pinned on the old reading.
+        monkeypatch.setenv("LUXE_CTX_CAL_TOOLS", "0")
         if damp:
             monkeypatch.setenv("LUXE_CTX_CAL_DAMP", "1")
         return _run(self.SCRIPT(), prompt_tokens=3_102,
@@ -473,6 +475,7 @@ class TestCalibrationDamping:
     def test_a_malformed_sweep_value_costs_a_default_arm_not_a_crash(
             self, monkeypatch):
         _clear(monkeypatch)
+        monkeypatch.setenv("LUXE_CTX_CAL_TOOLS", "0")       # as _run_replay
         monkeypatch.setenv("LUXE_CTX_CAL_DAMP", "1")
         monkeypatch.setenv("LUXE_CTX_CAL_UNMEASURED_RATIO", "prose")
         _, result = _run(self.SCRIPT(), prompt_tokens=3_102,
@@ -536,8 +539,8 @@ class TestToolSchemasInCalibration:
 
     def _run(self, monkeypatch, *, on: bool, tool_defs=None):
         _clear(monkeypatch)
-        if on:
-            monkeypatch.setenv("LUXE_CTX_CAL_TOOLS", "1")
+        if not on:
+            monkeypatch.setenv("LUXE_CTX_CAL_TOOLS", "0")
         defs = self._heavy_tool_defs() if tool_defs is None else tool_defs
         backend = _TruthfulBackend([_call("tool_0", path="big.js"), _stop()])
         result = run_agent(
@@ -557,14 +560,14 @@ class TestToolSchemasInCalibration:
 
     def test_off_the_schema_heavy_first_ratio_overstates_the_big_read(
             self, monkeypatch):
-        """The status quo, reproduced: well past the window on a request that
-        fills under half of it."""
+        """Disabled (=0), the pre-2026-10-20 reading, reproduced: well past the
+        window on a request that fills under half of it."""
         backend, result = self._run(monkeypatch, on=False)
         assert self._true_pressure(backend) < 0.5
         assert result.peak_context_pressure > 1.0
 
     def test_on_the_reading_tracks_the_real_window(self, monkeypatch):
-        """Pressure is the message share of what the schemas leave, so it
+        """The default (env unset). Pressure is the message share of what the schemas leave, so it
         sits at or just under the true total and far below any phase
         trigger it was crossing before."""
         backend, result = self._run(monkeypatch, on=True)

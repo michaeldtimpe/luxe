@@ -322,8 +322,8 @@
   "completion_tokens": 240,
   "last_prompt_tokens": 349,
   "step_texts": [],
-  "peak_context_pressure": 0.045623521,
-  "final_context_pressure": 0.045623521,
+  "peak_context_pressure": 0.031475869,
+  "final_context_pressure": 0.031475869,
   "tool_calls": [
    {
     "id": "",

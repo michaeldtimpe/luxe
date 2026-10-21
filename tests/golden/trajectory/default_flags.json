@@ -592,18 +592,6 @@
      ]
     },
     {
-     "role": "tool",
-     "tool_call_id": "a1",
-     "name": "read_file",
-     "content": "1\tline 0000: the quick brown fox jumps over the lazy dog\n2\tline 0001: the quick brown fox jumps over the lazy dog\n3\tline 0002: the quick brown fox jumps over the lazy dog\n4\tline 0003: the quick brown \n[Truncated — 9132 chars removed]"
-    },
-    {
-     "role": "tool",
-     "tool_call_id": "a2",
-     "name": "list_dir",
-     "content": "config.py\nutil.py\nwidget.py"
-    },
-    {
      "role": "assistant",
      "content": "Checking again.",
      "tool_calls": [
@@ -902,18 +890,6 @@
    "convergence_score": 0.25
   },
   {
-   "kind": "compaction_phase_reached",
-   "run_id": "golden-default_flags",
-   "phase": "main",
-   "step": 1,
-   "phase_reached": 2,
-   "tokens_before": 343,
-   "tokens_after": 343,
-   "tool_results_dropped": 0,
-   "effective": false,
-   "eligible_end": 2
-  },
-  {
    "kind": "step_usage",
    "run_id": "golden-default_flags",
    "phase": "main",
@@ -936,14 +912,6 @@
    "cached": false,
    "bytes_out": 9332,
    "path": "data/big.txt"
-  },
-  {
-   "kind": "read_after_compact",
-   "run_id": "golden-default_flags",
-   "phase": "main",
-   "step": 1,
-   "name": "read_file",
-   "compaction_max_phase": 2
   },
   {
    "kind": "tool_call",
@@ -1243,10 +1211,10 @@
    "run_id": "golden-default_flags",
    "phase": "main",
    "step": 6,
-   "phase_reached": 1,
+   "phase_reached": 3,
    "tokens_before": 3179,
-   "tokens_after": 904,
-   "tool_results_dropped": 1,
+   "tokens_after": 832,
+   "tool_results_dropped": 2,
    "effective": true,
    "eligible_end": 6
   },
@@ -1255,7 +1223,7 @@
    "run_id": "golden-default_flags",
    "phase": "main",
    "step": 6,
-   "prompt_tokens": 3371,
+   "prompt_tokens": 3235,
    "cached_tokens": null,
    "completion_tokens": 60,
    "prefill_s": null,
@@ -1307,11 +1275,11 @@
    "phase": "main",
    "step": 7,
    "phase_reached": 3,
-   "tokens_before": 951,
+   "tokens_before": 879,
    "tokens_after": 789,
-   "tool_results_dropped": 6,
+   "tool_results_dropped": 4,
    "effective": true,
-   "eligible_end": 11
+   "eligible_end": 9
   },
   {
    "kind": "step_usage",
@@ -1379,9 +1347,9 @@
    "phase": "main",
    "max_phase_reached": 3,
    "phase_at_first_write": 3,
-   "tool_results_dropped_total": 8,
+   "tool_results_dropped_total": 7,
    "total_tokens_dropped": 2456,
-   "ineffective_fires": 4,
+   "ineffective_fires": 3,
    "aborted": false
   }
  ],
@@ -1392,7 +1360,7 @@
   "schema_rejects": 2,
   "aborted": false,
   "abort_reason": "",
-  "prompt_tokens": 35886,
+  "prompt_tokens": 35750,
   "completion_tokens": 1325,
   "last_prompt_tokens": 3131,
   "step_texts": [
@@ -1400,8 +1368,8 @@
    "Checking again.",
    "Editing now."
   ],
-  "peak_context_pressure": 6.542857143,
-  "final_context_pressure": 1.182835821,
+  "peak_context_pressure": 4.853435115,
+  "final_context_pressure": 1.329803328,
   "tool_calls": [
    {
     "id": "",
