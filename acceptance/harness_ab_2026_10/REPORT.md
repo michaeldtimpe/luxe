@@ -337,6 +337,34 @@ run that used every step. What Glimmer needs from luxe is **whole reads +
 reasoning round-tripped + a longer budget than 30 steps**. All three are
 model-fit settings, not defaults the champion needs, so none is proposed.
 
+### Follow-up: the two remaining levers, alone and at 30 steps (2026-10-21)
+
+Compaction and `CTX_CAL_TOOLS` were at their defaults (on) in all three arms
+below, 3 reps each. Every diff was read and every run's `npm test` passes.
+Launchers: `neon_arms7.sh` and `neon_arms8.sh`.
+
+| Arm | Result | `Game.js` reads | First write |
+|---|---|---|---|
+| reads uncapped + roundtrip, **30 steps** | 1 REAL (step-limited, edit complete), 2 no write | 2 / 7 / 7 | step 22 / — / — |
+| reads uncapped alone, 60 steps | **0/3**, no write in 60 steps | 35 / 36 / 14 | — |
+| **roundtrip alone, 60 steps** | **3/3 REAL**, each finished unforced (49 / 50 / 40 steps) | 10 / 10 / 7 | 39 / 35 / 27 |
+
+All four REAL diffs use the reference `__restart` shape. Two of them skip key
+presses while you're typing in a field.
+
+**Revised verdict.** Glimmer needs exactly two things from luxe: **its reasoning
+sent back (`LUXE_REASONING_ROUNDTRIP=1`) and more than 30 steps.** The read cap
+and compaction are not necessary.
+- **Without the roundtrip,** Glimmer loses its own record of what it already
+  read and re-reads `Game.js` until the budget runs out. That happens at 30
+  steps (0/3), at 60 steps (0/3), and with reads uncapped (0/3).
+- **With the roundtrip,** the re-reads drop to 7–10. It writes at step 27–39,
+  past the default cap of 30, which is why the 30-step arms land at 1/3.
+
+Glimmer's chat template expects `reasoning_content` on prior turns (see the
+trace above). Neither setting changes for the champion; Glimmer is not
+promoted.
+
 ## Next
 
 - If luxe's tools are to be served to outside harnesses for real, the
