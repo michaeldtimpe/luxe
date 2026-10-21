@@ -252,10 +252,10 @@ Overnight elimination bench on m5, 4 arms × 10 maintain_suite fixtures (matrix
    corpus are true positives. **OWED: a bench-as-truth maintain_suite run** —
    new gates change scores by construction.
 2. **`run.py:866` mislabels max-steps deaths as `bailout_type=
-   "context_overflow"` — STILL OPEN**, unchanged since the 2026-08-18 handoff
-   and confirmed live a second time here: the arm it hit peaked at 56.3%
-   context. It string-matches "max steps" in `abort_reason`; needs a
-   rename/split plus a test.
+   "context_overflow"`** — CLOSED 2026-10-21: max steps is now `max_steps`,
+   and `context_overflow` means the server rejected the prompt as too long
+   (`tests/test_bailout_classify.py`). Records written before that use
+   `context_overflow` for max steps; their `bailout_reason` tells them apart.
 3. **Both graders are loose in the same direction.** The binary
    `expected_outcome` grader is a `regex_present` + `min_added_lines` check,
    far looser than the fixture goal text — and the stricter SpecDD
@@ -306,9 +306,8 @@ elimination bench on m5 vs the thick fallback:
 - **Weights on m5:** 4bit + 8bit kept (8bit = opt-in 262K-ctx session
   candidate, never a manifest slot); **bf16 removed** (51 GB freed) — a
   future 6-bit carve needs it re-pulled.
-- **Open:** (a) `bailout_type="context_overflow"` mislabel in
-  `benchmarks/maintain_suite/run.py:866` (string-matches "max steps";
-  needs a rename/split + test); (b) re-open the bake-off only on: official
+- **Open:** (a) ~~`bailout_type="context_overflow"` mislabel~~ — closed
+  2026-10-21 (now `max_steps`); (b) re-open the bake-off only on: official
   6bit quant, oMLX thinking-off for Qwen3.8, or per-model write-pressure
   tuning.
 

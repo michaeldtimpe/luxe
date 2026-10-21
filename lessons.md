@@ -57,8 +57,10 @@ Report: `acceptance/m5max_moe_r2_2026_10/REPORT.md`.
   commit time, and check every collected diff's +/- against result.json
   before reading it (`m5:~/luxe-bench-tmp/r2/{collect,attrcheck}.py`).
 - Test a grading checker against one doc in each format before trusting it.
-- Read `bailout_reason`, not `bailout_type`. Relabeling is a follow-up (it
-  breaks history comparability).
+- Read `bailout_reason`, not `bailout_type`. Relabelled 2026-10-21: max
+  steps is `max_steps`, and `context_overflow` now means the server rejected
+  the prompt as too long. Records from before that date still carry the old
+  label; their `bailout_reason` disambiguates.
 - oMLX greedy decode is non-deterministic at near-ties; no cache setting makes
   runs reproducible. Multi-rep is the only answer — don't build a "cold mode".
 - Harness levers (60 steps, compaction off) converted zero challenger failures;
