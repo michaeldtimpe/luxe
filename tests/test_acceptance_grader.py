@@ -1282,3 +1282,229 @@ def test_regex_absent_passes_when_the_target_is_cleaned(git_repo: Path):
     r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
                       citations_unresolved=0, citations_total=0, base_sha=base)
     assert r.expected_outcome_passed, r.expected_outcome_detail
+
+
+# --- 2026-10-21: two false failures from the harness_ab hand-verify -------
+# Both printed 1/5 on runs hand-graded REAL; acceptance/grader_fixes_2026_10.
+
+from benchmarks.maintain_suite.grade import (  # noqa: E402
+    _added_line_units,
+    _unfenced_headings,
+)
+
+# isomer README Quick Start at base_sha 33da2bc, and codex/q38/rep1's rewrite
+# of it (+25/-22), verbatim from the run's diff.patch: the same commands as
+# numbered steps.
+_ISOMER_QS_BASE = """# Isomer
+
+Isomer is a Dockerized, browser-based compliance tracking tool for **ISO 27001**.
+
+
+## Quick Start
+
+```bash
+# First-time setup: create a .env with a real secret.
+# The app refuses to start without ISOMER_SECRET set.
+cp .env.example .env
+python3 -c "import secrets; print('ISOMER_SECRET=' + secrets.token_urlsafe(48))" > .env
+chmod 600 .env
+
+# Build and run
+docker compose up -d --build
+
+# On the first boot the container generates a one-time bootstrap
+# password for the `admin` user and prints it to stderr. Read it once
+# and change it from Settings → Users on first login:
+docker logs isomer 2>&1 | grep -A1 "bootstrap admin"
+
+# Alternatively, pass ISOMER_BOOTSTRAP_PASSWORD in .env on first boot
+# to pick the initial password yourself (env is read only when the
+# users table is empty).
+
+# Local access (loopback-only; put nginx in front for remote):
+# http://127.0.0.1:27001/
+```
+
+## Features
+
+- Controls register
+"""
+
+_ISOMER_QS_STEPS = """# Isomer
+
+Isomer is a Dockerized, browser-based compliance tracking tool for **ISO 27001**.
+
+
+## Quick Start
+
+Isomer runs as a single Docker container defined in [`docker-compose.yml`](docker-compose.yml). The compose file builds the image from the repo root, mounts a named volume (`isomer_data`) at `/data` for persistence, loads `ISOMER_SECRET` from `.env`, and publishes the app on `127.0.0.1:27001` only — the same default port the Flask app uses in [`app.py`](app.py) (`app.run(host="0.0.0.0", port=27001)`).
+
+1. **Create `.env` with a real secret** (first time only). The app refuses to start without `ISOMER_SECRET` set:
+
+   ```bash
+   cp .env.example .env
+   python3 -c "import secrets; print('ISOMER_SECRET=' + secrets.token_urlsafe(48))" > .env
+   chmod 600 .env
+   ```
+
+2. **Build and start the container** with Docker Compose:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. **Get the bootstrap admin password.** On the first boot the container generates a one-time bootstrap password for the `admin` user and prints it to stderr. Read it once and change it from Settings → Users on first login:
+
+   ```bash
+   docker logs isomer 2>&1 | grep -A1 "bootstrap admin"
+   ```
+
+   Alternatively, pass `ISOMER_BOOTSTRAP_PASSWORD` in `.env` on first boot to pick the initial password yourself (env is read only when the users table is empty).
+
+4. **Open the dashboard.** The app is reachable at <http://127.0.0.1:27001/> (loopback-only; put nginx in front for remote access). Log in with `admin` and the bootstrap password — the dashboard lists all companies with completion stats.
+
+## Features
+
+- Controls register
+"""
+
+
+def test_fenced_shell_comments_are_not_sections(git_repo: Path):
+    """codex/q38/rep1 + codex-cat/q38/rep2 quickstart: every command kept,
+    the ```bash block split into numbered steps. Prong 3 read the deleted
+    `# First-time setup: ...` comment as a section heading and printed 1/5."""
+    _write_commit(git_repo, "README.md", _ISOMER_QS_BASE, "seed readme")
+    base = _base_sha(git_repo)
+    _write_commit(git_repo, "README.md", _ISOMER_QS_STEPS, "steps")
+    fix = _f("qs", "regex_present", task_type="document",
+             pattern=r"(?i)docker[\s-]?compose", min_added_lines=4)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert "destructive_diff" not in _gate_names(r), r.gates_triggered
+    assert r.expected_outcome_passed, r.expected_outcome_detail
+
+
+def test_hunk_opening_mid_fence_still_reads_comments_as_code(git_repo: Path):
+    """A hunk's context can start inside a fence, so the fence state has to
+    come from the whole file, not the hunk lines."""
+    body = [f"echo step {i}" for i in range(30)]
+    base_text = "# Ops\n\n## Runbook\n\n```sh\n" + "\n".join(
+        body[:15] + ["# Rotate the signing keys", "rotate --all", "verify --all",
+                     "publish --all"] + body[15:]) + "\n```\n"
+    _write_commit(git_repo, "RUNBOOK.md", base_text, "seed")
+    base = _base_sha(git_repo)
+    new_text = base_text.replace(
+        "# Rotate the signing keys\nrotate --all\nverify --all\npublish --all\n",
+        "rotate --all --verify\n")
+    _write_commit(git_repo, "RUNBOOK.md", new_text, "fold rotate steps")
+    fix = _f("rb", "regex_present", task_type="document", pattern=r"rotate")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert "destructive_diff" not in _gate_names(r), r.gates_triggered
+
+
+def test_real_section_beside_a_fence_still_trips(git_repo: Path):
+    """The filter must not blind prong 3: the 2026-08-17 shape (a real section
+    deleted to make room) still fires when the file also has a code block."""
+    base_text = _README + "\n```sh\n# not a heading\nnpm start\n```\n"
+    _write_commit(git_repo, "README.md", base_text, "seed readme")
+    base = _base_sha(git_repo)
+    rewritten = base_text.replace(
+        """## Features
+
+- Pick a random movie from the curated list
+- Reroll without reloading the page
+- Remembers the last five picks
+""",
+        """## How It Works
+
+The list is sourced in src/App.jsx and the next pick is chosen by the
+useRandomMovie hook, which draws a fresh index on every reroll.
+""",
+    )
+    _write_commit(git_repo, "README.md", rewritten, "swap section")
+    fix = _f("f-section", "regex_present", task_type="document",
+             pattern=r"src/App\.jsx")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert "destructive_diff" in _gate_names(r)
+    assert "Features" in r.expected_outcome_detail
+
+
+def test_unfenced_headings_fence_rules():
+    text = "\n".join([
+        "# Title",
+        "```bash",
+        "# comment",
+        "````",            # longer backtick run closes a ``` fence
+        "## Real",
+        "~~~",
+        "# tilde comment",
+        "```",             # wrong fence char: does not close ~~~
+        "# still code",
+        "~~~",
+        "   ```python",    # list-nested fence (indent past 3) still counts
+        "   # nested comment",
+        "   ```",
+        "### After",
+    ])
+    assert _unfenced_headings(text) == frozenset({"Title", "Real", "After"})
+
+
+def test_line_units_count_prose_by_80_columns():
+    assert _added_line_units("README.md", "") == 1
+    assert _added_line_units("README.md", "x" * 80) == 1
+    assert _added_line_units("README.md", "x" * 81) == 2
+    assert _added_line_units("docs/guide.MD", "x" * 400) == 5
+    # Code is never inflated: a long code line is not more code.
+    assert _added_line_units("src/app.py", "x" * 400) == 1
+
+
+_UNWRAPPED = ("To run Isomer locally, use docker compose with the provided "
+              "docker-compose.yml: `docker compose up -d --build`. The app "
+              "listens on port 27001 (see app.py), so open "
+              "http://127.0.0.1:27001/ in a browser to reach the dashboard and "
+              "sign in with the bootstrap admin password from the logs.")
+
+
+def test_unwrapped_paragraph_clears_the_substantive_edit_floor(git_repo: Path):
+    """Glimmer's quickstart shape: one unwrapped paragraph plus a blank line
+    (2 physical lines, ~60 words) against min_added_lines=4. Hand-verified
+    REAL in 11 harness_ab runs; printed 1/5 before."""
+    _write_commit(git_repo, "README.md", "# Isomer\n\n## Quick Start\n", "seed")
+    base = _base_sha(git_repo)
+    _write_commit(git_repo, "README.md",
+                  "# Isomer\n\n## Quick Start\n\n" + _UNWRAPPED + "\n", "doc")
+    fix = _f("qs-unwrapped", "regex_present", task_type="document",
+             pattern=r"(?i)docker[\s-]?compose", min_added_lines=4)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed, r.expected_outcome_detail
+
+
+def test_one_line_doc_edit_still_fails_the_floor(git_repo: Path):
+    _write_commit(git_repo, "README.md", "# Isomer\n\n## Quick Start\n", "seed")
+    base = _base_sha(git_repo)
+    _write_commit(git_repo, "README.md",
+                  "# Isomer\n\n## Quick Start\n\nRun `docker compose up`.\n",
+                  "one-liner")
+    fix = _f("qs-oneliner", "regex_present", task_type="document",
+             pattern=r"(?i)docker[\s-]?compose", min_added_lines=4)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert "only 2 added lines, need ≥4" in r.expected_outcome_detail
+
+
+def test_long_code_line_does_not_clear_the_floor(git_repo: Path):
+    base = _base_sha(git_repo)
+    p = git_repo / "src" / "main.py"
+    p.write_text(p.read_text() + "X = [" + ", ".join(["1"] * 200) + "]\n")
+    subprocess.run(["git", "commit", "-q", "-am", "long line"], cwd=git_repo,
+                   check=True)
+    fix = _f("code-long", "regex_present", task_type="implement",
+             pattern=r"X = \[", min_added_lines=2)
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert "only 1 added lines, need ≥2" in r.expected_outcome_detail

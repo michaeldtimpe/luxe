@@ -122,6 +122,12 @@ _MARKDOWN_EXTS = frozenset({".md", ".markdown", ".mdown", ".mkd"})
 _DOC_SECTION_MIN_BODY_LOSS = 3
 _DOC_SECTION_MAX_EXPANSION = 1.2
 _MD_HEADING_RX = re.compile(r"^\s{0,3}(?:#{1,6})\s+(.+?)\s*#*\s*$")
+# A fenced code block's opening/closing line. Indent is NOT capped at 3: a
+# fence nested in a list item sits deeper, and its `# comment` lines are just
+# as much not-a-heading. 2026-10-21: a README that turned a ```bash block of
+# `# First-time setup: ...` comments into numbered steps (every command kept)
+# fired this prong on a shell comment — 2 of the harness_ab false failures.
+_MD_FENCE_RX = re.compile(r"^\s*(`{3,}|~{3,})")
 
 # Content words: >=2 chars, starting with a letter or underscore. Bare numbers
 # and punctuation carry no information for the loss ratio.
@@ -185,6 +191,7 @@ def check_destructive_deletion(
     *,
     diff_hunks: "dict[str, tuple[list[str], list[str]]] | None" = None,
     task_type: str = "",
+    doc_headings: "DocHeadings | None" = None,
 ) -> tuple[bool, str]:
     """True if the diff destroys existing content. Returns (triggered, detail).
 
@@ -210,7 +217,7 @@ def check_destructive_deletion(
         return True, detail
 
     # Prong 3 — a documented markdown section deleted to make room.
-    ok, detail = _check_doc_section_loss(diff_hunks, task_type)
+    ok, detail = _check_doc_section_loss(diff_hunks, task_type, doc_headings)
     if ok:
         return True, detail
     return False, ""
@@ -302,6 +309,35 @@ def _headings(lines: list[str]) -> list[str]:
     return out
 
 
+def _unfenced_headings(text: str) -> frozenset[str]:
+    """Titles of the ATX headings in a whole markdown file that sit OUTSIDE
+    fenced code blocks.
+
+    Diff hunks can't answer this on their own — a hunk can open mid-fence — so
+    prong 3 reads the file at each side of the diff and keeps only titles that
+    are real headings there. A title present both as a heading and as a fenced
+    comment counts as a heading: the filter only ever removes candidates.
+    """
+    out: set[str] = set()
+    fence = ""
+    for line in text.splitlines():
+        m = _MD_FENCE_RX.match(line)
+        if m:
+            marker = m.group(1)
+            if not fence:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence) \
+                    and not line.strip()[len(marker):].strip():
+                fence = ""
+            continue
+        if fence:
+            continue
+        hm = _MD_HEADING_RX.match(line)
+        if hm and hm.group(1).strip():
+            out.add(hm.group(1).strip())
+    return frozenset(out)
+
+
 def _heading_key(title: str) -> tuple[str, frozenset[str]]:
     tokens = frozenset(_TOKEN_RX.findall(title.lower()))
     return "".join(sorted(re.findall(r"[a-z0-9]+", title.lower()))), tokens
@@ -310,6 +346,7 @@ def _heading_key(title: str) -> tuple[str, frozenset[str]]:
 def _check_doc_section_loss(
     diff_hunks: "dict[str, tuple[list[str], list[str]]]",
     task_type: str,
+    doc_headings: "DocHeadings | None" = None,
 ) -> tuple[bool, str]:
     """document/manage only: a markdown section heading AND its body deleted.
 
@@ -325,13 +362,21 @@ def _check_doc_section_loss(
     matches it after alnum-squashing ("Quick Start" -> "Quickstart") or shares
     at least half its words. And the body must go too — a diff that only
     rewrites heading lines can never trip this.
+
+    `doc_headings` (from `_doc_headings`) maps path -> (base titles, HEAD
+    titles) outside fenced code. When a side is known, a `#` line that is not
+    a real heading on that side is body text, not a section. A missing entry
+    or side keeps the pre-2026-10-21 reading of every `#` line as a heading.
     """
     if task_type not in ("document", "manage"):
         return False, ""
     for path, (added, deleted) in sorted(diff_hunks.items()):
         if Path(path).suffix.lower() not in _MARKDOWN_EXTS:
             continue
+        base_real, head_real = (doc_headings or {}).get(path, (None, None))
         deleted_titles = _headings(deleted)
+        if base_real is not None:
+            deleted_titles = [t for t in deleted_titles if t in base_real]
         if not deleted_titles:
             continue
         body_lost = len(deleted) - len(deleted_titles)
@@ -341,7 +386,10 @@ def _check_doc_section_loss(
             # The file grew well past what it lost — documentation was
             # delivered, not traded away.
             continue
-        added_keys = [_heading_key(t) for t in _headings(added)]
+        added_titles = _headings(added)
+        if head_real is not None:
+            added_titles = [t for t in added_titles if t in head_real]
+        added_keys = [_heading_key(t) for t in added_titles]
         for title in deleted_titles:
             squashed, tokens = _heading_key(title)
             survived = False
@@ -696,6 +744,7 @@ def apply_strict_gates(
     deletions: int,
     diff_added_text: str,
     diff_hunks: dict[str, tuple[list[str], list[str]]] | None = None,
+    doc_headings: "DocHeadings | None" = None,
 ) -> list[tuple[str, str]]:
     """Run every gate; return list of (gate_name, detail) for each triggered
     gate. Empty list = no gates triggered. Read-mode tasks (review,
@@ -705,13 +754,16 @@ def apply_strict_gates(
     `diff_hunks` maps path -> (added_lines, deleted_lines) from `_diff_hunks`.
     It is optional so a caller with only the shortstat keeps the pre-2026-08-19
     behaviour exactly; the replace-in-place, doc-section and tool_output_echo
-    checks need it and are skipped without it.
+    checks need it and are skipped without it. `doc_headings` (optional, from
+    `_doc_headings`) lets the doc-section check ignore `#` lines inside fenced
+    code.
     """
     if task_type not in _WRITE_TASK_TYPES:
         return []
     triggered: list[tuple[str, str]] = []
     ok, detail = check_destructive_deletion(
-        additions, deletions, diff_hunks=diff_hunks, task_type=task_type)
+        additions, deletions, diff_hunks=diff_hunks, task_type=task_type,
+        doc_headings=doc_headings)
     if ok:
         triggered.append(("destructive_diff", detail))
     ok, detail = check_role_name_leak(file_paths)
@@ -874,6 +926,24 @@ def _check_tests_pass(repo_path: Path, command: str,
     return rc == 0, (f"rc={rc}; tail:\n" + "\n".join(detail))[:1500]
 
 
+# The substantive-edit gate's unit for prose. An unwrapped markdown paragraph
+# is ONE physical line however long it is, so a raw line count measured
+# wrapping style: the 2026-10 harness bake-off printed 1/5 on 20 hand-verified
+# REAL doc runs (48-149 words of unwrapped prose against 4- and 8-line floors)
+# while the same words wrapped at ~80 columns passed. Counting each markdown
+# line as ceil(len/80) units can only RAISE a count, so no earlier pass flips,
+# and a heading rename or a one-liner is still under 80 columns = 1 unit.
+# Code lines always count 1: a long code line is not more code.
+_PROSE_LINE_COLUMNS = 80
+
+
+def _added_line_units(path: str, line: str) -> int:
+    """How many lines one added line counts as toward `min_added_lines`."""
+    if Path(path).suffix.lower() not in _MARKDOWN_EXTS:
+        return 1
+    return max(1, -(-len(line) // _PROSE_LINE_COLUMNS))
+
+
 def _check_regex_present(repo_path: Path, pattern: str,
                          changed_files: list[str],
                          base_sha: str = "",
@@ -890,7 +960,9 @@ def _check_regex_present(repo_path: Path, pattern: str,
     - `min_added_lines` — diff must add at least N total lines across changed
       files. Defends against rename-only or one-line edits that pass the
       regex without doing substantive work (e.g., the isomer "Quick Start"
-      → "Quickstart" rename that stripped the ISOMER_SECRET setup).
+      → "Quickstart" rename that stripped the ISOMER_SECRET setup). Markdown
+      lines count in 80-column units (`_added_line_units`), so the floor
+      measures how much prose was added, not how it was wrapped.
 
     Falls back to whole-file scan when base_sha isn't provided.
     """
@@ -931,9 +1003,15 @@ def _check_regex_present(repo_path: Path, pattern: str,
                                f"(needed ≥{min_matches}) across "
                                f"{len(changed_files)} changed file(s)")
 
-            if min_added_lines and len(added_lines) < min_added_lines:
-                return False, (f"only {len(added_lines)} added lines, "
-                               f"need ≥{min_added_lines} (substantive-edit gate)")
+            if min_added_lines:
+                units = sum(_added_line_units(f, b) for f, b in added_lines)
+                if units < min_added_lines:
+                    shown = (f"{len(added_lines)} added lines"
+                             if units == len(added_lines) else
+                             f"{len(added_lines)} added lines "
+                             f"({units} at 80 columns)")
+                    return False, (f"only {shown}, need ≥{min_added_lines} "
+                                   f"(substantive-edit gate)")
 
             if len(matches) >= min_matches:
                 if min_matches == 1:
@@ -1161,6 +1239,34 @@ def _parse_diff_hunks(out: str) -> dict[str, tuple[list[str], list[str]]]:
     return hunks
 
 
+# path -> (base-side titles, HEAD-side titles) outside fenced code; a side is
+# None when that revision has no such file (added / deleted / renamed).
+DocHeadings = dict[str, tuple[frozenset[str] | None, frozenset[str] | None]]
+
+
+def _doc_headings(repo_path: Path, base_sha: str,
+                  hunks: dict[str, tuple[list[str], list[str]]]) -> DocHeadings:
+    """Real (unfenced) heading titles of each changed markdown file at
+    `base_sha` and at HEAD, for prong 3 of `destructive_diff`.
+
+    Read with `_run`, not `_run_git`: a file missing at one side (added,
+    deleted, renamed away) is a normal non-zero `git show`, and its side is
+    None — prong 3 then reads that side's `#` lines exactly as it did before
+    this filter existed, so a read failure can never ADD a firing.
+    """
+    out: DocHeadings = {}
+    for path in hunks:
+        if Path(path).suffix.lower() not in _MARKDOWN_EXTS:
+            continue
+        sides: list[frozenset[str] | None] = []
+        for rev in (base_sha, "HEAD"):
+            rc, text = _run(["git", "show", f"{rev}:{path}"], cwd=repo_path,
+                            timeout=60)
+            sides.append(_unfenced_headings(text) if rc == 0 else None)
+        out[path] = (sides[0], sides[1])
+    return out
+
+
 def _added_text_from_hunks(
     hunks: dict[str, tuple[list[str], list[str]]],
 ) -> str:
@@ -1236,6 +1342,7 @@ def grade_fixture(
     if is_write_task and result.diff_produced:
         hunks = _diff_hunks(repo_path, base_sha, changed)
         added_text = _added_text_from_hunks(hunks)
+        doc_headings = _doc_headings(repo_path, base_sha, hunks)
         triggered = apply_strict_gates(
             task_type=fixture.task_type,
             file_paths=changed,
@@ -1243,6 +1350,7 @@ def grade_fixture(
             deletions=result.diff_deletions,
             diff_added_text=added_text,
             diff_hunks=hunks,
+            doc_headings=doc_headings,
         )
         for name, detail in triggered:
             result.gates_triggered.append({"name": name, "detail": detail})
