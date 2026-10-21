@@ -889,12 +889,31 @@ class Diagnostics:
     bailout_type: str = ""    # "" = no bailout (success/normal fail);
                               # "refusal" | "prose_only" | "no_engagement" |
                               # "stuck_after_done" | "stuck_no_output" |
-                              # "schema_confusion" | "context_overflow" |
-                              # "no_diff_writes" | "aborted"
+                              # "schema_confusion" | "max_steps" |
+                              # "context_overflow" | "no_diff_writes" |
+                              # "aborted". Records written before
+                              # 2026-10-21 used "context_overflow" for
+                              # max-steps deaths; their bailout_reason
+                              # ("max steps reached (N)") tells them apart.
     bailout_reason: str = ""  # human-readable evidence
     # True when this record was replayed from disk for a SKIP_DONE fixture
     # (never persisted as True — only set on the in-memory copy).
     cached: bool = False
+
+
+# The server's "the prompt did not fit" answer, lowercased. Mirrors
+# luxe.chat.session._WINDOW_SHAPED_ABORT (not imported: the bench path stays
+# off the chat package). oMLX says "Prompt too long: N tokens exceeds max
+# context window of M tokens" in a 400 that the loop records as
+# "Backend error: ...".
+_CONTEXT_OVERFLOW_SIGNS = (
+    "context length",
+    "context window",
+    "context_length_exceeded",
+    "maximum context",
+    "prompt too long",
+    "too many tokens",
+)
 
 
 _REFUSAL_PATTERNS = [
@@ -940,6 +959,9 @@ def _classify_bailout(state: FixtureState, artefacts: dict) -> tuple[str, str]:
             return ("stuck_no_output",
                     f"stuck-loop with no PR produced; {abort_reason[:120]}")
         if "max steps" in abort_reason:
+            return "max_steps", abort_reason[:160]
+        if (abort_reason.startswith("backend error")
+                and any(sign in abort_reason for sign in _CONTEXT_OVERFLOW_SIGNS)):
             return "context_overflow", abort_reason[:160]
         if "schema" in abort_reason or schema_rejects > 3:
             return "schema_confusion", f"schema_rejects={schema_rejects}; {abort_reason[:120]}"
