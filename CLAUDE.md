@@ -508,7 +508,8 @@ means.
 - **Shared first-things-to-try** when a workload behaves unexpectedly: disable
   the default-ON levers — `LUXE_TIERED_COMPACT=0`,
   `LUXE_TRUNCATED_TURN_RETRY=0`, `LUXE_CTX_SERVER_TRUTH=0`,
-  `LUXE_COMPACT_CACHE_FRIENDLY=0`, `LUXE_CLEANUP_TURN=0`.
+  `LUXE_COMPACT_CACHE_FRIENDLY=0`, `LUXE_CLEANUP_TURN=0`,
+  `LUXE_CTX_CAL_TOOLS=0`.
 
 ## Default-ON: cache-friendly compaction
 
@@ -556,6 +557,20 @@ printed PASS. `LUXE_STEP_LIMIT_LABEL=0` disables it.
 `LUXE_STEP_LIMIT_FINISH=1` is the **opt-in, unbenched** repair: one ≤8-step
 pass that shows the model its diff. A finish pass that ends on its own clears
 the label.
+
+## Default-ON: tool schemas in the calibration
+
+`LUXE_CTX_CAL_TOOLS` defaults to **ON** as of 2026-10-20. The server counts
+the request's tool schemas in `usage.prompt_tokens`; luxe's estimate never
+saw them, so the server-truth ratio read ~7× at step 0 and inflated the next
+file read (Glimmer neon-reset fired phase 2 at 36% of the real window). Now
+the schemas join the estimate and come off the window as a fixed charge.
+
+- **Benched** on m5, champion 10×3 vs a same-day shipped-defaults control:
+  **30/30 both arms**, 9/10 fixtures byte-identical requests and diffs,
+  compaction at the same steps. Inert on outcome for the champion; it corrects
+  the measurement. `acceptance/ctx_cal_tools_2026_10/REPORT.md`.
+- **Disable for ablation**: `LUXE_CTX_CAL_TOOLS=0` (exact string).
 
 ## Opt-in modes (default off, byte-identical when disabled)
 

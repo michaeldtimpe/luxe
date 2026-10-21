@@ -881,8 +881,8 @@
    "Looking at step 4.",
    "Looking at step 5."
   ],
-  "peak_context_pressure": 0.092426187,
-  "final_context_pressure": 0.092426187,
+  "peak_context_pressure": 0.025718878,
+  "final_context_pressure": 0.025718878,
   "tool_calls": [
    {
     "id": "",

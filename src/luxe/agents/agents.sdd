@@ -364,14 +364,15 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   from a chat-side drill (`acceptance/chat_bigread_2026_08_24/`), the way
   Phase 2's did.
 
-### Tool schemas in the calibration (pinned 2026-10-20, opt-in, no-harm pending)
+### Tool schemas in the calibration (pinned 2026-10-20, default-ON same day)
 
-- `LUXE_CTX_CAL_TOOLS=1` (`RunFlags.ctx_cal_tools`) adds
+- `LUXE_CTX_CAL_TOOLS` (`RunFlags.ctx_cal_tools`) adds
   `estimate_tools_tokens(openai_tools)` — the request's tool schemas, chars//4,
   computed once per run — to the estimate the server-truth ratio divides
   (`est_sent`, and the damping lever's `est_now`), and subtracts the same
-  amount from `effective_ctx`. **Default OFF; unset, the overhead is 0 and
-  every number is byte-identical**, pinned by `TestDefaultPathIsUntouched`.
+  amount from `effective_ctx`. **Default ON; only the exact string `"0"`
+  disables it**, and disabled the overhead is 0 and every number is the
+  pre-2026-10-20 reading exactly.
 - Why (`acceptance/harness_ab_2026_10/REPORT.md` § Glimmer neon-reset): the
   server counts the schemas in `usage.prompt_tokens` on every call;
   `estimate_messages_tokens` never saw them. On a short early prompt they
@@ -388,8 +389,21 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   still come off the window — they are real prompt either way. A run with no
   tools is unchanged. Pinned in
   `tests/test_loop_context_bounds.py::TestToolSchemasInCalibration`.
-- It changes WHEN compaction fires for every model, the champion included, so
-  it stays opt-in until a champion maintain_suite 10x3 shows no harm.
+- It can change WHEN compaction fires for every model. Champion no-harm 10x3
+  on m5, same day, interleaved with a shipped-defaults control
+  (`acceptance/ctx_cal_tools_2026_10/REPORT.md`): 30/30 both arms; 9/10
+  fixtures sent byte-identical requests and produced the identical diff in all
+  six runs, compaction firing at the same steps; the tenth
+  (document-config) varies within the control arm alone. Reported peak
+  pressure drops (e.g. 0.57 -> 0.22 on a short doc task) without moving any
+  compaction decision. Promoted on no-harm: for the champion it is a
+  correction of the measurement, inert on outcome. Glimmer neon-reset with it
+  alone: 1/3 REAL (0/4 before) — one of three conditions, as traced.
+- The golden trajectories were regenerated at the flip: their fake server
+  counts the whole request body, tools included, against 2.5–8K toy windows,
+  so the charge moves pressure everywhere and compaction timing in
+  `default_flags`/`clamp_and_damp`. `TestCalibrationDamping` pins `=0`: its
+  replayed ratio is the 2026-08-24 one, measured without the schemas.
 
 ### forge-hybrid Phase 4 (D) trajectory-shape invariants (pinned 2026-05-28, opt-in)
 

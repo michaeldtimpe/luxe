@@ -396,12 +396,12 @@ def run_agent(
     emit = _event_emitter(run_id, phase, log_calls)
 
     openai_tools = [td.to_openai() for td in tool_defs] if tool_defs else None
-    # LUXE_CTX_CAL_TOOLS (opt-in, 2026-10-20): the tool schemas ride in every
+    # LUXE_CTX_CAL_TOOLS (default-ON 2026-10-20): the tool schemas ride in every
     # request but not in `messages`, so the server-truth ratio was measured
     # against an estimate that never saw them — ~7x at step 0 with a 320-token
     # message list — and then multiplied onto the next file read. Counted here,
     # they join the estimate the ratio divides and leave the window as a fixed
-    # charge. 0 when off, which keeps every number below byte-identical.
+    # charge. 0 when disabled (=0), which restores every number below exactly.
     tools_overhead = (estimate_tools_tokens(openai_tools)
                       if flags.ctx_cal_tools else 0)
     tool_def_map = {td.name: td for td in tool_defs}
