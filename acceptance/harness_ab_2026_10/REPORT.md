@@ -348,6 +348,7 @@ Launchers: `neon_arms7.sh` and `neon_arms8.sh`.
 | reads uncapped + roundtrip, **30 steps** | 1 REAL (step-limited, edit complete), 2 no write | 2 / 7 / 7 | step 22 / — / — |
 | reads uncapped alone, 60 steps | **0/3**, no write in 60 steps | 35 / 36 / 14 | — |
 | **roundtrip alone, 60 steps** | **3/3 REAL**, each finished unforced (49 / 50 / 40 steps) | 10 / 10 / 7 | 39 / 35 / 27 |
+| roundtrip alone, 40 steps (`neon_arms9.sh`) | **3/3 REAL**: run 1 hit the cap (labelled incomplete, edit complete), run 3 ended on step 40, run 2 at 37 | 7 / 5 / 7 | 34 / 29 / 25 |
 
 All four REAL diffs use the reference `__restart` shape. Two of them skip key
 presses while you're typing in a field.
@@ -360,6 +361,9 @@ and compaction are not necessary.
   steps (0/3), at 60 steps (0/3), and with reads uncapped (0/3).
 - **With the roundtrip,** the re-reads drop to 7–10. It writes at step 27–39,
   past the default cap of 30, which is why the 30-step arms land at 1/3.
+- **At 40 steps** the roundtrip is 3/3, but two of the three runs used the
+  whole budget. 40 is about the floor for this fixture, and 60 is the
+  setting with headroom.
 
 Glimmer's chat template expects `reasoning_content` on prior turns (see the
 trace above). Neither setting changes for the champion; Glimmer is not
