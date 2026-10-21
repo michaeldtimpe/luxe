@@ -1,0 +1,18 @@
+commits=719 touching markdown=321 old_fires=17 new_fires=16
+KEPT    d55db134 benchmarks/perplexity/README.md: section `Perplexity` deleted with 34 line(s) of body and not retitled among the added headings — existing documentati
+KEPT    f60718c1 CLAUDE.md: section `Default-ON: server-truth context calibration` deleted with 379 line(s) of body and not retitled among the added headings — existin
+KEPT    31e2e031 acceptance/mcp_modules_2026_08/REPORT.md: section `Phase 3 — `showapp` (PRIVATE, in the showapp repo)` deleted with 145 line(s) of body and not retitl
+KEPT    59125ec5 acceptance/hygiene_2026_07/REPORT.md: section `Deferred — needs your call` deleted with 30 line(s) of body and not retitled among the added headings —
+KEPT    afe1be59 CLAUDE.md: section `Load context frames first (snapctx)` deleted with 17 line(s) of body and not retitled among the added headings — existing document
+KEPT    7e896f48 agents.md: section `Architect` deleted with 259 line(s) of body and not retitled among the added headings — existing documentation removed
+KEPT    5ab60bbe RESUME.md: section `Working-tree state (NOT committed; review and commit-or-revert at your discretion)` deleted with 4 line(s) of body and not retitle
+KEPT    3d1b22f0 RESUME.md: section `Current state — 2026-05-21 (v1.11 cycle — per-instance adaptive policy; Phase A+B done, Phase C running, Phase D queued)` deleted 
+KEPT    3174a79d README.md: section `Auto-pick mode based on goal + repo size` deleted with 190 line(s) of body and not retitled among the added headings — existing do
+DROPPED 92ceb4cb RESUME.md: section `Inspector — the hard new_file_in_diff blocker` deleted with 163 line(s) of body and not retitled among the added headings — existi
+KEPT    04c8aaca RESUME.md: section `Step 1 — Variance probe (~1h, sequential first)` deleted with 96 line(s) of body and not retitled among the added headings — exist
+KEPT    b7645179 RESUME.md: section `Step 1 — gold-proximity tier on the n=75 output` deleted with 66 line(s) of body and not retitled among the added headings — exist
+KEPT    fb9f9859 RESUME.md: section `B. SWE-bench prompt work before n=75 baseline (~half-day)` deleted with 20 line(s) of body and not retitled among the added headin
+KEPT    cebc2bae RESUME.md: section `⚡ Resume here — five next-session options` deleted with 511 line(s) of body and not retitled among the added headings — existing d
+KEPT    1e545e8d RESUME.md: section `What's already done (committed 2026-05-03)` deleted with 132 line(s) of body and not retitled among the added headings — existing 
+KEPT    4cfdac98 RESUME.md: section `Resume command — kicks off the in-flight 8-bit completion bake-off` deleted with 97 line(s) of body and not retitled among the add
+KEPT    83ce8222 AGENTS.md: section `Agents` deleted with 388 line(s) of body and not retitled among the added headings — existing documentation removed

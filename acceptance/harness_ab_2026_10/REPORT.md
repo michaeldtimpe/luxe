@@ -192,7 +192,8 @@ helped only the model that already speaks its grammar.
 - The printed grader is unreliable in both directions:
   - false passes: every VACUOUS and DAMAGING above;
   - false failures: a `destructive_diff` on a correct quickstart, and
-    min-lines gates on correct docs.
+    min-lines gates on correct docs. Both fixed 2026-10-21; 20 of the 21
+    now print PASS (`acceptance/grader_fixes_2026_10/REPORT.md`).
 
 ## MCP arm: luxe's tools, not its loop
 
