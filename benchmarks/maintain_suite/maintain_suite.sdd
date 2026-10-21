@@ -49,6 +49,15 @@ single pipeline; new fixtures must declare their per-requirement spec.
   file that did not grow past 1.2x what it lost. Thresholds are calibrated
   against 400 commits of real history — prongs 2 and 3's `_check_*` helpers
   carry the numbers; DON'T loosen them without re-running that audit
+- Prong 3 reads headings OUTSIDE fenced code only (2026-10-21): a `# comment`
+  in a ```bash block is body text, not a section. Fence state comes from the
+  whole file at each side of the diff (`_doc_headings`), never from hunk lines
+  — a hunk can open mid-fence. A side git can't read keeps the old reading, so
+  the filter can only remove firings. Audit: `acceptance/grader_fixes_2026_10/`
+- `min_added_lines` counts a MARKDOWN line as ceil(len/80) lines
+  (2026-10-21): the floor measures prose added, not wrapping. Code lines
+  always count 1. The count can only rise, so no earlier pass flips; don't
+  replace it with per-fixture word floors tuned on observed outputs
 - `tool_output_echo` is its OWN gate, never folded into `destructive_diff`:
   >= 10 consecutively numbered `<n>\t` added lines is `read_file`'s rendering
   (src/luxe/tools/fs.py) written back into a file, and the remediation differs.
