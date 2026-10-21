@@ -364,6 +364,33 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   from a chat-side drill (`acceptance/chat_bigread_2026_08_24/`), the way
   Phase 2's did.
 
+### Tool schemas in the calibration (pinned 2026-10-20, opt-in, no-harm pending)
+
+- `LUXE_CTX_CAL_TOOLS=1` (`RunFlags.ctx_cal_tools`) adds
+  `estimate_tools_tokens(openai_tools)` — the request's tool schemas, chars//4,
+  computed once per run — to the estimate the server-truth ratio divides
+  (`est_sent`, and the damping lever's `est_now`), and subtracts the same
+  amount from `effective_ctx`. **Default OFF; unset, the overhead is 0 and
+  every number is byte-identical**, pinned by `TestDefaultPathIsUntouched`.
+- Why (`acceptance/harness_ab_2026_10/REPORT.md` § Glimmer neon-reset): the
+  server counts the schemas in `usage.prompt_tokens` on every call;
+  `estimate_messages_tokens` never saw them. On a short early prompt they
+  dominate, so the ratio measured ~7x at step 0 (2,225 / 320) and 2.83x at
+  step 4, was multiplied onto a 34 KB file read, and fired phase 2 at 36% of
+  the real window, dropping the file one step after it was read. The damping
+  lever above treats the symptom (extrapolation); this removes the cause
+  (an estimate missing a fixed part of the prompt).
+- The window charge is what keeps the quotient honest: consumers divide the
+  MESSAGE estimate by `effective_ctx`, so the reading is the message share of
+  what the schemas leave, and at 1.0 messages + schemas fill the server's
+  window exactly. The pinned `(0.50, 0.85, 0.95)` thresholds keep their
+  values. With `LUXE_CTX_SERVER_TRUTH=0` the ratio stays 1.0 but the schemas
+  still come off the window — they are real prompt either way. A run with no
+  tools is unchanged. Pinned in
+  `tests/test_loop_context_bounds.py::TestToolSchemasInCalibration`.
+- It changes WHEN compaction fires for every model, the champion included, so
+  it stays opt-in until a champion maintain_suite 10x3 shows no harm.
+
 ### forge-hybrid Phase 4 (D) trajectory-shape invariants (pinned 2026-05-28, opt-in)
 
 - **`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE` defaults OFF.** The D smoke at n=14 confirmed

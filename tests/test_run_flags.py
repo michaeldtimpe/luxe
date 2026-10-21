@@ -39,6 +39,7 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.convergence_gate is False
     assert f.post_write_idle_repeats is False
     assert f.ctx_cal_damp is False                        # opt-in 2026-08-24
+    assert f.ctx_cal_tools is False                       # opt-in 2026-10-20
     assert f.ctx_cal_unmeasured_ratio == CALIBRATION_UNMEASURED_RATIO
     assert f.tool_result_clamp is False                   # opt-in 2026-08-24
     assert f.repeat_read_stub is False                    # opt-in 2026-10-17
@@ -87,6 +88,8 @@ OPT_IN = [
     # 2026-10-17 (acceptance/tuning_2026_10): no default-ON arm benched.
     ("LUXE_REPEAT_READ_STUB", "repeat_read_stub"),
     ("LUXE_REREAD_NOTE", "reread_note"),
+    # 2026-10-20 (acceptance/harness_ab_2026_10 Glimmer trace): no-harm pending.
+    ("LUXE_CTX_CAL_TOOLS", "ctx_cal_tools"),
 ]
 
 

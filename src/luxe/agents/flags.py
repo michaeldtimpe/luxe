@@ -105,6 +105,12 @@ class RunFlags:
     # otherwise. See agents.sdd "Calibration extrapolation damping".
     ctx_cal_damp: bool = False
 
+    # Count the tool schemas in the estimate the server-truth ratio divides,
+    # and charge them against the window. Opt-in: default OFF keeps the
+    # benchmark path byte-identical until a maintain_suite run says otherwise.
+    # See agents.sdd "Tool schemas in the calibration".
+    ctx_cal_tools: bool = False
+
     # The ratio `damped_calibration` assumes for prompt material the live
     # calibration never saw. 1.2 is MEASURED (two recalibrations in one
     # markdown-heavy session, EVIDENCE.md finding 3) but it is still a free
@@ -238,6 +244,8 @@ class RunFlags:
             ctx_server_truth=e.get("LUXE_CTX_SERVER_TRUTH", "1") != "0",
             # Opt-in: only the exact string "1" enables it.
             ctx_cal_damp=e.get("LUXE_CTX_CAL_DAMP") == "1",
+            # Opt-in: only the exact string "1" enables it.
+            ctx_cal_tools=e.get("LUXE_CTX_CAL_TOOLS") == "1",
             ctx_cal_unmeasured_ratio=unmeasured,
             # Opt-in: only the exact string "1" enables it.
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
