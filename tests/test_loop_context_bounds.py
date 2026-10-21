@@ -132,7 +132,7 @@ def _tool_contents(backend: _Backend) -> list[str]:
 
 def _clear(monkeypatch):
     for var in ("LUXE_TOOL_RESULT_CLAMP", "LUXE_CTX_CAL_DAMP",
-                "LUXE_CTX_CAL_UNMEASURED_RATIO"):
+                "LUXE_CTX_CAL_UNMEASURED_RATIO", "LUXE_CTX_CAL_TOOLS"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -155,7 +155,8 @@ class TestDefaultPathIsUntouched:
                             if m.get("role") == "tool"]
 
     @pytest.mark.parametrize("var", ["LUXE_TOOL_RESULT_CLAMP",
-                                     "LUXE_CTX_CAL_DAMP"])
+                                     "LUXE_CTX_CAL_DAMP",
+                                     "LUXE_CTX_CAL_TOOLS"])
     @pytest.mark.parametrize("value", NEAR_MISSES)
     def test_every_near_miss_spelling_leaves_the_run_byte_identical(
             self, monkeypatch, var, value):
@@ -174,7 +175,8 @@ class TestDefaultPathIsUntouched:
         assert result.steps == base_result.steps
 
     @pytest.mark.parametrize("var", ["LUXE_TOOL_RESULT_CLAMP",
-                                     "LUXE_CTX_CAL_DAMP"])
+                                     "LUXE_CTX_CAL_DAMP",
+                                     "LUXE_CTX_CAL_TOOLS"])
     def test_the_exact_string_one_is_the_only_thing_that_changes_anything(
             self, monkeypatch, var):
         baseline, base_result = self._baseline(monkeypatch)
@@ -488,3 +490,102 @@ class TestCalibrationDamping:
 
         assert TieredCompact._DEFAULT_PHASE_THRESHOLDS == (0.50, 0.85, 0.95)
         assert TieredCompact().keep_recent == 3
+
+
+# --- LUXE_CTX_CAL_TOOLS: the tool schemas in the calibration ---------------
+
+class _TruthfulBackend:
+    """A server whose real tokenizer reads everything at 1.2x chars/4, tool
+    schemas included — so the true prompt size of every request is known."""
+
+    TRUE_RATIO = 1.2
+
+    def __init__(self, script: list[ChatResponse]):
+        self._script = list(script)
+        self.calls: list[list[dict[str, Any]]] = []
+
+    def chat(self, messages, tools=None, **kwargs) -> ChatResponse:
+        from luxe.context import estimate_messages_tokens, estimate_tools_tokens
+
+        self.calls.append([dict(m) for m in messages])
+        real = int(self.TRUE_RATIO * (estimate_messages_tokens(messages)
+                                      + estimate_tools_tokens(tools)))
+        r = self._script.pop(0) if self._script else _stop()
+        return ChatResponse(
+            text=r.text, tool_calls=r.tool_calls, finish_reason=r.finish_reason,
+            timing=GenerationTiming(prompt_tokens=real, completion_tokens=10))
+
+
+class TestToolSchemasInCalibration:
+    """The Glimmer neon-reset trace (acceptance/harness_ab_2026_10/REPORT.md):
+    a 320-token message list against ~2,000 tokens of tool schemas measured a
+    ~7x ratio, which the next step multiplied onto a 34 KB file read and fired
+    phase 2 at 36% of the real window. Shape reproduced here: heavy schemas, a
+    tiny first prompt, one big read, a 32K window."""
+
+    NUM_CTX = 32_768
+    FILE = "x" * 36_000                              # ~9,000 estimated tokens
+
+    @staticmethod
+    def _heavy_tool_defs() -> list[ToolDef]:
+        return [ToolDef(name=f"tool_{i}", description="d" * 600,
+                        parameters={"type": "object",
+                                    "properties": {"path": {"type": "string"}},
+                                    "required": ["path"]})
+                for i in range(10)]
+
+    def _run(self, monkeypatch, *, on: bool, tool_defs=None):
+        _clear(monkeypatch)
+        if on:
+            monkeypatch.setenv("LUXE_CTX_CAL_TOOLS", "1")
+        defs = self._heavy_tool_defs() if tool_defs is None else tool_defs
+        backend = _TruthfulBackend([_call("tool_0", path="big.js"), _stop()])
+        result = run_agent(
+            backend=backend, role_cfg=_role(self.NUM_CTX),
+            system_prompt="sys", task_prompt="task", tool_defs=defs,
+            tool_fns={d.name: (lambda a: (self.FILE, None)) for d in defs},
+        )
+        return backend, result
+
+    def _true_pressure(self, backend: _TruthfulBackend) -> float:
+        from luxe.context import estimate_messages_tokens, estimate_tools_tokens
+
+        tools = [d.to_openai() for d in self._heavy_tool_defs()]
+        return (_TruthfulBackend.TRUE_RATIO
+                * (estimate_messages_tokens(backend.calls[-1])
+                   + estimate_tools_tokens(tools)) / self.NUM_CTX)
+
+    def test_off_the_schema_heavy_first_ratio_overstates_the_big_read(
+            self, monkeypatch):
+        """The status quo, reproduced: well past the window on a request that
+        fills under half of it."""
+        backend, result = self._run(monkeypatch, on=False)
+        assert self._true_pressure(backend) < 0.5
+        assert result.peak_context_pressure > 1.0
+
+    def test_on_the_reading_tracks_the_real_window(self, monkeypatch):
+        """Pressure is the message share of what the schemas leave, so it
+        sits at or just under the true total and far below any phase
+        trigger it was crossing before."""
+        backend, result = self._run(monkeypatch, on=True)
+        true = self._true_pressure(backend)
+        assert true * 0.8 < result.peak_context_pressure <= true
+        assert result.peak_context_pressure < 0.5
+
+    def test_no_tools_means_no_change(self, monkeypatch):
+        """With no schemas there is nothing to count: on and off send the
+        identical request sequence."""
+        off_backend, off = self._run(monkeypatch, on=False, tool_defs=[])
+        on_backend, on = self._run(monkeypatch, on=True, tool_defs=[])
+        assert on_backend.calls == off_backend.calls
+        assert on.peak_context_pressure == off.peak_context_pressure
+
+    def test_the_ablation_of_server_truth_still_charges_the_schemas(
+            self, monkeypatch):
+        """With LUXE_CTX_SERVER_TRUTH=0 the ratio stays 1.0, but the schemas
+        are still real prompt: they come off the window either way."""
+        monkeypatch.setenv("LUXE_CTX_SERVER_TRUTH", "0")
+        _, off = self._run(monkeypatch, on=False)
+        monkeypatch.setenv("LUXE_CTX_SERVER_TRUTH", "0")
+        _, on = self._run(monkeypatch, on=True)
+        assert on.peak_context_pressure > off.peak_context_pressure

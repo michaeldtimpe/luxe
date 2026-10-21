@@ -36,6 +36,15 @@ def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
     return total
 
 
+def estimate_tools_tokens(tools: list[dict[str, Any]] | None) -> int:
+    """The tool schemas a request carries outside `messages`, read the same
+    chars//4 way. The server counts them in `usage.prompt_tokens` on every
+    call; `estimate_messages_tokens` never sees them (LUXE_CTX_CAL_TOOLS)."""
+    if not tools:
+        return 0
+    return estimate_tokens(json.dumps(tools))
+
+
 def context_pressure(messages: list[dict[str, Any]], ctx_limit: int) -> float:
     if ctx_limit <= 0:
         return 0.0
