@@ -45,11 +45,10 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   same "only the exact string 1" / "only the exact string 0" asymmetries, same
   silent fallback for every malformed value. A new switch adds a field there
   plus a row in `tests/test_run_flags.py`, and a test asserts the loop's body
-  contains no `os.environ` access. Two reads deliberately stay outside:
-  `LUXE_TOKEN_LOG_INTERVAL` (loop.py module constant, read at import) and
-  `LUXE_LOAD_PRIORS` (cohort_priors) — those belong to their own modules'
-  contracts (`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE` in guardrails was a third
-  until its 2026-10-22 removal).
+  contains no `os.environ` access. One read deliberately stays outside:
+  `LUXE_TOKEN_LOG_INTERVAL` (loop.py module constant, read at import).
+  `LUXE_LOAD_PRIORS` (cohort_priors) and `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`
+  (guardrails) were the other two until their 2026-10-22 removal.
   `LUXE_EARLY_BAIL_MODE` is NOT one of them any more: `EarlyBailGuard` used to
   re-read it from os.environ up to three times per step; since 2026-09 it is
   `RunFlags.early_bail_mode` (verbatim string, same `"default"` default,
@@ -697,6 +696,17 @@ reintroduce any of them without new evidence.
   existed solely to pin it and was deleted; the remaining nine snapshots are
   byte-identical. `EarlyBailGuard`'s non-suppress branch now always fires.
 
+- **Cohort priors** (`LUXE_LOAD_PRIORS`, `agents/cohort_priors.py`, event
+  `prior_loaded`, v1.11 Phase 2, pinned 2026-05-20 as log-only). Read
+  `~/.luxe/cohort-history/<instance>.json` for the instance named in
+  `LUXE_INSTANCE_ID` and logged it; it never influenced intervention
+  intensity. UNREACHABLE: nothing in `src/`, `benchmarks/`, `scripts/` or
+  `configs/` ever set `LUXE_INSTANCE_ID`, and the only writer of that
+  directory was the archived `scripts/_archive/split_cohort_snapshot.py`,
+  removed with it (plus its archived test). `scripts/cohort_shift_3x3.py`
+  never wrote there and is untouched. The "wire priors into intensity"
+  Must-not went with it — re-adding priors is a new design, not a flag flip.
+
 ### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
 
 - `RoleConfig.stuck_loop_abort` (default **True**) gates whether
@@ -770,7 +780,7 @@ false count). Each rewrite forces everything after it to be prefilled again.
 - **Bias-not-lock**: no signal combination may reduce intervention probability to zero or increase it above the configured ceiling. Adaptive policy modulates intervention timing/intensity, never enables/disables. Property-tested in Phase 1
 - **Slew-rate limit**: per-step intensity-modifier delta bounded by `LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP` (default 0.3). Prevents oscillation; makes regressions smoother instead of catastrophic
 - **Disable-equivalence**: `LUXE_ADAPTIVE_POLICY=0` (or unset) produces byte-identical behavior to v1.10.5
-- **Priors are log-only in v1.11**: `LUXE_LOAD_PRIORS=1` reads `~/.luxe/cohort-history/<instance>.json` and logs to events.jsonl, but does **not** influence intervention intensity (deferred to v1.11.1+)
+- **Cross-cycle priors were log-only and are REMOVED (2026-10-22)**: see "Removed mechanisms (2026-10-22 refuted-lever cleanup)"
 
 ### Stage 3 / v1.11 Phase B activation — TRIED + REVERTED (2026-05-21)
 
@@ -785,7 +795,6 @@ false count). Each rewrite forces everything after it to be prefilled again.
 - Add a new prompt variant without a corresponding test in `tests/test_prompts.py`
 - (v1.11) Mutate the score_log from `convergence.py` — ownership lives in `loop.py`
 - (v1.11) Let a Stage 3 signal hard-gate (enable/disable) an intervention dispatch — bias only
-- (v1.11) Wire cross-cycle priors into intervention intensity computation — log-only this cycle
 - (v1.11.1+) Ship `intervention_history_within_run` without capping its weight below all other Stage 3 signals AND restricting it to suppress-only (never amplify) — prevents intervention-aversion attractor
 
 ## Owns

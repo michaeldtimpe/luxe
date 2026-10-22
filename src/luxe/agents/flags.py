@@ -11,12 +11,11 @@ each field to the local name it used before, so nothing downstream changed.
 No new switch belongs here without the `.sdd` entry that justifies it; the
 opt-in modes each have invariants in `agents.sdd` that gate promotion.
 
-Two `LUXE_*` reads that deliberately do NOT live here:
-- `LUXE_TOKEN_LOG_INTERVAL`, read once at loop.py import (module constant).
-- `LUXE_LOAD_PRIORS`, read by `cohort_priors` — it belongs to that module's
-  own contract, not to the loop's preamble.
-(`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`, read by `guardrails`, was the third
-until its mechanism was removed on 2026-10-22.)
+One `LUXE_*` read deliberately does NOT live here:
+`LUXE_TOKEN_LOG_INTERVAL`, read once at loop.py import (module constant).
+(`LUXE_LOAD_PRIORS`, read by `cohort_priors`, and
+`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`, read by `guardrails`, were the other two
+until their mechanisms were removed on 2026-10-22.)
 (`LUXE_EARLY_BAIL_MODE` used to be a third — re-read by `EarlyBailGuard` up
 to three times per step. It moved here in 2026-09 as `early_bail_mode`.)
 """

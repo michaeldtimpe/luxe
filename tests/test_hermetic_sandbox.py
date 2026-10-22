@@ -36,8 +36,6 @@ def test_home_is_a_per_test_tmp_dir(sandbox_guard, _hermetic_home):
 @pytest.mark.parametrize("mod_name, attr, parts", [
     ("luxe.chat.theme", "_PREF_PATH", (".luxe", "theme")),
     ("luxe.secrets", "SECRETS_PATH", (".luxe", "secrets.env")),
-    ("luxe.agents.cohort_priors", "DEFAULT_COHORT_HISTORY_DIR",
-     (".luxe", "cohort-history")),
     ("luxe.modelstore", "DEFAULT_MODELS_DIR", (".omlx", "models")),
 ])
 def test_import_time_home_paths_follow_the_moved_home(mod_name, attr, parts):
