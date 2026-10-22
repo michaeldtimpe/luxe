@@ -80,23 +80,44 @@ def _frontmatter_head(text: str) -> str:
     return ""
 
 
+def _read_frontmatter_head(path: Path) -> str:
+    """`_frontmatter_head` of a report file, reading only up to the closing
+    `---` instead of the whole report. Same answer as `_frontmatter_head(
+    path.read_text())`: the block is the lines after an exact `---` first
+    line up to the first later line starting with `---` (never the line
+    right after the opener — the text scan starts past it), and an
+    unterminated block has no head."""
+    head: str | None = None
+    with path.open() as f:
+        if f.readline() != "---\n":
+            return ""
+        for i, line in enumerate(f):
+            if i > 0 and line.startswith("---"):
+                return head or ""
+            if head is None and line.startswith("head:"):
+                head = line.split(":", 1)[1].strip()
+    return ""
+
+
 def latest_report_for(repo_path: str | Path, kind: str, head: str) -> str | None:
     """Return the body (post-frontmatter) of the newest saved `<kind>` report for
     `repo_path` whose frontmatter HEAD matches `head`, or None. Used so gitchange
     can consume a prior same-commit gitaudit (head-equality keeps the contract
-    clean — a stale audit never bleeds into a different commit's change plan)."""
+    clean — a stale audit never bleeds into a different commit's change plan).
+    Candidates are matched on their header alone; only the match is read whole."""
     d = reports_dir(repo_path)
-    if not d.is_dir():
+    if not head or not d.is_dir():
         return None
     cands = sorted(d.glob(f"{kind}-*.md"), key=lambda p: p.stat().st_mtime,
                    reverse=True)
     for p in cands:
         try:
+            if _read_frontmatter_head(p) != head:
+                continue
             text = p.read_text()
         except OSError:
             continue
-        if head and _frontmatter_head(text) == head:
-            return text.split("\n---\n", 1)[-1].strip()
+        return text.split("\n---\n", 1)[-1].strip()
     return None
 
 
