@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from luxe.secrets import scrubbed_env
 from luxe.tools.base import ToolDef, ToolFn
 from luxe.tools.fs import _resolve_rel, get_repo_root
 
@@ -143,6 +144,10 @@ def _run_tool(cmd: list[str], parse_json: bool = False,
             # one of them consume input meant for the session (see tools/shell.py).
             stdin=subprocess.DEVNULL,
             cwd=repo_root, timeout=_TIMEOUT,
+            # Secret-named variables dropped (2026-10-22, tools.sdd): an
+            # analyzer EXECUTES repo code the model may have written —
+            # mypy plugins, eslint configs, cargo build scripts, setup.py.
+            env=scrubbed_env(),
         )
         output = proc.stdout or proc.stderr
         if report_file is not None:

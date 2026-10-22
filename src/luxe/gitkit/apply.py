@@ -33,6 +33,7 @@ from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
 from luxe.gitkit.deep.mapcache import fresh_survey_notes
 from luxe.repo_index import _detect_languages_for_repo
+from luxe.secrets import scrubbed_env
 
 # A plan step's `verify` is MODEL-WRITTEN text: either a shell command or a
 # behavior to preserve ("preserve the public API"). It is treated as a command
@@ -288,7 +289,9 @@ def _run_verify(cmd: str, repo: Path, timeout: int, *, console,
                            # consume the operator's answer to the keep/discard
                            # prompt (or block on it until the timeout).
                            errors="replace", stdin=subprocess.DEVNULL,
-                           timeout=timeout)
+                           # MODEL-WRITTEN shell: secret-named variables
+                           # dropped (2026-10-22, tools.sdd).
+                           env=scrubbed_env(), timeout=timeout)
         return r.returncode == 0, (r.stdout + r.stderr)[-1500:]
     except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)

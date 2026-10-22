@@ -261,6 +261,10 @@ def _stub_host_probes(request, monkeypatch, _hermetic_home):
     from luxe import secrets
 
     secrets._KEYCHAIN_CACHE.clear()
+    # Secret-name/value state (2026-10-22): names luxe resolved and the
+    # derived caches are process-global — reset so test order stays irrelevant.
+    secrets._RESOLVED_NAMES.clear()
+    secrets.clear_cache()
     if request.node.get_closest_marker("host_probes") is None:
         from luxe import planeproxy, repair, staleproc
         monkeypatch.setattr(staleproc, "check_omlx", _inconclusive_omlx)

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from luxe import gitcmd
+from luxe.secrets import scrubbed_env
 from luxe.spec import Requirement, Spec
 
 
@@ -310,6 +311,9 @@ def _eval_tests_pass(req: Requirement, repo: Path) -> RequirementResult:
             # lets a prompting test read (and drain) luxe's own input, or block
             # on it for the full ten minutes.
             stdin=subprocess.DEVNULL,
+            # It runs code the agent wrote: secret-named variables dropped
+            # (2026-10-22, tools.sdd).
+            env=scrubbed_env(),
             timeout=600.0,
         )
     except subprocess.TimeoutExpired:

@@ -31,6 +31,7 @@ import yaml
 
 from luxe import gitcmd
 from luxe.gitclone import clone_env
+from luxe.secrets import scrubbed_env
 from luxe.run_state import (
     PRState,
     RunSpec,
@@ -663,8 +664,10 @@ def _do_test(spec: RunSpec, state: PRState, cfg: PRConfig) -> None:
     # polluted state) can't hang the whole bench. Timeout → rc=124,
     # test_passed=False, tail records the timeout instead of test output.
     try:
+        # The suite runs code the AGENT just wrote: secret-named variables
+        # are dropped from its environment (2026-10-22, tools.sdd).
         res = _run(["bash", "-lc", cmd_str], cwd=repo,
-                   timeout=cfg.test_timeout_s)
+                   env=scrubbed_env(), timeout=cfg.test_timeout_s)
     except subprocess.TimeoutExpired:
         state.test_passed = False
         state.test_output_tail = (
