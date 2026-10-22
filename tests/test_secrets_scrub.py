@@ -61,9 +61,34 @@ def test_credential_shaped_names_are_secret(name):
     # the explicit keep-list / benign-word list
     "SSH_AUTH_SOCK", "GPG_TTY", "GPG_AGENT_INFO", "TOKENIZERS_PARALLELISM",
     "GOPRIVATE", "GONOPRIVATE", "KEYCHAIN_PATH", "KEYTIMEOUT",
+    # git's env config protocol: the name holds a config KEY, not a secret
+    "GIT_CONFIG_KEY_0", "GIT_CONFIG_KEY_12",
+    "UV_KEYRING_PROVIDER", "PYTHON_KEYRING_BACKEND",
 ])
 def test_ordinary_and_keep_listed_names_are_not_secret(name):
     assert not secrets.is_secret_name(name)
+
+
+def test_git_env_config_survives_the_scrub(tmp_path, monkeypatch):
+    """The bench pins `commit.gpgsign=false` through GIT_CONFIG_COUNT +
+    GIT_CONFIG_KEY_0 + GIT_CONFIG_VALUE_0. Scrubbing only the KEY half left
+    git reading a count with no key — `fatal: unable to parse command-line
+    config` on every git call, which `pr.is_dirty` reports as a dirty tree,
+    so every bench run died at preflight (m5 no-harm A/B, 2026-10-22)."""
+    from luxe import pr
+    from tests._git import git
+    repo = tmp_path / "r"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    (repo / "a.txt").write_text("a\n")
+    git(repo, "add", "a.txt")
+    git(repo, "commit", "-qm", "init")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    env = secrets.scrubbed_env()
+    assert env["GIT_CONFIG_KEY_0"] == "commit.gpgsign"
+    assert not pr.is_dirty(repo)
 
 
 def test_every_name_in_secrets_env_is_secret(tmp_path, monkeypatch):

@@ -125,13 +125,21 @@ _SECRET_SUFFIXES = ("_PAT", "_AUTH")
 #: Words that CONTAIN a pattern without being one. They are removed from the
 #: name before matching, so `KEYCHAIN_PATH` and `TOKENIZERS_PARALLELISM` pass
 #: while `KEYCHAIN_PASSWORD` is still caught by its `PASSW`.
-_BENIGN_WORDS = ("KEYCHAIN", "KEYBOARD", "KEYMAP", "KEYTIMEOUT", "TOKENIZERS")
+_BENIGN_WORDS = ("KEYCHAIN", "KEYBOARD", "KEYMAP", "KEYRING", "KEYTIMEOUT",
+                 "TOKENIZERS")
 
 #: Whole names that are never secrets, whatever they match: the agent socket
 #: and TTY a child legitimately needs (ssh, commit signing), and Go's
 #: module-privacy config (`GOPRIVATE` is a host list; Go builds need it).
 _KEEP_NAMES = frozenset({"SSH_AUTH_SOCK", "GPG_TTY", "GPG_AGENT_INFO",
                          "GOPRIVATE", "GONOPRIVATE"})
+
+#: git's env config protocol (GIT_CONFIG_COUNT + GIT_CONFIG_KEY_<n> +
+#: GIT_CONFIG_VALUE_<n>): the name holds a config KEY such as
+#: `commit.gpgsign`. Dropping it leaves a count with no key, and every git
+#: call then fails `unable to parse command-line config` — the bench pins
+#: signing this way, so all its runs died at preflight (2026-10-22).
+_KEEP_RX = re.compile(r"GIT_CONFIG_KEY_\d+")
 
 #: Values shorter than this are never treated as known secrets: redacting
 #: "true" or "8192" everywhere would mangle ordinary output.
@@ -190,7 +198,8 @@ def is_secret_name(name: str, *, _explicit: set[str] | None = None) -> bool:
     credential (`resolve_api_key`, Keychain), OR credential-shaped: contains
     KEY / TOKEN / SECRET / PASSW / CREDENTIAL / PRIVATE / COOKIE, or ends in
     `_PAT` / `_AUTH`. The explicit sources win over everything; the small
-    `_KEEP_NAMES` list and `_BENIGN_WORDS` only override the PATTERN.
+    `_KEEP_NAMES` / `_KEEP_RX` lists and `_BENIGN_WORDS` only override the
+    PATTERN.
 
     A DENYLIST by design: an allowlist of "safe" names would break
     JAVA_HOME / GOPATH / CARGO_HOME / … in arbitrary projects, and the
@@ -200,7 +209,7 @@ def is_secret_name(name: str, *, _explicit: set[str] | None = None) -> bool:
     explicit = _explicit_names() if _explicit is None else _explicit
     if name in explicit:
         return True
-    if name.upper() in _KEEP_NAMES:
+    if name.upper() in _KEEP_NAMES or _KEEP_RX.fullmatch(name.upper()):
         return False
     return _pattern_match(name)
 
