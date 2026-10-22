@@ -741,3 +741,47 @@ def test_aborted_turn_renders_as_a_failure(tmp_path, monkeypatch):
         assert errors and errors[-1]["text"].startswith("Backend error:")
 
     asyncio.run(scenario())
+
+
+def test_aborted_turn_recovery_runs_on_the_worker_not_the_ui_thread(
+        tmp_path, monkeypatch):
+    """Regression (2026-10 review): `_render_outcome` runs ON THE UI THREAD and
+    used to call `ctl.aborted_report` → `note_aborted_turn` → the kit's
+    recovery (self-repair can brew-restart oMLX for up to 90s + a 60s health
+    wait), freezing the whole TUI for minutes after a backend abort. The
+    recovery must run on the turn worker; the renderer only draws the report."""
+    import threading
+
+    class _Aborted(_FakeResult):
+        final_text = ""
+        aborted = True
+        abort_reason = "Backend error: ConnectError: [Errno 61] Connection refused"
+
+    threads: list = []
+
+    def _recover(slots, reason):
+        threads.append(threading.current_thread())
+        return "recovered on the worker"
+
+    monkeypatch.setattr(turn_mod, "run_single", lambda *a, **k: _Aborted())
+    monkeypatch.setattr(turn_mod, "recover_backend_failure", _recover)
+
+    async def scenario():
+        app = _make_app(tmp_path)
+        written: list = []
+        ui_thread = threading.current_thread()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            log = app.query_one("#transcript", RichLog)
+            real_write = log.write
+            log.write = lambda r, *a, **k: (written.append(r),
+                                            real_write(r, *a, **k))[1]
+            app.query_one("#prompt", Input).value = "hi"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+        assert len(threads) == 1, threads               # ran exactly once
+        assert threads[0] is not ui_thread              # …and off the UI thread
+        assert any("recovered on the worker" in str(w) for w in written)
+
+    asyncio.run(scenario())

@@ -61,6 +61,11 @@ class TurnOutcome:
     ctx_ceiling: int = 0
     started_at: float = 0.0
     ended_at: float = 0.0
+    # `controller.AbortReport` for a turn the loop aborted, else None. Set by
+    # `ChatController.run_turn` on the thread that RAN the turn — building it
+    # runs the kit's recovery (a possible oMLX restart), which must never run
+    # on the TUI's UI thread. Renderers only draw it.
+    abort: object | None = None
 
 
 # Pytest-style summary parsing (C1). Tolerant: each count matched independently,

@@ -746,8 +746,9 @@ class ChatApp(App):
         # A turn the agent loop ABORTED (backend failure contained into the
         # result rather than raised) is a failed turn and must look like one —
         # it used to render as a successful empty reply. Text(), not markup:
-        # the reason is an exception string.
-        rep = ctl.aborted_report(outcome)
+        # the reason is an exception string. Built (record + recovery) on the
+        # worker by `run_turn` — never here, on the UI thread.
+        rep = outcome.abort
         if rep:
             log.write(Text(f"✗ {rep.reason}", style="red"))
             if rep.ctx_line:
