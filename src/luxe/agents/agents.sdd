@@ -677,6 +677,14 @@ reintroduce any of them without new evidence.
   write-pressure notice, the stub and this note all ignored, no in-loop text
   lever moves Glimmer.
 
+- **`commit_first` prompt variant** (`_COMMIT_FIRST_APPENDIX`, f845455,
+  2026-10-17): the baseline system prompt plus a "commit discipline"
+  appendix, opt-in via a variants overlay, never in a default config. INERT
+  (`acceptance/tuning_2026_10/REPORT.md` §1): muse-glimmer-30B stayed 0/2 with
+  the same trace as on the baseline prompt, and Qwen3.8-27B passed both dev
+  fixtures with or without it. `tests/golden/prompt_registry.json` lost
+  exactly that entry.
+
 ### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
 
 - `RoleConfig.stuck_loop_abort` (default **True**) gates whether
