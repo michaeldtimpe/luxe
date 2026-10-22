@@ -177,12 +177,12 @@ def main() -> int:
                         "fix-shape trajectories that --no-early-bail rescued at n=75). "
                         "Default off; baseline byte-identical when unset.")
     p.add_argument("--tiered-compact", action="store_true",
-                   help="forge-hybrid Phase 2 (A): set LUXE_TIERED_COMPACT=1 so the "
-                        "3-phase compaction strategy (drop _luxe_nudge messages, truncate "
-                        "tool_results, drop tool_results, drop text/clear tool_call "
-                        "content) replaces the default elide_old_tool_results at the "
-                        "pre-chat compaction site. Default off; baseline is byte-"
-                        "identical when this flag is absent.")
+                   help="NO-OP for the compactor, kept for CLI back-compat: "
+                        "TieredCompact (forge-hybrid Phase 2 (A) 3-phase compaction) "
+                        "is default-ON since 2026-05-28, with or without this flag. "
+                        "Disable it with LUXE_TIERED_COMPACT=0 in the environment. "
+                        "It only gates forwarding --tiered-compact-threshold / "
+                        "--tiered-compact-phase-thresholds.")
     p.add_argument("--tiered-compact-threshold", type=float, default=None,
                    help="Override the TieredCompact compact_threshold (default 0.75). "
                         "Lower values force compaction to fire at lower context pressure; "
