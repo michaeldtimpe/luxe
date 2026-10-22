@@ -4,7 +4,7 @@
 # the queue can be stopped once a cell is settled. Resumable: harness_ab.py
 # skips fixtures already DONE in each run dir's state.json.
 #
-#   OUT=acceptance/harness_ab_2026_10 nohup scripts/harness_ab_queue.sh > $OUT/queue.log 2>&1 &
+#   OUT=acceptance/harness_ab_2026_10 nohup scripts/_archive/harness_ab_queue.sh > $OUT/queue.log 2>&1 &
 #
 # Env: OUT (required), REPS (default "1 2 3"), HARNESSES (default
 # "opencode qwen codex claude codex-cat"), MODELS (default: champion,
@@ -13,7 +13,7 @@
 # finds it done moves straight on), EXTRA_ARGS (passed to every harness_ab.py
 # run, e.g. "--luxe-mcp" for the MCP arm under its own OUT).
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 : "${OUT:?set OUT to the acceptance dir}"
 REPS=${REPS:-"1 2 3"}
 HARNESSES=${HARNESSES:-"opencode qwen codex claude codex-cat"}
@@ -22,7 +22,7 @@ read -r -a EXTRA <<<"${EXTRA_ARGS:-}"
 
 if [ "${LUXE_CONTROL:-1}" = 1 ]; then
   echo "=== $(date '+%F %T') luxe-offline control (deps-audit x3)"
-  OUT="$OUT" scripts/harness_ab_luxe_offline.sh
+  OUT="$OUT" scripts/_archive/harness_ab_luxe_offline.sh
   echo "=== $(date '+%F %T') rc=$? luxe-offline control"
 fi
 
@@ -32,7 +32,7 @@ for rep in $REPS; do
     for h in $HARNESSES; do
       dir="$OUT/$h/$tag/rep$rep"
       echo "=== $(date '+%F %T') rep$rep $tag $h -> $dir"
-      uv run python scripts/harness_ab.py --harness "$h" --model "$model" \
+      uv run python scripts/_archive/harness_ab.py --harness "$h" --model "$model" \
         --output "$dir" --all --timeout "$timeout" --label "$h/$tag/rep$rep" ${EXTRA[@]+"${EXTRA[@]}"}
       echo "=== $(date '+%F %T') rc=$? rep$rep $tag $h"
     done

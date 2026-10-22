@@ -14,7 +14,7 @@ on the same repo and task type. Every call is appended to `--log` (JSONL) so
 usage can be counted independently of the harness's event stream.
 
 Usage (the harness launches it):
-    .venv/bin/python scripts/harness_ab_luxe_mcp.py --repo <clone> \
+    .venv/bin/python scripts/_archive/harness_ab_luxe_mcp.py --repo <clone> \
         --task-type <implement|document|manage> --log <fixture dir>/luxe_mcp.jsonl
 """
 
@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 # Tools the outside harnesses lack. luxe's read_file/grep/write/edit/bash/git_*

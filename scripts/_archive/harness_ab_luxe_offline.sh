@@ -10,9 +10,9 @@
 # cold like the outside harnesses (the cache code treats both as a miss). The
 # cache itself is never touched.
 #
-#   OUT=acceptance/harness_ab_2026_10 scripts/harness_ab_luxe_offline.sh
+#   OUT=acceptance/harness_ab_2026_10 scripts/_archive/harness_ab_luxe_offline.sh
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 : "${OUT:?set OUT to the acceptance dir}"
 dest="$OUT/luxe-offline/champ"
 mkdir -p "$dest"

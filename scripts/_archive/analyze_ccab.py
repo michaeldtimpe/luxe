@@ -22,7 +22,7 @@ from collections import defaultdict
 from pathlib import Path
 from statistics import median
 
-CSV = Path(__file__).resolve().parent / "out" / "chunk_conclude_ab.csv"
+CSV = Path(__file__).resolve().parents[1] / "out" / "chunk_conclude_ab.csv"
 
 
 def _binom_two_sided_p(b: int, c: int) -> float:

@@ -643,7 +643,7 @@ def _run_capture(cmd: list[str], log_dir: Path,
     runaway luxe invocation freezes the whole suite.
 
     The child runs in its OWN process group and a timeout kills the whole
-    group (SIGTERM, then SIGKILL) — the scripts/opencode_harness.py shape.
+    group (SIGTERM, then SIGKILL) — the scripts/_archive/opencode_harness.py shape.
     `subprocess.run(timeout=)` kills only the direct child: luxe's own
     children (a bash tool call, a test run) survived the timeout and kept
     running into the next fixture, against the clone that fixture reuses.
