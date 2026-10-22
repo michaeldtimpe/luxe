@@ -26,6 +26,7 @@ from luxe.gitkit.kinds import (  # re-exported: tests + scripts import these fro
 )
 from luxe.gitkit.output import finish_report
 from luxe.repo_index import _detect_languages_for_repo
+from luxe.roles import make_read_only_role
 
 # Kinds that consume a prior same-commit gitaudit's findings as context.
 _PRIOR_FINDINGS_KINDS = ("gitchange",)
@@ -142,7 +143,6 @@ def run_git_report(
     from luxe.backend import Backend
     from luxe.gitkit import health, store
     from luxe.gitkit.workspace import indexed_target
-    from luxe.mcp.server import make_read_only_role
     from luxe.tools.fs import get_repo_root
 
     if kind not in KINDS:

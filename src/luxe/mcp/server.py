@@ -23,6 +23,10 @@ from __future__ import annotations
 
 from luxe.ephemeral import is_ephemeral
 from luxe.paths import luxe_home
+# The read-only role patcher lives in the neutral `luxe.roles` (gitkit,
+# chat/turn and cli use it too); re-exported here for existing importers.
+from luxe.roles import MUTATION_TOOL_NAMES as _MUTATION_TOOL_NAMES  # noqa: F401
+from luxe.roles import make_read_only_role as make_read_only_role
 
 import hmac
 import json
@@ -170,25 +174,6 @@ def load_server_policy(path: str | Path | None = None) -> ServerPolicy:
     )
 
 
-# --- read-only role config patcher -----------------------------------------
-
-_MUTATION_TOOL_NAMES = {
-    "write_file", "edit_file", "bash",
-    # git_diff itself is read-only; we do not strip it
-}
-
-
-def make_read_only_role(role_cfg) -> Any:
-    """Return a copy of role_cfg with mutation tools stripped from `tools`."""
-    # role_cfg is a Pydantic RoleConfig; .copy(update=...) preserves type.
-    new_tools = [t for t in (role_cfg.tools or []) if t not in _MUTATION_TOOL_NAMES]
-    try:
-        return role_cfg.model_copy(update={"tools": new_tools})
-    except AttributeError:
-        # Older pydantic
-        return role_cfg.copy(update={"tools": new_tools})
-
-
 # --- FastMCP server builder ------------------------------------------------
 
 def build_server(*, unsafe: bool = False, policy: ServerPolicy | None = None,
@@ -212,77 +197,47 @@ def build_server(*, unsafe: bool = False, policy: ServerPolicy | None = None,
     def _check_rate(tool: str) -> tuple[bool, str]:
         return rate.check(tool)
 
+    def _run_readonly(tool: str, args: dict[str, Any]) -> str:
+        """The shared body of the three read-only tools: rate limit → runner
+        → audit. Every outcome is audited, a missing runner included."""
+        ok, msg = _check_rate(tool)
+        if not ok:
+            append_audit(tool, args, "rejected", msg)
+            return f"rate limited: {msg}"
+        if readonly_runner is None:
+            append_audit(tool, args, "error", "no runner installed")
+            return "luxe server not configured (no runner)"
+        try:
+            result = readonly_runner(tool, args)
+        except Exception as e:
+            append_audit(tool, args, "error", str(e))
+            return f"error: {e}"
+        append_audit(tool, args, "accepted")
+        return result
+
+    # Thin per-tool wrappers: FastMCP derives each tool's schema from its
+    # signature + docstring, so those stay per-tool.
     @mcp_server.tool(name="luxe_review")
     def luxe_review(repo_path: str, goal: str) -> str:
         """Run a luxe code review on a repository (read-only; no edits)."""
-        ok, msg = _check_rate("luxe_review")
-        if not ok:
-            append_audit("luxe_review", {"repo_path": repo_path, "goal": goal},
-                         "rejected", msg)
-            return f"rate limited: {msg}"
-        if readonly_runner is None:
-            append_audit("luxe_review", {"repo_path": repo_path, "goal": goal},
-                         "error", "no runner installed")
-            return "luxe server not configured (no runner)"
-        try:
-            result = readonly_runner("luxe_review",
-                                     {"repo_path": repo_path, "goal": goal})
-        except Exception as e:
-            append_audit("luxe_review", {"repo_path": repo_path, "goal": goal},
-                         "error", str(e))
-            return f"error: {e}"
-        append_audit("luxe_review", {"repo_path": repo_path, "goal": goal},
-                     "accepted")
-        return result
+        return _run_readonly("luxe_review",
+                             {"repo_path": repo_path, "goal": goal})
 
     @mcp_server.tool(name="luxe_summarize")
     def luxe_summarize(repo_path: str, goal: str = "") -> str:
         """Summarize a repository (read-only; no edits)."""
-        ok, msg = _check_rate("luxe_summarize")
-        if not ok:
-            append_audit("luxe_summarize", {"repo_path": repo_path, "goal": goal},
-                         "rejected", msg)
-            return f"rate limited: {msg}"
-        if readonly_runner is None:
-            return "luxe server not configured (no runner)"
-        try:
-            result = readonly_runner("luxe_summarize",
-                                     {"repo_path": repo_path, "goal": goal})
-        except Exception as e:
-            append_audit("luxe_summarize", {"repo_path": repo_path, "goal": goal},
-                         "error", str(e))
-            return f"error: {e}"
-        append_audit("luxe_summarize", {"repo_path": repo_path, "goal": goal},
-                     "accepted")
-        return result
+        return _run_readonly("luxe_summarize",
+                             {"repo_path": repo_path, "goal": goal})
 
     @mcp_server.tool(name="luxe_explain")
     def luxe_explain(repo_path: str, query: str) -> str:
         """Answer a question about a repository (read-only; no edits)."""
-        ok, msg = _check_rate("luxe_explain")
-        if not ok:
-            append_audit("luxe_explain", {"repo_path": repo_path, "query": query},
-                         "rejected", msg)
-            return f"rate limited: {msg}"
-        if readonly_runner is None:
-            return "luxe server not configured (no runner)"
-        try:
-            result = readonly_runner("luxe_explain",
-                                     {"repo_path": repo_path, "query": query})
-        except Exception as e:
-            append_audit("luxe_explain", {"repo_path": repo_path, "query": query},
-                         "error", str(e))
-            return f"error: {e}"
-        append_audit("luxe_explain", {"repo_path": repo_path, "query": query},
-                     "accepted")
-        return result
+        return _run_readonly("luxe_explain",
+                             {"repo_path": repo_path, "query": query})
 
     if unsafe:
-        if not _unsafe_enabled():
-            # We log this but still register — tool calls will be rejected
-            # at invocation time with a clear message.
-            pass
-
+        # Registered even without LUXE_MCP_UNSAFE=1: a call is then rejected
+        # (and audited) at invocation time with a clear message.
         @mcp_server.tool(name="luxe_maintain")
         def luxe_maintain(repo_path: str, goal: str, confirm_token: str) -> str:
             """Run a full luxe maintain pipeline (writes files, opens PRs).
