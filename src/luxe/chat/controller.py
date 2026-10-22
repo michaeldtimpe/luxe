@@ -327,41 +327,56 @@ def ephemeral_notice_markup() -> str:
     return f"[yellow]·[/] [dim]{_escape(notice)}[/]" if notice else ""
 
 
-def apply_startup_flags(session: ChatSession, *, dev_mode: bool = False,
-                        start_web: bool = False, start_write: bool = False,
-                        startup_verbose: str | None = None,
-                        startup_show_reasoning: bool = False,
-                        startup_no_terse: bool = False,
-                        startup_debug: bool = False,
-                        startup_compact: bool = False,
-                        startup_ctx_tier: str | None = None) -> None:
+@dataclass(frozen=True)
+class StartupFlags:
+    """The `luxe chat` / `luxe code` startup posture, as ONE value
+    `launch._run_interactive` hands to whichever front-end it picks, and
+    that front-end hands to `ChatController.build` (2026-10: the same
+    sixteen keyword arguments used to be threaded, and written out twice,
+    through all four). The defaults are a plain `luxe chat`."""
+    keep_loaded: bool = False          # --keep-loaded: skip the exit unload
+    resume_session_id: str | None = None
+    project_kind: str = "git"          # git | dir | none (luxe.project)
+    theme_name: str | None = None      # resolved palette name
+    dev_mode: bool = False             # --dev: write + unrestricted bash
+    start_web: bool = False            # --web
+    start_write: bool = False          # the `luxe code` posture
+    verbose: str | None = None         # --verbose off|diff|full
+    show_reasoning: bool = False       # --show-reasoning
+    no_terse: bool = False             # --no-terse
+    debug: bool = False                # --debug = verbose full + reasoning
+    compact: bool = False              # --compact
+    ctx_tier: str | None = None        # --ctx <tier>
+
+
+def apply_startup_flags(session: ChatSession, flags: StartupFlags) -> None:
     """The CLI's startup flags, applied to the session before the first turn
     (so /goal users get them without typing REPL commands first)."""
-    if dev_mode:
+    if flags.dev_mode:
         session.write_enabled = True
         session.unrestricted_bash = True
-    if start_web:
+    if flags.start_web:
         session.web_enabled = True
-    if start_write:
+    if flags.start_write:
         # `luxe code` posture: write tools ON from turn one (its reason to
         # exist is changing code). Bash stays gated — /bash as usual.
         session.write_enabled = True
     # C3: --debug = verbose full + reasoning.
-    if startup_debug:
+    if flags.debug:
         session.verbose_level = "full"
         session.show_reasoning = True
-    elif startup_verbose:
-        session.verbose_level = startup_verbose
-    if startup_show_reasoning:
+    elif flags.verbose:
+        session.verbose_level = flags.verbose
+    if flags.show_reasoning:
         session.show_reasoning = True
-    if startup_no_terse:
+    if flags.no_terse:
         session.terse = False
-    if startup_compact:
+    if flags.compact:
         session.compact = True
-    if startup_ctx_tier and startup_ctx_tier in CTX_TIERS:
+    if flags.ctx_tier and flags.ctx_tier in CTX_TIERS:
         # `--ctx <tier>` = /ctx before the first turn; the per-turn clamp to
         # the box/model ceiling applies exactly as it does for /ctx.
-        session.num_ctx_override = CTX_TIERS[startup_ctx_tier]
+        session.num_ctx_override = CTX_TIERS[flags.ctx_tier]
 
 
 # -- the controller ----------------------------------------------------------
@@ -404,37 +419,35 @@ class ChatController:
     @classmethod
     def build(cls, cfg, repo_path: str, languages: frozenset, *,
               on_status: Callable[[str], None],
-              keep_loaded: bool = False,
+              flags: StartupFlags = StartupFlags(),
               infer_task_type: Callable[[str], str] | None = None,
-              theme_name: str | None = None,
-              project_kind: str = "git",
-              log: logging.Logger | None = None,
-              **startup_flags) -> "ChatController":
+              log: logging.Logger | None = None) -> "ChatController":
         """Construct the session, its slots and status bar, with the CLI's
-        startup flags applied (`apply_startup_flags` names them). Nothing is
-        written yet — `start()` opens the transcript."""
+        startup flags applied (`apply_startup_flags`). Nothing is written
+        yet — `start()` opens the transcript."""
         from luxe.agents.tasktype import infer_task_type as _infer_task_type
         from luxe.chat.slots import SlotManager
 
         infer = infer_task_type or _infer_task_type  # the maintain heuristic
         # C-T: select a curated luxe palette (auto = track terminal/YASL theme).
-        if theme_name:
+        if flags.theme_name:
             from luxe.chat import theme as theme_mod
-            theme_mod.set_palette(theme_name)
+            theme_mod.set_palette(flags.theme_name)
         slots = SlotManager(cfg, on_status=on_status)
         session = ChatSession(
             repo_path=repo_path,
             project_hash=project_mem.project_hash(repo_path) if repo_path else "",
             languages=languages,
-            project_kind=project_kind,
+            project_kind=flags.project_kind,
         )
         # One cheap stat at session build: machines with the user's SSH-tunnel
         # tool get PLANEPROXY_HINT in the frame (session.py); others see nothing.
         from luxe.planeproxy import binary_present as _pp_present
         session.planeproxy_present = _pp_present()
-        apply_startup_flags(session, **startup_flags)
+        apply_startup_flags(session, flags)
         return cls(cfg, session=session, slots=slots, infer=infer,
-                   status=initial_status(slots), keep_loaded=keep_loaded, log=log)
+                   status=initial_status(slots), keep_loaded=flags.keep_loaded,
+                   log=log)
 
     def start(self) -> None:
         """Open the transcript, install the always-on debug log (chat.sdd:

@@ -36,6 +36,7 @@ from luxe.chat import commands as cmd
 from luxe.chat import status as status_mod
 from luxe.chat.controller import (
     ChatController,
+    StartupFlags,
     TurnHooks,
     banner_markup,
     build_hint_markup,
@@ -932,35 +933,22 @@ class TuiSink:
         self._app._call_ui(self._app._render_outcome, outcome, prep)
 
 
-def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,
-                 resume_session_id=None, dev_mode=False, start_web=False,
-                 start_write=False,
-                 startup_verbose=None,
-                 startup_show_reasoning=False, startup_no_terse=False,
-                 startup_debug=False, startup_compact=False, theme_name=None,
-                 startup_ctx_tier=None,
-                 infer_task_type=None, on_project=None,
-                 project_kind="git") -> None:
+def run_chat_app(cfg, repo_path, languages, *,
+                 flags: StartupFlags = StartupFlags(),
+                 infer_task_type=None, on_project=None) -> None:
     """Entry point: build + start the session (`ChatController`, the same
     startup-flag handling as run_chat_repl, so the two front-ends are
     interchangeable), then run the app."""
     # SlotManager notices are routed into the transcript once the app mounts
     # (ChatApp.on_mount); nothing is on screen to print to before that.
     ctl = ChatController.build(
-        cfg, repo_path, languages, on_status=lambda m: None,
-        keep_loaded=keep_loaded, infer_task_type=infer_task_type,
-        theme_name=theme_name, project_kind=project_kind, log=logger,
-        dev_mode=dev_mode, start_web=start_web, start_write=start_write,
-        startup_verbose=startup_verbose,
-        startup_show_reasoning=startup_show_reasoning,
-        startup_no_terse=startup_no_terse, startup_debug=startup_debug,
-        startup_compact=startup_compact, startup_ctx_tier=startup_ctx_tier,
-    )
+        cfg, repo_path, languages, on_status=lambda m: None, flags=flags,
+        infer_task_type=infer_task_type, log=logger)
     # Always-on per-session debug log — the TUI owns the screen, so without
     # it every logger.error traceback was simply lost (chat.sdd).
     ctl.start()
 
-    app = ChatApp(cfg, controller=ctl, resume_session_id=resume_session_id,
+    app = ChatApp(cfg, controller=ctl, resume_session_id=flags.resume_session_id,
                   on_project=on_project)
     try:
         app.run()

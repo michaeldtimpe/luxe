@@ -217,6 +217,7 @@ def _run_interactive(
 ):
     """Shared body of `luxe chat` / `luxe code` (posture via the two kwargs)."""
     from luxe.chat import run_chat_repl
+    from luxe.chat.controller import StartupFlags
     # Late, and from `cli` on purpose: see the module docstring.
     from luxe.cli import (
         _chat_cfg,
@@ -426,44 +427,19 @@ def _run_interactive(
                           "Run `uv sync --extra chat` (repo root) to restore "
                           "the full-screen UI.[/]")
 
+    flags = StartupFlags(
+        keep_loaded=keep_loaded, resume_session_id=resume_session_id,
+        project_kind=project.kind, theme_name=theme_name, dev_mode=dev_mode,
+        start_web=start_web, start_write=start_write, verbose=startup_verbose,
+        show_reasoning=startup_show_reasoning, no_terse=startup_no_terse,
+        debug=startup_debug, compact=startup_compact, ctx_tier=ctx_tier)
     try:
         if run_app is not None:
-            run_app(
-                cfg, repo_path, languages,
-                keep_loaded=keep_loaded,
-                resume_session_id=resume_session_id,
-                dev_mode=dev_mode,
-                start_web=start_web,
-                start_write=start_write,
-                startup_verbose=startup_verbose,
-                startup_show_reasoning=startup_show_reasoning,
-                startup_no_terse=startup_no_terse,
-                startup_debug=startup_debug,
-                startup_compact=startup_compact,
-                theme_name=theme_name,
-                startup_ctx_tier=ctx_tier,
-                on_project=_attach_project,
-                project_kind=project.kind,
-            )
+            run_app(cfg, repo_path, languages, flags=flags,
+                    on_project=_attach_project)
         else:
-            run_chat_repl(
-                cfg, repo_path, languages,
-                console=console,
-                keep_loaded=keep_loaded,
-                resume_session_id=resume_session_id,
-                dev_mode=dev_mode,
-                start_web=start_web,
-                start_write=start_write,
-                startup_verbose=startup_verbose,
-                startup_show_reasoning=startup_show_reasoning,
-                startup_no_terse=startup_no_terse,
-                startup_debug=startup_debug,
-                startup_compact=startup_compact,
-                theme_name=theme_name,
-                startup_ctx_tier=ctx_tier,
-                on_project=_attach_project,
-                project_kind=project.kind,
-            )
+            run_chat_repl(cfg, repo_path, languages, console=console,
+                          flags=flags, on_project=_attach_project)
     finally:
         search_mod.reset_index()
         symbols_mod.reset_index()

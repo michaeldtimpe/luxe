@@ -18,6 +18,7 @@ from luxe.backend import BackendError
 from luxe.chat import commands as cmd
 from luxe.chat import slots as slots_mod
 from luxe.chat import turn as turn_mod
+from luxe.chat.controller import StartupFlags
 from luxe.chat.session import ChatSession
 from luxe.config import BackendEntry, PipelineConfig, RoleConfig
 
@@ -315,7 +316,7 @@ def test_repl_turn_backend_error_prints_hint_only_multi(monkeypatch):
                 raise EOFError
 
         repl_mod.run_chat_repl(cfg, "", frozenset(), console=console,
-                               keep_loaded=True, reader=reader,
+                               flags=StartupFlags(keep_loaded=True), reader=reader,
                                infer_task_type=lambda m: "review")
         return out.getvalue()
 
@@ -353,7 +354,7 @@ def test_repl_turn_unexpected_exception_keeps_session_alive(monkeypatch):
             raise EOFError
 
     repl_mod.run_chat_repl(_single_cfg(), "", frozenset(), console=console,
-                           keep_loaded=True, reader=reader,
+                           flags=StartupFlags(keep_loaded=True), reader=reader,
                            infer_task_type=lambda m: "review")
 
     text = out.getvalue()
