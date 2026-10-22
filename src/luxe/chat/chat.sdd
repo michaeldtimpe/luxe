@@ -167,7 +167,9 @@ never touches this module.
   is refused as a target. The `weights` step reads the oMLX store only on a
   local `engine: omlx` endpoint (llama-server loads its preset's files; the
   main turn is the proof there), and every fix string comes from
-  `inspection.endpoint_fixes(entry)` — the engine-aware set `/doctor` uses.
+  `inspection.endpoint_fixes(entry)` — the engine-aware set `/doctor` uses —
+  or, for a missing/dangling `weights` line, `inspection._weights_fix` (names
+  the HF repo a dangling link points at, exactly as `/doctor` does).
   EVERY smoke/drill unload (pre-ping residency, drill turns, the CLI
   teardown) is gated on `smoke.endpoint_is_shared` (the entry's
   `is_shared()`, or loopback-ness for a `--base-url` elsewhere): a shared

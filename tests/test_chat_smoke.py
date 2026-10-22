@@ -332,6 +332,45 @@ def test_dangling_main_weights_fail_on_local_endpoint(monkeypatch):
     assert step.state == "fail" and "pull" in step.detail
 
 
+def test_dangling_main_weights_fix_names_the_hf_repo_like_doctor(monkeypatch):
+    """Regression (2026-10 review): smoke printed bare `luxe pull Main-M`,
+    which only searches mounts — a wiped HF cache's weights are not there.
+    `/doctor` names the HF repo the dangling link points at; smoke must print
+    the same fix string (inspection._weights_fix)."""
+    import luxe.modelstore as ms
+    from luxe.chat import origin as origin_mod
+    from luxe.chat.inspection import _weights_fix
+
+    monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: True)
+    monkeypatch.setattr(ms, "model_state",
+                        lambda mid, *a, **k: "dangling" if mid == "Main-M"
+                        else "ok")
+    monkeypatch.setattr(ms, "hf_repo_for",
+                        lambda mid, *a, **k: f"mlx-community/{mid}")
+    report = smoke_mod.run_smoke(_cfg(), skip_fallback=True, skip_tools=True)
+    step = next(s for s in report.steps if s.name == "weights Main-M")
+    assert "`luxe pull mlx-community/Main-M`" in step.detail
+    assert _weights_fix("Main-M", "dangling", ms.hf_repo_for) in step.detail
+
+
+def test_stale_check_error_has_doctors_severity(monkeypatch):
+    """`/doctor` (`_add_stale_check`) reports an errored build check as OK
+    "unchecked"; smoke reported the same exception as a WARN. One verdict."""
+    import luxe.staleproc as staleproc
+    from luxe.chat import origin as origin_mod
+
+    def _boom():
+        raise RuntimeError("lsof exploded")
+
+    monkeypatch.setattr(origin_mod, "endpoint_is_local", lambda url: True)
+    monkeypatch.setattr(staleproc, "check_omlx", _boom)
+    import luxe.modelstore as ms
+    monkeypatch.setattr(ms, "model_state", lambda *a, **k: "ok")
+    report = smoke_mod.run_smoke(_cfg(), skip_fallback=True, skip_tools=True)
+    step = next(s for s in report.steps if s.name == "oMLX build")
+    assert step.state == "pass" and "unchecked" in step.detail
+
+
 # --- code-drill step budget (2026-08-10) ------------------------------------
 
 class TestCodeDrillStepBudget:
