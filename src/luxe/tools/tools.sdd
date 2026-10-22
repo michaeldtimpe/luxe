@@ -137,16 +137,58 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   a small keep-list) and it is a DENYLIST on purpose: an allowlist would
   break JAVA_HOME/GOPATH/CARGO_HOME/… in arbitrary projects, and the
   fallback kit must work in whatever repo it is pointed at. Tool
-  DESCRIPTIONS are unchanged (golden-pinned). Deliberately NOT scrubbed —
-  luxe's own fixed commands: git/gh in the PR flow (`pr._run` otherwise,
-  `gitcmd`, `citations`, `cleanup`, `repo_index`, `fswalk`), `secrets`'
+  DESCRIPTIONS are unchanged (golden-pinned). Pinned by
+  `tests/test_secrets_scrub.py` (real spawns, fake values)
+
+- Every `git` luxe spawns FOR ITSELF also runs with `scrubbed_env()` as its
+  base env (2026-10-22): `gitcmd.run`/`run_in` (`_env()`) and
+  `gitcmd.parse_env()` — hence `tools/git.py`, gitkit, chat status/doctor,
+  `pr.diff_against_base`, `spec_validator`, `citations` — plus `pr._run`
+  whenever `cmd[0] == "git"`, `gitclone.clone_env()` (clone, and
+  `pr._run_net` for git push/ls-remote), `cleanup._git`, `fswalk`'s
+  `ls-files`, `repo_index._git_recent_files`, `buildinfo.fetch_origin` and
+  the smoke drill's git calls. Why: git EXECUTES things — `.git/hooks/*`
+  (luxe's own `git commit`), `diff.external` (the read-only `git_diff`
+  tool), `core.sshCommand`, filters — and one a model planted (via bash, or a
+  repo that arrived poisoned) must not find credentials. ENV ONLY: no argv
+  or `-c` pin changed. The keep-list (SSH_AUTH_SOCK, GPG_TTY,
+  GPG_AGENT_INFO) still passes, so ssh push and commit signing work; https
+  credentials come from the configured helper (osxkeychain on the fleet),
+  not env. `gh` is NOT scrubbed (`pr._run` with `cmd[0] == "gh"` inherits;
+  `_run_net` passes `clone_env(scrub=False)`): it runs no repo hooks and may
+  authenticate from GH_TOKEN. A structural test requires `env=` on every
+  literal `subprocess.run(["git", …])` in src/luxe
+- Still NOT scrubbed — luxe's own non-git fixed commands: `gh`, `secrets`'
   Keychain read, `repair`'s brew restart, `claudecode`/`staleproc` probes,
   `mcp_pdf` (fixed argv), and `fs._grep` (rg executes nothing; the model's
   pattern sits behind `--`). MCP stdio children already get only the SDK's
-  allowlist + the relays.yaml env block. Caveat: `bash -lc` (test step,
-  tests_pass) sources the login profile, which can re-export what the scrub
-  removed — keep secrets out of shell profiles. Pinned by
-  `tests/test_secrets_scrub.py` (real spawns, fake values)
+  allowlist + the relays.yaml env block
+
+- No fs write tool touches git metadata (2026-10-22). `write_file` and
+  `edit_file` (and the chat prose-aware variants, which call them) refuse a
+  path whose CANONICAL repo-relative form has `.git` as any component,
+  case-insensitively (`.git/hooks/x`, `.git/config`, `sub/.git/…`,
+  `src/../.git/…`, an absolute path, `.GIT/…` on a case-insensitive volume):
+  `_check_git_metadata`, run right after `_resolve_rel` and before every
+  other guard, in the escape refusal's style ("Path is inside git metadata
+  (.git): <path>"). `.gitignore`, `.gitattributes`, `.gitmodules`,
+  `.github/…` are different names and stay writable; reads are unaffected.
+  Pinned by `tests/test_tools.py::TestGitDirWriteGuard`
+
+- KNOWN RESIDUALS — this is NOT a sandbox, and nothing above makes it one:
+  * Allowlisted bash includes `python` (and `cat`, `make`, `npx`, …), so a
+    model can run code that reads `~/.luxe/secrets.env` (or any credential
+    FILE) from disk and sends it to the network within a single command. The
+    env scrub removes the inherited copy; the egress refusal only sees a
+    value that appears in a tool call's ARGUMENTS, not one a process reads
+    and transmits itself. Only sandboxing (filesystem + network isolation of
+    the child) closes this, and sandboxing is out of scope. Unrestricted
+    `/bash` widens it further (it can also write `.git/**` directly; the
+    git env scrub is what still holds there).
+  * `bash -lc` (the maintain test step, spec tests_pass) sources the login
+    profile, which could re-export what the scrub removed. Left as is: no
+    login profile on m1/m5/neo exports secrets (checked 2026-10-22). Keep it
+    that way.
 
 - A tool call never carries a known secret OUT (2026-10-22). The agent loop
   refuses, before dispatch, any call whose arguments hold a known secret
@@ -306,9 +348,12 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)
 - Wire unrestricted bash into the benchmark/maintain path or the default
   `TOOL_FNS` — it is a chat-front-end carve-out only
-- Spawn a model-driven subprocess with the inherited environment (`env=None`
-  to subprocess, or `dict(os.environ)`) — use `luxe.secrets.scrubbed_env()`;
-  and never define a second "what is a secret" list outside `luxe.secrets`
+- Spawn a model-driven subprocess, or ANY `git`, with the inherited
+  environment (`env=None` to subprocess, or `dict(os.environ)`) — use
+  `luxe.secrets.scrubbed_env()` (or `gitcmd`, which does); and never define
+  a second "what is a secret" list outside `luxe.secrets`
+- Let an fs write tool reach `.git/**` (hooks and config run as code)
+- Describe these guards as a sandbox — see KNOWN RESIDUALS above
 
 ## Owns
 - src/luxe/tools/**
