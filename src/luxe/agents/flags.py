@@ -121,8 +121,10 @@ class RunFlags:
 
     # Hand the model's own reasoning back on its assistant messages
     # (`reasoning_content`), as the Qwen3.6 template expects within an agent
-    # turn. Opt-in: default OFF keeps the benchmark path byte-identical until
-    # a maintain_suite run says otherwise. See agents.sdd "Reasoning round-trip".
+    # turn. Opt-in: default OFF keeps the benchmark path byte-identical.
+    # Benched 2026-10-15 and NOT promoted (-28% wall but it changes the
+    # trajectory, 29/30; acceptance/cache_ab_2026_10). See agents.sdd
+    # "Prefix-cache accounting + the two cache experiments".
     reasoning_roundtrip: bool = False
 
 
