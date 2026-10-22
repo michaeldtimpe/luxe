@@ -53,10 +53,6 @@ def disable() -> None:
     _EPHEMERAL = False
 
 
-def set_enabled(on: bool) -> None:
-    enable() if on else disable()
-
-
 def is_ephemeral() -> bool:
     return _EPHEMERAL
 

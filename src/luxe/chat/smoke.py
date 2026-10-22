@@ -9,8 +9,7 @@ main model, plus a generation on the fallback (which exercises the weight
 swap). Read-only against the repo; the only side effect is model loads.
 
 Exit code 0 = every step passed (warnings allowed), 1 = at least one FAIL.
-Runnable anywhere: `luxe smoke` on each fleet host, and the M4 prep script's
-final gate.
+Runnable anywhere: `luxe smoke` on each fleet host.
 """
 
 from __future__ import annotations
@@ -293,9 +292,10 @@ _CODE_DRILL_STEPS = 12
 #: 13 a comfortable margin. Reproducible — 3/3 fail at 12, 2/2 pass at 20.
 _CODE_DRILL_STEPS_LOW_BIT = 20
 
-#: Quant markers that select the larger budget. m1/m4 run 4-bit mains by the
-#: 2026-07-30 fallback-kit manifest; 2- and 3-bit are listed so a future
-#: low-bit main is not a silent regression.
+#: Quant markers that select the larger budget. m1 runs 4-bit models by the
+#: 2026-07-30 fallback-kit manifest (m4 did too until it was retired,
+#: 2026-10); 2- and 3-bit are listed so a future low-bit main is not a
+#: silent regression.
 _LOW_BIT_MARKERS = ("-2bit", "-3bit", "-4bit")
 
 

@@ -329,7 +329,9 @@ def test_4_worker_unwinding_after_quit_records_no_crash(tmp_path):
     try:
         raise RuntimeError("App is not running")
     except RuntimeError:
-        app._report_turn_crash()
+        # The path the workers take (`contain` → `report_crash`), through the
+        # TUI's sink, whose `closing` reads `_exiting`.
+        app.controller.report_crash("turn", app.sink)
     recs = session_store.load_session(app.session.session_id)[1]
     assert not any(r["kind"] == "error" for r in recs)
     # and a UI call from a worker after exit is dropped, not raised
