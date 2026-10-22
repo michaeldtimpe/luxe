@@ -313,6 +313,21 @@ def _safe(rel: str) -> Path:
     return _resolve_rel(rel)[0]
 
 
+def _check_git_metadata(canon: str, rel: str) -> str | None:
+    """Refuse a WRITE whose resolved repo-relative path has `.git` as any
+    component (2026-10-22): `.git/hooks/*` and `.git/config` (`diff.external`,
+    `core.sshCommand`, filters) run as code the next time luxe itself calls
+    git, so a model that could write them would turn luxe's own commit/diff
+    into its executor. Case-insensitive (macOS volumes are: `.GIT/hooks` IS
+    `.git/hooks`). Judged on the canonical path, so `src/../.git/…`, an
+    absolute path, or a symlink into `.git` is caught; `.gitignore`,
+    `.gitattributes`, `.github/…` are separate names and stay writable.
+    Reads are unaffected."""
+    if any(part.casefold() == ".git" for part in canon.split("/")):
+        return f"Path is inside git metadata (.git): {rel}"
+    return None
+
+
 def _check_spec_forbids(rel: str, *, creating: bool) -> str | None:
     """Return error if `rel` matches a `.sdd` Forbids glob in the chain.
 
@@ -920,6 +935,8 @@ def _write_file(args: dict[str, Any], *, prose_exempt: bool = False,
         path, canon = _resolve_rel(rel)
     except (PermissionError, ValueError) as e:
         return "", str(e)
+    if (err := _check_git_metadata(canon, rel)):
+        return "", err
 
     # Honesty guards — applied before any I/O so a refusal costs nothing.
     if (err := _check_role_path(canon)):
@@ -960,6 +977,8 @@ def _edit_file(args: dict[str, Any], *, prose_exempt: bool = False,
     # write, an escape here keeps RAISING (dispatch_tool formats it) exactly
     # as `_safe` always did, so that error text is unchanged.
     path, canon = _resolve_rel(rel)
+    if (err := _check_git_metadata(canon, rel)):
+        return "", err
     if (err := _check_role_path(canon)):
         return "", err
     # SpecDD Lever 2: tool-side Forbids — symmetric with _write_file.
