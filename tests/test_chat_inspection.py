@@ -447,6 +447,18 @@ class TestDoctor:
         mode = next(c for c in doc.checks if c.name == "mode")
         assert "read-only" in mode.detail and "/write" in mode.fix
 
+    def test_no_project_session_keeps_the_session_tail(self, doctor_ctx):
+        """Regression (2026-10 review): the no-project early return carried
+        its own copy of the mode/web/TUI tail and its mode line had dropped
+        the `/write` fix. One tail for both shapes."""
+        session, sm, _repo_path = doctor_ctx
+        session.project_kind = "none"
+        doc = inspection.run_doctor(session, sm, "")
+        mode = next(c for c in doc.checks if c.name == "mode")
+        assert "read-only" in mode.detail and "/write" in mode.fix
+        names = [c.name for c in doc.checks]
+        assert names[-5:] == ["project", "search index", "mode", "web", "TUI"]
+
     def test_dirty_tree_is_reported_as_ok_with_a_count(self, doctor_ctx, tmp_path):
         session, sm, repo = doctor_ctx
         (Path(repo) / "a.py").write_text("changed\n")

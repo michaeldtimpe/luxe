@@ -547,30 +547,43 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     """Preflight the things that silently break a chat session.
 
     Ordered so the first FAIL is the one to fix first: an unreachable endpoint
-    makes every later check meaningless.
+    makes every later check meaningless. Each group is its own helper; none
+    of them may raise.
     """
-    from luxe.modelstore import human_bytes
-
     doc = Doctor()
+    reachable, served = _endpoint_checks(doc, slots)
+    _key_check(doc, slots)
+    _model_checks(doc, slots, reachable, served)
+    # Host manifest (fallback kit): the declared main/fallback pair for this
+    # machine, and whether its weights are actually on disk. Config-only plus
+    # local filesystem — runs in no-project sessions too. Guarded throughout
+    # (doctor contract: nothing here may raise).
+    _manifest_checks(doc, slots, reachable, served)
+    _disk_check(doc)
+    _update_check(doc)
+    _project_checks(doc, session, repo_path)
+    _session_checks(doc, session)
+    return doc
+
+
+def _endpoint_checks(doc: Doctor, slots) -> tuple[bool, list[str] | None]:
+    """The endpoint line + the stale-build line under it. Returns
+    `(reachable, served)` — the one catalog every later check reuses."""
+    import httpx
+
     backend = slots.backend
     base_url = getattr(backend, "base_url", "") or "?"
     name = getattr(slots, "backend_name", "?")
-
     # Which serving stack is behind this URL. oMLX unless `backends:` says
     # otherwise, so every host but neo is unchanged. It switches only the
-    # DIAGNOSTIC lines below — a fix that reads `brew services start omlx` is
+    # DIAGNOSTIC lines — a fix that reads `brew services start omlx` is
     # worse than no fix at all on a box with no omlx formula.
     is_omlx, engine_label = _engine_facts(slots)
-    is_cloud = _is_cloud(slots)
-    entry = backend_entry_for(slots)
-    key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
-    fixes = endpoint_fixes(entry)
+    fixes = endpoint_fixes(backend_entry_for(slots))
 
     # Liveness AND catalog from one bounded GET (see `_fetch_catalog`). A
     # non-200 is "there but not answering" (restart); anything else — refused,
     # timed out, unroutable — is "not there" (start).
-    import httpx
-
     reachable = False
     served: list[str] | None = None
     try:
@@ -594,10 +607,16 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     # (lessons.md 2026-08-03 and 2026-08-04). Local endpoints only, and
     # offline-pure — pgrep/lsof/stat, no network.
     _add_stale_check(doc, base_url, is_omlx=is_omlx)
+    return reachable, served
 
-    if getattr(backend, "api_key", ""):
+
+def _key_check(doc: Doctor, slots) -> None:
+    is_omlx, engine_label = _engine_facts(slots)
+    entry = backend_entry_for(slots)
+    key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
+    if getattr(slots.backend, "api_key", ""):
         doc.add("API key", OK, "present")
-    elif is_cloud:
+    elif _is_cloud(slots):
         # FAIL, not WARN: on a cloud endpoint every single request 401s without
         # it, so this is the whole session, not a caveat. The env var is named;
         # its VALUE never appears here (chat.sdd Must-not).
@@ -616,63 +635,70 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
         # yellow lines that matter.
         doc.add("API key", OK, f"not required by {engine_label}")
 
+
+def _model_checks(doc: Doctor, slots, reachable: bool,
+                  served: list[str] | None) -> None:
+    """The chat model is served here, and where its weights live."""
     model = slots.model_for("chat")
-    if reachable:
-        try:
-            # Same roster filter as `SlotManager.available_models`, applied
-            # to the catalog already in hand instead of a second GET.
-            available = set(slots.cfg.visible(served or [],
-                                              entry=slots.active_entry()))
-        except Exception:
-            try:
-                available = set(slots.available_models())
-            except Exception:
-                available = set()
-        if available and model not in available:
-            doc.add("chat model", FAIL, f"{model} is not served here",
-                    f"`/model chat <id>`, or `luxe pull {model}`")
-        else:
-            doc.add("chat model", OK, model)
-        org = origin_mod.cached_origin_for(backend, model)
-        if org.kind == "unknown":
-            try:
-                org = origin_mod.origin_for(backend, model, served=served)
-            except Exception:
-                pass
-        if is_cloud:
-            # Provider-hosted: there is nothing on this disk to check and
-            # nothing to `luxe pull`. The fact worth stating is that the turns
-            # are billed, which no local endpoint has to say.
-            doc.add("weights", OK,
-                    f"provider-hosted by {engine_label} — billable per token",
-                    "")
-        elif org.kind == "network":
-            doc.add("weights", WARN, f"{org.glyph} {org.detail}",
-                    f"`luxe pull {model}` to copy them to local disk "
-                    "(loading over the network makes the first turn slow)")
-        elif org.kind == "remote":
-            doc.add("weights", WARN, f"{org.glyph} served by {org.detail}",
-                    f"`luxe pull {model}` here, then `--backend local`, if "
-                    "prompts should not cross the network")
-        elif org.kind == "local":
-            doc.add("weights", OK, f"{org.glyph} local disk")
-        elif is_omlx:
-            doc.add("weights", WARN, "location unreported by oMLX")
-        else:
-            # llama-server has no `/v1/models/status`, so there is no path to
-            # report and nothing to fix; it loads what its own preset names.
-            doc.add("weights", OK,
-                    f"{engine_label} reports no model path (its preset "
-                    "owns it)")
-    else:
+    if not reachable:
         doc.add("chat model", WARN, f"{model} (unverified — endpoint down)",
                 "fix the endpoint above first, then re-run")
+        return
+    try:
+        # Same roster filter as `SlotManager.available_models`, applied
+        # to the catalog already in hand instead of a second GET.
+        available = set(slots.cfg.visible(served or [],
+                                          entry=slots.active_entry()))
+    except Exception:
+        try:
+            available = set(slots.available_models())
+        except Exception:
+            available = set()
+    if available and model not in available:
+        doc.add("chat model", FAIL, f"{model} is not served here",
+                f"`/model chat <id>`, or `luxe pull {model}`")
+    else:
+        doc.add("chat model", OK, model)
+    _origin_check(doc, slots, model, served)
 
-    # Host manifest (fallback kit): the declared main/fallback pair for this
-    # machine, and whether its weights are actually on disk. Config-only plus
-    # local filesystem — runs in no-project sessions too. Guarded throughout
-    # (doctor contract: nothing here may raise).
-    _manifest_checks(doc, slots, reachable, served)
+
+def _origin_check(doc: Doctor, slots, model: str,
+                  served: list[str] | None) -> None:
+    backend = slots.backend
+    is_omlx, engine_label = _engine_facts(slots)
+    org = origin_mod.cached_origin_for(backend, model)
+    if org.kind == "unknown":
+        try:
+            org = origin_mod.origin_for(backend, model, served=served)
+        except Exception:
+            pass
+    if _is_cloud(slots):
+        # Provider-hosted: there is nothing on this disk to check and
+        # nothing to `luxe pull`. The fact worth stating is that the turns
+        # are billed, which no local endpoint has to say.
+        doc.add("weights", OK,
+                f"provider-hosted by {engine_label} — billable per token", "")
+    elif org.kind == "network":
+        doc.add("weights", WARN, f"{org.glyph} {org.detail}",
+                f"`luxe pull {model}` to copy them to local disk "
+                "(loading over the network makes the first turn slow)")
+    elif org.kind == "remote":
+        doc.add("weights", WARN, f"{org.glyph} served by {org.detail}",
+                f"`luxe pull {model}` here, then `--backend local`, if "
+                "prompts should not cross the network")
+    elif org.kind == "local":
+        doc.add("weights", OK, f"{org.glyph} local disk")
+    elif is_omlx:
+        doc.add("weights", WARN, "location unreported by oMLX")
+    else:
+        # llama-server has no `/v1/models/status`, so there is no path to
+        # report and nothing to fix; it loads what its own preset names.
+        doc.add("weights", OK,
+                f"{engine_label} reports no model path (its preset owns it)")
+
+
+def _disk_check(doc: Doctor) -> None:
+    from luxe.modelstore import human_bytes
 
     try:
         free = shutil.disk_usage(Path.home()).free
@@ -685,10 +711,12 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     except OSError as e:
         doc.add("disk", WARN, str(e))
 
-    # Update check — the ONE doctor line allowed to touch the network (a
-    # short git fetch on the luxe source repo). Startup banners stay
-    # offline-pure; /doctor is exactly where a round-trip is tolerable.
-    # Offline is NOT a warning: doctor runs during outages by design.
+
+def _update_check(doc: Doctor) -> None:
+    """The ONE doctor line allowed to touch the network (a short git fetch on
+    the luxe source repo). Startup banners stay offline-pure; /doctor is
+    exactly where a round-trip is tolerable. Offline is NOT a warning: doctor
+    runs during outages by design."""
     try:
         from luxe import buildinfo
         if buildinfo.fetch_origin(timeout_s=4):
@@ -704,61 +732,61 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     except Exception as e:
         doc.add("update", OK, f"unchecked ({e})")
 
-    # Search index: built at startup from the repo HEAD; a moved HEAD means the
-    # model is searching a tree that no longer matches the files it will read.
-    # A session with no project deliberately has none — that's a state, not a
-    # fault, so it reports OK with the escape hatch rather than a warning.
+
+def _project_checks(doc: Doctor, session, repo_path: str) -> None:
+    """Search index, its freshness, and the working tree.
+
+    The index is built at startup from the repo HEAD; a moved HEAD means the
+    model is searching a tree that no longer matches the files it will read.
+    A session with no project deliberately has none — that's a state, not a
+    fault, so it reports OK with the escape hatch rather than a warning.
+    """
     from luxe import search as search_mod
 
-    index = search_mod.get_index()
     if getattr(session, "project_kind", "git") == "none":
         doc.add("project", OK, f"none attached ({repo_path or 'cwd'})",
                 "`/project <path>` or `/index` to enable code search")
         doc.add("search index", OK, "not built (no project)")
-        doc.add("mode", OK, f"{'write on' if session.write_enabled else 'read-only'} · "
-                            f"bash {'unrestricted' if session.unrestricted_bash else 'allowlisted'}")
-        _add_web_check(doc, session)
-        try:
-            import textual  # noqa: F401
-            doc.add("TUI", OK, "textual installed")
-        except ImportError:
-            doc.add("TUI", WARN, "textual missing — line REPL fallback",
-                    "`uv sync --extra chat`")
-        return doc
-    if repo_path:
-        from luxe.gitkit.health import current_head, is_git_repo
-
-        if index is None:
-            doc.add("search index", WARN, "not built",
-                    "`/index` in chat, or start with "
-                    "`luxe chat --repo <path>`")
-        else:
-            doc.add("search index", OK, f"{len(getattr(index, 'paths', []))} files")
-        if is_git_repo(repo_path):
-            head = current_head(repo_path)
-            indexed = getattr(session, "index_head", "") or ""
-            if indexed and head and not head.startswith(indexed) \
-                    and not indexed.startswith(head):
-                doc.add("index freshness", WARN,
-                        f"indexed at {indexed}, HEAD is now {head}",
-                        "`/index` to reindex (or restart chat)")
-            else:
-                doc.add("index freshness", OK, head or "(no commits)")
-            diffs, err = session_diff(repo_path)
-            if err:
-                doc.add("working tree", WARN, err)
-            elif diffs:
-                doc.add("working tree", OK, f"{len(diffs)} file(s) changed "
-                                            "(`/diff` to see)")
-            else:
-                doc.add("working tree", OK, "clean")
-        else:
-            doc.add("git", WARN, "not a git repo — `/diff` and git tools "
-                                 "won't work here",
-                    f"`git -C {repo_path} init` if it should be one")
-    else:
+        return
+    if not repo_path:
         doc.add("repo", WARN, "no repo path for this session")
+        return
+    from luxe.gitkit.health import current_head, is_git_repo
 
+    index = search_mod.get_index()
+    if index is None:
+        doc.add("search index", WARN, "not built",
+                "`/index` in chat, or start with `luxe chat --repo <path>`")
+    else:
+        doc.add("search index", OK, f"{len(getattr(index, 'paths', []))} files")
+    if not is_git_repo(repo_path):
+        doc.add("git", WARN, "not a git repo — `/diff` and git tools "
+                             "won't work here",
+                f"`git -C {repo_path} init` if it should be one")
+        return
+    head = current_head(repo_path)
+    indexed = getattr(session, "index_head", "") or ""
+    if indexed and head and not head.startswith(indexed) \
+            and not indexed.startswith(head):
+        doc.add("index freshness", WARN,
+                f"indexed at {indexed}, HEAD is now {head}",
+                "`/index` to reindex (or restart chat)")
+    else:
+        doc.add("index freshness", OK, head or "(no commits)")
+    diffs, err = session_diff(repo_path)
+    if err:
+        doc.add("working tree", WARN, err)
+    elif diffs:
+        doc.add("working tree", OK, f"{len(diffs)} file(s) changed "
+                                    "(`/diff` to see)")
+    else:
+        doc.add("working tree", OK, "clean")
+
+
+def _session_checks(doc: Doctor, session) -> None:
+    """The session-scoped tail: mode, web, TUI. ONE copy for every session
+    shape — the no-project path used to carry its own, whose mode line had
+    lost the `/write` fix (2026-10 review)."""
     mode = ("write on" if session.write_enabled else "read-only")
     bash = ("unrestricted" if session.unrestricted_bash else "allowlisted")
     doc.add("mode", OK, f"{mode} · bash {bash}",
@@ -771,4 +799,3 @@ def run_doctor(session, slots, repo_path: str) -> Doctor:
     except ImportError:
         doc.add("TUI", WARN, "textual missing — line REPL fallback",
                 "`uv sync --extra chat`")
-    return doc
