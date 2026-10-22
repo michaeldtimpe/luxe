@@ -68,7 +68,7 @@ curl -s localhost:8080/v1/models        # expect Qwen3-4B-Instruct-2507 "loaded"
 ```
 luxe ready                       # what is actually broken
 luxe pull --list                 # local models; flags DANGLING store entries
-luxe pull <model>                # mount (kappa/alpha) first, HuggingFace second
+luxe pull <model>                # mount (kappa/alpha) first, then HF — trusted_publishers only
 luxe pull <model> --remove       # free disk; refuses manifest models without --force
 luxe unload                      # free oMLX RAM
 luxe repair                      # restart a STALE oMLX (brew upgraded under it); by hand: brew services restart omlx

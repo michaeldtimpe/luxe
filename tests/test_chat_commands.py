@@ -568,11 +568,13 @@ def test_pull_search_lists_hf_hits(ctx, _no_network_pull):
     assert "mlx-community/Qwen-4bit" in _text(ctx)
 
 
+# These fetch from a TRUSTED org: since 2026-10 an HF pull from a publisher
+# off `trusted_publishers` is refused at plan level (tests/test_template_pins.py).
 def test_pull_previews_before_transferring(ctx, _no_network_pull, monkeypatch):
     from luxe import modelstore as ms
 
     monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: [])
-    cmd.dispatch("/pull org/Champ", ctx)
+    cmd.dispatch("/pull mlx-community/Champ", ctx)
     out = _text(ctx)
     assert "HuggingFace" in out
     assert "--yes" in out                       # consent step is explicit
@@ -583,8 +585,8 @@ def test_pull_yes_starts_the_download(ctx, _no_network_pull, monkeypatch):
     from luxe import modelstore as ms
 
     monkeypatch.setattr(ms, "model_state", lambda *a, **k: "missing")
-    cmd.dispatch("/pull org/Champ --yes", ctx)
-    assert _FakeAdmin.started == ["org/Champ"]
+    cmd.dispatch("/pull mlx-community/Champ --yes", ctx)
+    assert _FakeAdmin.started == ["mlx-community/Champ"]
     assert "downloaded" in _text(ctx)
 
 
@@ -592,7 +594,7 @@ def test_pull_refuses_a_model_already_in_the_store(ctx, _no_network_pull, monkey
     from luxe import modelstore as ms
 
     monkeypatch.setattr(ms, "model_state", lambda *a, **k: "ok")
-    cmd.dispatch("/pull org/Champ --yes", ctx)
+    cmd.dispatch("/pull mlx-community/Champ --yes", ctx)
     assert "--force" in _text(ctx)
     assert _FakeAdmin.started == []
 
@@ -606,8 +608,8 @@ def test_pull_replaces_a_dangling_entry_without_force(ctx, _no_network_pull,
 
     monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: ["Champ"])
     monkeypatch.setattr(ms, "model_state", lambda *a, **k: "dangling")
-    cmd.dispatch("/pull org/Champ --yes", ctx)
-    assert _FakeAdmin.started == ["org/Champ"]
+    cmd.dispatch("/pull mlx-community/Champ --yes", ctx)
+    assert _FakeAdmin.started == ["mlx-community/Champ"]
 
 
 def test_pull_reports_when_there_is_no_source(ctx, _no_network_pull):
