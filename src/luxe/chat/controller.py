@@ -193,9 +193,15 @@ def model_origin_notice(slots, status=None) -> str:
     cache. Local weights are announced too, not just remote ones: the point is
     that you can always tell, not that you get warned when it's bad.
     """
+    from luxe.chat.inspection import _LIVENESS_TIMEOUT_S
+
     model = slots.model_for("chat")
     try:
-        org = origin_mod.origin_for(slots.backend, model)
+        # Bounded: this runs at TUI mount / REPL startup, and the client's
+        # read timeout is sized for GENERATION — a wedged endpoint used to
+        # hold startup for 10 min locally, 40 on m5.
+        org = origin_mod.origin_for(slots.backend, model,
+                                    timeout_s=_LIVENESS_TIMEOUT_S)
     except Exception:
         org = origin_mod.ModelOrigin(kind="unknown", model_id=model)
     if status is not None:

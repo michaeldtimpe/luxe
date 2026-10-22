@@ -19,6 +19,7 @@ failure degrades to `kind="unknown"` and never blocks a turn. Chat-only
 
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,8 +188,22 @@ def reset_cache() -> None:
     _origin_cache.clear()
 
 
+def call_bounded(fn, timeout_s: float | None):
+    """`fn(timeout_s=…)` when a bound is asked for and `fn` takes one, else
+    `fn()`. `Backend.list_models`/`model_paths` take it; a duck-typed backend
+    that doesn't is called exactly as before."""
+    if timeout_s is not None:
+        try:
+            if "timeout_s" in inspect.signature(fn).parameters:
+                return fn(timeout_s=timeout_s)
+        except (TypeError, ValueError):
+            pass
+    return fn()
+
+
 def origins_for_backend(backend, *, force: bool = False,
-                        served: list[str] | None = None
+                        served: list[str] | None = None,
+                        timeout_s: float | None = None,
                         ) -> dict[str, ModelOrigin]:
     """Map every model the endpoint serves to its provenance.
 
@@ -197,7 +212,9 @@ def origins_for_backend(backend, *, force: bool = False,
     old server yields `{}` and callers fall back to `unknown`.
 
     `served` is a catalog the caller ALREADY fetched (`/doctor` does); a
-    remote endpoint then needs no request of its own.
+    remote endpoint then needs no request of its own. `timeout_s` bounds that
+    one request (startup passes a liveness-sized bound — the client's own
+    read timeout is sized for generation, 600s locally / 2400s on m5).
     """
     base_url = getattr(backend, "base_url", "") or ""
     if not force and base_url in _origin_cache:
@@ -210,7 +227,7 @@ def origins_for_backend(backend, *, force: bool = False,
         origins: dict[str, ModelOrigin] = {}
         try:
             for mid in (served if served is not None
-                        else backend.list_models()):
+                        else call_bounded(backend.list_models, timeout_s)):
                 origins[mid] = ModelOrigin(kind="remote", detail=host, model_id=mid)
         except Exception:
             pass
@@ -222,7 +239,7 @@ def origins_for_backend(backend, *, force: bool = False,
     getter = getattr(backend, "model_paths", None)
     if callable(getter):
         try:
-            paths = getter() or {}
+            paths = call_bounded(getter, timeout_s) or {}
         except Exception:
             paths = {}
     for mid, path in paths.items():
@@ -233,16 +250,18 @@ def origins_for_backend(backend, *, force: bool = False,
 
 
 def origin_for(backend, model_id: str, *,
-               served: list[str] | None = None) -> ModelOrigin:
+               served: list[str] | None = None,
+               timeout_s: float | None = None) -> ModelOrigin:
     """Provenance of one model on the active endpoint (`unknown` if unreported).
 
     May perform one HTTP call (the first time an endpoint is seen) — call it
-    from a worker/startup path, never from a render. `served`: see
-    `origins_for_backend`.
+    from a worker/startup path, never from a render. `served` / `timeout_s`:
+    see `origins_for_backend`.
     """
     if not model_id:
         return ModelOrigin(kind="unknown")
-    found = origins_for_backend(backend, served=served).get(model_id)
+    found = origins_for_backend(backend, served=served,
+                                timeout_s=timeout_s).get(model_id)
     return found or ModelOrigin(kind="unknown", model_id=model_id)
 
 

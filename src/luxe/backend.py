@@ -1365,21 +1365,27 @@ class Backend:
         """
         return [m.get("id", "") for m in self._models_status() if m.get("loaded")]
 
-    def model_paths(self) -> dict[str, str]:
+    def model_paths(self, timeout_s: float | None = None) -> dict[str, str]:
         """Map model id → the path oMLX loads its weights from.
 
         Powers the chat front-end's local-vs-network provenance flag
         (`chat/origin.py`): the path can be a symlink into the HF cache, a
         network mount, or a cloud-sync placeholder tree. Best-effort — an old
         or unreachable server yields `{}`.
+
+        `timeout_s` bounds THIS request only (like `list_models(timeout_s=)`):
+        chat asks this at session startup, where a wedged endpoint must not
+        hold the TUI for the generation-sized read timeout. None = the
+        client's own, unchanged.
         """
         return {m.get("id", ""): m.get("model_path", "")
-                for m in self._models_status() if m.get("id")}
+                for m in self._models_status(timeout_s=timeout_s) if m.get("id")}
 
-    def _models_status(self) -> list[dict[str, Any]]:
+    def _models_status(self, timeout_s: float | None = None) -> list[dict[str, Any]]:
         """`/v1/models/status` model records, or [] when unavailable."""
+        kw = {} if timeout_s is None else {"timeout": timeout_s}
         try:
-            r = self._client.get("/v1/models/status")
+            r = self._client.get("/v1/models/status", **kw)
             r.raise_for_status()
             data = r.json()
         except (httpx.HTTPError, OSError, ValueError):
