@@ -446,6 +446,30 @@ working grep.**
   unrecoverably at both windows, ON completed and used the `offset=` resume;
   set per turn). Don't merge the call sites; BFCL is still unwired and inert.
 
+## Secrets never reach model-driven subprocesses or the model (2026-10-22)
+
+Threat: a model (backdoored fine-tune, poisoned template, injected file/page)
+steers the agent into reading credentials and sending them out. Sandboxing is
+out of scope; three guards, one definition (`src/luxe/secrets.py`):
+
+- **Env scrub** — every subprocess whose command/code the model controls
+  (bench + chat bash, analyzers, maintain test step, tests_pass, gitchange
+  verify, smoke --code pytest) runs with `scrubbed_env()`: secret-named vars
+  dropped (secrets.env names, names luxe resolved, KEY/TOKEN/SECRET/PASSW/
+  CREDENTIAL/PRIVATE/COOKIE, `*_PAT`/`*_AUTH`). A denylist on purpose —
+  JAVA_HOME/GOPATH/… must keep working. luxe's own git/gh/security/brew calls
+  are left alone. tools.sdd.
+- **Redaction + egress refusal** in `loop._dispatch_one` (covers every tool,
+  web/MCP included): known values in results → `[REDACTED:<NAME>]`; a call
+  whose args carry one (raw/percent/base64) is not run. Events
+  `secret_redacted`/`secret_egress_refused` carry NAMES only. agents.sdd.
+- **Warning** (chat) when web + bash are both on. chat.sdd.
+
+No flag; byte-identical when no secret value appears (goldens unchanged).
+Verify: `tests/test_secrets_{scrub,redact,chat_warning}.py`, or live with a
+FAKE value: `FAKE_TEST_TOKEN=… luxe chat --ephemeral` → `/write` → ask for
+`env` and to echo the value. Never use a real secret to test it.
+
 ## Wire format: vendor fields are TOP-LEVEL, never `extra_body`
 
 `extra_body` is an OpenAI **SDK** convention — the SDK flattens it before

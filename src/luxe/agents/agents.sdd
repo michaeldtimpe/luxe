@@ -450,6 +450,49 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   `benchmarks/maintain_suite/run.py` and the test corpus were swept, so there
   was no field-shape assumption to break.
 
+### Secret redaction + egress refusal (pinned 2026-10-22, ALWAYS ON, no flag)
+
+- ONE choke point: `loop._dispatch_one`, which every tool call of every run
+  passes through — built-in tools, bash, and the chat extra tools (web_*,
+  MCP relays, `claude_code_diag`) alike. Two helpers, both reading only
+  `luxe.secrets` (the single definition of a secret; tools.sdd):
+  * `_refuse_secret_egress` runs after the schema check and BEFORE the dedup
+    and `dispatch_tool`: arguments carrying a known secret value — raw,
+    percent-encoded (checked by decoding), or base64 at any alignment,
+    standard or URL-safe; deliberately no other encodings — are NOT run. The
+    model gets `secrets.egress_refusal(tool, NAME)` as the tool result (names
+    the variable, never the value); the ToolCall record carries the refusal
+    as `error` and its arguments WITHHELD (an encoded value survives a raw
+    redaction). Not added to `seen_calls`, so every attempt is refused.
+    It applies to EVERY tool, write_file/edit_file included: a credential
+    written into the repo leaves by commit/PR.
+  * `_redact_secrets` runs right after `dispatch_tool`: `result` and `error`
+    pass through `secrets.redact_report`, so a value the model read arrives
+    as `[REDACTED:<NAME>]` everywhere downstream (tool message,
+    `on_tool_event`, the persisted ToolCall). `bytes_out` keeps reporting
+    what the TOOL produced (same rule as the clamp).
+- Known values = secret-named vars in `os.environ`, every value in
+  `~/.luxe/secrets.env`, values already in `_KEYCHAIN_CACHE` (never a new
+  Keychain lookup); values < 8 chars are ignored, as are PATH-shaped values
+  of names matched only by pattern. Re-derived from sources on every call
+  (env scan + one stat); parse and compiled patterns cached.
+- Events (via `emit`, so gated by `log_calls` like everything else, and ONLY
+  when they fire): `secret_redacted` (step, tool `name`, `secrets` = sorted
+  NAMES) and `secret_egress_refused` (step, tool `name`, `secret` = NAME).
+  Never a value. Plus a display-only `on_notice` line (chat shows it; None on
+  the benchmark path).
+- Byte-identity: with no known value in an argument or a result, nothing is
+  touched — `redact_report` returns the same string object, no event, no
+  notice. The golden request/trajectory snapshots pass UNCHANGED; a
+  benchmark host that exports OMLX_API_KEY changes nothing unless a tool
+  result or argument actually contains it. No `LUXE_*` switch on purpose: a
+  security guard is not an ablation lever. Pinned by
+  `tests/test_secrets_redact.py`
+- Not covered (by design): what the model writes in plain prose, the
+  assistant message's own tool-call arguments (they stay in the conversation
+  the local server sees), and the BFCL adapter's synthetic tools (it
+  dispatches outside the loop).
+
 ### Truncated-turn retry (pinned 2026-08-10, DEFAULT-ON, BENCHED)
 
 - `LUXE_TRUNCATED_TURN_RETRY=1` (`RunFlags.truncated_turn_retry`): when a turn
