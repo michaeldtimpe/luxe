@@ -45,7 +45,7 @@ _TOOL_SCHEMA = [{
 #: step for forty minutes. Same few-second bound `/doctor`'s hint probe uses.
 _LIVENESS_TIMEOUT_S = 4.0
 
-#: The doctor vocabulary (`inspection.OK/WARN/FAIL`) → smoke's step states,
+#: The doctor vocabulary (`doctor.OK/WARN/FAIL`) → smoke's step states,
 #: for the checks the two surfaces share one implementation of.
 _SMOKE_STATE = {"ok": "pass", "warn": "warn", "fail": "fail"}
 
@@ -505,7 +505,7 @@ def run_smoke(cfg, *, backend_name: str | None = None,
     about a server it never touched.
     """
     from luxe.chat import origin as origin_mod
-    from luxe.chat.inspection import (
+    from luxe.chat.doctor import (
         endpoint_fixes,
         stale_build_check,
         weights_checks,
@@ -555,7 +555,7 @@ def run_smoke(cfg, *, backend_name: str | None = None,
     #    preset's paths, so reading ~/.omlx/models there reported a working
     #    host's main as missing. Its main turn below is the proof instead.
     if local and entry.is_omlx():
-        # `/doctor`'s implementation (`inspection.weights_checks`): a dangling
+        # `/doctor`'s implementation (`doctor.weights_checks`): a dangling
         # entry's fix names the HF repo its link points at — bare `luxe pull
         # <name>` only searches mounts, which is not where a wiped HF cache's
         # weights live.
@@ -594,7 +594,7 @@ def run_smoke(cfg, *, backend_name: str | None = None,
     #     not. This line exists so that when they do, the cause is already on
     #     screen. Local oMLX only (lessons.md 2026-08-03/04; chat.sdd: skipped
     #     on a non-oMLX engine — there is no formula to be stale about).
-    #     `/doctor`'s implementation (`inspection.stale_build_check`), so an
+    #     `/doctor`'s implementation (`doctor.stale_build_check`), so an
     #     errored check is OK "unchecked" on both surfaces; it returns None
     #     on a remote or non-oMLX endpoint.
     line = stale_build_check(url, is_omlx=entry.is_omlx()) if local else None

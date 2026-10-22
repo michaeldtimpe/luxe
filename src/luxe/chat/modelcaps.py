@@ -144,7 +144,7 @@ def for_model(backend, model_id: str) -> ToolCapability:
     if key in _cache:
         return _cache[key]
 
-    from luxe.chat.inspection import _LIVENESS_TIMEOUT_S
+    from luxe.chat.doctor import _LIVENESS_TIMEOUT_S
 
     cap = ToolCapability(UNKNOWN, "")
     try:
