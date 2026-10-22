@@ -592,3 +592,152 @@ class TestToolSchemasInCalibration:
         monkeypatch.setenv("LUXE_CTX_SERVER_TRUTH", "0")
         _, on = self._run(monkeypatch, on=True)
         assert on.peak_context_pressure > off.peak_context_pressure
+
+
+# --- est_sent on the TieredCompact path is cr.tokens_after (2026-10-22) -----
+#
+# `_compact_step` used to re-estimate the messages TieredCompact had just
+# returned; it now reuses `cr.tokens_after`. That is output-identical only if
+# every return path of `TieredCompact.compact` sets `tokens_after` to the
+# estimate of the messages it returns — pinned here at every phase, both
+# phase-1 modes, and the ctx_limit<=0 early return.
+
+def _trajectory(n: int, tool_size: int) -> list[dict[str, Any]]:
+    msgs: list[dict[str, Any]] = [
+        {"role": "system", "content": "you are an agent"},
+        {"role": "user", "content": "fix the bug"},
+    ]
+    for i in range(n):
+        if i % 3 == 0:
+            msgs.append({"role": "user", "content": "Mid-loop notice.",
+                         "_luxe_nudge": True, "_luxe_nudge_type": "wp"})
+        msgs.append({"role": "assistant", "content": "x" * 50, "tool_calls": [{
+            "id": f"call_{i}", "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path":"a"}'}}]})
+        msgs.append({"role": "tool", "tool_call_id": f"call_{i}",
+                     "name": "read_file", "content": "y" * tool_size})
+    return msgs
+
+
+class TestEstSentIsTokensAfter:
+
+    def test_tokens_after_is_the_estimate_of_what_compact_returns(self):
+        from luxe.context import TieredCompact, estimate_messages_tokens
+
+        phases: set[int] = set()
+        for cache_friendly in (False, True):
+            for n, size in ((2, 20), (6, 400), (12, 2000), (30, 8000)):
+                for ctx in (0, 200, 500, 1000, 2000, 4000, 8000, 100_000):
+                    msgs = _trajectory(n, size)
+                    cr = TieredCompact(keep_recent=2,
+                                       cache_friendly=cache_friendly).compact(
+                        msgs, ctx)
+                    assert cr.tokens_after == estimate_messages_tokens(
+                        cr.messages), (cache_friendly, n, size, ctx)
+                    phases.add(cr.phase_reached)
+        assert phases == {0, 1, 2, 3}, "the grid must reach every phase"
+
+    def test_the_loop_calibrates_on_exactly_what_it_sent(self, monkeypatch):
+        """End to end: every est_sent handed to the calibration equals the
+        estimate of the messages + tools the backend actually received, on a
+        run where compaction fires."""
+        from luxe.context import (
+            TieredCompact,
+            estimate_messages_tokens,
+            estimate_tools_tokens,
+        )
+
+        _clear(monkeypatch)
+        monkeypatch.delenv("LUXE_TIERED_COMPACT", raising=False)
+        monkeypatch.delenv("LUXE_CTX_SERVER_TRUTH", raising=False)
+        sent: list[tuple[list[dict[str, Any]], Any]] = []
+        ests: list[int] = []
+        phases: list[int] = []
+
+        class _Recording:
+            def __init__(self, script):
+                self._script = list(script)
+
+            def chat(self, messages, tools=None, **kwargs):
+                sent.append(([dict(m) for m in messages], tools))
+                r = self._script.pop(0) if self._script else _stop()
+                return ChatResponse(
+                    text=r.text, tool_calls=r.tool_calls,
+                    finish_reason=r.finish_reason,
+                    timing=GenerationTiming(
+                        prompt_tokens=2 * estimate_messages_tokens(messages),
+                        completion_tokens=10))
+
+        real_ratio = loop_mod.calibration_ratio
+        real_compact = TieredCompact.compact
+
+        def spy_ratio(prompt_tokens, est):
+            ests.append(est)
+            return real_ratio(prompt_tokens, est)
+
+        def spy_compact(self, messages, ctx_limit):
+            cr = real_compact(self, messages, ctx_limit)
+            phases.append(cr.phase_reached)
+            return cr
+
+        monkeypatch.setattr(loop_mod, "calibration_ratio", spy_ratio)
+        monkeypatch.setattr(TieredCompact, "compact", spy_compact)
+        script = [_call("read_file", path=f"f{i}.py") for i in range(6)]
+        run_agent(
+            backend=_Recording(script),
+            role_cfg=RoleConfig(model_key="test", num_ctx=6_000, max_steps=8,
+                                max_tokens_per_turn=512, temperature=0.0),
+            system_prompt="sys", task_prompt="task", tool_defs=_tool_defs(),
+            tool_fns={"read_file": lambda a: ("z" * 6_000, None)},
+        )
+        assert any(p > 0 for p in phases), "compaction never fired"
+        assert ests and len(ests) == len(sent)
+        for est, (messages, tools) in zip(ests, sent):
+            assert est == (estimate_messages_tokens(messages)
+                           + estimate_tools_tokens(tools))
+
+
+# --- the per-step ctx debug line is computed only when DEBUG is on ---------
+
+class TestCtxDebugLineIsLazy:
+    """`_step_window`'s debug line carries a second, raw-window estimate pass
+    (`est=`). It is computed only when a DEBUG handler would see it, so the
+    benchmark path (no handler) does one pressure estimate per step, not two.
+    """
+
+    def _run(self, monkeypatch):
+        calls: list[int] = []
+        real = loop_mod.context_pressure
+
+        def spy(messages, ctx_limit):
+            calls.append(ctx_limit)
+            return real(messages, ctx_limit)
+
+        _clear(monkeypatch)
+        monkeypatch.setattr(loop_mod, "context_pressure", spy)
+        _run([_call("read_file", path="a.py"), _stop()], num_ctx=40_000,
+             tool_fns={"read_file": lambda a: (SMALL, None)})
+        return calls
+
+    def test_debug_off_one_estimate_per_step(self, monkeypatch):
+        import logging
+
+        logger = logging.getLogger("luxe.agents.loop")
+        monkeypatch.setattr(logger, "level", logging.INFO)
+        logger.manager._clear_cache()
+        try:
+            calls = self._run(monkeypatch)
+        finally:
+            logger.manager._clear_cache()
+        assert len(calls) == 2                      # two steps, one each
+        assert 40_000 not in calls                  # never the raw window
+
+    def test_debug_on_the_line_still_reports_the_raw_estimate(
+            self, monkeypatch, caplog):
+        import logging
+
+        with caplog.at_level(logging.DEBUG, logger="luxe.agents.loop"):
+            calls = self._run(monkeypatch)
+        assert calls.count(40_000) == 2             # the `est=` reading
+        assert "step=1 ctx_pressure=" in caplog.text
+        assert "step=2 ctx_pressure=" in caplog.text

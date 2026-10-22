@@ -412,12 +412,17 @@ def _step_window(run: _Run, st: LoopState, result: AgentResult,
     # correction applied; when cal != 1.0 the reported pressure is
     # server-calibrated and should track chat's finalize_turn number rather
     # than sitting at half of it. debug.log-only; see logger note at top.
-    logger.debug("step=%d ctx_pressure=%.1f%% (est=%.1f%% cal=%.2fx) "
-                 "num_ctx=%d effective_ctx=%d msgs=%d",
-                 step + 1, pressure * 100,
-                 context_pressure(st.messages, role_cfg.num_ctx) * 100,
-                 step_calibration, role_cfg.num_ctx, effective_ctx,
-                 len(st.messages))
+    # Guarded because the `est` argument is a second full estimate pass over
+    # every message, computed eagerly even when no DEBUG handler would ever
+    # see it (the benchmark path). context_pressure is pure, so skipping it
+    # changes nothing else.
+    if logger.isEnabledFor(_logging.DEBUG):
+        logger.debug("step=%d ctx_pressure=%.1f%% (est=%.1f%% cal=%.2fx) "
+                     "num_ctx=%d effective_ctx=%d msgs=%d",
+                     step + 1, pressure * 100,
+                     context_pressure(st.messages, role_cfg.num_ctx) * 100,
+                     step_calibration, role_cfg.num_ctx, effective_ctx,
+                     len(st.messages))
     # chat-only live ctx% (one source of truth, C2)
     _display(run.on_progress, pressure, "on_progress")
     return effective_ctx, pressure
@@ -458,12 +463,15 @@ def _compact_step(run: _Run, st: LoopState, effective_ctx: int, step: int,
                 effective=cr.effective,
                 eligible_end=cr.eligible_end,
             )
-    else:
-        st.messages = elide_old_tool_results(st.messages, effective_ctx)
+        # What we are about to send, measured the same way the calibration
+        # divides it — AFTER compaction, so the ratio describes the request
+        # the server actually answers. `tokens_after` IS that measurement:
+        # every TieredCompact.compact return sets it to
+        # estimate_messages_tokens of the messages it returns (pinned by
+        # tests/test_loop_context_bounds.py), so re-estimating repeated it.
+        return cr.tokens_after + run.tools_overhead
 
-    # What we are about to send, measured the same way the calibration
-    # divides it — AFTER compaction, so the ratio describes the request the
-    # server actually answers.
+    st.messages = elide_old_tool_results(st.messages, effective_ctx)
     return estimate_messages_tokens(st.messages) + run.tools_overhead
 
 
@@ -1204,8 +1212,8 @@ def _track_write(run: _Run, st: LoopState, step: int,
 
 
 def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
-                      executed: ToolCall, key: str, step: int,
-                      emit: Callable[..., None]) -> None:
+                      executed: ToolCall, key: str, path: str | None,
+                      step: int, emit: Callable[..., None]) -> None:
     """Fold one dispatched call into the run's bookkeeping: the spec
     validator's call list, dedup keys, convergence history, and the
     write / post-write-idle counters."""
@@ -1225,7 +1233,7 @@ def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
         st.tool_history.append({
             "step": step,
             "name": tc.name,
-            "path": extract_path(tc.name, tc.arguments),
+            "path": path,
         })
         if len(st.tool_history) > TOOL_HISTORY_MAX:
             st.tool_history = st.tool_history[-TOOL_HISTORY_MAX:]
@@ -1248,8 +1256,8 @@ def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
 
 
 def _clamp_result(st: LoopState, tc: ToolCallResponse, executed: ToolCall,
-                  content: str, effective_ctx: int, step: int,
-                  emit: Callable[..., None]) -> str:
+                  content: str, path: str | None, effective_ctx: int,
+                  step: int, emit: Callable[..., None]) -> str:
     """LUXE_TOOL_RESULT_CLAMP (opt-in, default OFF; callers check the flag).
     Bound ONE result here, at creation, rather than asking TieredCompact
     to reach a message its pinned protections put out of reach. Off =>
@@ -1270,7 +1278,7 @@ def _clamp_result(st: LoopState, tc: ToolCallResponse, executed: ToolCall,
     _clamp_max = tool_result_clamp_chars(effective_ctx)
     content, _clamp_dropped = clamp_tool_result(
         content, tool_name=tc.name, max_chars=_clamp_max,
-        path=extract_path(tc.name, tc.arguments),
+        path=path,
     )
     if _clamp_dropped:
         st.tool_results_clamped += 1
@@ -1288,8 +1296,8 @@ def _clamp_result(st: LoopState, tc: ToolCallResponse, executed: ToolCall,
 
 
 def _record_tool_call(run: _Run, st: LoopState, tc: ToolCallResponse,
-                      executed: ToolCall, key_hash: str, step: int,
-                      emit: Callable[..., None]) -> None:
+                      executed: ToolCall, key_hash: str, path: str | None,
+                      step: int, emit: Callable[..., None]) -> None:
     """Report a completed dispatch: on_tool_event, the `tool_call` record,
     and the post-compaction recovery marker."""
     _display(run.on_tool_event, executed, "on_tool_event")
@@ -1301,7 +1309,7 @@ def _record_tool_call(run: _Run, st: LoopState, tc: ToolCallResponse,
         # v1.10 — emit path arg so future convergence-score
         # mining can run against the trace. Cheap; falls
         # back to None for tools without a path-like arg.
-        path=extract_path(tc.name, tc.arguments),
+        path=path,
     )
     # forge-hybrid Phase 2 (A) — post-compact recovery markers.
     # Emits one of three event types whenever a recovery-class
@@ -1382,15 +1390,19 @@ def _dispatch_one(run: _Run, st: LoopState, result: AgentResult,
             reason="unknown_tool", message=executed.error[:300],
         )
     result.tool_calls.append(executed)
-    _track_dispatched(run, st, tc, executed, key, step, emit)
+    # Once per call (it used to be re-derived at each of the three uses
+    # below). extract_path is pure, and nothing touches tc.arguments
+    # between here and the last use, so every consumer sees the same value.
+    path = extract_path(tc.name, tc.arguments)
+    _track_dispatched(run, st, tc, executed, key, path, step, emit)
 
     content = executed.error or executed.result
     if run.flags.tool_result_clamp and content:
-        content = _clamp_result(st, tc, executed, content, effective_ctx,
-                                step, emit)
+        content = _clamp_result(st, tc, executed, content, path,
+                                effective_ctx, step, emit)
     st.messages.append(_tool_message(tc, step, content))
 
-    _record_tool_call(run, st, tc, executed, key_hash, step, emit)
+    _record_tool_call(run, st, tc, executed, key_hash, path, step, emit)
     return False
 
 
