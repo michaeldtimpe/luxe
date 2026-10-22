@@ -251,21 +251,28 @@ class TestNonObjectArguments:
         assert result.schema_rejects == 1
 
 
-def test_emit_is_the_only_events_writer_in_run_agent():
+def test_emit_is_the_only_events_writer_in_the_loop_module():
     """2026-09: every events.jsonl record `run_agent` writes goes through the
     `emit` helper (`_event_emitter`), which owns the `log_calls` gate and the
     leading `phase=` field. A bare `append_event(` or `if log_calls:` block
-    creeping back into the body would bypass both."""
+    creeping back in would bypass both. Scanned over the WHOLE module, not
+    just `run_agent`'s own source (2026-10-22): the loop body is split into
+    module-level helpers, and a check confined to `run_agent` would let a
+    helper escape it."""
     import ast
     import inspect
 
-    tree = ast.parse(inspect.getsource(loop_mod.run_agent))
-    direct = [
-        n for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        and n.func.id == "append_event"
+    tree = ast.parse(inspect.getsource(loop_mod))
+    writers = [
+        fn.name for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "append_event"
+                for n in ast.walk(fn))
     ]
-    assert not direct, "run_agent calls append_event directly — use emit()"
+    # `_event_emitter` (and the `emit` closure inside it) is the one writer.
+    assert set(writers) == {"_event_emitter", "emit"}, (
+        f"append_event called outside emit(): {writers}")
     reads = [
         n for n in ast.walk(tree)
         if isinstance(n, ast.Name) and n.id == "log_calls"
