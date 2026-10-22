@@ -1,4 +1,4 @@
-"""Pure pieces of scripts/harness_ab.py + a live WireShim round-trip
+"""Pure pieces of scripts/_archive/harness_ab.py + a live WireShim round-trip
 (no agent harness, no model)."""
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import threading
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("harness_ab", ROOT / "scripts" / "harness_ab.py")
+ROOT = Path(__file__).resolve().parents[2]
+_spec = importlib.util.spec_from_file_location("harness_ab", ROOT / "scripts" / "_archive" / "harness_ab.py")
 ha = importlib.util.module_from_spec(_spec)
 sys.modules["harness_ab"] = ha
 _spec.loader.exec_module(ha)
@@ -345,7 +345,7 @@ def test_luxe_mcp_rejects_other_harnesses():
 
 def test_luxe_mcp_tool_list_matches_server():
     import importlib.util as iu
-    spec = iu.spec_from_file_location("lmcp", ROOT / "scripts" / "harness_ab_luxe_mcp.py")
+    spec = iu.spec_from_file_location("lmcp", ROOT / "scripts" / "_archive" / "harness_ab_luxe_mcp.py")
     mod = iu.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert tuple(mod.LAYER2) == ha.LUXE_MCP_TOOLS

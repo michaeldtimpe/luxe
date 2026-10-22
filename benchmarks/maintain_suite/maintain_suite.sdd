@@ -74,7 +74,7 @@ single pipeline; new fixtures must declare their per-requirement spec.
   removes points)
 - ONE fixtures.yaml loader (2026-09): `fixtures.py:load_fixtures` host-remaps
   the `/Users/<someone>/.luxe/fixture-cache/...` paths the YAML pins; run.py,
-  `scripts/regrade_local.py` and `scripts/opencode_harness.py` all read
+  `scripts/regrade_local.py` and `scripts/_archive/opencode_harness.py` all read
   through it. run.py preflights every local origin (`origin_problem`: exists,
   objects/ + refs/heads/ writable) and refuses to start otherwise
 - An ENVIRONMENT failure is an ERROR, never a score: a failed `push` step in

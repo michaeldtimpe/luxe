@@ -3,9 +3,9 @@
 them with luxe's own grader — a harness A/B on identical tasks, same local
 model, same engine.
 
-    uv run python scripts/opencode_harness.py --model Qwen3.6-35B-A3B-4bit \\
+    uv run python scripts/_archive/opencode_harness.py --model Qwen3.6-35B-A3B-4bit \\
         --output acceptance/opencode_ab_<date> --all
-    uv run python scripts/opencode_harness.py --model Qwen3.6-35B-A3B-4bit \\
+    uv run python scripts/_archive/opencode_harness.py --model Qwen3.6-35B-A3B-4bit \\
         --output /tmp/oc1 --id isomer-document-quickstart --timeout 1200
 
 What is held equal with `benchmarks.maintain_suite.run`:
@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
