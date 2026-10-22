@@ -37,7 +37,7 @@ in the front-end. Survey map + chunk plan persist per repo under
 
 ## Must
 - Be AGENT-READ-ONLY: the ANALYSIS runs through `make_read_only_role`
-  (mcp/server.py) — the model's tools cannot write/edit the repo (no `/write`).
+  (`luxe/roles.py`) — the model's tools cannot write/edit the repo (no `/write`).
   Canonical report/map/notes live under `~/.luxe/reports/`, written by the
   ORCHESTRATOR (plain Python), never by an agent tool.
   > [!IMPORTANT]

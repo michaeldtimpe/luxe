@@ -189,6 +189,72 @@ def test_readonly_runner_called(monkeypatch):
     assert captured == [("luxe_review", {"repo_path": "/r", "goal": "g"})]
 
 
+@pytest.mark.parametrize("tool,kwargs", [
+    ("luxe_review", {"repo_path": "/r", "goal": "g"}),
+    ("luxe_summarize", {"repo_path": "/r", "goal": "g"}),
+    ("luxe_explain", {"repo_path": "/r", "query": "q"}),
+])
+def test_readonly_tool_without_runner_is_audited(tool, kwargs):
+    """Every read-only tool records a call that hit an unconfigured server —
+    only luxe_review used to; summarize/explain returned silently."""
+    server = build_server(unsafe=False, readonly_runner=None)
+    out = server._tool_manager._tools[tool].fn(**kwargs)  # type: ignore[attr-defined]
+    assert out == "luxe server not configured (no runner)"
+    audit = _read_audit(audit_log_path())
+    assert len(audit) == 1
+    assert audit[0]["tool"] == tool
+    assert audit[0]["args"] == kwargs
+    assert (audit[0]["outcome"], audit[0]["detail"]) == ("error",
+                                                         "no runner installed")
+
+
+@pytest.mark.parametrize("tool,kwargs", [
+    ("luxe_summarize", {"repo_path": "/r", "goal": ""}),
+    ("luxe_explain", {"repo_path": "/r", "query": "q"}),
+])
+def test_readonly_tools_route_to_runner_and_audit(tool, kwargs):
+    captured: list[tuple[str, dict]] = []
+
+    def runner(name, args):
+        captured.append((name, args))
+        return "out"
+
+    server = build_server(unsafe=False, readonly_runner=runner)
+    out = server._tool_manager._tools[tool].fn(**kwargs)  # type: ignore[attr-defined]
+    assert out == "out"
+    assert captured == [(tool, kwargs)]
+    audit = _read_audit(audit_log_path())
+    assert [(a["tool"], a["outcome"]) for a in audit] == [(tool, "accepted")]
+
+
+def test_readonly_runner_error_is_audited_and_returned():
+    def runner(name, args):
+        raise RuntimeError("boom")
+
+    server = build_server(unsafe=False, readonly_runner=runner)
+    out = server._tool_manager._tools["luxe_explain"].fn(  # type: ignore[attr-defined]
+        repo_path="/r", query="q")
+    assert out == "error: boom"
+    audit = _read_audit(audit_log_path())
+    assert (audit[-1]["outcome"], audit[-1]["detail"]) == ("error", "boom")
+
+
+def test_summarize_goal_defaults_to_empty():
+    """The tool schemas FastMCP derives from the signatures are unchanged."""
+    server = build_server(unsafe=False)
+    params = {t.name: t.parameters for t in server._tool_manager.list_tools()}
+    assert params["luxe_summarize"]["required"] == ["repo_path"]
+    assert sorted(params["luxe_review"]["required"]) == ["goal", "repo_path"]
+    assert sorted(params["luxe_explain"]["required"]) == ["query", "repo_path"]
+
+
+def test_make_read_only_role_lives_in_a_neutral_module():
+    """gitkit, chat/turn and cli all use it; the old path re-exports."""
+    from luxe import roles
+    assert srv.make_read_only_role is roles.make_read_only_role
+    assert srv._MUTATION_TOOL_NAMES is roles.MUTATION_TOOL_NAMES
+
+
 def test_maintain_runner_rejected_without_unsafe_env(monkeypatch):
     """Even with unsafe=True at build time, runtime requires the env var."""
     monkeypatch.delenv("LUXE_MCP_UNSAFE", raising=False)

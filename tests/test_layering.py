@@ -144,9 +144,10 @@ def test_gitkit_has_no_cycle_dodging_local_imports(forbidden: str):
 
 
 def test_the_neutral_modules_import_nothing_from_chat_or_cli():
-    """The whole point of `luxe/{mounts,cancel,textfmt,project}.py` is that
+    """The whole point of `luxe/{mounts,cancel,textfmt,project,roles}.py` is that
     they sit below both. If one grows an upward import the cycle is back."""
-    for name in ("mounts.py", "cancel.py", "textfmt.py", "project.py"):
+    for name in ("mounts.py", "cancel.py", "textfmt.py", "project.py",
+                 "roles.py"):
         tree = _parse(SRC / name)
         mods = [m for m in _module_level_imports(tree)] + [
             m for _fn, m in _function_local_imports(tree)]

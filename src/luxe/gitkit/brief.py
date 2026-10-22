@@ -24,6 +24,7 @@ from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
 from luxe.gitkit.kinds import GITKIT_MAX_TOKENS, run_with_activity
 from luxe.repo_index import _detect_languages_for_repo
+from luxe.roles import make_read_only_role
 
 BLOCK_NAME = "brief"
 #: Hard write cap. `render_block`'s whole-memory budget is 4000 chars and
@@ -137,7 +138,6 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
     """
     from luxe.backend import Backend
     from luxe.gitkit.workspace import indexed_target
-    from luxe.mcp.server import make_read_only_role
     from luxe.memory import project as project_mem
 
     if run_single_fn is None:
