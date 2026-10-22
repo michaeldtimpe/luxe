@@ -500,9 +500,9 @@ def run_smoke(cfg, *, backend_name: str | None = None,
     m5` from m1 drilled m1's own endpoint with m1's pair and printed READY
     about a server it never touched.
     """
+    from luxe import modelstore as ms
     from luxe.chat import origin as origin_mod
-    from luxe.chat.inspection import endpoint_fixes
-    from luxe.modelstore import model_state
+    from luxe.chat.inspection import _weights_fix, endpoint_fixes
 
     report = SmokeReport()
     entry = cfg.backend_entry(backend_name or cfg.default_backend_name())
@@ -549,13 +549,17 @@ def run_smoke(cfg, *, backend_name: str | None = None,
     #    host's main as missing. Its main turn below is the proof instead.
     if local and entry.is_omlx():
         for mid in [m for m in [main, fallback, *keep] if m]:
-            state = model_state(mid)
+            state = ms.model_state(mid)
             if state == "ok":
                 report.add(f"weights {mid}", "pass", "on disk", model=mid)
             else:
                 sev = "fail" if mid == main else "warn"
+                # `/doctor`'s fix string: a dangling entry names the HF repo
+                # its link points at — bare `luxe pull <name>` only searches
+                # mounts, which is not where a wiped HF cache's weights live.
                 report.add(f"weights {mid}", sev,
-                           f"{state} — `luxe pull {mid}`", model=mid)
+                           f"{state} — {_weights_fix(mid, state, ms.hf_repo_for)}",
+                           model=mid)
     elif local:
         report.add("weights", "pass",
                    f"not checked — {entry.engine_label()} loads its own "
@@ -596,7 +600,9 @@ def run_smoke(cfg, *, backend_name: str | None = None,
             elif stale.conclusive:
                 report.add("oMLX build", "pass", stale.detail)
         except Exception as e:
-            report.add("oMLX build", "warn", f"unchecked ({e})")
+            # Same verdict as `/doctor`'s `_add_stale_check`: a check that
+            # could not run is "unchecked", not a warning about the server.
+            report.add("oMLX build", "pass", f"unchecked ({e})")
 
     # 4. Catalog.
     try:
