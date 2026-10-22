@@ -15,8 +15,6 @@ from pathlib import Path
 import pytest
 
 from luxe.citations import (
-    Citation,
-    LintResult,
     ValidatorEnvelope,
     ValidatorFinding,
     extract_citations,

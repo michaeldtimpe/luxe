@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from benchmarks.arc_challenge.adapter import (
-    LETTERS,
     build_prompt,
     gold_letter,
     valid_letters_for,

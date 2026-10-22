@@ -8,9 +8,7 @@ is `sync_call`, which we exercise after pre-seeding state.
 from __future__ import annotations
 
 import asyncio
-import threading
 
-import pytest
 
 from luxe.mcp.client import (
     CircuitBreakerConfig,

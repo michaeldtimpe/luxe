@@ -14,9 +14,7 @@ import pytest
 
 from luxe import pr as pr_mod
 from luxe.pr import (
-    CmdResult,
     NoMutationsError,
-    PRConfig,
     PRState,
 )
 from luxe.run_state import RunSpec

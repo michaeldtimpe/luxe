@@ -155,7 +155,7 @@ def _stub_run(monkeypatch, fn):
 
 
 def test_gitchange_single_pass_saves_plan_and_renders(small_repo, _gitkit_cfg, monkeypatch):
-    from luxe.gitkit import run_git_report, store
+    from luxe.gitkit import run_git_report
     from luxe.memory.project import repo_hash
 
     _stub_run(monkeypatch, lambda *a, **k: _FakeResult(_PLAN_JSON))
@@ -174,7 +174,6 @@ def test_gitchange_small_repo_auto_stays_single_pass(small_repo, _gitkit_cfg,
     """A small repo (footprint under the deep trigger) takes the single-pass path —
     one analysis pass, no survey/chunk/synthesis (a holistic plan is best in one
     window when it fits)."""
-    import luxe.agents.single as single_mod
     from luxe.gitkit import run_git_report
 
     calls: list[str] = []
@@ -192,7 +191,6 @@ def test_gitchange_small_repo_auto_stays_single_pass(small_repo, _gitkit_cfg,
 
 def test_gitchange_recovers_via_extraction_pass(small_repo, _gitkit_cfg, monkeypatch):
     """When the analysis emits prose (no JSON), a transcription pass recovers it."""
-    import luxe.agents.single as single_mod
     from luxe.gitkit import run_git_report
     from luxe.memory.project import repo_hash
 

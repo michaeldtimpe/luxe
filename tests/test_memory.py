@@ -138,7 +138,7 @@ def test_load_memory_curated_md_is_wire_safe_on_undecodable_bytes(repo: Path):
 
 
 def test_render_block_is_wire_safe_on_undecodable_bytes(repo: Path):
-    raw = _write_undecodable_memory_md(repo)
+    _write_undecodable_memory_md(repo)
     mem = project.load_memory(repo)
     block = project.render_block(mem)
     block.encode("utf-8")                      # must not raise

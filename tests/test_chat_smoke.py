@@ -255,8 +255,6 @@ def test_chat_drill_verifies_the_magic_word(monkeypatch):
 
 
 def test_chat_drill_strips_the_write_surface(monkeypatch):
-    import shutil
-
     import luxe.agents.single as single_mod
 
     seen = {}

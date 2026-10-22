@@ -4,7 +4,6 @@ Stubs `run_single`; no model/network."""
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 from rich.console import Console

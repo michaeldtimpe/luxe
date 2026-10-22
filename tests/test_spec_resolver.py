@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from luxe.sdd import SddFile, SddParseError
+from luxe.sdd import SddParseError
 from luxe.spec_resolver import (
-    ResolvedChain,
     find_all_sdd,
     format_sdd_block,
     resolve_chain,

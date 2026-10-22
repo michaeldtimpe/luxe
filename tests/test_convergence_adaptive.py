@@ -23,7 +23,6 @@ from luxe.agents.convergence import (
     _INTENSITY_MIN,
     _INTENSITY_NEUTRAL,
     _NO_WRITE_BIAS_THRESHOLD,
-    _SCORE_TREND_WINDOW,
     apply_slew_rate,
     bias_to_modulation,
     compute_intervention_bias,
