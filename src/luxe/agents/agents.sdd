@@ -665,6 +665,18 @@ reintroduce any of them without new evidence.
   `call_is_repeat` local, which had no other reader once the post-write
   repeat counting above was gone.
 
+- **Re-read note** (`LUXE_REREAD_NOTE`, `RunFlags.reread_note`,
+  `guardrails.reread_note_message` / `read_result_line_range` /
+  `range_is_covered`, `LoopState.read_coverage` / `read_counts`, event
+  `reread_note`, pinned 2026-10-18). Appended a note to a `read_file` result
+  whose every line had already been returned since the last write. REFUTED on
+  its target model (`acceptance/tuning_2026_10/REPORT.md` §10): the
+  line-coverage key did catch muse-glimmer-30B's loop (10–12 notes per
+  failing run) and Glimmer re-read the same lines right after each note —
+  2/6 REAL, the same as the stub arm. With the prompt appendix, the
+  write-pressure notice, the stub and this note all ignored, no in-loop text
+  lever moves Glimmer.
+
 ### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
 
 - `RoleConfig.stuck_loop_abort` (default **True**) gates whether
@@ -731,23 +743,6 @@ false count). Each rewrite forces everything after it to be prefilled again.
   about the *request being carried out*, never about tool calls.
 - Let verify-only mutate the generation transcript, or let Phase 2 repair invoke tools
   outside the original trajectory's tool surface (pre-registered repair budget).
-
-### Re-read note (2026-10-18, OPT-IN, UNBENCHED until tuning_2026_10)
-
-- `LUXE_REREAD_NOTE=1` (`RunFlags.reread_note`): for each `read_file` result
-  that shows numbered lines, the loop records the (first, last) line range per
-  path. When a new result's range lies entirely inside the union of ranges
-  already returned for that path since the last successful write, the result
-  is served IN FULL with `guardrails.reread_note_message(...)` appended, and a
-  `reread_note` event is emitted. Coverage and counts clear on every
-  successful write.
-- Unlike the repeat-read stub it keys on LINES, not arguments, and never
-  withholds content (compaction may have dropped the earlier copy).
-- Why: the stub fired once in six Glimmer runs. Glimmer's loop re-reads
-  sub-windows of Game.js it has already read in full, with new arguments each
-  time (tuning_2026_10 REPORT §7).
-- **Default OFF; with it unset the loop is byte-identical** (golden
-  trajectory + `test_loop_reread_note.py`).
 
 ### Stage 3 / v1.11 adaptive-policy invariants (pinned 2026-05-20)
 
