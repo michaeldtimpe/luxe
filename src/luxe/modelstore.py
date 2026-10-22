@@ -703,6 +703,43 @@ class OmlxAdmin:
 # --- orchestration ----------------------------------------------------------
 
 
+def pull_engine_refusal(engine: str, *, verb: str, command: str,
+                        local_note: str) -> list[str] | None:
+    """Why a pull cannot `verb` on an `engine` endpoint, as Rich-markup lines,
+    or None on oMLX (nothing to refuse).
+
+    Shared by BOTH pull surfaces — `luxe pull` (cli/pull.py) and `/pull`
+    (chat/cmd_models.py) — so neither can drive `OmlxAdmin` at an endpoint
+    that has no oMLX admin API (llama-server 404s every call; on OpenRouter it
+    posted that entry's key at an admin login). `command` names the surface
+    in the headline; `local_note` says which of its forms still work (the
+    local-store reads), since those differ per surface.
+    """
+    from luxe.config import ENGINE_OMLX, ENGINE_OPENROUTER
+    if engine == ENGINE_OMLX:
+        return None
+    lines = [
+        f"[red]✗ {command} cannot {verb} on a {engine} endpoint.[/] "
+        f"It drives oMLX's admin API and the ~/.omlx/models store, neither of "
+        f"which {engine} has."]
+    if engine == ENGINE_OPENROUTER:
+        # Nothing is downloadable here at all: the provider hosts the weights
+        # and bills per token. Pointing at a preset file would be nonsense.
+        lines.append(
+            "[dim]  OpenRouter hosts the weights and bills per token — there "
+            "is nothing to fetch onto this disk. Pick a model with "
+            "`/model find <text>` then `/model all <id>` inside "
+            "`luxe chat --backend openrouter`.[/]")
+    else:
+        lines.append(
+            "[dim]  This host serves GGUF weights named in its llama-server "
+            "preset (neo: `~/dotfiles/luxe/neo-models.ini`). Fetch the file "
+            "yourself, put it where the preset points, and restart the "
+            "server.[/]")
+    lines.append(f"[dim]  {local_note}[/]")
+    return lines
+
+
 def resolve_pull_sources(ref: str, *, admin: OmlxAdmin | None = None,
                          from_path: str = "",
                          include_mounts: bool = True) -> list[ModelSource]:
