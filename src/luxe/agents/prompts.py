@@ -153,26 +153,6 @@ Skeleton first:
   on a new file and to edit_file when you are adding a new function body.
 """
 
-# Commit-first appendix (2026-10-17, m5max_moe_r2 tuning pass). Opt-in bench
-# variant for challenger models whose traces showed the change fully planned and
-# then never written: muse-glimmer-30B planned the correct reset-shortcut fix at
-# step 17 and spent the remaining 12 steps re-litigating a pre-existing behaviour
-# (restart drops the persona); Qwen3.8-27B reasoned past the write-pressure
-# notice to keep verifying ("accuracy matters"). Generic on purpose: it names no
-# fixture, file, or variable. Not used by any default config.
-_COMMIT_FIRST_APPENDIX = """\
-
-Commit discipline:
-- As soon as you can name the change that meets the goal, make it in your
-  next step. Write first, then verify by reading back what you wrote or by
-  running the tests; refine the draft if verification finds a gap.
-- When existing behaviour looks questionable (a possible bug, an odd default),
-  keep it as it is, make the change the goal asks for, and list the concern
-  under open questions in your final report.
-- Work from what you have already read. Re-read a region only after you have
-  edited it or when you need lines you have not seen yet.
-"""
-
 # CoT plan-first directive — replaces baseline task prefix for CoT variant.
 #
 # v2 (2026-04-30): the original used `<plan>...</plan>` XML tags. Smoke
@@ -398,10 +378,6 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "manage_strict": PromptVariant(
         system=_BASELINE_SYSTEM,
         task_prefix=_MANAGE_STRICT_TASK_PREFIX,
-    ),
-    "commit_first": PromptVariant(
-        system=_BASELINE_SYSTEM + _COMMIT_FIRST_APPENDIX,
-        task_prefix=_BASELINE_TASK_PREFIX,
     ),
     "swebench_bugfix": PromptVariant(
         system=_BASELINE_SYSTEM,
