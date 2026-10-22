@@ -17,11 +17,12 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import click
 from rich.console import Console
 
+from luxe import pr as pr_mod
 from luxe.agents.prompts import (
     REPROMPT_SMALL_DIFF_TEMPLATE,
     REPROMPT_SPEC_TEMPLATE,
@@ -32,6 +33,11 @@ from luxe.config import load_config
 from luxe.gitclone import resolve_repo
 from luxe.pr import GitDiffError, diff_against_base as _diff_against_base
 from luxe.repo_index import _detect_languages_for_repo
+
+if TYPE_CHECKING:
+    from luxe.pr import PRConfig, PRPreflight
+    from luxe.run_state import RunSpec
+    from luxe.spec import Spec
 
 console = Console()
 
@@ -133,55 +139,17 @@ def maintain_pipeline(
     from luxe.agents.single import run_single
     from luxe.backend import Backend
     from luxe.citations import lint_report
-    from luxe.locks import LockHeld, acquire_repo_lock
-    from luxe import pr as pr_mod
+    import luxe.locks  # noqa: F401 — loaded here, as before `_acquire_lock`
     from luxe.run_state import RunSpec, append_event, init_run_dir, run_dir
     from luxe.tools.fs import set_repo_root
 
     repo_path = resolve_repo(repo)
     detected_task = task_type or infer_task_type(goal)
-
-    # SpecDD Lever 1 (v1.4-prep): load spec from --spec-yaml if provided.
-    # Failed loads (missing file, malformed YAML, invalid spec) abort the
-    # run BEFORE the model is loaded so the user sees the error fast.
-    # When None, the reprompt block falls back to v1.3 directive behavior.
-    loaded_spec = None
-    if spec_yaml_path:
-        import yaml as _yaml
-        from luxe.spec import spec_from_yaml_dict
-        with open(spec_yaml_path) as _f:
-            loaded_spec = spec_from_yaml_dict(_yaml.safe_load(_f) or {})
-
-    confirm_callback: Callable[[], bool] | None
-    if skip_confirm:
-        confirm_callback = lambda: True
-    elif sys.stdin.isatty():
-        def _confirm() -> bool:
-            click.echo(
-                "Type 'yes' to continue with --allow-dirty. Your uncommitted "
-                "changes WILL be included in the PR diff."
-            )
-            return click.prompt("→", default="", show_default=False).strip() == "yes"
-        confirm_callback = _confirm
-    else:
-        confirm_callback = None
-
+    loaded_spec = _load_spec(spec_yaml_path)
+    confirm_callback = _confirm_callback(skip_confirm)
     pr_cfg = pr_mod.load_pr_config()
-    try:
-        prep = pr_mod.preflight(
-            repo_path,
-            task_type=detected_task,
-            goal=goal,
-            allow_dirty=allow_dirty,
-            confirm_callback=confirm_callback,
-            cfg=pr_cfg,
-        )
-    except pr_mod.GhAuthError as e:
-        console.print(f"[red]✗ {e}[/]")
-        sys.exit(2)
-    except pr_mod.DirtyTreeError as e:
-        console.print(f"[red]✗ {e}[/]")
-        sys.exit(2)
+    prep = _preflight(repo_path, detected_task, goal, allow_dirty,
+                      confirm_callback, pr_cfg)
 
     spec = RunSpec(
         goal=goal,
@@ -194,62 +162,11 @@ def maintain_pipeline(
     append_event(spec.run_id, "preflight_ok",
                  base_branch=prep.base_branch, branch_name=prep.branch_name,
                  test_command=prep.test_command)
+    _print_header(spec, repo_path, goal, detected_task, prep)
 
-    console.print(f"\n[bold]luxe maintain[/]  [dim]run_id={spec.run_id}[/]")
-    console.print(f"Repo: {repo_path}")
-    console.print(f"Goal: {goal}")
-    console.print(f"Task: {detected_task}")
-    branch_display = prep.branch_name or "(none)"
-    console.print(f"Branch: [dim]{branch_display}[/]  Base: [dim]{prep.base_branch}@{prep.base_sha[:8]}[/]")
-    if prep.test_command:
-        console.print(f"Tests: [dim]{prep.test_command}[/]")
-    else:
-        console.print("Tests: [dim](none detected)[/]")
-
-    try:
-        ctx = acquire_repo_lock(spec.repo_path, spec.run_id)
-        ctx.__enter__()
-    except LockHeld as e:
-        console.print(f"\n[red]✗ {e}[/]")
-        sys.exit(3)
-
-    from luxe import search as search_mod
-    from luxe import symbols as symbols_mod
-    console.print("[dim]· Building BM25 + symbol indices…[/]")
-    bm25 = search_mod.build_bm25_index(repo_path)
-    sym_idx = symbols_mod.build_symbol_index(repo_path)
-    search_mod.set_index(bm25)
-    symbols_mod.set_index(sym_idx)
-    console.print(f"[dim]  BM25: {len(bm25.paths)} files | "
-                  f"symbols: {len(sym_idx.symbols)} symbols across "
-                  f"{sorted(sym_idx.coverage)}[/]")
-
-    from luxe.mcp.client import MCPClientManager, load_mcp_config
-    mcp_cfg = load_mcp_config()
-    # OPT-IN per task: a server reaches the maintain/benchmark tool surface
-    # only when its `enabled_for` names this task. An empty list used to mean
-    # "every task", so registering the chat-oriented codex_one + cpa servers
-    # (1925950, 2026-08-25) silently added 14 tools to every bench run since.
-    # Servers without an opt-in are not even started here; `luxe chat --mcp`
-    # attaches by name and is unaffected.
-    mcp_cfg.servers = [s for s in mcp_cfg.servers
-                       if detected_task in s.enabled_for]
-    mcp_mgr: MCPClientManager | None = None
-    extra_tool_defs: list = []
-    extra_tool_fns: dict = {}
-    if mcp_cfg.servers:
-        mcp_mgr = MCPClientManager(mcp_cfg).start()
-        extra_tool_defs, extra_tool_fns = mcp_mgr.discover_tools(
-            only_for_task=detected_task,
-        )
-        if extra_tool_defs:
-            console.print(f"[dim]· MCP: {len(extra_tool_defs)} tool(s) "
-                          f"from {len([s for s in mcp_mgr.server_status() if not s['down']])} "
-                          f"server(s)[/]")
-        for s in mcp_mgr.server_status():
-            if s["down"]:
-                console.print(f"[yellow]· MCP server {s['name']} DOWN: "
-                              f"{s['down_reason']}[/]")
+    ctx = _acquire_lock(spec)
+    _build_indices(repo_path)
+    mcp_mgr, extra_tool_defs, extra_tool_fns = _start_mcp(detected_task)
 
     try:
         cfg = load_config(config_path or _default_config())
@@ -601,27 +518,164 @@ def maintain_pipeline(
             console.print(f"\n{'='*60}")
             console.print(final_report)
     finally:
-        if mcp_mgr is not None:
-            try:
-                mcp_mgr.close()
-            except Exception:
-                pass
-        search_mod.reset_index()
-        symbols_mod.reset_index()
-        if not keep_loaded:
-            try:
-                from luxe.backend import Backend as _UnloadBackend
-                with _UnloadBackend(model="(unload-probe)") as _ub:
-                    results = _ub.unload_all_loaded()
-                if results:
-                    n_ok = sum(1 for v in results.values() if v)
-                    console.print(
-                        f"[dim]· Unloaded {n_ok}/{len(results)} model(s) "
-                        f"from oMLX (use --keep-loaded to skip)[/]"
-                    )
-            except Exception as e:
-                console.print(f"[dim]· Model unload skipped: {e}[/]")
+        _teardown(mcp_mgr, keep_loaded, ctx)
+
+
+# --- before the guarded block -------------------------------------------
+
+def _load_spec(spec_yaml_path: str | None) -> Spec | None:
+    """SpecDD Lever 1 (v1.4-prep): load spec from --spec-yaml if provided.
+    Failed loads (missing file, malformed YAML, invalid spec) abort the
+    run BEFORE the model is loaded so the user sees the error fast.
+    When None, the reprompt block falls back to v1.3 directive behavior."""
+    if not spec_yaml_path:
+        return None
+    import yaml as _yaml
+    from luxe.spec import spec_from_yaml_dict
+    with open(spec_yaml_path) as _f:
+        return spec_from_yaml_dict(_yaml.safe_load(_f) or {})
+
+
+def _confirm_callback(skip_confirm: bool) -> Callable[[], bool] | None:
+    """The `--allow-dirty` confirmation handed to preflight: always yes when
+    the prompt is skipped, a typed 'yes' on a TTY, and no callback without
+    one."""
+    if skip_confirm:
+        return lambda: True
+    if not sys.stdin.isatty():
+        return None
+
+    def _confirm() -> bool:
+        click.echo(
+            "Type 'yes' to continue with --allow-dirty. Your uncommitted "
+            "changes WILL be included in the PR diff."
+        )
+        return click.prompt("→", default="", show_default=False).strip() == "yes"
+    return _confirm
+
+
+def _preflight(repo_path: str, task: str, goal: str, allow_dirty: bool,
+               confirm_callback: Callable[[], bool] | None,
+               pr_cfg: PRConfig) -> PRPreflight:
+    """`pr.preflight`; a missing gh login or a dirty tree exits 2."""
+    try:
+        return pr_mod.preflight(
+            repo_path,
+            task_type=task,
+            goal=goal,
+            allow_dirty=allow_dirty,
+            confirm_callback=confirm_callback,
+            cfg=pr_cfg,
+        )
+    except (pr_mod.GhAuthError, pr_mod.DirtyTreeError) as e:
+        console.print(f"[red]✗ {e}[/]")
+        sys.exit(2)
+
+
+def _print_header(spec: RunSpec, repo_path: str, goal: str, task: str,
+                  prep: PRPreflight) -> None:
+    console.print(f"\n[bold]luxe maintain[/]  [dim]run_id={spec.run_id}[/]")
+    console.print(f"Repo: {repo_path}")
+    console.print(f"Goal: {goal}")
+    console.print(f"Task: {task}")
+    branch_display = prep.branch_name or "(none)"
+    console.print(f"Branch: [dim]{branch_display}[/]  Base: [dim]{prep.base_branch}@{prep.base_sha[:8]}[/]")
+    if prep.test_command:
+        console.print(f"Tests: [dim]{prep.test_command}[/]")
+    else:
+        console.print("Tests: [dim](none detected)[/]")
+
+
+def _acquire_lock(spec: RunSpec) -> Any:
+    """Enter the repo lock (released by `_teardown`); another holder exits 3."""
+    from luxe.locks import LockHeld, acquire_repo_lock
+    try:
+        lock = acquire_repo_lock(spec.repo_path, spec.run_id)
+        lock.__enter__()
+    except LockHeld as e:
+        console.print(f"\n[red]✗ {e}[/]")
+        sys.exit(3)
+    return lock
+
+
+def _build_indices(repo_path: str) -> None:
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+    console.print("[dim]· Building BM25 + symbol indices…[/]")
+    bm25 = search_mod.build_bm25_index(repo_path)
+    sym_idx = symbols_mod.build_symbol_index(repo_path)
+    search_mod.set_index(bm25)
+    symbols_mod.set_index(sym_idx)
+    console.print(f"[dim]  BM25: {len(bm25.paths)} files | "
+                  f"symbols: {len(sym_idx.symbols)} symbols across "
+                  f"{sorted(sym_idx.coverage)}[/]")
+
+
+def _start_mcp(task: str) -> tuple[Any, list, dict]:
+    """Start the MCP servers this task opted into; returns the manager (None
+    when none did) and the tool defs/fns they contribute."""
+    from luxe.mcp.client import MCPClientManager, load_mcp_config
+    mcp_cfg = load_mcp_config()
+    # OPT-IN per task: a server reaches the maintain/benchmark tool surface
+    # only when its `enabled_for` names this task. An empty list used to mean
+    # "every task", so registering the chat-oriented codex_one + cpa servers
+    # (1925950, 2026-08-25) silently added 14 tools to every bench run since.
+    # Servers without an opt-in are not even started here; `luxe chat --mcp`
+    # attaches by name and is unaffected.
+    mcp_cfg.servers = [s for s in mcp_cfg.servers
+                       if task in s.enabled_for]
+    mcp_mgr: MCPClientManager | None = None
+    extra_tool_defs: list = []
+    extra_tool_fns: dict = {}
+    if mcp_cfg.servers:
+        mcp_mgr = MCPClientManager(mcp_cfg).start()
+        extra_tool_defs, extra_tool_fns = mcp_mgr.discover_tools(
+            only_for_task=task,
+        )
+        if extra_tool_defs:
+            console.print(f"[dim]· MCP: {len(extra_tool_defs)} tool(s) "
+                          f"from {len([s for s in mcp_mgr.server_status() if not s['down']])} "
+                          f"server(s)[/]")
+        for s in mcp_mgr.server_status():
+            if s["down"]:
+                console.print(f"[yellow]· MCP server {s['name']} DOWN: "
+                              f"{s['down_reason']}[/]")
+    return mcp_mgr, extra_tool_defs, extra_tool_fns
+
+
+# --- teardown -----------------------------------------------------------
+
+def _teardown(mcp_mgr: Any, keep_loaded: bool, lock: Any) -> None:
+    """Runs however the guarded block ends (including the PR exits): close
+    MCP, drop the indices, unload the model unless --keep-loaded, release
+    the repo lock."""
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+    if mcp_mgr is not None:
         try:
-            ctx.__exit__(None, None, None)
+            mcp_mgr.close()
         except Exception:
             pass
+    search_mod.reset_index()
+    symbols_mod.reset_index()
+    if not keep_loaded:
+        _unload_models()
+    try:
+        lock.__exit__(None, None, None)
+    except Exception:
+        pass
+
+
+def _unload_models() -> None:
+    try:
+        from luxe.backend import Backend as _UnloadBackend
+        with _UnloadBackend(model="(unload-probe)") as _ub:
+            results = _ub.unload_all_loaded()
+        if results:
+            n_ok = sum(1 for v in results.values() if v)
+            console.print(
+                f"[dim]· Unloaded {n_ok}/{len(results)} model(s) "
+                f"from oMLX (use --keep-loaded to skip)[/]"
+            )
+    except Exception as e:
+        console.print(f"[dim]· Model unload skipped: {e}[/]")
