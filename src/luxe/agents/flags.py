@@ -56,14 +56,13 @@ class RunFlags:
     # Intervention gates (all opt-in; see agents.sdd)
     write_pressure: bool = False
     early_bail: bool = False
-    early_bail_commit_only: bool = False
     action_density_gate: bool = False
     convergence_gate: bool = False
     early_bail_band_response: str = DEFAULT_BAND_RESPONSE
     # LUXE_EARLY_BAIL_MODE — which early_bail message variant fires
     # (default/no_abstain/soft_anchor/...). Raw string, unvalidated: an unknown
     # value selects the default message inside EarlyBailGuard, and the
-    # commit_only suppression event reports it verbatim as `configured_mode`.
+    # `early_bail_fired` event reports it verbatim as `msg_variant`.
     # Read here once (2026-09) instead of by the guard on every step.
     early_bail_mode: str = DEFAULT_EARLY_BAIL_MODE
 
@@ -212,7 +211,6 @@ class RunFlags:
             suppress_tool_log=e.get("LUXE_SUPPRESS_TOOL_LOG") == "1",
             write_pressure=e.get("LUXE_WRITE_PRESSURE") == "1",
             early_bail=e.get("LUXE_EARLY_BAIL") == "1",
-            early_bail_commit_only=e.get("LUXE_EARLY_BAIL_COMMIT_ONLY") == "1",
             action_density_gate=e.get("LUXE_ACTION_DENSITY_GATE") == "1",
             convergence_gate=e.get("LUXE_CONVERGENCE_GATE") == "1",
             # Default ON: only the exact string "0" disables it.

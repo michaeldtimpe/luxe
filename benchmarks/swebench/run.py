@@ -162,13 +162,6 @@ def main() -> int:
                    help="Disable LUXE_CONVERGENCE_GATE=1 wiring (v1.10 default-on). "
                         "Use for ablation against conditional intervention stacking; "
                         "reverts to v1.9 binary same_file_read_twice suppression.")
-    p.add_argument("--early-bail-commit-only", action="store_true",
-                   help="Refined-port ablation (2026-05-26 edit-quality investigation): "
-                        "set LUXE_EARLY_BAIL_COMMIT_ONLY=1 so soft_anchor + breadth_probe "
-                        "variants are suppressed and ONLY commit_imperative fires (at "
-                        "convergence_score >= HIGH). Tests whether the high-convergence "
-                        "imperative recovers the wrong-target watchdog that --no-early-bail "
-                        "failed. Default off; no effect if --no-early-bail is also set.")
     p.add_argument("--tiered-compact", action="store_true",
                    help="forge-hybrid Phase 2 (A): set LUXE_TIERED_COMPACT=1 so the "
                         "3-phase compaction strategy (drop _luxe_nudge messages, truncate "
@@ -287,7 +280,6 @@ def main() -> int:
             early_bail=not args.no_early_bail,
             action_density_gate=not args.no_action_density_gate,
             convergence_gate=not args.no_convergence_gate,
-            early_bail_commit_only=args.early_bail_commit_only,
             tiered_compact=args.tiered_compact,
             tiered_compact_threshold=args.tiered_compact_threshold,
             tiered_compact_phase_thresholds=args.tiered_compact_phase_thresholds,

@@ -884,8 +884,7 @@ class EarlyBailOutcome:
     - suppress_event: Optional[(name, payload)]. Suppression-observability
       event the loop should emit IN ADDITION to any fired event (e.g.,
       `early_bail_suppressed_diffuse` paired with optional
-      `early_bail_breadth_probe_fired`, or `early_bail_suppressed_commit_only`
-      standalone).
+      `early_bail_breadth_probe_fired`).
     - fire_event: Optional[(name, payload)]. The fired-event the loop should
       emit (e.g., `early_bail_fired` or `early_bail_breadth_probe_fired`).
     """
@@ -913,8 +912,6 @@ class EarlyBailGuard:
                       event + escalation count fire)
           LOW <= score < HIGH: soft_anchor fires
           score >= HIGH: commit_imperative variant fires (tighter)
-      - LUXE_EARLY_BAIL_COMMIT_ONLY refined-port: suppresses soft_anchor at
-        mid band; only commit_imperative fires.
 
     The `_luxe_nudge_type` marker reflects the variant fired (e.g.,
     "early_bail_soft_anchor", "early_bail_breadth_probe") so compaction can
@@ -932,7 +929,6 @@ class EarlyBailGuard:
         step: int,
         tool_calls_total: int,
         early_bail_message: Optional[str],
-        early_bail_commit_only: bool,
         convergence_gate_enabled: bool,
         convergence_score: float,
         band_response: str,
@@ -1002,9 +998,8 @@ class EarlyBailGuard:
                     "distinct_files": distinct_files,
                 },
             )
-            # Hybrid breadth_probe fire on first event / Nth escalation —
-            # gated off when early_bail_commit_only refined port is set.
-            if band_response == "breadth_probe_hybrid" and not early_bail_commit_only:
+            # Hybrid breadth_probe fire on first event / Nth escalation.
+            if band_response == "breadth_probe_hybrid":
                 fire_reason: Optional[str] = None
                 if new_suppression_count == 1 and narrow_reader_signal:
                     fire_reason = "first"
@@ -1050,7 +1045,7 @@ class EarlyBailGuard:
             )
 
         # Non-suppress branch — pick message + variant.
-        msg: Optional[str]
+        msg: str
         msg_variant: str
         if early_bail_message is not None:
             msg = early_bail_message
@@ -1062,52 +1057,26 @@ class EarlyBailGuard:
                     and convergence_score >= _CONVERGENCE_HIGH_THRESHOLD):
                 msg = _EARLY_BAIL_MESSAGE_COMMIT_IMPERATIVE
                 msg_variant = "commit_imperative"
-            elif early_bail_commit_only and mode == "soft_anchor":
-                msg = None
-                msg_variant = "suppressed_commit_only"
             else:
                 msg = _EARLY_BAIL_MESSAGE_MODES.get(mode, _EARLY_BAIL_MESSAGE)
                 msg_variant = mode
-        if msg is not None:
-            fire_event = (
-                "early_bail_fired",
-                {
-                    "tool_calls_total": tool_calls_total,
-                    "completion_tokens": None,  # filled by loop (it owns the counter)
-                    "reads": tool_calls_total - writes_seen,
-                    "convergence_score": convergence_score,
-                    "msg_variant": msg_variant,
-                },
-            )
-            return EarlyBailOutcome(
-                decision=Decision(message=msg, metadata={}),
-                nudge_type=f"early_bail_{msg_variant}",
-                last_intervention_kind="early_bail",
-                sets_early_bail_fired=True,
-                suppression_count_delta=0,
-                breadth_probe_fire_delta=0,
-                suppress_event=None,
-                fire_event=fire_event,
-            )
-        # Refined-port observability: record suppression so post-hoc analysis
-        # can see how often commit_only saved a mid-band soft_anchor fire.
-        suppress_event = (
-            "early_bail_suppressed_commit_only",
+        fire_event = (
+            "early_bail_fired",
             {
                 "tool_calls_total": tool_calls_total,
-                "completion_tokens": None,  # filled by loop
+                "completion_tokens": None,  # filled by loop (it owns the counter)
                 "reads": tool_calls_total - writes_seen,
                 "convergence_score": convergence_score,
-                "configured_mode": early_bail_mode,
+                "msg_variant": msg_variant,
             },
         )
         return EarlyBailOutcome(
-            decision=None,
-            nudge_type=None,
-            last_intervention_kind=None,
-            sets_early_bail_fired=False,
+            decision=Decision(message=msg, metadata={}),
+            nudge_type=f"early_bail_{msg_variant}",
+            last_intervention_kind="early_bail",
+            sets_early_bail_fired=True,
             suppression_count_delta=0,
             breadth_probe_fire_delta=0,
-            suppress_event=suppress_event,
-            fire_event=None,
+            suppress_event=None,
+            fire_event=fire_event,
         )
