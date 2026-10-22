@@ -28,15 +28,12 @@ GITKIT_MAX_TOKENS = 16384
 KINDS: dict[str, tuple[str, str, str]] = {
     "gitaudit": (
         "review",
-        "Audit the codebase in the current working directory: orient, find serious "
-        "bugs & security issues, and identify the highest-leverage structural "
-        "improvements — in one report.",
+        prompts.GIT_AUDIT_ASK,
         prompts.GIT_AUDIT_HINT,
     ),
     "gitchange": (
         "review",
-        "Analyze the codebase in the current working directory and produce an "
-        "APPLY-READY, ordered structural change plan.",
+        prompts.GIT_CHANGE_ASK,
         prompts.GIT_CHANGE_HINT,
     ),
     # Internal kind only (never a CLI command): `gitaudit --base/--pr` switches
@@ -44,8 +41,7 @@ KINDS: dict[str, tuple[str, str, str]] = {
     # task_type (gitkit.sdd: no new task types).
     "gitaudit-diff": (
         "review",
-        "Audit ONLY the change between the given base and HEAD of the "
-        "repository in the current working directory.",
+        prompts.GIT_AUDIT_DIFF_ASK,
         prompts.GIT_AUDIT_DIFF_HINT,
     ),
 }

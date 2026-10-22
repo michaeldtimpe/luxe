@@ -263,6 +263,7 @@ in the front-end. Survey map + chunk plan persist per repo under
   `GIT_DEEP_REDUCE_HINT`; diff: `GIT_AUDIT_DIFF_HINT` /
   `GIT_AUDIT_DIFF_CHUNK_HINT` / `GIT_AUDIT_DIFF_SYNTH_HINT` — markdown chunk
   contract, never JSON-only; apply: `GIT_APPLY_STEP_HINT`; brief:
-  `GIT_BRIEF_HINT`). `plan.py`/`apply.py`/
+  `GIT_BRIEF_HINT`; and every pass's one-sentence goal lead-in, `GIT_*_ASK`
+  / the composed `GIT_*_GOAL`). `plan.py`/`apply.py`/
   `diffscope.py` hold only orchestration + deterministic data shaping
   (parse/normalize/render, git ops, the keep/discard gate, hunk-overlap priors).
