@@ -193,7 +193,7 @@ def model_origin_notice(slots, status=None) -> str:
     cache. Local weights are announced too, not just remote ones: the point is
     that you can always tell, not that you get warned when it's bad.
     """
-    from luxe.chat.inspection import _LIVENESS_TIMEOUT_S
+    from luxe.chat.doctor import _LIVENESS_TIMEOUT_S
 
     model = slots.model_for("chat")
     try:

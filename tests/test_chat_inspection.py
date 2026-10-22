@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from luxe.chat import doctor as doctor_mod
 from luxe.chat import inspection
 from luxe.chat.session import ChatSession
 from luxe.chat.slots import SlotManager
@@ -435,7 +436,7 @@ class TestDoctor:
 
     def test_low_disk_warns(self, doctor_ctx, monkeypatch):
         session, sm, repo = doctor_ctx
-        monkeypatch.setattr(inspection.shutil, "disk_usage",
+        monkeypatch.setattr(doctor_mod.shutil, "disk_usage",
                             lambda p: type("U", (), {"free": 1024**3})())
         doc = inspection.run_doctor(session, sm, repo)
         disk = next(c for c in doc.checks if c.name == "disk")

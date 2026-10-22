@@ -30,7 +30,7 @@ from luxe.paths import luxe_home
 def unload_models(except_for: tuple[str, ...], force: bool):
     """Unload all currently-loaded models from the configured endpoint to
     free RAM (the chat config's default backend — `$LUXE_CONFIG` honoured)."""
-    from luxe.chat.inspection import endpoint_fixes
+    from luxe.chat.doctor import endpoint_fixes
 
     cfg = _chat_cfg()
     entry = cfg.backend_entry(cfg.default_backend_name())
