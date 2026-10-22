@@ -166,7 +166,6 @@ def _drill_cfg():
                               tools=["read_file", "list_dir", "grep",
                                      "bm25_search", "write_file", "edit_file",
                                      "bash"])},
-        task_types={},
         hosts={"here": HostManifest(main="Main-M", fallback="Fb-M")},
     )
 
