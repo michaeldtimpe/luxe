@@ -133,11 +133,6 @@ class LoopState:
     # trajectories rerun reads ~3× more often than empties per the v18
     # distribution; that's a "found my target" signal).
     read_keys_seen: set[str] = field(default_factory=set)
-    # LUXE_REREAD_NOTE: path -> line ranges `read_file` has returned since
-    # the last write, and path -> reads of it since the last write. Both are
-    # cleared on every successful write.
-    read_coverage: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
-    read_counts: dict[str, int] = field(default_factory=dict)
     same_file_read_twice_step: int | None = None
 
     # v1.9 — habituation telemetry. Records the most-recent intervention fire

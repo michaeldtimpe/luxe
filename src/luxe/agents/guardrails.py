@@ -49,7 +49,6 @@ apply state mutations + emit events according to the outcome.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -601,50 +600,6 @@ _DEDUP_MESSAGE_TEMPLATE = (
 def dedup_message(name: str) -> str:
     """The duplicate-call tool result for tool `name`."""
     return _DEDUP_MESSAGE_TEMPLATE.format(name=name)
-
-
-# LUXE_REREAD_NOTE (opt-in): appended to a read_file result whose every line
-# was already returned since the last write. The content above it is served
-# in full (compaction may have dropped the earlier copy); the note only says
-# so. Positive imperatives only.
-_REREAD_NOTE_TEMPLATE = (
-    "[luxe] Every line above ({path} lines {lo}-{hi}) was already shown to "
-    "you earlier in this run, and no file has been written since. This is "
-    "read {n} of {path}. Decide the change now and make it with edit_file or "
-    "write_file. If one specific fact is still missing, name it and read "
-    "only the lines that hold it."
-)
-
-
-def reread_note_message(path: str, lo: int, hi: int, n: int) -> str:
-    """The note appended to a fully re-covered read of `path`."""
-    return _REREAD_NOTE_TEMPLATE.format(path=path or "this file",
-                                        lo=lo, hi=hi, n=n)
-
-
-_NUMBERED_LINE = re.compile(r"^(\d+)\t", re.MULTILINE)
-
-
-def read_result_line_range(content: str) -> tuple[int, int] | None:
-    """(first, last) line number a `read_file` result shows, from its
-    `N<TAB>` prefixes; None when it shows no numbered lines (a refusal,
-    an empty file, an error)."""
-    nums = [int(m.group(1)) for m in _NUMBERED_LINE.finditer(content or "")]
-    if not nums:
-        return None
-    return min(nums), max(nums)
-
-
-def range_is_covered(seen: list[tuple[int, int]], lo: int, hi: int) -> bool:
-    """True when [lo, hi] lies entirely inside the union of `seen` ranges."""
-    nxt = lo
-    for a, b in sorted(seen):
-        if a > nxt:
-            break
-        nxt = max(nxt, b + 1)
-        if nxt > hi:
-            return True
-    return nxt > hi
 
 
 # SpecDD Lever 1 pre-dispatch gate (v1.8 Track 2): the decline reprompt that
