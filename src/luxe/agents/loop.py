@@ -12,6 +12,7 @@ import os as _os_for_logging
 import re
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable
 
 from luxe.agents.convergence import (
@@ -840,6 +841,284 @@ def _recalibrate(st: LoopState, resp: ChatResponse, est_sent: int) -> None:
     st.est_at_calibration = est_sent
 
 
+class _Flow(Enum):
+    """What the loop does after a step helper returns."""
+    CONTINUE = "continue"  # go on to the next step
+    BREAK = "break"        # the run ends here
+
+
+def _resolve_tool_calls(run: _Run, resp: ChatResponse, step: int,
+                        emit: Callable[..., None]) -> list[ToolCallResponse]:
+    """The response's structured tool calls, or — when it has none, but
+    text, and the run offers tools — the first one recovered from the text.
+    Unknown names the text fallback drops are logged and recorded."""
+    tool_calls = resp.tool_calls
+    if not tool_calls and resp.text and run.tool_defs:
+        text_drops: list[str] = []
+        tool_calls = _parse_text_tool_calls(resp.text, run.known_names,
+                                            drops=text_drops)
+        if text_drops:
+            logger.warning(
+                "text-fallback dropped unknown tool call(s): %s",
+                [d[:80] for d in text_drops])
+            emit(
+                "textfallback_drop",
+                step=step,
+                names=[d[:80] for d in text_drops],
+                recovered=bool(tool_calls),
+            )
+    return tool_calls
+
+
+def _truncated_turn_retry(run: _Run, st: LoopState, resp: ChatResponse,
+                          step: int, emit: Callable[..., None]) -> bool:
+    """Truncated-turn gate (2026-08-10). A response cut off at
+    max_tokens comes back finish_reason="length"; mid-prose it also
+    carries no tool calls, and the terminal test cannot tell
+    that from a model that finished and chose to answer. Nudge and
+    continue instead of ending a run that never acted. Bounded, and
+    a no-op unless the switch is on — see agents.sdd. True = it fired."""
+    flags = run.flags
+    tt = TruncatedTurnGuard.should_fire(
+        truncated_turn_retry_enabled=flags.truncated_turn_retry,
+        finish_reason=getattr(resp, "finish_reason", "") or "",
+        has_tool_calls=False,  # only reached when the turn had none
+        retries_used=st.truncated_turn_retries_used,
+        max_retries=flags.truncated_turn_max_retries,
+    )
+    if tt is None:
+        return False
+    # Record the cut-off text before the nudge so the transcript
+    # shows what the model was mid-way through saying.
+    if resp.text:
+        st.messages.append(run.assistant(resp, resp.text))
+    st.messages.append(_user_message(_TRUNCATED_TURN_MESSAGE,
+                                     TruncatedTurnGuard.nudge_type))
+    st.truncated_turn_retries_used += 1
+    emit(
+        "truncated_turn_retry",
+        step=step,
+        retries_used=st.truncated_turn_retries_used,
+        max_retries=flags.truncated_turn_max_retries,
+        completion_tokens=resp.timing.completion_tokens,
+    )
+    logger.debug(
+        "truncated turn retry step=%d retries_used=%d max=%d "
+        "completion_tokens=%d",
+        step, st.truncated_turn_retries_used,
+        flags.truncated_turn_max_retries, resp.timing.completion_tokens)
+    run.notice(
+        f"answer cut off at the {resp.timing.completion_tokens:,}-token "
+        f"cap with no tool call — retrying "
+        f"({st.truncated_turn_retries_used}/{flags.truncated_turn_max_retries}); "
+        f"each retry costs another full generation"
+    )
+    return True
+
+
+def _empty_turn_retry(run: _Run, st: LoopState, resp: ChatResponse,
+                      step: int, emit: Callable[..., None]) -> bool:
+    """Empty-completion gate (2026-08-17). A turn with no tool call AND
+    no text satisfies the terminal test exactly as a real
+    answer does, so a blank reply was recorded as a finished turn —
+    no gate, no warning, nothing in the record to tell them apart.
+    Nudge and continue. Bounded at one retry; ordered AFTER the
+    truncation gate so a cut-off response is handled by the guard
+    that owns it rather than spending both budgets on one problem.
+    True = it fired."""
+    et = EmptyTurnGuard.should_fire(
+        empty_turn_retry_enabled=run.flags.empty_turn_retry,
+        text=resp.text or "",
+        has_tool_calls=False,  # only reached when the turn had none
+        finish_reason=getattr(resp, "finish_reason", "") or "",
+        retries_used=st.empty_turn_retries_used,
+    )
+    if et is None:
+        return False
+    st.messages.append(_user_message(_EMPTY_TURN_MESSAGE,
+                                     EmptyTurnGuard.nudge_type))
+    st.empty_turn_retries_used += 1
+    reasoning_chars = getattr(resp, "reasoning_chars", 0)
+    emit(
+        "empty_turn_retry",
+        step=step,
+        retries_used=st.empty_turn_retries_used,
+        max_retries=et["max_retries"],
+        finish_reason=et["finish_reason"],
+        reasoning_chars=reasoning_chars,
+    )
+    logger.debug(
+        "empty turn retry step=%d retries_used=%d "
+        "finish_reason=%s reasoning_chars=%d",
+        step, st.empty_turn_retries_used, et["finish_reason"],
+        reasoning_chars)
+    # Say WHY when we can: "it thought and said nothing" is a very
+    # different report from "it returned nothing", and the
+    # reasoning-channel count is the only thing that separates them.
+    run.notice(
+        "the model replied with nothing"
+        + (f" after {reasoning_chars:,} characters of reasoning"
+           if reasoning_chars else "")
+        + " — retrying once"
+    )
+    return True
+
+
+def _spec_min_calls_reprompt(run: _Run, st: LoopState, resp: ChatResponse,
+                             step: int, emit: Callable[..., None]) -> bool:
+    """SpecDD Lever 1 min_tool_calls gate: before declaring the run
+    finished, check whether the spec expects more tool calls than
+    the model has emitted. If so, inject a reprompt and continue
+    the loop instead of breaking. Each requirement fires at most
+    once per run, so a stuck model can't ping-pong forever.
+    True = it reprompted. Callers check `run.spec is not None` first."""
+    vr = spec_validate(run.spec, "", "", tool_calls=st.actual_tool_calls)
+    reprompts: list[str] = []
+    for rr in vr.unsatisfied:
+        if rr.requirement.id in st.spec_violations_reprompted:
+            continue
+        if rr.requirement.kind != "min_tool_calls":
+            continue
+        reprompts.append(rr.detail)
+        st.spec_violations_reprompted.add(rr.requirement.id)
+        emit(
+            "spec_reprompt_fired",
+            step=step,
+            requirement_id=rr.requirement.id,
+            requirement_kind=rr.requirement.kind,
+        )
+    if not reprompts:
+        return False
+    # Replay the assistant's would-be final answer FIRST, then
+    # the reprompt, so the model reads the correction after
+    # its own exit. Appending in the other order (the pre-2026-09
+    # behavior) ended the request on the stale answer, with the
+    # correction buried above it.
+    if resp.text:
+        st.messages.append(run.assistant(resp, resp.text))
+    for detail in reprompts:
+        st.messages.append(_user_message(detail))
+    return True
+
+
+def _terminal_turn(run: _Run, st: LoopState, result: AgentResult,
+                   resp: ChatResponse, step: int,
+                   emit: Callable[..., None]) -> None:
+    """The run ends on this turn's answer: record the truncated/empty
+    telemetry, say so when it was cut off, and set `final_text`."""
+    # TELEMETRY ONLY — additive, ungated, never touches control flow or
+    # `messages` (agents.sdd "Tool-call telemetry events"). A run that
+    # ends here on finish_reason="length" was CUT OFF mid-answer, not
+    # finished; without this the records cannot tell the two apart,
+    # which is how the strict-flag fixture read as a clean completion
+    # for six identical runs.
+    if (getattr(resp, "finish_reason", "") or "") == "length":
+        emit(
+            "terminal_turn_truncated",
+            step=step,
+            completion_tokens=resp.timing.completion_tokens,
+            final_text_chars=len(resp.text or ""),
+            retry_enabled=run.flags.truncated_turn_retry,
+            retries_used=st.truncated_turn_retries_used,
+        )
+    # Same reason, the other failure: a run that ends HERE with no text
+    # produced no answer at all. Ungated telemetry — this is the only
+    # record distinguishing "answered" from "said nothing", exactly as
+    # `terminal_turn_truncated` is for "finished" vs "cut off".
+    if not (resp.text or "").strip():
+        emit(
+            "terminal_turn_empty",
+            step=step,
+            finish_reason=getattr(resp, "finish_reason", "") or "",
+            reasoning_chars=getattr(resp, "reasoning_chars", 0),
+            completion_tokens=resp.timing.completion_tokens,
+            retry_enabled=run.flags.empty_turn_retry,
+            retries_used=st.empty_turn_retries_used,
+        )
+    if (getattr(resp, "finish_reason", "") or "") == "length":
+        run.notice(
+            f"answer cut off at the {resp.timing.completion_tokens:,}-token "
+            f"cap — ending the turn "
+            + (f"({st.truncated_turn_retries_used} retr"
+               + ("y" if st.truncated_turn_retries_used == 1 else "ies")
+               + " already used)"
+               if st.truncated_turn_retries_used
+               else "without retrying")
+        )
+    result.final_text = resp.text
+
+
+def _no_tool_calls(run: _Run, st: LoopState, result: AgentResult,
+                   resp: ChatResponse, step: int,
+                   emit: Callable[..., None]) -> _Flow:
+    """A turn that ended without a tool call: retry a truncated or empty
+    turn, reprompt an unmet min_tool_calls spec, or end the run on it.
+    The order of the three gates is load-bearing (agents.sdd)."""
+    if _truncated_turn_retry(run, st, resp, step, emit):
+        return _Flow.CONTINUE
+    if _empty_turn_retry(run, st, resp, step, emit):
+        return _Flow.CONTINUE
+    if (run.spec is not None and run.tool_defs
+            and _spec_min_calls_reprompt(run, st, resp, step, emit)):
+        return _Flow.CONTINUE
+    _terminal_turn(run, st, result, resp, step, emit)
+    return _Flow.BREAK
+
+
+def _block_zero_call_dispatch(run: _Run, st: LoopState, resp: ChatResponse,
+                              tool_calls: list[ToolCallResponse], step: int,
+                              emit: Callable[..., None]) -> None:
+    """SpecDD Lever 1 PRE-DISPATCH spec gate (v1.8 Track 2). When the
+    spec contains any `expects_zero_calls` requirement and the model
+    has emitted a tool call, we intercept BEFORE dispatch_tool runs:
+    do NOT add anything to actual_tool_calls (the grader checks
+    len(actual_tool_calls) == 0), do NOT execute the call, replay
+    the assistant text without the tool_calls field, then inject a
+    decline reprompt and continue the loop. This is capability
+    gating, not post-hoc policy auditing — the bench grades on
+    executed behavior, so the runtime must enforce before dispatch.
+    See plan §C.2 latency contract and lessons.md 2026-05-12 entry."""
+    # Strip tool_calls from the assistant message so the model's
+    # next turn doesn't see a dangling "I tried to call X" without
+    # a corresponding tool result.
+    assistant_text = resp.text or ""
+    st.messages.append(run.assistant(resp, assistant_text))
+    st.messages.append(_user_message(_SPEC_ZERO_CALLS_DECLINE_MESSAGE))
+    emit(
+        "spec_predispatch_blocked",
+        step=step,
+        blocked_tool_names=[tc.name for tc in tool_calls],
+        blocked_count=len(tool_calls),
+    )
+
+
+def _append_acting_turn(run: _Run, st: LoopState, result: AgentResult,
+                        resp: ChatResponse, step: int) -> None:
+    """Append the assistant message of a step that is about to dispatch
+    tool calls (with its `tool_calls` field), and keep any prose it had."""
+    # INTERMEDIATE PROSE (2026-08-17). This step is acting, not finishing,
+    # yet models routinely put the lead-in to their answer here ("Let me
+    # check X…", or an opening paragraph) and only the LAST step's text
+    # becomes `final_text`. Chat showed that last fragment alone, so a
+    # reply could start mid-thought (session 0eb5998d8825 turn -7: 3 steps,
+    # 2 tool calls, the answer's opening lived in step 1). Recorded as a
+    # SEPARATE field: `final_text` keeps its exact meaning and no benchmark
+    # grader sees anything new. Only the chat layer reads this.
+    if (resp.text or "").strip():
+        result.step_texts.append(resp.text)
+    assistant_msg: dict[str, Any] = run.assistant(resp, resp.text or "")
+    if resp.tool_calls:
+        assistant_msg["tool_calls"] = [
+            {
+                "id": tc.id or f"call_{step}_{i}",
+                "type": "function",
+                "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+            }
+            for i, tc in enumerate(resp.tool_calls)
+        ]
+    st.messages.append(assistant_msg)
+
+
 def _token_progress(st: LoopState, result: AgentResult, step: int,
                     pressure: float) -> None:
     """Token-interval progress logging — fires when cumulative completion
@@ -1050,230 +1329,21 @@ def run_agent(
             _recalibrate(st, resp, est_sent)
         _token_progress(st, result, step, pressure)
 
-        tool_calls = resp.tool_calls
-        if not tool_calls and resp.text and tool_defs:
-            text_drops: list[str] = []
-            tool_calls = _parse_text_tool_calls(resp.text, known_names,
-                                                drops=text_drops)
-            if text_drops:
-                logger.warning(
-                    "text-fallback dropped unknown tool call(s): %s",
-                    [d[:80] for d in text_drops])
-                emit(
-                    "textfallback_drop",
-                    step=step,
-                    names=[d[:80] for d in text_drops],
-                    recovered=bool(tool_calls),
-                )
+        tool_calls = _resolve_tool_calls(run, resp, step, emit)
 
         if not tool_calls:
-            # Truncated-turn gate (2026-08-10). A response cut off at
-            # max_tokens comes back finish_reason="length"; mid-prose it also
-            # carries no tool calls, and the terminal test below cannot tell
-            # that from a model that finished and chose to answer. Nudge and
-            # continue instead of ending a run that never acted. Bounded, and
-            # a no-op unless the switch is on — see agents.sdd.
-            tt = TruncatedTurnGuard.should_fire(
-                truncated_turn_retry_enabled=flags.truncated_turn_retry,
-                finish_reason=getattr(resp, "finish_reason", "") or "",
-                has_tool_calls=bool(tool_calls),
-                retries_used=st.truncated_turn_retries_used,
-                max_retries=flags.truncated_turn_max_retries,
-            )
-            if tt is not None:
-                # Record the cut-off text before the nudge so the transcript
-                # shows what the model was mid-way through saying.
-                if resp.text:
-                    st.messages.append(run.assistant(resp, resp.text))
-                st.messages.append(_user_message(_TRUNCATED_TURN_MESSAGE,
-                                                 TruncatedTurnGuard.nudge_type))
-                st.truncated_turn_retries_used += 1
-                emit(
-                    "truncated_turn_retry",
-                    step=step,
-                    retries_used=st.truncated_turn_retries_used,
-                    max_retries=flags.truncated_turn_max_retries,
-                    completion_tokens=resp.timing.completion_tokens,
-                )
-                logger.debug(
-                    "truncated turn retry step=%d retries_used=%d max=%d "
-                    "completion_tokens=%d",
-                    step, st.truncated_turn_retries_used,
-                    flags.truncated_turn_max_retries, resp.timing.completion_tokens)
-                run.notice(
-                    f"answer cut off at the {resp.timing.completion_tokens:,}-token "
-                    f"cap with no tool call — retrying "
-                    f"({st.truncated_turn_retries_used}/{flags.truncated_turn_max_retries}); "
-                    f"each retry costs another full generation"
-                )
+            if _no_tool_calls(run, st, result, resp, step, emit) is _Flow.CONTINUE:
                 continue
-
-            # Empty-completion gate (2026-08-17). A turn with no tool call AND
-            # no text satisfies the terminal test above exactly as a real
-            # answer does, so a blank reply was recorded as a finished turn —
-            # no gate, no warning, nothing in the record to tell them apart.
-            # Nudge and continue. Bounded at one retry; ordered AFTER the
-            # truncation gate so a cut-off response is handled by the guard
-            # that owns it rather than spending both budgets on one problem.
-            et = EmptyTurnGuard.should_fire(
-                empty_turn_retry_enabled=flags.empty_turn_retry,
-                text=resp.text or "",
-                has_tool_calls=bool(tool_calls),
-                finish_reason=getattr(resp, "finish_reason", "") or "",
-                retries_used=st.empty_turn_retries_used,
-            )
-            if et is not None:
-                st.messages.append(_user_message(_EMPTY_TURN_MESSAGE,
-                                                 EmptyTurnGuard.nudge_type))
-                st.empty_turn_retries_used += 1
-                reasoning_chars = getattr(resp, "reasoning_chars", 0)
-                emit(
-                    "empty_turn_retry",
-                    step=step,
-                    retries_used=st.empty_turn_retries_used,
-                    max_retries=et["max_retries"],
-                    finish_reason=et["finish_reason"],
-                    reasoning_chars=reasoning_chars,
-                )
-                logger.debug(
-                    "empty turn retry step=%d retries_used=%d "
-                    "finish_reason=%s reasoning_chars=%d",
-                    step, st.empty_turn_retries_used, et["finish_reason"],
-                    reasoning_chars)
-                # Say WHY when we can: "it thought and said nothing" is a very
-                # different report from "it returned nothing", and the
-                # reasoning-channel count is the only thing that separates them.
-                run.notice(
-                    "the model replied with nothing"
-                    + (f" after {reasoning_chars:,} characters of reasoning"
-                       if reasoning_chars else "")
-                    + " — retrying once"
-                )
-                continue
-
-            # SpecDD Lever 1 min_tool_calls gate: before declaring the run
-            # finished, check whether the spec expects more tool calls than
-            # the model has emitted. If so, inject a reprompt and continue
-            # the loop instead of breaking. Each requirement fires at most
-            # once per run, so a stuck model can't ping-pong forever.
-            if spec is not None and tool_defs:
-                vr = spec_validate(spec, "", "", tool_calls=st.actual_tool_calls)
-                reprompts: list[str] = []
-                for rr in vr.unsatisfied:
-                    if rr.requirement.id in st.spec_violations_reprompted:
-                        continue
-                    if rr.requirement.kind != "min_tool_calls":
-                        continue
-                    reprompts.append(rr.detail)
-                    st.spec_violations_reprompted.add(rr.requirement.id)
-                    emit(
-                        "spec_reprompt_fired",
-                        step=step,
-                        requirement_id=rr.requirement.id,
-                        requirement_kind=rr.requirement.kind,
-                    )
-                if reprompts:
-                    # Replay the assistant's would-be final answer FIRST, then
-                    # the reprompt, so the model reads the correction after
-                    # its own exit. Appending in the other order (the pre-2026-09
-                    # behavior) ended the request on the stale answer, with the
-                    # correction buried above it.
-                    if resp.text:
-                        st.messages.append(run.assistant(resp, resp.text))
-                    for detail in reprompts:
-                        st.messages.append(_user_message(detail))
-                    continue
-            # TELEMETRY ONLY — additive, ungated, never touches control flow or
-            # `messages` (agents.sdd "Tool-call telemetry events"). A run that
-            # ends here on finish_reason="length" was CUT OFF mid-answer, not
-            # finished; without this the records cannot tell the two apart,
-            # which is how the strict-flag fixture read as a clean completion
-            # for six identical runs.
-            if (getattr(resp, "finish_reason", "") or "") == "length":
-                emit(
-                    "terminal_turn_truncated",
-                    step=step,
-                    completion_tokens=resp.timing.completion_tokens,
-                    final_text_chars=len(resp.text or ""),
-                    retry_enabled=flags.truncated_turn_retry,
-                    retries_used=st.truncated_turn_retries_used,
-                )
-            # Same reason, the other failure: a run that ends HERE with no text
-            # produced no answer at all. Ungated telemetry — this is the only
-            # record distinguishing "answered" from "said nothing", exactly as
-            # `terminal_turn_truncated` is for "finished" vs "cut off".
-            if not (resp.text or "").strip():
-                emit(
-                    "terminal_turn_empty",
-                    step=step,
-                    finish_reason=getattr(resp, "finish_reason", "") or "",
-                    reasoning_chars=getattr(resp, "reasoning_chars", 0),
-                    completion_tokens=resp.timing.completion_tokens,
-                    retry_enabled=flags.empty_turn_retry,
-                    retries_used=st.empty_turn_retries_used,
-                )
-            if (getattr(resp, "finish_reason", "") or "") == "length":
-                run.notice(
-                    f"answer cut off at the {resp.timing.completion_tokens:,}-token "
-                    f"cap — ending the turn "
-                    + (f"({st.truncated_turn_retries_used} retr"
-                       + ("y" if st.truncated_turn_retries_used == 1 else "ies")
-                       + " already used)"
-                       if st.truncated_turn_retries_used
-                       else "without retrying")
-                )
-            result.final_text = resp.text
             break
 
-        # SpecDD Lever 1 PRE-DISPATCH spec gate (v1.8 Track 2). When the
-        # spec contains any `expects_zero_calls` requirement and the model
-        # has emitted a tool call, we intercept BEFORE dispatch_tool runs:
-        # do NOT add anything to actual_tool_calls (the grader checks
-        # len(actual_tool_calls) == 0), do NOT execute the call, replay
-        # the assistant text without the tool_calls field, then inject a
-        # decline reprompt and continue the loop. This is capability
-        # gating, not post-hoc policy auditing — the bench grades on
-        # executed behavior, so the runtime must enforce before dispatch.
-        # See plan §C.2 latency contract and lessons.md 2026-05-12 entry.
         if spec_has_zero_calls and tool_calls:
-            # Strip tool_calls from the assistant message so the model's
-            # next turn doesn't see a dangling "I tried to call X" without
-            # a corresponding tool result.
-            assistant_text = resp.text or ""
-            st.messages.append(run.assistant(resp, assistant_text))
-            st.messages.append(_user_message(_SPEC_ZERO_CALLS_DECLINE_MESSAGE))
-            emit(
-                "spec_predispatch_blocked",
-                step=step,
-                blocked_tool_names=[tc.name for tc in tool_calls],
-                blocked_count=len(tool_calls),
-            )
+            _block_zero_call_dispatch(run, st, resp, tool_calls, step, emit)
             # Skip the dispatch loop entirely. Tool calls are dropped on
             # the floor — they never enter actual_tool_calls, so the BFCL
             # grader sees zero calls. Continue to next step.
             continue
 
-        # INTERMEDIATE PROSE (2026-08-17). This step is acting, not finishing,
-        # yet models routinely put the lead-in to their answer here ("Let me
-        # check X…", or an opening paragraph) and only the LAST step's text
-        # becomes `final_text`. Chat showed that last fragment alone, so a
-        # reply could start mid-thought (session 0eb5998d8825 turn -7: 3 steps,
-        # 2 tool calls, the answer's opening lived in step 1). Recorded as a
-        # SEPARATE field: `final_text` keeps its exact meaning and no benchmark
-        # grader sees anything new. Only the chat layer reads this.
-        if (resp.text or "").strip():
-            result.step_texts.append(resp.text)
-        assistant_msg: dict[str, Any] = run.assistant(resp, resp.text or "")
-        if resp.tool_calls:
-            assistant_msg["tool_calls"] = [
-                {
-                    "id": tc.id or f"call_{step}_{i}",
-                    "type": "function",
-                    "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
-                }
-                for i, tc in enumerate(resp.tool_calls)
-            ]
-        st.messages.append(assistant_msg)
+        _append_acting_turn(run, st, result, resp, step)
 
         step_had_repeat = False
         for tc in tool_calls:
