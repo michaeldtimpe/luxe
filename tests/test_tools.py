@@ -806,3 +806,70 @@ class TestChatExtraAllow:
         assert "gh" in shell.restricted_bash_def().description.split(", ")
         default_desc = shell.tool_defs()[0].description
         assert "gh," not in default_desc and ": gh" not in default_desc
+
+
+class TestGitDirWriteGuard:
+    """No fs write tool touches git metadata (2026-10-22). `.git/hooks/*` and
+    `.git/config` (`diff.external`, `core.sshCommand`, filters) run as CODE
+    the next time luxe itself calls git — a model that could write them
+    turned luxe's own commit/diff into its executor. Judged on the RESOLVED
+    repo-relative path, any component, case-insensitively (macOS volumes are
+    case-insensitive: `.GIT/hooks` IS `.git/hooks`)."""
+
+    @pytest.fixture(autouse=True)
+    def _git_dir(self, tmp_repo: Path):
+        (tmp_repo / ".git" / "hooks").mkdir(parents=True)
+        (tmp_repo / ".git" / "config").write_text("[core]\n")
+        (tmp_repo / "sub" / ".git").mkdir(parents=True)
+        (tmp_repo / "sub" / ".git" / "config").write_text("[core]\n")
+
+    @pytest.mark.parametrize("path", [
+        ".git/hooks/pre-commit", ".git/config", ".git/info/exclude",
+        "sub/.git/config", "sub/.git/hooks/post-checkout", ".git",
+        "src/../.git/hooks/pre-commit", ".GIT/hooks/pre-commit",
+    ])
+    def test_write_file_refuses_git_metadata(self, tmp_repo: Path, path):
+        out, err = fs.MUTATION_FNS["write_file"](
+            {"path": path, "content": "#!/bin/sh\necho pwned\n"})
+        assert out == "" and err and ".git" in err and path in err
+        assert not (tmp_repo / ".git" / "hooks" / "pre-commit").exists()
+        assert (tmp_repo / ".git" / "config").read_text() == "[core]\n"
+        assert not (tmp_repo / ".git" / "info").exists()
+
+    def test_write_file_refuses_an_absolute_path_into_git(self, tmp_repo: Path):
+        target = str(tmp_repo / ".git" / "hooks" / "pre-push")
+        out, err = fs.MUTATION_FNS["write_file"]({"path": target, "content": "x"})
+        assert out == "" and err and ".git" in err
+        assert not (tmp_repo / ".git" / "hooks" / "pre-push").exists()
+
+    @pytest.mark.parametrize("path", [".git/config", "sub/.git/config"])
+    def test_edit_file_refuses_git_metadata(self, tmp_repo: Path, path):
+        out, err = fs.MUTATION_FNS["edit_file"](
+            {"path": path, "old_string": "[core]",
+             "new_string": "[diff]\n\texternal = /tmp/x"})
+        assert out == "" and err and ".git" in err and path in err
+        assert (tmp_repo / path).read_text() == "[core]\n"
+
+    def test_prose_aware_chat_write_fns_refuse_too(self, tmp_repo: Path):
+        fns = fs.make_prose_aware_write_fns()
+        out, err = fns["write_file"]({"path": ".git/hooks/notes.md",
+                                      "content": "x"})
+        assert out == "" and err and ".git" in err
+        assert not (tmp_repo / ".git" / "hooks" / "notes.md").exists()
+
+    @pytest.mark.parametrize("path", [
+        ".gitignore", ".gitattributes", ".github/workflows/ci.yml",
+        ".gitmodules", "docs/.gitkeep", "git/notes.txt", "my.git/readme.txt",
+    ])
+    def test_git_lookalike_names_are_still_writable(self, tmp_repo: Path, path):
+        out, err = fs.MUTATION_FNS["write_file"]({"path": path,
+                                                  "content": "ok\n"})
+        assert err is None, err
+        assert (tmp_repo / path).read_text() == "ok\n"
+        out, err = fs.MUTATION_FNS["edit_file"](
+            {"path": path, "old_string": "ok", "new_string": "fine"})
+        assert err is None, err
+
+    def test_reading_git_metadata_is_unchanged(self, tmp_repo: Path):
+        out, err = fs.READ_ONLY_FNS["read_file"]({"path": ".git/config"})
+        assert err is None and "[core]" in out
