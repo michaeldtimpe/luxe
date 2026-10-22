@@ -543,6 +543,20 @@ class ChatSession:
                      "\n</current_request>")
         return "\n\n" + "\n\n".join(parts), fold_version
 
+    def fetch_and_execute_notice(self) -> str:
+        """"Split the two powers" (2026-10-22, chat.sdd): one line when the
+        session holds BOTH web tools and a shell — a model with both can
+        fetch content and execute it, the shape a prompt-injected page needs.
+        A WARNING, never a block. "" otherwise. Bash is exposed only in
+        write mode, so "shell available" == `write_enabled`; `/bash` alone
+        is inert until then."""
+        if not (self.web_enabled and self.write_enabled):
+            return ""
+        shell = "UNRESTRICTED bash" if self.unrestricted_bash else "bash"
+        return (f"web + {shell} are both on — a model with both can fetch "
+                "content from the internet and execute it; turn one off "
+                "(/web or /write) unless this session needs both")
+
     def carry_frame(self, *extra: object, memory: str | None = None) -> str:
         """Fingerprint of everything the first message of a carried
         conversation was built from, other than the history and the request
