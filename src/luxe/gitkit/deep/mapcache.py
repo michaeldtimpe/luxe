@@ -181,6 +181,20 @@ def load_map(target: str | Path, *, head: str, rebuild: bool = False,
         return None
 
 
+def fresh_survey_notes(target: str | Path, *, head: str) -> str | None:
+    """The cached map's survey notes iff the map is FRESH for `head`, else
+    None. For callers that only borrow the survey as context (diff audits,
+    the apply executor): a map saved at another commit describes a
+    different tree."""
+    if map_status(target, head=head).state is not MapState.FRESH:
+        return None
+    sn = _map_dir(target) / "survey_notes.md"
+    try:
+        return sn.read_text() if sn.is_file() else None
+    except OSError:
+        return None
+
+
 def git_file_shas(target: str | Path) -> dict[str, str]:
     """{rel path: blob sha} for every tracked file at HEAD (`git ls-tree -r`).
     SHAs, never timestamps — the incremental staleness currency. Untracked

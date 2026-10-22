@@ -115,6 +115,7 @@ from luxe.gitkit.deep.mapcache import (
     CacheDecision as CacheDecision,
     chunk_note_is_valid as chunk_note_is_valid,
     fold_contribution as fold_contribution,
+    fresh_survey_notes as fresh_survey_notes,
     git_file_shas as git_file_shas,
     load_chunk_note as load_chunk_note,
     load_map as load_map,

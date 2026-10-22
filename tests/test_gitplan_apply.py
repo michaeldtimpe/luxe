@@ -91,6 +91,42 @@ def _writer_stub(repo: Path, content="def g():\n    return 2\n"):
     return fake, calls
 
 
+def _context_stub(repo: Path):
+    """A writer stub that also records each pass's extra_context."""
+    seen: list[str] = []
+
+    def fake(backend, role, *, extra_context="", **kw):
+        seen.append(extra_context)
+        (repo / "main.py").write_text("def g():\n    return 2\n")
+
+        class _R:
+            final_text = "done"
+        return _R()
+    return fake, seen
+
+
+@pytest.mark.parametrize("map_head,injected", [("current", True),
+                                               ("0ld0ld0", False)])
+def test_apply_injects_survey_only_from_a_fresh_map(repo_on_main, _cfg,
+                                                    monkeypatch, map_head,
+                                                    injected):
+    """The step context carries the cached survey only when the map is FRESH
+    for this HEAD — the same check the runner makes. A map saved for another
+    commit describes a different tree and must not be shown as this one's."""
+    from luxe.gitkit import deep
+    monkeypatch.setattr(apply, "_is_tty", lambda c: True)
+    head = _save_plan(repo_on_main, [dict(_STEP)])
+    deep.save_map(repo_on_main, head=head if map_head == "current" else map_head,
+                  survey_notes="SURVEY-NOTES-MARKER", chunks=[],
+                  content_budget=1, framing=[], summary_render="")
+    fake, seen = _context_stub(repo_on_main)
+    rc = apply.run_apply(repo_path=str(repo_on_main), cfg=_cfg,
+                         console=_TTYConsole(), reader=lambda _p: "keep",
+                         run_single_fn=fake)
+    assert rc == 0 and len(seen) == 1
+    assert ("<survey>\nSURVEY-NOTES-MARKER" in seen[0]) is injected
+
+
 # --- the invariants ---------------------------------------------------------
 
 def test_apply_refused_without_tty(repo_on_main, _cfg, monkeypatch):
