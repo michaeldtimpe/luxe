@@ -34,11 +34,11 @@ def _collect(*extra: str) -> str:
 def test_live_model_is_deselected_by_default():
     """A bare pytest run must not collect the live-model module."""
     out = _collect()
-    assert "test_token_logprobs_basic" not in out, (
+    assert "test_first_token_top_logprobs" not in out, (
         "live_model tests are being collected by default — the addopts marker "
         "filter in pyproject.toml is missing or no longer takes effect.\n" + out
     )
-    assert "4 deselected" in out or "no tests ran" in out or "4/4 deselected" in out, out
+    assert "3 deselected" in out or "no tests ran" in out or "3/3 deselected" in out, out
 
 
 def test_live_model_is_reselectable_on_demand():
@@ -49,11 +49,11 @@ def test_live_model_is_reselectable_on_demand():
     than opt-in.
     """
     out = _collect("-m", "live_model")
-    assert "test_token_logprobs_basic" in out, (
+    assert "test_first_token_top_logprobs" in out, (
         "-m live_model no longer re-selects the live tests; the addopts filter "
         "has made them unreachable instead of opt-in.\n" + out
     )
-    assert "4 tests collected" in out, out
+    assert "3 tests collected" in out, out
 
 
 def test_markers_are_registered():
