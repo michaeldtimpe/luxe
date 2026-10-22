@@ -138,15 +138,15 @@ def gather_repo_health(repo_path: str | Path) -> str:
         if ok_w:
             lines.append(f"Commits in last {days} days: {win}")
 
-    ok_dates, dates = _run_git(["log", "--format=%ai"], repo_path)
-    if ok_dates and dates:
-        rows = dates.splitlines()
-        lines.append(f"Latest commit: {rows[0]}")
-        lines.append(f"First commit: {rows[-1]}")
-
-    ok_auth, auth = _run_git(["log", "--format=%an"], repo_path)
-    if ok_auth and auth:
-        lines.append(f"Distinct authors: {len(set(auth.splitlines()))}")
+    # ONE full-history walk for dates AND authors (`<date>\t<author>` rows,
+    # newest first) — this was two `git log` passes over the whole history.
+    ok_log, log = _run_git(["log", "--format=%ai%x09%an"], repo_path)
+    if ok_log and log:
+        rows = [r.split("\t", 1) for r in log.splitlines()]
+        lines.append(f"Latest commit: {rows[0][0]}")
+        lines.append(f"First commit: {rows[-1][0]}")
+        authors = {r[1] if len(r) > 1 else "" for r in rows}
+        lines.append(f"Distinct authors: {len(authors)}")
 
     ok_subj, subj = _run_git(["log", "-15", "--format=%s"], repo_path)
     if ok_subj and subj:

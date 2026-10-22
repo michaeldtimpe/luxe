@@ -8,6 +8,7 @@ end-to-end manually against oMLX, not here.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -62,6 +63,55 @@ def test_gather_repo_health_reports_commits_and_size(git_repo: Path):
     assert "Files:" in block and "Tracked LOC:" in block
     assert "requirements.txt" in block  # manifest detected
     assert "tweak f" in block  # recent subject
+
+
+def test_gather_repo_health_history_lines_one_log_pass(tmp_path: Path,
+                                                       monkeypatch):
+    """Latest/First commit + Distinct authors come from ONE full-history
+    `git log` (was two: %ai then %an), with output identical to the two-pass
+    reading — computed here independently from the two old commands."""
+    repo = tmp_path / "multi"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    commits = [("Alice", "2024-01-02T10:00:00+00:00"),
+               ("Bob Builder", "2024-03-04T11:30:00+02:00"),
+               ("Alice", "2024-05-06T12:00:00-05:00"),
+               ("Carol", "2024-07-08T09:15:00+00:00")]
+    for i, (name, date) in enumerate(commits):
+        (repo / "f.py").write_text(f"x = {i}\n")
+        _git(repo, "add", "-A")
+        env = {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": "a@example.com",
+               "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_NAME": name,
+               "GIT_COMMITTER_EMAIL": "a@example.com",
+               "GIT_COMMITTER_DATE": date}
+        subprocess.run(["git", "commit", "-q", "-m", f"c{i}"], cwd=repo,
+                       check=True, capture_output=True,
+                       env={**os.environ, **env})
+
+    def _out(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=repo, check=True,
+                              capture_output=True, text=True).stdout.strip()
+    dates = _out("log", "--format=%ai").splitlines()
+    authors = set(_out("log", "--format=%an").splitlines())
+    expected = [f"Latest commit: {dates[0]}", f"First commit: {dates[-1]}",
+                f"Distinct authors: {len(authors)}"]
+
+    calls: list[list[str]] = []
+    real = health._run_git
+
+    def spy(args, repo_path, timeout=health._GIT_TIMEOUT):
+        calls.append(list(args))
+        return real(args, repo_path, timeout)
+    monkeypatch.setattr(health, "_run_git", spy)
+
+    lines = health.gather_repo_health(repo).splitlines()
+    i = lines.index(expected[0])
+    assert lines[i:i + 3] == expected
+    assert expected == ["Latest commit: 2024-07-08 09:15:00 +0000",
+                        "First commit: 2024-01-02 10:00:00 +0000",
+                        "Distinct authors: 3"]
+    full_history = [a for a in calls if a[0] == "log" and "-15" not in a]
+    assert len(full_history) == 1, full_history
 
 
 def test_gather_repo_health_empty_repo_does_not_crash(tmp_path: Path):
