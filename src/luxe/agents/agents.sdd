@@ -45,10 +45,11 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   same "only the exact string 1" / "only the exact string 0" asymmetries, same
   silent fallback for every malformed value. A new switch adds a field there
   plus a row in `tests/test_run_flags.py`, and a test asserts the loop's body
-  contains no `os.environ` access. Three reads deliberately stay outside:
-  `LUXE_TOKEN_LOG_INTERVAL` (loop.py module constant, read at import),
-  `LUXE_LOAD_PRIORS` (cohort_priors) and `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`
-  (guardrails) — those belong to their own modules' contracts.
+  contains no `os.environ` access. Two reads deliberately stay outside:
+  `LUXE_TOKEN_LOG_INTERVAL` (loop.py module constant, read at import) and
+  `LUXE_LOAD_PRIORS` (cohort_priors) — those belong to their own modules'
+  contracts (`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE` in guardrails was a third
+  until its 2026-10-22 removal).
   `LUXE_EARLY_BAIL_MODE` is NOT one of them any more: `EarlyBailGuard` used to
   re-read it from os.environ up to three times per step; since 2026-09 it is
   `RunFlags.early_bail_mode` (verbatim string, same `"default"` default,
@@ -405,18 +406,6 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   `default_flags`/`clamp_and_damp`. `TestCalibrationDamping` pins `=0`: its
   replayed ratio is the 2026-08-24 one, measured without the schemas.
 
-### forge-hybrid Phase 4 (D) trajectory-shape invariants (pinned 2026-05-28, opt-in)
-
-- **`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE` defaults OFF.** The D smoke at n=14 confirmed
-  the locked predicate (`sustained_low_trend ≥ 3 AND grep_vs_read_ratio < 0.5 AND
-  breadth_saturation < 0.6`) is too narrow for this champion at num_ctx=32768: 0/14
-  suppression fires across the smoke set. The lever is in-tree as infrastructure but
-  the predicate does not engage; future cycles may trace-mine to find empirically-grounded
-  thresholds.
-- **Implicit dependency on `LUXE_ADAPTIVE_POLICY=1`** for `score_log` population. With
-  adaptive policy off, the predicate is a no-op (sustained_low_trend = 0). This is a
-  documented coupling, not a bug.
-
 ### Tool-call telemetry events (pinned 2026-08-04, additive-only)
 
 - `tool_reject` (reason=schema|unknown_tool, name + message) and
@@ -684,6 +673,18 @@ reintroduce any of them without new evidence.
   the same trace as on the baseline prompt, and Qwen3.8-27B passed both dev
   fixtures with or without it. `tests/golden/prompt_registry.json` lost
   exactly that entry.
+
+- **Trajectory-shape early_bail suppression** (`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`,
+  forge-hybrid Phase 4 (D), pinned 2026-05-28): `convergence.ShapeSignals` /
+  `trajectory_shape_signals` / `should_suppress_for_trajectory_shape` and the
+  `_SHAPE_SUPPRESS_*` thresholds, the `EarlyBailGuard` branch that read the
+  env var directly (and its `score_log=` / `early_bail_step=` parameters,
+  which fed only it), event `early_bail_suppressed_trajectory_shape`, and the
+  swebench runner's `--early-bail-trajectory-shape`. The locked predicate
+  (`sustained_low_trend >= 3 AND grep_vs_read_ratio < 0.5 AND
+  breadth_saturation < 0.6`) fired 0/14 in the D smoke at num_ctx=32768 —
+  too narrow for this champion — and needed `LUXE_ADAPTIVE_POLICY=1` to
+  populate `score_log` at all. guardrails now reads no environment.
 
 ### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
 
