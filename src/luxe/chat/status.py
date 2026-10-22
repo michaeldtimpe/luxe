@@ -622,6 +622,36 @@ def to_rich_text(segments: list[Segment]):
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+def activity_line(started_at: float, parts=(), *, reasoning_since: float = 0.0,
+                  suffix: str = "", now: float | None = None):
+    """The in-turn activity line, ONE builder for both front-ends (the line
+    REPL's `LiveActivity` and the TUI's `#generating` timer each built their
+    own): spinner · elapsed · `parts` (each a `(text, style)`; empty text is
+    skipped) · `thinking Ns` while the reasoning channel is live · `suffix`.
+
+    Thinking is a COUNTER, never the text (chat.sdd): a reasoning model can
+    be silent for minutes before its first content token — measured at 10.5
+    min with nothing on screen — and this is what tells that apart from a
+    dead request. Dimmed, and only while it IS thinking."""
+    from rich.text import Text
+
+    now = time.time() if now is None else now
+    elapsed = max(0.0, now - started_at) if started_at else 0.0
+    line = Text()
+    line.append(f"{_SPINNER[int(elapsed * 10) % len(_SPINNER)]} ", style="cyan")
+    line.append(f"{elapsed:4.1f}s", style="bold")
+    bits = [(text, style) for text, style in parts if text]
+    if reasoning_since:
+        bits.append((f"thinking {max(0.0, now - reasoning_since):.0f}s",
+                     "bright_black"))
+    if suffix:
+        bits.append((suffix, "dim"))
+    for text, style in bits:
+        line.append(" · ", style="bright_black")
+        line.append(text, style=style)
+    return line
+
+
 class LiveActivity:
     """Rich renderable for the in-turn live view — THREE stacked lines so a long
     generation isn't opaque:
@@ -669,9 +699,6 @@ class LiveActivity:
         from rich.text import Text
 
         width = _term_width()
-        elapsed = max(0.0, time.time() - self.started_at)
-        frame = _SPINNER[int(elapsed * 10) % len(_SPINNER)]
-
         lines = []
         # 1. live streaming preview (last non-blank line, truncated to width)
         tail = next((ln for ln in reversed(self._stream.splitlines()) if ln.strip()), "")
@@ -679,19 +706,12 @@ class LiveActivity:
             if len(tail) > width - 2:
                 tail = "…" + tail[-(width - 3):]
             lines.append(Text(tail, style="bright_black"))
-        # 2. activity line
-        act = Text()
-        act.append(f"{frame} ", style="cyan")
-        act.append(f"{elapsed:5.1f}s ", style="bold")
-        act.append(f"·{self.tools} tools", style="bright_black")
-        if self.last_tool:
-            act.append(f" · {self.last_tool}", style="yellow")
-        # Dimmed, and only while it IS thinking — the point is to distinguish a
-        # working request from a dead one, not to narrate.
-        if self._reasoning_since:
-            think_s = max(0.0, time.time() - self._reasoning_since)
-            act.append(f" · thinking {think_s:.0f}s", style="bright_black")
-        lines.append(act)
+        # 2. activity line (shared with the TUI)
+        lines.append(activity_line(
+            self.started_at,
+            [(f"{self.tools} tools", "bright_black"),
+             (self.last_tool, "yellow")],
+            reasoning_since=self._reasoning_since))
         # 3. status bar
         # Renders on rich.Live's refresh thread at 10 Hz: git refreshes in
         # the background so a slow `git status` can't freeze the animation.

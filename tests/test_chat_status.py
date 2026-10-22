@@ -281,6 +281,17 @@ def test_live_activity_renders_spinner_and_elapsed(slots):
     assert "tools" in text and "bash" in text
 
 
+def test_activity_line_is_one_builder_for_both_front_ends():
+    """`LiveActivity` (line REPL) and the TUI's `_tick` both draw
+    `activity_line`: spinner · elapsed · parts · thinking Ns · suffix."""
+    line = status_mod.activity_line(
+        100.0, [("read_file (2)", "bright_black"), ("", "yellow")],
+        reasoning_since=104.0, suffix="esc to interrupt", now=110.0).plain
+    assert " 10.0s · read_file (2) · thinking 6s · esc to interrupt" in line
+    assert " ·  · " not in line                   # an empty part is skipped
+    assert "thinking" not in status_mod.activity_line(100.0, now=101.0).plain
+
+
 # --- aborted-turn context reporting + the /ctx suggestion gate --------------
 #
 # Both land here because both are pure DISPLAY decisions about the two context
