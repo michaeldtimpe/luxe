@@ -14,9 +14,9 @@ HTTP-Backend benchmarks (BFCL/swebench/maintain_suite/GSM8K/CodeNeedle)
 before mlx-direct benchmarks to avoid contention.
 
 **Chat-template handling:** `MLXDirectBackend` is template-agnostic.
-Callers either pass raw completion prompts (`token_logprobs`)
-or pre-templated chat strings (MMLU/ARC must apply the tokenizer's
-chat_template explicitly via `apply_chat_template()` before scoring).
+Callers pass raw completion prompts or pre-templated chat strings
+(MMLU/ARC must apply the tokenizer's chat_template explicitly via
+`apply_chat_template()` before scoring).
 """
 from __future__ import annotations
 
@@ -42,11 +42,10 @@ class TopLogprob:
 class MLXDirectBackend:
     """Thin wrapper over an mlx_lm-loaded model exposing logprob helpers.
 
-    Two public methods:
-      - `token_logprobs(text)` — per-token logprob of `text` (live smoke tests;
-        its perplexity consumer was retired 2026-10-15).
-      - `first_token_top_logprobs(prompt, top_k)` — top-K candidates for the
-        next token after `prompt`. Used by MMLU/ARC.
+    `first_token_top_logprobs(prompt, top_k)` returns the top-K candidates
+    for the next token after `prompt`; `score_choices` builds MMLU/ARC
+    scoring on it. (The per-token `token_logprobs` pair went with its
+    perplexity consumer, retired 2026-10-15.)
 
     Model + tokenizer are loaded once at construction. Reuse the same
     instance across all questions in a benchmark.
@@ -58,34 +57,6 @@ class MLXDirectBackend:
         self.model.eval()
 
     # --- logprob helpers -----------------------------------------------------
-
-    def token_logprobs(self, text: str) -> tuple[list[int], list[float]]:
-        """Return (token_ids, per-token logprobs) for `text`.
-
-        Each logprob[i] is log P(token[i+1] | token[0..i]); the first
-        token has no predecessor so it is not scored. The returned
-        token_ids list is the full tokenization (length N); the logprobs
-        list is length N-1 aligned to token_ids[1:].
-        """
-        ids = self.tokenizer.encode(text)
-        return ids, self.token_logprobs_from_ids(ids)
-
-    def token_logprobs_from_ids(self, ids: list[int]) -> list[float]:
-        """Per-token logprobs given pre-tokenized IDs.
-
-        Returns a list of length len(ids)-1; entry i is the logprob of
-        ids[i+1] conditioned on ids[0..i].
-        """
-        if len(ids) < 2:
-            return []
-        arr = mx.array(ids)[None, :]  # (1, N)
-        logits = self.model(arr)        # (1, N, V)
-        logits = logits[0]              # (N, V)
-        log_probs = nn.log_softmax(logits[:-1], axis=-1)  # (N-1, V)
-        targets = mx.array(ids[1:])                       # (N-1,)
-        idx = mx.arange(log_probs.shape[0])
-        gathered = log_probs[idx, targets]                # (N-1,)
-        return [float(x) for x in gathered.tolist()]
 
     def first_token_top_logprobs(
         self,

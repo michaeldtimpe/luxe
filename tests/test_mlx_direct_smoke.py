@@ -10,8 +10,6 @@ concurrently with an active oMLX server holding the same model.
 """
 from __future__ import annotations
 
-import math
-
 import pytest
 
 pytestmark = pytest.mark.live_model
@@ -21,16 +19,6 @@ pytestmark = pytest.mark.live_model
 def backend():
     from benchmarks._eval_common.mlx_direct import MLXDirectBackend
     return MLXDirectBackend()
-
-
-def test_token_logprobs_basic(backend):
-    ids, lps = backend.token_logprobs("The capital of France is Paris.")
-    assert len(ids) >= 5
-    assert len(lps) == len(ids) - 1
-    # All logprobs should be finite and non-positive (it's a probability)
-    for lp in lps:
-        assert math.isfinite(lp)
-        assert lp <= 0.0
 
 
 def test_first_token_top_logprobs(backend):
