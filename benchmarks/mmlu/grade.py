@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from benchmarks.mmlu.adapter import CATEGORIES, category_for
+from benchmarks.mmlu.adapter import category_for
 
 
 def aggregate(item_records: list[dict[str, Any]]) -> dict[str, Any]:

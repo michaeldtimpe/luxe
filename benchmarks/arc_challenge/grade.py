@@ -1,7 +1,6 @@
 """Aggregate ARC-Challenge per-question results."""
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any
 
 

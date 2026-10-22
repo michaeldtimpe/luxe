@@ -21,7 +21,6 @@ correctly NOT call them. Both modes apply.
 
 from __future__ import annotations
 
-import importlib.resources
 import json
 import os
 import time

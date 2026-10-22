@@ -1067,12 +1067,6 @@ def aggregate_diagnostics(diags: list[Diagnostics],
     n_citations_blocked = sum(1 for d in diags if d.citations_unresolved > 0)
     n_drafts = sum(1 for d in diags if d.is_draft)
 
-    pass_rate_by_task: dict[str, dict[str, int]] = {}
-    for r in results:
-        # Look up via fixture_id; we'd need the fixture for task_type but
-        # the diagnostic doesn't carry it. We compute pass rate overall.
-        pass
-
     return {
         "fixtures_diagnosed": len(diags),
         "avg_wall_s": round(avg_wall, 1),
