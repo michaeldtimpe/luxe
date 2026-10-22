@@ -422,6 +422,50 @@ def _step_window(run: _Run, st: LoopState, result: AgentResult,
     return effective_ctx, pressure
 
 
+def _compact_step(run: _Run, st: LoopState, effective_ctx: int, step: int,
+                  emit: Callable[..., None]) -> int:
+    """Compact `st.messages` for this step's request (TieredCompact, or the
+    legacy elide path when it is off) and return `est_sent`, the estimate the
+    server-truth calibration divides the server's prompt count by."""
+    if run.compactor is not None:  # i.e. flags.tiered_compact
+        cr = run.compactor.compact(st.messages, effective_ctx)
+        st.messages = cr.messages
+        if cr.phase_reached > 0:
+            st.compaction_tool_results_dropped_total += cr.tool_results_dropped
+            st.compaction_total_tokens_dropped += (cr.tokens_before - cr.tokens_after)
+            if cr.phase_reached > st.compaction_max_phase_this_run:
+                st.compaction_max_phase_this_run = cr.phase_reached
+            # 2026-08-24 — ADDITIVE telemetry, no flag, no behaviour
+            # change: a phase can fire and achieve nothing (phase 3 with
+            # tokens_before == tokens_after == 71616 and zero drops, when
+            # `_find_eligible_end` returned 2 because the turn had two
+            # assistant messages). Existing field names and values are
+            # untouched; `effective` and `eligible_end` say whether the
+            # fire did anything and why. No events.jsonl consumer reads
+            # compaction records today (checked: scripts/*.py,
+            # benchmarks/maintain_suite/run.py, tests/) — the two new keys
+            # cannot break a field-shape assumption that does not exist.
+            if not cr.effective:
+                st.compaction_ineffective_fires += 1
+            emit(
+                "compaction_phase_reached",
+                step=step,
+                phase_reached=cr.phase_reached,
+                tokens_before=cr.tokens_before,
+                tokens_after=cr.tokens_after,
+                tool_results_dropped=cr.tool_results_dropped,
+                effective=cr.effective,
+                eligible_end=cr.eligible_end,
+            )
+    else:
+        st.messages = elide_old_tool_results(st.messages, effective_ctx)
+
+    # What we are about to send, measured the same way the calibration
+    # divides it — AFTER compaction, so the ratio describes the request the
+    # server actually answers.
+    return estimate_messages_tokens(st.messages) + run.tools_overhead
+
+
 def _account_usage(result: AgentResult, resp: ChatResponse, step: int,
                    emit: Callable[..., None]) -> None:
     """Fold one response's server-reported usage into `result` and write the
@@ -937,43 +981,7 @@ def run_agent(
         # next iteration's delta correctly measures THIS step's response.
         st.prev_completion_tokens = result.completion_tokens
 
-        if compactor is not None:  # i.e. flags.tiered_compact
-            cr = compactor.compact(st.messages, effective_ctx)
-            st.messages = cr.messages
-            if cr.phase_reached > 0:
-                st.compaction_tool_results_dropped_total += cr.tool_results_dropped
-                st.compaction_total_tokens_dropped += (cr.tokens_before - cr.tokens_after)
-                if cr.phase_reached > st.compaction_max_phase_this_run:
-                    st.compaction_max_phase_this_run = cr.phase_reached
-                # 2026-08-24 — ADDITIVE telemetry, no flag, no behaviour
-                # change: a phase can fire and achieve nothing (phase 3 with
-                # tokens_before == tokens_after == 71616 and zero drops, when
-                # `_find_eligible_end` returned 2 because the turn had two
-                # assistant messages). Existing field names and values are
-                # untouched; `effective` and `eligible_end` say whether the
-                # fire did anything and why. No events.jsonl consumer reads
-                # compaction records today (checked: scripts/*.py,
-                # benchmarks/maintain_suite/run.py, tests/) — the two new keys
-                # cannot break a field-shape assumption that does not exist.
-                if not cr.effective:
-                    st.compaction_ineffective_fires += 1
-                emit(
-                    "compaction_phase_reached",
-                    step=step,
-                    phase_reached=cr.phase_reached,
-                    tokens_before=cr.tokens_before,
-                    tokens_after=cr.tokens_after,
-                    tool_results_dropped=cr.tool_results_dropped,
-                    effective=cr.effective,
-                    eligible_end=cr.eligible_end,
-                )
-        else:
-            st.messages = elide_old_tool_results(st.messages, effective_ctx)
-
-        # What we are about to send, measured the same way the calibration
-        # divides it — AFTER compaction, so the ratio describes the request the
-        # server actually answers.
-        est_sent = estimate_messages_tokens(st.messages) + tools_overhead
+        est_sent = _compact_step(run, st, effective_ctx, step, emit)
 
         try:
             resp = backend.chat(
