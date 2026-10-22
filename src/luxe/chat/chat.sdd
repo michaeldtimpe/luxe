@@ -471,7 +471,10 @@ never touches this module.
   degrade → hint / crash record, "the session is still alive"),
   `run_plan(sink)`/`run_goal(sink)` (the /plan and /goal supervisors), the
   post-turn decisions both renderers show (`apply_turn_status`, `suggest_ctx`,
-  `aborted_report`), and `shutdown(console)` — always cancel → session notes →
+  `aborted_report`) and the finished turn's lines themselves
+  (`outcome_lines`: answer, `render.footer_lines`, ctx suggestion, verbose
+  ledger, abort report — the union of what the two used to print, 2026-10;
+  each sink only prints the list), and `shutdown(console)` — always cancel → session notes →
   unload unless keep_loaded → debug log, the log detached even if an earlier
   step raised. A front-end is a `TurnSink`: `print`, `choose` (the /plan
   choice — `Prompt.ask` on the line path, a modal in the TUI), the per-turn

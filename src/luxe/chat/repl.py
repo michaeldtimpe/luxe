@@ -36,14 +36,11 @@ from luxe.chat.render import (
     format_tool_call_verbose,
     make_tool_event,
     pick_no_adjacent_repeats,
-    render_final,
-    render_footer,
 )
 from luxe.chat import status as status_mod
 from luxe.chat.session import ChatSession
 from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
-from luxe.state import ledger as ledger_mod
 
 # Moved to turn.py / controller.py; re-exported so `repl.<name>` keeps working.
 from luxe.chat.controller import (  # noqa: F401
@@ -409,58 +406,9 @@ class LineSink:
                     pass
 
     def render_outcome(self, outcome: TurnOutcome, prep: TurnPrep) -> None:
-        console, session, slots = self.console, self.ctl.session, self.ctl.slots
-        result = outcome.result
-        if outcome.interrupted:
-            console.print("[yellow]· interrupted — partial turn saved[/]")
-            if (kept := attachments_kept_note(session)):
-                console.print(Text(kept, style="dim"))
-            return
-        if result is None:
-            return
-        # WS4 output ladder: full when /verbose full (or /debug), else compact
-        # if /compact, else the default truncated preview.
-        out_mode = ("full" if session.verbose_level == "full"
-                    else "compact" if session.compact else "truncated")
-        render_final(console, outcome.final_text, mode=out_mode)
-        render_footer(
-            console,
-            slot=prep.slot,
-            model=prep.model,
-            write_enabled=session.write_enabled,
-            result=result,
-            swap_count=slots.stats.count,
-            swap_seconds=slots.stats.seconds,
-            started_at=outcome.started_at,
-            ended_at=outcome.ended_at,
-            num_ctx=prep.role_cfg.num_ctx,
-        )
-        self.ctl.apply_turn_status(outcome)
-        nxt = self.ctl.suggest_ctx(outcome)
-        if nxt:
-            console.print(
-                f"[dim]· context pressure {result.peak_context_pressure:.0%} — "
-                f"`/ctx {nxt[0]}` (num_ctx {nxt[1]}) gives more headroom[/]"
-            )
-
-        # Working-state view (B2): show the ledger after the footer so the
-        # operator sees decided/done/remaining at a glance.
-        if session.verbose_level in ("diff", "full"):
-            console.print(ledger_mod.render_rich(ledger_mod.load(session.session_id)))
-
-        # LAST, so it is the line left on screen: a turn the loop aborted is a
-        # FAILED turn, not an empty answer. Rendered after the footer rather
-        # than instead of it — an abort can land after several good steps, and
-        # that partial prose is still worth showing.
-        rep = outcome.abort  # recorded + recovered by `run_turn`
-        if rep:
-            console.print(f"[red]✗ {_escape(rep.reason)}[/]")
-            if rep.ctx_line:
-                console.print(f"[dim]· {rep.ctx_line}[/]")
-            if rep.hint:
-                console.print(Text(f"· {rep.hint}", style="yellow"))
-            if rep.kept:
-                console.print(Text(rep.kept, style="dim"))
+        # Built once by the controller (the TUI prints the same list).
+        for line in self.ctl.outcome_lines(outcome, prep):
+            self.console.print(line)
 
 
 def _make_project_hook(session, on_project):

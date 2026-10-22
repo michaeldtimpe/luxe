@@ -14,14 +14,19 @@ from luxe.chat.render import (
     PROMPT_ARROW_PALETTE,
     arrow_prompt_markup,
     pick_no_adjacent_repeats,
+    footer_lines,
     rainbow_banner,
-    render_footer,
 )
 
 
 def _console() -> tuple[Console, io.StringIO]:
     buf = io.StringIO()
     return Console(file=buf, force_terminal=False, width=200), buf
+
+
+def render_footer(console, *, slot, model, result, **kw) -> None:
+    for line in footer_lines(slot, model, result, **kw):
+        console.print(line)
 
 
 def test_pick_no_adjacent_repeats_never_repeats_neighbors():
@@ -86,6 +91,25 @@ def test_footer_no_timestamp_line_without_bookends():
     console, buf = _console()
     render_footer(console, slot="chat", model="m", write_enabled=False, result=_result())
     assert "elapsed" not in buf.getvalue()
+
+
+def test_footer_is_the_union_both_front_ends_show():
+    """2026-10: the TUI footer had no mode/swaps/elapsed and the line REPL's
+    no session totals; both print `footer_lines` now, which carries all of
+    them."""
+    lines = footer_lines("chat", "m[x]", _result(), write_enabled=True,
+                         swap_count=2, swap_seconds=31.0,
+                         started_at=1_000_000.0, ended_at=1_000_012.5,
+                         session_tokens=(5000, 900), session_cost_usd=0.0)
+    head = lines[0].plain
+    assert "model: m[x]" in head                      # a Text: never markup
+    assert "mode: write" in head
+    assert "swaps: 2 (31s)" in head
+    assert "session tok: 5000+900" in head
+    assert "session cost" not in head                 # nothing billed
+    assert "elapsed 12.5s" in lines[1].plain
+    assert "mode: read-only" in footer_lines(
+        "chat", "m", _result(), write_enabled=False)[0].plain
 
 
 # --- leaked-reasoning hygiene ------------------------------------------------

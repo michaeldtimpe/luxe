@@ -33,7 +33,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, RichLog, Static
 
 from luxe.chat import commands as cmd
-from luxe.chat import cost as cost_mod
 from luxe.chat import status as status_mod
 from luxe.chat.controller import (
     ChatController,
@@ -46,13 +45,11 @@ from luxe.chat.controller import (
     model_origin_notice,
 )
 from luxe.chat.render import (
-    build_final_renderable,
     format_tool_call_verbose,
-    render_footer_text,
 )
 from luxe.chat.session import ChatSession
 from luxe.chat.status import StatusState
-from luxe.chat.turn import TurnOutcome, TurnPrep, attachments_kept_note
+from luxe.chat.turn import TurnOutcome, TurnPrep
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -279,8 +276,6 @@ class ChatApp(App):
         self._timer = None
         self._queue: list[tuple[str, str]] = []  # type-ahead: (display, message) mid-run
         self._paste_chunks: list[tuple[str, str]] = []  # (chip, full text) pending
-        self._session_in = 0               # session cumulative prompt tokens
-        self._session_out = 0              # session cumulative completion tokens
         # Cached widget refs (set in on_mount). We hold references rather than
         # query_one() each tick because `App.query_one` only searches the ACTIVE
         # screen — once a PromptScreen modal is pushed the base-screen widgets are
@@ -706,57 +701,18 @@ class ChatApp(App):
         (`ChatController.report_crash`). Call from inside the `except`."""
         self.controller.report_crash(what, self.sink)
 
-    def _render_outcome(self, outcome, prep, interrupted) -> None:
-        """UI thread (`TuiSink.render_outcome` marshals here)."""
-        ctl = self.controller
+    def _render_outcome(self, outcome, prep) -> None:
+        """UI thread (`TuiSink.render_outcome` marshals here): the lines the
+        controller builds for both front-ends. Building them applies the turn
+        to the status bar, so mirror the fill into the live buffer after —
+        `_end_busy`'s final `_tick` would otherwise overwrite it with the
+        stale live estimate. An aborted turn's record + recovery already ran
+        on the worker (`run_turn`); this only draws it."""
         log = self._log()
-        if interrupted:
-            ran = outcome.tool_calls
-            note = f" ({ran} tool call{'s' if ran != 1 else ''} completed)" if ran else ""
-            log.write(f"[yellow]· interrupted — partial turn saved{note}[/]")
-            if (kept := attachments_kept_note(self.session)):
-                log.write(Text(kept, style="dim"))
-            return
-        result = outcome.result
-        if result is None:
-            return
-        mode = ("full" if self.session.verbose_level == "full"
-                else "compact" if self.session.compact else "truncated")
-        log.write(build_final_renderable(outcome.final_text, mode=mode))
-        self._session_in += result.prompt_tokens
-        self._session_out += result.completion_tokens
-        # Spend was already settled by the controller (before this render), so
-        # the footer and status bar read the running total.
-        footer = (render_footer_text(prep.slot, prep.model, result,
-                                     num_ctx=outcome.num_ctx,
-                                     ended_at=time.time())
-                  + f" · session tok: {self._session_in}+{self._session_out}")
-        if self.session.session_cost_usd > 0:
-            footer += f" · session cost: {cost_mod.fmt(self.session.session_cost_usd)}"
-        log.write(Text(footer, style="dim"))
-        # Update the persistent status from the completed turn, then mirror the
-        # fill into the live buffer — _end_busy's final _tick would otherwise
-        # overwrite it with the stale live estimate.
-        ctl.apply_turn_status(outcome)
-        self._ctx_pressure = self.status.ctx_pressure
-        nxt = ctl.suggest_ctx(outcome)
-        if nxt:
-            log.write(f"[dim]· context pressure {result.peak_context_pressure:.0%} "
-                      f"— `/ctx {nxt[0]}` gives more headroom[/]")
-        # A turn the agent loop ABORTED (backend failure contained into the
-        # result rather than raised) is a failed turn and must look like one —
-        # it used to render as a successful empty reply. Text(), not markup:
-        # the reason is an exception string. Built (record + recovery) on the
-        # worker by `run_turn` — never here, on the UI thread.
-        rep = outcome.abort
-        if rep:
-            log.write(Text(f"✗ {rep.reason}", style="red"))
-            if rep.ctx_line:
-                log.write(Text(f"· {rep.ctx_line}", style="dim"))
-            if rep.hint:
-                log.write(Text(f"· {rep.hint}", style="yellow"))
-            if rep.kept:
-                log.write(Text(rep.kept, style="dim"))
+        for line in self.controller.outcome_lines(outcome, prep):
+            log.write(line)
+        if outcome.result is not None and not outcome.interrupted:
+            self._ctx_pressure = self.status.ctx_pressure
 
     # -- command worker -----------------------------------------------------
     @work(thread=True, exclusive=True, group="turn")
@@ -778,10 +734,6 @@ class ChatApp(App):
     def _command_body(self, line: str) -> None:
         """One slash command on the command worker (contained by the caller)."""
         res = cmd.dispatch(line, self.ctx)
-        if line.strip().lower().startswith("/clear"):
-            # The footer's cumulative session tokens describe the cleared
-            # conversation too — zero them with the status bar.
-            self._session_in = self._session_out = 0
         if getattr(res, "exit", False):
             self.call_from_thread(self.action_quit_app)
             return
@@ -1042,8 +994,7 @@ class TuiSink:
             app._reasoning_since = 0.0
 
     def render_outcome(self, outcome: TurnOutcome, prep: TurnPrep) -> None:
-        self._app._call_ui(self._app._render_outcome, outcome, prep,
-                           outcome.interrupted)
+        self._app._call_ui(self._app._render_outcome, outcome, prep)
 
 
 def run_chat_app(cfg, repo_path, languages, *, keep_loaded=False,

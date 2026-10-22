@@ -453,68 +453,52 @@ def _cost_bit(result) -> str | None:
     return f"cost: {cost_mod.fmt(usd)}" if usd > 0 else None
 
 
-def render_footer_text(slot: str, model: str, result, *, num_ctx: int = 0,
-                       ended_at: float | None = None) -> str:
-    """Plain one-line footer for the TUI transcript (no console required).
-    `tok: P+C` is this task's prompt+completion tokens; ctx% is the last step's
-    server-reported fill of the window (`of <size>` when num_ctx is known);
-    `cost:` appears only when the endpoint billed this turn."""
+def footer_lines(slot: str, model: str, result, *, write_enabled: bool,
+                 num_ctx: int = 0, swap_count: int = 0,
+                 swap_seconds: float = 0.0, started_at: float | None = None,
+                 ended_at: float | None = None,
+                 session_tokens: tuple[int, int] | None = None,
+                 session_cost_usd: float = 0.0) -> list[Text]:
+    """The turn footer, one builder for BOTH front-ends (2026-10: the line
+    REPL and the TUI each had their own, and each dropped something the other
+    showed — the TUI had no mode/swaps/elapsed, the REPL no session totals).
+
+    Line 1: slot · model · mode · steps · tools · model wall · rates ·
+    `tok: P+C` (this turn's prompt+completion) · ctx% (the last step's
+    server-reported fill, `of <size>` when num_ctx is known) · `cost:` (only
+    when the endpoint billed this turn) · swaps (when any) · session token
+    and cost totals (when given / non-zero). Line 2, when both bookends are
+    known: wall-clock start/end + full-turn elapsed (covers overhead the
+    model wall misses). `Text`, never markup: the model id is not escaped.
+    """
     ctx = f"ctx: {_ctx_fill(result, num_ctx):.0%}"
     if num_ctx:
         ctx += f" of {num_ctx // 1024}K"
-    bits = [
-        f"slot: {slot}", f"model: {model}", f"steps: {result.steps}",
-        f"tools: {result.tool_calls_total}", f"{result.wall_s:.1f}s",
-        *_rate_bits(result),
-        f"tok: {result.prompt_tokens}+{result.completion_tokens}",
-        ctx,
+    head = [f"slot: {slot}", f"model: {model}"]
+    tail = [
+        f"steps: {result.steps}", f"tools: {result.tool_calls_total}",
+        f"{result.wall_s:.1f}s", *_rate_bits(result),
+        f"tok: {result.prompt_tokens}+{result.completion_tokens}", ctx,
     ]
     cost = _cost_bit(result)
     if cost:
-        bits.append(cost)
-    if ended_at is not None:
-        bits.append(_clock(ended_at))
-    return "· " + " · ".join(bits)
-
-
-def render_footer(
-    console: Console,
-    *,
-    slot: str,
-    model: str,
-    write_enabled: bool,
-    result,  # AgentResult
-    swap_count: int = 0,
-    swap_seconds: float = 0.0,
-    started_at: float | None = None,
-    ended_at: float | None = None,
-    num_ctx: int = 0,
-) -> None:
-    mode = (f"[{theme_mod.rich('warn') or 'yellow'}]write[/]" if write_enabled
-            else f"[{theme_mod.rich('success') or 'green'}]read-only[/]")
-    bits = [
-        f"slot: {slot}",
-        f"model: {model}",
-        f"mode: {mode}",
-        f"steps: {result.steps}",
-        f"tools: {result.tool_calls_total}",
-        f"{result.wall_s:.1f}s",
-        *_rate_bits(result),
-        f"tok: {result.prompt_tokens}+{result.completion_tokens}",
-        f"ctx: {_ctx_fill(result, num_ctx):.0%}"
-        + (f" of {num_ctx // 1024}K" if num_ctx else ""),
-    ]
-    cost = _cost_bit(result)
-    if cost:
-        bits.append(cost)
+        tail.append(cost)
     if swap_count:
-        bits.append(f"swaps: {swap_count} ({swap_seconds:.0f}s)")
-    console.print("[dim]· " + " · ".join(bits) + "[/]")
-    # Wall-clock bookends + full-turn elapsed (covers overhead the model wall
-    # above misses, and supplies a total duration when wall_s is unset).
+        tail.append(f"swaps: {swap_count} ({swap_seconds:.0f}s)")
+    if session_tokens is not None:
+        tail.append(f"session tok: {session_tokens[0]}+{session_tokens[1]}")
+    if session_cost_usd > 0:
+        from luxe.chat import cost as cost_mod
+        tail.append(f"session cost: {cost_mod.fmt(session_cost_usd)}")
+    line = Text("· " + " · ".join(head) + " · mode: ", style="dim")
+    line.append("write" if write_enabled else "read-only",
+                style=(theme_mod.rich("warn") or "yellow") if write_enabled
+                else (theme_mod.rich("success") or "green"))
+    line.append(" · " + " · ".join(tail))
+    lines = [line]
     if started_at is not None and ended_at is not None:
         elapsed = max(0.0, ended_at - started_at)
-        console.print(
-            f"[dim]· started {_clock(started_at)} · ended {_clock(ended_at)}"
-            f" · elapsed {elapsed:.1f}s[/]"
-        )
+        lines.append(Text(f"· started {_clock(started_at)} · ended "
+                          f"{_clock(ended_at)} · elapsed {elapsed:.1f}s",
+                          style="dim"))
+    return lines

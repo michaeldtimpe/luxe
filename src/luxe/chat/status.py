@@ -306,6 +306,10 @@ class StatusState:
     prefill_tps: float | None = None
     decode_tps: float | None = None
     cache_hit: float | None = None
+    # Cumulative prompt/completion tokens of the session's completed turns —
+    # the footer's `session tok:` (zeroed by /clear with the rest).
+    session_prompt_tokens: int = 0
+    session_completion_tokens: int = 0
 
 
 # Model-provenance markers (chat/origin.ModelOrigin.kind). Only a WIRE CROSSING

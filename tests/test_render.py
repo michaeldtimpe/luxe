@@ -51,8 +51,8 @@ def test_render_final_modes(mode, expect_hint):
     assert ("/full expands" in out.getvalue()) == expect_hint
 
 
-def test_render_footer_text_shows_tokens_and_ctx_window():
-    from luxe.chat.render import render_footer_text
+def test_footer_shows_tokens_and_ctx_window():
+    from luxe.chat.render import footer_lines
 
     class _R:
         steps = 2
@@ -62,7 +62,8 @@ def test_render_footer_text_shows_tokens_and_ctx_window():
         prompt_tokens = 120
         peak_context_pressure = 0.1
 
-    line = render_footer_text("chat", "Champ", _R(), num_ctx=131072)
+    line = footer_lines("chat", "Champ", _R(), write_enabled=False,
+                        num_ctx=131072)[0].plain
     assert "tok: 120+30" in line
     assert "of 128K" in line
 

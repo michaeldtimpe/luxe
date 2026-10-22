@@ -1066,7 +1066,8 @@ def test_clear_resets_the_turn_status(ctx):
 
     st = StatusState(model="Champ", slot="code", num_ctx=32768, has_turn=True,
                      ctx_pressure=0.61, prompt_tokens=20_000, steps=7,
-                     wall_s=12.0, tok_per_s=40.0)
+                     wall_s=12.0, tok_per_s=40.0, session_prompt_tokens=9000,
+                     session_completion_tokens=800)
     ctx.status = st
     ctx.session.turns.append(__import__("luxe.chat.session", fromlist=["ChatTurn"])
                              .ChatTurn(user="q", assistant="a"))
@@ -1076,6 +1077,8 @@ def test_clear_resets_the_turn_status(ctx):
     assert ctx.session.turns == []
     assert st.ctx_pressure == 0.0 and st.prompt_tokens == 0
     assert st.steps == 0 and st.has_turn is False
+    # The footer's `session tok:` totals describe it too (both front-ends).
+    assert st.session_prompt_tokens == st.session_completion_tokens == 0
     # Settings survive — they aren't history.
     assert st.num_ctx == 32768 and st.model == "Champ"
 
