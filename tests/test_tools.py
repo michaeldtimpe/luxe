@@ -494,9 +494,15 @@ class TestUnrestrictedBash:
         out, err = fn({"command": "pytest --version"})
         assert err is None and "pytest" in out
 
-    def test_bench_bash_env_is_untouched(self, tmp_repo: Path, monkeypatch):
-        """The benchmark path's bash (module default, env=None) must inherit
-        the process environment byte-identically — no venv injection."""
+    def test_bench_bash_env_is_only_scrubbed(self, tmp_repo: Path, monkeypatch):
+        """The benchmark path's bash (module default, env=None) gets the
+        process environment with ONLY the secret-named variables dropped
+        (2026-10-22, `luxe.secrets.scrubbed_env`) — no venv injection, no
+        other change."""
+        import os
+
+        from luxe.secrets import is_secret_name
+
         seen = {}
         # _bash spawns via Popen (process-group teardown on timeout, 2026-09-26).
         real_popen = shell.subprocess.Popen
@@ -507,7 +513,10 @@ class TestUnrestrictedBash:
 
         monkeypatch.setattr(shell.subprocess, "Popen", spy)
         shell._bash({"command": "echo ok"})
-        assert seen["env"] is None
+        expected = {k: v for k, v in os.environ.items() if not is_secret_name(k)}
+        same = seen["env"] == expected       # (never let pytest print the env)
+        assert same
+        assert seen["env"].get("PATH") == os.environ.get("PATH")
 
 
 class _Tok:
