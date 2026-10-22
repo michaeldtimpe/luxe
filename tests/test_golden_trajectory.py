@@ -260,14 +260,6 @@ SCENARIOS: list[Scenario] = [
                        completion=400)
                 for i in range(9)] + [_DONE],
     ),
-    # soft_anchor + commit_only: the mid band is suppressed.
-    Scenario(
-        name="guards_commit_only",
-        env={"LUXE_EARLY_BAIL": "1", "LUXE_EARLY_BAIL_MODE": "soft_anchor",
-             "LUXE_EARLY_BAIL_COMMIT_ONLY": "1"},
-        role={"num_ctx": 32768, "max_steps": 7},
-        script=_read_only_walk(6, completion=200) + [_DONE],
-    ),
     # no_abstain mode, and the run exhausts max_steps.
     Scenario(
         name="no_abstain_max_steps",
@@ -497,7 +489,6 @@ _EXPECTED_KINDS = {
                                    "adaptive_state"},
     "guards_soft_anchor_converged": {
         "early_bail_fired", "action_density_gate_suppressed_converged"},
-    "guards_commit_only": {"early_bail_suppressed_commit_only"},
     "no_abstain_max_steps": {"early_bail_fired"},
     "spec_zero_calls": {"spec_predispatch_blocked"},
     "spec_min_calls": {"spec_reprompt_fired"},

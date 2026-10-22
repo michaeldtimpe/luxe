@@ -19,7 +19,7 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   `append_event` from `luxe.agents.loop` at call time (tests monkeypatch it
   there). No bare `append_event(` / `if log_calls:` in the body —
   `tests/test_loop_telemetry.py` pins it
-- `tests/test_golden_trajectory.py` pins ten scripted multi-step trajectories
+- `tests/test_golden_trajectory.py` pins nine scripted multi-step trajectories
   byte-for-byte (every request body, every events record in order, the
   AgentResult). A change to what the model sees or what telemetry records
   must regenerate a snapshot deliberately, in the same commit as its cause
@@ -685,6 +685,17 @@ reintroduce any of them without new evidence.
   breadth_saturation < 0.6`) fired 0/14 in the D smoke at num_ctx=32768 —
   too narrow for this champion — and needed `LUXE_ADAPTIVE_POLICY=1` to
   populate `score_log` at all. guardrails now reads no environment.
+
+- **early_bail commit-only refined port** (`LUXE_EARLY_BAIL_COMMIT_ONLY`,
+  `RunFlags.early_bail_commit_only`, 2026-05-26): under `soft_anchor` mode it
+  suppressed the breadth_probe and mid-band soft_anchor variants so only
+  `commit_imperative` fired, with event `early_bail_suppressed_commit_only`;
+  plus the swebench runner's `--early-bail-commit-only`. REFUTED 2026-05-26
+  at n=14 (lessons.md, edit-quality investigation Phase 3: +1 resolve, 1
+  wrong_target watchdog hit — commit_imperative ALSO drives premature
+  commitment) and kept only as a diagnostic nobody ran since. The golden snapshot `guards_commit_only`
+  existed solely to pin it and was deleted; the remaining nine snapshots are
+  byte-identical. `EarlyBailGuard`'s non-suppress branch now always fires.
 
 ### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
 
