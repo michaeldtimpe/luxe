@@ -126,11 +126,6 @@ class RunFlags:
     # a maintain_suite run says otherwise. See agents.sdd "Reasoning round-trip".
     reasoning_roundtrip: bool = False
 
-    # Answer a repeated, unchanged `read_file` (same arguments, no write since,
-    # earlier result still intact in context) with a short pointer back to
-    # that result instead of the full text again. Opt-in: default OFF keeps
-    # the benchmark path byte-identical. See agents.sdd "Repeat-read stub".
-    repeat_read_stub: bool = False
     # Append a note to a `read_file` result whose every line was already
     # returned since the last write (overlapping re-reads, any arguments).
     # The content is still served. Opt-in: default OFF keeps the benchmark
@@ -242,8 +237,6 @@ class RunFlags:
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
             # Opt-in: only the exact string "1" enables it.
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
-            # Opt-in: only the exact string "1" enables it.
-            repeat_read_stub=e.get("LUXE_REPEAT_READ_STUB") == "1",
             # Opt-in: only the exact string "1" enables it.
             reread_note=e.get("LUXE_REREAD_NOTE") == "1",
             # Default ON: only the exact string "0" disables it.

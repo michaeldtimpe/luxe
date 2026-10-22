@@ -653,6 +653,18 @@ reintroduce any of them without new evidence.
   `variants_pwir*.yaml` and `tests/test_loop_post_write_repeats.py` went with
   it (recover from history).
 
+- **Repeat-read stub** (`LUXE_REPEAT_READ_STUB`, `RunFlags.repeat_read_stub`,
+  `guardrails.repeat_read_stub_message`, `LoopState.read_results`, event
+  `repeat_read_stub`, pinned 2026-10-17). Answered a `read_file` repeated
+  with identical arguments and no write since with a short pointer back to
+  the earlier result, provided that result was still intact in `messages`.
+  INERT on its target model (`acceptance/tuning_2026_10/REPORT.md` §7):
+  muse-glimmer-30B 2/6 REAL, and it fired once in 6 runs, not in either pass
+  — Glimmer's re-reads come after compaction has rewritten the earlier
+  result, which the stub declines by design. With it went the loop's
+  `call_is_repeat` local, which had no other reader once the post-write
+  repeat counting above was gone.
+
 ### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
 
 - `RoleConfig.stuck_loop_abort` (default **True**) gates whether
@@ -719,24 +731,6 @@ false count). Each rewrite forces everything after it to be prefilled again.
   about the *request being carried out*, never about tool calls.
 - Let verify-only mutate the generation transcript, or let Phase 2 repair invoke tools
   outside the original trajectory's tool surface (pre-registered repair budget).
-
-### Repeat-read stub (2026-10-17, OPT-IN, UNBENCHED until tuning_2026_10)
-
-- `LUXE_REPEAT_READ_STUB=1` (`RunFlags.repeat_read_stub`): a `read_file` call
-  whose key is already in `seen_calls` (so: same arguments AND no write since
-  — a write prunes every non-write key) is answered with
-  `guardrails.repeat_read_stub_message(path)` instead of re-running the tool,
-  PROVIDED the earlier tool message is still in `messages` by identity with
-  the content it was appended with. Compaction that truncated or dropped it
-  ⇒ the read runs normally (a stub must never point at nothing).
-- The stub is recorded `duplicate=True, cached=True, bytes_out=0`, emits a
-  `repeat_read_stub` event, counts toward `post_write_idle_tools` like the
-  dedup short-circuit, and does NOT set `step_had_repeat` — the lever under
-  test is the reply, not an earlier repeat-streak abort.
-- Why: muse-glimmer-30B re-read Game.js 227–256 at steps 19/24/29 of a run it
-  had solved in its reasoning, then hit max steps (both prompt levers ignored).
-- **Default OFF; with it unset the loop is byte-identical** (golden
-  trajectory + `test_loop_repeat_read_stub.py`).
 
 ### Re-read note (2026-10-18, OPT-IN, UNBENCHED until tuning_2026_10)
 
