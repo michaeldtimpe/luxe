@@ -22,26 +22,12 @@ and a backend luxe cannot read must not raise into a render path.
 from __future__ import annotations
 
 
-def entry_for(slots):
-    """The active `backends:` entry, or None. Never raises."""
-    getter = getattr(slots, "active_entry", None)
-    if getter is None:
-        return None
-    try:
-        return getter()
-    except Exception:
-        return None
-
-
 def is_billable(slots) -> bool:
-    """True when tokens on the ACTIVE endpoint cost money."""
-    entry = entry_for(slots)
-    if entry is None:
-        return False
-    try:
-        return bool(entry.is_billable())
-    except Exception:
-        return False
+    """True when tokens on the ACTIVE endpoint cost money
+    (`SlotManager.is_billable`, which is guarded). A stand-in without the
+    predicate — the status bar is rendered from test doubles — is local."""
+    pred = getattr(slots, "is_billable", None)
+    return bool(pred()) if pred is not None else False
 
 
 def spent(session) -> float:
@@ -59,7 +45,7 @@ def cap_usd(session, slots) -> float | None:
     override = getattr(session, "budget_override_usd", None)
     if override is not None:
         return float(override)
-    entry = entry_for(slots)
+    entry = getattr(slots, "active_entry", lambda: None)()
     if entry is None:
         return None
     cap = getattr(entry, "budget_usd", None)

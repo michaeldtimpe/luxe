@@ -274,3 +274,44 @@ def test_same_model_fallback_is_told_loudly_once(monkeypatch):
     # Single-fire, like every degrade notice.
     assert sm.note_turn_failure() is None
     assert len([n for n in notices if "same model" in n]) == 1
+
+
+class TestEnginePredicates:
+    """`SlotManager.is_omlx/is_cloud/is_billable/engine_label` are the ONE
+    guarded way to ask the active entry a question — doctor, cost and the
+    commands used to wrap `active_entry().is_…()` in their own try/except."""
+
+    def test_an_openrouter_entry_reads_as_cloud_and_billable(self):
+        from luxe.config import BackendEntry
+
+        cfg = _champion_cfg()
+        cfg.backends = {"local": BackendEntry(base_url="http://127.0.0.1:8000"),
+                        "or": BackendEntry(base_url="https://openrouter.ai/api",
+                                           engine="openrouter")}
+        sm = slots_mod.SlotManager(cfg)
+        sm.backend_name = "or"
+        assert (sm.is_cloud(), sm.is_billable(), sm.is_omlx()) == \
+            (True, True, False)
+
+    def test_an_unreadable_entry_degrades_to_local_omlx(self, monkeypatch):
+        sm = slots_mod.SlotManager(_champion_cfg())
+
+        def _boom(_self, _name):
+            raise RuntimeError("config luxe cannot read")
+
+        monkeypatch.setattr(PipelineConfig, "backend_entry", _boom)
+        assert sm.active_entry() is None
+        assert (sm.is_cloud(), sm.is_billable(), sm.is_omlx(),
+                sm.engine_label()) == (False, False, True, "oMLX")
+
+    def test_a_raising_predicate_is_the_safe_default(self, monkeypatch):
+        class _Entry:
+            def is_billable(self):
+                raise RuntimeError("nope")
+
+            is_openrouter = is_omlx = engine_label = is_billable
+
+        sm = slots_mod.SlotManager(_champion_cfg())
+        monkeypatch.setattr(sm, "active_entry", lambda: _Entry())
+        assert (sm.is_cloud(), sm.is_billable(), sm.is_omlx(),
+                sm.engine_label()) == (False, False, True, "oMLX")

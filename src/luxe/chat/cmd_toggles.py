@@ -158,10 +158,7 @@ def _ctx(args, ctx: CommandContext) -> CommandResult:
     base = ctx.slots.default_num_ctx("chat")
     active = ctx.session.num_ctx_override or base
     local_ram = _ctx_on_local_ram(ctx)
-    try:
-        billable = ctx.slots.active_entry().is_billable()
-    except Exception:
-        billable = False
+    billable = ctx.slots.is_billable()
 
     def _tiers_line() -> str:
         bits = []
@@ -462,12 +459,7 @@ def _reasoning(args, ctx: CommandContext) -> CommandResult:
             return CommandResult(handled=True)
         return _reasoning_display([], ctx)
 
-    try:
-        entry = ctx.slots.active_entry()
-        supported = entry is not None and entry.is_openrouter()
-        engine = ctx.slots.engine_label()
-    except Exception:
-        supported, engine = False, "this backend"
+    supported, engine = ctx.slots.is_cloud(), ctx.slots.engine_label()
 
     if not args:
         shown = "shown" if ctx.session.show_reasoning else "hidden"

@@ -59,13 +59,10 @@ def _status(args, ctx: CommandContext) -> CommandResult:
     # Reasoning effort — only where the field reaches a provider that reads
     # it. Every reasoning token is billed and none of it is the answer, so on
     # a thinking model this is a cost line as much as a quality one.
-    try:
-        if sm.active_entry().is_openrouter():
-            from luxe.chat.cmd_toggles import _reasoning_state
-            rows.append(("reasoning", f"effort {_reasoning_state(ctx)} · live "
-                         f"display {'on' if s.show_reasoning else 'off'}"))
-    except Exception:
-        pass
+    if sm.is_cloud():
+        from luxe.chat.cmd_toggles import _reasoning_state
+        rows.append(("reasoning", f"effort {_reasoning_state(ctx)} · live "
+                     f"display {'on' if s.show_reasoning else 'off'}"))
     # Spend — only where tokens are billed (or where something was billed).
     # A local session must not carry a "$0.00" row it can never move.
     if cost_mod.is_billable(sm) or cost_mod.spent(s) > 0:
