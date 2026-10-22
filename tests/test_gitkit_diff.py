@@ -242,7 +242,7 @@ _DIFF_REPORT = ("# Diff audit\n**Base: x (merge-base y) — 3 files, +3/−2**\n
 def test_small_diff_routes_single_pass_with_diff_blocks(diff_repo, _cfg,
                                                         monkeypatch):
     import luxe.agents.single as single_mod
-    from luxe.gitkit import run_git_report, store
+    from luxe.gitkit import run_git_report
 
     repo, base = diff_repo
     _stub_backend(monkeypatch)

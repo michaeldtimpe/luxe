@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -13,16 +12,13 @@ from luxe.pr import (
     CmdResult,
     DirtyTreeError,
     GhAuthError,
-    NoMutationsError,
     PRConfig,
-    PRError,
     assert_clean_tree,
     detect_test_command,
     is_dirty,
     plan_branch_name,
     slugify_goal,
 )
-from luxe.run_state import RunSpec
 
 
 def _cfg() -> PRConfig:

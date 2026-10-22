@@ -615,7 +615,6 @@ def test_destructive_diff_blocks_write_task_pass(git_repo: Path):
     deletions ≥ 30) on a write task; assert outcome=False AND gates_triggered
     contains destructive_diff. The committed diff would otherwise pass the
     regex check on the small added lines."""
-    base = _base_sha(git_repo)
     # Seed a large file to delete from.
     big = git_repo / "src" / "big.py"
     big.write_text("\n".join(f"line_{i}" for i in range(50)) + "\n")
@@ -690,7 +689,6 @@ def test_read_only_task_gates_skip(git_repo: Path):
     """Read-mode tasks (review, summarize) skip strict gates entirely; a
     diff with destructive shape should not be penalized for a task type
     that wasn't supposed to produce a diff in the first place."""
-    base = _base_sha(git_repo)
     big = git_repo / "src" / "big.py"
     big.write_text("\n".join(f"line_{i}" for i in range(50)) + "\n")
     subprocess.run(["git", "add", "."], cwd=git_repo, check=True)

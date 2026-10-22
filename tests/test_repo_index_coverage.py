@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from luxe.repo_index import RepoSummary, build_repo_summary
+from luxe.repo_index import build_repo_summary
 
 
 @pytest.fixture

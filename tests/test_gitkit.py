@@ -169,8 +169,6 @@ def test_save_report_two_calls_do_not_clash(tmp_path: Path):
 
 
 def test_aliased_group_resolves_aliases():
-    import click
-
     from luxe.cli import AliasedGroup, apply_aliases
 
     group = AliasedGroup(name="root")

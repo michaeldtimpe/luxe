@@ -7,7 +7,6 @@ synthetic ground-truth shapes derived from the bfcl_eval data layout.
 from __future__ import annotations
 
 from benchmarks.bfcl.grade import (
-    GradeResult,
     _call_matches_gt_entry,
     _value_matches,
     grade,

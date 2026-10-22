@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -11,13 +10,11 @@ import pytest
 import luxe.mcp.server as srv
 from luxe.mcp.server import (
     RateLimiter,
-    ServerPolicy,
     _check_confirm_token,
     _parse_rate,
     _redact_args,
     _unsafe_enabled,
     build_server,
-    load_server_policy,
     make_read_only_role,
     server_tool_names,
 )
@@ -181,8 +178,7 @@ def test_readonly_runner_called(monkeypatch):
         return "review report"
 
     server = build_server(unsafe=False, readonly_runner=runner)
-    # Find the registered review tool and invoke its underlying fn directly.
-    tools = {t.name: t for t in server._tool_manager.list_tools()}
+    # Invoke the registered review tool's underlying fn directly.
     out = server._tool_manager._tools["luxe_review"].fn(  # type: ignore[attr-defined]
         repo_path="/r", goal="g")
     assert out == "review report"

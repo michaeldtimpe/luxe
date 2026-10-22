@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
-import time
 from multiprocessing import Process
 from pathlib import Path
 
@@ -96,7 +94,6 @@ def test_release_on_exception(tmp_path):
 
 def _hold_lock_and_die(repo_path: str, lock_dir_path: str, run_id: str):
     """Subprocess helper: acquire lock, write a marker, exit (releasing lock)."""
-    import os as _os
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     # Re-route lock dir for the subprocess

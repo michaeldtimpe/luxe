@@ -8,7 +8,6 @@ import pytest
 
 from luxe.sdd import (
     CANONICAL_SECTIONS,
-    SddFile,
     SddParseError,
     parse_sdd,
     parse_sdd_file,

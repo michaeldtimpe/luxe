@@ -95,3 +95,15 @@ markers = [
 # (`pytest tests/test_mlx_direct_smoke.py -m live_model`) still works.
 # Pinned by tests/test_marker_policy.py.
 addopts = "-m 'not live_model and not live_backend'"
+
+[tool.ruff]
+# Vendored / reference-only trees: upstream code kept byte-for-byte (BFCL's
+# multi_turn tool classes, CodeNeedle's harness and fixture repos) and the
+# closed-cycle scripts and tests under `_archive/`. Lint findings there are
+# not ours to fix, and fixing them would drift the vendored copies.
+extend-exclude = [
+    "benchmarks/bfcl/multi_turn/func_source_code",
+    "benchmarks/codeneedle/fixtures",
+    "benchmarks/codeneedle/upstream",
+    "**/_archive",
+]
