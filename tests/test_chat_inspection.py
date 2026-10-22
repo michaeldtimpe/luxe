@@ -16,14 +16,6 @@ from luxe.config import PipelineConfig, RoleConfig
 from luxe.memory import session as session_store
 
 
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-
-
 def _repo(tmp_path: Path, *, commit: bool = True) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()

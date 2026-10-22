@@ -54,10 +54,8 @@ class _TC:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_home(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+def _fake_backend(monkeypatch):
+    # $HOME isolation comes from tests/conftest.py's autouse _hermetic_home.
     monkeypatch.setattr(slots_mod, "Backend", _FakeBackend)
 
 
