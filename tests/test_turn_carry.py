@@ -279,3 +279,20 @@ def test_attachments_ride_a_carried_turn_once(chat):
     assert session.attachments == []
     turn("three")
     assert "attached_files" not in calls[2]["extra_context"]
+
+
+def test_project_memory_is_read_once_per_turn(chat, monkeypatch):
+    """`carry_frame` and `build_extra_context` both need the rendered project
+    memory; `prepare_turn` reads `.luxe/memory.md` ONCE and hands it to both
+    (each used to read it itself, twice per fresh turn)."""
+    from luxe.memory import project as project_mem
+
+    session, _cfg, calls, _k, turn = chat
+    reads: list[str] = []
+    real = project_mem.load_memory
+    monkeypatch.setattr(project_mem, "load_memory",
+                        lambda repo, *a, **k: reads.append(repo) or real(repo, *a, **k))
+    turn("one")                        # fresh: frame + full context
+    assert reads == [session.repo_path]
+    turn("two")                        # carried: frame only
+    assert reads == [session.repo_path] * 2

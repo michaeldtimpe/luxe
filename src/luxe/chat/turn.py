@@ -435,10 +435,14 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     from luxe.agents.single import _build_full_tool_surface
     surface, _ = _build_full_tool_surface(languages, role_cfg.tools or None,
                                           task_type=task_type)
+    # Project memory is read ONCE per turn: the frame fingerprints it and a
+    # fresh (non-carried) turn's context renders it.
+    memory = session.memory_block()
     carry_frame = session.carry_frame(
         model, getattr(slots, "backend_name", ""), role_cfg.system_prompt_id,
         role_cfg.task_prompt_id, role_cfg.task_overlay_id,
         sorted(d.name for d in surface), sorted(d.name for d in extra_tool_defs),
+        memory=memory,
     )
     carry = _carry_for_turn(
         session, cfg, carry_frame, role_cfg.num_ctx,
@@ -447,7 +451,8 @@ def prepare_turn(message, session, slots, cfg, languages, infer,
     if carry is not None:
         extra_context, fold_version = session.build_followup_context(), "carry"
     else:
-        extra_context, fold_version = session.build_extra_context(message)
+        extra_context, fold_version = session.build_extra_context(message,
+                                                                  memory=memory)
 
     turn_idx = len(session.turns)
     # Not `len(session.turns)` alone: `/clear` empties the list, and a run id

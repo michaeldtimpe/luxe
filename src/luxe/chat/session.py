@@ -433,7 +433,33 @@ class ChatSession:
 
     # -- context assembly -----------------------------------------------------
 
-    def build_extra_context(self, current_user_message: str, *, budget_chars: int = 4000) -> tuple[str, str]:
+    def memory_block(self) -> str:
+        """The rendered `<project_memory>` block for this session's project
+        ("" with none). Reads `.luxe/memory.md` — `prepare_turn` loads it ONCE
+        per turn and hands it to both `carry_frame` and `build_extra_context`
+        (each used to read the file itself)."""
+        if not self.repo_path:
+            return ""
+        return project_mem.render_block(project_mem.load_memory(self.repo_path))
+
+    def _consume_attachments(self) -> str:
+        """The staged `/attach` payload as one `<attached_files>` block, or "".
+        ONE-SHOT: moved to `consumed_attachments` (re-staged by
+        `turn.restore_attachments` if the turn fails) so it feeds exactly the
+        next turn; later turns recall it via history."""
+        if not self.attachments:
+            return ""
+        file_blocks = "\n".join(
+            f'<file path="{a["path"]}">\n{a["content"]}\n</file>'
+            for a in self.attachments
+        )
+        self.consumed_attachments = list(self.attachments)
+        self.attachments = []
+        return ("<attached_files>\nThe user attached these files for this "
+                f"turn:\n{file_blocks}\n</attached_files>")
+
+    def build_extra_context(self, current_user_message: str, *, budget_chars: int = 4000,
+                            memory: str | None = None) -> tuple[str, str]:
         """Assemble the tagged `extra_context` block + record the fold version.
 
         Returns (extra_context, fold_version). `extra_context` is "" only on a
@@ -441,11 +467,10 @@ class ChatSession:
         path's prompt as close to legacy as possible (the current message is
         already the Goal). In read-only mode a low-precedence `<session_mode>`
         hint is always present so the model points the user at /write rather than
-        claiming luxe can't create or edit files.
+        claiming luxe can't create or edit files. `memory` is this turn's
+        `memory_block()` when the caller already has it (None = read it).
         """
-        memory_block = ""
-        if self.repo_path:
-            memory_block = project_mem.render_block(project_mem.load_memory(self.repo_path))
+        memory_block = self.memory_block() if memory is None else memory
 
         history_text, fold_version = self.fold(budget_chars=budget_chars)
 
@@ -504,20 +529,10 @@ class ChatSession:
             parts.insert(0, f"<system_constraints>\nYou MUST follow these constraints for every turn in this session:\n{numbered}\n</system_constraints>")
         # /attach payload rides just BELOW <system_constraints> in the precedence
         # ladder (the user's explicit rules still outrank pasted file content)
-        # and above everything else. ONE-SHOT: cleared here on consumption so it
-        # feeds exactly the next turn; later turns recall it via history.
-        if self.attachments:
-            file_blocks = "\n".join(
-                f'<file path="{a["path"]}">\n{a["content"]}\n</file>'
-                for a in self.attachments
-            )
-            parts.insert(
-                1 if self.system_constraints else 0,
-                "<attached_files>\nThe user attached these files for this "
-                f"turn:\n{file_blocks}\n</attached_files>",
-            )
-            self.consumed_attachments = list(self.attachments)
-            self.attachments = []
+        # and above everything else. ONE-SHOT (`_consume_attachments`).
+        attached = self._consume_attachments()
+        if attached:
+            parts.insert(1 if self.system_constraints else 0, attached)
         if not parts:
             # First turn, no memory, write mode on: nothing to disambiguate.
             return "", fold_version
@@ -528,19 +543,18 @@ class ChatSession:
                      "\n</current_request>")
         return "\n\n" + "\n\n".join(parts), fold_version
 
-    def carry_frame(self, *extra: object) -> str:
+    def carry_frame(self, *extra: object, memory: str | None = None) -> str:
         """Fingerprint of everything the first message of a carried
         conversation was built from, other than the history and the request
         itself: mode hints' inputs, project memory, constraints, style, plan.
         `extra` is the turn's own frame (model, persona ids, tool names) from
         prepare_turn. Two turns may share one conversation only when this is
-        equal — otherwise the next turn re-folds and starts fresh."""
+        equal — otherwise the next turn re-folds and starts fresh. `memory`
+        is this turn's `memory_block()` when the caller has it (None = read)."""
         import hashlib
         import json as _json
 
-        memory_block = ""
-        if self.repo_path:
-            memory_block = project_mem.render_block(project_mem.load_memory(self.repo_path))
+        memory_block = self.memory_block() if memory is None else memory
         frame = [
             self.repo_path, self.project_kind, self.tools_withheld,
             self.write_enabled, self.unrestricted_bash, self.web_enabled,
@@ -556,16 +570,8 @@ class ChatSession:
         (mode, memory, constraints, history) is already in the conversation;
         only a staged `/attach` payload is new. Consumed exactly as
         `build_extra_context` consumes it, so failure re-staging still works."""
-        if not self.attachments:
-            return ""
-        file_blocks = "\n".join(
-            f'<file path="{a["path"]}">\n{a["content"]}\n</file>'
-            for a in self.attachments
-        )
-        self.consumed_attachments = list(self.attachments)
-        self.attachments = []
-        return ("\n\n<attached_files>\nThe user attached these files for this "
-                f"turn:\n{file_blocks}\n</attached_files>")
+        attached = self._consume_attachments()
+        return f"\n\n{attached}" if attached else ""
 
     def add_turn(self, turn: ChatTurn) -> None:
         self.turns.append(turn)
