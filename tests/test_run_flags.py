@@ -40,7 +40,6 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.ctx_cal_damp is False                        # opt-in 2026-08-24
     assert f.ctx_cal_unmeasured_ratio == CALIBRATION_UNMEASURED_RATIO
     assert f.tool_result_clamp is False                   # opt-in 2026-08-24
-    assert f.repeat_read_stub is False                    # opt-in 2026-10-17
     assert f.reread_note is False                         # opt-in 2026-10-18
     assert f.adaptive_policy is False
     # The three that are NOT off-by-default:
@@ -84,7 +83,6 @@ OPT_IN = [
     ("LUXE_CTX_CAL_DAMP", "ctx_cal_damp"),
     ("LUXE_TOOL_RESULT_CLAMP", "tool_result_clamp"),
     # 2026-10-17 (acceptance/tuning_2026_10): no default-ON arm benched.
-    ("LUXE_REPEAT_READ_STUB", "repeat_read_stub"),
     ("LUXE_REREAD_NOTE", "reread_note"),
 ]
 

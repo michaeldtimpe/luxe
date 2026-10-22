@@ -51,7 +51,6 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
     dedup_message,
     read_result_line_range,
     range_is_covered,
-    repeat_read_stub_message,
     reread_note_message,
     _CONVERGENCE_LOW_THRESHOLD,
     _EARLY_BAIL_MESSAGE,
@@ -443,7 +442,6 @@ def run_agent(
     # LUXE_EARLY_BAIL_MODE (default/no_abstain/soft_anchor/...), read once
     # with the other switches instead of by EarlyBailGuard on every step.
     early_bail_mode = flags.early_bail_mode
-    repeat_read_stub_enabled = flags.repeat_read_stub
     reread_note_enabled = flags.reread_note
     truncated_turn_retry_enabled = flags.truncated_turn_retry
     truncated_turn_max_retries = flags.truncated_turn_max_retries
@@ -1320,52 +1318,6 @@ def run_agent(
                     st.same_file_read_twice_step = step
                 else:
                     st.read_keys_seen.add(key)
-            # Captured BEFORE the dedup branch and before `seen_calls.add(key)`
-            # further down, so it means "this exact call already ran this run".
-            # Distinct from `step_had_repeat`, which the dedup exemption keeps
-            # False for read_file.
-            call_is_repeat = key in st.seen_calls
-            # LUXE_REPEAT_READ_STUB (opt-in, default OFF). `call_is_repeat`
-            # already means "no write since" — a write prunes every non-write
-            # key from `seen_calls` — so the only extra condition is that the
-            # earlier result is still in context exactly as sent. Compaction
-            # may have truncated or dropped it; then the read runs normally.
-            # Not counted toward the repeat streak (step_had_repeat): the
-            # lever under test is the reply, not an earlier abort.
-            if (repeat_read_stub_enabled and tc.name == "read_file"
-                    and call_is_repeat):
-                _prior = st.read_results.get(key)
-                if (_prior is not None
-                        and any(m is _prior[0] for m in st.messages)
-                        and _prior[0].get("content") == _prior[1]):
-                    content = repeat_read_stub_message(
-                        str(tc.arguments.get("path") or ""))
-                    stub = ToolCall(
-                        id=tc.id or f"call_{step}",
-                        name=tc.name,
-                        arguments=tc.arguments,
-                        result=content,
-                        cached=True,
-                        duplicate=True,
-                        bytes_out=0,
-                        wall_s=0.0,
-                    )
-                    result.tool_calls.append(stub)
-                    st.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id or f"call_{step}",
-                        "name": tc.name,
-                        "content": content,
-                    })
-                    _display(on_tool_event, stub, "on_tool_event")
-                    emit(
-                        "repeat_read_stub",
-                        step=step, name=tc.name, key_hash=key_hash,
-                        path=extract_path(tc.name, tc.arguments),
-                    )
-                    if st.writes_seen > 0:
-                        st.post_write_idle_tools += 1
-                    continue
             if key in st.seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
                 step_had_repeat = True
                 content = dedup_message(tc.name)
@@ -1550,9 +1502,6 @@ def run_agent(
                 "content": content,
             }
             st.messages.append(_tool_msg)
-            if (repeat_read_stub_enabled and tc.name == "read_file"
-                    and not executed.error):
-                st.read_results[key] = (_tool_msg, content)
 
             _display(on_tool_event, executed, "on_tool_event")
             emit(
