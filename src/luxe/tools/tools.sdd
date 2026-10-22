@@ -152,7 +152,10 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   tool), `core.sshCommand`, filters — and one a model planted (via bash, or a
   repo that arrived poisoned) must not find credentials. ENV ONLY: no argv
   or `-c` pin changed. The keep-list (SSH_AUTH_SOCK, GPG_TTY,
-  GPG_AGENT_INFO) still passes, so ssh push and commit signing work; https
+  GPG_AGENT_INFO) still passes, so ssh push and commit signing work, and so
+  does git's env-config protocol: `GIT_CONFIG_KEY_<n>` holds a config key,
+  and scrubbing it alone left a count with no key, so every git call failed
+  and the whole bench died at preflight (caught by the m5 no-harm A/B); https
   credentials come from the configured helper (osxkeychain on the fleet),
   not env. `gh` is NOT scrubbed (`pr._run` with `cmd[0] == "gh"` inherits;
   `_run_net` passes `clone_env(scrub=False)`): it runs no repo hooks and may
