@@ -397,19 +397,6 @@ def short_hostname() -> str:
         return ""
 
 
-class TaskTypeConfig(BaseModel):
-    description: str = ""
-    pipeline: list[str] = Field(default_factory=list)
-    architect_prompt: str = ""
-
-
-class ProfileConfig(BaseModel):
-    name: str = ""
-    description: str = ""
-    memory_budget_gb: int = 64
-    peak_model_gb: float = 0.0
-
-
 class PipelineConfig(BaseModel):
     omlx_base_url: str = "http://127.0.0.1:8000"
     # Named oMLX endpoints for `luxe chat` (`/backend`, `--backend`). Chat-only;
@@ -417,10 +404,11 @@ class PipelineConfig(BaseModel):
     # every existing config parses (and behaves) identically. The benchmark/
     # maintain path reads omlx_base_url only.
     backends: dict[str, BackendEntry] = Field(default_factory=dict)
-    profile: ProfileConfig = Field(default_factory=ProfileConfig)
+    # `profile:` and `task_types:` (swarm/phased-era sections) were removed
+    # 2026-10: nothing read them. The model ignores unknown keys, so YAMLs
+    # that still carry them parse exactly as before.
     models: dict[str, str] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
-    task_types: dict[str, TaskTypeConfig] = Field(default_factory=dict)
     # Interactive-only model slots (`luxe chat`). None or empty model_keys =>
     # champion-everywhere (no fan-out). Read only by the chat front-end.
     slots: ChatSlots | None = None
@@ -580,11 +568,6 @@ class PipelineConfig(BaseModel):
         entry = self.backend_entry(name or self.default_backend_name())
         return entry.build_backend(model, base_url=base_url,
                                    backend_cls=backend_cls)
-
-    def task_type(self, name: str) -> TaskTypeConfig:
-        if name not in self.task_types:
-            raise KeyError(f"Unknown task type: {name}. Available: {list(self.task_types)}")
-        return self.task_types[name]
 
 
 def load_config(path: str | Path | None = None) -> PipelineConfig:

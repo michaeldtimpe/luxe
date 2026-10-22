@@ -20,12 +20,15 @@ def test_model_for_role(config_path: Path):
     assert model  # non-empty model id
 
 
-def test_task_types(config_path: Path):
+def test_retired_sections_still_parse(config_path: Path):
+    """`profile:` / `task_types:` were removed from the model (2026-10,
+    nothing read them); configs that still carry them must keep loading."""
+    import yaml
+
+    raw = yaml.safe_load(config_path.read_text())
+    assert "task_types" in raw and "profile" in raw   # the shipped file has both
     cfg = load_config(config_path)
-    assert "review" in cfg.task_types
-    assert "implement" in cfg.task_types
-    review = cfg.task_type("review")
-    assert "monolith" in review.pipeline
+    assert not hasattr(cfg, "task_types") and not hasattr(cfg, "profile")
 
 
 def test_role_configs(config_path: Path):
