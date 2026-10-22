@@ -152,32 +152,17 @@ def _refuse_pull_on_non_omlx(engine: str, *, verb: str) -> None:
     calls 404s, and the failure that surfaces is a confusing
     "oMLX admin login failed: 404" rather than the true answer, which is that
     this host provisions weights a different way. Say so, and point at it.
+    The wording is shared with chat's `/pull` (`modelstore.pull_engine_refusal`).
     """
-    from luxe.config import ENGINE_OMLX, ENGINE_OPENROUTER
-    if engine == ENGINE_OMLX:
+    from luxe.modelstore import pull_engine_refusal
+    lines = pull_engine_refusal(
+        engine, verb=verb, command="`luxe pull`",
+        local_note="`luxe pull --list` and `--remove` still work — they only "
+                   "read the local store.")
+    if lines is None:
         return
-    console.print(
-        f"[red]✗ `luxe pull` cannot {verb} on a {engine} endpoint.[/] "
-        f"It drives oMLX's admin API and the ~/.omlx/models store, neither of "
-        f"which {engine} has.")
-    if engine == ENGINE_OPENROUTER:
-        # Nothing is downloadable here at all: the provider hosts the weights
-        # and bills per token. Pointing at a preset file would be nonsense.
-        console.print(
-            "[dim]  OpenRouter hosts the weights and bills per token — there "
-            "is nothing to fetch onto this disk. Pick a model with "
-            "`/model find <text>` then `/model all <id>` inside "
-            "`luxe chat --backend openrouter`.[/]\n"
-            "[dim]  `luxe pull --list` and `--remove` still work — they only "
-            "read the local store.[/]")
-    else:
-        console.print(
-            "[dim]  This host serves GGUF weights named in its llama-server "
-            "preset (neo: `~/dotfiles/luxe/neo-models.ini`). Fetch the file "
-            "yourself, put it where the preset points, and restart the "
-            "server.[/]\n"
-            "[dim]  `luxe pull --list` and `--remove` still work — they only "
-            "read the local store.[/]")
+    console.print(lines[0])
+    console.print("\n".join(lines[1:]))
     sys.exit(2)
 
 

@@ -359,6 +359,23 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
             ctx.console.print("[yellow]Usage: /pull --search <query>[/]")
             return CommandResult(handled=True)
 
+    # Same engine refusal as `luxe pull`, BEFORE any admin client exists:
+    # off oMLX there is no admin API, and building one posted this entry's
+    # key (an OpenRouter key, say) at an oMLX admin login. Bare `/pull` is
+    # the local-store read (`luxe pull --list`) and stays available.
+    entry = getattr(ctx.slots, "active_entry", lambda: None)()
+    engine = getattr(entry, "engine", "") or "omlx"
+    refusal = ms.pull_engine_refusal(
+        engine, verb="fetch weights", command="`/pull`",
+        local_note="bare `/pull` still lists the local store.")
+    if refusal is not None:
+        if "--search" not in flags and not positional and not from_path:
+            _pull_show_state(ctx, None, engine=engine)
+        else:
+            for line in refusal:
+                ctx.console.print(line)
+        return CommandResult(handled=True)
+
     base_url = getattr(ctx.slots.backend, "base_url", "") or ""
     api_key = getattr(ctx.slots.backend, "api_key", "") or ""
     try:
@@ -372,10 +389,15 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
 
             ref = positional[0] if positional else ms.store_name_for(from_path)
             name = ms.store_name_for(ref)
-            # Same store rule as `luxe pull`: an entry whose weights don't
-            # resolve is replaceable, and its dangling link names the HF
-            # repo to re-fetch when only a bare name was given.
+            # Same store rule as `luxe pull`, checked FIRST — before the ≤20s
+            # mount scan: an entry whose weights don't resolve is
+            # replaceable, and its dangling link names the HF repo to
+            # re-fetch when only a bare name was given.
             state = ms.model_state(name)
+            if state == "ok" and "--force" not in flags:
+                ctx.console.print(f"[yellow]· {name} is already in the local "
+                                  "store — add --force to replace it[/]")
+                return CommandResult(handled=True)
             source_ref = ref
             if state == "dangling" and "/" not in ref and not from_path:
                 source_ref = ms.hf_repo_for(name) or ref
@@ -398,12 +420,7 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
                 return CommandResult(handled=True)
 
             chosen = sources[0]
-            already = state == "ok"
             ctx.console.print(f"[bold]{name}[/] ← {chosen.describe()}")
-            if already and "--force" not in flags:
-                ctx.console.print("[yellow]· already in the local store "
-                                  "— add --force to replace it[/]")
-                return CommandResult(handled=True)
             if "--yes" not in flags:
                 ctx.console.print(f"[dim]· preview only — run "
                                   f"`/pull {ref} --yes` to transfer[/]")
@@ -418,13 +435,18 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
     return CommandResult(handled=True)
 
 
-def _pull_show_state(ctx: CommandContext, admin) -> None:
+def _pull_show_state(ctx: CommandContext, admin, *, engine: str = "omlx") -> None:
     from luxe.modelstore import ModelStoreError, human_bytes, local_model_names
 
     names = local_model_names()
     ctx.console.print(f"[bold]Local models[/] [dim]({len(names)})[/]")
     for n in names:
         ctx.console.print(f"  · {n}")
+    if admin is None:
+        # Off oMLX (see `_pull`): there is no download queue to ask about.
+        ctx.console.print(f"[dim]· no download queue on a {escape(engine)} "
+                          "endpoint[/]")
+        return
     try:
         tasks = admin.tasks()
     except ModelStoreError as e:

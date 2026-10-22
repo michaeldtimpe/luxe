@@ -631,6 +631,80 @@ def test_pull_from_a_local_dir_imports_it(ctx, _no_network_pull, tmp_path, monke
     assert "✓" in _text(ctx)
 
 
+def _engine_ctx(tmp_path, engine: str):
+    """A CommandContext whose ACTIVE backend entry runs `engine`."""
+    from luxe.config import BackendEntry
+
+    cfg = PipelineConfig(
+        models={"monolith": "Champ"},
+        roles={"monolith": RoleConfig(model_key="monolith")},
+        backends={"only": BackendEntry(base_url="http://127.0.0.1:8080",
+                                       engine=engine, default=True)},
+    )
+    out = io.StringIO()
+    c = cmd.CommandContext(console=Console(file=out, force_terminal=False, width=200),
+                           session=ChatSession(repo_path=str(tmp_path)),
+                           slots=slots_mod.SlotManager(cfg))
+    c._out = out  # type: ignore[attr-defined]
+    assert c.slots.active_entry().engine == engine
+    return c
+
+
+@pytest.mark.parametrize("engine", ["llama-server", "openrouter"])
+@pytest.mark.parametrize("line", ["/pull org/Champ --yes", "/pull --search Qwen",
+                                  "/pull org/Champ"])
+def test_pull_refuses_off_omlx_like_luxe_pull(tmp_path, monkeypatch, engine, line):
+    """Regression (2026-10 review): `luxe pull` refuses a non-oMLX engine, but
+    `/pull` drove `OmlxAdmin` at that entry's URL with that entry's key (an
+    OpenRouter key posted to an oMLX admin login). Same refusal, same words."""
+    from luxe import modelstore as ms
+
+    def _no_admin(*a, **k):
+        raise AssertionError("OmlxAdmin must not be built off oMLX")
+
+    monkeypatch.setattr(ms, "OmlxAdmin", _no_admin)
+    monkeypatch.setattr(ms, "network_mounts",
+                        lambda: pytest.fail("no mount scan off oMLX"))
+    c = _engine_ctx(tmp_path, engine)
+    cmd.dispatch(line, c)
+    out = _text(c)
+    assert f"cannot fetch weights on a {engine} endpoint" in out
+    if engine == "openrouter":
+        assert "bills per token" in out and "neo-models.ini" not in out
+    else:
+        assert "neo-models.ini" in out
+
+
+def test_bare_pull_off_omlx_lists_the_local_store_without_the_admin_api(
+        tmp_path, monkeypatch):
+    """Bare `/pull` is the chat `luxe pull --list`: a local-store read that
+    stays available everywhere — but without asking an admin API that isn't
+    there for a download queue."""
+    from luxe import modelstore as ms
+
+    monkeypatch.setattr(ms, "OmlxAdmin", lambda *a, **k: pytest.fail("no admin"))
+    monkeypatch.setattr(ms, "local_model_names", lambda *a, **k: ["Champ"])
+    c = _engine_ctx(tmp_path, "llama-server")
+    cmd.dispatch("/pull", c)
+    out = _text(c)
+    assert "Local models" in out and "Champ" in out
+    assert "cannot fetch" not in out
+
+
+def test_pull_checks_the_store_before_the_mount_scan(ctx, _no_network_pull,
+                                                     monkeypatch):
+    """`luxe pull` reads store state BEFORE the ≤20s mount scan; `/pull` scanned
+    first and only then said "already in the local store"."""
+    from luxe import modelstore as ms
+
+    monkeypatch.setattr(ms, "model_state", lambda *a, **k: "ok")
+    monkeypatch.setattr(ms, "resolve_pull_sources",
+                        lambda *a, **k: pytest.fail("scanned before the store check"))
+    cmd.dispatch("/pull org/Champ --yes", ctx)
+    assert "already in the local store" in _text(ctx)
+    assert _FakeAdmin.started == []
+
+
 def test_pull_surfaces_admin_errors(ctx, monkeypatch):
     from luxe import modelstore as ms
 

@@ -602,7 +602,12 @@ never touches this module.
   `modelstore.resolve_pull_sources(ref, admin=, from_path=, include_mounts=)`
   and `tests/test_modelstore.py::TestPullSourceParity` asserts they reach it
   with the same arguments, so the two can never disagree about where a ref
-  comes from. What is NOT shared, deliberately: the consent shape (chat
+  comes from. The ENGINE REFUSAL is shared too (2026-10 review;
+  `modelstore.pull_engine_refusal`): off `engine: omlx` both refuse before any
+  `OmlxAdmin` exists — `/pull` used to drive it at a llama-server/OpenRouter
+  URL with that entry's key — leaving only the local-store reads (bare
+  `/pull`; `luxe pull --list`/`--remove`). Both check store state BEFORE the
+  ≤20s mount scan. What is NOT shared, deliberately: the consent shape (chat
   previews then `--yes`; the CLI prompts `click.confirm`), progress rendering
   (chat prints one line per 10%, the CLI drives a Rich bar), the wording of
   every message, and the CLI-only `--list`/`--remove`/HF-cache materialize
