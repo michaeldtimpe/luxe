@@ -18,16 +18,14 @@ retention window.
 
 from __future__ import annotations
 
-import subprocess
+from functools import partial
 
 import pytest
 
 from benchmarks.maintain_suite.run import _prune_old_branches
+from tests._git import git
 
-
-def _git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, check=False)
+_git = partial(git, check=False)
 
 
 @pytest.fixture
@@ -58,7 +56,7 @@ def _branches(repo, prefix=""):
     here fail against correct production code.
     """
     out = _git(repo, "for-each-ref", "--format=%(refname:short)",
-               "refs/heads/").stdout.split()
+               "refs/heads/").split()
     return sorted(b for b in out if b.startswith(prefix))
 
 

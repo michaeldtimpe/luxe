@@ -7,11 +7,13 @@ temp dir — nothing here may touch the real ~/.luxe.
 from __future__ import annotations
 
 import io
-import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
 from rich.console import Console
+
+from tests._git import git as _git
 
 
 @pytest.fixture(autouse=True)
@@ -23,14 +25,7 @@ def isolated_home(tmp_path: Path, monkeypatch):
     return home
 
 
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True,
-                          capture_output=True, text=True).stdout.strip()
-
-
-def _out(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                          text=True).stdout.strip()
+_out = partial(_git, check=False)
 
 
 def _init_repo(root: Path, files: dict[str, str]) -> Path:

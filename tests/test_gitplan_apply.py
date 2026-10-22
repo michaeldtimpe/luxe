@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import io
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
 from luxe.gitkit import apply, health, plan
+from tests._git import git as _git
 
 
 def _TTYConsole():
@@ -42,13 +44,7 @@ def _cfg():
                           roles={"monolith": RoleConfig(model_key="monolith")})
 
 
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
-
-
-def _out(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                          text=True).stdout.strip()
+_out = partial(_git, check=False)
 
 
 @pytest.fixture

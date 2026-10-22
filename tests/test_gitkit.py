@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from luxe.gitkit import health, store
+from tests._git import git as _git
 
 
 def _QuietConsole():
@@ -30,11 +31,6 @@ def isolated_home(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True,
-                   capture_output=True, text=True)
 
 
 @pytest.fixture
@@ -88,11 +84,8 @@ def test_gather_repo_health_history_lines_one_log_pass(tmp_path: Path,
                        check=True, capture_output=True,
                        env={**os.environ, **env})
 
-    def _out(*args: str) -> str:
-        return subprocess.run(["git", *args], cwd=repo, check=True,
-                              capture_output=True, text=True).stdout.strip()
-    dates = _out("log", "--format=%ai").splitlines()
-    authors = set(_out("log", "--format=%an").splitlines())
+    dates = _git(repo, "log", "--format=%ai").splitlines()
+    authors = set(_git(repo, "log", "--format=%an").splitlines())
     expected = [f"Latest commit: {dates[0]}", f"First commit: {dates[-1]}",
                 f"Distinct authors: {len(authors)}"]
 
