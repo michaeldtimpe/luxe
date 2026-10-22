@@ -10,7 +10,6 @@ A fixture passes when it earns ≥4/5 points. v1.0 ships when ≥8/10 pass.
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 from collections import Counter
@@ -823,7 +822,6 @@ class FixtureResult:
                               error=self.error)
 
     def to_dict(self) -> dict:
-        from dataclasses import asdict
         return asdict(self)
 
 

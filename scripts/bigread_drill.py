@@ -372,7 +372,6 @@ def analyze_turn(run_id: str, chunk: dict, luxe_root: Path) -> dict:
                       partial_chars=int(m.group(3)))
 
     step_pressures = []
-    wall_span = [None, None]
     for rec in records:
         m = _STEP_RE.match(rec["msg"])
         if m:
