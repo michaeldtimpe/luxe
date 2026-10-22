@@ -5,7 +5,7 @@ runner owns the full target lifecycle: it resolves the target repo (prompting
 to clone a URL when the path is NOT a git working tree), sets `repo_root`,
 builds the BM25/symbol indices for the target, runs one read-only pass, then
 restores whatever repo_root/indices were resident before (so a `luxe chat`
-session is left untouched after a `/gitsummary` over a freshly-cloned repo).
+session is left untouched after a `/gitaudit` over a freshly-cloned repo).
 """
 
 from __future__ import annotations
@@ -206,9 +206,9 @@ def run_git_report(
         sym_index = symbols_mod._index
         summary = build_repo_summary(
             target, symbol_coverage=getattr(sym_index, "coverage", None))
-        # gitrefactor consumes a prior same-commit gitreview's FINDINGS (not the
-        # whole report — extract_findings keeps the payload small) so refactor steps
-        # don't undo security fixes. Consume-if-present; empty when no review exists.
+        # gitchange consumes a prior same-commit gitaudit's FINDINGS (not the
+        # whole report — extract_findings keeps the payload small) so change steps
+        # don't undo security fixes. Consume-if-present; empty when no audit exists.
         prior_findings = ""
         if kind in _PRIOR_FINDINGS_KINDS:
             prior_md = store.latest_report_for(

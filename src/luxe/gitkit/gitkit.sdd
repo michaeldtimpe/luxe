@@ -218,7 +218,9 @@ in the front-end. Survey map + chunk plan persist per repo under
   `salvage.py` (ramble detector, transcription passes, heuristic salvage),
   `render.py` (pure-data blocks + deterministic report render). The
   orchestrator `run_deep_report` and its tunables live in `deep/__init__.py`,
-  which re-exports every name the old module had — `deep.X` keeps working.
+  which re-exports only the submodule names something actually reads as
+  `deep.X` (src/tests/scripts) or that the orchestration uses — the 46 that
+  nothing read were pruned 2026-10; import any other name from its submodule.
   A test that monkeypatches a name must patch the module that LOOKS IT UP
   (`deep._CONTENT_BUDGET_FRAC` / `deep.enumerate_files` → the package, where
   `run_deep_report` reads them; a submodule's own global → that submodule);
