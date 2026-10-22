@@ -63,11 +63,20 @@ class TestTheBenchmarkSpawn:
         shell.TOOL_FNS["bash"]({"command": "echo hi"})
         assert seen.get("errors") == "replace"
 
-    def test_env_none_is_still_passed_through(self, monkeypatch):
-        """The bench default must stay `env=None` = inherit, unchanged."""
+    def test_env_is_the_process_env_minus_secrets_only(self, monkeypatch):
+        """The bench default was `env=None` = inherit. Since 2026-10-22 it is
+        the process env with every secret-named variable dropped
+        (`luxe.secrets.scrubbed_env`; tests/test_secrets_scrub.py) — and
+        NOTHING else changes: every other variable passes through as-is."""
+        import os
+
+        from luxe.secrets import is_secret_name
+
         seen = _spy_run(monkeypatch)
         shell.TOOL_FNS["bash"]({"command": "echo hi"})
-        assert seen.get("env") is None
+        expected = {k: v for k, v in os.environ.items() if not is_secret_name(k)}
+        same = seen.get("env") == expected    # (never let pytest print the env)
+        assert same
 
     def test_ordinary_output_is_unchanged(self):
         out, err = shell.TOOL_FNS["bash"]({"command": "echo hello"})

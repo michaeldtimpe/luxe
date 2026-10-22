@@ -26,6 +26,7 @@ import signal
 import subprocess
 from typing import Any
 
+from luxe.secrets import scrubbed_env
 from luxe.tools.base import ToolDef, ToolFn
 from luxe.tools.fs import get_repo_root
 
@@ -238,8 +239,11 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
           cancel=None,
           extra_allow: frozenset[str] = frozenset()) -> tuple[str, str | None]:
     """`env=None` (the default, and the ONLY value the benchmark path ever
-    passes) inherits the process environment unchanged — byte-identical
-    behaviour. The chat front-end passes an augmented env (see
+    passes) runs with the process environment MINUS every secret-named
+    variable (`luxe.secrets.scrubbed_env`, 2026-10-22): the command is the
+    model's, and allowlisted `python`/`pip`/`make` can read the environment
+    and reach the network. Nothing else about the environment changes. The
+    chat front-end passes its own env, built from the same scrub (see
     make_bash_fn). `cancel=None` (benchmark default) runs one blocking
     Popen.communicate; a token switches to the cancellable polling runner.
     `extra_allow` (empty on the benchmark default, so the rejection message
@@ -247,6 +251,8 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
     repo_root = get_repo_root()
     if repo_root is None:
         return "", "Repo root not set"
+    if env is None:
+        env = scrubbed_env()
 
     command = args["command"]
     if unrestricted:
@@ -294,7 +300,7 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         # the timeout. Neither is a shell command's job.
         stdin=subprocess.DEVNULL,
         cwd=repo_root,
-        env=env,   # None (bench default) == inherit, unchanged
+        env=env,   # never None here: the scrubbed env (bench) or chat's own
         start_new_session=True,
     )
     try:
@@ -320,13 +326,16 @@ def _chat_bash_env() -> dict[str, str]:
     pytest. Motivation (2026-07-30 m1-vs-m5 head-to-head): the m5's default
     PATH had no `python`, so a write-mode agent could build but not run the
     tests — exit 127 in the exact "fix it and verify" flow the fallback kit
-    exists for. Host PATH still wins for everything not in the venv."""
+    exists for. Host PATH still wins for everything not in the venv.
+
+    Built from `scrubbed_env()` (2026-10-22): every secret-named variable is
+    dropped, exactly as on the benchmark path."""
     import os
     import sys
     from pathlib import Path
 
     venv_bin = str(Path(sys.executable).parent)
-    env = dict(os.environ)
+    env = scrubbed_env()
     env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
     return env
 

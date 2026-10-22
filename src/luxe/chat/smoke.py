@@ -366,6 +366,8 @@ def run_code_drill(cfg, *, backend_name: str | None = None,
     import subprocess
     import sys
 
+    from luxe.secrets import scrubbed_env
+
     report = SmokeReport()
     backend, model = _resolve_drill_backend(cfg, backend_name, base_url, model,
                                             code=True)
@@ -386,7 +388,10 @@ def run_code_drill(cfg, *, backend_name: str | None = None,
 
     if ok:
         try:
+            # pytest imports the code the model just edited: secret-named
+            # variables dropped (2026-10-22, tools.sdd).
             tests = subprocess.run([sys.executable, "-m", "pytest", "-q"],
+                                   env=scrubbed_env(),
                                    cwd=str(repo), capture_output=True,
                                    text=True, timeout=120)
         except subprocess.TimeoutExpired:
