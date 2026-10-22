@@ -144,13 +144,21 @@ def for_model(backend, model_id: str) -> ToolCapability:
     if key in _cache:
         return _cache[key]
 
+    from luxe.chat.inspection import _LIVENESS_TIMEOUT_S
+
     cap = ToolCapability(UNKNOWN, "")
     try:
-        org = origin_mod.origin_for(backend, model_id)
+        # Both lookups are bounded like the startup origin probe: a timeout
+        # here is UNKNOWN (tools stay on), never a turn waiting out the
+        # generation-sized read timeout before it starts.
+        org = origin_mod.origin_for(backend, model_id,
+                                    timeout_s=_LIVENESS_TIMEOUT_S)
         if org.kind == "remote":
             cap = ToolCapability(UNKNOWN, "remote endpoint — weights not local")
         else:
-            paths = getattr(backend, "model_paths", lambda: {})() or {}
+            paths = origin_mod.call_bounded(
+                getattr(backend, "model_paths", lambda: {}),
+                _LIVENESS_TIMEOUT_S) or {}
             path = paths.get(model_id, "")
             cap = from_template(path) if path else ToolCapability(
                 UNKNOWN, "the endpoint reports no model path")

@@ -939,7 +939,10 @@ never touches this module.
   endpoint (`⇅`), the status bar carries that glyph next to the model name
   (warn-coloured when the wire is involved), `/model` labels every listed
   model, and a weight swap names the origin. Resolution is one guarded
-  `/v1/models/status` call per endpoint, cached; it happens at startup / on
+  `/v1/models/status` call per endpoint, cached — BOUNDED at startup and in
+  `modelcaps.for_model` (`timeout_s=` = doctor's 4s liveness bound, additive
+  on `Backend.model_paths`; the generation-sized read timeout hung startup
+  10–40 min on a wedged endpoint, 2026-10 review); it happens at startup / on
   `/backend` switch (worker threads) — NEVER during a render, and a failure
   degrades to `unknown` (no glyph), never to a blocked turn.
 - The `.sdd` contract scan is cached per repo root for the session

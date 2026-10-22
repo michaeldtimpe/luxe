@@ -323,3 +323,69 @@ def test_describe_trims_the_hf_snapshot_sha(tmp_path):
     text = org.describe()
     assert "models--mlx-community--Champ-6bit" in text
     assert "cb7e092" not in text
+
+
+# --- startup probes are bounded (2026-10 review) ----------------------------
+
+
+def _recording_backend(base_url):
+    """A real Backend whose transport records every request's read timeout."""
+    import httpx
+
+    from luxe.backend import Backend
+
+    seen: list = []
+
+    def handler(request):
+        seen.append((request.url.path, request.extensions.get("timeout")["read"]))
+        if request.url.path.endswith("/status"):
+            return httpx.Response(200, json={"models": [
+                {"id": "Champ", "model_path": "/tmp/Champ"}]})
+        return httpx.Response(200, json={"data": [{"id": "Champ"}]})
+
+    backend = Backend(base_url=base_url, model="Champ")
+    backend._client = httpx.Client(base_url=backend.base_url,
+                                   timeout=httpx.Timeout(600.0),
+                                   transport=httpx.MockTransport(handler))
+    return backend, seen
+
+
+def test_model_paths_bound_is_additive():
+    """`model_paths()` with no bound keeps the client's own timeout (the
+    benchmark path is unchanged); `timeout_s=` bounds that one request."""
+    backend, seen = _recording_backend(LOCAL)
+    assert backend.model_paths() == {"Champ": "/tmp/Champ"}
+    assert backend.model_paths(timeout_s=4.0) == {"Champ": "/tmp/Champ"}
+    assert [t for _, t in seen] == [600.0, 4.0]
+
+
+@pytest.mark.parametrize("url", [LOCAL, REMOTE])
+def test_startup_origin_notice_is_bounded(url):
+    """Regression: `model_origin_notice` runs at TUI mount / REPL startup and
+    asked the endpoint with the GENERATION read timeout (600s local, 2400s on
+    m5) — a wedged endpoint hung startup for 10-40 minutes."""
+    from types import SimpleNamespace
+
+    from luxe.chat.controller import model_origin_notice
+
+    backend, seen = _recording_backend(url)
+    slots = SimpleNamespace(backend=backend, model_for=lambda slot: "Champ")
+    model_origin_notice(slots)
+    assert seen, "the notice should have asked the endpoint"
+    assert all(t <= 10 for _, t in seen), seen
+
+
+def test_first_turn_tool_capability_probe_is_bounded():
+    """`modelcaps.for_model` (first turn on a model) makes the same
+    `/v1/models/status` request; it must not wait out the generation timeout
+    either."""
+    from luxe.chat import modelcaps
+
+    modelcaps.reset_cache()
+    backend, seen = _recording_backend(LOCAL)
+    try:
+        modelcaps.for_model(backend, "Champ")
+    finally:
+        modelcaps.reset_cache()
+    assert seen
+    assert all(t <= 10 for _, t in seen), seen
