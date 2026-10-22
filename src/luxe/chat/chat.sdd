@@ -634,6 +634,12 @@ never touches this module.
   (chat prints one line per 10%, the CLI drives a Rich bar), the wording of
   every message, and the CLI-only `--list`/`--remove`/HF-cache materialize
   steps. Those are two different UIs, not duplication — do not fold them.
+  PROVENANCE (2026-10) rides the same plan: `plan_pull(trusted_publishers=,
+  allow_untrusted=)` sets `plan.publisher`/`trusted`/`refusal`, and both
+  surfaces print the refusal and stop BEFORE confirm/transfer (`/pull …
+  --allow-untrusted` mirrors the CLI flag). After a transfer both record the
+  template pin (`modelpins.record_pin`; an `--ephemeral` session records
+  nothing and says so). `--pin`/`--show-template` are CLI-only.
 - Session-shape commands (2026-07-29 `/help` audit): `/theme` switches the
   palette live (previously startup-only, so the shipped default was
   unescapable), `/tools` prints the ACTUAL tool surface for the next turn with
@@ -910,7 +916,18 @@ never touches this module.
   DANGLING entry's fix names the HF repo its link text points at
   (`modelstore.hf_repo_for`) so `luxe pull` routes to HuggingFace, and `luxe
   pull`/`/pull` treat any entry whose weights don't resolve as replaceable
-  without --force. A billable entry's manifest line is OK "n/a" (never "add
+  without --force. The `template:<id>` lines (2026-10, model provenance;
+  `modelpins.endpoint_template_checks`, shared with `luxe smoke`'s
+  `template <id>` steps) cover every manifest model incl. keep, on a LOCAL
+  endpoint only (remote = skipped, like modelcaps): OK when the on-disk
+  template matches its pin; WARN when unpinned (fix `luxe pull --pin <m>`),
+  when the publisher is off `trusted_publishers`, on a lint finding not
+  accepted at pin time, and — loudly worded, "TEMPLATE CHANGED ON DISK … no
+  `luxe pull` recorded this" — on a mismatch (fix `--show-template`, then
+  `--pin`). Never FAIL: `ready` must stay exit 0 so the kit starts during an
+  outage. Publisher-unknown is NOT a warning (a mount copy has none). On
+  llama-server the GGUF is found through the entry's `models_preset:`;
+  without it one OK `templates` line says how to enable it. A billable entry's manifest line is OK "n/a" (never "add
   a hosts: entry"), and the missing-key fix names the ENTRY's variable. The `build` check
   (`luxe.staleproc`, shared with `luxe smoke`) sits directly under the endpoint
   because it EXPLAINS the checks below it: a server left running across a

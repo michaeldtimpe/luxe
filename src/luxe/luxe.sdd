@@ -145,6 +145,27 @@ auto-memory.
   `modelstore.OmlxAdmin`) — never a second `snapshot_download`, which would race
   the server over the same HF cache. Mount imports are plain copies into
   `~/.omlx/models/`, resolving symlinks AND Synology `XSym` stubs
+- Model provenance (2026-10; chat/pull/doctor only — the benchmark path never
+  imports it): (a) `modelstore.plan_pull` refuses an HF source whose org is
+  not in `trusted_publishers:` (default `config.DEFAULT_TRUSTED_PUBLISHERS`,
+  case-insensitive) unless `allow_untrusted`, and a mount source whose path
+  names an org (`models--org--Name`) the same way; a mount path with no org
+  is allowed as publisher-UNKNOWN (the NAS is the fleet's own; refusing would
+  break kappa recovery). Publisher is read from STRUCTURE only — never from a
+  README/config inside the weights, which a re-upload controls. (b)
+  `luxe/modelpins.py` owns `~/.luxe/model_pins.json` (per host): written
+  ONLY by a successful `luxe pull`/`/pull` and by `luxe pull --pin`, atomic
+  (temp + `os.replace`), suppressed under `--ephemeral`; read by
+  `/doctor`/`ready`/`smoke`. The hash covers every template source the
+  server reads (`chat_template.jinja`/`.json`, the `chat_template` field of
+  `tokenizer_config.json` only, `additional_chat_templates/`; a GGUF's
+  `tokenizer.chat_template*` via the stdlib reader `luxe/gguf.py`, or a
+  llama-server preset's `chat-template-file` override). (c)
+  `luxe/templatelint.py` is REPORT-ONLY and never blocks: URLs, and message
+  content compared to a non-benign string literal (benign = `<think>`,
+  `</think>`, `<tool_response>`, `</tool_response>`, `/think`, `/nothink`,
+  empty) — zero findings on every fleet family template. All three are
+  root-tier neutral modules (no `luxe.chat` import)
 - `oMLX` `idle_timeout_seconds: 1800` (null keeps models resident forever)
 - `--keep-loaded` for bench mode (post-run unload fires by default)
 - The anti-fumble surfaces are POINT-IN-TIME and USER-INVOKED (2026-08-04):
