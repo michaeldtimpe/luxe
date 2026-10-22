@@ -400,7 +400,8 @@ def reset_turn_status(status) -> None:
         return
     for field, value in (("ctx_pressure", 0.0), ("prompt_tokens", 0),
                          ("steps", 0), ("wall_s", 0.0), ("tok_per_s", 0.0),
-                         ("has_turn", False)):
+                         ("has_turn", False), ("session_prompt_tokens", 0),
+                         ("session_completion_tokens", 0)):
         if hasattr(status, field):
             setattr(status, field, value)
 

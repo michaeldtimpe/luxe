@@ -41,6 +41,8 @@ from luxe.chat import origin as origin_mod
 from luxe.chat.render import (
     CancelToken,
     ChatCancelled,
+    build_final_renderable,
+    footer_lines,
     rainbow_banner,
     raise_if_cancelled,
 )
@@ -566,6 +568,76 @@ class ChatController:
             perf.prefill_tps, perf.decode_tps, perf.cache)
         s.steps = result.steps
         s.has_turn = True
+        s.session_prompt_tokens += result.prompt_tokens
+        s.session_completion_tokens += result.completion_tokens
+
+    def outcome_lines(self, outcome: TurnOutcome, prep: TurnPrep) -> list:
+        """Everything a finished turn shows, built ONCE for both renderers,
+        which only print the list (2026-10: each had its own copy and they had
+        drifted — the TUI dropped swaps, the write mode, the elapsed line and
+        the verbose ledger; the REPL the session token totals. Both now show
+        the union).
+
+        Applies the turn to the status bar first (`apply_turn_status` — the
+        ctx suggestion reads the model origin it records), so call it on the
+        thread that owns the status: the TUI's UI thread. It does not record
+        or recover anything — `run_turn` already built `outcome.abort`."""
+        session = self.session
+        if outcome.interrupted:
+            ran = outcome.tool_calls
+            note = (f" ({ran} tool call{'s' if ran != 1 else ''} completed)"
+                    if ran else "")
+            lines: list = [Text(f"· interrupted — partial turn saved{note}",
+                                style="yellow")]
+            if (kept := attachments_kept_note(session)):
+                lines.append(Text(kept, style="dim"))
+            return lines
+        result = outcome.result
+        if result is None:
+            return []
+        # WS4 output ladder: full when /verbose full (or /debug), else compact
+        # if /compact, else the default truncated preview.
+        mode = ("full" if session.verbose_level == "full"
+                else "compact" if session.compact else "truncated")
+        lines = [build_final_renderable(outcome.final_text, mode=mode)]
+        # Spend was already settled (run_turn's finally), so the footer and
+        # status bar read the running total.
+        self.apply_turn_status(outcome)
+        s = self.status
+        lines += footer_lines(
+            prep.slot, prep.model, result,
+            write_enabled=session.write_enabled, num_ctx=outcome.num_ctx,
+            swap_count=self.slots.stats.count,
+            swap_seconds=self.slots.stats.seconds,
+            started_at=outcome.started_at, ended_at=outcome.ended_at,
+            session_tokens=((s.session_prompt_tokens,
+                             s.session_completion_tokens)
+                            if s is not None else None),
+            session_cost_usd=session.session_cost_usd)
+        nxt = self.suggest_ctx(outcome)
+        if nxt:
+            lines.append(Text(
+                f"· context pressure {result.peak_context_pressure:.0%} — "
+                f"`/ctx {nxt[0]}` (num_ctx {nxt[1]}) gives more headroom",
+                style="dim"))
+        # Working-state view (B2): decided/done/remaining at a glance.
+        if session.verbose_level in ("diff", "full"):
+            lines.append(ledger_mod.render_rich(ledger_mod.load(session.session_id)))
+        # LAST, so it is the line left on screen: a turn the loop aborted is a
+        # FAILED turn, not an empty answer. After the footer rather than
+        # instead of it — an abort can land after several good steps, and
+        # that partial prose is still worth showing. Text(): the reason is an
+        # exception string.
+        rep = outcome.abort
+        if rep:
+            lines.append(Text(f"✗ {rep.reason}", style="red"))
+            if rep.ctx_line:
+                lines.append(Text(f"· {rep.ctx_line}", style="dim"))
+            if rep.hint:
+                lines.append(Text(f"· {rep.hint}", style="yellow"))
+            if rep.kept:
+                lines.append(Text(rep.kept, style="dim"))
+        return lines
 
     def suggest_ctx(self, outcome: TurnOutcome):
         """Auto-suggest a larger window (never resizes silently — chat.sdd),

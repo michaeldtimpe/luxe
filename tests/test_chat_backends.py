@@ -866,7 +866,10 @@ class TestSpendAndTheHardCap:
         assert "$" not in local_text
 
     def test_the_footer_reports_a_billed_turn_and_omits_an_unbilled_one(self):
-        from luxe.chat.render import render_footer_text
+        from luxe.chat.render import footer_lines
+
+        def render_footer_text(slot, model, result):
+            return footer_lines(slot, model, result, write_enabled=False)[0].plain
 
         class _R:
             steps = 1
