@@ -361,9 +361,11 @@ def run_instance(
     # luxe.agents.convergence.should_suppress_for_trajectory_shape.
     if early_bail_trajectory_shape:
         extra_env = {**(extra_env or {}), "LUXE_EARLY_BAIL_TRAJECTORY_SHAPE": "1"}
-    # forge-hybrid Phase 2 (A): wire TieredCompact when flagged; default OFF.
-    # Replaces the elide_old_tool_results call at loop.py's pre-chat
-    # compaction site with the 3-phase strategy.
+    # forge-hybrid Phase 2 (A): TieredCompact has been DEFAULT-ON in the loop
+    # since 2026-05-28 (luxe.agents.flags), so LUXE_TIERED_COMPACT=1 here is
+    # a no-op kept for CLI back-compat; disable it with LUXE_TIERED_COMPACT=0
+    # in the caller's environment. The flag still gates forwarding the two
+    # threshold overrides below.
     if tiered_compact:
         extra_env = {**(extra_env or {}), "LUXE_TIERED_COMPACT": "1"}
         if tiered_compact_threshold is not None:
