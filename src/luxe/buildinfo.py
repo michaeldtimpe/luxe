@@ -12,6 +12,7 @@ from pathlib import Path
 
 from luxe import gitcmd
 from luxe import __version__
+from luxe.secrets import scrubbed_env
 
 
 def _repo_root() -> Path:
@@ -50,6 +51,8 @@ def fetch_origin(timeout_s: float = 5.0) -> bool:
         r = subprocess.run(
             ["git", "-C", str(_repo_root()), "fetch", "origin", "--quiet"],
             capture_output=True, text=True, timeout=timeout_s,
+            # no secrets for hooks/config commands (tools.sdd, 2026-10-22)
+            env=scrubbed_env(),
         )
         return r.returncode == 0
     except Exception:

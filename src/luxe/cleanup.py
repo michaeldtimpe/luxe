@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from luxe.agents.prompts import CLEANUP_TURN_SYSTEM, CLEANUP_TURN_TEMPLATE
+from luxe.secrets import scrubbed_env
 
 _CODE_EXTS = frozenset({
     ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
@@ -53,7 +54,9 @@ class Candidate:
 def _git(repo: Path, *args: str) -> tuple[int, str]:
     try:
         p = subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                           text=True, stdin=subprocess.DEVNULL, timeout=30)
+                           text=True, stdin=subprocess.DEVNULL, timeout=30,
+                           # no secrets for hooks/config commands (tools.sdd)
+                           env=scrubbed_env())
     except (OSError, subprocess.TimeoutExpired):
         return 2, ""
     return p.returncode, p.stdout

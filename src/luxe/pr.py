@@ -139,6 +139,11 @@ class CmdResult:
 
 def _run(cmd: list[str], cwd: str | Path, env: dict | None = None,
          timeout: float | None = None) -> CmdResult:
+    # Every `git` luxe runs gets the scrubbed env (2026-10-22): `git commit`
+    # runs .git/hooks/*, and a hook a model planted must not find secrets.
+    # `gh` (no repo hooks; may need GH_TOKEN) keeps inheriting.
+    if env is None and cmd and cmd[0] == "git":
+        env = scrubbed_env()
     proc = subprocess.run(
         cmd, cwd=str(cwd), env=env, capture_output=True, text=True,
         # A test suite or a `gh` payload can print a non-UTF-8 byte; decoding
@@ -171,7 +176,8 @@ def _run_net(cmd: list[str], cwd: str | Path, *,
     would be the same silent-failure bug one level up.
     """
     try:
-        return _run(cmd, cwd=cwd, env=clone_env(), timeout=timeout)
+        return _run(cmd, cwd=cwd, env=clone_env(scrub=cmd[0] == "git"),
+                    timeout=timeout)
     except subprocess.TimeoutExpired:
         return CmdResult(rc=124, stdout="",
                          stderr=(f"`{' '.join(cmd[:3])}` timed out after "
