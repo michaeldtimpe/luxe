@@ -574,7 +574,7 @@ the schemas join the estimate and come off the window as a fixed charge.
 
 ## Opt-in modes (default off, byte-identical when disabled)
 
-Five subsystems are gated by env vars and default to **off**. Each has
+Two subsystems are gated by env vars and default to **off**. Each has
 invariants in its `.sdd` you must read before enabling:
 
 - **Reflect / verify stage** (`LUXE_REFLECT=1`) — a separate `backend.chat`
@@ -584,18 +584,10 @@ invariants in its `.sdd` you must read before enabling:
   intervention-intensity modulation. **Bias-not-lock**: never gates dispatch.
   Slew-rate limited via `LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP`. See
   `agents.sdd` § "Stage 3 / v1.11 adaptive-policy invariants".
-- **Cohort priors** (`LUXE_LOAD_PRIORS=1`) — reads
-  `~/.luxe/cohort-history/<instance>.json`. **Log-only in v1.11** (does not
-  influence intervention intensity); promotion deferred to v1.11.1+.
-- **Trajectory-shape early_bail suppression** (`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1`)
-  — suppresses `early_bail` during deep localized reading with stable
-  convergence. Fired 0/14 at n=14 (too narrow for this champion at
-  num_ctx=32768); needs `LUXE_ADAPTIVE_POLICY=1` for `score_log`.
-- **Post-write idle repeat counting** (`LUXE_POST_WRITE_IDLE_REPEATS=1`) —
-  counts a repeated post-write call toward the `post_write_idle` streak
-  (closes the `read_file` `_DEDUP_EXEMPT` blind spot). **REFUTED at n=2 A/Bs
-  (2026-08-10): no score, firing, or wall change — keep OFF, do not re-bench.**
-  See `agents.sdd` § "Post-write idle repeat counting".
+- **Removed 2026-10-22** (refuted or inert, off by default): cohort priors,
+  trajectory-shape and commit-only early_bail, post-write idle repeat
+  counting, repeat-read stub, re-read note, `commit_first` — see `agents.sdd`
+  § "Removed mechanisms (2026-10-22 refuted-lever cleanup)".
 
 If you toggle any of these on, walk the relevant `.sdd` section first —
 unbiased flips can silently change benchmark behavior.
