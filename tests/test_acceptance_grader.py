@@ -18,7 +18,7 @@ from benchmarks.maintain_suite.grade import (
     FixtureResult,
     _diff_added_text,
     _diff_shortstat,
-    fixture_pass_threshold,
+    fixture_passed,
     grade_fixture,
     summarize,
 )
@@ -58,10 +58,26 @@ def _make_diff(repo: Path, content: str = "# noop\n") -> None:
 # --- threshold --
 
 def test_fixture_pass_threshold():
-    assert not fixture_pass_threshold(0)
-    assert not fixture_pass_threshold(3)
-    assert fixture_pass_threshold(4)
-    assert fixture_pass_threshold(5)
+    assert not fixture_passed(0)
+    assert not fixture_passed(3)
+    assert fixture_passed(4)
+    assert fixture_passed(5)
+    assert not fixture_passed(5, skipped=True)
+    assert not fixture_passed(5, error="boom")
+
+
+def test_pass_rule_is_one_function():
+    """FixtureResult.passed and regrade_local's stored-result verdict both
+    route through fixture_passed — identical verdicts over the whole grid."""
+    for score in range(6):
+        for skipped in (False, True):
+            for error in ("", "e"):
+                fr = FixtureResult(fixture_id="x", score=score,
+                                   skipped=skipped, error=error)
+                legacy = score >= 4 and not skipped and not error
+                assert fr.passed is legacy
+                assert fixture_passed(score, skipped=skipped,
+                                      error=error) is legacy
 
 
 # --- regex_present --
