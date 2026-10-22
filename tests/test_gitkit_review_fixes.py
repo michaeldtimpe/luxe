@@ -273,6 +273,80 @@ def test_ctrl_c_mid_step_reverts_the_step(tmp_path, _cfg, apply_env):
     assert _out(repo, "status", "--porcelain") == ""
 
 
+def test_ctrl_c_mid_pass_spares_files_made_before_the_step(tmp_path, _cfg,
+                                                          apply_env):
+    """Ctrl-C DURING a pass reverts everything new since THAT step began —
+    an untracked file the operator made while reviewing the previous step
+    is outside the step's baseline and survives."""
+    repo = _repo(tmp_path)
+    _save_plan(repo, [_step("S1"), _step("S2")])
+    fake, calls = _stub(repo, {"S1": {"main.py": "def f():\n    return 2\n"},
+                               "S2": {"half.py": "partial\n",
+                                      "main.py": "def f():\n    return 3\n"}},
+                        raise_on={"S2": KeyboardInterrupt()})
+
+    def reader(p):
+        (repo / "operator.txt").write_text("mine\n")    # made during S1 review
+        return "keep"
+    rc = apply_env.run_apply(repo_path=str(repo), cfg=_cfg,
+                             console=_tty_console(), reader=reader,
+                             run_single_fn=fake)
+    assert rc == 130 and calls == ["S1", "S2"]
+    assert not (repo / "half.py").exists()              # S2's creation: gone
+    assert "return 2" in (repo / "main.py").read_text()  # S2's edit: reverted
+    assert (repo / "operator.txt").read_text() == "mine\n"
+
+
+def test_ctrl_c_at_the_keep_prompt_reverts_only_the_steps_files(
+        tmp_path, _cfg, apply_env):
+    """Ctrl-C AFTER the pass (at keep/discard) reverts the step's files as
+    frozen when its pass returned — not a fresh scan, which would also
+    delete a file the operator created while looking at the diff."""
+    repo = _repo(tmp_path)
+    _save_plan(repo, [_step("S1"), _step("S2")])
+    fake, calls = _stub(repo, {"S1": {"main.py": "def f():\n    return 2\n"},
+                               "S2": {"s2new.py": "x = 2\n"}})
+    prompts_seen: list[str] = []
+
+    def reader(p):
+        prompts_seen.append(p)
+        if len(prompts_seen) == 2:                       # S2's keep prompt
+            (repo / "review-notes.txt").write_text("operator\n")
+            raise KeyboardInterrupt
+        return "keep"
+    con = _tty_console()
+    rc = apply_env.run_apply(repo_path=str(repo), cfg=_cfg, console=con,
+                             reader=reader, run_single_fn=fake)
+    assert rc == 130 and calls == ["S1", "S2"]
+    assert "interrupted" in con.file.getvalue()
+    assert "gitchange S1" in _out(repo, "log", "-1", "--pretty=%s")
+    assert not (repo / "s2new.py").exists()
+    assert (repo / "review-notes.txt").read_text() == "operator\n"
+    assert _out(repo, "status", "--porcelain") == "?? review-notes.txt"
+
+
+def test_ctrl_c_at_the_diff_read_reverts_the_step(tmp_path, _cfg, apply_env,
+                                                  monkeypatch):
+    """An interrupt between the pass and the keep prompt (here: while the
+    diff is read) reverts the in-flight step — edits and creations."""
+    repo = _repo(tmp_path)
+    _save_plan(repo, [_step("S1")])
+    fake, calls = _stub(repo, {"S1": {"main.py": "def f():\n    return 2\n",
+                                      "n.py": "n = 1\n"}})
+    from luxe import pr as pr_mod
+
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(pr_mod, "diff_against_base", boom)
+    rc = apply_env.run_apply(repo_path=str(repo), cfg=_cfg,
+                             console=_tty_console(), reader=lambda _p: "keep",
+                             run_single_fn=fake)
+    assert rc == 130 and calls == ["S1"]
+    assert not (repo / "n.py").exists()
+    assert "return 1" in (repo / "main.py").read_text()
+    assert _out(repo, "status", "--porcelain") == ""
+
+
 def test_verify_command_needs_confirmation(tmp_path, _cfg, apply_env):
     """7: the model-written verify string ran via bash -lc unconfirmed."""
     repo = _repo(tmp_path)
