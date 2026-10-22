@@ -1570,8 +1570,7 @@ def _clear_server_cache() -> None:
         admin.clear_caches()
 
 
-def main() -> int:
-    _ensure_luxe_importable()
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="luxe acceptance suite")
     parser.add_argument("--fixtures", default=None,
                         help="Path to fixtures.yaml (default: alongside this file)")
@@ -1614,13 +1613,13 @@ def main() -> int:
                              "luxe_run_id cleared so --retry-errors restarts it "
                              "fresh. Recommended for long-running runs (e.g. "
                              "--per-fixture-timeout 1200 = 20 min).")
-    args = parser.parse_args()
+    return parser
 
-    fixtures_path = Path(args.fixtures) if args.fixtures else \
-        Path(__file__).parent / "fixtures.yaml"
-    output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
 
+def _select_fixtures(args: argparse.Namespace,
+                     fixtures_path: Path) -> list[Fixture] | None:
+    """Apply --id / --all. None = nothing to run (the reason is printed;
+    main exits 2)."""
     fixtures = _load_fixtures(fixtures_path)
     if args.id:
         wanted = set(args.id)
@@ -1628,57 +1627,56 @@ def main() -> int:
         unknown = wanted - {f.id for f in fixtures}
         if unknown:
             print(f"unknown fixture id(s): {sorted(unknown)}")
-            return 2
+            return None
     elif not args.all:
         print("No fixtures selected. Pass --all or --id <id>.")
         print(f"Available fixtures in {fixtures_path}:")
         for f in fixtures:
             print(f"  {f.id}\t{f.task_type}\t{f.goal[:60]}")
-        return 2
+        return None
     if not fixtures:
         print("No matching fixtures.")
-        return 2
+        return None
+    return fixtures
 
-    # Origin preflight: every run pushes its branch to the fixture's origin
-    # (and regrade_local.py grades that pushed branch). A missing or
-    # read-only origin is an environment fault — refuse to start rather than
-    # spend hours producing runs whose push fails.
+
+def _origin_preflight_blocks(fixtures: list[Fixture], dry_run: bool) -> bool:
+    """Origin preflight: every run pushes its branch to the fixture's origin
+    (and regrade_local.py grades that pushed branch). A missing or read-only
+    origin is an environment fault — refuse to start rather than spend hours
+    producing runs whose push fails. --dry-run reports and carries on."""
     problems = sorted({origin_problem(f) for f in fixtures} - {""})
-    if problems:
-        print("origin preflight failed:")
-        for msg in problems:
-            print(f"  - {msg}")
-        if not args.dry_run:
-            return 2
+    if not problems:
+        return False
+    print("origin preflight failed:")
+    for msg in problems:
+        print(f"  - {msg}")
+    return not dry_run
 
-    # Work dir: pinned default (clones are reused; deterministic across runs)
-    # vs explicit path vs --ephemeral-work-dir (fresh tempdir, cleaned at exit).
-    # The pinned default is load-bearing for temp=0 reproducibility — random
-    # tempdir paths leak into bash/git tool output, which contaminates the
-    # model's prompt and produces different output even at greedy decoding.
-    # See the 2026-05-02 lessons.md entry + project_workdir_variance_leak.md
-    # in the project memory.
-    cleanup_work_dir = False
+
+def _resolve_work_dir(args: argparse.Namespace) -> tuple[Path, bool]:
+    """(work_dir, remove-it-at-exit).
+
+    Pinned default (clones are reused; deterministic across runs) vs explicit
+    path vs --ephemeral-work-dir (fresh tempdir, cleaned at exit). The pinned
+    default is load-bearing for temp=0 reproducibility — random tempdir paths
+    leak into bash/git tool output, which contaminates the model's prompt and
+    produces different output even at greedy decoding. See the 2026-05-02
+    lessons.md entry + project_workdir_variance_leak.md in the project memory.
+    """
     if args.ephemeral_work_dir:
-        td = tempfile.mkdtemp(prefix="luxe-acceptance-")
-        work_dir = Path(td)
-        cleanup_work_dir = True
-    elif args.work_dir:
+        return Path(tempfile.mkdtemp(prefix="luxe-acceptance-")), True
+    if args.work_dir:
         work_dir = Path(args.work_dir).expanduser().resolve()
-        work_dir.mkdir(parents=True, exist_ok=True)
     else:
         work_dir = (Path.home() / ".luxe" / "bench-workspace").resolve()
-        work_dir.mkdir(parents=True, exist_ok=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir, False
 
-    # Variant matrix — when set, each fixture runs once per (mode, model) cell.
-    variants: list[Variant] = []
-    if args.variants:
-        variants = _load_variants(Path(args.variants))
-        if not variants:
-            print(f"variants file {args.variants} loaded zero variants — nothing to do.")
-            return 2
 
-    print(f"\n━━━ luxe acceptance suite")
+def _print_header(fixtures_path: Path, fixtures: list[Fixture], output: Path,
+                  work_dir: Path, variants: list[Variant]) -> None:
+    print("\n━━━ luxe acceptance suite")
     print(f"fixtures: {fixtures_path}  ({len(fixtures)} selected)")
     print(f"output:   {output}")
     print(f"work_dir: {work_dir}")
@@ -1688,273 +1686,372 @@ def main() -> int:
         for v in variants:
             print(f"  - {v.variant_id}  ({v.model_id})")
 
-    overlay_dir = output / "_overlays" if variants else None
-    # Cold-cache mode preflight: fail the whole bench NOW if the clear
-    # endpoint is broken — a run where some fixtures cleared and some didn't
-    # is mixed-state, worse than either mode.
-    cold_cache = os.environ.get("LUXE_BENCH_COLD_CACHE") == "1"
-    if cold_cache:
-        _clear_server_cache()
-        print("cold-cache: ON — oMLX hot+SSD prompt cache cleared before "
-              "every fixture (LUXE_BENCH_COLD_CACHE=1)")
+
+def _cold_cache_preflight() -> bool:
+    """Cold-cache mode preflight: fail the whole bench NOW if the clear
+    endpoint is broken — a run where some fixtures cleared and some didn't
+    is mixed-state, worse than either mode."""
+    if os.environ.get("LUXE_BENCH_COLD_CACHE") != "1":
+        return False
+    _clear_server_cache()
+    print("cold-cache: ON — oMLX hot+SSD prompt cache cleared before "
+          "every fixture (LUXE_BENCH_COLD_CACHE=1)")
+    return True
+
+
+@dataclass
+class _BenchRun:
+    """What every fixture run in one bench invocation shares, plus the
+    running tallies main() reports from."""
+    args: argparse.Namespace
+    output: Path
+    work_dir: Path
+    overlay_dir: Path | None
+    cold_cache: bool
+    total_runs: int
+    results: list[FixtureResult] = field(default_factory=list)
+    diags: list[Diagnostics] = field(default_factory=list)
     # Per-variant aggregation buckets so we can emit a comparison table
     # at the end without re-reading from disk.
-    by_variant: dict[str, list[tuple[FixtureResult, Diagnostics]]] = {}
+    by_variant: dict[str, list[tuple[FixtureResult, Diagnostics]]] = field(
+        default_factory=dict)
+    completed_walls: list[float] = field(default_factory=list)  # rolling ETA window
 
-    # Iteration plan: flat list of (variant|None, fixture) pairs. Single-
-    # variant mode preserves the legacy output layout (no variant subdir).
-    plan: list[tuple[Variant | None, Fixture]] = []
-    if variants:
-        for v in variants:
-            for f in fixtures:
-                plan.append((v, f))
+
+def _eta_suffix(completed_walls: list[float], total_runs: int,
+                run_idx: int) -> str:
+    """ETA from the running average of completed fresh runs (cached ones
+    don't burn wall, so they'd skew the estimate low)."""
+    if not completed_walls:
+        return ""
+    avg_s = sum(completed_walls) / len(completed_walls)
+    remaining = total_runs - run_idx + 1
+    eta_min = (avg_s * remaining) / 60
+    return f"  ETA ~{eta_min:.0f}min"
+
+
+def _invoke_fixture(bench: _BenchRun, variant: Variant | None,
+                    f: Fixture) -> tuple[FixtureResult, Diagnostics]:
+    """run_fixture, with any non-interrupt exception recorded as an ERRORED
+    fixture so the bench carries on."""
+    args = bench.args
+    try:
+        if bench.cold_cache:
+            _clear_server_cache()
+        return run_fixture(
+            f, bench.output, bench.work_dir,
+            force=args.force,
+            retry_errors=args.retry_errors,
+            retry_skipped=args.retry_skipped,
+            dry_run=args.dry_run,
+            variant=variant,
+            overlay_dir=bench.overlay_dir,
+            per_fixture_timeout_s=args.per_fixture_timeout,
+        )
+    except KeyboardInterrupt:
+        print("  [interrupted by user; state preserved]")
+        raise
+    except Exception as e:
+        print(f"  [unexpected error: {type(e).__name__}: {e}]")
+        return (FixtureResult(fixture_id=f.id, error=f"{type(e).__name__}: {e}"),
+                Diagnostics(fixture_id=f.id))
+
+
+def _print_verdict_line(r: FixtureResult, d: Diagnostics, end_ts: str,
+                        run_elapsed: float) -> None:
+    # Format elapsed as M:SS for legibility on long runs.
+    mm, ss = divmod(int(run_elapsed), 60)
+    elapsed_str = f"{mm}:{ss:02d}"
+    # tokens shown as in/out/total. gen_tps~ is wall-bounded
+    # (completion / wall_s) — includes tool-execution and inter-turn
+    # overhead, so it understates raw MLX decode speed. Tilde flags
+    # the approximation. Real prefill/decode TPS arrives with the
+    # streaming-backend refactor (stage 2).
+    tps_g = (d.completion_tokens / d.wall_s) if d.wall_s > 0 else 0.0
+    tok_field = (f"tokens={_fmt_tok(d.prompt_tokens)}/"
+                 f"{_fmt_tok(d.completion_tokens)}/"
+                 f"{_fmt_tok(d.tokens_total)}")
+    print(f"  {_verdict(r):5s}  [{end_ts} +{elapsed_str}]  "
+          f"score={r.score}/{r.max_score}  "
+          f"wall={d.wall_s:.0f}s  {tok_field}  "
+          f"gen_tps~{tps_g:.0f}  "
+          f"diff={r.diff_files}f  "
+          f"validator={d.validator_status or '-'}  "
+          f"cite={d.citations_unresolved}/{d.citations_total}"
+          + ("  [cached]" if d.cached else ""))
+
+
+def _print_run_notes(r: FixtureResult, d: Diagnostics, fdir: Path) -> None:
+    """A fresh run's criteria breakdown and diagnostics, under its verdict."""
+    # Per-criterion breakdown so the verdict reasoning is visible.
+    for c in r.criteria_breakdown:
+        mark = "✓" if c["earned"] == c["weight"] else (
+            "·" if c["earned"] == 0 and c["weight"] == 0 else "✗"
+        )
+        print(f"        {mark} {c['criterion']}  "
+              f"({c['earned']}/{c['weight']})  {c['detail'][:90]}")
+    if d.stages_resumed:
+        print(f"        resumed: {','.join(d.stages_resumed)}")
+    # Silent-failure diagnostics for this run only.
+    if _is_silent_failure(d, r) and not r.skipped and not r.error:
+        for note in _diagnose_silent_failure(d, fdir):
+            print(f"        ⚠ {note}")
+    # Did-work-but-no-diff diagnostics: model emitted text without
+    # tool calls, or workers ran but didn't commit edits.
+    for note in _diagnose_no_tool_calls(d, r, fdir):
+        print(f"        ⓘ {note}")
+    for note in _diagnose_step_limit(d):
+        print(f"        ⚠ {note}")
+
+
+def _bench_one(bench: _BenchRun, run_idx: int, variant: Variant | None,
+               f: Fixture) -> None:
+    """One plan entry: progress line, run, verdict, notes; records the
+    outcome on `bench`."""
+    tag = f"[{variant.variant_id}] " if variant else ""
+    run_start = time.monotonic()
+    start_ts = time.strftime("%H:%M:%S", time.localtime())
+    eta_str = _eta_suffix(bench.completed_walls, bench.total_runs, run_idx)
+    print(f"\n━━━ run {run_idx}/{bench.total_runs}  [{start_ts}]"
+          f"{eta_str}  {tag}{f.id}  [{f.task_type}]  {f.goal[:80]}")
+    print(f"      grading: {_describe_outcome(f)}")
+    r, d = _invoke_fixture(bench, variant, f)
+    run_elapsed = time.monotonic() - run_start
+    end_ts = time.strftime("%H:%M:%S", time.localtime())
+    bench.results.append(r)
+    bench.diags.append(d)
+    if variant is not None:
+        bench.by_variant.setdefault(variant.variant_id, []).append((r, d))
+    # Differentiate cached-skip from a fresh run so warnings/diagnostics
+    # below aren't read as live information when they're stale.
+    cached_skip = d.cached
+    # Cached skips finish in <1s and shouldn't poison the ETA.
+    if not cached_skip and not r.skipped:
+        bench.completed_walls.append(run_elapsed)
+    _print_verdict_line(r, d, end_ts, run_elapsed)
+    if cached_skip:
+        # Cached display: just the score, don't pretend the cached
+        # warnings/criteria are from this invocation.
+        print("        (cached from prior run; --force to re-run)")
+        return
+    fdir = (bench.output / variant.variant_id / f.id) if variant \
+        else (bench.output / f.id)
+    _print_run_notes(r, d, fdir)
+
+
+def _print_upstream_alert(attempted: list[tuple[FixtureResult, Diagnostics]],
+                          n_silent: int, output: Path) -> None:
+    print(f"  ⚠ {n_silent}/{len(attempted)} attempted fixtures had "
+          "near-zero wall time and zero tokens — luxe never reached "
+          "the model. Likely upstream config issue.")
+    # Aggregate diagnostic notes from the silent failures.
+    seen: set[str] = set()
+    for r, d in attempted:
+        if not _is_silent_failure(d, r):
+            continue
+        fdir = output / r.fixture_id
+        for note in _diagnose_silent_failure(d, fdir):
+            if note not in seen:
+                seen.add(note)
+                print(f"    → {note}")
+    print()
+
+
+def _print_release_gate(summary: dict) -> None:
+    if summary.get("v1_release_gate_per_variant"):
+        cleared_cells = [vid for vid, ok
+                         in summary["v1_release_gate_per_variant"].items()
+                         if ok]
+        verdict = "YES" if cleared_cells else "NO"
+        detail = (f" (cleared by: {', '.join(cleared_cells)})"
+                  if cleared_cells
+                  else " (per-cell ≥8/10 — no cell cleared)")
+        print(f"  v1 release : {verdict}{detail}")
     else:
-        for f in fixtures:
-            plan.append((None, f))
+        print(f"  v1 release : {'YES' if summary['v1_release_gate'] else 'NO'} "
+              f"(needs ≥8 of ≥10 passing)")
 
-    results: list[FixtureResult] = []
-    diags: list[Diagnostics] = []
-    total_runs = len(plan)
-    completed_walls: list[float] = []  # rolling ETA window
+
+def _report_summary(bench: _BenchRun) -> dict:
+    """Write summary.json and print the Summary block; returns the summary."""
+    results, diags = bench.results, bench.diags
+    # Multi-variant runs gate per cell, not in aggregate. Pass the
+    # per-variant breakdown to summarize so the v1_release_gate flag
+    # reflects "any cell ≥8/10", not "total passes ≥8 across all cells."
+    per_variant_results: dict[str, list[FixtureResult]] = {}
+    for vid, pairs in bench.by_variant.items():
+        per_variant_results[vid] = [r for r, _ in pairs]
+    summary = summarize(
+        results,
+        per_variant=per_variant_results if per_variant_results else None,
+    )
+    summary["diagnostics"] = aggregate_diagnostics(diags, results)
+
+    # Global silent-failure alert: when most fixtures had wall<5s+tokens=0
+    # the issue is upstream of luxe (auth, network, oMLX) — surface it
+    # ABOVE the per-fixture grades so it's the first thing the user sees.
+    attempted = [(r, d) for r, d in zip(results, diags)
+                 if not r.skipped and not r.error]
+    n_silent = sum(1 for r, d in attempted if _is_silent_failure(d, r))
+    upstream_issue = attempted and n_silent >= max(1, len(attempted) // 2)
+
+    (bench.output / "summary.json").write_text(json.dumps(summary, indent=2))
+
+    print("\n━━━ Summary")
+    if upstream_issue:
+        _print_upstream_alert(attempted, n_silent, bench.output)
+    print(f"  fixtures   : {summary['fixtures']}")
+    print(f"  passed     : {summary['passed']}")
+    print(f"  failed     : {summary['failed']}")
+    print(f"  errored    : {summary['errored']}")
+    print(f"  skipped    : {summary['skipped']}")
+    print(f"  score      : {summary['score']}/{summary['max_score']}")
+    _print_release_gate(summary)
+    d_agg = summary.get("diagnostics", {})
+    if d_agg.get("tuning_hints"):
+        print("\n  Tuning hints:")
+        for h in d_agg["tuning_hints"]:
+            print(f"    - {h}")
+    return summary
+
+
+def _variant_stats(pairs: list[tuple[FixtureResult, Diagnostics]]) -> dict:
+    """One variant's comparison numbers, unrounded (the table and
+    comparison.json round them differently)."""
+    ok = [(r, d) for r, d in pairs if not r.error]
+    attempted_v = [(r, d) for r, d in ok if not r.skipped]
+    avg_wall = (sum(d.wall_s for _, d in attempted_v) / len(attempted_v)
+                if attempted_v else 0.0)
+    avg_tok = (sum(d.tokens_total for _, d in attempted_v) / len(attempted_v)
+               if attempted_v else 0.0)
+    avg_in = (sum(d.prompt_tokens for _, d in attempted_v) / len(attempted_v)
+              if attempted_v else 0.0)
+    avg_out = (sum(d.completion_tokens for _, d in attempted_v) / len(attempted_v)
+               if attempted_v else 0.0)
+    # Wall-bounded gen TPS — see per-fixture print for caveats.
+    total_out = sum(d.completion_tokens for _, d in attempted_v)
+    total_wall = sum(d.wall_s for _, d in attempted_v)
+    # Bailout breakdown per variant — counts each bailout type
+    # so the table at-a-glance shows whether failures are
+    # refusals, prose-only, stuck-loops, etc.
+    bailout_counts: dict[str, int] = {}
+    for _, d in attempted_v:
+        if d.bailout_type:
+            bailout_counts[d.bailout_type] = (
+                bailout_counts.get(d.bailout_type, 0) + 1)
+    return {
+        "passed": sum(1 for r, _ in ok if r.passed),
+        "failed": sum(1 for r, _ in ok if not r.passed and not r.skipped),
+        "errored": sum(1 for r, _ in pairs if r.error),
+        "avg_wall": avg_wall, "avg_tok": avg_tok,
+        "avg_in": avg_in, "avg_out": avg_out,
+        "avg_gen_tps": (total_out / total_wall) if total_wall > 0 else 0.0,
+        # Microloop-specific signals — non-zero only on micro runs.
+        "total_rej": sum(d.microstep_rejects for _, d in attempted_v),
+        "bailouts": bailout_counts,
+    }
+
+
+def _report_comparison(bench: _BenchRun, n_fixtures: int) -> None:
+    """Per-variant comparison table + comparison.json (--variants only)."""
+    print("\n━━━ Mode × Model comparison")
+    header = (f"  {'variant':32s}  {'pass':>4}  {'fail':>4}  {'err':>3}  "
+              f"{'avg_wall':>8}  {'avg_in':>7}  {'avg_out':>7}  "
+              f"{'gen_tps~':>8}  "
+              f"{'bailouts':<28}")
+    print(header)
+    print(f"  {'-' * (len(header) - 2)}")
+    cmp_rows: dict[str, dict] = {}
+    for vid, pairs in bench.by_variant.items():
+        s = _variant_stats(pairs)
+        bailout_summary = (", ".join(f"{t}×{n}" for t, n in
+                                      sorted(s["bailouts"].items()))
+                           or "—")
+        print(f"  {vid:32s}  {s['passed']:>4}  {s['failed']:>4}  "
+              f"{s['errored']:>3}  "
+              f"{s['avg_wall']:>7.1f}s  {_fmt_tok(int(s['avg_in'])):>7}  "
+              f"{_fmt_tok(int(s['avg_out'])):>7}  "
+              f"{s['avg_gen_tps']:>8.1f}  "
+              f"{bailout_summary:<28}")
+        cmp_rows[vid] = {
+            "passed": s["passed"], "failed": s["failed"],
+            "errored": s["errored"],
+            "avg_wall_s": round(s["avg_wall"], 1),
+            "avg_tokens": int(s["avg_tok"]),
+            "avg_prompt_tokens": int(s["avg_in"]),
+            "avg_completion_tokens": int(s["avg_out"]),
+            # Wall-bounded: completion / wall_s (includes tool exec
+            # and inter-turn overhead). Underestimates raw decode TPS.
+            "gen_tps_wall": round(s["avg_gen_tps"], 2),
+            "microstep_rejects_total": s["total_rej"],
+            "bailouts": s["bailouts"],
+            "fixtures": len(pairs),
+        }
+    (bench.output / "comparison.json").write_text(json.dumps({
+        "variants": cmp_rows, "fixtures": n_fixtures,
+    }, indent=2))
+    print(f"\n  Per-fixture mode breakdown saved: {bench.output}/comparison.json")
+
+
+def _bench_end_unload() -> None:
+    """End-of-bench unload — releases models the per-fixture --keep-loaded
+    leaves resident. Without this the user's RAM stays occupied after the
+    bench completes. Best-effort: failures here don't block the exit code or
+    the work-dir cleanup."""
+    try:
+        from luxe.backend import Backend as _UnloadBackend
+        _ub = _UnloadBackend(model="(bench-end-unload)")
+        unload_results = _ub.unload_all_loaded()
+        if unload_results:
+            n_ok = sum(1 for v in unload_results.values() if v)
+            print(f"\n[bench end] unloaded {n_ok}/{len(unload_results)} "
+                  f"model(s) from oMLX")
+    except Exception as e:
+        print(f"\n[bench end] model unload skipped: {e}")
+
+
+def main() -> int:
+    _ensure_luxe_importable()
+    args = _build_parser().parse_args()
+
+    fixtures_path = Path(args.fixtures) if args.fixtures else \
+        Path(__file__).parent / "fixtures.yaml"
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+
+    fixtures = _select_fixtures(args, fixtures_path)
+    if fixtures is None or _origin_preflight_blocks(fixtures, args.dry_run):
+        return 2
+    work_dir, cleanup_work_dir = _resolve_work_dir(args)
+
+    # Variant matrix — when set, each fixture runs once per (mode, model) cell.
+    variants: list[Variant] = []
+    if args.variants:
+        variants = _load_variants(Path(args.variants))
+        if not variants:
+            print(f"variants file {args.variants} loaded zero variants — nothing to do.")
+            return 2
+
+    _print_header(fixtures_path, fixtures, output, work_dir, variants)
+    # Iteration plan: flat list of (variant|None, fixture) pairs, variant-
+    # major. Single-variant mode preserves the legacy output layout (no
+    # variant subdir).
+    plan: list[tuple[Variant | None, Fixture]] = (
+        [(v, f) for v in variants for f in fixtures] if variants
+        else [(None, f) for f in fixtures])
+    bench = _BenchRun(
+        args=args, output=output, work_dir=work_dir,
+        overlay_dir=output / "_overlays" if variants else None,
+        cold_cache=_cold_cache_preflight(), total_runs=len(plan))
     try:
         for run_idx, (variant, f) in enumerate(plan, start=1):
-            tag = f"[{variant.variant_id}] " if variant else ""
-            run_start = time.monotonic()
-            start_ts = time.strftime("%H:%M:%S", time.localtime())
-            # ETA from the running average of completed fresh runs (cached
-            # ones don't burn wall, so they'd skew the estimate low).
-            if completed_walls:
-                avg_s = sum(completed_walls) / len(completed_walls)
-                remaining = total_runs - run_idx + 1
-                eta_min = (avg_s * remaining) / 60
-                eta_str = f"  ETA ~{eta_min:.0f}min"
-            else:
-                eta_str = ""
-            print(f"\n━━━ run {run_idx}/{total_runs}  [{start_ts}]"
-                  f"{eta_str}  {tag}{f.id}  [{f.task_type}]  {f.goal[:80]}")
-            print(f"      grading: {_describe_outcome(f)}")
-            try:
-                if cold_cache:
-                    _clear_server_cache()
-                r, d = run_fixture(
-                    f, output, work_dir,
-                    force=args.force,
-                    retry_errors=args.retry_errors,
-                    retry_skipped=args.retry_skipped,
-                    dry_run=args.dry_run,
-                    variant=variant,
-                    overlay_dir=overlay_dir,
-                    per_fixture_timeout_s=args.per_fixture_timeout,
-                )
-            except KeyboardInterrupt:
-                print(f"  [interrupted by user; state preserved]")
-                raise
-            except Exception as e:
-                print(f"  [unexpected error: {type(e).__name__}: {e}]")
-                r = FixtureResult(fixture_id=f.id, error=f"{type(e).__name__}: {e}")
-                d = Diagnostics(fixture_id=f.id)
-            run_elapsed = time.monotonic() - run_start
-            end_ts = time.strftime("%H:%M:%S", time.localtime())
-            results.append(r)
-            diags.append(d)
-            if variant is not None:
-                by_variant.setdefault(variant.variant_id, []).append((r, d))
-            # Differentiate cached-skip from a fresh run so warnings/diagnostics
-            # below aren't read as live information when they're stale.
-            cached_skip = d.cached
-            # Cached skips finish in <1s and shouldn't poison the ETA.
-            if not cached_skip and not r.skipped:
-                completed_walls.append(run_elapsed)
-            # Format elapsed as M:SS for legibility on long runs.
-            mm, ss = divmod(int(run_elapsed), 60)
-            elapsed_str = f"{mm}:{ss:02d}"
-            # tokens shown as in/out/total. gen_tps~ is wall-bounded
-            # (completion / wall_s) — includes tool-execution and inter-turn
-            # overhead, so it understates raw MLX decode speed. Tilde flags
-            # the approximation. Real prefill/decode TPS arrives with the
-            # streaming-backend refactor (stage 2).
-            tps_g = (d.completion_tokens / d.wall_s) if d.wall_s > 0 else 0.0
-            tok_field = (f"tokens={_fmt_tok(d.prompt_tokens)}/"
-                         f"{_fmt_tok(d.completion_tokens)}/"
-                         f"{_fmt_tok(d.tokens_total)}")
-            print(f"  {_verdict(r):5s}  [{end_ts} +{elapsed_str}]  "
-                  f"score={r.score}/{r.max_score}  "
-                  f"wall={d.wall_s:.0f}s  {tok_field}  "
-                  f"gen_tps~{tps_g:.0f}  "
-                  f"diff={r.diff_files}f  "
-                  f"validator={d.validator_status or '-'}  "
-                  f"cite={d.citations_unresolved}/{d.citations_total}"
-                  + ("  [cached]" if cached_skip else ""))
-            if cached_skip:
-                # Cached display: just the score, don't pretend the cached
-                # warnings/criteria are from this invocation.
-                print(f"        (cached from prior run; --force to re-run)")
-                continue
-            # Per-criterion breakdown so the verdict reasoning is visible.
-            for c in r.criteria_breakdown:
-                mark = "✓" if c["earned"] == c["weight"] else (
-                    "·" if c["earned"] == 0 and c["weight"] == 0 else "✗"
-                )
-                print(f"        {mark} {c['criterion']}  "
-                      f"({c['earned']}/{c['weight']})  {c['detail'][:90]}")
-            if d.stages_resumed:
-                print(f"        resumed: {','.join(d.stages_resumed)}")
-            # Silent-failure diagnostics for this run only.
-            fdir = (output / variant.variant_id / f.id) if variant else (output / f.id)
-            if _is_silent_failure(d, r) and not r.skipped and not r.error:
-                for note in _diagnose_silent_failure(d, fdir):
-                    print(f"        ⚠ {note}")
-            # Did-work-but-no-diff diagnostics: model emitted text without
-            # tool calls, or workers ran but didn't commit edits.
-            for note in _diagnose_no_tool_calls(d, r, fdir):
-                print(f"        ⓘ {note}")
-            for note in _diagnose_step_limit(d):
-                print(f"        ⚠ {note}")
-
-        # Multi-variant runs gate per cell, not in aggregate. Pass the
-        # per-variant breakdown to summarize so the v1_release_gate flag
-        # reflects "any cell ≥8/10", not "total passes ≥8 across all cells."
-        per_variant_results: dict[str, list[FixtureResult]] = {}
-        for vid, pairs in by_variant.items():
-            per_variant_results[vid] = [r for r, _ in pairs]
-        summary = summarize(
-            results,
-            per_variant=per_variant_results if per_variant_results else None,
-        )
-        summary["diagnostics"] = aggregate_diagnostics(diags, results)
-
-        # Global silent-failure alert: when most fixtures had wall<5s+tokens=0
-        # the issue is upstream of luxe (auth, network, oMLX) — surface it
-        # ABOVE the per-fixture grades so it's the first thing the user sees.
-        attempted = [(r, d) for r, d in zip(results, diags)
-                     if not r.skipped and not r.error]
-        n_silent = sum(1 for r, d in attempted if _is_silent_failure(d, r))
-        upstream_issue = attempted and n_silent >= max(1, len(attempted) // 2)
-
-        (output / "summary.json").write_text(json.dumps(summary, indent=2))
-
-        print(f"\n━━━ Summary")
-        if upstream_issue:
-            print(f"  ⚠ {n_silent}/{len(attempted)} attempted fixtures had "
-                  "near-zero wall time and zero tokens — luxe never reached "
-                  "the model. Likely upstream config issue.")
-            # Aggregate diagnostic notes from the silent failures.
-            seen: set[str] = set()
-            for r, d in attempted:
-                if not _is_silent_failure(d, r):
-                    continue
-                fdir = output / r.fixture_id
-                for note in _diagnose_silent_failure(d, fdir):
-                    if note not in seen:
-                        seen.add(note)
-                        print(f"    → {note}")
-            print()
-        print(f"  fixtures   : {summary['fixtures']}")
-        print(f"  passed     : {summary['passed']}")
-        print(f"  failed     : {summary['failed']}")
-        print(f"  errored    : {summary['errored']}")
-        print(f"  skipped    : {summary['skipped']}")
-        print(f"  score      : {summary['score']}/{summary['max_score']}")
-        if summary.get("v1_release_gate_per_variant"):
-            cleared_cells = [vid for vid, ok
-                             in summary["v1_release_gate_per_variant"].items()
-                             if ok]
-            verdict = "YES" if cleared_cells else "NO"
-            detail = (f" (cleared by: {', '.join(cleared_cells)})"
-                      if cleared_cells
-                      else " (per-cell ≥8/10 — no cell cleared)")
-            print(f"  v1 release : {verdict}{detail}")
-        else:
-            print(f"  v1 release : {'YES' if summary['v1_release_gate'] else 'NO'} "
-                  f"(needs ≥8 of ≥10 passing)")
-        d_agg = summary.get("diagnostics", {})
-        if d_agg.get("tuning_hints"):
-            print(f"\n  Tuning hints:")
-            for h in d_agg["tuning_hints"]:
-                print(f"    - {h}")
-
-        # Per-variant comparison table (only when --variants was set).
-        if by_variant:
-            print(f"\n━━━ Mode × Model comparison")
-            header = (f"  {'variant':32s}  {'pass':>4}  {'fail':>4}  {'err':>3}  "
-                      f"{'avg_wall':>8}  {'avg_in':>7}  {'avg_out':>7}  "
-                      f"{'gen_tps~':>8}  "
-                      f"{'bailouts':<28}")
-            print(header)
-            print(f"  {'-' * (len(header) - 2)}")
-            cmp_rows: dict[str, dict] = {}
-            for vid, pairs in by_variant.items():
-                ok = [(r, d) for r, d in pairs if not r.error]
-                passed = sum(1 for r, _ in ok if r.passed)
-                failed = sum(1 for r, _ in ok if not r.passed and not r.skipped)
-                errored = sum(1 for r, _ in pairs if r.error)
-                attempted_v = [(r, d) for r, d in ok if not r.skipped]
-                avg_wall = (sum(d.wall_s for _, d in attempted_v) / len(attempted_v)
-                            if attempted_v else 0.0)
-                avg_tok = (sum(d.tokens_total for _, d in attempted_v) / len(attempted_v)
-                           if attempted_v else 0.0)
-                avg_in = (sum(d.prompt_tokens for _, d in attempted_v) / len(attempted_v)
-                          if attempted_v else 0.0)
-                avg_out = (sum(d.completion_tokens for _, d in attempted_v) / len(attempted_v)
-                           if attempted_v else 0.0)
-                # Wall-bounded gen TPS — see per-fixture print for caveats.
-                total_out = sum(d.completion_tokens for _, d in attempted_v)
-                total_wall = sum(d.wall_s for _, d in attempted_v)
-                avg_gen_tps = (total_out / total_wall) if total_wall > 0 else 0.0
-                # Bailout breakdown per variant — counts each bailout type
-                # so the table at-a-glance shows whether failures are
-                # refusals, prose-only, stuck-loops, etc.
-                bailout_counts: dict[str, int] = {}
-                for _, d in attempted_v:
-                    if d.bailout_type:
-                        bailout_counts[d.bailout_type] = (
-                            bailout_counts.get(d.bailout_type, 0) + 1)
-                bailout_summary = (", ".join(f"{t}×{n}" for t, n in
-                                              sorted(bailout_counts.items()))
-                                   or "—")
-                # Microloop-specific signals — non-zero only on micro runs.
-                total_rej = sum(d.microstep_rejects for _, d in attempted_v)
-                print(f"  {vid:32s}  {passed:>4}  {failed:>4}  {errored:>3}  "
-                      f"{avg_wall:>7.1f}s  {_fmt_tok(int(avg_in)):>7}  "
-                      f"{_fmt_tok(int(avg_out)):>7}  "
-                      f"{avg_gen_tps:>8.1f}  "
-                      f"{bailout_summary:<28}")
-                cmp_rows[vid] = {
-                    "passed": passed, "failed": failed, "errored": errored,
-                    "avg_wall_s": round(avg_wall, 1),
-                    "avg_tokens": int(avg_tok),
-                    "avg_prompt_tokens": int(avg_in),
-                    "avg_completion_tokens": int(avg_out),
-                    # Wall-bounded: completion / wall_s (includes tool exec
-                    # and inter-turn overhead). Underestimates raw decode TPS.
-                    "gen_tps_wall": round(avg_gen_tps, 2),
-                    "microstep_rejects_total": total_rej,
-                    "bailouts": bailout_counts,
-                    "fixtures": len(pairs),
-                }
-            (output / "comparison.json").write_text(json.dumps({
-                "variants": cmp_rows, "fixtures": len(fixtures),
-            }, indent=2))
-            print(f"\n  Per-fixture mode breakdown saved: {output}/comparison.json")
+            _bench_one(bench, run_idx, variant, f)
+        summary = _report_summary(bench)
+        if bench.by_variant:
+            _report_comparison(bench, len(fixtures))
         return 0 if summary["v1_release_gate"] else 1
     finally:
-        # End-of-bench unload — releases models the per-fixture --keep-loaded
-        # leaves resident. Without this the user's RAM stays occupied after
-        # the bench completes. Best-effort: failures here don't block the
-        # exit code or the work-dir cleanup.
-        try:
-            from luxe.backend import Backend as _UnloadBackend
-            _ub = _UnloadBackend(model="(bench-end-unload)")
-            # NOT `results` — that name holds the run's list[FixtureResult] in
-            # the enclosing scope, and rebinding it here is a landmine for
-            # anyone who later adds a statement between this and the return.
-            unload_results = _ub.unload_all_loaded()
-            if unload_results:
-                n_ok = sum(1 for v in unload_results.values() if v)
-                print(f"\n[bench end] unloaded {n_ok}/{len(unload_results)} "
-                      f"model(s) from oMLX")
-        except Exception as e:
-            print(f"\n[bench end] model unload skipped: {e}")
+        _bench_end_unload()
         if cleanup_work_dir:
             import shutil
             shutil.rmtree(work_dir, ignore_errors=True)
