@@ -13,7 +13,6 @@ import gzip
 import http.server
 import ipaddress
 import socket
-import threading
 import time
 
 import pytest
@@ -102,13 +101,9 @@ class _FastServer(http.server.HTTPServer):
 
 
 @pytest.fixture()
-def port():
+def port(serve_http):
     _Handler.seen = []
-    srv = _FastServer(("127.0.0.1", 0), _Handler)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    yield srv.server_port
-    srv.shutdown()
+    return serve_http(_FastServer(("127.0.0.1", 0), _Handler)).server_port
 
 
 # --- DNS rebinding -----------------------------------------------------------
