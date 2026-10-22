@@ -270,21 +270,12 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool,
         # (neo) loads the paths in its preset, so reading the oMLX store
         # there FAILED a working host's main as "not in the store".
         from luxe.chat.origin import endpoint_is_local
-        from luxe.modelstore import hf_repo_for, model_state
         local = endpoint_is_local(getattr(slots.backend, "base_url", ""))
         if local and is_omlx:
-            for mid in manifest.all_models():
-                state = model_state(mid)
-                role = ("main" if mid == manifest.main
-                        else "fallback" if mid == manifest.fallback else "keep")
-                if state == "ok":
-                    doc.add(f"weights:{mid}", OK, f"{role} · on disk")
-                else:
-                    sev = FAIL if role == "main" else WARN
-                    why = ("store entry dangles into a wiped cache"
-                           if state == "dangling" else "not in the store")
-                    doc.add(f"weights:{mid}", sev, f"{role} · {why}",
-                            _weights_fix(mid, state, hf_repo_for))
+            for mid, state, detail, fix in weights_checks(
+                    manifest.all_models(), main=manifest.main,
+                    fallback=manifest.fallback):
+                doc.add(f"weights:{mid}", state, detail, fix)
         elif local:
             doc.add("weights:store", OK,
                     f"n/a — {engine_label} loads the files its own preset "
@@ -313,6 +304,34 @@ def _weights_fix(mid: str, state: str, hf_repo_for) -> str:
         return (f"`luxe pull {repo}` (re-fetch from HuggingFace — the "
                 "dangling entry pointed there)")
     return f"`luxe pull {mid}` (kappa mount; `luxe pull <org>/{mid}` for HF)"
+
+
+def weights_checks(models: list[str], *, main: str, fallback: str = ""
+                   ) -> list[tuple[str, str, str, str]]:
+    """`(model, state, detail, fix)` for each of `models` in the LOCAL oMLX
+    store — the one implementation behind `/doctor`'s `weights:<id>` lines
+    and `luxe smoke`'s `weights <id>` steps (they used to carry a copy each,
+    and smoke's fix string drifted from doctor's).
+
+    The main missing is a FAIL (the session cannot start on it); anything
+    else is a WARN. Callers decide whether the store applies at all — it is
+    the layout of a LOCAL `engine: omlx` endpoint only.
+    """
+    from luxe import modelstore as ms
+
+    out: list[tuple[str, str, str, str]] = []
+    for mid in models:
+        state = ms.model_state(mid)
+        role = ("main" if mid == main
+                else "fallback" if mid == fallback else "keep")
+        if state == "ok":
+            out.append((mid, OK, f"{role} · on disk", ""))
+            continue
+        why = ("store entry dangles into a wiped cache"
+               if state == "dangling" else "not in the store")
+        out.append((mid, FAIL if role == "main" else WARN, f"{role} · {why}",
+                    _weights_fix(mid, state, ms.hf_repo_for)))
+    return out
 
 
 #: Deadline for `/doctor`'s one catalog GET, which doubles as its liveness
@@ -411,32 +430,44 @@ def _is_cloud(slots) -> bool:
         return False
 
 
-def _add_stale_check(doc, base_url: str, *, is_omlx: bool = True) -> None:
-    """Report whether the local oMLX is running the Cellar tree brew installed.
+def stale_build_check(base_url: str, *, is_omlx: bool = True
+                      ) -> tuple[str, str, str] | None:
+    """`(state, detail, fix)` for whether the local oMLX is running the Cellar
+    tree brew installed, or None when there is nothing to say.
 
+    One implementation for `/doctor`'s and `luxe smoke`'s `oMLX build` line.
     A stale process is a WARN, not a FAIL: it may still be serving everything
     asked of it, and smoke/doctor's real checks will fail on their own if it
     is not. The value here is that when they DO fail, the cause is already on
-    screen instead of costing another half hour. Never raises — doctor runs
-    during outages.
+    screen instead of costing another half hour. None on a non-oMLX engine
+    (nothing brew-installed to be stale about), a remote endpoint (its
+    process table is its own problem), and an INCONCLUSIVE verdict (not
+    running / not brew-installed — other checks own that). A check that could
+    not run is OK "unchecked". Never raises — doctor runs during outages.
     """
     if not is_omlx:
-        return              # nothing brew-installed to be stale about
+        return None
     try:
         from luxe.chat.origin import endpoint_is_local
         if not endpoint_is_local(base_url):
-            return          # a remote host's process table is its own problem
+            return None
         from luxe.staleproc import check_omlx
 
         check = check_omlx()
         if not check.conclusive:
-            return          # not running / not brew-installed — other checks own that
+            return None
         if check.stale:
-            doc.add("oMLX build", WARN, check.detail, check.fix)
-        else:
-            doc.add("oMLX build", OK, check.detail)
+            return WARN, check.detail, check.fix
+        return OK, check.detail, ""
     except Exception as e:
-        doc.add("oMLX build", OK, f"unchecked ({e})")
+        return OK, f"unchecked ({e})", ""
+
+
+def _add_stale_check(doc, base_url: str, *, is_omlx: bool = True) -> None:
+    """Add the `oMLX build` line (`stale_build_check`) when it has one."""
+    line = stale_build_check(base_url, is_omlx=is_omlx)
+    if line is not None:
+        doc.add("oMLX build", *line)
 
 
 def _add_web_check(doc, session) -> None:
