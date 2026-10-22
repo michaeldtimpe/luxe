@@ -133,10 +133,6 @@ class LoopState:
     # trajectories rerun reads ~3× more often than empties per the v18
     # distribution; that's a "found my target" signal).
     read_keys_seen: set[str] = field(default_factory=set)
-    # LUXE_REPEAT_READ_STUB: read_file key -> (tool message dict, its content
-    # at append time). The stub is served only while that exact message is
-    # still in `messages` with that content (compaction has not touched it).
-    read_results: dict[str, tuple[dict[str, Any], str]] = field(default_factory=dict)
     # LUXE_REREAD_NOTE: path -> line ranges `read_file` has returned since
     # the last write, and path -> reads of it since the last write. Both are
     # cleared on every successful write.
