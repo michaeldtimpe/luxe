@@ -107,7 +107,10 @@ when reached for — availability over capability. Concretely:
   through the SHARED renderer `chat.inspection.render_doctor`, then a verdict
   — exit 0 on ok/warn, 1 on any FAIL, 2 on a bad `--backend`. Offline-safe
   (doctor's one ≤4s `update` fetch degrades quietly). Every `Check.fix` is a
-  runnable command. **`luxe outage` / `/outage`** print `OUTAGE.md`, the
+  runnable command. `template:<id>` lines (manifest + keep; local endpoints
+  only; shared with `luxe smoke`) are WARN at worst — unpinned, untrusted
+  publisher, lint finding, or a loudly-worded TEMPLATE CHANGED ON DISK — so
+  the kit still starts during an outage. **`luxe outage` / `/outage`** print `OUTAGE.md`, the
   ≤120-line offline emergency card (one reader, `luxe.outage.load_card`; a
   test asserts every `luxe <sub>` it names is a registered command, so it
   can't rot). There is deliberately **no scheduled/cron/launchd/alerting
@@ -252,6 +255,16 @@ session must not rediscover the hard way; mechanism lives in the `.sdd` + code.
   (races the server over the HF cache). Mount imports resolve symlinks AND
   Synology `XSym` stubs; dangling links abort; stages in `.partial`. Full
   detail in memory `project_luxe_model_provenance_and_pull.md`.
+  **Provenance (2026-10; `modelpins.py`, `templatelint.py`, `gguf.py`):**
+  HF pulls only from `trusted_publishers:` (chat.yaml; `--allow-untrusted`
+  overrides, refusal is at `plan_pull` level so nothing downloads); a mount
+  copy is checked only when its path names an org, else pinned
+  publisher-unknown. A successful pull PINS the chat template (sha256 per
+  source) in `~/.luxe/model_pins.json`; `luxe pull --pin <m>` (TOFU, or
+  `org/<m>` to record the org) and `--show-template <m>` work on what is on
+  disk. Publisher comes from STRUCTURE only (repo id, `models--org--`,
+  `<store>/<org>/`), never a README. Lint is report-only (URLs; content vs a
+  non-benign literal). neo: GGUF template via the entry's `models_preset:`.
 - **`/claude` diagnoses Claude Code itself (2026-08-13; `claudecode.py`,
   `luxe claudecode`, tool `claude_code_diag`).** Answers which billing path
   each running session is on. **Three tested invariants (chat.sdd Must-not) —
