@@ -215,7 +215,12 @@ auto-memory.
   (served by `cli/__main__.py`), so the command name, arguments, and option
   surface are frozen — check `luxe maintain --help` against the previous
   revision before shipping a change there. `maintain.py` does not import
-  `cli` at all; `cli/maint.py` imports it at module level
+  `cli` at all; `cli/maint.py` imports it at module level.
+  `maintain_pipeline` is a list of step helpers sharing a `_Pipeline`
+  record (2026-10-22, behaviour-identical split); events go through
+  `_Pipeline.emit` and every `run_single` call through `_run_pass`. Its
+  end-to-end behaviour (event sequence, pass goals/phases, PR arguments,
+  exit codes, teardown) is pinned by `tests/test_maintain_pipeline.py`
 - The CLI is the PACKAGE `luxe/cli/` (split from the single `cli.py`
   2026-09-26, behavior and `--help` byte-identical): `_common.py` holds the
   root group `main` (entry point stays `luxe.cli:main`), `AliasedGroup`, the
