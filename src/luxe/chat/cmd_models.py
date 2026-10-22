@@ -60,47 +60,7 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     runs the picked model.
     """
     if not args:
-        slot_models = ctx.slots.slot_models()
-        ctx.console.print(f"[bold]Model slots[/] [dim](resident in RAM: "
-                          f"[cyan]{ctx.slots.resident}[/])[/]")
-        for slot, model in slot_models.items():
-            ctx.console.print(f"  [cyan]{slot:5s}[/] → {model}")
-        avail = ctx.slots.available_models()
-        if avail:
-            in_use = set(slot_models.values())
-            # Provenance per model (chat/origin.py) so "which of these is
-            # actually on this disk?" is answerable at selection time.
-            try:
-                origins = origin_mod.origins_for_backend(ctx.slots.backend)
-            except Exception:
-                origins = {}
-            ctx.console.print("[dim]available models — `/model <slot> <n>`:[/]")
-            for i, m in enumerate(avail, 1):
-                marks = []
-                if m == ctx.slots.resident:
-                    marks.append("resident")
-                if m in in_use:
-                    marks.append("in use")
-                tag = f"  [dim]({', '.join(marks)})[/]" if marks else ""
-                org = origins.get(m)
-                mark = ""
-                # Local is the norm — no marker for it (absence of ☁/⇅ IS
-                # "local", per the 2026-07-30 roster trim). Only a wire crossing
-                # is worth a glyph.
-                if org is not None and org.is_over_the_network:
-                    mark = f" [yellow]{org.glyph} {org.label}[/]"
-                if not modelcaps.for_model(ctx.slots.backend, m).usable:
-                    mark += " [yellow]⚠ no tool support[/]"
-                ctx.console.print(f"  [cyan]{i:2d}[/] {m}{mark}{tag}")
-            if any(o.is_over_the_network for o in origins.values()):
-                ctx.console.print("[dim]  ☁ network volume · ⇅ remote endpoint "
-                                  "(unmarked = local disk)[/]")
-        else:
-            ctx.console.print(f"[dim]({ctx.slots.engine_label()} unreachable — "
-                              "`/model <slot> <id>` still works)[/]")
-        if ctx.slots.catalog_is_larger_than_roster():
-            ctx.console.print("[dim]· `/model find <text>` searches the full "
-                              "catalog (this list is the shortlist)[/]")
+        _model_list(ctx)
         return CommandResult(handled=True)
     slot = args[0]
     # `find` is a SEARCH, not a slot: it reads the catalog and selects nothing.
@@ -111,25 +71,12 @@ def _model(args, ctx: CommandContext) -> CommandResult:
                           "chat|plan|code|all (or `find <text>`).[/]")
         return CommandResult(handled=True)
     if len(args) < 2:
-        for s in (_SLOTS if slot == "all" else (slot,)):
-            ctx.console.print(f"  {s} → {ctx.slots.model_for(s)}")
+        _model_show(slot, ctx)
         return CommandResult(handled=True)
     sel = args[1]
-    # Numeric selection indexes into the available-model list (1-based).
-    if sel.isdigit():
-        avail = ctx.slots.available_models()
-        idx = int(sel)
-        if not avail:
-            ctx.console.print("[yellow]No available-model list "
-                              f"({ctx.slots.engine_label()} unreachable) "
-                              "— pass an explicit id: /model <slot> <id>.[/]")
-            return CommandResult(handled=True)
-        if not (1 <= idx <= len(avail)):
-            ctx.console.print(f"[yellow]Pick 1–{len(avail)} (see /model).[/]")
-            return CommandResult(handled=True)
-        model_id = avail[idx - 1]
-    else:
-        model_id = sel
+    model_id = _model_pick(sel, ctx)
+    if model_id is None:
+        return CommandResult(handled=True)
     # An explicit id the picker doesn't offer has TWO very different causes,
     # and "unknown model" would be wrong for one of them: the server may well
     # serve it while `visible_models:` hides it from the roster (a supported
@@ -137,7 +84,93 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     # Say which, and name the unlock, instead of failing at swap time.
     if not sel.isdigit():
         _warn_model_not_offered(ctx, model_id)
+    _model_set(slot, model_id, ctx)
+    return CommandResult(handled=True)
 
+
+def _model_list(ctx: CommandContext) -> None:
+    """`/model` with no args: the slot table, then the numbered roster."""
+    slot_models = ctx.slots.slot_models()
+    ctx.console.print(f"[bold]Model slots[/] [dim](resident in RAM: "
+                      f"[cyan]{ctx.slots.resident}[/])[/]")
+    for slot, model in slot_models.items():
+        ctx.console.print(f"  [cyan]{slot:5s}[/] → {model}")
+    avail = ctx.slots.available_models()
+    if avail:
+        _model_roster(ctx, avail, set(slot_models.values()))
+    else:
+        ctx.console.print(f"[dim]({ctx.slots.engine_label()} unreachable — "
+                          "`/model <slot> <id>` still works)[/]")
+    if ctx.slots.catalog_is_larger_than_roster():
+        ctx.console.print("[dim]· `/model find <text>` searches the full "
+                          "catalog (this list is the shortlist)[/]")
+
+
+def _model_roster(ctx: CommandContext, avail: list[str], in_use: set[str]) -> None:
+    """The numbered `/model <slot> <n>` list, one marked line per model."""
+    # Provenance per model (chat/origin.py) so "which of these is
+    # actually on this disk?" is answerable at selection time.
+    try:
+        origins = origin_mod.origins_for_backend(ctx.slots.backend)
+    except Exception:
+        origins = {}
+    ctx.console.print("[dim]available models — `/model <slot> <n>`:[/]")
+    for i, m in enumerate(avail, 1):
+        ctx.console.print(_model_roster_line(ctx, i, m, origins.get(m), in_use))
+    if any(o.is_over_the_network for o in origins.values()):
+        ctx.console.print("[dim]  ☁ network volume · ⇅ remote endpoint "
+                          "(unmarked = local disk)[/]")
+
+
+def _model_roster_line(ctx: CommandContext, i: int, m: str, org,
+                       in_use: set[str]) -> str:
+    """One roster row: index, id, wire-crossing glyph, tool warning, marks."""
+    marks = []
+    if m == ctx.slots.resident:
+        marks.append("resident")
+    if m in in_use:
+        marks.append("in use")
+    tag = f"  [dim]({', '.join(marks)})[/]" if marks else ""
+    mark = ""
+    # Local is the norm — no marker for it (absence of ☁/⇅ IS
+    # "local", per the 2026-07-30 roster trim). Only a wire crossing
+    # is worth a glyph.
+    if org is not None and org.is_over_the_network:
+        mark = f" [yellow]{org.glyph} {org.label}[/]"
+    if not modelcaps.for_model(ctx.slots.backend, m).usable:
+        mark += " [yellow]⚠ no tool support[/]"
+    return f"  [cyan]{i:2d}[/] {m}{mark}{tag}"
+
+
+def _model_show(slot: str, ctx: CommandContext) -> None:
+    """`/model <slot>` (or `/model all`): print what the slot(s) resolve to."""
+    for s in (_SLOTS if slot == "all" else (slot,)):
+        ctx.console.print(f"  {s} → {ctx.slots.model_for(s)}")
+
+
+def _model_pick(sel: str, ctx: CommandContext) -> str | None:
+    """The model id `sel` names, or None (already explained) if it can't.
+
+    Numeric selection indexes into the available-model list (1-based);
+    anything else IS the id.
+    """
+    if not sel.isdigit():
+        return sel
+    avail = ctx.slots.available_models()
+    idx = int(sel)
+    if not avail:
+        ctx.console.print("[yellow]No available-model list "
+                          f"({ctx.slots.engine_label()} unreachable) "
+                          "— pass an explicit id: /model <slot> <id>.[/]")
+        return None
+    if not (1 <= idx <= len(avail)):
+        ctx.console.print(f"[yellow]Pick 1–{len(avail)} (see /model).[/]")
+        return None
+    return avail[idx - 1]
+
+
+def _model_set(slot: str, model_id: str, ctx: CommandContext) -> None:
+    """Point `slot` (or every slot, for `all`) at `model_id` and confirm."""
     targets = tuple(_SLOTS) if slot == "all" else (slot,)
     for s in targets:
         ctx.slots.set_override(s, model_id)
@@ -147,6 +180,11 @@ def _model(args, ctx: CommandContext) -> CommandResult:
     else:
         ctx.console.print(f"[green]✓[/] slot [cyan]{slot}[/] → {model_id} "
                           f"[dim](swaps on next {slot} turn)[/]")
+    _model_caveats(model_id, ctx)
+
+
+def _model_caveats(model_id: str, ctx: CommandContext) -> None:
+    """After a switch: say if the weights cross a wire, or tools are withheld."""
     try:
         org = origin_mod.origin_for(ctx.slots.backend, model_id)
     except Exception:
@@ -159,7 +197,6 @@ def _model(args, ctx: CommandContext) -> CommandResult:
             f"  [yellow]⚠ {model_id} cannot call tools[/] [dim]— {cap.reason}. "
             "luxe will withhold the tool surface on its turns: conversation "
             "only, no reading or editing files.[/]")
-    return CommandResult(handled=True)
 
 
 _FIND_MAX_ROWS = 30
