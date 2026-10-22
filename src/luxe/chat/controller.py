@@ -525,6 +525,10 @@ class ChatController:
                                 message=message, started_at=started_at,
                                 ended_at=ended_at,
                                 partial_text="".join(stream_parts))
+        # Record + recover an aborted turn HERE, on the thread that ran it:
+        # recovery can restart oMLX (minutes), and the TUI's renderer runs on
+        # the UI thread — it used to freeze the app for the whole repair.
+        outcome.abort = self.aborted_report(outcome)
         sink.render_outcome(outcome, prep)
         return outcome
 
@@ -579,7 +583,11 @@ class ChatController:
         record it and run the kit's recovery (`turn.note_aborted_turn`), and
         say which step each context number describes — the footer's `ctx:` is
         the last ACCEPTED step, the pressure figure the step that FAILED
-        (2026-08-24, EVIDENCE.md finding 4). None when not aborted."""
+        (2026-08-24, EVIDENCE.md finding 4). None when not aborted.
+
+        `run_turn` calls this once per turn, off the UI thread, and carries the
+        result on `TurnOutcome.abort`; renderers read that field and must not
+        call this (it records, and its recovery can block for minutes)."""
         noted = note_aborted_turn(self.session, self.slots, outcome.result)
         if not noted:
             return None
@@ -811,8 +819,9 @@ def run_goal_loop(ctl: ChatController, sink: TurnSink, *,
             break
 
         if outcome.result is not None and is_backend_abort(outcome.result):
-            # The loop contained the backend failure into an abort; the turn
-            # renderer already ran the recovery. Count it like a raised one.
+            # The loop contained the backend failure into an abort;
+            # `run_turn` already ran the recovery (`TurnOutcome.abort`).
+            # Count it like a raised one.
             if _crashed("backend error"):
                 break
             continue

@@ -303,7 +303,10 @@ never touches this module.
   (`AgentResult.aborted`, e.g. a contained backend ConnectError or max steps)
   gets the SAME treatment in both front-ends — the reason on screen in red
   plus a kind="error" transcript record (`turn.note_aborted_turn`, via
-  `ChatController.aborted_report`) — because
+  `ChatController.aborted_report`, which `run_turn` calls on the thread that
+  ran the turn and carries on `TurnOutcome.abort` — renderers only draw it;
+  the TUI's renderer is the UI thread, and recovery can restart oMLX for
+  minutes) — because
   an aborted turn returns empty text and otherwise renders as a successful
   blank reply (session 3aabb18b0e07, five of them against a dead proxy). An
   aborted turn whose reason is a backend error ALSO runs the kit's recovery

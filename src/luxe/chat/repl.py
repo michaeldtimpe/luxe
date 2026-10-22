@@ -452,7 +452,7 @@ class LineSink:
         # FAILED turn, not an empty answer. Rendered after the footer rather
         # than instead of it — an abort can land after several good steps, and
         # that partial prose is still worth showing.
-        rep = self.ctl.aborted_report(outcome)
+        rep = outcome.abort  # recorded + recovered by `run_turn`
         if rep:
             console.print(f"[red]✗ {_escape(rep.reason)}[/]")
             if rep.ctx_line:
