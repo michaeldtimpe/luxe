@@ -19,9 +19,12 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   `append_event` from `luxe.agents.loop` at call time (tests monkeypatch it
   there). No bare `append_event(` / `if log_calls:` in the body —
   `tests/test_loop_telemetry.py` pins it
-- `tests/test_golden_trajectory.py` pins nine scripted multi-step trajectories
-  byte-for-byte (every request body, every events record in order, the
-  AgentResult). A change to what the model sees or what telemetry records
+- `tests/test_golden_trajectory.py` pins eighteen scripted multi-step
+  trajectories byte-for-byte (every request body, every events record in
+  order, the AgentResult; for the nine added 2026-10-22 — turn carry and its
+  rejection, reasoning roundtrip, the terminal truncated/empty paths,
+  stuck-loop suppressed, backend-error abort — also the display callbacks
+  and `AgentResult.messages`). A change to what the model sees or what telemetry records
   must regenerate a snapshot deliberately, in the same commit as its cause
 - `guardrails.py` is the SOLE home of intervention thresholds + nudge bodies
   (`_WRITE_PRESSURE_*`, `_ACTION_DENSITY_GATE_*`,
