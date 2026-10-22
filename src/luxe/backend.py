@@ -101,12 +101,6 @@ class GenerationTiming:
             return None
         return self.completion_tokens / self.decode_s
 
-    @property
-    def decode_tok_per_s(self) -> float:
-        if self.total_s <= 0 or self.completion_tokens <= 0:
-            return 0.0
-        return self.completion_tokens / self.total_s
-
 
 @dataclass
 class ToolCallResponse:
