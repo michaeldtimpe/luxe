@@ -17,6 +17,7 @@ prompt forever, with no output and no deadline.
 from __future__ import annotations
 
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -24,16 +25,14 @@ import pytest
 from luxe import pr, spec_validator
 from luxe.pr import CmdResult, GitDiffError
 from luxe.spec import Requirement, Spec
+from tests._git import git
 
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                          text=True, check=True).stdout
+_git = partial(git, strip=False)
 
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    _git(tmp_path, "init", "-q", "-b", "main")
     _git(tmp_path, "config", "user.email", "t@t")
     _git(tmp_path, "config", "user.name", "test")
     (tmp_path / "a.txt").write_text("first\n")

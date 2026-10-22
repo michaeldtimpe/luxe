@@ -13,6 +13,7 @@ from luxe.chat import slots as slots_mod
 from luxe.chat.session import ChatSession
 from luxe.config import PipelineConfig, RoleConfig
 from luxe.memory import project as project_mem
+from tests._git import git as _git
 
 
 class FakeBackend:
@@ -818,13 +819,12 @@ def test_retry_with_no_history(ctx):
 
 
 def _init_repo(path):
-    import subprocess
-    subprocess.run(["git", "init", "-q", "."], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
+    _git(path, "init", "-q", ".")
+    _git(path, "config", "user.email", "t@t")
+    _git(path, "config", "user.name", "t")
     (path / "a.py").write_text("one\ntwo\n")
-    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
-    subprocess.run(["git", "commit", "-qm", "init"], cwd=path, check=True)
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "init")
 
 
 def test_doctor_prints_a_verdict_line(ctx, monkeypatch):

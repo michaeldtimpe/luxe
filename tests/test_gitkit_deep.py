@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import io
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
 from luxe.gitkit import deep
+from tests._git import git as _git
 
 
 def _QuietConsole():
@@ -407,10 +407,6 @@ def test_reduce_findings_batches_and_keeps_survivors():
 
 
 # --- orchestration through run_git_report (stubbed run_single) --------------
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
-
 
 @pytest.fixture
 def big_repo(tmp_path: Path) -> Path:

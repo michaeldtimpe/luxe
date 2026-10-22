@@ -18,16 +18,17 @@ from luxe.pr import (
     PRState,
 )
 from luxe.run_state import RunSpec
+from tests._git import git as _git
 
 
 @pytest.fixture
 def git_repo(tmp_path: Path) -> Path:
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
     (tmp_path / "README.md").write_text("# repo\n")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "init")
     return tmp_path
 
 
@@ -82,11 +83,6 @@ def test_non_empty_diff_commits_branch(git_repo: Path, monkeypatch, tmp_path):
     log = subprocess.run(["git", "log", "--oneline", "-1"],
                          cwd=git_repo, capture_output=True, text=True, check=True)
     assert "bugfix: fix x" in log.stdout
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                          text=True, check=True).stdout.strip()
 
 
 def test_agent_made_commit_is_shipped_not_no_mutations(git_repo: Path):

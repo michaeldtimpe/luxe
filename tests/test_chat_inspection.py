@@ -15,18 +15,19 @@ from luxe.chat.session import ChatSession
 from luxe.chat.slots import SlotManager
 from luxe.config import PipelineConfig, RoleConfig
 from luxe.memory import session as session_store
+from tests._git import git as _git
 
 
 def _repo(tmp_path: Path, *, commit: bool = True) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "."], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    _git(repo, "init", "-q", ".")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
     (repo / "a.py").write_text("one\ntwo\nthree\n")
     if commit:
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "init")
     return repo
 
 

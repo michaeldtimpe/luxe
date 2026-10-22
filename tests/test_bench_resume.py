@@ -30,6 +30,7 @@ from benchmarks.maintain_suite.run import (
     run_fixture,
     save_state,
 )
+from tests._git import git as _git
 
 
 @pytest.fixture(autouse=True)
@@ -806,12 +807,6 @@ def test_no_mutations_without_a_diff_still_grades(tmp_path, monkeypatch):
         fixture_id="f1", score=1, diff_produced=False))
     fr, _ = run_fixture(_f(), out, tmp_path / "wd")
     assert "never shipped" not in (fr.error or "")
-
-
-def _git(repo, *args):
-    import subprocess
-    return subprocess.run(["git", *args], cwd=repo, check=True,
-                          capture_output=True, text=True).stdout.strip()
 
 
 def test_reused_clone_does_not_rewind_previous_run_branch(tmp_path, monkeypatch):
