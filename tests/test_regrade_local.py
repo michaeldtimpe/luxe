@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.maintain_suite.grade import Fixture
+from tests._git import git as _git
 
 ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location(
@@ -19,11 +20,6 @@ _spec = importlib.util.spec_from_file_location(
 rl = importlib.util.module_from_spec(_spec)
 sys.modules["regrade_local"] = rl
 _spec.loader.exec_module(rl)
-
-
-def _git(cwd: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, check=True,
-                          capture_output=True, text=True).stdout.strip()
 
 
 @pytest.fixture

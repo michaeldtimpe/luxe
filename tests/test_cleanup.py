@@ -8,18 +8,16 @@ new, unreferenced files are scratch; Python deletes only offered paths.
 
 from __future__ import annotations
 
-import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
 
 from luxe import cleanup
 from luxe.backend import ChatResponse, GenerationTiming
+from tests._git import git
 
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True,
-                          capture_output=True, text=True).stdout
+_git = partial(git, strip=False)
 
 
 @pytest.fixture

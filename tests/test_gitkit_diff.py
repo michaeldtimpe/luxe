@@ -9,13 +9,13 @@ tests drive `run_git_report` with a STUBBED run_single (the deep-test pattern).
 from __future__ import annotations
 
 import io
-import subprocess
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
 from luxe.gitkit import diffscope
+from tests._git import git as _git
 
 
 def _QuietConsole():
@@ -27,12 +27,6 @@ def isolated_home(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-
-
-def _git(repo: Path, *args: str) -> str:
-    r = subprocess.run(["git", *args], cwd=repo, check=True,
-                       capture_output=True, text=True)
-    return r.stdout.strip()
 
 
 @pytest.fixture

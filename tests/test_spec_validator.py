@@ -6,7 +6,7 @@ predicate logic without a real fixture cache. Each test is isolated.
 
 from __future__ import annotations
 
-import subprocess
+from functools import partial
 from pathlib import Path
 
 
@@ -16,14 +16,9 @@ from luxe.spec_validator import (
     format_unsatisfied_for_reprompt,
     validate,
 )
+from tests._git import git
 
-
-def _git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(repo), capture_output=True, text=True, check=True,
-    )
-    return proc.stdout
+_git = partial(git, strip=False)
 
 
 def _init_repo(tmp_path: Path) -> tuple[Path, str]:
