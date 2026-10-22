@@ -526,6 +526,48 @@ def test_latest_report_for_matches_head(git_repo, _gitkit_cfg):
     assert store.latest_report_for(git_repo, "gitreview", "deadbeef") is None
 
 
+@pytest.mark.parametrize("text", [
+    "---\nkind: gitaudit\nhead: abc123\nrepo: /r\n---\n\n# body\nhead: zzz\n",
+    "---\nhead: abc\nhead: def\n---\nbody",
+    "---\nhead:\nhead: later\n---\n",                  # first head: wins, even empty
+    "---\n---\nhead: x\n---\nbody",                     # opener's next line never closes
+    "---\nhead: x\n",                                   # unterminated → no head
+    "---\nhead: x\n----\nbody",
+    "no frontmatter\nhead: x\n---\n",
+    "--- \nhead: x\n---\n",
+    "",
+    "---\r\nhead: crlf\r\n---\r\nbody",
+])
+def test_read_frontmatter_head_matches_the_text_scan(tmp_path, text):
+    """The header-only reader answers exactly what the whole-text scan did."""
+    p = tmp_path / "r.md"
+    p.write_bytes(text.encode())
+    assert store._read_frontmatter_head(p) == store._frontmatter_head(
+        p.read_text())
+
+
+def test_latest_report_for_reads_only_the_match_in_full(git_repo, _gitkit_cfg,
+                                                        monkeypatch):
+    """Non-matching candidates are judged on their header alone."""
+    head = health.current_head(git_repo)
+    stale = store.save_report(git_repo, "gitaudit", "# old\n" + "x\n" * 5000,
+                              meta={"head": "0ld0ld0"})
+    match = store.save_report(git_repo, "gitaudit", "# Repository audit\nok",
+                              meta={"head": head})
+    newer = stale.stat().st_mtime + 10      # newest first: stale is tried first
+    os.utime(stale, (newer, newer))
+    read: list[Path] = []
+    real = Path.read_text
+
+    def spy(self, *a, **k):
+        read.append(self)
+        return real(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", spy)
+    body = store.latest_report_for(git_repo, "gitaudit", head)
+    assert body is not None and body.startswith("# Repository audit")
+    assert read == [match]
+
+
 def test_gitchange_injects_prior_findings(git_repo, _gitkit_cfg, monkeypatch):
     from luxe.gitkit import run_git_report, store
     head = health.current_head(git_repo)
