@@ -29,6 +29,7 @@ from rich.markup import escape
 from luxe import gitcmd
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
+from luxe.gitkit.deep.mapcache import fresh_survey_notes
 from luxe.repo_index import _detect_languages_for_repo
 
 # A plan step's `verify` is MODEL-WRITTEN text: either a shell command or a
@@ -295,7 +296,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
               rebuild_map: bool = False, run_single_fn=None) -> int:
     """Execute a saved gitchange against a LOCAL repo under the six invariants.
     Returns a process exit code (0 ok, non-zero on abort)."""
-    from luxe.gitkit import health, plan as plan_mod, store
+    from luxe.gitkit import health, plan as plan_mod
     from luxe import pr
     reader = reader or console.input
     repo = Path(repo_path)
@@ -368,10 +369,9 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
     if run_single_fn is None:
         from luxe.agents.single import run_single as run_single_fn
 
-    survey = ""
-    smap = store.reports_dir(repo) / "map" / "survey_notes.md"
-    if smap.is_file():
-        survey = smap.read_text()[:4000]
+    # The cached survey is context only when the map is FRESH for this HEAD
+    # (the runner's rule) — a map from another commit describes another tree.
+    survey = (fresh_survey_notes(repo, head=head) or "")[:4000]
 
     backend = Backend(base_url=cfg.omlx_base_url, model=cfg.model_for_slot("chat"))
     role = cfg.role("monolith")    # FULL, write-enabled — NOT make_read_only_role

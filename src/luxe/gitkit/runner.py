@@ -278,14 +278,11 @@ def run_git_report(
                     for c in chunks if c.files}
                 # Opportunistic: inject a FRESH whole-repo map's survey notes;
                 # NEVER generate one, and diff runs never write map/.
-                survey_inject = None
-                st = deep_mod.map_status(target, head=health.current_head(target))
-                if st.state is deep_mod.MapState.FRESH:
-                    sn = deep_mod._map_dir(target) / "survey_notes.md"
-                    if sn.is_file():
-                        survey_inject = sn.read_text()
-                        console.print("[dim]· injecting fresh whole-repo survey "
-                                      "notes into the diff audit[/]")
+                survey_inject = deep_mod.fresh_survey_notes(
+                    target, head=health.current_head(target))
+                if survey_inject is not None:
+                    console.print("[dim]· injecting fresh whole-repo survey "
+                                  "notes into the diff audit[/]")
                 return deep_mod.run_deep_report(
                     kind, target=target, task_type=task_type, backend=backend,
                     role_cfg=role_cfg, languages=languages, console=console,
