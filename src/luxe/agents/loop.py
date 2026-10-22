@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from luxe.agents.cohort_priors import load_prior_from_env
 from luxe.agents.convergence import (
     apply_slew_rate,
     bias_to_modulation,
@@ -486,20 +485,6 @@ def run_agent(
     # v1.11 Phase 3a — slew-rate limit; agents.sdd-pinned default 0.3.
     # Bounds per-step intensity-modifier change. Override for ablation.
     adaptive_max_delta = flags.adaptive_max_delta
-    # v1.11 Phase 2 — cross-cycle prior (log-only this cycle). Read once
-    # at run start. Priors do NOT influence intervention intensity in
-    # v1.11 per agents.sdd ("priors-log-only" invariant); deferred to
-    # v1.11.1+. Loader is null-safe — missing/corrupt input returns None.
-    cohort_prior = load_prior_from_env()
-    if cohort_prior is not None:
-        emit(
-            "prior_loaded",
-            instance_id=cohort_prior.get("instance_id"),
-            verdict=cohort_prior.get("verdict"),
-            tiers_a=cohort_prior.get("tiers_a"),
-            tiers_b=cohort_prior.get("tiers_b"),
-            rank_delta=cohort_prior.get("rank_delta"),
-        )
     # v1.10.4 — band-response policy for the score<LOW suppression branch.
     # "silent"               = v1.10.3 behavior (blanket silent suppression)
     # "breadth_probe_hybrid" = v1.10.4 default (fire breadth_probe on the

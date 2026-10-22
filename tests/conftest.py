@@ -57,8 +57,6 @@ _REAL_BFCL_DATA = os.path.join(_REAL_HOME, ".luxe", "bfcl-data")
 _IMPORT_TIME_HOME_PATHS = (
     ("luxe.chat.theme", "_PREF_PATH", (".luxe", "theme")),
     ("luxe.secrets", "SECRETS_PATH", (".luxe", "secrets.env")),
-    ("luxe.agents.cohort_priors", "DEFAULT_COHORT_HISTORY_DIR",
-     (".luxe", "cohort-history")),
     ("luxe.modelstore", "DEFAULT_MODELS_DIR", (".omlx", "models")),
 )
 
