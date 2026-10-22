@@ -66,12 +66,6 @@ class RunFlags:
     # Read here once (2026-09) instead of by the guard on every step.
     early_bail_mode: str = DEFAULT_EARLY_BAIL_MODE
 
-    # Count a post-write REPEAT call (same tool + same args as an earlier call
-    # this run) toward the post-write idle streak. Opt-in: default OFF keeps
-    # the benchmark path byte-identical until a maintain_suite run says
-    # otherwise. See agents.sdd "post-write idle repeat counting".
-    post_write_idle_repeats: bool = False
-
     # Treat a turn truncated at max_tokens with no tool call as recoverable
     # (nudge + continue) instead of terminal. DEFAULT-ON since 2026-08-10:
     # the A/B took maintain_suite 27/30 -> 30/30 with zero regressions.
@@ -230,9 +224,6 @@ class RunFlags:
             early_bail_commit_only=e.get("LUXE_EARLY_BAIL_COMMIT_ONLY") == "1",
             action_density_gate=e.get("LUXE_ACTION_DENSITY_GATE") == "1",
             convergence_gate=e.get("LUXE_CONVERGENCE_GATE") == "1",
-            post_write_idle_repeats=(
-                e.get("LUXE_POST_WRITE_IDLE_REPEATS") == "1"
-            ),
             # Default ON: only the exact string "0" disables it.
             truncated_turn_retry=(
                 e.get("LUXE_TRUNCATED_TURN_RETRY", "1") != "0"

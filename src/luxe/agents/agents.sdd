@@ -448,72 +448,6 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   `benchmarks/maintain_suite/run.py` and the test corpus were swept, so there
   was no field-shape assumption to break.
 
-### Post-write idle repeat counting (pinned 2026-08-10, opt-in, UNBENCHED)
-
-- `LUXE_POST_WRITE_IDLE_REPEATS=1` (`RunFlags.post_write_idle_repeats`) makes a
-  post-write REPEAT call — same tool, same arguments as an earlier call this
-  run — count toward the `post_write_idle_tools` streak instead of resetting
-  it. **Default OFF; with it unset the loop is byte-identical.**
-- Why it exists: `PostWriteIdleExitGuard`'s docstring always claimed it caught
-  non-write calls that "hit the dedup short-circuit", but `read_file` is in
-  `_DEDUP_EXEMPT_TOOLS`, so a repeated read returns full content, resets the
-  streak, and the guard never arms. `consecutive_repeat` is blind for the same
-  reason. The gap is between the guard's stated contract and what it can see.
-- Demonstrated on m1, 2026-08-10, Qwen3.6-35B-A3B-4bit, from
-  `~/.luxe/runs/smoke-code/events.jsonl`: step 1 reads key `f0ee19e9`; after
-  the edit at step 9, step 10 reads the SAME key again, recorded
-  `dup=False` (the exemption) with `bytes=78`. Under the old logic that call
-  RESET the streak; with the switch on it counts, and `post_write_idle_exit`
-  fires on that run where it does not on the identical runs beside it.
-- **This is a latent gap, not the cause of any known abort.** It was found
-  while investigating m1's code-drill failure, but that failure was a step
-  BUDGET problem — seven bash probes before the edit at step 9, 14 calls over
-  13 steps against a 12-step cap — fixed by `_CODE_DRILL_STEPS_LOW_BIT`, not
-  by this switch. An earlier draft of this section attributed a
-  seven-repeated-reads trajectory to m1; that came from misreading a stale
-  run directory and is withdrawn.
-- `call_is_repeat` is captured BEFORE the dedup branch and before
-  `seen_calls.add(key)`, so it means "this exact call already ran". It is
-  deliberately distinct from `step_had_repeat`, which the dedup exemption
-  keeps False for `read_file` — the very tool that created the blind spot.
-- A NOVEL post-write call still resets the streak. Exploration after a write
-  must not be cut short; only redundant work counts.
-- **BENCHED 2026-08-10 — default STAYS OFF.** 3 reps x 10 fixtures x 2 arms
-  on the champion: 27/30 and 111/150 in BOTH arms, per-fixture scores
-  identical across all six passes, `post_write_idle_exit` 9 in both. The
-  switch is **inert on this suite**, not merely neutral: across 60 runs the
-  max post-write repeats in any single run is 1, against a threshold of 3, so
-  a lone repeat can never arm the guard. The wall/token deltas are substrate
-  noise — no firing decision changed. Report:
-  `acceptance/pwir_ab_2026_08_10/REPORT.md`.
-- Venue check done offline against 1,369 archived trajectories, 2026-08-10
-  (`acceptance/pwir_ab_2026_08_10/SWEBENCH-VENUE-CHECK.md`). **SWE-bench is the
-  WRONG venue**: the switch would change 7 of 896 runs (0.8%), and 0 of the 136
-  most recent. An n=75 A/B there would expect under one affected instance.
-- **maintain_suite is now the right venue, and the earlier "do not re-run this
-  suite" note is withdrawn.** 9 of 154 August runs (5.8%) would change, all on
-  `nothing-ever-happens-document-config` — the fixture with documented temp=0
-  variance. The A/B's own 60 runs really did have zero opportunity (re-checked,
-  0/60), so its verdict stands; the pattern shows up in later runs.
-- Careful with the reasoning, not just the verdict: a lone repeat CAN arm the
-  guard by topping up an existing 2-streak (`baseline_streak=1 →
-  treatment_streak=3` in all 9 cases). REPORT.md's claim that it "can never arm
-  the guard by itself" was an overstatement of a correct empirical result.
-- **RE-BENCHED 2026-08-10 and REFUTED.** With opportunity present (3 runs per
-  arm had a streak reaching 3 only when repeats count) the switch changed
-  nothing: 30/30 and 120/150 in BOTH arms, `post_write_idle_exit` 12 in both
-  with an identical per-fixture distribution, wall identical to 0.1s, tokens
-  +0.3%. The predicted wall/token saving did not materialise because in those
-  runs the guard already armed via the zero-byte path. Report:
-  `acceptance/pwir_rerun_2026_08_10/REPORT.md`.
-- Disposition: keep in-tree, default OFF, documented as refuted — same as
-  the trajectory-shape suppressor (`LUXE_RESPOND_TERMINAL` was removed
-  outright in 2026-09; see "Removed mechanisms"). **Do not
-  re-bench on maintain_suite**; two 3-rep A/Bs from opposite starting
-  conditions (no opportunity, then opportunity) agree. Reviving it needs a
-  workload where post-write repeat streaks reach 3 WITHOUT zero-byte calls
-  already getting there.
-
 ### Truncated-turn retry (pinned 2026-08-10, DEFAULT-ON, BENCHED)
 
 - `LUXE_TRUNCATED_TURN_RETRY=1` (`RunFlags.truncated_turn_retry`): when a turn
@@ -694,6 +628,30 @@ bias -> modulation -> slew pipeline has to run anyway, and the Stage 3
 invariants (bias-not-lock, slew-rate, disable-equivalence) are written against
 it. Special-casing two of its three keys would save a few lines at the cost of
 the one shape those invariants describe.
+
+### Removed mechanisms (2026-10-22 refuted-lever cleanup)
+
+Same rules as the 2026-09 record above: each was off by default, set by no
+benchmark config, and refuted or inert on its own bench; the golden request
+and trajectory snapshots pass unchanged (a snapshot that existed only to pin
+a removed lever is deleted and named here). `outcomes.py` / the taxonomy
+script keep whatever historical event names they already parse. Do not
+reintroduce any of them without new evidence.
+
+- **Post-write idle repeat counting** (`LUXE_POST_WRITE_IDLE_REPEATS`,
+  `RunFlags.post_write_idle_repeats`, pinned 2026-08-10). Counted a
+  post-write REPEAT call (same tool + arguments) toward the
+  `post_write_idle_tools` streak, closing the `read_file`
+  `_DEDUP_EXEMPT_TOOLS` blind spot in `PostWriteIdleExitGuard`. REFUTED by two
+  3-rep x 10 maintain_suite A/Bs from opposite starting conditions: 27/30 and
+  30/30 in BOTH arms, `post_write_idle_exit` counts identical, wall identical
+  (`acceptance/pwir_ab_2026_08_10/REPORT.md`,
+  `acceptance/pwir_rerun_2026_08_10/REPORT.md`; SWE-bench ruled out as a
+  venue in `SWEBENCH-VENUE-CHECK.md`). Where the opportunity existed the guard
+  already armed via the zero-byte path. The blind spot itself stands: a
+  repeated `read_file` after a write returns content and resets the streak.
+  `variants_pwir*.yaml` and `tests/test_loop_post_write_repeats.py` went with
+  it (recover from history).
 
 ### Consecutive-repeat abort is a RoleConfig switch (2026-10-15)
 

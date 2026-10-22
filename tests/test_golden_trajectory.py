@@ -211,12 +211,11 @@ SCENARIOS: list[Scenario] = [
             _reply("The widget renders a string."),
         ],
     ),
-    # Compaction OFF (the elide path), calibration OFF, post-write repeat
-    # counting ON, and a stuck-loop abort from two consecutive dedup steps.
+    # Compaction OFF (the elide path), calibration OFF, and a stuck-loop
+    # abort from two consecutive dedup steps.
     Scenario(
         name="ablation_stuck_loop",
         env={"LUXE_TIERED_COMPACT": "0", "LUXE_CTX_SERVER_TRUTH": "0",
-             "LUXE_POST_WRITE_IDLE_REPEATS": "1",
              "LUXE_TRUNCATED_TURN_RETRY": "0", "LUXE_EMPTY_TURN_RETRY": "0"},
         role={"num_ctx": 4000, "max_steps": 10},
         script=[
