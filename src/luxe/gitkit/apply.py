@@ -415,8 +415,7 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                 try:
                     run_single_fn(
                         backend, role,
-                        goal="Apply ONLY this single refactor step to the working tree.\n\n"
-                             + prompts.GIT_APPLY_STEP_HINT,
+                        goal=prompts.GIT_APPLY_STEP_GOAL,
                         task_type="implement", languages=languages,
                         extra_context=_step_block(step, plan, survey),
                         run_id=f"gitchange-apply-{step['id']}", phase="main")

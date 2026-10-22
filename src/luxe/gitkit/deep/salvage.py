@@ -33,9 +33,7 @@ def _plan_extract_pass(text: str, *, pass_fn, role) -> str:
     Returns the raw pass text (the caller parses it leniently). `pass_fn`/`role` are
     the run_deep_report `_pass` choke point so the recovery is timed like any stage."""
     ctx = f"<plan_draft>\n{text}\n</plan_draft>"
-    goal = ("Convert the change plan draft into the required JSON.\n\n"
-            + prompts.GIT_CHANGE_EXTRACT_HINT)
-    res = pass_fn(goal, ctx, "plan-extract", role=role)
+    res = pass_fn(prompts.GIT_CHANGE_EXTRACT_GOAL, ctx, "plan-extract", role=role)
     return getattr(res, "final_text", "") or ""
 
 
@@ -62,9 +60,7 @@ def _format_final_report(draft: str, kind: str, *, pass_fn, role) -> str | None:
     draft (copy findings verbatim, drop the narration). Returns the sliced clean
     report, or None if it still has no header."""
     ctx = f"<report_draft>\n{draft}\n</report_draft>"
-    goal = ("Produce the clean final report from the draft below.\n\n"
-            + prompts.GIT_DEEP_FORMAT_HINT)
-    res = pass_fn(goal, ctx, "format", role=role)
+    res = pass_fn(prompts.GIT_DEEP_FORMAT_GOAL, ctx, "format", role=role)
     text = (getattr(res, "final_text", "") or "").strip()
     sliced = extract_report(text, kind)
     return sliced if _has_report_header(sliced, kind) else None

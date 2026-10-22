@@ -157,8 +157,7 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
             backend = Backend(base_url=cfg.omlx_base_url, model=model)
         role_cfg = make_read_only_role(cfg.role("monolith")).model_copy(
             update={"max_tokens_per_turn": GITKIT_MAX_TOKENS})
-        goal = ("Write the project brief for the repository in the current "
-                "working directory.\n\n" + prompts.GIT_BRIEF_HINT)
+        goal = prompts.GIT_BRIEF_GOAL
 
         def _do_run(on_event=None, on_token=None):
             return run_single_fn(

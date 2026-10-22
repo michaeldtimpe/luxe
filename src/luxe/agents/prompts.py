@@ -970,6 +970,45 @@ GIT_DEEP_REDUCE_HINT = (
     "```"
 )
 
+# --- gitkit goal lead-ins ----------------------------------------------------
+# Every gitkit pass's `goal` is "<ASK>\n\n<HINT>": a one-sentence task statement,
+# then the directive. The ASKs lived inline in gitkit/ until 2026-10 (gitkit.sdd
+# Forbids inline prompts); moved here byte-identical. Module constants only —
+# none of them is a registry variant or overlay, so the golden registry is
+# unchanged. Where the HINT is fixed, the composed `*_GOAL` is the single source.
+GIT_AUDIT_ASK = (
+    "Audit the codebase in the current working directory: orient, find serious "
+    "bugs & security issues, and identify the highest-leverage structural "
+    "improvements — in one report."
+)
+GIT_CHANGE_ASK = (
+    "Analyze the codebase in the current working directory and produce an "
+    "APPLY-READY, ordered structural change plan."
+)
+GIT_AUDIT_DIFF_ASK = (
+    "Audit ONLY the change between the given base and HEAD of the "
+    "repository in the current working directory."
+)
+GIT_SURVEY_ASK = "Survey the repository in the current working directory."
+# `.format(n=<1-based chunk>, total=<chunks>)`; the per-kind chunk HINT follows.
+GIT_CHUNK_ASK = "Analyze chunk {n} of {total} of this repository."
+# The per-kind synthesis HINT follows.
+GIT_SYNTH_ASK = ("Write the final consolidated report for the repository in the "
+                 "current working directory.")
+GIT_CHANGE_EXTRACT_ASK = "Convert the change plan draft into the required JSON."
+GIT_DEEP_FORMAT_ASK = "Produce the clean final report from the draft below."
+GIT_DEEP_REDUCE_ASK = "Consolidate this batch of findings."
+GIT_BRIEF_ASK = ("Write the project brief for the repository in the current "
+                 "working directory.")
+GIT_APPLY_STEP_ASK = "Apply ONLY this single refactor step to the working tree."
+
+GIT_SURVEY_GOAL = f"{GIT_SURVEY_ASK}\n\n{GIT_SURVEY_HINT}"
+GIT_CHANGE_EXTRACT_GOAL = f"{GIT_CHANGE_EXTRACT_ASK}\n\n{GIT_CHANGE_EXTRACT_HINT}"
+GIT_DEEP_FORMAT_GOAL = f"{GIT_DEEP_FORMAT_ASK}\n\n{GIT_DEEP_FORMAT_HINT}"
+GIT_DEEP_REDUCE_GOAL = f"{GIT_DEEP_REDUCE_ASK}\n\n{GIT_DEEP_REDUCE_HINT}"
+GIT_BRIEF_GOAL = f"{GIT_BRIEF_ASK}\n\n{GIT_BRIEF_HINT}"
+GIT_APPLY_STEP_GOAL = f"{GIT_APPLY_STEP_ASK}\n\n{GIT_APPLY_STEP_HINT}"
+
 
 def get(prompt_id: str) -> PromptVariant:
     """Look up a PromptVariant by id. Raises KeyError with a list of

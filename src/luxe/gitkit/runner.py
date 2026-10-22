@@ -14,8 +14,8 @@ import contextlib
 from pathlib import Path
 
 from luxe import gitclone
-from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
+from luxe.gitkit.deep.salvage import _plan_extract_pass
 from luxe.gitkit.kinds import (  # re-exported: tests + scripts import these from here
     GITKIT_MAX_TOKENS as GITKIT_MAX_TOKENS,
     KINDS as KINDS,
@@ -356,15 +356,15 @@ def run_git_report(
             # (its own prose draft → JSON), then render the markdown deterministically.
             from luxe.gitkit import plan as plan_mod
 
-            def _extract_plan_json(draft: str) -> str:
-                r = run_single(
-                    backend, role_cfg,
-                    goal="Convert the change plan draft into the required JSON.\n\n"
-                         + prompts.GIT_CHANGE_EXTRACT_HINT,
-                    task_type=task_type, languages=languages,
-                    extra_context=f"<plan_draft>\n{draft}\n</plan_draft>",
+            def _extract_pass(goal: str, ctx: str, _label: str, role):
+                return run_single(
+                    backend, role, goal=goal, task_type=task_type,
+                    languages=languages, extra_context=ctx,
                     phase="chat", run_id="gitkit-gitchange-extract")
-                return (getattr(r, "final_text", "") or "")
+
+            def _extract_plan_json(draft: str) -> str:
+                return _plan_extract_pass(draft, pass_fn=_extract_pass,
+                                          role=role_cfg)
 
             report, _ = plan_mod.finalize_and_save(
                 target, _head, (result.final_text or "").strip(),

@@ -425,10 +425,8 @@ def run_deep_report(
         framing = framing_files(target)
         survey_ctx = (f"{health_block}\n\n<repo_map>\n{summary.render()}\n</repo_map>"
                       f"\n\n{_framing_block(framing)}")
-        survey_goal = ("Survey the repository in the current working directory.\n\n"
-                       + prompts.GIT_SURVEY_HINT)
         try:
-            res = _pass(survey_goal, survey_ctx, "survey")
+            res = _pass(prompts.GIT_SURVEY_GOAL, survey_ctx, "survey")
         except (ChatCancelled, KeyboardInterrupt):
             console.print("[yellow]· cancelled.[/]")
             return "", None
@@ -528,8 +526,8 @@ def run_deep_report(
                      f"{_chunk_block(c, len(chunks))}")
             if chunk_extra_blocks and c.index in chunk_extra_blocks:
                 extra += f"\n\n{chunk_extra_blocks[c.index]}"
-            goal = (f"Analyze chunk {c.index + 1} of {len(chunks)} of this "
-                    f"repository.\n\n{chunk_hint}")
+            ask = prompts.GIT_CHUNK_ASK.format(n=c.index + 1, total=len(chunks))
+            goal = f"{ask}\n\n{chunk_hint}"
             res = _pass(goal, extra, f"chunk-{c.index + 1}")
             # Enrich the just-recorded chunk timing with its footprint — defensively
             # (a mid-pass throw would have raised before appending, so guard the
@@ -643,8 +641,7 @@ def run_deep_report(
                  f"\n\n{_notes_block(digest)}")
     if prior_report:
         synth_ctx += f"\n\n{_prior_findings_block(prior_report)}"
-    synth_goal = ("Write the final consolidated report for the repository in the "
-                  "current working directory.\n\n" + _SYNTH_HINTS[kind])
+    synth_goal = f"{prompts.GIT_SYNTH_ASK}\n\n{_SYNTH_HINTS[kind]}"
     try:
         res = _pass(synth_goal, synth_ctx, "synthesis", role=synth_role)
     except (ChatCancelled, KeyboardInterrupt):

@@ -309,8 +309,8 @@ def _reduce_findings(digest: dict, *, eff_ctx: int, pass_fn, log=None,
                              f"({n.get('label', '')})\n{n.get('md', '')}"
                              for n in b_notes))
         parts.append("\n</chunk_findings>")
-        goal = "Consolidate this batch of findings.\n\n" + prompts.GIT_DEEP_REDUCE_HINT
-        res = pass_fn(goal, "".join(parts), f"reduce-{i + 1}", role=role)
+        res = pass_fn(prompts.GIT_DEEP_REDUCE_GOAL, "".join(parts),
+                      f"reduce-{i + 1}", role=role)
         parsed = parse_chunk_notes((getattr(res, "final_text", "") or "").strip())
         # an EMPTY findings list from a batch that had inputs is a miss, not
         # "all duplicates": a merge pass cannot legitimately consolidate N
