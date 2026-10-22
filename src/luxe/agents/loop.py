@@ -1394,6 +1394,109 @@ def _dispatch_one(run: _Run, st: LoopState, result: AgentResult,
     return False
 
 
+def _end_of_step(run: _Run, st: LoopState, result: AgentResult,
+                 resp: ChatResponse, step: int, step_had_repeat: bool,
+                 emit: Callable[..., None]) -> bool:
+    """After an acting step's calls are dispatched: the post-write idle
+    exit, then the consecutive-repeat streak (and its stuck-loop abort).
+    Returns True when the run ends here (`result` already says how)."""
+    pwi_exit = PostWriteIdleExitGuard.should_exit(
+        post_write_idle_tools=st.post_write_idle_tools,
+        writes_seen=st.writes_seen,
+    )
+    if pwi_exit is not None:
+        result.final_text = resp.text or ""
+        emit(
+            "post_write_idle_exit",
+            step=step,
+            **pwi_exit,
+        )
+        return True
+
+    if step_had_repeat:
+        st.consecutive_repeat_steps += 1
+        emit(
+            "tool_step_done",
+            step=step,
+            step_had_repeat=True,
+            consecutive_repeat_steps=st.consecutive_repeat_steps,
+        )
+        cr_abort = ConsecutiveRepeatGuard.should_abort(
+            consecutive_repeat_steps=st.consecutive_repeat_steps,
+        )
+        if cr_abort is not None and not run.role_cfg.stuck_loop_abort:
+            # `/loopguard off` (chat-only): record that the guard WOULD
+            # have fired, then keep going. Never reached on a YAML config.
+            emit(
+                "stuck_loop_suppressed",
+                step=step,
+                consecutive_repeat_steps=st.consecutive_repeat_steps,
+            )
+        elif cr_abort is not None:
+            result.final_text = resp.text or ""
+            result.aborted = True
+            result.abort_reason = cr_abort["abort_reason"]
+            return True
+    else:
+        st.consecutive_repeat_steps = 0
+        emit(
+            "tool_step_done",
+            step=step,
+            step_had_repeat=False,
+            consecutive_repeat_steps=0,
+        )
+    return False
+
+
+def _finalize(run: _Run, st: LoopState, result: AgentResult,
+              emit: Callable[..., None]) -> None:
+    """Run-end records and `result.messages`, on every exit path."""
+    # forge-hybrid Phase 2 (A) — resolve-time compaction telemetry. Emits the
+    # final per-run cumulative state so post-hoc analysis can attribute
+    # outcomes to compaction state. Fires regardless of resolve/abort/max_steps
+    # — all paths route through this single return.
+    if run.flags.tiered_compact:
+        emit(
+            "compaction_phase_at_resolve",
+            max_phase_reached=st.compaction_max_phase_this_run,
+            phase_at_first_write=st.compaction_phase_at_first_write,
+            tool_results_dropped_total=st.compaction_tool_results_dropped_total,
+            total_tokens_dropped=st.compaction_total_tokens_dropped,
+            # Additive 2026-08-24: how many of those fires achieved nothing.
+            ineffective_fires=st.compaction_ineffective_fires,
+            aborted=result.aborted,
+        )
+
+    if st.tool_results_clamped:
+        logger.debug("tool results clamped this run: %d", st.tool_results_clamped)
+
+    result.messages = list(st.messages)
+    if not result.aborted and result.final_text:
+        result.messages.append({"role": "assistant", "content": result.final_text})
+
+
+def _initial_messages(system_prompt: str, task_prompt: str,
+                      prior_messages: list[dict[str, Any]] | None,
+                      result: AgentResult,
+                      emit: Callable[..., None]) -> list[dict[str, Any]]:
+    """The run's opening messages: a fresh `[system, user]` pair, or — turn
+    carry, chat-only — `prior_messages` plus the new user message when they
+    open with this run's system message (`turn_carry`; a mismatch is
+    ignored, `turn_carry_rejected`)."""
+    initial_messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": task_prompt},
+    ]
+    if prior_messages:
+        if prior_messages[0] == initial_messages[0]:
+            initial_messages = [*prior_messages, initial_messages[1]]
+            result.carried = True
+            emit("turn_carry", prior_messages=len(prior_messages))
+        else:
+            emit("turn_carry_rejected", reason="system_prompt_changed")
+    return initial_messages
+
+
 def _token_progress(st: LoopState, result: AgentResult, step: int,
                     pressure: float) -> None:
     """Token-interval progress logging — fires when cumulative completion
@@ -1508,19 +1611,9 @@ def run_agent(
 
     # All mutable loop state (agents/loopstate.py). Field-by-field the same
     # names and initial values the bare locals had.
-    initial_messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": task_prompt},
-    ]
-    if prior_messages:
-        if prior_messages[0] == initial_messages[0]:
-            initial_messages = [*prior_messages, initial_messages[1]]
-            result.carried = True
-            emit("turn_carry", prior_messages=len(prior_messages))
-        else:
-            emit("turn_carry_rejected", reason="system_prompt_changed")
     st = LoopState(
-        messages=initial_messages,
+        messages=_initial_messages(system_prompt, task_prompt, prior_messages,
+                                   result, emit),
         next_token_log_threshold=_TOKEN_LOG_INTERVAL,  # 0 = disabled
         write_pressure_enabled=flags.write_pressure,
         early_bail_enabled=flags.early_bail,
@@ -1625,77 +1718,13 @@ def run_agent(
             if _dispatch_one(run, st, result, tc, step, effective_ctx, emit):
                 step_had_repeat = True
 
-        pwi_exit = PostWriteIdleExitGuard.should_exit(
-            post_write_idle_tools=st.post_write_idle_tools,
-            writes_seen=st.writes_seen,
-        )
-        if pwi_exit is not None:
-            result.final_text = resp.text or ""
-            emit(
-                "post_write_idle_exit",
-                step=step,
-                **pwi_exit,
-            )
+        if _end_of_step(run, st, result, resp, step, step_had_repeat, emit):
             break
-
-        if step_had_repeat:
-            st.consecutive_repeat_steps += 1
-            emit(
-                "tool_step_done",
-                step=step,
-                step_had_repeat=True,
-                consecutive_repeat_steps=st.consecutive_repeat_steps,
-            )
-            cr_abort = ConsecutiveRepeatGuard.should_abort(
-                consecutive_repeat_steps=st.consecutive_repeat_steps,
-            )
-            if cr_abort is not None and not role_cfg.stuck_loop_abort:
-                # `/loopguard off` (chat-only): record that the guard WOULD
-                # have fired, then keep going. Never reached on a YAML config.
-                emit(
-                    "stuck_loop_suppressed",
-                    step=step,
-                    consecutive_repeat_steps=st.consecutive_repeat_steps,
-                )
-            elif cr_abort is not None:
-                result.final_text = resp.text or ""
-                result.aborted = True
-                result.abort_reason = cr_abort["abort_reason"]
-                break
-        else:
-            st.consecutive_repeat_steps = 0
-            emit(
-                "tool_step_done",
-                step=step,
-                step_had_repeat=False,
-                consecutive_repeat_steps=0,
-            )
     else:
         result.final_text = resp.text if resp else ""
         result.aborted = True
         result.abort_reason = f"Max steps reached ({role_cfg.max_steps})"
 
-    # forge-hybrid Phase 2 (A) — resolve-time compaction telemetry. Emits the
-    # final per-run cumulative state so post-hoc analysis can attribute
-    # outcomes to compaction state. Fires regardless of resolve/abort/max_steps
-    # — all paths route through this single return.
-    if flags.tiered_compact:
-        emit(
-            "compaction_phase_at_resolve",
-            max_phase_reached=st.compaction_max_phase_this_run,
-            phase_at_first_write=st.compaction_phase_at_first_write,
-            tool_results_dropped_total=st.compaction_tool_results_dropped_total,
-            total_tokens_dropped=st.compaction_total_tokens_dropped,
-            # Additive 2026-08-24: how many of those fires achieved nothing.
-            ineffective_fires=st.compaction_ineffective_fires,
-            aborted=result.aborted,
-        )
-
-    if st.tool_results_clamped:
-        logger.debug("tool results clamped this run: %d", st.tool_results_clamped)
-
-    result.messages = list(st.messages)
-    if not result.aborted and result.final_text:
-        result.messages.append({"role": "assistant", "content": result.final_text})
+    _finalize(run, st, result, emit)
     result.wall_s = time.monotonic() - t0
     return result
