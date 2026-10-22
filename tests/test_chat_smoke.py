@@ -19,6 +19,7 @@ from luxe.config import HostManifest, PipelineConfig, RoleConfig
 class _Resp:
     text: str = "OK"
     tool_calls: list = field(default_factory=list)
+    reasoning_chars: int = 0
 
 
 @dataclass
@@ -30,6 +31,7 @@ class _Backend:
     served = ["Main-M", "Fb-M"]
     healthy = True
     reply_text = "OK"
+    reply_reasoning = 0
     tool_reply: list = [_ToolCall()]
     fail_models: set = set()
     health_timeouts: list = []
@@ -61,7 +63,8 @@ class _Backend:
         self.chatted.append(self.model)
         if tools:
             return _Resp(text="", tool_calls=list(self.tool_reply))
-        return _Resp(text=self.reply_text)
+        return _Resp(text=self.reply_text,
+                     reasoning_chars=self.reply_reasoning)
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +87,7 @@ def _fakes(monkeypatch):
     _Backend.made = []
     _Backend.healthy = True
     _Backend.reply_text = "OK"
+    _Backend.reply_reasoning = 0
     _Backend.tool_reply = [_ToolCall()]
     _Backend.fail_models = set()
     yield
@@ -139,6 +143,21 @@ def test_empty_response_states_observable_and_discriminator():
     assert "empty response" in step.detail
     assert "completion_tokens=" in step.detail
     assert "dangling weights" in step.detail
+
+
+def test_reasoning_only_ping_is_alive():
+    """oMLX 0.7.2 returns a thinking model's output in `reasoning_content`, so
+    a 16-token ping comes back with empty `content` and the budget spent on
+    reasoning. Older servers leaked that reasoning into `content`, which is
+    the only reason the ping used to pass. Reasoning tokens prove the model
+    loaded and generates — the ping's whole question — so it is a pass,
+    labelled as reasoning (2026-10-22, m1 + m5 after the 0.7.2 upgrade)."""
+    _Backend.reply_text = ""
+    _Backend.reply_reasoning = 64
+    report = smoke_mod.run_smoke(_cfg(), skip_fallback=True)
+    step = next(s for s in report.steps if s.name == "main turn")
+    assert step.state == "pass"
+    assert "reasoning" in step.detail
 
 
 def test_missing_tool_call_fails():

@@ -118,6 +118,18 @@ def _ping(backend: Backend, model: str, report: SmokeReport,
         report.add(label, "pass", f"{model} answered in {dt:.1f}s", dt,
                    model=model)
         return True
+    # A thinking model spends the 16-token budget in the reasoning channel.
+    # oMLX ≥0.7.2 returns that as `reasoning_content` (older builds leaked it
+    # into `content`, which is the only reason this ping used to pass). Tokens
+    # of reasoning prove the weights loaded and the model generates, which is
+    # all this ping asks; the tool ping below checks a real answer.
+    reasoning = getattr(resp, "reasoning_chars", 0) or 0
+    if reasoning:
+        report.add(label, "pass",
+                   f"{model} generated in {dt:.1f}s (reasoning only, "
+                   f"{reasoning} chars before the 16-token cap)", dt,
+                   model=model)
+        return True
     # State the observable, then the discriminator — not a single theory.
     # (2026-08-03: this hint used to assert "the 'deleted weights'
     # signature"; a thinking model burning its whole max_tokens budget in
