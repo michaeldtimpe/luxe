@@ -34,7 +34,6 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.suppress_tool_log is False
     assert f.write_pressure is False
     assert f.early_bail is False
-    assert f.early_bail_commit_only is False
     assert f.action_density_gate is False
     assert f.convergence_gate is False
     assert f.ctx_cal_damp is False                        # opt-in 2026-08-24
@@ -72,7 +71,6 @@ OPT_IN = [
     ("LUXE_SUPPRESS_TOOL_LOG", "suppress_tool_log"),
     ("LUXE_WRITE_PRESSURE", "write_pressure"),
     ("LUXE_EARLY_BAIL", "early_bail"),
-    ("LUXE_EARLY_BAIL_COMMIT_ONLY", "early_bail_commit_only"),
     ("LUXE_ACTION_DENSITY_GATE", "action_density_gate"),
     ("LUXE_CONVERGENCE_GATE", "convergence_gate"),
     ("LUXE_ADAPTIVE_POLICY", "adaptive_policy"),
@@ -276,7 +274,7 @@ def test_early_bail_mode_passes_through_verbatim(value):
     """Same `os.environ.get("LUXE_EARLY_BAIL_MODE", "default")` the guard
     used to call every step: unvalidated (an unknown value selects the
     default message in the guard and is reported verbatim as
-    `configured_mode`), and exported-but-empty stays ""."""
+    `msg_variant`), and exported-but-empty stays ""."""
     assert RunFlags.from_env(
         {"LUXE_EARLY_BAIL_MODE": value}).early_bail_mode == value
 

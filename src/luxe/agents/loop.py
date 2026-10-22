@@ -425,17 +425,6 @@ def run_agent(
         convergence_gate_enabled=flags.convergence_gate,
     )
 
-    # Refined port (2026-05-26 edit-quality investigation, project_track0_*) —
-    # when LUXE_EARLY_BAIL_COMMIT_ONLY=1 AND mode=soft_anchor, suppress the
-    # mid/low-convergence variants (breadth_probe, soft_anchor) and let only
-    # commit_imperative (score >= _CONVERGENCE_HIGH_THRESHOLD) fire. The Phase-1
-    # diagnostic showed soft_anchor + breadth_probe correlate with degraded edit
-    # quality on the 3 forge-only wins at n=75; the +10.67pp --no-early-bail
-    # ablation cleared resolves but failed the wrong-target watchdog (3-4 new
-    # wrong_target migrations from baseline empty_patch). This flag tests whether
-    # keeping the high-convergence imperative recovers the watchdog cleanly.
-    # Default OFF (byte-identical with baseline).
-    early_bail_commit_only = flags.early_bail_commit_only
     # LUXE_EARLY_BAIL_MODE (default/no_abstain/soft_anchor/...), read once
     # with the other switches instead of by EarlyBailGuard on every step.
     early_bail_mode = flags.early_bail_mode
@@ -687,7 +676,6 @@ def run_agent(
             step=step,
             tool_calls_total=result.tool_calls_total,
             early_bail_message=early_bail_message,
-            early_bail_commit_only=early_bail_commit_only,
             convergence_gate_enabled=st.convergence_gate_enabled,
             convergence_score=convergence_score,
             band_response=_band_response,
@@ -725,7 +713,7 @@ def run_agent(
                 if event is not None:
                     ev_name, ev_payload = event
                     # Loop owns the completion_tokens counter; fill it for
-                    # events that carry it (commit_only suppression).
+                    # events that carry it (early_bail_fired).
                     payload = {
                         k: (result.completion_tokens if k == "completion_tokens" and v is None else v)
                         for k, v in ev_payload.items()
