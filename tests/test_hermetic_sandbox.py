@@ -3,9 +3,10 @@
 Before it existed, `/theme` tests rewrote the developer's ~/.luxe/theme, a
 modelcaps test minted a real session dir on every run, and a loop test
 appended to ~/.luxe/runs/test-escalation/events.jsonl without end. These pin
-the three pieces that prevent that: $HOME is a per-test tmp dir, the modules
+the pieces that prevent that: $HOME is a per-test tmp dir, the modules
 that bind a ~ path at import follow it, and anything that still reaches for
-the real home or the network is refused.
+the real home, the network or a host probe (pgrep/lsof/security/…) is
+refused, and the host-reading luxe functions answer "nothing here".
 """
 
 from __future__ import annotations
@@ -92,3 +93,40 @@ def test_interpreter_bytecode_under_home_is_not_an_escape(monkeypatch):
     pyc = os.path.join(prefix, "lib", "__pycache__", "tty.cpython-311.pyc.1234")
     assert not c._under_real_home(pyc)
     assert c._under_real_home(os.path.join(prefix, "lib", "evil.py"))
+
+
+# --- host probes -------------------------------------------------------------
+
+@pytest.mark.parametrize("argv, shell", [
+    (["pgrep", "-f", "omlx-server"], False),
+    (["/usr/sbin/lsof", "-p", "1"], False),
+    ("security find-generic-password -s X -w", True),
+])
+def test_a_host_probe_spawn_is_refused(sandbox_guard, argv, shell):
+    """A test that reads this host's process table or keychain asserts the
+    box, not the code (m1's stale oMLX failed a smoke test, 2026-10-21)."""
+    import subprocess
+    with pytest.raises(PermissionError, match="host probe spawned"):
+        subprocess.run(argv, shell=shell, capture_output=True, timeout=5)
+    sandbox_guard.violations.clear()
+
+
+def test_ordinary_spawns_stay_allowed():
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, "-c", "pass"], check=True, timeout=30)
+
+
+def test_host_reads_are_pinned_to_nothing_here():
+    from luxe import planeproxy, repair, secrets, staleproc
+    for check in (staleproc.check_omlx(), repair.check_omlx()):
+        assert not check.conclusive and not check.stale and check.reason
+    assert secrets._from_keychain("OMLX_API_KEY") == ""
+    assert not planeproxy.binary_present()
+
+
+@pytest.mark.host_probes
+def test_host_probes_marker_lifts_the_stubs():
+    from luxe import secrets, staleproc
+    assert staleproc.check_omlx.__module__ == "luxe.staleproc"
+    assert secrets._from_keychain.__module__ == "luxe.secrets"

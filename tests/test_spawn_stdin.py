@@ -53,6 +53,7 @@ def test_repo_index_recent_files_timeout_is_empty_not_a_crash(monkeypatch, tmp_p
     assert repo_index._git_recent_files(tmp_path) == []
 
 
+@pytest.mark.host_probes  # the real _from_keychain (subprocess faked)
 def test_keychain_lookup_uses_devnull(spy):
     secrets._from_keychain("OMLX_API_KEY_TEST")
     assert spy[-1].get("stdin") is subprocess.DEVNULL

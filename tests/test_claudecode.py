@@ -389,6 +389,9 @@ def test_full_report_status_does_no_network(monkeypatch):
 
     monkeypatch.setattr(netdiag, "run_ladder", _boom)
     monkeypatch.setattr(cc, "resolve_bin", lambda: None)
+    # No real Keychain / process-table reads either: this box's state is not
+    # what's under test.
+    monkeypatch.setattr(cc, "_run", lambda argv: ("", "", 1))
     report = cc.full_report(check="status")
     assert report.verdict == cc.CC_NOT_INSTALLED
     assert report.facts.net_verdict == ""

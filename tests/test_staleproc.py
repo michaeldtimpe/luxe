@@ -198,6 +198,7 @@ def test_real_run_helper_survives_a_missing_binary():
     assert staleproc._run(["definitely-not-a-real-binary-xyz"]) == ""
 
 
+@pytest.mark.host_probes  # really runs pgrep/lsof
 def test_check_omlx_returns_a_verdict_on_this_box():
     """Whatever this machine's state, the call completes and is well-formed."""
     got = staleproc.check_omlx()

@@ -3,6 +3,8 @@ hygiene (env → ~/.luxe/secrets.env → keychain). The 2026-07-30 m5 401."""
 
 from __future__ import annotations
 
+import pytest
+
 import luxe.secrets as secrets
 
 
@@ -85,6 +87,7 @@ def test_slot_manager_resolves_entry_key_via_secrets(monkeypatch, tmp_path):
     assert seen["api_key"] == "tailnet-key"
 
 
+@pytest.mark.host_probes  # the real _from_keychain (subprocess faked)
 def test_keychain_is_asked_once_per_process_per_name(monkeypatch, tmp_path):
     """Every chat-side Backend construction resolves its key; a miss in env
     + secrets.env spawned `security` EVERY time (≤3s each). Cache per name —
@@ -109,6 +112,7 @@ def test_keychain_is_asked_once_per_process_per_name(monkeypatch, tmp_path):
     assert secrets.resolve_api_key("CACHE_PROBE_KEY") == "late"
 
 
+@pytest.mark.host_probes  # the real _from_keychain (subprocess faked)
 def test_a_locked_keychain_is_not_cached(monkeypatch, tmp_path):
     """Only exit 44 ("item not found") is a definitive miss. A locked
     keychain (e.g. exit 36) is transient — the next call must ask again,

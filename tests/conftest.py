@@ -23,8 +23,9 @@ collect_ignore = ["_archive"]
 # minted a real session dir every run (half of ~/.luxe/sessions was pytest's),
 # and a loop test appended to ~/.luxe/runs/test-escalation/events.jsonl
 # forever. Every test now runs with $HOME at its own tmp dir, and one audit
-# hook refuses — and fails the test for — any write under the real home or
-# any network egress (DNS lookup / connect to a non-loopback host).
+# hook refuses — and fails the test for — any write under the real home,
+# any network egress (DNS lookup / connect to a non-loopback host), or any
+# spawn of a host-probe program (see `_HOST_PROBE_PROGRAMS`).
 #
 # The hook is installed once (audit hooks cannot be removed) and is inert
 # outside a test body: `_Guard.active` is set only by the autouse fixture.
@@ -64,6 +65,7 @@ _IMPORT_TIME_HOME_PATHS = (
 class _Guard:
     active = False
     allow_network = False
+    allow_host_probes = False
     violations: list[str] = []
     # Per-thread reentrancy latch: the hook's own work must not re-enter it,
     # but one thread inside the hook must not blind it for the others.
@@ -105,6 +107,38 @@ _FS_EVENTS = {
 }
 
 
+# Programs that read the live host's process table, keychain or service
+# manager. A test that spawns one asserts whatever this box happens to be
+# doing — m1's stale oMLX failed a smoke test on 2026-10-21 — so outside a
+# `host_probes`-marked test the spawn is refused (see `_stub_host_probes`).
+_HOST_PROBE_PROGRAMS = frozenset({"pgrep", "lsof", "security", "brew", "launchctl"})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash"})
+_SPAWN_EVENTS = frozenset({"subprocess.Popen", "os.posix_spawn", "os.system"})
+
+
+def _spawned_program(event: str, args: tuple) -> str:
+    """Basename of the program a spawn event runs ("" if unreadable). A
+    `shell=True` spawn is `/bin/sh -c CMD` by audit time; report CMD's head."""
+    try:
+        if event == "os.system":
+            argv = os.fsdecode(args[0]).split()
+        else:
+            # subprocess.Popen: (executable, args, cwd, env);
+            # os.posix_spawn: (path, argv, env).
+            raw = args[1]
+            argv = ([os.fsdecode(raw)] if isinstance(raw, (str, bytes, os.PathLike))
+                    else [os.fsdecode(a) for a in raw])
+            if args[0] is not None:
+                argv[:1] = [os.fsdecode(args[0])]
+        prog = os.path.basename(argv[0]) if argv else ""
+        if prog in _SHELLS and len(argv) >= 3 and argv[1] == "-c":
+            head = argv[2].split()
+            prog = os.path.basename(head[0]) if head else prog
+        return prog
+    except (TypeError, ValueError, IndexError):
+        return ""
+
+
 def _refuse(msg: str, exc: type[BaseException]) -> None:
     _Guard.violations.append(msg)
     raise exc(msg)
@@ -126,6 +160,12 @@ def _audit(event: str, args: tuple) -> None:
             for i in _FS_EVENTS[event]:
                 if _under_real_home(args[i]):
                     _refuse(f"{event} under the real home: {args[i]}", PermissionError)
+        elif event in _SPAWN_EVENTS:
+            prog = _spawned_program(event, args)
+            if prog in _HOST_PROBE_PROGRAMS and not _Guard.allow_host_probes:
+                _refuse(f"host probe spawned: {prog} (mark the test "
+                        f"`host_probes` if it means to read this host)",
+                        PermissionError)
         elif _Guard.allow_network:
             pass
         elif event == "socket.getaddrinfo":
@@ -185,6 +225,7 @@ def _hermetic_home(request, tmp_path_factory, monkeypatch):
 
     _Guard.violations = []
     _Guard.allow_network = request.node.get_closest_marker("live_network") is not None
+    _Guard.allow_host_probes = request.node.get_closest_marker("host_probes") is not None
     _Guard.active = True
     try:
         yield home
@@ -195,6 +236,40 @@ def _hermetic_home(request, tmp_path_factory, monkeypatch):
     if _Guard.violations and not getattr(request.node, "_luxe_call_failed", False):
         pytest.fail("test escaped its sandbox:\n  " + "\n  ".join(
             dict.fromkeys(_Guard.violations)), pytrace=False)
+
+
+# --- Host probes off by default ----------------------------------------------
+#
+# Three luxe functions read the live host, and every test that reached one
+# asserted this box's state rather than the code's: `staleproc.check_omlx`
+# (pgrep + lsof — a stale oMLX on m1 added a real warning to a smoke report
+# and failed a test that never mentioned staleness), `secrets._from_keychain`
+# (`security`, answer cached in module state across tests — order-dependent),
+# and `planeproxy._resolve_bin` (the real PATH — moves `planeproxy_present`).
+# Each is pinned to the "nothing here" answer; a test that patches one again
+# wins. A test that means to exercise the real function is marked
+# `host_probes`, which also lifts the spawn guard in `_audit`.
+
+def _inconclusive_omlx():
+    from luxe.staleproc import StaleCheck
+    return StaleCheck(formula="omlx",
+                      reason="host probes are stubbed in tests (tests/conftest.py)")
+
+
+@pytest.fixture(autouse=True)
+def _stub_host_probes(request, monkeypatch, _hermetic_home):
+    from luxe import secrets
+
+    secrets._KEYCHAIN_CACHE.clear()
+    if request.node.get_closest_marker("host_probes") is None:
+        from luxe import planeproxy, repair, staleproc
+        monkeypatch.setattr(staleproc, "check_omlx", _inconclusive_omlx)
+        # repair binds check_omlx at import; the chat callers import it lazily.
+        monkeypatch.setattr(repair, "check_omlx", _inconclusive_omlx)
+        monkeypatch.setattr(secrets, "_from_keychain", lambda name: "")
+        monkeypatch.setattr(planeproxy, "_resolve_bin", lambda: None)
+    yield
+    secrets._KEYCHAIN_CACHE.clear()
 
 
 @pytest.fixture
