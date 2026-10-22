@@ -13,8 +13,12 @@ benchmark `Variant`/`make_overlay` machinery and `run_single`.
 - Mode 1 (luxe-enhanced vs bare champion) drives the bare side via an
   `os.environ` save/restore context manager (baseline prompt; EVERY substrate
   lever off — the default-ON ones need the exact string "0": LUXE_TIERED_COMPACT,
-  LUXE_TRUNCATED_TURN_RETRY, LUXE_EMPTY_TURN_RETRY, LUXE_CTX_SERVER_TRUTH — plus
-  the opt-in interventions); env overrides must be restored after each side
+  LUXE_TRUNCATED_TURN_RETRY, LUXE_EMPTY_TURN_RETRY, LUXE_CTX_SERVER_TRUTH,
+  LUXE_CTX_CAL_TOOLS, LUXE_COMPACT_CACHE_FRIENDLY — plus the opt-in
+  interventions; every boolean `RunFlags` lever must read False under the
+  overlay, test-derived from agents/flags.py). Maintain-only levers
+  (LUXE_CLEANUP_TURN, LUXE_STEP_LIMIT_LABEL, LUXE_TOOL_BUDGET_CTX) are not on
+  the `run_single` path and stay out; env overrides must be restored after each side
 - Persistence honors `--ephemeral` (`store.save` / `record_vote` write nothing);
   the per-side overlay YAML lives in a TemporaryDirectory removed after load
 - Each side gets its own `run_id` so existing `~/.luxe/runs/<run_id>/` logging

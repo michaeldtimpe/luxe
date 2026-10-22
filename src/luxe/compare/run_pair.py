@@ -22,20 +22,42 @@ from luxe.config import load_config
 # shell exported them) and the DEFAULT-ON ones — only the exact string "0"
 # turns those off (agents/flags.py), and until 2026-09 the bare side left
 # truncated-turn retry, empty-turn retry and server-truth calibration running,
-# so "bare" still carried three of the substrate's loop interventions.
+# so "bare" still carried three of the substrate's loop interventions (and
+# until 2026-10, tool-schema calibration + cache-friendly compaction).
+# Every boolean `RunFlags` lever must end up False under this overlay; a test
+# derives that from flags.py, so a new lever fails CI until it lands here.
+# Deliberately NOT here: LUXE_CLEANUP_TURN / LUXE_STEP_LIMIT_LABEL /
+# LUXE_TOOL_BUDGET_CTX — read only by maintain.py / chat/turn.py, never on the
+# `run_single` path compare drives, so setting them would be inert.
 _BARE_SUBSTRATE_ENV = {
-    # default-ON levers
+    # default-ON levers (RunFlags)
     "LUXE_TIERED_COMPACT": "0",
     "LUXE_TRUNCATED_TURN_RETRY": "0",
     "LUXE_EMPTY_TURN_RETRY": "0",
     "LUXE_CTX_SERVER_TRUTH": "0",
-    # opt-in levers
-    "LUXE_REFLECT": "0",
+    "LUXE_CTX_CAL_TOOLS": "0",
+    "LUXE_COMPACT_CACHE_FRIENDLY": "0",
+    # adaptive-policy sub-signals: default ON but inert while
+    # LUXE_ADAPTIVE_POLICY is off — zeroed so "every lever off" holds literally
+    "LUXE_ADAPTIVE_NO_WRITE": "0",
+    "LUXE_ADAPTIVE_SCORE_TREND": "0",
+    # opt-in levers (RunFlags)
     "LUXE_ADAPTIVE_POLICY": "0",
     "LUXE_WRITE_PRESSURE": "0",
     "LUXE_EARLY_BAIL": "0",
-    "LUXE_PROSE_BURST": "0",
+    "LUXE_EARLY_BAIL_COMMIT_ONLY": "0",
     "LUXE_ACTION_DENSITY_GATE": "0",
+    "LUXE_CONVERGENCE_GATE": "0",
+    "LUXE_POST_WRITE_IDLE_REPEATS": "0",
+    "LUXE_CTX_CAL_DAMP": "0",
+    "LUXE_TOOL_RESULT_CLAMP": "0",
+    "LUXE_REASONING_ROUNDTRIP": "0",
+    "LUXE_REPEAT_READ_STUB": "0",
+    "LUXE_REREAD_NOTE": "0",
+    # opt-in levers read outside RunFlags
+    "LUXE_REFLECT": "0",
+    "LUXE_LOAD_PRIORS": "0",
+    "LUXE_EARLY_BAIL_TRAJECTORY_SHAPE": "0",
 }
 
 
