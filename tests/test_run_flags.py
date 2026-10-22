@@ -37,7 +37,6 @@ def test_empty_environment_gives_the_documented_defaults():
     assert f.early_bail_commit_only is False
     assert f.action_density_gate is False
     assert f.convergence_gate is False
-    assert f.post_write_idle_repeats is False
     assert f.ctx_cal_damp is False                        # opt-in 2026-08-24
     assert f.ctx_cal_unmeasured_ratio == CALIBRATION_UNMEASURED_RATIO
     assert f.tool_result_clamp is False                   # opt-in 2026-08-24
@@ -79,7 +78,6 @@ OPT_IN = [
     ("LUXE_ACTION_DENSITY_GATE", "action_density_gate"),
     ("LUXE_CONVERGENCE_GATE", "convergence_gate"),
     ("LUXE_ADAPTIVE_POLICY", "adaptive_policy"),
-    ("LUXE_POST_WRITE_IDLE_REPEATS", "post_write_idle_repeats"),
     # 2026-08-24 (acceptance/chat_bigread_2026_08_24). Both deliberately take
     # the opt-IN grammar, not the default-ON one: neither has a maintain_suite
     # arm yet, so the benchmark path must be byte-identical until one exists.
