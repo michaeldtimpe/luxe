@@ -158,11 +158,9 @@ def _walk_dirs(root: Path):
         return
 
 
-def collect(luxe_root: Path, cutoff: float, *,
-            include_apparatus: bool = False) -> tuple[dict, dict]:
-    """Scan runs + sessions once. Returns (buckets, stats)."""
-    tools, tools_from = known_tools()
-    b = {
+def _new_buckets() -> dict[str, Bucket]:
+    """Every class `collect` reports on, in report-detail order."""
+    return {
         "schema_reject": Bucket(
             "schema_reject",
             "validate_args refused the arguments; the model got 'Schema error: …' "
@@ -191,145 +189,208 @@ def collect(luxe_root: Path, cutoff: float, *,
             "backend_retry",
             "backend.chat retry decisions (transient-*, 5xx-*, 4xx-*)"),
     }
-    stats = collections.Counter()
-    stats["_tools_known"] = len(tools)
-    meta = {"tools_from": tools_from,
-            "apparatus": "included" if include_apparatus
-                         else ", ".join(APPARATUS_PREFIXES)}
 
-    # --- runs/<run_id>/events.jsonl -----------------------------------------
-    # As of 2026-08-04 the loop emits DIRECT events for three classes that
-    # previously needed proxies: `tool_reject` (reason=schema|unknown_tool)
-    # and `textfallback_drop`. Direct events are preferred; the legacy
-    # proxies still run for older records but are suppressed wherever a
-    # direct event already covered the same call, so mixed corpora never
-    # double-count.
-    runs_root = luxe_root / "runs"
-    tool_calls_by_run: dict[str, int] = collections.Counter()
-    run_seen_ts: dict[str, float] = {}
-    direct_drop_runs: set[str] = set()
-    for run_dir in _walk_dirs(runs_root):
-        events = run_dir / "events.jsonl"
-        if not events.is_file():
+
+@dataclass
+class _Scan:
+    """One `collect` pass: buckets, stats, and the two run-side indexes the
+    session scan consults (which runs had tool events / direct drops)."""
+    buckets: dict
+    stats: collections.Counter
+    tools: set
+    cutoff: float
+    tool_calls_by_run: collections.Counter = field(
+        default_factory=collections.Counter)
+    direct_drop_runs: set = field(default_factory=set)
+
+
+@dataclass
+class _RunState:
+    """Per-run accumulators, fresh for every run directory — so a direct
+    event only ever suppresses a proxy from its OWN run."""
+    run_id: str
+    session: str
+    dups: int = 0
+    in_window: bool = False
+    direct_schema: int = 0
+    direct_unknown: set = field(default_factory=set)
+    heur_unknown: list = field(default_factory=list)
+
+
+# --- runs/<run_id>/events.jsonl ---------------------------------------------
+# As of 2026-08-04 the loop emits DIRECT events for three classes that
+# previously needed proxies: `tool_reject` (reason=schema|unknown_tool)
+# and `textfallback_drop`. Direct events are preferred; the legacy
+# proxies still run for older records but are suppressed wherever a
+# direct event already covered the same call, so mixed corpora never
+# double-count.
+
+def _on_tool_call(scan: _Scan, run: _RunState, rec: dict) -> None:
+    scan.stats["tool_calls"] += 1
+    scan.tool_calls_by_run[run.run_id] += 1
+    name = (rec.get("name") or "").strip()
+    if rec.get("duplicate"):
+        run.dups += 1
+    if name and name not in scan.tools \
+            and not name.startswith(MCP_PREFIX):
+        run.heur_unknown.append(
+            (rec.get("step"), name,
+             f"{run.run_id} step {rec.get('step')}: {name!r}"))
+
+
+def _on_tool_reject(scan: _Scan, run: _RunState, rec: dict) -> None:
+    b = scan.buckets
+    reason = rec.get("reason") or ""
+    name = (rec.get("name") or "").strip() or "(unnamed)"
+    if reason == "schema":
+        run.direct_schema += 1
+        b["schema_reject"].hit(
+            run.session,
+            f"{run.run_id} step {rec.get('step')}: {name!r}: "
+            f"{(rec.get('message') or '')[:60]} (direct)",
+            key=name)
+    elif reason == "unknown_tool":
+        run.direct_unknown.add((rec.get("step"), name))
+        b["unknown_tool_name"].hit(
+            run.session,
+            f"{run.run_id} step {rec.get('step')}: {name!r} (direct)",
+            key=name)
+
+
+def _on_textfallback_drop(scan: _Scan, run: _RunState, rec: dict) -> None:
+    scan.direct_drop_runs.add(run.run_id)
+    for nm in (rec.get("names") or ["(unnamed)"]):
+        scan.buckets["textfallback_drop"].hit(
+            run.session,
+            f"{run.run_id} step {rec.get('step')}: {str(nm)!r} (direct)",
+            key=str(nm))
+
+
+def _on_run_done(scan: _Scan, run: _RunState, rec: dict) -> None:
+    b = scan.buckets
+    scan.stats["runs_completed"] += 1
+    # Direct per-call `tool_reject` events already counted their
+    # share of this run's total; only the remainder (legacy runs
+    # or pre-2026-08-04 records) lands via the old per-run proxy.
+    rejects = max(
+        0, int(rec.get("schema_rejects") or 0) - run.direct_schema)
+    for _ in range(rejects):
+        b["schema_reject"].hit(run.session, f"{run.run_id}: {rejects} reject(s)")
+    if rec.get("aborted"):
+        reason = rec.get("abort_reason") or "(unreported)"
+        b["aborted_run"].hit(run.session, f"{run.run_id}: {reason}",
+                             key=str(reason))
+
+
+def _on_run_record(scan: _Scan, run: _RunState, rec: dict) -> None:
+    """Route one in-window events.jsonl record by kind."""
+    kind = rec.get("kind")
+    if kind == "tool_call":
+        _on_tool_call(scan, run, rec)
+    elif kind == "tool_reject":
+        _on_tool_reject(scan, run, rec)
+    elif kind == "textfallback_drop":
+        _on_textfallback_drop(scan, run, rec)
+    elif kind == "single_mode_done":
+        _on_run_done(scan, run, rec)
+
+
+def _finish_run(scan: _Scan, run: _RunState) -> None:
+    """After the run's last record: the name-proxy remainder, then the
+    per-run totals (only for runs with at least one in-window record)."""
+    b, stats = scan.buckets, scan.stats
+    for step_, name_, example in run.heur_unknown:
+        if (step_, name_) not in run.direct_unknown:
+            b["unknown_tool_name"].hit(run.session, example, key=name_)
+    if run.in_window:
+        stats["runs_in_window"] += 1
+        if run.dups >= 3:
+            b["duplicate_storm"].hit(run.session,
+                                     f"{run.run_id}: {run.dups} duplicates",
+                                     key=str(run.dups))
+        stats["duplicate_calls"] += run.dups
+
+
+def _scan_run(scan: _Scan, run_dir: Path, include_apparatus: bool) -> None:
+    events = run_dir / "events.jsonl"
+    if not events.is_file():
+        return
+    run_id = run_dir.name
+    if not include_apparatus and run_id.startswith(APPARATUS_PREFIXES):
+        scan.stats["runs_skipped_apparatus"] += 1
+        return
+    run = _RunState(run_id, _session_of(run_id))
+    for rec in _iter_jsonl(events):
+        ts = float(rec.get("ts") or 0.0)
+        if ts < scan.cutoff:
             continue
-        run_id = run_dir.name
-        if not include_apparatus and run_id.startswith(APPARATUS_PREFIXES):
-            stats["runs_skipped_apparatus"] += 1
+        run.in_window = True
+        _on_run_record(scan, run, rec)
+    _finish_run(scan, run)
+
+
+# --- sessions/<id>/{transcript.jsonl,debug.log} -----------------------------
+
+def _on_assistant(scan: _Scan, session: str, turn: int, rec: dict) -> None:
+    b = scan.buckets
+    scan.stats["assistant_turns"] += 1
+    text = rec.get("text") or ""
+    run_id = rec.get("run_id") or f"{session}-{max(turn, 0)}"
+    if not rec.get("interrupted") and not text.strip():
+        b["empty_response"].hit(
+            session,
+            f"{run_id}: steps={rec.get('steps')} "
+            f"tools={rec.get('tool_calls')}")
+    if _TOOL_CALL_TAG_RE.search(text) \
+            and not scan.tool_calls_by_run.get(run_id) \
+            and run_id not in scan.direct_drop_runs:
+        b["textfallback_drop"].hit(
+            session, f"{run_id}: <tool_call> in prose, 0 tool events")
+
+
+def _on_error(scan: _Scan, session: str, rec: dict) -> None:
+    scan.stats["error_records"] += 1
+    text = (rec.get("text") or "").strip()
+    scan.buckets["turn_error"].hit(session, f"{session}: {text[:120]}",
+                                   key=text.split(":")[0][:40] or "(bare)")
+
+
+def _scan_transcript(scan: _Scan, sess_dir: Path) -> None:
+    session = sess_dir.name
+    # Every `user` record advances the turn — in the window or not — so a
+    # run_id-less assistant record maps to the same `<session>-<turn>` run.
+    turn = -1
+    for rec in _iter_jsonl(sess_dir / "transcript.jsonl"):
+        ts = float(rec.get("ts") or 0.0)
+        kind = rec.get("kind")
+        if kind == "user":
+            turn += 1
+        if ts < scan.cutoff:
             continue
-        session = _session_of(run_id)
-        dups = 0
-        in_window = False
-        direct_schema = 0
-        direct_unknown: set[tuple] = set()
-        heur_unknown: list[tuple] = []
-        for rec in _iter_jsonl(events):
-            ts = float(rec.get("ts") or 0.0)
-            if ts < cutoff:
-                continue
-            in_window = True
-            run_seen_ts[run_id] = max(run_seen_ts.get(run_id, 0.0), ts)
-            kind = rec.get("kind")
-            if kind == "tool_call":
-                stats["tool_calls"] += 1
-                tool_calls_by_run[run_id] += 1
-                name = (rec.get("name") or "").strip()
-                if rec.get("duplicate"):
-                    dups += 1
-                if name and name not in tools \
-                        and not name.startswith(MCP_PREFIX):
-                    heur_unknown.append(
-                        (rec.get("step"), name,
-                         f"{run_id} step {rec.get('step')}: {name!r}"))
-            elif kind == "tool_reject":
-                reason = rec.get("reason") or ""
-                name = (rec.get("name") or "").strip() or "(unnamed)"
-                if reason == "schema":
-                    direct_schema += 1
-                    b["schema_reject"].hit(
-                        session,
-                        f"{run_id} step {rec.get('step')}: {name!r}: "
-                        f"{(rec.get('message') or '')[:60]} (direct)",
-                        key=name)
-                elif reason == "unknown_tool":
-                    direct_unknown.add((rec.get("step"), name))
-                    b["unknown_tool_name"].hit(
-                        session,
-                        f"{run_id} step {rec.get('step')}: {name!r} (direct)",
-                        key=name)
-            elif kind == "textfallback_drop":
-                direct_drop_runs.add(run_id)
-                for nm in (rec.get("names") or ["(unnamed)"]):
-                    b["textfallback_drop"].hit(
-                        session,
-                        f"{run_id} step {rec.get('step')}: {str(nm)!r} (direct)",
-                        key=str(nm))
-            elif kind == "single_mode_done":
-                stats["runs_completed"] += 1
-                # Direct per-call `tool_reject` events already counted their
-                # share of this run's total; only the remainder (legacy runs
-                # or pre-2026-08-04 records) lands via the old per-run proxy.
-                rejects = max(
-                    0, int(rec.get("schema_rejects") or 0) - direct_schema)
-                for _ in range(rejects):
-                    b["schema_reject"].hit(session, f"{run_id}: {rejects} reject(s)")
-                if rec.get("aborted"):
-                    reason = rec.get("abort_reason") or "(unreported)"
-                    b["aborted_run"].hit(session, f"{run_id}: {reason}",
-                                         key=str(reason))
-        for step_, name_, example in heur_unknown:
-            if (step_, name_) not in direct_unknown:
-                b["unknown_tool_name"].hit(session, example, key=name_)
-        if in_window:
-            stats["runs_in_window"] += 1
-            if dups >= 3:
-                b["duplicate_storm"].hit(session, f"{run_id}: {dups} duplicates",
-                                         key=str(dups))
-            stats["duplicate_calls"] += dups
+        if kind == "assistant":
+            _on_assistant(scan, session, turn, rec)
+        elif kind == "error":
+            _on_error(scan, session, rec)
 
-    # --- sessions/<id>/{transcript.jsonl,debug.log} -------------------------
-    sessions_root = luxe_root / "sessions"
-    for sess_dir in _walk_dirs(sessions_root):
-        session = sess_dir.name
-        turn = -1
-        for rec in _iter_jsonl(sess_dir / "transcript.jsonl"):
-            ts = float(rec.get("ts") or 0.0)
-            kind = rec.get("kind")
-            if kind == "user":
-                turn += 1
-            if ts < cutoff:
-                continue
-            if kind == "assistant":
-                stats["assistant_turns"] += 1
-                text = rec.get("text") or ""
-                run_id = rec.get("run_id") or f"{session}-{max(turn, 0)}"
-                if not rec.get("interrupted") and not text.strip():
-                    b["empty_response"].hit(
-                        session,
-                        f"{run_id}: steps={rec.get('steps')} "
-                        f"tools={rec.get('tool_calls')}")
-                if _TOOL_CALL_TAG_RE.search(text) \
-                        and not tool_calls_by_run.get(run_id) \
-                        and run_id not in direct_drop_runs:
-                    b["textfallback_drop"].hit(
-                        session, f"{run_id}: <tool_call> in prose, 0 tool events")
-            elif kind == "error":
-                stats["error_records"] += 1
-                text = (rec.get("text") or "").strip()
-                b["turn_error"].hit(session, f"{session}: {text[:120]}",
-                                    key=text.split(":")[0][:40] or "(bare)")
 
-        log = sess_dir / "debug.log"
-        if log.is_file():
-            try:
-                body = log.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                body = ""
-            stats["debug_log_lines"] += body.count("\n")
-            for m in _RETRY_RE.finditer(body):
-                b["backend_retry"].hit(session, f"{session}: {m.group(1)}",
-                                       key=m.group(1))
+def _scan_debug_log(scan: _Scan, sess_dir: Path) -> None:
+    """Retry decisions. The log is plain text with no per-line ts, so it is
+    NOT windowed — the whole file counts."""
+    log = sess_dir / "debug.log"
+    if not log.is_file():
+        return
+    try:
+        body = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        body = ""
+    scan.stats["debug_log_lines"] += body.count("\n")
+    for m in _RETRY_RE.finditer(body):
+        scan.buckets["backend_retry"].hit(
+            sess_dir.name, f"{sess_dir.name}: {m.group(1)}", key=m.group(1))
 
-    # Buckets today's records genuinely cannot answer.
+
+def _mark_unmeasurable(b: dict, stats: collections.Counter) -> None:
+    """Buckets today's records genuinely cannot answer."""
     if stats["debug_log_lines"] == 0 or b["backend_retry"].count == 0:
         b["backend_retry"].measurable = False
         b["backend_retry"].why_unmeasurable = (
@@ -339,8 +400,29 @@ def collect(luxe_root: Path, cutoff: float, *,
             "logger.warning); sessions after do, so a zero here on a "
             "post-2026-08-04 corpus is a genuinely quiet window, while a "
             "zero on an older corpus is a records gap.")
-    stats["_meta"] = meta  # type: ignore[assignment]
-    return b, stats
+
+
+def collect(luxe_root: Path, cutoff: float, *,
+            include_apparatus: bool = False) -> tuple[dict, dict]:
+    """Scan runs + sessions once. Returns (buckets, stats).
+
+    Runs first: the session scan's text-fallback proxy needs to know which
+    runs recorded tool events or a direct drop.
+    """
+    tools, tools_from = known_tools()
+    scan = _Scan(_new_buckets(), collections.Counter(), tools, cutoff)
+    scan.stats["_tools_known"] = len(tools)
+    meta = {"tools_from": tools_from,
+            "apparatus": "included" if include_apparatus
+                         else ", ".join(APPARATUS_PREFIXES)}
+    for run_dir in _walk_dirs(luxe_root / "runs"):
+        _scan_run(scan, run_dir, include_apparatus)
+    for sess_dir in _walk_dirs(luxe_root / "sessions"):
+        _scan_transcript(scan, sess_dir)
+        _scan_debug_log(scan, sess_dir)
+    _mark_unmeasurable(scan.buckets, scan.stats)
+    scan.stats["_meta"] = meta  # type: ignore[assignment]
+    return scan.buckets, scan.stats
 
 
 _UNMEASURABLE_NOTES = {
