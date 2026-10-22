@@ -1,7 +1,6 @@
 """Offline unit tests for benchmarks/_eval_common/{dataset,fewshot,meta}.py."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest

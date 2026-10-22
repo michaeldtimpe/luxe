@@ -9,7 +9,6 @@ import pytest
 from luxe import symbols as symbols_mod
 from luxe.symbols import (
     SUPPORTED_LANGUAGES,
-    Symbol,
     _find_symbol_fn,
     build_symbol_index,
 )

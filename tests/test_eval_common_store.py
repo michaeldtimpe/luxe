@@ -8,11 +8,7 @@ of the error text)."""
 from __future__ import annotations
 
 import json
-import math
-from pathlib import Path
-from types import SimpleNamespace
 
-import pytest
 
 from benchmarks._eval_common.choices import pick_choice
 from benchmarks._eval_common.store import ResultStore

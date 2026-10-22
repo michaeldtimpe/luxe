@@ -9,12 +9,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
 
 from luxe.spec import Requirement, Spec
 from luxe.spec_validator import (
-    RequirementResult,
-    ValidationResult,
     _added_lines_from_diff,
     format_unsatisfied_for_reprompt,
     validate,

@@ -24,7 +24,6 @@ from benchmarks.maintain_suite.run import (
     Diagnostics,
     FixtureState,
     FixtureStatus,
-    _luxe_run_dir,
     _stderr_excerpt,
     decide,
     load_state,

@@ -5,7 +5,6 @@ import pytest
 
 from benchmarks.mmlu.adapter import (
     CATEGORIES,
-    LETTERS,
     build_prompt,
     category_for,
     fewshot_for_subject,

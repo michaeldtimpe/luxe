@@ -1,7 +1,6 @@
 """Offline unit tests for benchmarks/_eval_common/extract.py."""
 from __future__ import annotations
 
-import pytest
 
 from benchmarks._eval_common.extract import (
     extract_choice_letter,
