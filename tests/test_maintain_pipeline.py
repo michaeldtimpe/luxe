@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import io
 import json
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,6 +32,7 @@ from luxe.agents.prompts import REPROMPT_SPEC_TEMPLATE
 from luxe.citations import Citation, CitationResult, LintResult, SpecFinding
 from luxe.run_state import PRState, run_dir
 from luxe import steplimit
+from tests._git import git
 
 
 _SWITCHES = ("LUXE_REPROMPT_ON_DOC", "LUXE_STEP_LIMIT_LABEL",
@@ -109,8 +109,7 @@ class Harness:
         self._install_stubs()
 
     def _git(self, *args: str) -> str:
-        return subprocess.run(["git", *args], cwd=self.repo, check=True,
-                              capture_output=True, text=True).stdout
+        return git(self.repo, *args, strip=False)
 
     def _install_stubs(self) -> None:
         h = self
