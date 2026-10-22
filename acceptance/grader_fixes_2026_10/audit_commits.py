@@ -1,6 +1,6 @@
 """Prong 3 old vs new over the last N commits of a repo (task_type=document)."""
 import subprocess, sys
-from benchmarks.maintain_suite import grade as g
+from benchmarks.maintain_suite import gates as gt, grade as g
 
 repo, n = sys.argv[1], int(sys.argv[2])
 def git(*a, ok=False):
@@ -12,18 +12,18 @@ old_f, new_f, cands = [], [], 0
 for c in revs.split():
     _, out = git("show", "-M", "--format=", c)
     hunks = g._parse_diff_hunks(out)
-    if not any(p.lower().endswith(tuple(g._MARKDOWN_EXTS)) for p in hunks): continue
+    if not any(p.lower().endswith(tuple(gt._MARKDOWN_EXTS)) for p in hunks): continue
     cands += 1
     dh = {}
     for p in hunks:
-        if not p.lower().endswith(tuple(g._MARKDOWN_EXTS)): continue
+        if not p.lower().endswith(tuple(gt._MARKDOWN_EXTS)): continue
         sides = []
         for rev in (f"{c}^", c):
             rc, t = git("show", f"{rev}:{p}", ok=True)
-            sides.append(g._unfenced_headings(t) if rc == 0 else None)
+            sides.append(gt._unfenced_headings(t) if rc == 0 else None)
         dh[p] = tuple(sides)
-    o = g._check_doc_section_loss(hunks, "document")
-    nw = g._check_doc_section_loss(hunks, "document", dh)
+    o = gt._check_doc_section_loss(hunks, "document")
+    nw = gt._check_doc_section_loss(hunks, "document", dh)
     if o[0]: old_f.append((c[:8], o[1][:150]))
     if nw[0]: new_f.append((c[:8], nw[1][:150]))
 print(f"commits={len(revs.split())} touching markdown={cands} old_fires={len(old_f)} new_fires={len(new_f)}")

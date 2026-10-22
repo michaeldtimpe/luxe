@@ -1,4 +1,5 @@
-"""Tests for benchmarks/maintain_suite/grade.py — the acceptance grader.
+"""Tests for benchmarks/maintain_suite/grade.py — the acceptance grader —
+and its strict gates in gates.py.
 
 The grader is a pure scoring layer over already-collected run artefacts;
 we don't actually invoke luxe in these tests. Each test seeds the grading
@@ -801,7 +802,7 @@ def test_tool_output_echo_blocks_line_numbered_rewrite(git_repo: Path):
 def test_tool_output_echo_needs_a_consecutive_run():
     """A handful of numbered lines is not the signature — read_file emits
     dozens of strictly consecutive ones. Below the floor, nothing fires."""
-    from benchmarks.maintain_suite.grade import check_tool_output_echo
+    from benchmarks.maintain_suite.gates import check_tool_output_echo
 
     short = ["1\tfirst", "2\tsecond", "3\tthird"]
     assert check_tool_output_echo({"notes.md": (short, [])})[0] is False
@@ -819,7 +820,7 @@ def test_tool_output_echo_needs_a_consecutive_run():
 def test_tool_output_echo_skips_tab_separated_data():
     """A .tsv with a sequential id column is the one place `<int><TAB>` runs
     are normal; the gate must not fail a fixture for adding data."""
-    from benchmarks.maintain_suite.grade import check_tool_output_echo
+    from benchmarks.maintain_suite.gates import check_tool_output_echo
 
     rows = [f"{i + 1}\tacme\t{i * 3}" for i in range(40)]
     assert check_tool_output_echo({"data/rows.tsv": (rows, [])})[0] is False
@@ -1057,7 +1058,7 @@ def test_doc_section_loss_needs_a_trade_not_growth():
     pruned along the way — a weaker signal, and 43% of the doc-section
     candidates in the 400-commit calibration were exactly that shape
     (RESUME.md roll-forwards)."""
-    from benchmarks.maintain_suite.grade import check_destructive_deletion
+    from benchmarks.maintain_suite.gates import check_destructive_deletion
 
     deleted = ["## Features", "", "- Pick a random movie",
                "- Reroll without reloading", "- Remembers five picks"]
@@ -1078,7 +1079,7 @@ def test_doc_section_loss_scoped_to_document_and_manage():
     additive by construction ("Preserve the existing content"). An
     implement/bugfix task that drops a stale doc section is not this gate's
     business."""
-    from benchmarks.maintain_suite.grade import check_destructive_deletion
+    from benchmarks.maintain_suite.gates import check_destructive_deletion
 
     hunks = {
         "README.md": (
@@ -1097,7 +1098,7 @@ def test_doc_section_loss_scoped_to_document_and_manage():
 def test_strict_gates_without_hunks_are_unchanged():
     """`diff_hunks` is optional; a caller that passes only the shortstat gets
     exactly the pre-2026-08-19 behaviour."""
-    from benchmarks.maintain_suite.grade import apply_strict_gates
+    from benchmarks.maintain_suite.gates import apply_strict_gates
 
     triggered = apply_strict_gates(
         task_type="document", file_paths=["README.md"],
@@ -1136,8 +1137,8 @@ class TestGitFailureIsAnErrorNotAVerdict:
             _diff_added_text(git_repo, "0" * 40, ["src/main.py"])
 
     def test_added_files_raises_outside_a_repo(self, tmp_path: Path):
-        from benchmarks.maintain_suite.grade import (GitRunError,
-                                                     _added_files_in_diff)
+        from benchmarks.maintain_suite.gates import _added_files_in_diff
+        from benchmarks.maintain_suite.grade import GitRunError
         with pytest.raises(GitRunError):
             _added_files_in_diff(tmp_path / "not-a-repo", "HEAD")
 
@@ -1301,10 +1302,8 @@ def test_regex_absent_passes_when_the_target_is_cleaned(git_repo: Path):
 # --- 2026-10-21: two false failures from the harness_ab hand-verify -------
 # Both printed 1/5 on runs hand-graded REAL; acceptance/grader_fixes_2026_10.
 
-from benchmarks.maintain_suite.grade import (  # noqa: E402
-    _added_line_units,
-    _unfenced_headings,
-)
+from benchmarks.maintain_suite.gates import _unfenced_headings  # noqa: E402
+from benchmarks.maintain_suite.grade import _added_line_units  # noqa: E402
 
 # isomer README Quick Start at base_sha 33da2bc, and codex/q38/rep1's rewrite
 # of it (+25/-22), verbatim from the run's diff.patch: the same commands as
