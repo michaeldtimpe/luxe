@@ -5,8 +5,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from benchmarks._eval_common.dataset import jsonl_load
-
 
 def aggregate_items(item_records: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute summary statistics from a list of per-item result dicts.

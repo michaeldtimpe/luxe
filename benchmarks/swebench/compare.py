@@ -177,7 +177,6 @@ def render_text(cmp: PairedComparison) -> str:
 def main() -> int:
     """CLI entry: compare two harness_summary.json files."""
     import argparse
-    import sys
     from pathlib import Path
 
     p = argparse.ArgumentParser(description="Paired pre/post comparison via McNemar.")

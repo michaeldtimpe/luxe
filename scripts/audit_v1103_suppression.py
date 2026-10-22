@@ -103,7 +103,6 @@ def trajectory_summary(events: list[dict], instance_id: str, rep_label: str,
     suppressions = []  # list of (step, score, recent_path_diversity)
     bail_fires = []    # list of (step, msg_variant)
     density_fires = []
-    other_msgs = []
     tool_calls = []
     final_diff = None
 
