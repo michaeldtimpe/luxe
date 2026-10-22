@@ -23,14 +23,6 @@ from luxe.config import PipelineConfig, RoleConfig
 
 
 @pytest.fixture(autouse=True)
-def _isolated_home(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-
-
-@pytest.fixture(autouse=True)
 def _offline(monkeypatch):
     """The update check is the only networked doctor line — pin it offline so
     the suite never waits on (or depends on) a fetch."""
