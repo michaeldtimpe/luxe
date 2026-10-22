@@ -1119,6 +1119,281 @@ def _append_acting_turn(run: _Run, st: LoopState, result: AgentResult,
     st.messages.append(assistant_msg)
 
 
+def _schema_error(run: _Run, tc: ToolCallResponse) -> str | None:
+    """Why this call's arguments are rejected before dispatch, or None."""
+    # Arguments that decode to something other than an object (`null`,
+    # a list, a double-encoded string) used to reach `validate_args` /
+    # `_call_key` / `.get` and kill the whole run with an uncaught
+    # AttributeError. Reject them like any other schema error — for
+    # every name, offered or not.
+    if not isinstance(tc.arguments, dict):
+        err = ("Arguments must be a JSON object, got "
+               f"{type(tc.arguments).__name__}")
+    elif tc.name in run.tool_def_map:
+        err = validate_args(run.tool_def_map[tc.name], tc.arguments)
+    else:
+        err = None
+    return err
+
+
+def _dedup_short_circuit(run: _Run, st: LoopState, result: AgentResult,
+                         tc: ToolCallResponse, step: int, key_hash: str,
+                         emit: Callable[..., None]) -> None:
+    """Answer a repeated call with the loop's dedup message instead of
+    dispatching it again."""
+    content = dedup_message(tc.name)
+    dup = ToolCall(
+        id=tc.id or f"call_{step}",
+        name=tc.name,
+        arguments=tc.arguments,
+        result=content,
+        cached=True,
+        duplicate=True,
+        bytes_out=0,
+        wall_s=0.0,
+    )
+    result.tool_calls.append(dup)
+    st.messages.append(_tool_message(tc, step, content))
+    _display(run.on_tool_event, dup, "on_tool_event")
+    emit(
+        "tool_call",
+        step=step, name=tc.name,
+        key_hash=key_hash, duplicate=True, cached=False,
+        bytes_out=0,
+    )
+    if st.writes_seen > 0:
+        st.post_write_idle_tools += 1
+
+
+def _track_write(run: _Run, st: LoopState, step: int,
+                 emit: Callable[..., None]) -> None:
+    """Bookkeeping for a successful write_file / edit_file."""
+    st.writes_seen += 1
+    st.post_write_idle_tools = 0
+    # A write changes what every observation tool would return, so
+    # "you already called this — the result was provided above" is
+    # false for any call made before it. Keyed on args alone, the
+    # dedup refused post-write re-verification (`bash` pytest,
+    # `grep`, `typecheck`): 174 such refusals across 122 runs in
+    # ~/.luxe/runs (2026-09 review), each also counted toward the
+    # repeat-streak abort. Write keys survive, so a repeated
+    # identical write is still deduplicated as before.
+    st.seen_calls = {k for k in st.seen_calls
+                     if k.partition(":")[0] in _WRITE_TOOLS}
+    # forge-hybrid Phase 2 (A) — capture compaction phase at the
+    # first successful write. Used by the resolve-time telemetry
+    # to attribute write-step gating to compaction state. Fires
+    # at most once per run.
+    if (run.flags.tiered_compact
+            and st.compaction_phase_at_first_write is None):
+        st.compaction_phase_at_first_write = st.compaction_max_phase_this_run
+        emit(
+            "compaction_phase_at_first_write",
+            step=step,
+            phase_reached=st.compaction_phase_at_first_write,
+        )
+    # v1.10 — post-intervention write telemetry. Capture
+    # time-to-first-write and sustained-write-burst signals
+    # for any trajectory where an intervention fired earlier.
+    if st.last_intervention_step is not None:
+        if st.first_write_step_after_intervention is None:
+            st.first_write_step_after_intervention = step - st.last_intervention_step
+        st.post_intervention_consecutive_writes += 1
+        if st.post_intervention_consecutive_writes > st.post_intervention_write_burst_max:
+            st.post_intervention_write_burst_max = st.post_intervention_consecutive_writes
+
+
+def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
+                      executed: ToolCall, key: str, step: int,
+                      emit: Callable[..., None]) -> None:
+    """Fold one dispatched call into the run's bookkeeping: the spec
+    validator's call list, dedup keys, convergence history, and the
+    write / post-write-idle counters."""
+    # SpecDD Lever 1: track every successfully-dispatched call (name,
+    # args) for the spec validator. Skip error and schema-reject
+    # cases — those don't represent a "real" call as far as the
+    # agent-trajectory predicates are concerned.
+    if not executed.error:
+        st.actual_tool_calls.append((tc.name, tc.arguments))
+    st.seen_calls.add(key)
+    # v1.10 — append to tool_history for the convergence score.
+    # Bounded to the last TOOL_HISTORY_MAX entries; only
+    # successfully-dispatched calls (errors don't represent observed
+    # behavior). Path extraction is permissive — see
+    # luxe.agents.convergence.extract_path.
+    if not executed.error:
+        st.tool_history.append({
+            "step": step,
+            "name": tc.name,
+            "path": extract_path(tc.name, tc.arguments),
+        })
+        if len(st.tool_history) > TOOL_HISTORY_MAX:
+            st.tool_history = st.tool_history[-TOOL_HISTORY_MAX:]
+    if tc.name in _WRITE_TOOLS and not executed.error:
+        _track_write(run, st, step, emit)
+    elif st.writes_seen > 0:
+        # A dedup-exempt repeat (read_file) returns content, so it
+        # RESETS the streak. Counting such repeats as idle was benched
+        # twice and refuted (LUXE_POST_WRITE_IDLE_REPEATS, removed
+        # 2026-10-22; agents.sdd "Removed mechanisms").
+        idle = executed.bytes_out == 0 or executed.error
+        if idle:
+            st.post_write_idle_tools += 1
+        else:
+            st.post_write_idle_tools = 0
+        # v1.10 — non-write after intervention breaks the burst
+        # (only matters once at least one write has occurred).
+        if st.last_intervention_step is not None:
+            st.post_intervention_consecutive_writes = 0
+
+
+def _clamp_result(st: LoopState, tc: ToolCallResponse, executed: ToolCall,
+                  content: str, effective_ctx: int, step: int,
+                  emit: Callable[..., None]) -> str:
+    """LUXE_TOOL_RESULT_CLAMP (opt-in, default OFF; callers check the flag).
+    Bound ONE result here, at creation, rather than asking TieredCompact
+    to reach a message its pinned protections put out of reach. Off =>
+    this is not called at all and `content` is the untouched string, so
+    the benchmark path is byte-identical by construction.
+
+    `executed.bytes_out` and the `tool_call` event keep reporting
+    what the TOOL produced — the clamp is about what the CONTEXT
+    carries, and conflating the two would make the corpus lie about
+    tool behaviour.
+
+    The other two `role: "tool"` appends in the loop (the schema
+    reject and the dedup short-circuit) are deliberately NOT
+    clamped: neither runs `dispatch_tool`, and both carry loop-
+    authored constants — `validate_args` returns a fixed sentence
+    that never echoes an argument value, and the dedup message is
+    literal. Clamping them could only ever be a no-op on a hot path."""
+    _clamp_max = tool_result_clamp_chars(effective_ctx)
+    content, _clamp_dropped = clamp_tool_result(
+        content, tool_name=tc.name, max_chars=_clamp_max,
+        path=extract_path(tc.name, tc.arguments),
+    )
+    if _clamp_dropped:
+        st.tool_results_clamped += 1
+        logger.debug("tool result clamped name=%s max_chars=%d "
+                     "dropped=%d", tc.name, _clamp_max,
+                     _clamp_dropped)
+        emit(
+            "tool_result_clamped",
+            step=step, name=tc.name,
+            max_chars=_clamp_max,
+            chars_dropped=_clamp_dropped,
+            bytes_out=executed.bytes_out,
+        )
+    return content
+
+
+def _record_tool_call(run: _Run, st: LoopState, tc: ToolCallResponse,
+                      executed: ToolCall, key_hash: str, step: int,
+                      emit: Callable[..., None]) -> None:
+    """Report a completed dispatch: on_tool_event, the `tool_call` record,
+    and the post-compaction recovery marker."""
+    _display(run.on_tool_event, executed, "on_tool_event")
+    emit(
+        "tool_call",
+        step=step, name=tc.name,
+        key_hash=key_hash, duplicate=False,
+        cached=executed.cached, bytes_out=executed.bytes_out,
+        # v1.10 — emit path arg so future convergence-score
+        # mining can run against the trace. Cheap; falls
+        # back to None for tools without a path-like arg.
+        path=extract_path(tc.name, tc.arguments),
+    )
+    # forge-hybrid Phase 2 (A) — post-compact recovery markers.
+    # Emits one of three event types whenever a recovery-class
+    # tool runs after compaction has fired anywhere in the run.
+    # Used to characterize whether compaction is followed by
+    # productive read/grep/edit activity (the search-geometry
+    # signal flagged in the plan's risk register).
+    if st.compaction_max_phase_this_run > 0:
+        recovery_event = _COMPACTION_RECOVERY_EVENT_BY_TOOL.get(tc.name)
+        if recovery_event is not None:
+            emit(
+                recovery_event,
+                step=step, name=tc.name,
+                compaction_max_phase=st.compaction_max_phase_this_run,
+            )
+
+
+def _dispatch_one(run: _Run, st: LoopState, result: AgentResult,
+                  tc: ToolCallResponse, step: int, effective_ctx: int,
+                  emit: Callable[..., None]) -> bool:
+    """Handle ONE tool call of an acting step: schema-reject it, answer it
+    from the dedup short-circuit, or dispatch it, and append its tool
+    message. Returns True when it was a dedup repeat (the step's
+    `step_had_repeat`)."""
+    result.tool_calls_total += 1
+    # Normalize the tool name at the loop boundary, not just inside
+    # dispatch_tool. Several downstream checks (`_WRITE_TOOLS`,
+    # `_DEDUP_EXEMPT_TOOLS`, `tool_def_map`, `_call_key`) all compare
+    # against the raw name; if GLM emits "edit_file\n", every one of
+    # them misses and bookkeeping silently drifts (writes_seen never
+    # increments → WP fires after diffs already landed,
+    # post_write_idle_exit never arms).
+    tc.name = tc.name.strip()
+
+    err = _schema_error(run, tc)
+    if err:
+        result.schema_rejects += 1
+        emit(
+            "tool_reject",
+            step=step, name=tc.name,
+            reason="schema", message=str(err)[:300],
+        )
+        st.messages.append(_tool_message(tc, step, f"Schema error: {err}"))
+        return False
+
+    key = _call_key(tc.name, tc.arguments)
+    key_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
+    # v1.9 — convergence proxy. The first time a read_file call key
+    # repeats (same path + args), record the step. Strong trajectories
+    # re-read targets ~3× more often than empties; this is a
+    # "found my target" signal that suppresses the action-density
+    # gate. Tracked for read_file only — repeating a search/edit has
+    # different semantics (revising, not converging on a candidate).
+    if tc.name == "read_file":
+        if key in st.read_keys_seen and st.same_file_read_twice_step is None:
+            st.same_file_read_twice_step = step
+        else:
+            st.read_keys_seen.add(key)
+    if key in st.seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
+        _dedup_short_circuit(run, st, result, tc, step, key_hash, emit)
+        return True
+
+    # Dispatch-time visibility: every other record (events.jsonl,
+    # on_tool_event, /verbose) fires on COMPLETION, so a hung tool
+    # was invisible everywhere — including post-hoc (session
+    # 5bb630813c21: 9m40s on a curl with no trace of the command).
+    logger.debug("tool dispatch step=%d name=%s args=%s",
+                 step + 1, tc.name, _args_preview(tc.arguments))
+    executed = dispatch_tool(tc.name, tc.arguments, run.tool_fns)
+    logger.debug("tool done name=%s wall_s=%.2f error=%s bytes_out=%d",
+                 tc.name, getattr(executed, "wall_s", 0.0) or 0.0,
+                 (getattr(executed, "error", None) or "")[:200] or None,
+                 getattr(executed, "bytes_out", 0) or 0)
+    if executed.error and executed.error.startswith("Unknown tool"):
+        emit(
+            "tool_reject",
+            step=step, name=tc.name,
+            reason="unknown_tool", message=executed.error[:300],
+        )
+    result.tool_calls.append(executed)
+    _track_dispatched(run, st, tc, executed, key, step, emit)
+
+    content = executed.error or executed.result
+    if run.flags.tool_result_clamp and content:
+        content = _clamp_result(st, tc, executed, content, effective_ctx,
+                                step, emit)
+    st.messages.append(_tool_message(tc, step, content))
+
+    _record_tool_call(run, st, tc, executed, key_hash, step, emit)
+    return False
+
+
 def _token_progress(st: LoopState, result: AgentResult, step: int,
                     pressure: float) -> None:
     """Token-interval progress logging — fires when cumulative completion
@@ -1347,227 +1622,8 @@ def run_agent(
 
         step_had_repeat = False
         for tc in tool_calls:
-            result.tool_calls_total += 1
-            # Normalize the tool name at the loop boundary, not just inside
-            # dispatch_tool. Several downstream checks (`_WRITE_TOOLS`,
-            # `_DEDUP_EXEMPT_TOOLS`, `tool_def_map`, `_call_key`) all compare
-            # against the raw name; if GLM emits "edit_file\n", every one of
-            # them misses and bookkeeping silently drifts (writes_seen never
-            # increments → WP fires after diffs already landed,
-            # post_write_idle_exit never arms).
-            tc.name = tc.name.strip()
-
-            # Arguments that decode to something other than an object (`null`,
-            # a list, a double-encoded string) used to reach `validate_args` /
-            # `_call_key` / `.get` and kill the whole run with an uncaught
-            # AttributeError. Reject them like any other schema error — for
-            # every name, offered or not.
-            if not isinstance(tc.arguments, dict):
-                err = ("Arguments must be a JSON object, got "
-                       f"{type(tc.arguments).__name__}")
-            elif tc.name in tool_def_map:
-                err = validate_args(tool_def_map[tc.name], tc.arguments)
-            else:
-                err = None
-            if err:
-                result.schema_rejects += 1
-                emit(
-                    "tool_reject",
-                    step=step, name=tc.name,
-                    reason="schema", message=str(err)[:300],
-                )
-                st.messages.append(_tool_message(tc, step, f"Schema error: {err}"))
-                continue
-
-            key = _call_key(tc.name, tc.arguments)
-            key_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
-            # v1.9 — convergence proxy. The first time a read_file call key
-            # repeats (same path + args), record the step. Strong trajectories
-            # re-read targets ~3× more often than empties; this is a
-            # "found my target" signal that suppresses the action-density
-            # gate. Tracked for read_file only — repeating a search/edit has
-            # different semantics (revising, not converging on a candidate).
-            if tc.name == "read_file":
-                if key in st.read_keys_seen and st.same_file_read_twice_step is None:
-                    st.same_file_read_twice_step = step
-                else:
-                    st.read_keys_seen.add(key)
-            if key in st.seen_calls and tc.name not in _DEDUP_EXEMPT_TOOLS:
+            if _dispatch_one(run, st, result, tc, step, effective_ctx, emit):
                 step_had_repeat = True
-                content = dedup_message(tc.name)
-                dup = ToolCall(
-                    id=tc.id or f"call_{step}",
-                    name=tc.name,
-                    arguments=tc.arguments,
-                    result=content,
-                    cached=True,
-                    duplicate=True,
-                    bytes_out=0,
-                    wall_s=0.0,
-                )
-                result.tool_calls.append(dup)
-                st.messages.append(_tool_message(tc, step, content))
-                _display(run.on_tool_event, dup, "on_tool_event")
-                emit(
-                    "tool_call",
-                    step=step, name=tc.name,
-                    key_hash=key_hash, duplicate=True, cached=False,
-                    bytes_out=0,
-                )
-                if st.writes_seen > 0:
-                    st.post_write_idle_tools += 1
-                continue
-
-            # Dispatch-time visibility: every other record (events.jsonl,
-            # on_tool_event, /verbose) fires on COMPLETION, so a hung tool
-            # was invisible everywhere — including post-hoc (session
-            # 5bb630813c21: 9m40s on a curl with no trace of the command).
-            logger.debug("tool dispatch step=%d name=%s args=%s",
-                         step + 1, tc.name, _args_preview(tc.arguments))
-            executed = dispatch_tool(tc.name, tc.arguments, tool_fns)
-            logger.debug("tool done name=%s wall_s=%.2f error=%s bytes_out=%d",
-                         tc.name, getattr(executed, "wall_s", 0.0) or 0.0,
-                         (getattr(executed, "error", None) or "")[:200] or None,
-                         getattr(executed, "bytes_out", 0) or 0)
-            if executed.error and executed.error.startswith("Unknown tool"):
-                emit(
-                    "tool_reject",
-                    step=step, name=tc.name,
-                    reason="unknown_tool", message=executed.error[:300],
-                )
-            result.tool_calls.append(executed)
-            # SpecDD Lever 1: track every successfully-dispatched call (name,
-            # args) for the spec validator. Skip error and schema-reject
-            # cases — those don't represent a "real" call as far as the
-            # agent-trajectory predicates are concerned.
-            if not executed.error:
-                st.actual_tool_calls.append((tc.name, tc.arguments))
-            st.seen_calls.add(key)
-            # v1.10 — append to tool_history for the convergence score.
-            # Bounded to the last TOOL_HISTORY_MAX entries; only
-            # successfully-dispatched calls (errors don't represent observed
-            # behavior). Path extraction is permissive — see
-            # luxe.agents.convergence.extract_path.
-            if not executed.error:
-                st.tool_history.append({
-                    "step": step,
-                    "name": tc.name,
-                    "path": extract_path(tc.name, tc.arguments),
-                })
-                if len(st.tool_history) > TOOL_HISTORY_MAX:
-                    st.tool_history = st.tool_history[-TOOL_HISTORY_MAX:]
-            if tc.name in _WRITE_TOOLS and not executed.error:
-                st.writes_seen += 1
-                st.post_write_idle_tools = 0
-                # A write changes what every observation tool would return, so
-                # "you already called this — the result was provided above" is
-                # false for any call made before it. Keyed on args alone, the
-                # dedup refused post-write re-verification (`bash` pytest,
-                # `grep`, `typecheck`): 174 such refusals across 122 runs in
-                # ~/.luxe/runs (2026-09 review), each also counted toward the
-                # repeat-streak abort. Write keys survive, so a repeated
-                # identical write is still deduplicated as before.
-                st.seen_calls = {k for k in st.seen_calls
-                                 if k.partition(":")[0] in _WRITE_TOOLS}
-                # forge-hybrid Phase 2 (A) — capture compaction phase at the
-                # first successful write. Used by the resolve-time telemetry
-                # to attribute write-step gating to compaction state. Fires
-                # at most once per run.
-                if (flags.tiered_compact
-                        and st.compaction_phase_at_first_write is None):
-                    st.compaction_phase_at_first_write = st.compaction_max_phase_this_run
-                    emit(
-                        "compaction_phase_at_first_write",
-                        step=step,
-                        phase_reached=st.compaction_phase_at_first_write,
-                    )
-                # v1.10 — post-intervention write telemetry. Capture
-                # time-to-first-write and sustained-write-burst signals
-                # for any trajectory where an intervention fired earlier.
-                if st.last_intervention_step is not None:
-                    if st.first_write_step_after_intervention is None:
-                        st.first_write_step_after_intervention = step - st.last_intervention_step
-                    st.post_intervention_consecutive_writes += 1
-                    if st.post_intervention_consecutive_writes > st.post_intervention_write_burst_max:
-                        st.post_intervention_write_burst_max = st.post_intervention_consecutive_writes
-            elif st.writes_seen > 0:
-                # A dedup-exempt repeat (read_file) returns content, so it
-                # RESETS the streak. Counting such repeats as idle was benched
-                # twice and refuted (LUXE_POST_WRITE_IDLE_REPEATS, removed
-                # 2026-10-22; agents.sdd "Removed mechanisms").
-                idle = executed.bytes_out == 0 or executed.error
-                if idle:
-                    st.post_write_idle_tools += 1
-                else:
-                    st.post_write_idle_tools = 0
-                # v1.10 — non-write after intervention breaks the burst
-                # (only matters once at least one write has occurred).
-                if st.last_intervention_step is not None:
-                    st.post_intervention_consecutive_writes = 0
-
-            content = executed.error or executed.result
-            # LUXE_TOOL_RESULT_CLAMP (opt-in, default OFF). Bound ONE result
-            # here, at creation, rather than asking TieredCompact to reach a
-            # message its pinned protections put out of reach. Off => the
-            # helper is not called at all and `content` is the untouched
-            # string, so the benchmark path is byte-identical by construction.
-            #
-            # `executed.bytes_out` and the `tool_call` event keep reporting
-            # what the TOOL produced — the clamp is about what the CONTEXT
-            # carries, and conflating the two would make the corpus lie about
-            # tool behaviour.
-            #
-            # The other two `role: "tool"` appends in this loop (the schema
-            # reject and the dedup short-circuit) are deliberately NOT
-            # clamped: neither runs `dispatch_tool`, and both carry loop-
-            # authored constants — `validate_args` returns a fixed sentence
-            # that never echoes an argument value, and the dedup message is
-            # literal. Clamping them could only ever be a no-op on a hot path.
-            if flags.tool_result_clamp and content:
-                _clamp_max = tool_result_clamp_chars(effective_ctx)
-                content, _clamp_dropped = clamp_tool_result(
-                    content, tool_name=tc.name, max_chars=_clamp_max,
-                    path=extract_path(tc.name, tc.arguments),
-                )
-                if _clamp_dropped:
-                    st.tool_results_clamped += 1
-                    logger.debug("tool result clamped name=%s max_chars=%d "
-                                 "dropped=%d", tc.name, _clamp_max,
-                                 _clamp_dropped)
-                    emit(
-                        "tool_result_clamped",
-                        step=step, name=tc.name,
-                        max_chars=_clamp_max,
-                        chars_dropped=_clamp_dropped,
-                        bytes_out=executed.bytes_out,
-                    )
-            st.messages.append(_tool_message(tc, step, content))
-
-            _display(run.on_tool_event, executed, "on_tool_event")
-            emit(
-                "tool_call",
-                step=step, name=tc.name,
-                key_hash=key_hash, duplicate=False,
-                cached=executed.cached, bytes_out=executed.bytes_out,
-                # v1.10 — emit path arg so future convergence-score
-                # mining can run against the trace. Cheap; falls
-                # back to None for tools without a path-like arg.
-                path=extract_path(tc.name, tc.arguments),
-            )
-            # forge-hybrid Phase 2 (A) — post-compact recovery markers.
-            # Emits one of three event types whenever a recovery-class
-            # tool runs after compaction has fired anywhere in the run.
-            # Used to characterize whether compaction is followed by
-            # productive read/grep/edit activity (the search-geometry
-            # signal flagged in the plan's risk register).
-            if st.compaction_max_phase_this_run > 0:
-                recovery_event = _COMPACTION_RECOVERY_EVENT_BY_TOOL.get(tc.name)
-                if recovery_event is not None:
-                    emit(
-                        recovery_event,
-                        step=step, name=tc.name,
-                        compaction_max_phase=st.compaction_max_phase_this_run,
-                    )
 
         pwi_exit = PostWriteIdleExitGuard.should_exit(
             post_write_idle_tools=st.post_write_idle_tools,
