@@ -98,10 +98,52 @@ Champion `Qwen3.6-35B-A3B-6bit`, all 10 maintain_suite fixtures, 3 reps, with th
 | m5 | 12 s | |
 | neo | 50 s | Only after re-bootstrapping its llama-server LaunchAgent. It had not run since a reboot 7 days earlier — the known Background Task Management gap in CLAUDE.md, not a code issue. |
 
-## Left open
+## Left open (at close of the main pass)
 
 - Clean candidates for a future pass: `maintain_pipeline` (55), `maintain_suite.run.main` (50),
   `backend._stream_once` (28), and splitting `grade.py`'s `check_*` gates into a module.
 - **neo boot persistence** still needs the one-time approval in System Settings → Login Items.
 - **The uv.lock drift** is still uncommitted on all three hosts.
 - **The `_git` test helper** has 15 copies, a consolidation skipped as too wide for this pass.
+
+## Follow-up, same day: the deferred items
+
+The uv.lock drift was identical on all three hosts (lock revision 3 → 5, certifi 2026.10.19) and landed as
+`c1bfe24`. The four deferred refactors landed as one fast-forward, `c1bfe24..13a4508`:
+
+| PR | Change | Main commits |
+|---|---|---|
+| #43 | `maintain_pipeline` C901 55 → 1: a `_Pipeline` record and step helpers (max 6); 33 end-to-end characterization tests (51 single-line mutations of the old code, each caught) | `ae47e6e..cc294b0` |
+| #42 | `maintain_suite.run.main` C901 50 → 7 (`_BenchRun`); the six strict gates moved to `gates.py`, the git runner to `proc.py`; 22 tests (21 mutations caught); `--help` identical | `6daf6fd..e78f47d` |
+| #41 | `backend._stream_once` C901 28 → 7 (`_StreamAccumulator`); 23 tests (27 mutations caught); no other function's source changed | `e9ccc8d..39bdb8a` |
+| #40 | One `tests/_git.py` runner replaces the 15 `_git` copies; collected count unchanged | `062c93d`, `13a4508` |
+
+Full suite on the combined tree: 4039 passed (3961 + 78 new). `maintain_pipeline`'s refactor was also checked with a
+full trace of all 33 characterization runs (events, every `run_single` call, console text, report): identical before
+and after.
+
+**No-harm A/B** (m5, `review_2026_10_deferred_ab/`, local and gitignored). Champion, 10 fixtures × 3 reps,
+interleaved; ctl = `c1bfe24`, trt = `13a4508`. Each arm used its own bench runner and grader.
+
+| | ctl | trt |
+|---|---|---|
+| expected_outcome | **30/30** | **30/30** |
+| score | 120 | 120 |
+| byte-identical diffs | 9/10 fixtures identical in all 6 runs | |
+| gates triggered / step-limit bailouts | 0 / 1 | 0 / 1 |
+| wall (sum) | 1,234 s | 1,197 s |
+
+document-config varied in both arms; trt rep3 reproduces ctl rep1 byte for byte (same 219-event trajectory).
+Hand-verifying the six CONFIG.md files against the fixture source: five are correct, and **trt rep1 invents four of
+the six `PM_RISK_*` defaults** (10000/2000/500/3600; the source has 1500/1000/0/900) and gives `DASHBOARD_PORT` a
+default of 8080, which it does not have. The grader passed it anyway. It is the known Mode B pattern on this fixture
+(writing after too few reads; it wrote after 8 file reads where the others read 13–14). It is not the harness: all
+six runs sent identically sized prompts for the first five steps, and trt rep1's step-5 *response* differed. The
+control runs diverge from each other the same way at step 9. **Verdict: no harm.**
+
+Smoke after deploy (`13a4508`): `luxe ready` and `luxe smoke --chat --code` READY on m1 (150 s), m5 (10 s) and
+neo (42 s).
+
+Still open: neo boot persistence (the Login Items approval). Above-25 functions remaining outside vendored fixtures:
+`scripts/toolcall_taxonomy.collect` (33), `chat/status.fields` (28) and `chat/cmd_models._model` (25); none is on
+the benchmark path.

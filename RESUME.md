@@ -22,6 +22,12 @@ This is the second whole-project review. Seven PRs landed as signed fast-forward
 - **Smoke:** READY on m1, m5 and neo. neo needed its llama-server LaunchAgent re-bootstrapped after a reboot
   (the known BTM gap).
 - **Report and open items:** `acceptance/review_2026_10/REPORT.md`.
+- **Follow-up, same day (main `13a4508`):** the deferred items landed.
+  - uv.lock drift committed (`c1bfe24`).
+  - `maintain_pipeline` C901 55 → 1 (#43); bench `run.main` 50 → 7, with the strict gates now in
+    `benchmarks/maintain_suite/gates.py` (#42); `backend._stream_once` 28 → 7 (#41); one `tests/_git.py` (#40).
+  - 78 new characterization tests. Second no-harm A/B: 30/30 both arms. One trt document-config doc invented
+    risk defaults, the known Mode B, not harness-caused (see the report). Smoke READY on all three hosts.
 
 ## ⇒ SESSION NOTE (2026-09-28, m5) — SWE-bench n=75 baseline: 36.3/75 = 48.4% harness-resolved (3 reps: 38/36/35)
 
