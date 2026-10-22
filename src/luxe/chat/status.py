@@ -15,8 +15,9 @@ LIGHTWEIGHT variant: a static bar pinned under the input line, refreshed from
 `StatusState` BETWEEN turns (the tool tail-log streams above for live progress).
 `fields()` is the single source of segment order/content; `status_markup()`
 (line REPL), `to_rich_text()` (TUI bar + in-turn live view) render from it.
-Unlike YASL there is no width-responsive segment-dropping yet — prompt_toolkit
-truncates the bar; the path is shown home-relative but not middle-ellipsised.
+Width-responsive like YASL: `fit(segments, width)` drops the low-value
+segments first (each `Segment` carries a drop `priority`) and then
+middle-ellipsises the home-relative path; path/git/ctx/model are protected.
 """
 
 from __future__ import annotations

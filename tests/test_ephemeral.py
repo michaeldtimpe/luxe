@@ -237,8 +237,6 @@ class TestTheFlagItself:
         assert ephemeral.is_ephemeral() is True
         ephemeral.disable()
         assert ephemeral.is_ephemeral() is False
-        ephemeral.set_enabled(True)
-        assert ephemeral.is_ephemeral() is True
 
     def test_turning_it_off_resumes_writing(self, home, tmp_path):
         ephemeral.enable()

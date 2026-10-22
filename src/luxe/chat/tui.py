@@ -671,18 +671,6 @@ class ChatApp(App):
         finally:
             self._call_ui(self._end_busy)
 
-    def _report_backend_error(self, e) -> None:
-        """A dead endpoint fails the turn, not the app: record + recovery
-        (repair → degrade → /backend hint), rendered into the transcript
-        (`ChatController.report_backend_error`)."""
-        self.controller.report_backend_error(e, self.sink)
-
-    def _report_turn_crash(self, what: str = "turn") -> None:
-        """Render an unexpected worker exception into the transcript instead of
-        letting it kill the app; after quit it is only logged
-        (`ChatController.report_crash`). Call from inside the `except`."""
-        self.controller.report_crash(what, self.sink)
-
     def _render_outcome(self, outcome, prep) -> None:
         """UI thread (`TuiSink.render_outcome` marshals here): the lines the
         controller builds for both front-ends. Building them applies the turn
