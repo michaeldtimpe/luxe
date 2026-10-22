@@ -319,6 +319,186 @@ def _record_intervention(st: LoopState, step: int, kind: str) -> None:
     st.intervention_kinds_fired.add(kind)
 
 
+def _display(cb: Callable[[Any], None] | None, arg: Any, what: str) -> None:
+    """Display-only callbacks (chat front-end; None on the benchmark path):
+    a broken one must not kill the run."""
+    if cb is None:
+        return
+    try:
+        cb(arg)
+    except Exception:
+        logger.debug("%s raised", what, exc_info=True)
+
+
+@dataclass(frozen=True)
+class _Run:
+    """One `run_agent` call's CONFIGURATION, built once before the first step
+    and never reassigned: the caller's arguments, `RunFlags`, and what is
+    derived from them. The step helpers below read it; everything they
+    mutate is `LoopState` / `AgentResult` (agents.sdd: loop.py is the sole
+    mutator)."""
+
+    role_cfg: RoleConfig
+    flags: RunFlags
+    tool_defs: list[ToolDef]
+    tool_fns: dict[str, ToolFn]
+    tool_def_map: dict[str, ToolDef]
+    known_names: set[str]
+    openai_tools: list[dict[str, Any]] | None
+    # Estimated tokens of the tool schemas (LUXE_CTX_CAL_TOOLS); 0 when off.
+    tools_overhead: int
+    compactor: TieredCompact | None
+    spec: Spec | None
+    spec_has_zero_calls: bool
+    early_bail_message: str | None
+    on_token: Callable[[str], None] | None
+    on_progress: Callable[[float], None] | None
+    on_notice: Callable[[str], None] | None
+    on_tool_event: OnToolEvent | None
+
+    def notice(self, text: str) -> None:
+        _display(self.on_notice, text, "on_notice")
+
+    def assistant(self, resp: ChatResponse, content: str) -> dict[str, Any]:
+        """The assistant message the model's output becomes in `messages`.
+        With LUXE_REASONING_ROUNDTRIP=1 it carries the reasoning the server
+        split off, so the template renders the model's real `<think>` block
+        instead of an empty one. Off: exactly the legacy dict."""
+        msg: dict[str, Any] = {"role": "assistant", "content": content}
+        if self.flags.reasoning_roundtrip and resp.reasoning_text:
+            msg["reasoning_content"] = resp.reasoning_text
+        return msg
+
+
+def _step_window(run: _Run, st: LoopState, result: AgentResult,
+                 step: int) -> tuple[int, float]:
+    """This step's `(effective_ctx, pressure)`: the calibrated window every
+    pressure consumer divides by, and the messages' pressure against it.
+    Records peak/final pressure on `result` and reports it to `on_progress`.
+    """
+    role_cfg = run.role_cfg
+    # The window every pressure consumer divides by this step. From step 2
+    # on it is `num_ctx` shrunk by however far the chars/4 estimate ran
+    # under the server's own `usage.prompt_tokens` last call — see
+    # `calibrated_ctx_limit`. Step 1 has nothing to calibrate against and
+    # uses `num_ctx` raw, which is the historical behaviour.
+    # LUXE_CTX_CAL_DAMP (opt-in, default OFF): the live ratio was measured
+    # on ONE prompt; apply only the share of it that prompt still covers.
+    # `step_calibration is ctx_calibration` whenever the flag is off, so
+    # `effective_ctx`, the debug line, and every consumer are unchanged.
+    step_calibration = st.ctx_calibration
+    if run.flags.ctx_cal_damp and st.ctx_calibration != 1.0:
+        _est_now = estimate_messages_tokens(st.messages) + run.tools_overhead
+        step_calibration = damped_calibration(
+            st.ctx_calibration, st.est_at_calibration, _est_now,
+            unmeasured=run.flags.ctx_cal_unmeasured_ratio)
+        if step_calibration != st.ctx_calibration:
+            logger.debug("ctx calibration damped %.2fx -> %.2fx "
+                         "(measured at est=%d, prompt now est=%d)",
+                         st.ctx_calibration, step_calibration,
+                         st.est_at_calibration, _est_now)
+    effective_ctx = calibrated_ctx_limit(role_cfg.num_ctx, step_calibration)
+    if run.tools_overhead:
+        # Consumers divide the MESSAGE estimate by this, so the schemas'
+        # share of the window comes off the denominator: at a quotient of
+        # 1.0 messages + tools fill the server's window exactly.
+        effective_ctx = max(1, effective_ctx - run.tools_overhead)
+
+    pressure = context_pressure(st.messages, effective_ctx)
+    result.peak_context_pressure = max(result.peak_context_pressure, pressure)
+    result.final_context_pressure = pressure  # instantaneous; matches token-progress
+    # Per-step ctx forensics. `est` is the raw chars/4 reading, `cal` the
+    # correction applied; when cal != 1.0 the reported pressure is
+    # server-calibrated and should track chat's finalize_turn number rather
+    # than sitting at half of it. debug.log-only; see logger note at top.
+    logger.debug("step=%d ctx_pressure=%.1f%% (est=%.1f%% cal=%.2fx) "
+                 "num_ctx=%d effective_ctx=%d msgs=%d",
+                 step + 1, pressure * 100,
+                 context_pressure(st.messages, role_cfg.num_ctx) * 100,
+                 step_calibration, role_cfg.num_ctx, effective_ctx,
+                 len(st.messages))
+    # chat-only live ctx% (one source of truth, C2)
+    _display(run.on_progress, pressure, "on_progress")
+    return effective_ctx, pressure
+
+
+def _account_usage(result: AgentResult, resp: ChatResponse, step: int,
+                   emit: Callable[..., None]) -> None:
+    """Fold one response's server-reported usage into `result` and write the
+    step's `step_usage` record."""
+    result.prompt_tokens += resp.timing.prompt_tokens
+    result.completion_tokens += resp.timing.completion_tokens
+    if resp.timing.prompt_tokens:
+        result.last_prompt_tokens = resp.timing.prompt_tokens
+    _t = resp.timing
+    if _t.cached_tokens is not None:
+        result.cached_tokens += _t.cached_tokens
+        result.perf_prompt_tokens += _t.prompt_tokens
+    if _t.prefill_s:
+        result.prefill_s += _t.prefill_s
+        result.prefill_tokens += max(_t.prompt_tokens - (_t.cached_tokens or 0), 0)
+    if _t.decode_s:
+        result.decode_s += _t.decode_s
+        result.decode_tokens += _t.completion_tokens
+    if step == 0:
+        result.first_step_prompt_tokens = _t.prompt_tokens
+        result.first_step_cached_tokens = _t.cached_tokens
+    # Per-step cache/prefill record (2026-10-15, additive telemetry): the
+    # only place a run's prefix-cache behaviour is visible client-side.
+    emit(
+        "step_usage",
+        step=step,
+        prompt_tokens=_t.prompt_tokens,
+        cached_tokens=_t.cached_tokens,
+        completion_tokens=_t.completion_tokens,
+        prefill_s=_t.prefill_s,
+        decode_s=_t.decode_s,
+        reasoning_chars=resp.reasoning_chars,
+    )
+    if resp.timing.cost_usd:
+        # SUM, not last-wins: a multi-step turn bills once per step, and a
+        # cap that only ever saw the final step's cost would undercount by
+        # the length of the turn.
+        result.cost_usd += resp.timing.cost_usd
+
+
+def _recalibrate(st: LoopState, resp: ChatResponse, est_sent: int) -> None:
+    """Server-truth calibration: re-measure the ratio from the response we
+    just got. Re-measured every step rather than latched once: the mix shifts
+    as tool payloads accumulate, and a run that starts on prose and ends on
+    JSON should not keep the first step's ratio. `calibration_ratio` clamps
+    and degrades to 1.0 on a missing/zero usage report."""
+    new_cal = calibration_ratio(resp.timing.prompt_tokens, est_sent)
+    if new_cal != st.ctx_calibration:
+        logger.debug("ctx calibration %.2fx -> %.2fx "
+                     "(server=%d est=%d)", st.ctx_calibration, new_cal,
+                     resp.timing.prompt_tokens, est_sent)
+    st.ctx_calibration = new_cal
+    # The prompt this ratio describes. Only meaningful while the
+    # ratio is; read solely by the opt-in damping in _step_window.
+    st.est_at_calibration = est_sent
+
+
+def _token_progress(st: LoopState, result: AgentResult, step: int,
+                    pressure: float) -> None:
+    """Token-interval progress logging — fires when cumulative completion
+    tokens crosses each LUXE_TOKEN_LOG_INTERVAL multiple. Lets us see
+    whether a model is steadily generating with tool calls (engaged) vs
+    bursting prose without tools (bailing)."""
+    if (st.next_token_log_threshold > 0
+            and result.completion_tokens >= st.next_token_log_threshold):
+        print(
+            f"    [token-progress] step={step+1} "
+            f"completion_tokens={result.completion_tokens} "
+            f"prompt_tokens={result.prompt_tokens} "
+            f"tool_calls={result.tool_calls_total} "
+            f"ctx_pressure={pressure:.0%}",
+            flush=True,
+        )
+        while st.next_token_log_threshold <= result.completion_tokens:
+            st.next_token_log_threshold += _TOKEN_LOG_INTERVAL
+
+
 def run_agent(
     backend: Backend,
     role_cfg: RoleConfig,
@@ -384,18 +564,6 @@ def run_agent(
     result = AgentResult()
     t0 = time.monotonic()
 
-    def _display(cb, arg, what: str) -> None:
-        """Display-only callbacks (chat front-end; None on the benchmark
-        path): a broken one must not kill the run."""
-        if cb is None:
-            return
-        try:
-            cb(arg)
-        except Exception:
-            logger.debug("%s raised", what, exc_info=True)
-
-    def _notice(text: str) -> None:
-        _display(on_notice, text, "on_notice")
     # Every LUXE_* switch this run obeys, read once, here (agents/flags.py).
     # The body reads `flags.<field>` directly; flags.py documents each one.
     flags = RunFlags.from_env()
@@ -407,15 +575,6 @@ def run_agent(
     # (ablation parity for legacy callers).
     log_calls = bool(run_id) and not flags.suppress_tool_log
 
-    def _assistant(resp: ChatResponse, content: str) -> dict[str, Any]:
-        """The assistant message the model's output becomes in `messages`.
-        With LUXE_REASONING_ROUNDTRIP=1 it carries the reasoning the server
-        split off, so the template renders the model's real `<think>` block
-        instead of an empty one. Off: exactly the legacy dict."""
-        msg: dict[str, Any] = {"role": "assistant", "content": content}
-        if flags.reasoning_roundtrip and resp.reasoning_text:
-            msg["reasoning_content"] = resp.reasoning_text
-        return msg
     # Every events.jsonl record this run writes goes through `emit`, which
     # owns the `log_calls` gate and the leading `phase=` field.
     emit = _event_emitter(run_id, phase, log_calls)
@@ -480,6 +639,17 @@ def run_agent(
         st.early_bail_enabled = False
         st.action_density_gate_enabled = False
         st.convergence_gate_enabled = False
+    run = _Run(
+        role_cfg=role_cfg, flags=flags,
+        tool_defs=tool_defs, tool_fns=tool_fns,
+        tool_def_map=tool_def_map, known_names=known_names,
+        openai_tools=openai_tools, tools_overhead=tools_overhead,
+        compactor=compactor,
+        spec=spec, spec_has_zero_calls=spec_has_zero_calls,
+        early_bail_message=early_bail_message,
+        on_token=on_token, on_progress=on_progress, on_notice=on_notice,
+        on_tool_event=on_tool_event,
+    )
     # The previous iteration's response. Bound here (not just inside the loop)
     # because the pre-step clean-exit guards below read it before this step's
     # backend.chat runs; on step 0 there is nothing to read and `""` is right.
@@ -489,48 +659,7 @@ def run_agent(
     for step in range(role_cfg.max_steps):
         result.steps = step + 1
 
-        # The window every pressure consumer divides by this step. From step 2
-        # on it is `num_ctx` shrunk by however far the chars/4 estimate ran
-        # under the server's own `usage.prompt_tokens` last call — see
-        # `calibrated_ctx_limit`. Step 1 has nothing to calibrate against and
-        # uses `num_ctx` raw, which is the historical behaviour.
-        # LUXE_CTX_CAL_DAMP (opt-in, default OFF): the live ratio was measured
-        # on ONE prompt; apply only the share of it that prompt still covers.
-        # `step_calibration is ctx_calibration` whenever the flag is off, so
-        # `effective_ctx`, the debug line, and every consumer are unchanged.
-        step_calibration = st.ctx_calibration
-        if flags.ctx_cal_damp and st.ctx_calibration != 1.0:
-            _est_now = estimate_messages_tokens(st.messages) + tools_overhead
-            step_calibration = damped_calibration(
-                st.ctx_calibration, st.est_at_calibration, _est_now,
-                unmeasured=flags.ctx_cal_unmeasured_ratio)
-            if step_calibration != st.ctx_calibration:
-                logger.debug("ctx calibration damped %.2fx -> %.2fx "
-                             "(measured at est=%d, prompt now est=%d)",
-                             st.ctx_calibration, step_calibration,
-                             st.est_at_calibration, _est_now)
-        effective_ctx = calibrated_ctx_limit(role_cfg.num_ctx, step_calibration)
-        if tools_overhead:
-            # Consumers divide the MESSAGE estimate by this, so the schemas'
-            # share of the window comes off the denominator: at a quotient of
-            # 1.0 messages + tools fill the server's window exactly.
-            effective_ctx = max(1, effective_ctx - tools_overhead)
-
-        pressure = context_pressure(st.messages, effective_ctx)
-        result.peak_context_pressure = max(result.peak_context_pressure, pressure)
-        result.final_context_pressure = pressure  # instantaneous; matches token-progress
-        # Per-step ctx forensics. `est` is the raw chars/4 reading, `cal` the
-        # correction applied; when cal != 1.0 the reported pressure is
-        # server-calibrated and should track chat's finalize_turn number rather
-        # than sitting at half of it. debug.log-only; see logger note at top.
-        logger.debug("step=%d ctx_pressure=%.1f%% (est=%.1f%% cal=%.2fx) "
-                     "num_ctx=%d effective_ctx=%d msgs=%d",
-                     step + 1, pressure * 100,
-                     context_pressure(st.messages, role_cfg.num_ctx) * 100,
-                     step_calibration, role_cfg.num_ctx, effective_ctx,
-                     len(st.messages))
-        # chat-only live ctx% (one source of truth, C2)
-        _display(on_progress, pressure, "on_progress")
+        effective_ctx, pressure = _step_window(run, st, result, step)
 
         # v1.10 — compute convergence score ONCE per step at the top of the
         # iteration. Used by both early_bail and action_density_gate
@@ -864,73 +993,10 @@ def run_agent(
             result.abort_reason = f"Backend error: {e}"
             break
 
-        result.prompt_tokens += resp.timing.prompt_tokens
-        result.completion_tokens += resp.timing.completion_tokens
-        if resp.timing.prompt_tokens:
-            result.last_prompt_tokens = resp.timing.prompt_tokens
-        _t = resp.timing
-        if _t.cached_tokens is not None:
-            result.cached_tokens += _t.cached_tokens
-            result.perf_prompt_tokens += _t.prompt_tokens
-        if _t.prefill_s:
-            result.prefill_s += _t.prefill_s
-            result.prefill_tokens += max(_t.prompt_tokens - (_t.cached_tokens or 0), 0)
-        if _t.decode_s:
-            result.decode_s += _t.decode_s
-            result.decode_tokens += _t.completion_tokens
-        if step == 0:
-            result.first_step_prompt_tokens = _t.prompt_tokens
-            result.first_step_cached_tokens = _t.cached_tokens
-        # Per-step cache/prefill record (2026-10-15, additive telemetry): the
-        # only place a run's prefix-cache behaviour is visible client-side.
-        emit(
-            "step_usage",
-            step=step,
-            prompt_tokens=_t.prompt_tokens,
-            cached_tokens=_t.cached_tokens,
-            completion_tokens=_t.completion_tokens,
-            prefill_s=_t.prefill_s,
-            decode_s=_t.decode_s,
-            reasoning_chars=resp.reasoning_chars,
-        )
-        if resp.timing.cost_usd:
-            # SUM, not last-wins: a multi-step turn bills once per step, and a
-            # cap that only ever saw the final step's cost would undercount by
-            # the length of the turn.
-            result.cost_usd += resp.timing.cost_usd
-
-        # Recalibrate from the response we just got. Re-measured every step
-        # rather than latched once: the mix shifts as tool payloads accumulate,
-        # and a run that starts on prose and ends on JSON should not keep the
-        # first step's ratio. `calibration_ratio` clamps and degrades to 1.0 on
-        # a missing/zero usage report.
+        _account_usage(result, resp, step, emit)
         if flags.ctx_server_truth:
-            new_cal = calibration_ratio(resp.timing.prompt_tokens, est_sent)
-            if new_cal != st.ctx_calibration:
-                logger.debug("ctx calibration %.2fx -> %.2fx "
-                             "(server=%d est=%d)", st.ctx_calibration, new_cal,
-                             resp.timing.prompt_tokens, est_sent)
-            st.ctx_calibration = new_cal
-            # The prompt this ratio describes. Only meaningful while the
-            # ratio is; read solely by the opt-in damping above.
-            st.est_at_calibration = est_sent
-
-        # Token-interval progress logging — fires when cumulative completion
-        # tokens crosses each LUXE_TOKEN_LOG_INTERVAL multiple. Lets us see
-        # whether a model is steadily generating with tool calls (engaged)
-        # vs bursting prose without tools (bailing).
-        if (st.next_token_log_threshold > 0
-                and result.completion_tokens >= st.next_token_log_threshold):
-            print(
-                f"    [token-progress] step={step+1} "
-                f"completion_tokens={result.completion_tokens} "
-                f"prompt_tokens={result.prompt_tokens} "
-                f"tool_calls={result.tool_calls_total} "
-                f"ctx_pressure={pressure:.0%}",
-                flush=True,
-            )
-            while st.next_token_log_threshold <= result.completion_tokens:
-                st.next_token_log_threshold += _TOKEN_LOG_INTERVAL
+            _recalibrate(st, resp, est_sent)
+        _token_progress(st, result, step, pressure)
 
         tool_calls = resp.tool_calls
         if not tool_calls and resp.text and tool_defs:
@@ -966,7 +1032,7 @@ def run_agent(
                 # Record the cut-off text before the nudge so the transcript
                 # shows what the model was mid-way through saying.
                 if resp.text:
-                    st.messages.append(_assistant(resp, resp.text))
+                    st.messages.append(run.assistant(resp, resp.text))
                 st.messages.append(_user_message(_TRUNCATED_TURN_MESSAGE,
                                                  TruncatedTurnGuard.nudge_type))
                 st.truncated_turn_retries_used += 1
@@ -982,7 +1048,7 @@ def run_agent(
                     "completion_tokens=%d",
                     step, st.truncated_turn_retries_used,
                     flags.truncated_turn_max_retries, resp.timing.completion_tokens)
-                _notice(
+                run.notice(
                     f"answer cut off at the {resp.timing.completion_tokens:,}-token "
                     f"cap with no tool call — retrying "
                     f"({st.truncated_turn_retries_used}/{flags.truncated_turn_max_retries}); "
@@ -1025,7 +1091,7 @@ def run_agent(
                 # Say WHY when we can: "it thought and said nothing" is a very
                 # different report from "it returned nothing", and the
                 # reasoning-channel count is the only thing that separates them.
-                _notice(
+                run.notice(
                     "the model replied with nothing"
                     + (f" after {reasoning_chars:,} characters of reasoning"
                        if reasoning_chars else "")
@@ -1061,7 +1127,7 @@ def run_agent(
                     # behavior) ended the request on the stale answer, with the
                     # correction buried above it.
                     if resp.text:
-                        st.messages.append(_assistant(resp, resp.text))
+                        st.messages.append(run.assistant(resp, resp.text))
                     for detail in reprompts:
                         st.messages.append(_user_message(detail))
                     continue
@@ -1095,7 +1161,7 @@ def run_agent(
                     retries_used=st.empty_turn_retries_used,
                 )
             if (getattr(resp, "finish_reason", "") or "") == "length":
-                _notice(
+                run.notice(
                     f"answer cut off at the {resp.timing.completion_tokens:,}-token "
                     f"cap — ending the turn "
                     + (f"({st.truncated_turn_retries_used} retr"
@@ -1122,7 +1188,7 @@ def run_agent(
             # next turn doesn't see a dangling "I tried to call X" without
             # a corresponding tool result.
             assistant_text = resp.text or ""
-            st.messages.append(_assistant(resp, assistant_text))
+            st.messages.append(run.assistant(resp, assistant_text))
             st.messages.append(_user_message(_SPEC_ZERO_CALLS_DECLINE_MESSAGE))
             emit(
                 "spec_predispatch_blocked",
@@ -1145,7 +1211,7 @@ def run_agent(
         # grader sees anything new. Only the chat layer reads this.
         if (resp.text or "").strip():
             result.step_texts.append(resp.text)
-        assistant_msg: dict[str, Any] = _assistant(resp, resp.text or "")
+        assistant_msg: dict[str, Any] = run.assistant(resp, resp.text or "")
         if resp.tool_calls:
             assistant_msg["tool_calls"] = [
                 {
@@ -1219,7 +1285,7 @@ def run_agent(
                 )
                 result.tool_calls.append(dup)
                 st.messages.append(_tool_message(tc, step, content))
-                _display(on_tool_event, dup, "on_tool_event")
+                _display(run.on_tool_event, dup, "on_tool_event")
                 emit(
                     "tool_call",
                     step=step, name=tc.name,
@@ -1355,7 +1421,7 @@ def run_agent(
                     )
             st.messages.append(_tool_message(tc, step, content))
 
-            _display(on_tool_event, executed, "on_tool_event")
+            _display(run.on_tool_event, executed, "on_tool_event")
             emit(
                 "tool_call",
                 step=step, name=tc.name,
