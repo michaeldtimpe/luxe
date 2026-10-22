@@ -37,7 +37,6 @@ from luxe.chat import status as status_mod
 from luxe.chat.controller import (
     ChatController,
     TurnHooks,
-    apply_project_summary,
     banner_markup,
     build_hint_markup,
     ephemeral_notice_markup,
@@ -375,24 +374,16 @@ class ChatApp(App):
         self._transcript = self.query_one("#transcript", RichLog)
         self._input = self.query_one("#prompt", Input)
         self._gen.display = False
-        self.controller.ctx = cmd.CommandContext(
-            console=LogConsole(self),
-            session=self.session,
-            slots=self.slots,
-            on_resume=self._resume_hook,
-            on_git_analysis=self._git_hook,
-            on_compare=self._compare_hook,
-            on_compare_review=self._compare_review_hook,
-            on_project=self._project_hook,
-            status=self.status,
-            session_log=self._dbglog,
-            run_external=self.run_external,
-        )
+        # Hooks print into the transcript (LogConsole marshals worker writes
+        # via call_from_thread) and ask their sub-prompts through a modal.
+        ctx = self.controller.command_context(
+            LogConsole(self), reader=self.prompt_user,
+            run_external=self.run_external, on_project=self._on_project)
         # `--resume <id>`: replay the prior transcript into the RichLog and seed
         # the live session's turns before the first prompt (chat.sdd — resume no
         # longer forces the line REPL).
         if self._resume_id:
-            self._resume_hook(self._resume_id)
+            ctx.on_resume(self._resume_id)
         self._input.focus()
 
     # -- helpers ------------------------------------------------------------
@@ -772,62 +763,6 @@ class ChatApp(App):
             return _ui()
         return self.call_from_thread(_ui)
 
-    def _project_hook(self, target: str | None) -> dict:
-        """`/project` / `/index`: run cli's attach (re-resolve + re-index + move
-        the repo lock), then re-point the app's own view of the repo so the
-        status bar, git segment, and turn setup all follow."""
-        if self._on_project is None:
-            raise RuntimeError("this session cannot switch projects")
-        summary = self._on_project(target)
-        # The SESSION is the single live source (controller.apply_project_summary):
-        # the status bar, turn setup, compare, and `self.repo_path` all read it
-        # at use time.
-        apply_project_summary(self.session, summary)
-        self.refresh_status()
-        return summary
-
-    def _resume_hook(self, session_id: str) -> None:
-        """/resume (and --resume on mount): replay a prior transcript into the
-        RichLog and extend the live session's turns. Runs on the UI thread at
-        mount and on a worker for /resume — LogConsole marshals worker writes
-        via call_from_thread."""
-        from luxe.chat import resume as resume_mod
-
-        console = LogConsole(self)
-        if not session_id:
-            resume_mod.list_resumable(console)
-            return
-        resume_mod.resume_into(session_id, self.session, console)
-
-    # -- feature hooks (run on the worker; reader/console route to the TUI) --
-    def _git_hook(self, kind: str, deep: bool | None = None) -> None:
-        from luxe.gitkit import run_git_report
-        run_git_report(kind, cfg=self.cfg, repo_path=self.session.repo_path,
-                       console=LogConsole(self), reader=self._reader, save=True,
-                       verbose=(self.session.verbose_level == "full"),
-                       expected_head=self.session.index_head, cancel=self.cancel,
-                       deep=deep)
-
-    def _compare_hook(self, task: str) -> None:
-        try:
-            from luxe.compare.run_pair import interactive_compare
-        except Exception:
-            self.write("[yellow]compare unavailable.[/]")
-            return
-        interactive_compare(task, self.cfg, self.session.repo_path,
-                            self.session.languages,
-                            console=LogConsole(self), reader=self._reader)
-
-    def _compare_review_hook(self, compare_id: str) -> None:
-        try:
-            from luxe.compare.store import review as review_compare
-        except Exception:
-            self.write("[yellow]compare review unavailable.[/]")
-            return
-        review_compare(compare_id, console=LogConsole(self))
-
-    def _reader(self, prompt: str) -> str:
-        return self.prompt_user(prompt)
 
 
 class _NullStatus:

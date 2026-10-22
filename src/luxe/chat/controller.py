@@ -147,6 +147,92 @@ def apply_project_summary(session, summary: dict) -> None:
         session.index_head = ""
 
 
+# -- the command hooks (one copy; both front-ends) ----------------------------
+#
+# `console` is where a hook prints (the real console on the line path, the
+# TUI's transcript shim there) and `reader(prompt)` answers its sub-prompts —
+# gitkit's clone URL, the compare vote: `console.input` on the line path, a
+# modal in the TUI. Each front-end used to build its own set and they drifted
+# (the line REPL's /gitaudit never got a reader).
+
+
+def make_resume_hook(console, session: ChatSession):
+    def _resume(session_id: str) -> None:
+        from luxe.chat.resume import list_resumable, resume_into
+
+        if not session_id:
+            list_resumable(console)
+            return
+        resume_into(session_id, session, console)
+
+    return _resume
+
+
+def make_compare_hook(console, reader, cfg, session: ChatSession):
+    def _compare(task: str) -> None:
+        try:
+            from luxe.compare.run_pair import interactive_compare
+        except Exception:
+            console.print("[yellow]compare module unavailable.[/]")
+            return
+        # Read at call time: `/project` moves both.
+        interactive_compare(task, cfg, session.repo_path, session.languages,
+                            console=console, reader=reader)
+
+    return _compare
+
+
+def make_compare_review_hook(console):
+    def _review(compare_id: str) -> None:
+        try:
+            from luxe.compare.store import review as review_compare
+        except Exception:
+            console.print("[yellow]compare review unavailable.[/]")
+            return
+        review_compare(compare_id, console=console)
+
+    return _review
+
+
+def make_git_analysis_hook(console, reader, cfg, session: ChatSession,
+                           cancel=None):
+    """/gitaudit (and /gitchange) — a read-only gitkit report. Targets the
+    SESSION repo, reusing its resident indices (warns if HEAD moved); if the
+    session dir isn't a git repo, the runner asks `reader` for a URL to clone
+    into a local copy and analyzes that, restoring session state."""
+    def _git(kind: str, deep: bool | None = None) -> None:
+        try:
+            from luxe.gitkit import run_git_report
+        except Exception:
+            console.print("[yellow]gitkit module unavailable.[/]")
+            return
+        run_git_report(
+            kind, cfg=cfg, repo_path=session.repo_path, console=console,
+            reader=reader, save=True, expected_head=session.index_head,
+            verbose=(session.verbose_level == "full"), cancel=cancel, deep=deep,
+        )
+
+    return _git
+
+
+def make_project_hook(session: ChatSession, on_project):
+    """Wrap cli's attach hook so the SESSION follows the new project too.
+
+    cli owns the lock and the indexes; the session owns repo_path /
+    project_kind / index_head, which drive the prompt frame, the git segment,
+    and `/diff`. None when the front-end was given no hook (tests,
+    embedders) — `/project` then says the session can't switch."""
+    if on_project is None:
+        return None
+
+    def _hook(target: str | None) -> dict:
+        summary = on_project(target)
+        apply_project_summary(session, summary)
+        return summary
+
+    return _hook
+
+
 def start_session_gc() -> None:
     """Evict old session directories in the background (memory.sdd names the
     eviction policy; nothing ever called it, so `~/.luxe/sessions/` grew
@@ -410,6 +496,31 @@ class ChatController:
         finally:
             self.log.info("session %s end", self.session.session_id)
             debuglog.uninstall(self.dbglog)
+
+    def command_context(self, console, *, reader: Callable[[str], str],
+                        run_external: Callable[[list[str]], int] | None = None,
+                        on_project=None) -> cmd.CommandContext:
+        """Build (and keep, as `self.ctx`) the CommandContext both front-ends
+        dispatch through: the session, slots and status, the debug-log handle
+        `/ephemeral` detaches, and the hooks above wired to `console` and
+        `reader`. `run_external` runs an interactive program (`/memory edit`)
+        — the TUI suspends itself for it; None = a plain subprocess."""
+        session = self.session
+        self.ctx = cmd.CommandContext(
+            console=console,
+            session=session,
+            slots=self.slots,
+            on_resume=make_resume_hook(console, session),
+            on_compare=make_compare_hook(console, reader, self.cfg, session),
+            on_compare_review=make_compare_review_hook(console),
+            on_git_analysis=make_git_analysis_hook(console, reader, self.cfg,
+                                                   session, self.cancel),
+            on_project=make_project_hook(session, on_project),
+            status=self.status,
+            session_log=self.dbglog,
+            run_external=run_external,
+        )
+        return self.ctx
 
     # -- containment ---------------------------------------------------------
     def contain(self, what: str, fn, *args, sink: TurnSink, **kwargs):
