@@ -23,10 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # uv itself is pinned too: `latest` let a uv release change resolution
+      # or lockfile handling under a green PR with no commit to blame. Bump it
+      # deliberately (fleet hosts run the brew uv; 0.13.4 as of 2026-10-22).
       - name: Install uv
         uses: astral-sh/setup-uv@v8.1.0
         with:
-          version: latest
+          version: "0.13.4"
+          enable-cache: true
 
       - name: Set up Python 3.11
         run: uv python install 3.11
@@ -37,11 +41,20 @@ jobs:
       # luxe's grep tool shells out to ripgrep; without it three grep tests
       # fail (FileNotFoundError: 'rg') and main has been red since at least
       # 59b9f18. Every fleet host has rg (brew), so the runner should too.
-      - name: Install ripgrep
-        run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep
+      # qpdf + poppler-utils (pdftotext/pdftoppm) are the CLI half of the
+      # [pdf] module; tests/test_mcp_pdf.py skips its qpdf/poppler cases
+      # without them.
+      - name: Install ripgrep, qpdf, poppler
+        run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep qpdf poppler-utils
 
+      # The canonical host sync (chat+dev+analyzers+web, `luxe update` in
+      # src/luxe/cli/kit.py) plus [pdf]. Before this, CI ran chat+dev only:
+      # tests/test_mcp_pdf.py (52 tests) import-skipped here and on every
+      # host, and the real-bandit test skipped. [web] installs playwright but
+      # no browser download; tests/test_web_browser_live.py runs on the
+      # runner's preinstalled Google Chrome and skips where there is none.
       - name: Sync dependencies
-        run: uv sync --extra dev --extra chat
+        run: uv sync --extra dev --extra chat --extra analyzers --extra web --extra pdf
 
       # No `-x`: stopping at the first failure hides the rest of the suite,
       # which is the opposite of what a CI report is for. The live_model
