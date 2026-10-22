@@ -1,4 +1,4 @@
-"""Pure pieces of scripts/opencode_harness.py (no opencode, no model)."""
+"""Pure pieces of scripts/_archive/opencode_harness.py (no opencode, no model)."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location(
-    "opencode_harness", ROOT / "scripts" / "opencode_harness.py")
+    "opencode_harness", ROOT / "scripts" / "_archive" / "opencode_harness.py")
 oh = importlib.util.module_from_spec(_spec)
 sys.modules["opencode_harness"] = oh
 _spec.loader.exec_module(oh)

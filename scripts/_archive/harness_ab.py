@@ -3,12 +3,12 @@
 (opencode, Qwen Code or Codex) against the same local model and grade them
 with luxe's own grader — the harness arm of a bake-off.
 
-    uv run python scripts/harness_ab.py --harness qwen \\
+    uv run python scripts/_archive/harness_ab.py --harness qwen \\
         --model Qwen3.6-35B-A3B-6bit --output acceptance/harness_ab_<date>/qwen/champ/rep1 --all
-    uv run python scripts/harness_ab.py --harness codex --model Qwen3.8-27B-8bit \\
+    uv run python scripts/_archive/harness_ab.py --harness codex --model Qwen3.8-27B-8bit \\
         --output /tmp/hx --id isomer-document-quickstart --timeout 3600
 
-Generalises scripts/opencode_harness.py (whose pure pieces it reuses; that
+Generalises scripts/_archive/opencode_harness.py (whose pure pieces it reuses; that
 script stays as-is so the 2026-09 Splash A/B artefacts remain reproducible).
 Held equal across harnesses, and with `benchmarks.maintain_suite.run`:
   * repo prep — `_resolve_repo`, plus harness dot-dirs in .git/info/exclude;
@@ -34,7 +34,7 @@ auto-approve (opencode --auto, qwen yolo, codex bypass), i.e. each agent's
 shell has the same reach.
 
 MCP arm (`--luxe-mcp`, Qwen Code and Claude Code only): attaches
-scripts/harness_ab_luxe_mcp.py — luxe's search/symbol/analyzer tools, plus
+scripts/_archive/harness_ab_luxe_mcp.py — luxe's search/symbol/analyzer tools, plus
 cve_lookup on manage — as a stdio MCP server started per fixture inside the
 same sandbox. Task text is unchanged; whether the model reaches for the tools
 is part of the measurement (each call is logged to <fixture>/luxe_mcp.jsonl).
@@ -65,12 +65,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 _spec = importlib.util.spec_from_file_location(
-    "opencode_harness", ROOT / "scripts" / "opencode_harness.py")
+    "opencode_harness", ROOT / "scripts" / "_archive" / "opencode_harness.py")
 oh = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("opencode_harness", oh)
 _spec.loader.exec_module(oh)
@@ -91,9 +91,9 @@ EXCLUDE_ENTRIES = [".opencode/", ".qwen/", ".codex/", ".claude/"]
 # interactive session (a one-shot run would wait on them).
 QWEN_EXCLUDE_TOOLS = ["web_fetch", "web_search", "cron_create", "cron_list",
                       "cron_delete", "loop_wakeup", "monitor"]
-LUXE_MCP_SCRIPT = ROOT / "scripts" / "harness_ab_luxe_mcp.py"
+LUXE_MCP_SCRIPT = ROOT / "scripts" / "_archive" / "harness_ab_luxe_mcp.py"
 LUXE_MCP_HARNESSES = ("qwen", "claude")
-# Every tool scripts/harness_ab_luxe_mcp.py can offer (its LAYER2).
+# Every tool scripts/_archive/harness_ab_luxe_mcp.py can offer (its LAYER2).
 LUXE_MCP_TOOLS = ("bm25_search", "find_symbol", "lint", "typecheck", "security_scan",
                   "deps_audit", "cve_lookup")
 # Index build + first analyzer import; both harnesses default far lower.
@@ -651,7 +651,7 @@ class CodexAdapter(Adapter):
 # re-pointed at the local model. Overrides strip what oMLX cannot serve:
 # websockets, Responses-lite, images,
 # reasoning summaries, verbosity, service tiers.
-CODEX_MODEL_TEMPLATE = ROOT / "scripts" / "harness_ab_codex_model.json"
+CODEX_MODEL_TEMPLATE = ROOT / "scripts" / "_archive" / "harness_ab_codex_model.json"
 
 
 def make_codex_catalog(model: str, template: Path = CODEX_MODEL_TEMPLATE) -> dict[str, Any]:

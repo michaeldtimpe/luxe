@@ -1,5 +1,5 @@
 """The ONE fixtures.yaml loader — run.py, scripts/regrade_local.py and
-scripts/opencode_harness.py all read fixtures through here.
+scripts/_archive/opencode_harness.py all read fixtures through here.
 
 fixtures.yaml pins absolute fixture-cache paths under one host's home
 (`~/.luxe/fixture-cache/<repo>`). On a host whose user differs
