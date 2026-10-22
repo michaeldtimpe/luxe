@@ -10,12 +10,12 @@ import re
 
 from luxe.agents import prompts
 from luxe.gitkit import patterns
+from luxe.gitkit.kinds import _TITLES, extract_report
 
 
 def _has_report_header(text: str, kind: str) -> bool:
     """True if the chunk output concluded with the kind's required markdown report
     header (so its findings can be recovered by slicing even without JSON)."""
-    from luxe.gitkit.runner import _TITLES
     title = _TITLES.get(kind, "")
     if not title or not text:
         return False
@@ -61,7 +61,6 @@ def _format_final_report(draft: str, kind: str, *, pass_fn, role) -> str | None:
     """Strict transcription pass: reproduce a clean report from a rambly synthesis
     draft (copy findings verbatim, drop the narration). Returns the sliced clean
     report, or None if it still has no header."""
-    from luxe.gitkit.runner import extract_report
     ctx = f"<report_draft>\n{draft}\n</report_draft>"
     goal = ("Produce the clean final report from the draft below.\n\n"
             + prompts.GIT_DEEP_FORMAT_HINT)

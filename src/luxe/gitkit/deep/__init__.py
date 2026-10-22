@@ -56,6 +56,7 @@ from pathlib import Path
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.context import estimate_tokens
+from luxe.gitkit.kinds import _TITLES, extract_report, run_with_activity
 
 
 from luxe.gitkit.deep.chunking import (
@@ -285,7 +286,6 @@ def run_deep_report(
     saved report's frontmatter (base / merge_base).
     """
     from luxe.gitkit import health
-    from luxe.gitkit.runner import _activity_callbacks
 
     if run_single_fn is None:
         from luxe.agents.single import run_single as run_single_fn
@@ -317,22 +317,14 @@ def run_deep_report(
     def _pass(goal: str, extra_context: str, label: str, role=None):
         role = role or chunk_role
         start = int(time.time())
-        if console.is_terminal:
-            with console.status(f"[dim]deep · {label}…[/]", spinner="dots") as st:
-                on_e, on_t = _activity_callbacks(
-                    lambda t: st.update(f"[dim]deep · {label} · {t}[/]"), cancel=cancel)
-                res = run_single_fn(
-                    backend, role, goal=goal, task_type=task_type,
-                    languages=languages, extra_context=extra_context,
-                    on_tool_event=on_e, on_token=on_t,
-                    phase="chat", run_id=f"gitkit-deep-{kind}-{label}")
-        else:
-            on_e, on_t = _activity_callbacks(lambda t: None, cancel=cancel)
-            res = run_single_fn(
+        res = run_with_activity(
+            console, f"deep · {label}", cancel,
+            lambda on_e, on_t: run_single_fn(
                 backend, role, goal=goal, task_type=task_type,
                 languages=languages, extra_context=extra_context,
                 on_tool_event=on_e, on_token=on_t,
-                phase="chat", run_id=f"gitkit-deep-{kind}-{label}")
+                phase="chat", run_id=f"gitkit-deep-{kind}-{label}"),
+            update_prefix=f"deep · {label} · ")
         # Read only public result fields (getattr-guarded — stubs + backends that
         # populate steps/tool_calls_total differently both stay safe).
         timings.append(PassTiming(
@@ -493,7 +485,6 @@ def run_deep_report(
 
     work_dir = _new_work_dir(target, kind) if save else None
     digest = empty_digest()
-    from luxe.gitkit.runner import extract_report
 
     def _record_chunk(c: Chunk, contribution: dict, n_timed: int) -> None:
         """The shared tail of a FRESHLY analyzed chunk, for every kind: cache
@@ -668,7 +659,6 @@ def run_deep_report(
         # digest steps (Python packaging never rambles, so a valid plan is always
         # produced). Then save plan.json + render the markdown deterministically.
         from luxe.gitkit import plan as plan_mod
-        from luxe.gitkit.runner import _TITLES
 
         def _extract_plan_json(draft: str) -> str:
             return _plan_extract_pass(draft, pass_fn=_pass, role=synth_role)
