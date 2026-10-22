@@ -282,8 +282,9 @@ def test_early_bail_mode_passes_through_verbatim(value):
 
 
 def test_early_bail_guard_no_longer_reads_the_environment():
-    """EarlyBailGuard takes the mode as a parameter; the only env read left
-    in guardrails is LUXE_EARLY_BAIL_TRAJECTORY_SHAPE (its own contract)."""
+    """EarlyBailGuard takes the mode as a parameter. Since the 2026-10-22
+    removal of LUXE_EARLY_BAIL_TRAJECTORY_SHAPE, guardrails reads no
+    environment at all."""
     import inspect
 
     from luxe.agents import guardrails
@@ -291,6 +292,8 @@ def test_early_bail_guard_no_longer_reads_the_environment():
     src = inspect.getsource(guardrails)
     assert "LUXE_EARLY_BAIL_MODE\")" not in src
     assert 'environ.get("LUXE_EARLY_BAIL_MODE"' not in src
+    assert "environ.get(" not in src
+    assert "import os" not in src
 
 
 # --- the loop actually uses it ---------------------------------------------

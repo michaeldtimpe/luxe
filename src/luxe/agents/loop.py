@@ -694,8 +694,6 @@ def run_agent(
             suppression_count_in_trajectory=st.suppression_count_in_trajectory,
             tool_history=st.tool_history,
             recent_path_diversity=recent_path_diversity(st.tool_history),
-            score_log=st.score_log,
-            early_bail_step=st.early_bail_step,
             early_bail_mode=early_bail_mode,
         )
         if eb_outcome is not None:

@@ -48,14 +48,8 @@ apply state mutations + emit events according to the outcome.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
-
-from luxe.agents.convergence import (
-    should_suppress_for_trajectory_shape,
-    trajectory_shape_signals,
-)
 
 
 @dataclass(frozen=True)
@@ -945,8 +939,6 @@ class EarlyBailGuard:
         suppression_count_in_trajectory: int,
         tool_history: list[dict[str, Any]],
         recent_path_diversity: float,
-        score_log: Optional[list[float]] = None,
-        early_bail_step: Optional[int] = None,
         early_bail_mode: str = "default",
     ) -> Optional[EarlyBailOutcome]:
         """`early_bail_mode` is LUXE_EARLY_BAIL_MODE as `RunFlags` read it
@@ -963,43 +955,6 @@ class EarlyBailGuard:
             return None
         if (tool_calls_total - writes_seen) < _EARLY_BAIL_MIN_READS:
             return None
-
-        # Phase 4 (D) — trajectory-shape selective suppression. Evaluated
-        # BEFORE convergence_gate suppression because it is the more
-        # targeted predicate: it suppresses early_bail ONLY on the
-        # "deep localized reading with stable convergence" shape — the
-        # fix-shape trajectories that --no-early-bail rescued at n=75
-        # without re-introducing the 3 wrong_target damages. Opt-in via
-        # LUXE_EARLY_BAIL_TRAJECTORY_SHAPE=1; default OFF preserves the
-        # pre-Phase-4 EarlyBailGuard behavior byte-identical. Same
-        # semantics as `early_bail_suppressed_diffuse`:
-        # early_bail_fired stays False (once-per-run flag NOT consumed).
-        if (os.environ.get("LUXE_EARLY_BAIL_TRAJECTORY_SHAPE") == "1"
-                and score_log is not None):
-            shape_signals = trajectory_shape_signals(
-                tool_history, score_log, step,
-                early_bail_step=early_bail_step,
-            )
-            if should_suppress_for_trajectory_shape(shape_signals):
-                suppress_event = (
-                    "early_bail_suppressed_trajectory_shape",
-                    {
-                        "sustained_low_trend": shape_signals.sustained_low_trend,
-                        "grep_vs_read_ratio": shape_signals.grep_vs_read_ratio,
-                        "breadth_saturation": shape_signals.breadth_saturation,
-                        "post_bail_call_rate": shape_signals.post_bail_call_rate,
-                    },
-                )
-                return EarlyBailOutcome(
-                    decision=None,
-                    nudge_type=None,
-                    last_intervention_kind=None,
-                    sets_early_bail_fired=False,
-                    suppression_count_delta=0,
-                    breadth_probe_fire_delta=0,
-                    suppress_event=suppress_event,
-                    fire_event=None,
-                )
 
         # Resolution precedence: explicit kwarg > env mode > default.
         # Only soft_anchor mode is dynamic; static modes (default,
