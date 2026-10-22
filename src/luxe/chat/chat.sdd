@@ -607,7 +607,9 @@ never touches this module.
   `modelstore.resolve_pull_sources(ref, admin=, from_path=, include_mounts=)`
   and `tests/test_modelstore.py::TestPullSourceParity` asserts they reach it
   with the same arguments, so the two can never disagree about where a ref
-  comes from. The ENGINE REFUSAL is shared too (2026-10 review;
+  comes from. Since 2026-10 they reach it through ONE plan,
+  `modelstore.plan_pull` (store name, store state, the dangling link's HF
+  repo, the sources), and each surface only renders, confirms and transfers. The ENGINE REFUSAL is shared too (2026-10 review;
   `modelstore.pull_engine_refusal`): off `engine: omlx` both refuse before any
   `OmlxAdmin` exists — `/pull` used to drive it at a llama-server/OpenRouter
   URL with that entry's key — leaving only the local-store reads (bare

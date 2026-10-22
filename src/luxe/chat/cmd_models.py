@@ -388,25 +388,21 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
                 return CommandResult(handled=True)
 
             ref = positional[0] if positional else ms.store_name_for(from_path)
-            name = ms.store_name_for(ref)
-            # Same store rule as `luxe pull`, checked FIRST — before the ≤20s
-            # mount scan: an entry whose weights don't resolve is
-            # replaceable, and its dangling link names the HF repo to
-            # re-fetch when only a bare name was given.
-            state = ms.model_state(name)
-            if state == "ok" and "--force" not in flags:
-                ctx.console.print(f"[yellow]· {name} is already in the local "
-                                  "store — add --force to replace it[/]")
+            def _searching(_plan) -> None:
+                if not from_path:
+                    ctx.console.print("[dim]· looking for it (mounts, then HF)…[/]")
+
+            # The same plan as `luxe pull` (`modelstore.plan_pull`): store
+            # state first, a dangling link's HF repo, then the sources.
+            plan = ms.plan_pull(ref, admin=admin, from_path=from_path,
+                                include_mounts="--hf" not in flags,
+                                force="--force" in flags, on_resolve=_searching)
+            if not plan.resolved:
+                ctx.console.print(f"[yellow]· {plan.name} is already in the "
+                                  "local store — add --force to replace it[/]")
                 return CommandResult(handled=True)
-            source_ref = ref
-            if state == "dangling" and "/" not in ref and not from_path:
-                source_ref = ms.hf_repo_for(name) or ref
-            if not from_path:
-                ctx.console.print("[dim]· looking for it (mounts, then HF)…[/]")
-            sources = ms.resolve_pull_sources(
-                source_ref, admin=admin, from_path=from_path,
-                include_mounts="--hf" not in flags)
-            if not sources:
+            chosen = plan.chosen
+            if chosen is None:
                 # With --from the only empty case is "not a model directory";
                 # without it, nothing anywhere has these weights.
                 if from_path:
@@ -419,8 +415,7 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
                         "Try `/pull --search <query>`.[/]")
                 return CommandResult(handled=True)
 
-            chosen = sources[0]
-            ctx.console.print(f"[bold]{name}[/] ← {chosen.describe()}")
+            ctx.console.print(f"[bold]{plan.name}[/] ← {chosen.describe()}")
             if "--yes" not in flags:
                 ctx.console.print(f"[dim]· preview only — run "
                                   f"`/pull {ref} --yes` to transfer[/]")
