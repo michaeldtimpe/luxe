@@ -89,6 +89,7 @@ from luxe.context import (
     estimate_tools_tokens,
     tool_result_clamp_chars,
 )
+from luxe import secrets as _secrets
 from luxe.run_state import append_event
 from luxe.spec import Spec
 from luxe.spec_validator import validate as spec_validate
@@ -1327,6 +1328,55 @@ def _record_tool_call(run: _Run, st: LoopState, tc: ToolCallResponse,
             )
 
 
+def _refuse_secret_egress(run: _Run, st: LoopState, result: AgentResult,
+                          tc: ToolCallResponse, step: int,
+                          emit: Callable[..., None]) -> bool:
+    """Secret egress guard (2026-10-22, agents.sdd). A call whose ARGUMENTS
+    carry a known secret value — raw, percent-encoded or base64
+    (`luxe.secrets.secret_in_args`) — is NOT dispatched: the model gets a
+    refusal naming the variable, never the value. Covers every tool the run
+    holds (bash, web_*, MCP relays) because it sits before `dispatch_tool`.
+    Returns True when it refused. With no known value in the arguments it
+    returns False having touched nothing."""
+    leaked = _secrets.secret_in_args(tc.arguments)
+    if leaked is None:
+        return False
+    content = _secrets.egress_refusal(tc.name, leaked)
+    # The record (display, runs/ ToolCall) never carries the arguments: they
+    # hold the value in some encoding, which a raw-text redaction can miss.
+    refused = ToolCall(id=tc.id or f"call_{step}", name=tc.name,
+                       arguments={"withheld": f"carried the value of {leaked}"},
+                       error=content)
+    result.tool_calls.append(refused)
+    st.messages.append(_tool_message(tc, step, content))
+    emit("secret_egress_refused", step=step, name=tc.name, secret=leaked)
+    run.notice(f"refused {tc.name}: its arguments carry the value of "
+               f"{leaked} (not run)")
+    _display(run.on_tool_event, refused, "on_tool_event")
+    return True
+
+
+def _redact_secrets(run: _Run, executed: ToolCall, step: int,
+                    emit: Callable[..., None]) -> None:
+    """Redaction choke point (2026-10-22, agents.sdd): a dispatched call's
+    result AND error pass through `luxe.secrets.redact` before anything
+    downstream sees them — the `role: "tool"` message, `on_tool_event`, the
+    persisted ToolCall. `bytes_out` keeps reporting what the TOOL produced
+    (same rule as the clamp). No known value in the text ⇒ the same string
+    objects stay in place and nothing is emitted."""
+    fired: set[str] = set()
+    executed.result, names = _secrets.redact_report(executed.result)
+    fired.update(names)
+    if executed.error:
+        executed.error, names = _secrets.redact_report(executed.error)
+        fired.update(names)
+    if fired:
+        emit("secret_redacted", step=step, name=executed.name,
+             secrets=sorted(fired))
+        run.notice(f"redacted {', '.join(sorted(fired))} from "
+                   f"{executed.name} output")
+
+
 def _dispatch_one(run: _Run, st: LoopState, result: AgentResult,
                   tc: ToolCallResponse, step: int, effective_ctx: int,
                   emit: Callable[..., None]) -> bool:
@@ -1355,6 +1405,9 @@ def _dispatch_one(run: _Run, st: LoopState, result: AgentResult,
         st.messages.append(_tool_message(tc, step, f"Schema error: {err}"))
         return False
 
+    if _refuse_secret_egress(run, st, result, tc, step, emit):
+        return False
+
     key = _call_key(tc.name, tc.arguments)
     key_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
     # v1.9 — convergence proxy. The first time a read_file call key
@@ -1379,6 +1432,7 @@ def _dispatch_one(run: _Run, st: LoopState, result: AgentResult,
     logger.debug("tool dispatch step=%d name=%s args=%s",
                  step + 1, tc.name, _args_preview(tc.arguments))
     executed = dispatch_tool(tc.name, tc.arguments, run.tool_fns)
+    _redact_secrets(run, executed, step, emit)
     logger.debug("tool done name=%s wall_s=%.2f error=%s bytes_out=%d",
                  tc.name, getattr(executed, "wall_s", 0.0) or 0.0,
                  (getattr(executed, "error", None) or "")[:200] or None,
