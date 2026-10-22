@@ -35,8 +35,10 @@ Package layout (split from the single `deep.py` along its stages):
                transcription passes, heuristic finding salvage)
   render.py    pure-data extra_context blocks + deterministic report render
   __init__.py  `run_deep_report` (the orchestration) and its tunables; it
-               re-exports every name the single module had, so
-               `from luxe.gitkit import deep; deep.X` keeps working.
+               re-exports the submodule names that something reads as
+               `deep.X` (src, tests, scripts) or that the orchestration
+               uses. A name only a submodule reads is imported from that
+               submodule (pruned 2026-10: 46 re-exports nothing read).
 
 `run_deep_report` lives HERE, not in a submodule, so its module-global
 lookups (`_CONTENT_BUDGET_FRAC`, `enumerate_files`, …) resolve in this
@@ -62,88 +64,48 @@ from luxe.gitkit.kinds import _TITLES, extract_report, run_with_activity
 from luxe.gitkit.deep.chunking import (
     base_ctx as base_ctx,
     build_chunks as build_chunks,
-    _CHARS_PER_TOKEN as _CHARS_PER_TOKEN,
     Chunk as Chunk,
     _CHUNK_S as _CHUNK_S,
     _DEEP_TRIGGER_FRAC as _DEEP_TRIGGER_FRAC,
     deep_window as deep_window,
-    DeepEstimate as DeepEstimate,
-    _ENTRY_STEMS as _ENTRY_STEMS,
     enumerate_files as enumerate_files,
-    estimate_repo_tokens as estimate_repo_tokens,
     estimate_run as estimate_run,
-    _file_priority as _file_priority,
     file_recs_for as file_recs_for,
     FileRec as FileRec,
     framing_files as framing_files,
-    _FRAMING_LIMIT as _FRAMING_LIMIT,
-    _FRAMING_PATTERNS as _FRAMING_PATTERNS,
-    _FRAMING_RE as _FRAMING_RE,
-    _is_visible as _is_visible,
-    _LARGE_CONFIRM_CHUNKS as _LARGE_CONFIRM_CHUNKS,
-    _MAX_CHUNK_SYMBOLS as _MAX_CHUNK_SYMBOLS,
     _norm_recent as _norm_recent,
-    _pick_framing as _pick_framing,
-    _PRIORITY_SUBSTRINGS as _PRIORITY_SUBSTRINGS,
     should_use_deep as should_use_deep,
     _SURVEY_S as _SURVEY_S,
-    _symbols_by_path as _symbols_by_path,
-    _symbols_for as _symbols_for,
     _SYNTH_S as _SYNTH_S,
 )
 
 from luxe.gitkit.deep.digest import (
     compact_digest as compact_digest,
     confidence_of as confidence_of,
-    _DEEP_KEYS as _DEEP_KEYS,
     empty_digest as empty_digest,
-    _evidence_keys as _evidence_keys,
-    _finding_chunks as _finding_chunks,
-    _finding_key as _finding_key,
-    _JSON_FENCE_RE as _JSON_FENCE_RE,
-    _MAX_EVIDENCE_PER_FINDING as _MAX_EVIDENCE_PER_FINDING,
-    _merge_evidence as _merge_evidence,
-    _merge_into as _merge_into,
     parse_chunk_notes as parse_chunk_notes,
     _reduce_findings as _reduce_findings,
-    _sev_rank as _sev_rank,
-    _SEVERITY_RANK as _SEVERITY_RANK,
-    _SOURCE_RANK as _SOURCE_RANK,
     _SYNTH_REDUCE_FRAC as _SYNTH_REDUCE_FRAC,
     update_digest as update_digest,
 )
 
 from luxe.gitkit.deep.salvage import (
-    _BOLD_FILE_RE as _BOLD_FILE_RE,
     _clean_note as _clean_note,
-    _FILE_LINE_RE as _FILE_LINE_RE,
-    _FILE_REF_RE as _FILE_REF_RE,
-    _FINDING_HEADING_RE as _FINDING_HEADING_RE,
     _format_final_report as _format_final_report,
     _has_report_header as _has_report_header,
     _heuristic_findings as _heuristic_findings,
     _looks_rambly as _looks_rambly,
-    _NON_FINDING_RE as _NON_FINDING_RE,
-    _NUM_BOLD_RE as _NUM_BOLD_RE,
-    _NUM_PLAIN_RE as _NUM_PLAIN_RE,
     _plan_extract_pass as _plan_extract_pass,
-    _RAMBLE_MARKERS as _RAMBLE_MARKERS,
-    _REPORT_BULLET_RE as _REPORT_BULLET_RE,
-    _SEV_LEAD_RE as _SEV_LEAD_RE,
     _SEV_LINE_RE as _SEV_LINE_RE,
-    _SEV_WORD_RE as _SEV_WORD_RE,
 )
 
 from luxe.gitkit.deep.render import (
     _chunk_block as _chunk_block,
     _digest_block as _digest_block,
     _framing_block as _framing_block,
-    _index_entries as _index_entries,
-    _INDEX_LINE_CHARS as _INDEX_LINE_CHARS,
     _notes_block as _notes_block,
     _prior_findings_block as _prior_findings_block,
     _render_report as _render_report,
-    _strip_report_header as _strip_report_header,
 )
 
 from luxe.gitkit.deep.mapcache import (
@@ -154,8 +116,6 @@ from luxe.gitkit.deep.mapcache import (
     chunk_note_is_valid as chunk_note_is_valid,
     fold_contribution as fold_contribution,
     git_file_shas as git_file_shas,
-    _HASH_BATCH as _HASH_BATCH,
-    IncrementalPlan as IncrementalPlan,
     load_chunk_note as load_chunk_note,
     load_map as load_map,
     make_baseline as make_baseline,
@@ -163,10 +123,6 @@ from luxe.gitkit.deep.mapcache import (
     map_status as map_status,
     MapState as MapState,
     MapStatus as MapStatus,
-    _MAX_CHUNK_GROWTH_FRAC as _MAX_CHUNK_GROWTH_FRAC,
-    _MAX_DELTA_CHUNKS as _MAX_DELTA_CHUNKS,
-    _MAX_DELTA_TOKENS_FRAC as _MAX_DELTA_TOKENS_FRAC,
-    _MAX_FILE_CHURN_FRAC as _MAX_FILE_CHURN_FRAC,
     _new_work_dir as _new_work_dir,
     _notes_dir as _notes_dir,
     plan_incremental as plan_incremental,

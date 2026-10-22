@@ -187,12 +187,6 @@ def _open_reader(src: Path, password: str = ""):
 
 # --- read-only tools -------------------------------------------------------
 
-_PERM_KEYS = (
-    "print", "modify", "extract", "annotate", "form", "accessibility",
-    "assemble", "print_high_res",
-)
-
-
 def _permissions(reader) -> dict[str, bool] | None:
     """Decode the /P permission bits into plain booleans (True = allowed).
 

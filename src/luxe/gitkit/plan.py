@@ -1,6 +1,6 @@
-"""gitplan — the apply-ready change-plan artifact (deterministic data shaping).
+"""gitchange plan — the apply-ready change-plan artifact (deterministic data shaping).
 
-`gitrefactor` emits a prose structural plan; `gitplan` emits a STRUCTURED plan the
+`gitaudit` advises structural changes in prose; `gitchange` emits a STRUCTURED plan the
 gated executor (`apply.py`) can act on. The champion produces the plan as a fenced
 ```json block (the GIT_DEEP_REDUCE_HINT precedent); this module parses it leniently,
 normalizes it to the `gitplan/v1` schema, renders a human-readable markdown report,
