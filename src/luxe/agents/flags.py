@@ -6,8 +6,9 @@ fallback. Reading them in one place makes the run's configuration inspectable
 and testable without driving the loop.
 
 This is a MOVE, not a redesign. Same variables, same defaults, same fallbacks,
-same read order, read at the same point in the run — `run_agent` still assigns
-each field to the local name it used before, so nothing downstream changed.
+same read order, read at the same point in the run. `run_agent` and its step
+helpers read the fields directly (`flags.<field>`, since 2026-10-22; before
+that each was copied to the local name it used pre-extraction).
 No new switch belongs here without the `.sdd` entry that justifies it; the
 opt-in modes each have invariants in `agents.sdd` that gate promotion.
 
@@ -57,6 +58,16 @@ class RunFlags:
     early_bail: bool = False
     action_density_gate: bool = False
     convergence_gate: bool = False
+    # v1.10.4 — band-response policy for the score<LOW suppression branch.
+    # "silent"               = v1.10.3 behavior (blanket silent suppression)
+    # "breadth_probe_hybrid" = v1.10.4 default (fire breadth_probe on the
+    #                         first suppression AND on the Nth escalation
+    #                         suppression where N=_BREADTH_PROBE_ESCALATION_COUNT;
+    #                         silent on intervening suppressions)
+    # The hybrid restores the v1.10.2-style first-event nudge that
+    # sphinx-10435 needs, while keeping suppression silent enough on
+    # subsequent events to avoid the v1.10.1 wasted-runway shape that
+    # broke matplotlib-14623.
     early_bail_band_response: str = DEFAULT_BAND_RESPONSE
     # LUXE_EARLY_BAIL_MODE — which early_bail message variant fires
     # (default/no_abstain/soft_anchor/...). Raw string, unvalidated: an unknown
@@ -96,6 +107,10 @@ class RunFlags:
     # sample the ratio was measured on. Opt-in: default OFF keeps the
     # benchmark path byte-identical until a maintain_suite run says
     # otherwise. See agents.sdd "Calibration extrapolation damping".
+    # The ratio describes the PREVIOUS request; at step 1 that request is
+    # system prompt + tool JSON (observed 1.79-2.64x) and the next one can be
+    # 96% prose (1.21-1.27x in the same sessions), which is how a request at
+    # ~65% of a 128K window reported 102.5% and was blamed on the endpoint.
     ctx_cal_damp: bool = False
 
     # Count the tool schemas in the estimate the server-truth ratio divides,
@@ -136,12 +151,25 @@ class RunFlags:
     # restores the legacy re-truncating phase 1. See agents.sdd.
     compact_cache_friendly: bool = True
 
-    # Context compaction (default ON since 2026-05-28)
+    # Context compaction (default ON since 2026-05-28). The n=75 rep-1+rep-2
+    # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
+    # rate equivalent to no-compaction baseline (within substrate noise band
+    # ±2.8 at n=75), 42-56% wall savings, 2 protected wrong_target instances
+    # healed (matplotlib-25775, pylint-6528). LUXE_TIERED_COMPACT=0 disables
+    # for ablation. LUXE_TIERED_COMPACT_THRESHOLD overrides the default
+    # trigger for stress-testing; LUXE_TIERED_COMPACT_PHASE_THRESHOLDS
+    # ("p1,p2,p3") beats it when valid, mirroring forge's
+    # TieredCompact.phase_thresholds; None = TieredCompact's own defaults.
     tiered_compact: bool = True
     tiered_compact_threshold: float = DEFAULT_TIERED_COMPACT_THRESHOLD
     tiered_compact_phase_thresholds: tuple[float, float, float] | None = None
 
-    # v1.11 adaptive policy
+    # v1.11 adaptive policy substrate. The write_pressure/early_bail biases
+    # are pinned at 0.0 and the soft_anchor consumer was reverted, so in
+    # practice it is observability (the adaptive_state event) — agents.sdd
+    # "Stage 3 / v1.11". Disable-equivalence: off means zero adaptive_state
+    # events and zero new state. The two per-signal ablation toggles default
+    # ON; adaptive_max_delta is the agents.sdd-pinned slew-rate limit (0.3).
     adaptive_policy: bool = False
     adaptive_no_write: bool = True
     adaptive_score_trend: bool = True

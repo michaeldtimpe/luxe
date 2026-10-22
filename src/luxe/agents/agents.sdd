@@ -43,8 +43,9 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 - Mode B write-pressure injection (v1.4.1) is opt-in via `LUXE_WRITE_PRESSURE=1`
 - Every `LUXE_*` switch `run_agent` obeys is read in `agents/flags.py`
   (`RunFlags.from_env`), once, at the top of the run — NOT with an
-  `os.environ.get` in the body. `run_agent` assigns each field to the local
-  name it always used, so the extraction changed no behaviour: same defaults,
+  `os.environ.get` in the body. `run_agent` and its step helpers read
+  `flags.<field>` directly (2026-10-22; the extraction first copied each field
+  to the local name it always used), so it changed no behaviour: same defaults,
   same "only the exact string 1" / "only the exact string 0" asymmetries, same
   silent fallback for every malformed value. A new switch adds a field there
   plus a row in `tests/test_run_flags.py`, and a test asserts the loop's body

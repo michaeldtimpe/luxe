@@ -288,6 +288,37 @@ def _event_emitter(run_id: str | None, phase: str,
     return emit
 
 
+def _user_message(content: str, nudge_type: str | None = None) -> dict[str, Any]:
+    """A user-role message the LOOP authors. With `nudge_type` it carries the
+    `_luxe_nudge` markers TieredCompact identifies droppable nudges by
+    (agents.sdd "Marker-based nudge identification"); without, a plain user
+    message (spec reprompts, the zero-calls decline)."""
+    msg: dict[str, Any] = {"role": "user", "content": content}
+    if nudge_type is not None:
+        msg["_luxe_nudge"] = True
+        msg["_luxe_nudge_type"] = nudge_type
+    return msg
+
+
+def _tool_message(tc: ToolCallResponse, step: int, content: str) -> dict[str, Any]:
+    """The `role: "tool"` message answering one call. A call the model sent
+    without an id gets `call_<step>`."""
+    return {
+        "role": "tool",
+        "tool_call_id": tc.id or f"call_{step}",
+        "name": tc.name,
+        "content": content,
+    }
+
+
+def _record_intervention(st: LoopState, step: int, kind: str) -> None:
+    """Mark an intervention as the latest to fire (habituation telemetry and
+    the habituation exit read these)."""
+    st.last_intervention_step = step
+    st.last_intervention_kind = kind
+    st.intervention_kinds_fired.add(kind)
+
+
 def run_agent(
     backend: Backend,
     role_cfg: RoleConfig,
@@ -366,9 +397,7 @@ def run_agent(
     def _notice(text: str) -> None:
         _display(on_notice, text, "on_notice")
     # Every LUXE_* switch this run obeys, read once, here (agents/flags.py).
-    # Same variables, same defaults, same malformed-value fallbacks as the
-    # sixteen scattered os.environ.get() calls this replaced; each is still
-    # assigned to the local name the body below uses.
+    # The body reads `flags.<field>` directly; flags.py documents each one.
     flags = RunFlags.from_env()
     # v1.10.1 — log_calls default-on when run_id is set. Earlier policy
     # was opt-in via LUXE_LOG_TOOL_CALLS=1, which silently degraded the
@@ -425,80 +454,15 @@ def run_agent(
         convergence_gate_enabled=flags.convergence_gate,
     )
 
-    # LUXE_EARLY_BAIL_MODE (default/no_abstain/soft_anchor/...), read once
-    # with the other switches instead of by EarlyBailGuard on every step.
-    early_bail_mode = flags.early_bail_mode
-    truncated_turn_retry_enabled = flags.truncated_turn_retry
-    truncated_turn_max_retries = flags.truncated_turn_max_retries
-    empty_turn_retry_enabled = flags.empty_turn_retry
-    # Server-truth context calibration (2026-08-11); see LoopState.ctx_calibration.
-    ctx_server_truth_enabled = flags.ctx_server_truth
-    # Damp that extrapolation when the prompt has outgrown the sample the
-    # ratio was measured on (2026-08-24, OPT-IN, default OFF). The ratio
-    # describes the PREVIOUS request; at step 1 that request is system prompt
-    # + tool JSON (observed 1.79-2.64x) and the next one can be 96% prose
-    # (1.21-1.27x in the same sessions), which is how a request at ~65% of a
-    # 128K window reported 102.5% and was blamed on the endpoint. When the
-    # flag is unset `step_calibration is st.ctx_calibration` at every step and
-    # nothing downstream can tell the difference.
-    ctx_cal_damp_enabled = flags.ctx_cal_damp
-    # Sweepable for the promotion bench (LUXE_CTX_CAL_UNMEASURED_RATIO);
-    # inert while the damping flag is off.
-    ctx_cal_unmeasured_ratio = flags.ctx_cal_unmeasured_ratio
-    # Bound ONE tool result at insertion (2026-08-24, OPT-IN, default OFF).
-    # See luxe.context.clamp_tool_result for why this is not a TieredCompact
-    # change. `tool_result_clamp_chars` returning 0 means "no bound", so the
-    # disabled path never even computes a limit.
-    tool_result_clamp_enabled = flags.tool_result_clamp
-    # forge-hybrid Phase 2 (A) — TieredCompact context compaction. DEFAULT-ON
-    # as of 2026-05-28 (cycle closeout commit). The n=75 rep-1+rep-2
-    # validation at phase_thresholds=(0.50, 0.85, 0.95) confirmed: resolve
-    # rate equivalent to no-compaction baseline (within substrate noise band
-    # ±2.8 at n=75), 42-56% wall savings, 2 protected wrong_target instances
-    # healed (matplotlib-25775, pylint-6528). Set LUXE_TIERED_COMPACT=0 to
-    # disable for ablation; any other value (or unset) keeps it ON. Default
-    # phase_thresholds come from TieredCompact._DEFAULT_PHASE_THRESHOLDS.
-    tiered_compact_enabled = flags.tiered_compact
-    # LUXE_TIERED_COMPACT_THRESHOLD overrides the default trigger (0.75) for
-    # stress-testing; LUXE_TIERED_COMPACT_PHASE_THRESHOLDS ("p1,p2,p3") beats
-    # it when valid, mirroring forge's TieredCompact.phase_thresholds. Both
-    # parse (and silently fall back) in RunFlags.from_env.
-    _tc_threshold = flags.tiered_compact_threshold
-    _tc_phase_thresholds = flags.tiered_compact_phase_thresholds
-    _tiered_compactor: TieredCompact | None = (
+    # forge-hybrid Phase 2 (A) — TieredCompact context compaction, DEFAULT-ON
+    # since 2026-05-28 (agents.sdd). None = the legacy elide path.
+    compactor: TieredCompact | None = (
         TieredCompact(
-            compact_threshold=_tc_threshold,
-            phase_thresholds=_tc_phase_thresholds,
+            compact_threshold=flags.tiered_compact_threshold,
+            phase_thresholds=flags.tiered_compact_phase_thresholds,
             cache_friendly=flags.compact_cache_friendly,
-        ) if tiered_compact_enabled else None
+        ) if flags.tiered_compact else None
     )
-
-    # v1.11 adaptive policy substrate. Phase 3a wired the slew-rate-limited
-    # modulation into WritePressureGuard, but the write_pressure/early_bail
-    # biases are pinned at 0.0 (Phase B: no_write retired) and the
-    # soft_anchor consumer was reverted, so in practice it is observability
-    # (the adaptive_state event) — agents.sdd "Stage 3 / v1.11".
-    # Disable-equivalence invariant: when LUXE_ADAPTIVE_POLICY=0 (or unset),
-    # zero adaptive_state events are emitted and zero new state is
-    # computed — v1.10.5 byte-identical.
-    adaptive_policy_enabled = flags.adaptive_policy
-    # Per-signal ablation toggles (default ON when adaptive_policy_enabled).
-    adaptive_no_write_enabled = flags.adaptive_no_write
-    adaptive_score_trend_enabled = flags.adaptive_score_trend
-    # v1.11 Phase 3a — slew-rate limit; agents.sdd-pinned default 0.3.
-    # Bounds per-step intensity-modifier change. Override for ablation.
-    adaptive_max_delta = flags.adaptive_max_delta
-    # v1.10.4 — band-response policy for the score<LOW suppression branch.
-    # "silent"               = v1.10.3 behavior (blanket silent suppression)
-    # "breadth_probe_hybrid" = v1.10.4 default (fire breadth_probe on the
-    #                         first suppression AND on the Nth escalation
-    #                         suppression where N=_BREADTH_PROBE_ESCALATION_COUNT;
-    #                         silent on intervening suppressions)
-    # The hybrid restores the v1.10.2-style first-event nudge that
-    # sphinx-10435 needs, while keeping suppression silent enough on
-    # subsequent events to avoid the v1.10.1 wasted-runway shape that
-    # broke matplotlib-14623.
-    _band_response = flags.early_bail_band_response
 
     spec_has_zero_calls = (
         spec is not None
@@ -535,11 +499,11 @@ def run_agent(
         # `step_calibration is ctx_calibration` whenever the flag is off, so
         # `effective_ctx`, the debug line, and every consumer are unchanged.
         step_calibration = st.ctx_calibration
-        if ctx_cal_damp_enabled and st.ctx_calibration != 1.0:
+        if flags.ctx_cal_damp and st.ctx_calibration != 1.0:
             _est_now = estimate_messages_tokens(st.messages) + tools_overhead
             step_calibration = damped_calibration(
                 st.ctx_calibration, st.est_at_calibration, _est_now,
-                unmeasured=ctx_cal_unmeasured_ratio)
+                unmeasured=flags.ctx_cal_unmeasured_ratio)
             if step_calibration != st.ctx_calibration:
                 logger.debug("ctx calibration damped %.2fx -> %.2fx "
                              "(measured at est=%d, prompt now est=%d)",
@@ -580,7 +544,7 @@ def run_agent(
         # LUXE_ADAPTIVE_POLICY to preserve disable-equivalence. The only
         # dispatch consumer is WritePressureGuard's modulation, held at
         # neutral 1.0 by the pinned bias; see the substrate note above.
-        if adaptive_policy_enabled:
+        if flags.adaptive_policy:
             st.score_log.append(convergence_score)
             # Bounded growth: cap at 64 entries (covers max_steps for current
             # configs with headroom). Drop oldest when over.
@@ -588,15 +552,15 @@ def run_agent(
                 st.score_log[:] = st.score_log[-64:]
             adaptive_state = compute_within_run_state(
                 st.score_log, st.tool_history, step,
-                no_write_enabled=adaptive_no_write_enabled,
-                score_trend_enabled=adaptive_score_trend_enabled,
+                no_write_enabled=flags.adaptive_no_write,
+                score_trend_enabled=flags.adaptive_score_trend,
             )
             # v1.11 Phase 3a — compute bias → target modulation → slew-rate-limited update.
             bias = compute_intervention_bias(adaptive_state)
             for kind, prev_mod in list(st.intervention_modulation.items()):
                 target = bias_to_modulation(bias.get(kind, 0.0))
                 st.intervention_modulation[kind] = apply_slew_rate(
-                    prev_mod, target, max_delta=adaptive_max_delta,
+                    prev_mod, target, max_delta=flags.adaptive_max_delta,
                 )
             emit(
                 "adaptive_state",
@@ -628,20 +592,14 @@ def run_agent(
             step=step,
             tool_calls_total=result.tool_calls_total,
             completion_tokens=result.completion_tokens,
-            adaptive_policy_enabled=adaptive_policy_enabled,
+            adaptive_policy_enabled=flags.adaptive_policy,
             intervention_modulation_write_pressure=st.intervention_modulation["write_pressure"],
         )
         if wp_decision is not None:
-            st.messages.append({
-                "role": "user",
-                "content": wp_decision.message,
-                "_luxe_nudge": True,
-                "_luxe_nudge_type": WritePressureGuard.nudge_type,
-            })
+            st.messages.append(_user_message(wp_decision.message,
+                                             WritePressureGuard.nudge_type))
             st.write_pressure_fired = True
-            st.last_intervention_step = step
-            st.last_intervention_kind = "write_pressure"
-            st.intervention_kinds_fired.add("write_pressure")
+            _record_intervention(st, step, "write_pressure")
             emit(
                 "write_pressure_fired",
                 step=step,
@@ -666,11 +624,11 @@ def run_agent(
             early_bail_message=early_bail_message,
             convergence_gate_enabled=st.convergence_gate_enabled,
             convergence_score=convergence_score,
-            band_response=_band_response,
+            band_response=flags.early_bail_band_response,
             suppression_count_in_trajectory=st.suppression_count_in_trajectory,
             tool_history=st.tool_history,
             recent_path_diversity=recent_path_diversity(st.tool_history),
-            early_bail_mode=early_bail_mode,
+            early_bail_mode=flags.early_bail_mode,
         )
         if eb_outcome is not None:
             # Apply state mutations the loop owns. The guard tells us how
@@ -682,18 +640,10 @@ def run_agent(
                 st.early_bail_fired = True
                 st.early_bail_step = step
             if eb_outcome.decision is not None:
-                msg_dict: dict[str, Any] = {
-                    "role": "user",
-                    "content": eb_outcome.decision.message,
-                }
-                if eb_outcome.nudge_type is not None:
-                    msg_dict["_luxe_nudge"] = True
-                    msg_dict["_luxe_nudge_type"] = eb_outcome.nudge_type
-                st.messages.append(msg_dict)
+                st.messages.append(_user_message(eb_outcome.decision.message,
+                                                 eb_outcome.nudge_type))
             if eb_outcome.last_intervention_kind is not None:
-                st.last_intervention_step = step
-                st.last_intervention_kind = eb_outcome.last_intervention_kind
-                st.intervention_kinds_fired.add(eb_outcome.last_intervention_kind)
+                _record_intervention(st, step, eb_outcome.last_intervention_kind)
             # Suppression event first, then the fire event — the order the
             # records have always been written in.
             for event in (eb_outcome.suppress_event, eb_outcome.fire_event):
@@ -753,16 +703,10 @@ def run_agent(
             early_bail_step=st.early_bail_step,
         )
         if adg_decision is not None:
-            st.messages.append({
-                "role": "user",
-                "content": adg_decision.message,
-                "_luxe_nudge": True,
-                "_luxe_nudge_type": ActionDensityGateGuard.nudge_type,
-            })
+            st.messages.append(_user_message(adg_decision.message,
+                                             ActionDensityGateGuard.nudge_type))
             st.action_density_gate_fired = True
-            st.last_intervention_step = step
-            st.last_intervention_kind = "action_density_gate"
-            st.intervention_kinds_fired.add("action_density_gate")
+            _record_intervention(st, step, "action_density_gate")
             emit(
                 "action_density_gate_fired",
                 step=step,
@@ -864,8 +808,8 @@ def run_agent(
         # next iteration's delta correctly measures THIS step's response.
         st.prev_completion_tokens = result.completion_tokens
 
-        if tiered_compact_enabled and _tiered_compactor is not None:
-            cr = _tiered_compactor.compact(st.messages, effective_ctx)
+        if compactor is not None:  # i.e. flags.tiered_compact
+            cr = compactor.compact(st.messages, effective_ctx)
             st.messages = cr.messages
             if cr.phase_reached > 0:
                 st.compaction_tool_results_dropped_total += cr.tool_results_dropped
@@ -960,7 +904,7 @@ def run_agent(
         # and a run that starts on prose and ends on JSON should not keep the
         # first step's ratio. `calibration_ratio` clamps and degrades to 1.0 on
         # a missing/zero usage report.
-        if ctx_server_truth_enabled:
+        if flags.ctx_server_truth:
             new_cal = calibration_ratio(resp.timing.prompt_tokens, est_sent)
             if new_cal != st.ctx_calibration:
                 logger.debug("ctx calibration %.2fx -> %.2fx "
@@ -1012,40 +956,36 @@ def run_agent(
             # continue instead of ending a run that never acted. Bounded, and
             # a no-op unless the switch is on — see agents.sdd.
             tt = TruncatedTurnGuard.should_fire(
-                truncated_turn_retry_enabled=truncated_turn_retry_enabled,
+                truncated_turn_retry_enabled=flags.truncated_turn_retry,
                 finish_reason=getattr(resp, "finish_reason", "") or "",
                 has_tool_calls=bool(tool_calls),
                 retries_used=st.truncated_turn_retries_used,
-                max_retries=truncated_turn_max_retries,
+                max_retries=flags.truncated_turn_max_retries,
             )
             if tt is not None:
                 # Record the cut-off text before the nudge so the transcript
                 # shows what the model was mid-way through saying.
                 if resp.text:
                     st.messages.append(_assistant(resp, resp.text))
-                st.messages.append({
-                    "role": "user",
-                    "content": _TRUNCATED_TURN_MESSAGE,
-                    "_luxe_nudge": True,
-                    "_luxe_nudge_type": TruncatedTurnGuard.nudge_type,
-                })
+                st.messages.append(_user_message(_TRUNCATED_TURN_MESSAGE,
+                                                 TruncatedTurnGuard.nudge_type))
                 st.truncated_turn_retries_used += 1
                 emit(
                     "truncated_turn_retry",
                     step=step,
                     retries_used=st.truncated_turn_retries_used,
-                    max_retries=truncated_turn_max_retries,
+                    max_retries=flags.truncated_turn_max_retries,
                     completion_tokens=resp.timing.completion_tokens,
                 )
                 logger.debug(
                     "truncated turn retry step=%d retries_used=%d max=%d "
                     "completion_tokens=%d",
                     step, st.truncated_turn_retries_used,
-                    truncated_turn_max_retries, resp.timing.completion_tokens)
+                    flags.truncated_turn_max_retries, resp.timing.completion_tokens)
                 _notice(
                     f"answer cut off at the {resp.timing.completion_tokens:,}-token "
                     f"cap with no tool call — retrying "
-                    f"({st.truncated_turn_retries_used}/{truncated_turn_max_retries}); "
+                    f"({st.truncated_turn_retries_used}/{flags.truncated_turn_max_retries}); "
                     f"each retry costs another full generation"
                 )
                 continue
@@ -1058,19 +998,15 @@ def run_agent(
             # truncation gate so a cut-off response is handled by the guard
             # that owns it rather than spending both budgets on one problem.
             et = EmptyTurnGuard.should_fire(
-                empty_turn_retry_enabled=empty_turn_retry_enabled,
+                empty_turn_retry_enabled=flags.empty_turn_retry,
                 text=resp.text or "",
                 has_tool_calls=bool(tool_calls),
                 finish_reason=getattr(resp, "finish_reason", "") or "",
                 retries_used=st.empty_turn_retries_used,
             )
             if et is not None:
-                st.messages.append({
-                    "role": "user",
-                    "content": _EMPTY_TURN_MESSAGE,
-                    "_luxe_nudge": True,
-                    "_luxe_nudge_type": EmptyTurnGuard.nudge_type,
-                })
+                st.messages.append(_user_message(_EMPTY_TURN_MESSAGE,
+                                                 EmptyTurnGuard.nudge_type))
                 st.empty_turn_retries_used += 1
                 reasoning_chars = getattr(resp, "reasoning_chars", 0)
                 emit(
@@ -1127,7 +1063,7 @@ def run_agent(
                     if resp.text:
                         st.messages.append(_assistant(resp, resp.text))
                     for detail in reprompts:
-                        st.messages.append({"role": "user", "content": detail})
+                        st.messages.append(_user_message(detail))
                     continue
             # TELEMETRY ONLY — additive, ungated, never touches control flow or
             # `messages` (agents.sdd "Tool-call telemetry events"). A run that
@@ -1141,7 +1077,7 @@ def run_agent(
                     step=step,
                     completion_tokens=resp.timing.completion_tokens,
                     final_text_chars=len(resp.text or ""),
-                    retry_enabled=truncated_turn_retry_enabled,
+                    retry_enabled=flags.truncated_turn_retry,
                     retries_used=st.truncated_turn_retries_used,
                 )
             # Same reason, the other failure: a run that ends HERE with no text
@@ -1155,7 +1091,7 @@ def run_agent(
                     finish_reason=getattr(resp, "finish_reason", "") or "",
                     reasoning_chars=getattr(resp, "reasoning_chars", 0),
                     completion_tokens=resp.timing.completion_tokens,
-                    retry_enabled=empty_turn_retry_enabled,
+                    retry_enabled=flags.empty_turn_retry,
                     retries_used=st.empty_turn_retries_used,
                 )
             if (getattr(resp, "finish_reason", "") or "") == "length":
@@ -1187,8 +1123,7 @@ def run_agent(
             # a corresponding tool result.
             assistant_text = resp.text or ""
             st.messages.append(_assistant(resp, assistant_text))
-            st.messages.append({"role": "user",
-                                "content": _SPEC_ZERO_CALLS_DECLINE_MESSAGE})
+            st.messages.append(_user_message(_SPEC_ZERO_CALLS_DECLINE_MESSAGE))
             emit(
                 "spec_predispatch_blocked",
                 step=step,
@@ -1253,12 +1188,7 @@ def run_agent(
                     step=step, name=tc.name,
                     reason="schema", message=str(err)[:300],
                 )
-                st.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id or f"call_{step}",
-                    "name": tc.name,
-                    "content": f"Schema error: {err}",
-                })
+                st.messages.append(_tool_message(tc, step, f"Schema error: {err}"))
                 continue
 
             key = _call_key(tc.name, tc.arguments)
@@ -1288,12 +1218,7 @@ def run_agent(
                     wall_s=0.0,
                 )
                 result.tool_calls.append(dup)
-                st.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id or f"call_{step}",
-                    "name": tc.name,
-                    "content": content,
-                })
+                st.messages.append(_tool_message(tc, step, content))
                 _display(on_tool_event, dup, "on_tool_event")
                 emit(
                     "tool_call",
@@ -1360,7 +1285,7 @@ def run_agent(
                 # first successful write. Used by the resolve-time telemetry
                 # to attribute write-step gating to compaction state. Fires
                 # at most once per run.
-                if (tiered_compact_enabled
+                if (flags.tiered_compact
                         and st.compaction_phase_at_first_write is None):
                     st.compaction_phase_at_first_write = st.compaction_max_phase_this_run
                     emit(
@@ -1410,7 +1335,7 @@ def run_agent(
             # authored constants — `validate_args` returns a fixed sentence
             # that never echoes an argument value, and the dedup message is
             # literal. Clamping them could only ever be a no-op on a hot path.
-            if tool_result_clamp_enabled and content:
+            if flags.tool_result_clamp and content:
                 _clamp_max = tool_result_clamp_chars(effective_ctx)
                 content, _clamp_dropped = clamp_tool_result(
                     content, tool_name=tc.name, max_chars=_clamp_max,
@@ -1428,13 +1353,7 @@ def run_agent(
                         chars_dropped=_clamp_dropped,
                         bytes_out=executed.bytes_out,
                     )
-            _tool_msg = {
-                "role": "tool",
-                "tool_call_id": tc.id or f"call_{step}",
-                "name": tc.name,
-                "content": content,
-            }
-            st.messages.append(_tool_msg)
+            st.messages.append(_tool_message(tc, step, content))
 
             _display(on_tool_event, executed, "on_tool_event")
             emit(
@@ -1516,7 +1435,7 @@ def run_agent(
     # final per-run cumulative state so post-hoc analysis can attribute
     # outcomes to compaction state. Fires regardless of resolve/abort/max_steps
     # — all paths route through this single return.
-    if tiered_compact_enabled:
+    if flags.tiered_compact:
         emit(
             "compaction_phase_at_resolve",
             max_phase_reached=st.compaction_max_phase_this_run,
