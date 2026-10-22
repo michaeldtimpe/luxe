@@ -49,7 +49,7 @@ jobs:
 
       # The canonical host sync (chat+dev+analyzers+web, `luxe update` in
       # src/luxe/cli/kit.py) plus [pdf]. Before this, CI ran chat+dev only:
-      # tests/test_mcp_pdf.py (52 tests) import-skipped here and on every
+      # tests/test_mcp_pdf.py (53 tests) import-skipped here and on every
       # host, and the real-bandit test skipped. [web] installs playwright but
       # no browser download; tests/test_web_browser_live.py runs on the
       # runner's preinstalled Google Chrome and skips where there is none.
