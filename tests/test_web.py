@@ -505,3 +505,32 @@ def test_an_oversized_api_response_is_refused(monkeypatch):
     monkeypatch.setattr(answers_mod, "_key", lambda: "ans-key")
     with pytest.raises(WebError, match="exceeded"):
         answers_mod.answer("q")
+
+
+@pytest.mark.parametrize("exc,expected", [
+    (WebError("refused: private host"), "refused: private host"),
+    (RuntimeError("boom"), "{name} failed: RuntimeError: boom")])
+@pytest.mark.parametrize("name,patch_target,args", [
+    ("web_fetch", "luxe.web.fetch.fetch_url", {"url": "https://x.test/"}),
+    ("web_search", "luxe.web.search.search", {"query": "q"}),
+    ("web_answer", "luxe.web.answers.answer", {"query": "q"}),
+    ("web_page", None, {"action": "read"})])
+def test_web_tool_failures_map_to_the_same_messages(monkeypatch, name,
+                                                    patch_target, args,
+                                                    exc, expected):
+    """Every web tool turns a WebError into its own message and any other
+    exception into `<tool> failed: <Type>: <msg>` — never a raise."""
+    from types import SimpleNamespace
+
+    from luxe.web import page as page_mod
+    from luxe.web import tools as tools_mod
+
+    def _raise(*_a, **_k):
+        raise exc
+    if patch_target:
+        monkeypatch.setattr(patch_target, _raise)
+    else:
+        monkeypatch.setattr(page_mod, "get_session",
+                            lambda: SimpleNamespace(op=_raise))
+    _d, fn = getattr(tools_mod, f"make_{name}_tool")()
+    assert fn(args) == ("", expected.format(name=name))

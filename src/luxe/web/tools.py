@@ -21,6 +21,18 @@ MIN_MAX_CHARS = 1_000
 MAX_MAX_CHARS = 50_000
 
 
+def _guarded(name: str, call) -> tuple[str, str | None]:
+    """Run a tool's network work and shape the outcome as `(text, error)`:
+    a `WebError` carries its own message; anything else becomes
+    `<name> failed: <Type>: <msg>`. A web tool never raises into the loop."""
+    try:
+        return call(), None
+    except WebError as e:
+        return "", str(e)
+    except Exception as e:
+        return "", f"{name} failed: {type(e).__name__}: {e}"
+
+
 def _clamp_chars(value, default: int) -> int:
     """`max_chars` as an int in [MIN_MAX_CHARS, MAX_MAX_CHARS]; junk → default."""
     try:
@@ -120,17 +132,15 @@ def make_web_fetch_tool():
         max_chars = _clamp_chars(args.get("max_chars"), 20_000)
         render = bool(args.get("render"))
         wait_for = str(args.get("wait_for") or "").strip()
-        try:
+
+        def _do() -> str:
             if render:
                 from luxe.web.browser import render_to_result
                 result = render_to_result(url, wait_for=wait_for)
             else:
                 result = fetch_url(url)
-            return to_markdown(result, max_chars=max_chars), None
-        except WebError as e:
-            return "", str(e)
-        except Exception as e:
-            return "", f"web_fetch failed: {type(e).__name__}: {e}"
+            return to_markdown(result, max_chars=max_chars)
+        return _guarded("web_fetch", _do)
 
     return ToolDef(name="web_fetch", description=_FETCH_DESC,
                    parameters=_FETCH_PARAMS), _fn
@@ -145,13 +155,11 @@ def make_web_search_tool():
         query = str(args.get("query") or "").strip()
         if not query:
             return "", "web_search: `query` is required"
-        try:
+
+        def _do() -> str:
             provider, hits = search(query, count=int(args.get("count") or 5))
-            return render_hits(provider, query, hits), None
-        except WebError as e:
-            return "", str(e)
-        except Exception as e:
-            return "", f"web_search failed: {type(e).__name__}: {e}"
+            return render_hits(provider, query, hits)
+        return _guarded("web_search", _do)
 
     return ToolDef(name="web_search", description=_SEARCH_DESC,
                    parameters=_SEARCH_PARAMS), _fn
@@ -166,12 +174,9 @@ def make_web_answer_tool():
         query = str(args.get("query") or "").strip()
         if not query:
             return "", "web_answer: `query` is required"
-        try:
-            return answer(query, model=str(args.get("model") or "")), None
-        except WebError as e:
-            return "", str(e)
-        except Exception as e:
-            return "", f"web_answer failed: {type(e).__name__}: {e}"
+        return _guarded(
+            "web_answer",
+            lambda: answer(query, model=str(args.get("model") or "")))
 
     return ToolDef(name="web_answer", description=_ANSWER_DESC,
                    parameters=_ANSWER_PARAMS), _fn
@@ -232,18 +237,16 @@ def make_web_page_tool():
             page_mod.close_session()
             return "page session closed", None
         max_chars = _clamp_chars(args.get("max_chars"), 12_000)
-        try:
+
+        def _do() -> str:
             snap = page_mod.get_session().op(
                 action,
                 url=args.get("url"), target=args.get("target"),
                 text=args.get("text"), submit=bool(args.get("submit")),
                 direction=args.get("direction"),
             )
-            return page_mod.render_snapshot(snap, max_chars=max_chars), None
-        except WebError as e:
-            return "", str(e)
-        except Exception as e:
-            return "", f"web_page failed: {type(e).__name__}: {e}"
+            return page_mod.render_snapshot(snap, max_chars=max_chars)
+        return _guarded("web_page", _do)
 
     return ToolDef(name="web_page", description=_PAGE_DESC,
                    parameters=_PAGE_PARAMS), _fn
