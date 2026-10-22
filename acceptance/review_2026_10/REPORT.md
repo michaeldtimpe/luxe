@@ -147,3 +147,16 @@ neo (42 s).
 Still open: neo boot persistence (the Login Items approval). Above-25 functions remaining outside vendored fixtures:
 `scripts/toolcall_taxonomy.collect` (33), `chat/status.fields` (28) and `chat/cmd_models._model` (25); none is on
 the benchmark path.
+
+## Follow-up 2: the last three hotspots
+
+Landed as one fast-forward, `706fef4..1adbd5e`. None is on the benchmark path, so there was no A/B.
+
+| PR | Change | Main commits |
+|---|---|---|
+| #44 | `chat/cmd_models._model` (`/model`) C901 25 → 7; 23 tests (24 mutations caught); live `/model` output identical | `fdca52d..aba1c8f` |
+| #45 | `scripts/toolcall_taxonomy.collect` C901 33 → 3; 53 test cases (31 mutations caught); report byte-identical on the real `~/.luxe` corpus (3,506 runs, 12 window/flag combinations) | `2243a52..592b46b` |
+| #46 | `chat/status.fields` C901 28 → 2, one builder per segment; characterization class (31 mutations caught); live status bar byte-identical | `ff79c3f..1adbd5e` |
+
+Full suite 4166 passed. Smoke READY on m1 (112 s), m5 (13 s) and neo (41 s). No function outside the vendored
+benchmark fixtures is now above C901 24.
