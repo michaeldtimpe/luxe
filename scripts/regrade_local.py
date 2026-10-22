@@ -5,12 +5,19 @@ The agent loop is what's slow (60-120 min per 10-fixture sweep); the grader
 itself takes seconds. Every fixture's pushed branch lives in the local cache
 at the path `Fixture.repo_url` points to, so we can:
 
-    1. Read each fixture's <output>/<variant>/<fixture>/state.json for run_id.
-    2. Read ~/.luxe/runs/<run_id>/pr_state.json for branch_name.
-    3. Clone the cache repo into a private mkdtemp dir (local clone — sub-second).
-    4. Checkout origin/<branch_name>. A recorded branch missing from the
-       cache is UNREGRADABLE (excluded from the totals), never graded at
-       base_sha.
+    1. Read each fixture's <output>/<variant>/<fixture>/state.json for run_id
+       and head_sha_used (the commit the bench graded; recorded since
+       2026-10-22).
+    2. Clone the cache repo into a private mkdtemp dir (local clone — sub-second).
+    3. Check out head_sha_used. If the cache no longer has that commit,
+       rebuild it from the run's diff.patch on base_sha; if neither exists
+       the run is UNREGRADABLE (excluded from the totals).
+    4. Runs recorded before head_sha_used existed fall back to
+       ~/.luxe/runs/<run_id>/pr_state.json's branch_name and
+       origin/<branch_name>, flagged ATTRIBUTION UNVERIFIED: bench branch
+       names are reused once pruned, so that branch may hold a later run's
+       commit. A recorded branch missing from the cache is UNREGRADABLE,
+       never graded at base_sha.
     5. Call grade_fixture() directly with that worktree.
     6. Write result_regraded.json next to the original.
 
@@ -41,7 +48,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from benchmarks.maintain_suite.grade import (  # noqa: E402
     Fixture,
-    FixtureResult,
+    fixture_passed,
     grade_fixture,
 )
 from benchmarks.maintain_suite.fixtures import (  # noqa: E402
@@ -80,16 +87,25 @@ class Unregradable(RuntimeError):
 
 
 def _prepare_worktree(fixture: Fixture, branch: str, dest: Path,
-                      had_diff: bool) -> None:
-    """Local-clone the fixture's repo to `dest` and check out the agent's
-    pushed branch.
+                      had_diff: bool, head_sha: str = "",
+                      patch: Path | None = None,
+                      base_sha: str = "") -> str:
+    """Local-clone the fixture's repo to `dest` and check out the state the
+    bench graded. Returns how that state was attributed:
 
-    Raises Unregradable instead of quietly grading base_sha when the state
-    to grade is gone: a branch recorded in pr_state.json but absent from the
-    cache (push failed, or pruned), or no branch at all for a run whose
-    original grade saw a diff. Grading base_sha there scored "the model
-    changed nothing" — a fabricated FAIL counted into the totals. Only a run
-    that recorded no branch AND no diff is legitimately graded at base_sha.
+      "sha"               the run's recorded head_sha_used
+      "patch"             head_sha_used is gone from the cache; rebuilt from
+                          the run's diff.patch on base_sha
+      "unverified-branch" no recorded sha (pre-2026-10-22 run):
+                          origin/<branch>, which a later run may have reused
+      "base"              no branch and no diff — base_sha is the graded state
+
+    Raises Unregradable instead of quietly grading base_sha (or a reused
+    branch) when the state to grade is gone: a recorded sha with neither the
+    commit nor a diff.patch, a branch recorded in pr_state.json but absent
+    from the cache (push failed, or pruned), or no branch at all for a run
+    whose original grade saw a diff. Grading base_sha there scored "the
+    model changed nothing" — a fabricated FAIL counted into the totals.
     """
     if dest.exists():
         shutil.rmtree(dest)
@@ -97,6 +113,15 @@ def _prepare_worktree(fixture: Fixture, branch: str, dest: Path,
     rc, out = _run(["git", "clone", "--quiet", "--local", fixture.repo_url, str(dest)])
     if rc != 0:
         raise Unregradable(f"clone of {fixture.repo_url} failed: {out.strip()[:200]}")
+    if head_sha:
+        rc, _ = _run(["git", "checkout", "-q", "--detach", head_sha], cwd=dest)
+        if rc == 0:
+            return "sha"
+        if patch is None or not patch.is_file():
+            raise Unregradable(f"recorded head {head_sha[:12]} not in "
+                               f"{fixture.repo_url} and no diff.patch")
+        _apply_patch(dest, base_sha or fixture.base_sha, patch)
+        return "patch"
     if not branch:
         if had_diff:
             raise Unregradable("no pushed branch recorded, but the original "
@@ -105,11 +130,35 @@ def _prepare_worktree(fixture: Fixture, branch: str, dest: Path,
             rc, out = _run(["git", "checkout", "-q", fixture.base_sha], cwd=dest)
             if rc != 0:
                 raise Unregradable(f"checkout {fixture.base_sha} failed: {out.strip()[:200]}")
-        return
+        return "base"
     rc, out = _run(["git", "checkout", "-q", f"origin/{branch}"], cwd=dest)
     if rc != 0:
         raise Unregradable(f"branch {branch} not in {fixture.repo_url} "
                            "(push failed or pruned)")
+    return "unverified-branch"
+
+
+def _apply_patch(dest: Path, base_sha: str, patch: Path) -> None:
+    """Rebuild the graded commit: base_sha + the run's diff.patch, committed
+    (grade_fixture diffs base_sha..HEAD, so the change must be a commit)."""
+    if not base_sha:
+        raise Unregradable("diff.patch present but no base_sha to apply it to")
+    rc, out = _run(["git", "checkout", "-q", "--detach", base_sha], cwd=dest)
+    if rc != 0:
+        raise Unregradable(f"checkout {base_sha} failed: {out.strip()[:200]}")
+    if patch.stat().st_size == 0:
+        return  # the graded change was empty: base_sha IS the graded state
+    rc, out = _run(["git", "apply", "--index", "--binary", str(patch)], cwd=dest)
+    if rc != 0:
+        raise Unregradable(f"diff.patch does not apply on {base_sha[:12]}: "
+                           f"{out.strip()[:200]}")
+    rc, out = _run(["git", "-c", "user.name=regrade_local",
+                    "-c", "user.email=regrade_local@localhost",
+                    "-c", "commit.gpgsign=false",
+                    "commit", "-q", "--no-verify", "-m", "regrade: diff.patch"],
+                   cwd=dest)
+    if rc != 0:
+        raise Unregradable(f"commit of diff.patch failed: {out.strip()[:200]}")
 
 
 def regrade_one(result_path: Path, fixtures: dict[str, Fixture]) -> dict:
@@ -130,19 +179,22 @@ def regrade_one(result_path: Path, fixtures: dict[str, Fixture]) -> dict:
             pass
     run_id = str(state.get("luxe_run_id", ""))
     branch = _pushed_branch_for(run_id) if run_id else ""
+    head_sha = str(state.get("head_sha_used", ""))
+    base_sha = str(state.get("base_sha_used", ""))
 
     # A private temp dir per call — a fixed /tmp/regrade-<id> collided
     # between concurrent regrades and was never cleaned up.
     tmp = Path(tempfile.mkdtemp(prefix=f"regrade-{fixture_id}-"))
     try:
         return _regrade_in(tmp / "repo", raw, fixture, run_id, branch,
-                           result_path)
+                           result_path, head_sha=head_sha, base_sha=base_sha)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _regrade_in(worktree: Path, raw: dict, fixture: Fixture, run_id: str,
-                branch: str, result_path: Path) -> dict:
+                branch: str, result_path: Path, *, head_sha: str = "",
+                base_sha: str = "") -> dict:
     fixture_id = fixture.id
     # Carry over agent-loop outputs we don't recompute: pr_url, pr_opened.
     # The grader's responsibility is the *grading* logic; the agent-loop's
@@ -150,11 +202,17 @@ def _regrade_in(worktree: Path, raw: dict, fixture: Fixture, run_id: str,
     pr_url = str(raw.get("pr_url", ""))
     pr_opened = bool(raw.get("pr_opened", False))
     try:
-        _prepare_worktree(fixture, branch, worktree,
-                          had_diff=bool(raw.get("diff_produced")))
+        attribution = _prepare_worktree(
+            fixture, branch, worktree,
+            had_diff=bool(raw.get("diff_produced")), head_sha=head_sha,
+            patch=result_path.with_name("diff.patch"), base_sha=base_sha)
     except Unregradable as e:
         return {"fixture_id": fixture_id, "unregradable": str(e),
-                "branch": branch}
+                "branch": branch, "head_sha": head_sha}
+    if attribution == "unverified-branch":
+        print(f"  ! {fixture_id}: no recorded head sha — graded origin/{branch}; "
+              "ATTRIBUTION UNVERIFIED (bench branch names are reused)",
+              file=sys.stderr, flush=True)
 
     # Re-run the citation linter against the original synthesizer.md if we
     # can find it. Falls back to stored counts if the run dir is gone or
@@ -188,8 +246,9 @@ def _regrade_in(worktree: Path, raw: dict, fixture: Fixture, run_id: str,
 
     return {
         "fixture_id": fixture_id,
-        "v1_passed": bool(raw.get("score", 0) >= 4 and not raw.get("error", "")
-                          and not raw.get("skipped", False)),
+        "v1_passed": fixture_passed(raw.get("score", 0),
+                                    skipped=raw.get("skipped", False),
+                                    error=raw.get("error", "")),
         "v1_score": int(raw.get("score", 0)),
         "v2_passed": new_result.passed,
         "v2_score": new_result.score,
@@ -204,6 +263,8 @@ def _regrade_in(worktree: Path, raw: dict, fixture: Fixture, run_id: str,
         "v1_gates": [g.get("name", g.get("gate", "")) for g in raw.get("gates_triggered", [])],
         "v2_gates": [g.get("name", g.get("gate", "")) for g in new_result.gates_triggered],
         "branch": branch,
+        "head_sha": head_sha,
+        "attribution": attribution,
     }
 
 
@@ -253,8 +314,10 @@ def main() -> int:
         gates_v1 = ",".join(r["v1_gates"]) or "—"
         gates_v2 = ",".join(r["v2_gates"]) or "—"
         gates_d = f"{gates_v1} → {gates_v2}"
+        flag = ("  [ATTRIBUTION UNVERIFIED]"
+                if r.get("attribution") == "unverified-branch" else "")
         print(f"  {r['fixture_id']:45s}  {v1:>5}  {v2:>5}  "
-              f"{add_d:>10}  {del_d:>10}  {gates_d:<35}")
+              f"{add_d:>10}  {del_d:>10}  {gates_d:<35}{flag}")
 
     real_rows = [r for r in rows
                  if not r.get("skipped") and not r.get("unregradable")]
@@ -264,6 +327,12 @@ def main() -> int:
     n_unreg = sum(1 for r in rows if r.get("unregradable"))
     if n_unreg:
         print(f"  excluded: {n_unreg} UNREGRADABLE (graded state not in the cache)")
+    n_unver = sum(1 for r in real_rows if r.get("attribution") == "unverified-branch")
+    if n_unver:
+        print(f"  WARNING: {n_unver}/{len(real_rows)} ATTRIBUTION UNVERIFIED — graded "
+              "origin/<branch> for runs that predate head_sha_used; a reused "
+              "branch name may hold another run's commit. Hand-verify via the "
+              "reflog before trusting these rows.")
 
     return 0
 

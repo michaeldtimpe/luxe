@@ -778,6 +778,14 @@ def apply_strict_gates(
     return triggered
 
 
+def fixture_passed(score: int, *, skipped: bool = False,
+                   error: str = "") -> bool:
+    """THE pass rule: score >= 4 of 5, and neither skipped nor errored.
+    FixtureResult.passed and scripts/regrade_local.py (stored result.json)
+    both call this, so the bench and the regrade cannot disagree."""
+    return bool(score >= 4 and not skipped and not error)
+
+
 @dataclass
 class FixtureResult:
     """One fixture's grading record. Persisted as JSON next to the run dir."""
@@ -811,7 +819,8 @@ class FixtureResult:
 
     @property
     def passed(self) -> bool:
-        return self.score >= 4 and not self.skipped and not self.error
+        return fixture_passed(self.score, skipped=self.skipped,
+                              error=self.error)
 
     def to_dict(self) -> dict:
         from dataclasses import asdict
@@ -1579,8 +1588,3 @@ def summarize(
         "v1_release_gate": gate,
         "v1_release_gate_per_variant": per_variant_gate,
     }
-
-
-def fixture_pass_threshold(score: int, max_score: int = 5) -> bool:
-    """Pass = score ≥ 4 of 5."""
-    return score >= 4
