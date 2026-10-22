@@ -13,9 +13,10 @@ opt-in modes each have invariants in `agents.sdd` that gate promotion.
 
 Two `LUXE_*` reads that deliberately do NOT live here:
 - `LUXE_TOKEN_LOG_INTERVAL`, read once at loop.py import (module constant).
-- `LUXE_LOAD_PRIORS` and `LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`, read by
-  `cohort_priors` and `guardrails` respectively — they belong to those
-  modules' own contracts, not to the loop's preamble.
+- `LUXE_LOAD_PRIORS`, read by `cohort_priors` — it belongs to that module's
+  own contract, not to the loop's preamble.
+(`LUXE_EARLY_BAIL_TRAJECTORY_SHAPE`, read by `guardrails`, was the third
+until its mechanism was removed on 2026-10-22.)
 (`LUXE_EARLY_BAIL_MODE` used to be a third — re-read by `EarlyBailGuard` up
 to three times per step. It moved here in 2026-09 as `early_bail_mode`.)
 """
