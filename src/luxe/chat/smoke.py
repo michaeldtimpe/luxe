@@ -266,6 +266,8 @@ def _make_drill_repo(kind: str, files: dict[str, str]):
     import tempfile
     from pathlib import Path
 
+    from luxe.secrets import scrubbed_env
+
     root = Path(tempfile.mkdtemp(prefix=f"luxe-{kind}-drill-"))
     for name, content in files.items():
         (root / name).write_text(content)
@@ -273,7 +275,7 @@ def _make_drill_repo(kind: str, files: dict[str, str]):
                  ["-c", "user.email=drill@luxe", "-c", "user.name=luxe-drill",
                   "commit", "-qm", "drill: initial state"]):
         subprocess.run(["git", "-C", str(root), *args],
-                       capture_output=True, timeout=30)
+                       capture_output=True, timeout=30, env=scrubbed_env())
     return root
 
 
@@ -411,7 +413,8 @@ def run_code_drill(cfg, *, backend_name: str | None = None,
             ok = False
         diff = subprocess.run(["git", "-C", str(repo), "diff",
                                "--name-only"],
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, timeout=30,
+                              env=scrubbed_env())
         touched = [f for f in diff.stdout.split() if f]
         if touched == ["calc.py"]:
             report.add("diff", "pass", "exactly calc.py changed")

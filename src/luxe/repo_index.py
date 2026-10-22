@@ -12,6 +12,7 @@ Output is a single ~2k-token block:
 from __future__ import annotations
 
 from luxe.fswalk import INDEX_EXCLUDE_DIRS, iter_pruned
+from luxe.secrets import scrubbed_env
 
 import os
 import subprocess
@@ -141,6 +142,8 @@ def _git_recent_files(repo_root: Path, days: int = 90) -> list[str]:
             # a git that stalls (a lock, a huge history on a slow mount) used
             # to hang the build with no deadline at all (2026-09-26).
             stdin=subprocess.DEVNULL, timeout=_GIT_RECENT_TIMEOUT_S,
+            # no secrets for hooks/config commands (tools.sdd, 2026-10-22)
+            env=scrubbed_env(),
         )
         if out.returncode != 0:
             return []

@@ -19,6 +19,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from luxe.secrets import scrubbed_env
+
 # Abort when the transfer sits below this many bytes/sec for this many seconds.
 # 1 KB/s for a minute is far under any working connection while being clearly
 # distinguishable from "slow but moving".
@@ -29,14 +31,19 @@ _LOW_SPEED_SECONDS = 60
 _WALL_CAP_S = 1800.0
 
 
-def clone_env() -> dict[str, str]:
+def clone_env(*, scrub: bool = True) -> dict[str, str]:
     """Environment for a non-interactive clone.
 
     `GIT_TERMINAL_PROMPT=0` matters: without it a private URL makes git block
     on a credential prompt, which is indistinguishable from a slow network and
     is exactly the kind of silent hang this module exists to prevent.
+
+    Based on `luxe.secrets.scrubbed_env()` (2026-10-22) — git can run hooks
+    and config-driven commands, so no git luxe spawns sees a secret.
+    `scrub=False` is for `gh` only (`pr._run_net`): it runs no repo hooks and
+    may authenticate from GH_TOKEN.
     """
-    env = dict(os.environ)
+    env = scrubbed_env() if scrub else dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
     env.setdefault("GIT_ASKPASS", "")
     return env

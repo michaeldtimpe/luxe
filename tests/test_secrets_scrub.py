@@ -216,3 +216,183 @@ def test_smoke_code_drill_pytest_runs_with_secrets_scrubbed():
     src = inspect.getsource(smoke)
     i = src.index('"-m", "pytest", "-q"]')
     assert "env=scrubbed_env()" in src[i:i + 200]
+
+
+# --- luxe's OWN git calls run with the scrubbed env --------------------------
+#
+# A hook (`.git/hooks/*`) or a config-driven command (`diff.external`,
+# `core.sshCommand`, filters) runs inside git's environment the next time luxe
+# itself calls git. fs write tools refuse `.git/**` (test_tools.py), but a
+# model with bash — or a repo that arrived poisoned — can still plant one, so
+# every git luxe spawns for itself gets `scrubbed_env()` as its base. argv and
+# config pins are unchanged; `gh` is NOT scrubbed (it runs no repo hooks and
+# may need GH_TOKEN); the keep-list (SSH_AUTH_SOCK, GPG_TTY) still passes, so
+# signing and ssh push keep working.
+
+_HOOK_PROBE = ('#!/bin/sh\n'
+               'echo "[$FAKE_TEST_TOKEN][$FAKE_PLAIN_VAR][$SSH_AUTH_SOCK]" '
+               '> "{mark}"\n')
+_ID = ("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false")
+
+
+def _plant(repo: Path, tmp_path: Path, hook: str) -> Path:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True,
+                   capture_output=True)
+    mark = tmp_path / f"mark-{hook}"
+    h = repo / ".git" / "hooks" / hook
+    h.write_text(_HOOK_PROBE.format(mark=mark))
+    h.chmod(0o755)
+    return mark
+
+
+@pytest.fixture
+def git_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("FAKE_TEST_TOKEN", FAKE)
+    monkeypatch.setenv("FAKE_PLAIN_VAR", "visible")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    repo = tmp_path / "g"
+    repo.mkdir()
+    return repo
+
+
+_SCRUBBED = "[][visible][/tmp/fake-agent.sock]"
+
+
+def test_gitcmd_run_in_hooks_see_the_scrubbed_env(git_env, tmp_path):
+    from luxe import gitcmd
+
+    mark = _plant(git_env, tmp_path, "pre-commit")
+    (git_env / "a.txt").write_text("a\n")
+    gitcmd.run_in(git_env, "add", "a.txt")
+    proc = gitcmd.run_in(git_env, *_ID, "commit", "-qm", "x")
+    assert proc.returncode == 0, proc.stderr
+    assert mark.read_text().strip() == _SCRUBBED
+
+
+def test_gitcmd_run_hooks_see_the_scrubbed_env(git_env, tmp_path):
+    from luxe import gitcmd
+
+    mark = _plant(git_env, tmp_path, "pre-commit")
+    (git_env / "a.txt").write_text("a\n")
+    gitcmd.run(git_env, "add", "a.txt")
+    proc = gitcmd.run(git_env, *_ID, "commit", "-qm", "x")
+    assert proc.returncode == 0, proc.stderr
+    assert mark.read_text().strip() == _SCRUBBED
+
+
+def test_git_diff_tool_external_diff_sees_the_scrubbed_env(git_env, tmp_path):
+    """`diff.external` planted in .git/config runs under the READ-ONLY
+    git_diff tool."""
+    import subprocess
+
+    from luxe import gitcmd
+    from luxe.tools import git as git_tools
+
+    _plant(git_env, tmp_path, "unused")
+    mark = tmp_path / "mark-ext"
+    ext = tmp_path / "ext.sh"
+    ext.write_text(_HOOK_PROBE.format(mark=mark))
+    ext.chmod(0o755)
+    (git_env / "a.txt").write_text("a\n")
+    gitcmd.run_in(git_env, "add", "a.txt")
+    gitcmd.run_in(git_env, *_ID, "commit", "-qm", "x")
+    subprocess.run(["git", "-C", str(git_env), "config", "diff.external",
+                    str(ext)], check=True)
+    (git_env / "a.txt").write_text("b\n")
+    fs.set_repo_root(git_env)
+    try:
+        git_tools.TOOL_FNS["git_diff"]({})
+    finally:
+        fs._REPO_ROOT = None
+    assert mark.read_text().strip() == _SCRUBBED
+
+
+def test_gitcmd_parse_env_is_scrubbed(git_env):
+    from luxe import gitcmd
+
+    env = gitcmd.parse_env()
+    leaked = "FAKE_TEST_TOKEN" in env
+    assert not leaked
+    assert env["FAKE_PLAIN_VAR"] == "visible"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1" and env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_gitclone_env_is_scrubbed(git_env):
+    from luxe.gitclone import clone_env
+
+    env = clone_env()
+    leaked = "FAKE_TEST_TOKEN" in env
+    assert not leaked
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["SSH_AUTH_SOCK"] == "/tmp/fake-agent.sock"
+
+
+def test_pr_flow_git_commit_hook_sees_the_scrubbed_env(git_env, tmp_path):
+    from luxe import pr as pr_mod
+
+    mark = _plant(git_env, tmp_path, "pre-commit")
+    (git_env / "a.txt").write_text("a\n")
+    pr_mod._run(["git", "add", "a.txt"], cwd=git_env)
+    r = pr_mod._run(["git", *_ID, "commit", "-qm", "x"], cwd=git_env)
+    assert r.ok, r.stderr
+    assert mark.read_text().strip() == _SCRUBBED
+
+
+def test_pr_flow_gh_is_not_scrubbed(git_env, monkeypatch):
+    """gh runs no repo hooks and may authenticate from GH_TOKEN."""
+    import subprocess
+
+    from luxe import pr as pr_mod
+
+    seen: list = []
+
+    def _spy(cmd, **kw):
+        seen.append((cmd[0], kw.get("env")))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(pr_mod.subprocess, "run", _spy)
+    pr_mod._run(["gh", "api", "user"], cwd=git_env)
+    pr_mod._run_net(["gh", "pr", "checks", "1"], cwd=git_env)
+    pr_mod._run_net(["git", "push", "-u", "origin", "b"], cwd=git_env)
+    pr_mod._run(["git", "status"], cwd=git_env)
+    (gh1, e1), (gh2, e2), (g1, e3), (g2, e4) = seen
+    # (booleans, so a failure never makes pytest print an environment)
+    gh_inherits = e1 is None
+    gh_net_unscrubbed = (e2 is not None and e2.get("FAKE_TEST_TOKEN") == FAKE
+                         and e2.get("GIT_TERMINAL_PROMPT") == "0")
+    git_scrubbed = all(e is not None and "FAKE_TEST_TOKEN" not in e
+                       for e in (e3, e4))
+    git_net_prompt_off = e3 is not None and e3.get("GIT_TERMINAL_PROMPT") == "0"
+    assert (gh1, gh2, g1, g2) == ("gh", "gh", "git", "git")
+    assert gh_inherits and gh_net_unscrubbed
+    assert git_scrubbed and git_net_prompt_off
+
+
+def test_every_literal_git_spawn_in_luxe_passes_an_env():
+    """Structural backstop: any `subprocess.run/Popen(["git", …])` in
+    src/luxe must pass `env=` (gitcmd's helpers and pr._run supply the scrub
+    for every other git call; they are pinned behaviourally above)."""
+    import ast
+
+    import luxe
+
+    root = Path(luxe.__file__).parent
+    missing = []
+    for py in sorted(root.rglob("*.py")):
+        tree = ast.parse(py.read_text())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("run", "Popen", "check_output")
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "subprocess"
+                    and node.args and isinstance(node.args[0], ast.List)
+                    and node.args[0].elts
+                    and isinstance(node.args[0].elts[0], ast.Constant)
+                    and node.args[0].elts[0].value == "git"):
+                continue
+            # `**common` (spec_validator) carries env inside the splat.
+            if not any(k.arg in ("env", None) for k in node.keywords):
+                missing.append(f"{py.relative_to(root)}:{node.lineno}")
+    assert missing == []

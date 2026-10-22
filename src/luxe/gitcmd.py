@@ -35,6 +35,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from luxe.secrets import scrubbed_env
+
 
 #: Host git config that would corrupt CAPTURED output, pinned off at every
 #: invocation (2026-08-12). `color.ui=always` in a user's ~/.gitconfig makes
@@ -77,13 +79,24 @@ DIFF_PARSE_PINS: tuple[str, ...] = (
 def parse_env() -> dict[str, str]:
     """Environment for a git call whose output is parsed: no system config
     (the `-c` pins cover ~/.gitconfig and the repo, `GIT_CONFIG_NOSYSTEM`
-    covers /etc/gitconfig) and no credential prompt on an inherited stdin."""
-    import os
-
-    env = dict(os.environ)
+    covers /etc/gitconfig) and no credential prompt on an inherited stdin.
+    Built on `scrubbed_env()` like every git luxe spawns (see `_env`)."""
+    env = scrubbed_env()
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_TERMINAL_PROMPT"] = "0"
     return env
+
+
+def _env() -> dict[str, str]:
+    """The environment of EVERY git luxe spawns (2026-10-22): the process env
+    minus secret-named variables (`luxe.secrets.scrubbed_env`). A hook
+    (`.git/hooks/*`) or config-driven command (`diff.external`,
+    `core.sshCommand`, a filter) runs inside this environment — one a model
+    planted (via bash, or a repo that arrived poisoned; the fs write tools
+    refuse `.git/**`) must not find credentials there. argv and pins are
+    unchanged; the keep-list (SSH_AUTH_SOCK, GPG_TTY) still passes, so ssh
+    and commit signing keep working."""
+    return scrubbed_env()
 
 
 def run(repo: str | Path, *args: str,
@@ -94,7 +107,8 @@ def run(repo: str | Path, *args: str,
     than raising — git handles the path itself.
     """
     return subprocess.run(["git", "-C", str(repo), *_CONFIG_PINS, *args],
-                          capture_output=True, timeout=timeout, **_DECODE, **_NO_STDIN)
+                          capture_output=True, timeout=timeout, env=_env(),
+                          **_DECODE, **_NO_STDIN)
 
 
 def run_in(repo: str | Path, *args: str,
@@ -110,7 +124,7 @@ def run_in(repo: str | Path, *args: str,
     """
     return subprocess.run(["git", *_CONFIG_PINS, *args], cwd=str(repo),
                           capture_output=True, timeout=timeout, stdin=stdin,
-                          check=False, **_DECODE)
+                          env=_env(), check=False, **_DECODE)
 
 
 def run_ok(repo: str | Path, *args: str,

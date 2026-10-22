@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
 
+from luxe.secrets import scrubbed_env
+
 logger = logging.getLogger(__name__)
 
 # Directories never worth descending into for contract/citation lookups. Kept in
@@ -82,6 +84,8 @@ def _git_tracked_files(root: Path) -> list[Path] | None:
             ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
              "--exclude-standard"],
             capture_output=True, timeout=30,
+            # no secrets for hooks/config commands (tools.sdd, 2026-10-22)
+            env=scrubbed_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
