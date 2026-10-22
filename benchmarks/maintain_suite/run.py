@@ -15,8 +15,9 @@ Usage:
   python -m benchmarks.maintain_suite.run --variants <yaml> --all
 
 Outputs under --output (default ./acceptance/):
-  <id>/state.json     — current fixture status
+  <id>/state.json     — current fixture status (+ head_sha_used, the commit graded)
   <id>/result.json    — FixtureResult once status==DONE
+  <id>/diff.patch     — base_sha_used..head_sha_used, the change graded
   <id>/diagnostics.json — wall, tokens, validator status, etc.
   <id>/stdout.log     — captured luxe stdout
   <id>/stderr.log     — captured luxe stderr
@@ -46,7 +47,6 @@ from benchmarks.maintain_suite.fixtures import load_fixtures, origin_problem
 from benchmarks.maintain_suite.grade import (
     Fixture,
     FixtureResult,
-    fixture_pass_threshold,
     grade_fixture,
     summarize,
 )
@@ -72,6 +72,12 @@ class FixtureState:
     last_error: str = ""
     repo_path_used: str = ""
     base_sha_used: str = ""
+    # The workspace HEAD this attempt was GRADED at (grade_fixture diffs
+    # base_sha_used..HEAD). Bench branch names are reused once pruned, so the
+    # branch in pr_state.json can later name another run's commit;
+    # regrade_local checks out this sha instead. "" = recorded before
+    # 2026-10-22, or the attempt never reached grading.
+    head_sha_used: str = ""
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -89,6 +95,7 @@ class FixtureState:
             last_error=str(d.get("last_error", "")),
             repo_path_used=str(d.get("repo_path_used", "")),
             base_sha_used=str(d.get("base_sha_used", "")),
+            head_sha_used=str(d.get("head_sha_used", "")),
         )
 
 
@@ -579,6 +586,24 @@ def _head_sha(repo: Path) -> str:
     r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
                        capture_output=True, text=True, check=False)
     return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _write_diff_patch(repo: Path, base_sha: str, head_sha: str,
+                      dest: Path) -> None:
+    """Save `git diff --binary base_sha head_sha` to `dest` — the graded
+    change, kept beside result.json so a regrade survives the commit being
+    pruned from the fixture cache. Best-effort: a breadcrumb, not grading,
+    so a git failure here leaves no file and never touches the verdict."""
+    if not (base_sha and head_sha):
+        return
+    try:
+        r = subprocess.run(["git", "diff", "--binary", base_sha, head_sha],
+                           cwd=repo, capture_output=True, check=False,
+                           timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if r.returncode == 0:
+        dest.write_bytes(r.stdout)
 
 
 # --- subprocess helpers ----------------------------------------------------
@@ -1312,7 +1337,7 @@ def run_fixture(
     # re-run that ERRORs left the old result.json on disk, and the next
     # invocation's cached path reported the stale PASS for a fixture whose
     # state said error.
-    for stale in ("result.json", "diagnostics.json"):
+    for stale in ("result.json", "diagnostics.json", "diff.patch"):
         (fdir / stale).unlink(missing_ok=True)
 
     repo, err = _resolve_repo(fixture, work_dir)
@@ -1328,6 +1353,7 @@ def run_fixture(
 
     state.repo_path_used = str(repo)
     state.base_sha_used = fixture.base_sha or _head_sha(repo)
+    state.head_sha_used = ""
     state.attempts += 1
     state.last_attempt_ts = time.time()
     state.status = FixtureStatus.RUNNING
@@ -1381,7 +1407,10 @@ def run_fixture(
         return (FixtureResult(fixture_id=fixture.id, error=state.last_error),
                 Diagnostics(fixture_id=fixture.id))
     state.luxe_run_id = run_id
+    state.head_sha_used = _head_sha(repo)
     save_state(output, state, variant_id)
+    _write_diff_patch(repo, state.base_sha_used, state.head_sha_used,
+                      fdir / "diff.patch")
 
     artefacts = _read_run_artefacts(run_id)
     fr = grade_fixture(

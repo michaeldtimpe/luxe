@@ -25,13 +25,23 @@ single pipeline; new fixtures must declare their per-requirement spec.
 - New fixtures land with a `requirements:` block (SpecDD Lever 1 schema)
 - Bench runs use `--work-dir ~/.luxe/bench-workspace` (variance leak fix)
 - Sidecar regrade via `scripts/regrade_local.py` re-runs the citation linter against `synthesizer.md`
+- A run records the commit it was GRADED at (2026-10-22): run.py writes the
+  workspace HEAD after `luxe maintain` to state.json `head_sha_used` and a
+  `diff.patch` (base_sha_used..head_sha_used, `--binary`, best-effort) beside
+  result.json. `regrade_local.py` checks out that sha, else rebuilds it from
+  diff.patch on base_sha, else reports UNREGRADABLE — never the branch.
+  Bench branch names are REUSED once pruned, so `origin/<branch>` can hold a
+  later run's commit (one hand-verify misattributed 14–30 of 310 diffs). Runs
+  without `head_sha_used` fall back to the branch, flagged ATTRIBUTION
+  UNVERIFIED in the row and the totals
 - Bench runs PRUNE their own branch backlog: `_prune_old_branches` keeps the
   newest `LUXE_BENCH_BRANCH_RETENTION` (25) `<prefix>/*` branches PER GOAL SLUG
   in both the workspace clone and the fixture-cache origin, and logs what it
   dropped. Grouping is per slug because `luxe.pr.plan_branch_name`'s 99-name
   budget is per slug — a repo-wide cap would still let one hot slug die.
-  Retention, not delete-after-grading: `regrade_local.py` checks the pushed
-  branch out, so recent ones must survive. `keep<=0` is a no-op, never a wipe
+  Retention, not delete-after-grading: `regrade_local.py` falls back to the
+  pushed branch for runs without `head_sha_used`, and a pruned branch's
+  commit is gc-able, so recent ones must survive. `keep<=0` is a no-op, never a wipe
 - Borderline document/manage fixtures replicate 3× before claiming a regression
 - `destructive_diff` catches REPLACE-IN-PLACE, not just lopsided churn
   (2026-08-19): its ratio prong needs deletions >= 5x additions, so a
@@ -111,7 +121,9 @@ single pipeline; new fixtures must declare their per-requirement spec.
   which the scoreboard renders as an ordinary failure — it manufactured a
   clean-looking 116-vs-108 "regression" that was pure arm ordering. See
   `acceptance/pwir_rerun_2026_08_10/BRANCH-LEAK.md`
-- Trust `scripts/regrade_local.py` results that read `origin/<branch>` (pre-v1.4.1 bug; fixed but stay alert)
+- Trust a `scripts/regrade_local.py` row flagged ATTRIBUTION UNVERIFIED: it
+  read `origin/<branch>`, which a later run may have reused. Hand-verify it by
+  resolving that run's commit from the reflog, never `base..<branch name>`
 - Add fixtures without `task_type` in the YAML (cve_lookup gating depends on it)
 
 ## Owns

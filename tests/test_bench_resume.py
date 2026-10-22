@@ -877,3 +877,46 @@ def test_run_capture_timeout_kills_grandchildren(tmp_path):
     if alive:
         os.kill(pid, 9)
     assert not alive, "grandchild survived the per-fixture timeout"
+
+
+# --- 2026-10-22: record the graded commit (bench branch names are reused) --
+
+def test_run_fixture_records_graded_head_sha_and_diff_patch(tmp_path, monkeypatch):
+    """regrade_local checked out `origin/<branch>` — but branch names are
+    recycled once pruned, so a later run's commit was graded as this one's.
+    run_fixture now records the workspace HEAD it graded (state.json
+    `head_sha_used`) and a base..HEAD `diff.patch` next to result.json."""
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+
+    def fake_maintain(repo_, fix, log_dir, **_):
+        (repo / "a.py").write_text("x = 1\ny = 2\n")
+        _git(repo, "commit", "-q", "-am", "agent")
+        return 0, "rHEAD", ""
+
+    out = tmp_path / "acc"
+    monkeypatch.setattr(br, "_resolve_repo", lambda fix, wd: (repo, ""))
+    monkeypatch.setattr(br, "_luxe_maintain", fake_maintain)
+    monkeypatch.setattr(br, "_read_run_artefacts", lambda rid: {
+        "pr_url": "", "pr_opened": False, "is_draft": False,
+        "test_passed": None, "citations_unresolved": 0, "citations_total": 0,
+        "validator_status": "", "validator_verified": 0,
+        "validator_removed": 0, "stages_completed": [], "stages_resumed": [],
+        "tokens_total": 10, "wall_s_total": 1.0, "events_kinds": {},
+    })
+    fx = _f()
+    fx.base_sha = base
+    run_fixture(fx, out, tmp_path / "wd")
+    head = _git(repo, "rev-parse", "HEAD")
+    assert head != base
+    state = load_state(out, "f1")
+    assert state.head_sha_used == head
+    assert FixtureState.from_dict(state.to_dict()).head_sha_used == head
+    assert "+y = 2" in (out / "f1" / "diff.patch").read_text()
