@@ -12,6 +12,7 @@ from luxe.context import estimate_tokens
 from luxe.gitkit.deep.chunking import Chunk
 from luxe.gitkit.deep.digest import _SEVERITY_RANK, _sev_rank, confidence_of
 from luxe.gitkit.deep.salvage import _heuristic_findings
+from luxe.gitkit.kinds import _TITLES
 
 
 # --- extra_context block builders (pure data, no instructions) --------------
@@ -117,7 +118,6 @@ def _render_report(digest: dict, kind: str) -> str:
     """Assemble a clean final report DETERMINISTICALLY from the (already-cleaned)
     per-chunk notes + any JSON findings + coverage gaps. This is the guaranteed
     non-rambly path when the LLM synthesis won't behave — Python never rambles."""
-    from luxe.gitkit.runner import _TITLES
     title = _TITLES.get(kind, "Report")
     notes = digest.get("markdown_notes", [])
     pf = digest.get("provisional_findings", [])

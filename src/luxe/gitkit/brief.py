@@ -22,6 +22,7 @@ from pathlib import Path
 from luxe import project as project_mod
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
+from luxe.gitkit.kinds import GITKIT_MAX_TOKENS, run_with_activity
 from luxe.repo_index import _detect_languages_for_repo
 
 BLOCK_NAME = "brief"
@@ -135,7 +136,6 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
     own code and git history only (memory.sdd discipline extends here).
     """
     from luxe.backend import Backend
-    from luxe.gitkit.runner import GITKIT_MAX_TOKENS, _activity_callbacks
     from luxe.gitkit.workspace import indexed_target
     from luxe.mcp.server import make_read_only_role
     from luxe.memory import project as project_mem
@@ -169,15 +169,8 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
                 phase="chat", run_id="gitkit-brief")
 
         try:
-            if console.is_terminal:
-                with console.status("[dim]reading the repo…[/]",
-                                    spinner="dots") as status:
-                    on_e, on_t = _activity_callbacks(
-                        lambda t: status.update(f"[dim]{t}[/]"), cancel=cancel)
-                    result = _do_run(on_e, on_t)
-            else:
-                on_e, on_t = _activity_callbacks(lambda t: None, cancel=cancel)
-                result = _do_run(on_e, on_t)
+            result = run_with_activity(console, "reading the repo", cancel,
+                                       _do_run)
         except (ChatCancelled, KeyboardInterrupt):
             return BriefResult(ok=False, repo_root=target, error="cancelled")
 
