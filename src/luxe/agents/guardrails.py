@@ -879,8 +879,6 @@ class EarlyBailOutcome:
     - suppression_count_delta: int (0 or 1). How much the loop should
       increment suppression_count_in_trajectory (always 0 except in the
       suppress_diffuse branch).
-    - breadth_probe_fire_delta: int (0 or 1). Likewise for
-      breadth_probe_fire_count.
     - suppress_event: Optional[(name, payload)]. Suppression-observability
       event the loop should emit IN ADDITION to any fired event (e.g.,
       `early_bail_suppressed_diffuse` paired with optional
@@ -894,7 +892,6 @@ class EarlyBailOutcome:
     last_intervention_kind: Optional[str] = None
     sets_early_bail_fired: bool = False
     suppression_count_delta: int = 0
-    breadth_probe_fire_delta: int = 0
     suppress_event: Optional[tuple[str, dict[str, Any]]] = None
     fire_event: Optional[tuple[str, dict[str, Any]]] = None
 
@@ -1028,7 +1025,6 @@ class EarlyBailGuard:
                         last_intervention_kind="early_bail_breadth_probe",
                         sets_early_bail_fired=False,
                         suppression_count_delta=1,
-                        breadth_probe_fire_delta=1,
                         suppress_event=suppress_event,
                         fire_event=fire_event,
                     )
@@ -1039,7 +1035,6 @@ class EarlyBailGuard:
                 last_intervention_kind=None,
                 sets_early_bail_fired=False,
                 suppression_count_delta=1,
-                breadth_probe_fire_delta=0,
                 suppress_event=suppress_event,
                 fire_event=None,
             )
@@ -1076,7 +1071,6 @@ class EarlyBailGuard:
             last_intervention_kind="early_bail",
             sets_early_bail_fired=True,
             suppression_count_delta=0,
-            breadth_probe_fire_delta=0,
             suppress_event=None,
             fire_event=fire_event,
         )
