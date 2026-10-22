@@ -12,7 +12,6 @@ from __future__ import annotations
 import http.server
 import socket
 import socketserver
-import threading
 
 import pytest
 
@@ -24,7 +23,7 @@ pytestmark = pytest.mark.skipif(not browser_mod.availability().ok,
                                 reason="no Chromium / playwright")
 
 
-def _serve(family, host, handler):
+def _server(family, host, handler):
     class _S(socketserver.ThreadingMixIn, http.server.HTTPServer):
         address_family = family
         daemon_threads = True
@@ -34,13 +33,11 @@ def _serve(family, host, handler):
             self.server_name = "x"
             self.server_port = self.server_address[1]
 
-    srv = _S((host, 0), handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv
+    return _S((host, 0), handler)
 
 
 @pytest.fixture()
-def servers(monkeypatch):
+def servers(monkeypatch, serve_http):
     real = fetch_mod._is_public_ip
     monkeypatch.setattr(fetch_mod, "_is_public_ip",
                         lambda ip: ip == "127.0.0.1" or real(ip))
@@ -59,7 +56,7 @@ def servers(monkeypatch):
         def log_message(self, *a):
             pass
 
-    priv = _serve(socket.AF_INET6, "::1", Private)
+    priv = serve_http(_server(socket.AF_INET6, "::1", Private))
     secret = f"http://[::1]:{priv.server_port}"
 
     class Public(http.server.BaseHTTPRequestHandler):
@@ -86,10 +83,8 @@ def servers(monkeypatch):
         def log_message(self, *a):
             pass
 
-    pub = _serve(socket.AF_INET, "127.0.0.1", Public)
-    yield f"http://127.0.0.1:{pub.server_port}", hits
-    pub.shutdown()
-    priv.shutdown()
+    pub = serve_http(_server(socket.AF_INET, "127.0.0.1", Public))
+    return f"http://127.0.0.1:{pub.server_port}", hits
 
 
 @pytest.mark.parametrize("path", ["/to-private", "/hop"])
