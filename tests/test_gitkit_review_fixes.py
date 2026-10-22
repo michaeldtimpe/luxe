@@ -820,18 +820,49 @@ def test_no_save_does_not_write_the_plan_json(tmp_path, isolated_home):
     assert p["steps"] and not (isolated_home / ".luxe").exists()
 
 
-def test_bare_compare_side_disables_default_on_levers():
+def test_bare_compare_side_disables_default_on_levers(monkeypatch):
     """18: the bare side zeroed opt-in flags but left the DEFAULT-ON loop
-    levers (truncated/empty-turn retry, server-truth calibration) running."""
+    levers (truncated/empty-turn retry, server-truth calibration) running —
+    and after 2026-10 also `LUXE_CTX_CAL_TOOLS` / `LUXE_COMPACT_CACHE_FRIENDLY`.
+
+    Derived from `luxe.agents.flags` so a new lever can't drift past it: with
+    EVERY `LUXE_*` switch flags.py reads exported as "1" (an operator shell
+    that turned everything on), the bare overlay must still leave every
+    boolean `RunFlags` field False."""
+    import dataclasses
+    import inspect
+    import re
+    from luxe.agents import flags as flags_mod
     from luxe.agents.flags import RunFlags
     from luxe.compare.run_pair import _env_overrides, build_sides
+
+    names = set(re.findall(r'"(LUXE_[A-Z_]+)"', inspect.getsource(flags_mod)))
+    assert {"LUXE_CTX_CAL_TOOLS", "LUXE_COMPACT_CACHE_FRIENDLY"} <= names
+    for n in names:
+        monkeypatch.setenv(n, "1")
     _a, b = build_sides(1, model_id="Champ")
     with _env_overrides(b.substrate_env):
         f = RunFlags.from_env()
-    assert f.truncated_turn_retry is False
-    assert f.empty_turn_retry is False
-    assert f.ctx_server_truth is False
-    assert f.tiered_compact is False
+    # suppress_tool_log is telemetry (what gets logged), not a loop lever.
+    bools = [fl.name for fl in dataclasses.fields(RunFlags)
+             if isinstance(getattr(RunFlags(), fl.name), bool)
+             and fl.name != "suppress_tool_log"]
+    still_on = [n for n in bools if getattr(f, n)]
+    assert still_on == [], f"bare compare side leaves levers on: {still_on}"
+
+
+def test_bare_compare_env_names_only_live_switches():
+    """18: the bare overlay set `LUXE_PROSE_BURST`, removed 2026-09 — a key
+    nothing reads documents a lever that isn't there. Every key must still be
+    read somewhere in src/luxe outside compare/."""
+    import re
+    from luxe.compare.run_pair import _BARE_SUBSTRATE_ENV
+    src = Path(__file__).resolve().parents[1] / "src" / "luxe"
+    text = "\n".join(p.read_text(encoding="utf-8")
+                     for p in src.rglob("*.py") if "compare" not in p.parts)
+    dead = [k for k in _BARE_SUBSTRATE_ENV
+            if not re.search(r'environ\.get\(\s*"%s"|e\.get\(\s*"%s"' % (k, k), text)]
+    assert dead == []
 
 
 def test_compare_overlay_tempdirs_are_cleaned(tmp_path, monkeypatch):
