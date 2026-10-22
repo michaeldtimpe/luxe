@@ -29,6 +29,7 @@ from luxe.chat.controller import (
     banner_markup,
     build_hint_markup,
     ephemeral_notice_markup,
+    fetch_execute_notice_markup,
 )
 from luxe.chat.render import (
     ARROW_PALETTE_PTK,
@@ -186,6 +187,10 @@ def run_chat_repl(
     # Where the weights actually live (local disk / network volume / remote
     # host) — stated once at startup so a networked session is never implicit.
     console.print(model_origin_notice(slots, status))
+    # web + bash from the first turn (`--web` with `--dev` / `luxe code`):
+    # warn once up front, as the toggles do mid-session (chat.sdd).
+    if (_fx_notice := fetch_execute_notice_markup(session)):
+        console.print(_fx_notice)
 
     sink = LineSink(ctl, console)
     try:

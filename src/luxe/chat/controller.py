@@ -338,6 +338,17 @@ def ephemeral_notice_markup() -> str:
     return f"[yellow]·[/] [dim]{_escape(notice)}[/]" if notice else ""
 
 
+def fetch_execute_notice_markup(session: ChatSession) -> str:
+    """The web + bash warning (`ChatSession.fetch_and_execute_notice`) as one
+    markup line, or "". Printed at startup when the posture (`--web` with
+    `--dev` / `luxe code`) begins there, and by the /web, /write and /bash
+    toggles when the combination becomes active. Duck-typed sessions (test
+    stand-ins) without the method get ""."""
+    fn = getattr(session, "fetch_and_execute_notice", None)
+    notice = fn() if callable(fn) else ""
+    return f"[yellow]⚠ {_escape(notice)}[/]" if notice else ""
+
+
 @dataclass(frozen=True)
 class StartupFlags:
     """The `luxe chat` / `luxe code` startup posture, as ONE value

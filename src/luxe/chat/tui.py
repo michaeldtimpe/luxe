@@ -41,6 +41,7 @@ from luxe.chat.controller import (
     banner_markup,
     build_hint_markup,
     ephemeral_notice_markup,
+    fetch_execute_notice_markup,
     initial_status,
     model_origin_notice,
 )
@@ -361,6 +362,10 @@ class ChatApp(App):
         # Model provenance (local disk / network volume / remote host), stated
         # once — same notice the line REPL prints.
         log.write(model_origin_notice(self.slots, self.status))
+        # web + bash from the first turn: the same one-line warning the line
+        # REPL prints and the /web, /write, /bash toggles print (chat.sdd).
+        if (fx_notice := fetch_execute_notice_markup(self.session)):
+            log.write(fx_notice)
         # Route SlotManager notices (weight swaps, auto-degrade) into the
         # transcript. run_chat_app constructs slots before the app exists, so
         # the binding lands here; self.write is thread-safe, and the degrade

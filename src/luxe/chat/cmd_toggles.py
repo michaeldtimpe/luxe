@@ -381,10 +381,25 @@ def _toggle(
     return handler
 
 
+def _warn_fetch_execute(ctx: CommandContext, value: bool) -> None:
+    """"Split the two powers" (2026-10-22, chat.sdd): called by /write, /bash
+    and /web right after they flip their switch. Turning a power ON that
+    completes (or escalates) web + bash prints the one-line warning; turning
+    one OFF never does. A warning, not a block."""
+    if not value:
+        return
+    from luxe.chat.controller import fetch_execute_notice_markup
+
+    line = fetch_execute_notice_markup(ctx.session)
+    if line:
+        ctx.console.print(line)
+
+
 _write = _toggle(
     "write_enabled", "write tools",
     on_hint="write_file, edit_file, bash enabled — /write to disable",
     off_hint="read-only; /write to enable file creation/edits",
+    after=_warn_fetch_execute,
 )
 
 
@@ -392,6 +407,7 @@ def _bash_note(ctx: CommandContext, value: bool) -> None:
     if value and not ctx.session.write_enabled:
         ctx.console.print("[yellow]· note: bash is only exposed in write mode — "
                           "run /write to enable it[/]")
+    _warn_fetch_execute(ctx, value)
 
 
 _bash_mode = _toggle(
@@ -692,6 +708,7 @@ def _web_mode(args, ctx: CommandContext) -> CommandResult:
                           f"{avail.reason}; fix: {avail.fix}[/]")
         ctx.console.print("  [yellow]·[/] web_page withheld [dim]— needs the "
                           "render fix above[/]")
+    _warn_fetch_execute(ctx, True)
     return CommandResult(handled=True)
 
 
