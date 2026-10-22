@@ -466,6 +466,323 @@ def _compact_step(run: _Run, st: LoopState, effective_ctx: int, step: int,
     return estimate_messages_tokens(st.messages) + run.tools_overhead
 
 
+def _adaptive_step(run: _Run, st: LoopState, step: int,
+                   convergence_score: float,
+                   emit: Callable[..., None]) -> None:
+    """v1.11 — append to score_log + compute adaptive state. Called only
+    under LUXE_ADAPTIVE_POLICY, to preserve disable-equivalence. The only
+    dispatch consumer is WritePressureGuard's modulation, held at neutral
+    1.0 by the pinned bias (flags.py, agents.sdd "Stage 3 / v1.11")."""
+    st.score_log.append(convergence_score)
+    # Bounded growth: cap at 64 entries (covers max_steps for current
+    # configs with headroom). Drop oldest when over.
+    if len(st.score_log) > 64:
+        st.score_log[:] = st.score_log[-64:]
+    adaptive_state = compute_within_run_state(
+        st.score_log, st.tool_history, step,
+        no_write_enabled=run.flags.adaptive_no_write,
+        score_trend_enabled=run.flags.adaptive_score_trend,
+    )
+    # v1.11 Phase 3a — compute bias → target modulation → slew-rate-limited update.
+    bias = compute_intervention_bias(adaptive_state)
+    for kind, prev_mod in list(st.intervention_modulation.items()):
+        target = bias_to_modulation(bias.get(kind, 0.0))
+        st.intervention_modulation[kind] = apply_slew_rate(
+            prev_mod, target, max_delta=run.flags.adaptive_max_delta,
+        )
+    emit(
+        "adaptive_state",
+        step=step,
+        consecutive_no_write=adaptive_state.consecutive_no_write,
+        score_trend=adaptive_state.score_trend,
+        score_log_len=adaptive_state.score_log_len,
+        convergence_score=convergence_score,
+        modulation_write_pressure=st.intervention_modulation["write_pressure"],
+        modulation_early_bail=st.intervention_modulation["early_bail"],
+        modulation_soft_anchor=st.intervention_modulation["soft_anchor"],
+    )
+
+
+def _write_pressure(run: _Run, st: LoopState, result: AgentResult, step: int,
+                    emit: Callable[..., None]) -> None:
+    """Mid-loop write-pressure injection (Mode B fix). Fires once per
+    run when the agent has done substantial reading + generation
+    without writing. Targets the prose-mode trap where the model
+    declares "comprehensive picture" prematurely and hallucinates
+    the deliverable into chat instead of committing it. The
+    synthetic user message interrupts the read-loop and forces a
+    write decision before further tool calls accumulate.
+
+    Decision logic lives in luxe.agents.guardrails.WritePressureGuard
+    (forge-hybrid Phase 1). Loop owns state mutation (the *_fired flag,
+    intervention tracking vars, event emission)."""
+    wp_decision = WritePressureGuard.check(
+        write_pressure_enabled=st.write_pressure_enabled,
+        write_pressure_fired=st.write_pressure_fired,
+        writes_seen=st.writes_seen,
+        step=step,
+        tool_calls_total=result.tool_calls_total,
+        completion_tokens=result.completion_tokens,
+        adaptive_policy_enabled=run.flags.adaptive_policy,
+        intervention_modulation_write_pressure=st.intervention_modulation["write_pressure"],
+    )
+    if wp_decision is not None:
+        st.messages.append(_user_message(wp_decision.message,
+                                         WritePressureGuard.nudge_type))
+        st.write_pressure_fired = True
+        _record_intervention(st, step, "write_pressure")
+        emit(
+            "write_pressure_fired",
+            step=step,
+            tool_calls_total=result.tool_calls_total,
+            completion_tokens=result.completion_tokens,
+        )
+
+
+def _early_bail(run: _Run, st: LoopState, result: AgentResult, step: int,
+                convergence_score: float, emit: Callable[..., None]) -> None:
+    """Early-bail intervention (v1.7 priority #1). Same checkpoint as
+    write_pressure but fires earlier — at step 4 with 4+ non-write
+    tool calls and zero writes. Trace-derived thresholds; see the
+    block comment on guardrails._EARLY_BAIL_MIN_STEP for the empirical
+    basis. The message gives the model a binary recovery gradient:
+    edit OR explicitly decline-with-justification. Mutually
+    compatible with WRITE_PRESSURE — both can fire in the same run
+    since they target different trajectory shapes."""
+    eb_outcome = EarlyBailGuard.evaluate(
+        early_bail_enabled=st.early_bail_enabled,
+        early_bail_fired=st.early_bail_fired,
+        writes_seen=st.writes_seen,
+        step=step,
+        tool_calls_total=result.tool_calls_total,
+        early_bail_message=run.early_bail_message,
+        convergence_gate_enabled=st.convergence_gate_enabled,
+        convergence_score=convergence_score,
+        band_response=run.flags.early_bail_band_response,
+        suppression_count_in_trajectory=st.suppression_count_in_trajectory,
+        tool_history=st.tool_history,
+        recent_path_diversity=recent_path_diversity(st.tool_history),
+        early_bail_mode=run.flags.early_bail_mode,
+    )
+    if eb_outcome is None:
+        return
+    # Apply state mutations the loop owns. The guard tells us how
+    # much to change suppression_count, whether to set
+    # early_bail_fired, and which intervention-kind to record on the
+    # trackers.
+    st.suppression_count_in_trajectory += eb_outcome.suppression_count_delta
+    if eb_outcome.sets_early_bail_fired:
+        st.early_bail_fired = True
+        st.early_bail_step = step
+    if eb_outcome.decision is not None:
+        st.messages.append(_user_message(eb_outcome.decision.message,
+                                         eb_outcome.nudge_type))
+    if eb_outcome.last_intervention_kind is not None:
+        _record_intervention(st, step, eb_outcome.last_intervention_kind)
+    # Suppression event first, then the fire event — the order the
+    # records have always been written in.
+    for event in (eb_outcome.suppress_event, eb_outcome.fire_event):
+        if event is not None:
+            ev_name, ev_payload = event
+            # Loop owns the completion_tokens counter; fill it for
+            # events that carry it (early_bail_fired).
+            payload = {
+                k: (result.completion_tokens if k == "completion_tokens" and v is None else v)
+                for k, v in ev_payload.items()
+            }
+            emit(ev_name, step=step, **payload)
+
+
+def _action_density_gate(st: LoopState, result: AgentResult, step: int,
+                         convergence_score: float, action_density: float,
+                         emit: Callable[..., None]) -> None:
+    """v1.9 — LUXE_ACTION_DENSITY_GATE. Staged-escalation predicate that
+    fires once per run in one of two modes:
+      - standalone:        early_bail never fired; gate stands alone
+      - post_bail_rescue:  early_bail fired ≥MIN_TURNS_AFTER_BAIL
+                           turns ago AND no writes since
+    Convergence proxy (same_file_read_twice on/before this step)
+    suppresses the gate — strong trajectories converge by re-reading
+    the same target. Thresholds derived from
+    scripts/mine_action_density.py over v17 + v18 SWE-bench n=75;
+    see acceptance/v19_mining/THRESHOLD_DECISION.md.
+    v1.10 — convergence-score suppression replaces the v1.9 binary
+    same_file_read_twice skip. When the gate is enabled AND the
+    model has converged (score >= HIGH), suppress the gate — the
+    rescue would interrupt a trajectory that's converging on its
+    own. Keep the v1.9 same_file_read_twice_step as a fallback skip
+    condition when the convergence gate is OFF (preserves v1.9
+    ablation semantics)."""
+    v110_suppress, v19_suppress = ActionDensityGateGuard.convergence_suppression(
+        convergence_gate_enabled=st.convergence_gate_enabled,
+        convergence_score=convergence_score,
+        same_file_read_twice_step=st.same_file_read_twice_step,
+        step=step,
+    )
+    adg_decision = ActionDensityGateGuard.check(
+        action_density_gate_enabled=st.action_density_gate_enabled,
+        action_density_gate_fired=st.action_density_gate_fired,
+        writes_seen=st.writes_seen,
+        step=step,
+        completion_tokens=result.completion_tokens,
+        tool_calls_total=result.tool_calls_total,
+        v110_suppress=v110_suppress,
+        v19_suppress=v19_suppress,
+        early_bail_step=st.early_bail_step,
+    )
+    if adg_decision is not None:
+        st.messages.append(_user_message(adg_decision.message,
+                                         ActionDensityGateGuard.nudge_type))
+        st.action_density_gate_fired = True
+        _record_intervention(st, step, "action_density_gate")
+        emit(
+            "action_density_gate_fired",
+            step=step,
+            fire_mode=adg_decision.metadata["fire_mode"],
+            turns_since_bail=adg_decision.metadata["turns_since_bail"],
+            tool_calls_total=result.tool_calls_total,
+            completion_tokens=result.completion_tokens,
+            action_density=action_density,
+            same_file_read_twice_step=st.same_file_read_twice_step,
+            convergence_score=convergence_score,
+        )
+    else:
+        # Observability — record the v1.10 suppression when the gate
+        # would otherwise have fired, so post-hoc analysis can tell
+        # convergence-suppression from threshold-miss.
+        adg_suppressed = ActionDensityGateGuard.suppressed_converged(
+            action_density_gate_enabled=st.action_density_gate_enabled,
+            action_density_gate_fired=st.action_density_gate_fired,
+            v110_suppress=v110_suppress,
+            writes_seen=st.writes_seen,
+            step=step,
+            completion_tokens=result.completion_tokens,
+            tool_calls_total=result.tool_calls_total,
+            convergence_score=convergence_score,
+        )
+        if adg_suppressed is not None:
+            emit(
+                "action_density_gate_suppressed_converged",
+                step=step,
+                **adg_suppressed,
+            )
+
+
+def _action_density_sample(st: LoopState, result: AgentResult, step: int,
+                           convergence_score: float, completion_delta: int,
+                           action_density: float,
+                           emit: Callable[..., None]) -> None:
+    """Observability: emit action_density per step regardless of gating.
+    Becomes the dataset for adaptive threshold tuning. Cheap. Not on step 0."""
+    # v1.9 habituation telemetry: when an intervention has fired,
+    # report (a) how many steps since it fired, (b) which one, and
+    # (c) whether the immediately-following step produced any tool
+    # call. Lets us post-hoc measure whether text-level interventions
+    # remain causally active or accumulate as ignorable background.
+    habituation: dict[str, Any] = {}
+    if st.last_intervention_step is not None and step > st.last_intervention_step:
+        step_had_call = result.tool_calls_total > st.prev_tool_calls_total_at_sample
+        habituation = {
+            "since_intervention_step": step - st.last_intervention_step,
+            "since_intervention_kind": st.last_intervention_kind,
+            "next_action_was_tool_call": step_had_call,
+            # v1.10 — post-intervention behavior signals. None
+            # until the first post-intervention write fires; once
+            # it does, time_to_first_write_after_intervention is
+            # fixed for the rest of the run. write_burst_persistence
+            # is the running max consecutive post-intervention
+            # writes — captures "stuck on cleanup" vs "real
+            # engagement" once the model commits.
+            "time_to_first_write_after_intervention":
+                st.first_write_step_after_intervention,
+            "write_burst_persistence": st.post_intervention_write_burst_max,
+        }
+    # v1.10 — convergence_score is already computed at top of
+    # step (used by early_bail + action_density_gate predicates);
+    # just emit it on the sample event for observability.
+    emit(
+        "action_density_sample",
+        step=step,
+        completion_delta=completion_delta,
+        action_density=action_density,
+        writes_seen=st.writes_seen,
+        tool_calls_total=result.tool_calls_total,
+        convergence_score=convergence_score,
+        **habituation,
+    )
+
+
+def _pre_step_guards(run: _Run, st: LoopState, result: AgentResult, step: int,
+                     resp: ChatResponse | None,
+                     emit: Callable[..., None]) -> bool:
+    """Everything that runs at the top of a step, before compaction and the
+    request: the adaptive substrate, the three nudge interventions, the
+    habituation clean exit, and the per-step sample. Returns True when the
+    run must END here (habituation exit; `result.final_text` is set).
+    `resp` is the PREVIOUS step's response (None on step 0)."""
+    # v1.10 — compute convergence score ONCE per step at the top of the
+    # iteration. Used by both early_bail and action_density_gate
+    # predicates AND emitted on the action_density_sample observability
+    # event. Pure function over the bounded tool_history; cheap to
+    # evaluate every step. The score is the v1.10 replacement for the
+    # v1.9 binary `same_file_read_twice_step` skip — see
+    # luxe.agents.convergence module docstring for the design rationale.
+    convergence_score = compute_convergence_score(st.tool_history)
+    if run.flags.adaptive_policy:
+        _adaptive_step(run, st, step, convergence_score, emit)
+
+    _write_pressure(run, st, result, step, emit)
+    _early_bail(run, st, result, step, convergence_score, emit)
+
+    # Per-step deltas (v1.8 Track 1 plumbing). Used by
+    # action_density_gate and the action_density_sample observability
+    # event. completion_delta_last_step is the SIZE of the previous
+    # step's response — we evaluate at the start of step N to catch a
+    # step N-1 burst, leaving budget for the intervention to land.
+    completion_delta_last_step = result.completion_tokens - st.prev_completion_tokens
+    action_density = (
+        (result.tool_calls_total / max(1, result.completion_tokens))
+        if result.completion_tokens > 0 else 0.0
+    )
+    _action_density_gate(st, result, step, convergence_score, action_density,
+                         emit)
+
+    # v1.10.1 — habituation clean-exit. When ≥3 distinct interventions
+    # have fired this run AND the model has produced ZERO post-intervention
+    # writes AND step ≥ _HABITUATION_EXIT_MIN_STEP, the trajectory is
+    # intervention-resistant. Burning the remaining max_steps budget
+    # yields no further information. Exit cleanly to preserve trace +
+    # evaluation semantics (mirrors the post_write_idle_exit shape). Founding instance: sympy-13031 fired
+    # all three distinct interventions by step 15, zero writes through
+    # max_steps. `resp` is from the prior iteration's backend.chat call.
+    hab_exit = HabituationExitGuard.should_exit(
+        intervention_kinds_fired=st.intervention_kinds_fired,
+        first_write_step_after_intervention=st.first_write_step_after_intervention,
+        step=step,
+        last_intervention_step=st.last_intervention_step,
+        tool_calls_total=result.tool_calls_total,
+        completion_tokens=result.completion_tokens,
+    )
+    if hab_exit is not None:
+        result.final_text = (resp.text if resp else "") or ""
+        emit(
+            "habituation_exit",
+            step=step,
+            **hab_exit,
+        )
+        return True
+
+    if step > 0:
+        _action_density_sample(st, result, step, convergence_score,
+                               completion_delta_last_step, action_density,
+                               emit)
+    st.prev_tool_calls_total_at_sample = result.tool_calls_total
+    # Capture cumulative tokens BEFORE this step's backend.chat so the
+    # next iteration's delta correctly measures THIS step's response.
+    st.prev_completion_tokens = result.completion_tokens
+    return False
+
+
 def _account_usage(result: AgentResult, resp: ChatResponse, step: int,
                    emit: Callable[..., None]) -> None:
     """Fold one response's server-reported usage into `result` and write the
@@ -705,281 +1022,8 @@ def run_agent(
 
         effective_ctx, pressure = _step_window(run, st, result, step)
 
-        # v1.10 — compute convergence score ONCE per step at the top of the
-        # iteration. Used by both early_bail and action_density_gate
-        # predicates AND emitted on the action_density_sample observability
-        # event. Pure function over the bounded tool_history; cheap to
-        # evaluate every step. The score is the v1.10 replacement for the
-        # v1.9 binary `same_file_read_twice_step` skip — see
-        # luxe.agents.convergence module docstring for the design rationale.
-        convergence_score = compute_convergence_score(st.tool_history)
-        # v1.11 — append to score_log + compute adaptive state. Guarded by
-        # LUXE_ADAPTIVE_POLICY to preserve disable-equivalence. The only
-        # dispatch consumer is WritePressureGuard's modulation, held at
-        # neutral 1.0 by the pinned bias; see the substrate note above.
-        if flags.adaptive_policy:
-            st.score_log.append(convergence_score)
-            # Bounded growth: cap at 64 entries (covers max_steps for current
-            # configs with headroom). Drop oldest when over.
-            if len(st.score_log) > 64:
-                st.score_log[:] = st.score_log[-64:]
-            adaptive_state = compute_within_run_state(
-                st.score_log, st.tool_history, step,
-                no_write_enabled=flags.adaptive_no_write,
-                score_trend_enabled=flags.adaptive_score_trend,
-            )
-            # v1.11 Phase 3a — compute bias → target modulation → slew-rate-limited update.
-            bias = compute_intervention_bias(adaptive_state)
-            for kind, prev_mod in list(st.intervention_modulation.items()):
-                target = bias_to_modulation(bias.get(kind, 0.0))
-                st.intervention_modulation[kind] = apply_slew_rate(
-                    prev_mod, target, max_delta=flags.adaptive_max_delta,
-                )
-            emit(
-                "adaptive_state",
-                step=step,
-                consecutive_no_write=adaptive_state.consecutive_no_write,
-                score_trend=adaptive_state.score_trend,
-                score_log_len=adaptive_state.score_log_len,
-                convergence_score=convergence_score,
-                modulation_write_pressure=st.intervention_modulation["write_pressure"],
-                modulation_early_bail=st.intervention_modulation["early_bail"],
-                modulation_soft_anchor=st.intervention_modulation["soft_anchor"],
-            )
-
-        # Mid-loop write-pressure injection (Mode B fix). Fires once per
-        # run when the agent has done substantial reading + generation
-        # without writing. Targets the prose-mode trap where the model
-        # declares "comprehensive picture" prematurely and hallucinates
-        # the deliverable into chat instead of committing it. The
-        # synthetic user message interrupts the read-loop and forces a
-        # write decision before further tool calls accumulate.
-        # Write-pressure guard. Decision logic extracted to
-        # luxe.agents.guardrails.WritePressureGuard (forge-hybrid Phase 1).
-        # Loop owns state mutation (the *_fired flag, intervention tracking
-        # vars, event emission) so behavior is unchanged on the wire.
-        wp_decision = WritePressureGuard.check(
-            write_pressure_enabled=st.write_pressure_enabled,
-            write_pressure_fired=st.write_pressure_fired,
-            writes_seen=st.writes_seen,
-            step=step,
-            tool_calls_total=result.tool_calls_total,
-            completion_tokens=result.completion_tokens,
-            adaptive_policy_enabled=flags.adaptive_policy,
-            intervention_modulation_write_pressure=st.intervention_modulation["write_pressure"],
-        )
-        if wp_decision is not None:
-            st.messages.append(_user_message(wp_decision.message,
-                                             WritePressureGuard.nudge_type))
-            st.write_pressure_fired = True
-            _record_intervention(st, step, "write_pressure")
-            emit(
-                "write_pressure_fired",
-                step=step,
-                tool_calls_total=result.tool_calls_total,
-                completion_tokens=result.completion_tokens,
-            )
-
-        # Early-bail intervention (v1.7 priority #1). Same checkpoint as
-        # write_pressure but fires earlier — at step 4 with 4+ non-write
-        # tool calls and zero writes. Trace-derived thresholds; see the
-        # block comment on guardrails._EARLY_BAIL_MIN_STEP for the empirical
-        # basis. The message gives the model a binary recovery gradient:
-        # edit OR explicitly decline-with-justification. Mutually
-        # compatible with WRITE_PRESSURE — both can fire in the same run
-        # since they target different trajectory shapes.
-        eb_outcome = EarlyBailGuard.evaluate(
-            early_bail_enabled=st.early_bail_enabled,
-            early_bail_fired=st.early_bail_fired,
-            writes_seen=st.writes_seen,
-            step=step,
-            tool_calls_total=result.tool_calls_total,
-            early_bail_message=early_bail_message,
-            convergence_gate_enabled=st.convergence_gate_enabled,
-            convergence_score=convergence_score,
-            band_response=flags.early_bail_band_response,
-            suppression_count_in_trajectory=st.suppression_count_in_trajectory,
-            tool_history=st.tool_history,
-            recent_path_diversity=recent_path_diversity(st.tool_history),
-            early_bail_mode=flags.early_bail_mode,
-        )
-        if eb_outcome is not None:
-            # Apply state mutations the loop owns. The guard tells us how
-            # much to change suppression_count, whether to set
-            # early_bail_fired, and which intervention-kind to record on the
-            # trackers.
-            st.suppression_count_in_trajectory += eb_outcome.suppression_count_delta
-            if eb_outcome.sets_early_bail_fired:
-                st.early_bail_fired = True
-                st.early_bail_step = step
-            if eb_outcome.decision is not None:
-                st.messages.append(_user_message(eb_outcome.decision.message,
-                                                 eb_outcome.nudge_type))
-            if eb_outcome.last_intervention_kind is not None:
-                _record_intervention(st, step, eb_outcome.last_intervention_kind)
-            # Suppression event first, then the fire event — the order the
-            # records have always been written in.
-            for event in (eb_outcome.suppress_event, eb_outcome.fire_event):
-                if event is not None:
-                    ev_name, ev_payload = event
-                    # Loop owns the completion_tokens counter; fill it for
-                    # events that carry it (early_bail_fired).
-                    payload = {
-                        k: (result.completion_tokens if k == "completion_tokens" and v is None else v)
-                        for k, v in ev_payload.items()
-                    }
-                    emit(ev_name, step=step, **payload)
-
-        # Per-step deltas (v1.8 Track 1 plumbing). Used by
-        # action_density_gate and the action_density_sample observability
-        # event. completion_delta_last_step is the SIZE of the previous
-        # step's response — we evaluate at the start of step N to catch a
-        # step N-1 burst, leaving budget for the intervention to land.
-        completion_delta_last_step = result.completion_tokens - st.prev_completion_tokens
-        action_density = (
-            (result.tool_calls_total / max(1, result.completion_tokens))
-            if result.completion_tokens > 0 else 0.0
-        )
-
-        # v1.9 — LUXE_ACTION_DENSITY_GATE. Staged-escalation predicate that
-        # fires once per run in one of two modes:
-        #   - standalone:        early_bail never fired; gate stands alone
-        #   - post_bail_rescue:  early_bail fired ≥MIN_TURNS_AFTER_BAIL
-        #                        turns ago AND no writes since
-        # Convergence proxy (same_file_read_twice on/before this step)
-        # suppresses the gate — strong trajectories converge by re-reading
-        # the same target. Thresholds derived from
-        # scripts/mine_action_density.py over v17 + v18 SWE-bench n=75;
-        # see acceptance/v19_mining/THRESHOLD_DECISION.md.
-        # v1.10 — convergence-score suppression replaces the v1.9 binary
-        # same_file_read_twice skip. When the gate is enabled AND the
-        # model has converged (score >= HIGH), suppress the gate — the
-        # rescue would interrupt a trajectory that's converging on its
-        # own. Keep the v1.9 same_file_read_twice_step as a fallback skip
-        # condition when the convergence gate is OFF (preserves v1.9
-        # ablation semantics).
-        v110_suppress, v19_suppress = ActionDensityGateGuard.convergence_suppression(
-            convergence_gate_enabled=st.convergence_gate_enabled,
-            convergence_score=convergence_score,
-            same_file_read_twice_step=st.same_file_read_twice_step,
-            step=step,
-        )
-        adg_decision = ActionDensityGateGuard.check(
-            action_density_gate_enabled=st.action_density_gate_enabled,
-            action_density_gate_fired=st.action_density_gate_fired,
-            writes_seen=st.writes_seen,
-            step=step,
-            completion_tokens=result.completion_tokens,
-            tool_calls_total=result.tool_calls_total,
-            v110_suppress=v110_suppress,
-            v19_suppress=v19_suppress,
-            early_bail_step=st.early_bail_step,
-        )
-        if adg_decision is not None:
-            st.messages.append(_user_message(adg_decision.message,
-                                             ActionDensityGateGuard.nudge_type))
-            st.action_density_gate_fired = True
-            _record_intervention(st, step, "action_density_gate")
-            emit(
-                "action_density_gate_fired",
-                step=step,
-                fire_mode=adg_decision.metadata["fire_mode"],
-                turns_since_bail=adg_decision.metadata["turns_since_bail"],
-                tool_calls_total=result.tool_calls_total,
-                completion_tokens=result.completion_tokens,
-                action_density=action_density,
-                same_file_read_twice_step=st.same_file_read_twice_step,
-                convergence_score=convergence_score,
-            )
-        else:
-            # Observability — record the v1.10 suppression when the gate
-            # would otherwise have fired, so post-hoc analysis can tell
-            # convergence-suppression from threshold-miss.
-            adg_suppressed = ActionDensityGateGuard.suppressed_converged(
-                action_density_gate_enabled=st.action_density_gate_enabled,
-                action_density_gate_fired=st.action_density_gate_fired,
-                v110_suppress=v110_suppress,
-                writes_seen=st.writes_seen,
-                step=step,
-                completion_tokens=result.completion_tokens,
-                tool_calls_total=result.tool_calls_total,
-                convergence_score=convergence_score,
-            )
-            if adg_suppressed is not None:
-                emit(
-                    "action_density_gate_suppressed_converged",
-                    step=step,
-                    **adg_suppressed,
-                )
-
-        # v1.10.1 — habituation clean-exit. When ≥3 distinct interventions
-        # have fired this run AND the model has produced ZERO post-intervention
-        # writes AND step ≥ _HABITUATION_EXIT_MIN_STEP, the trajectory is
-        # intervention-resistant. Burning the remaining max_steps budget
-        # yields no further information. Exit cleanly to preserve trace +
-        # evaluation semantics (mirrors the post_write_idle_exit shape). Founding instance: sympy-13031 fired
-        # all three distinct interventions by step 15, zero writes through
-        # max_steps. `resp` is from the prior iteration's backend.chat call.
-        hab_exit = HabituationExitGuard.should_exit(
-            intervention_kinds_fired=st.intervention_kinds_fired,
-            first_write_step_after_intervention=st.first_write_step_after_intervention,
-            step=step,
-            last_intervention_step=st.last_intervention_step,
-            tool_calls_total=result.tool_calls_total,
-            completion_tokens=result.completion_tokens,
-        )
-        if hab_exit is not None:
-            result.final_text = (resp.text if resp else "") or ""
-            emit(
-                "habituation_exit",
-                step=step,
-                **hab_exit,
-            )
+        if _pre_step_guards(run, st, result, step, resp, emit):
             break
-
-        # Observability: emit action_density per step regardless of gating.
-        # Becomes the dataset for adaptive threshold tuning. Cheap.
-        if step > 0:
-            # v1.9 habituation telemetry: when an intervention has fired,
-            # report (a) how many steps since it fired, (b) which one, and
-            # (c) whether the immediately-following step produced any tool
-            # call. Lets us post-hoc measure whether text-level interventions
-            # remain causally active or accumulate as ignorable background.
-            habituation: dict[str, Any] = {}
-            if st.last_intervention_step is not None and step > st.last_intervention_step:
-                step_had_call = result.tool_calls_total > st.prev_tool_calls_total_at_sample
-                habituation = {
-                    "since_intervention_step": step - st.last_intervention_step,
-                    "since_intervention_kind": st.last_intervention_kind,
-                    "next_action_was_tool_call": step_had_call,
-                    # v1.10 — post-intervention behavior signals. None
-                    # until the first post-intervention write fires; once
-                    # it does, time_to_first_write_after_intervention is
-                    # fixed for the rest of the run. write_burst_persistence
-                    # is the running max consecutive post-intervention
-                    # writes — captures "stuck on cleanup" vs "real
-                    # engagement" once the model commits.
-                    "time_to_first_write_after_intervention":
-                        st.first_write_step_after_intervention,
-                    "write_burst_persistence": st.post_intervention_write_burst_max,
-                }
-            # v1.10 — convergence_score is already computed at top of
-            # step (used by early_bail + action_density_gate predicates);
-            # just emit it on the sample event for observability.
-            emit(
-                "action_density_sample",
-                step=step,
-                completion_delta=completion_delta_last_step,
-                action_density=action_density,
-                writes_seen=st.writes_seen,
-                tool_calls_total=result.tool_calls_total,
-                convergence_score=convergence_score,
-                **habituation,
-            )
-        st.prev_tool_calls_total_at_sample = result.tool_calls_total
-        # Capture cumulative tokens BEFORE this step's backend.chat so the
-        # next iteration's delta correctly measures THIS step's response.
-        st.prev_completion_tokens = result.completion_tokens
 
         est_sent = _compact_step(run, st, effective_ctx, step, emit)
 
