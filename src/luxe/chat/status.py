@@ -356,6 +356,196 @@ def _cost_segment(session, slots, state: StatusState) -> "Segment | None":
     return Segment([_S(text, style)], priority=5)
 
 
+def _path_segment(repo: str) -> Segment | None:
+    """home-relative path (theme `pwd` role; elastic: ellipsised before drops)."""
+    if not repo:
+        return None
+    return Segment([_S(textfmt.tilde(repo), theme_mod.styles_for("pwd"))],
+                   priority=2, path=True)
+
+
+def _git_or_project_segment(session, repo: str, *, background: bool,
+                            on_update: Callable[[], None] | None) -> Segment | None:
+    """git (theme-coloured) — slots in after path when inside a repo. When the
+    session isn't attached to a project at all (started from `~`, say), say so
+    instead: the model has no index, and that's worth seeing every turn."""
+    git_seg = _git_segment(repo, background=background, on_update=on_update)
+    if git_seg:
+        return Segment(git_seg, priority=1)
+    if getattr(session, "project_kind", "git") == "none":
+        return Segment([_S("no project", _GREY)], priority=2)
+    return None
+
+
+def _ctx_segment(session, state: StatusState) -> Segment:
+    """ctx: `ctx N% <window-size>` (label = default fg; % used; size in the K/M
+    context convention). A pending `/ctx` override (clamped to the slot ceiling)
+    is reflected IMMEDIATELY — before the next turn — so the bar tracks the
+    command. The % appears once a turn has measured usage (live mid-turn)."""
+    eff_win = state.num_ctx
+    if session.num_ctx_override:
+        ceiling = getattr(state, "ctx_ceiling", 0) or 0
+        eff_win = (min(session.num_ctx_override, ceiling) if ceiling
+                   else session.num_ctx_override)
+    ctx_spans: list[Span] = [_S("ctx ", _DEFAULT)]
+    if state.has_turn:
+        ctx_spans.append(_S(f"{state.ctx_pressure:.0%} ", _DEFAULT))
+    ctx_spans.append(_S(_ctx_size(eff_win) if eff_win else "default", _GREY))
+    return Segment(ctx_spans, priority=2)
+
+
+def _cache_segment(state: StatusState) -> Segment | None:
+    """cache: prompt tokens processed last turn, prefixed by the share the
+    server served from its prefix cache when it reported one (oMLX does)."""
+    if not state.has_turn:
+        return None
+    cache_spans: list[Span] = [_S("cache ", _GREY)]
+    if state.cache_hit is not None:
+        cache_spans.append(_S(f"{state.cache_hit:.0%} ", _DEFAULT))
+    cache_spans.append(_S(_human(state.prompt_tokens), _GREY
+                          if state.cache_hit is not None else _DEFAULT))
+    return Segment(cache_spans, priority=8)
+
+
+def _rate_segment(state: StatusState) -> Segment | None:
+    """pp/tg: server-measured prefill and decode tokens/s of the last turn."""
+    if not (state.has_turn and (state.prefill_tps or state.decode_tps)):
+        return None
+    from luxe.chat.perf import rate
+    rate_spans: list[Span] = []
+    if state.prefill_tps:
+        rate_spans += [_S("pp ", _GREY), _S(rate(state.prefill_tps), _DEFAULT)]
+    if state.decode_tps:
+        if rate_spans:
+            rate_spans.append(_S(" ", _GREY))
+        rate_spans += [_S("tg ", _GREY), _S(rate(state.decode_tps), _DEFAULT)]
+    rate_spans.append(_S(" t/s", _GREY))
+    return Segment(rate_spans, priority=6)
+
+
+# start / last (separate segments, droppable) ------------------------
+
+
+def _start_segment(state: StatusState) -> Segment | None:
+    if not state.opened_at:
+        return None
+    started = time.strftime("%H:%M", time.localtime(state.opened_at))
+    return Segment([_S("start ", _GREY), _S(started, _DEFAULT)], priority=7)
+
+
+def _last_segment() -> Segment:
+    now = time.strftime("%H:%M", time.localtime())
+    return Segment([_S("last ", _GREY), _S(now, _DEFAULT)], priority=7)
+
+
+def _gate_segments(session) -> list[Segment]:
+    """write on/off · bash on/off · web on/off — ON=success, OFF=MUTED. Off is
+    the safe default, not a failure: rendering it in the error role put two
+    reds in every default session's bar (reported 2026-07-30). Red is for
+    errors. web is the same shape, always visible (operator request
+    2026-08-03: the gate state should be readable at a glance either way,
+    like write/bash — "off" is information, not clutter)."""
+    _on = theme_mod.styles_for("success")
+    _off = theme_mod.styles_for("muted")
+    gates = (("write ", session.write_enabled),
+             ("bash ", session.unrestricted_bash),
+             ("web ", getattr(session, "web_enabled", False)))
+    return [Segment([_S(label, _DEFAULT),
+                     _S("on" if on else "off", _on if on else _off)], priority=3)
+            for label, on in gates]
+
+
+def _ephemeral_segment() -> Segment | None:
+    """ephemeral — shown ONLY when on, unlike write/bash/web. Those three are
+    gates whose "off" state is the safe default worth confirming; this one is
+    off in every ordinary session, so a permanent "eph off" would be pure
+    noise. When it IS on the user is running without a transcript or debug
+    log, which they must be able to see at a glance — hence priority 1
+    (protected from the responsive drop, like git/ctx/model; `fit` drops
+    HIGHEST priority numbers first) and the warning colour."""
+    if not _ephemeral.is_ephemeral():
+        return None
+    return Segment([_S("eph ", _DEFAULT),
+                    _S("on", theme_mod.styles_for("warning"))],
+                   priority=1)
+
+
+def _limits_segment(session) -> Segment | None:
+    """loop limits (/steps, /maxtokens, /loopguard, /frontier) — shown ONLY when
+    a session override is in force, like eph: the config defaults are what
+    every ordinary turn runs, so a permanent chip would be noise. When the
+    three match the /frontier preset, it is labelled as such."""
+    from luxe.chat.session import frontier_active
+    limit_bits: list[str] = []
+    if getattr(session, "max_steps_override", None):
+        limit_bits.append(f"steps {session.max_steps_override}")
+    if getattr(session, "max_tokens_override", None):
+        limit_bits.append(f"tok {_human(session.max_tokens_override)}")
+    if not getattr(session, "loop_guard", True):
+        limit_bits.append("loopguard off")
+    if not limit_bits:
+        return None
+    label = "frontier " if frontier_active(session) else "limits "
+    return Segment([_S(label, _DEFAULT),
+                    _S(" ".join(limit_bits),
+                       theme_mod.styles_for("warning"))],
+                   priority=3)
+
+
+def _backend_segment(slots) -> Segment | None:
+    """backend name — only when the config offers >1 endpoint (multi-backend is
+    the exception, not the rule; single-backend bars stay untouched). Mid
+    drop-priority: nice to see, not protected like git/ctx/model."""
+    try:
+        multi = len(slots.cfg.backend_entries()) > 1
+    except Exception:
+        multi = False
+    if not multi:
+        return None
+    return Segment([_S("backend ", _GREY),
+                    _S(getattr(slots, "backend_name", "?"), _DEFAULT)],
+                   priority=5)
+
+
+def _mode_segment(session) -> Segment | None:
+    """session mode chip — non-default observability flags (verbose / reasoning /
+    compact / terse-off), in the same vein as write/bash. Omitted when all
+    default so the bar stays clean. (write/bash have their own chips.)"""
+    mode_bits: list[str] = []
+    if getattr(session, "verbose_level", "off") not in ("", "off"):
+        mode_bits.append(f"verbose:{session.verbose_level}")
+    if getattr(session, "show_reasoning", False):
+        mode_bits.append("reason")
+    if getattr(session, "compact", False):
+        mode_bits.append("compact")
+    if not getattr(session, "terse", True):
+        mode_bits.append("terse:off")
+    if not mode_bits:
+        return None
+    return Segment([_S("mode ", _DEFAULT),
+                    _S(" ".join(mode_bits), theme_mod.styles_for("info"))],
+                   priority=4)
+
+
+def _slot_segment(state: StatusState) -> Segment:
+    """luxe mode (slot) — theme `slot` role (calm, not the old dominant purple)."""
+    return Segment([_S(state.slot, theme_mod.styles_for("slot"))], priority=2)
+
+
+def _model_segment(slots, state: StatusState) -> Segment:
+    """The model name in the theme `model` role, pinned last. Origin glyph rides
+    WITH the model name (same protected segment): ☁ network-backed weights ·
+    ⇅ remote endpoint, warn-coloured — that's a turn crossing the wire, which
+    the bar used to hide entirely. Local weights get no glyph at all."""
+    model = state.model or slots.model_for("chat")
+    spans: list[Span] = []
+    glyph = _ORIGIN_GLYPHS.get(state.model_origin)
+    if glyph:
+        spans.append(_S(glyph + " ", theme_mod.styles_for("warn")))
+    spans.append(_S(_short_model(model), theme_mod.styles_for("model")))
+    return Segment(spans, priority=1)
+
+
 def fields(session, slots, repo: str, state: StatusState, *,
            on_git_update: Callable[[], None] | None = None,
            background_git: bool | None = None) -> list[Segment]:
@@ -368,173 +558,35 @@ def fields(session, slots, repo: str, state: StatusState, *,
     default-fg values).
 
     Render-path callers pass `on_git_update` (or `background_git=True`): git
-    state then refreshes off-thread and this function does no I/O at all."""
+    state then refreshes off-thread and this function does no I/O at all.
+
+    Each segment has its own builder above (None = not shown right now); this
+    list fixes their ORDER, so it reads as the bar, left to right."""
     if background_git is None:
         background_git = on_git_update is not None
-    segs: list[Segment] = []
-
-    # home-relative path (theme `pwd` role; elastic: ellipsised before drops)
-    if repo:
-        segs.append(Segment([_S(textfmt.tilde(repo), theme_mod.styles_for("pwd"))],
-                            priority=2, path=True))
-
-    # git (theme-coloured) — slots in after path when inside a repo. When the
-    # session isn't attached to a project at all (started from `~`, say), say so
-    # instead: the model has no index, and that's worth seeing every turn.
-    git_seg = _git_segment(repo, background=background_git,
-                           on_update=on_git_update)
-    if git_seg:
-        segs.append(Segment(git_seg, priority=1))
-    elif getattr(session, "project_kind", "git") == "none":
-        segs.append(Segment([_S("no project", _GREY)], priority=2))
-
-    # ctx: `ctx N% <window-size>` (label = default fg; % used; size in the K/M
-    # context convention). A pending `/ctx` override (clamped to the slot ceiling)
-    # is reflected IMMEDIATELY — before the next turn — so the bar tracks the
-    # command. The % appears once a turn has measured usage (live mid-turn).
-    eff_win = state.num_ctx
-    if session.num_ctx_override:
-        ceiling = getattr(state, "ctx_ceiling", 0) or 0
-        eff_win = (min(session.num_ctx_override, ceiling) if ceiling
-                   else session.num_ctx_override)
-    ctx_spans: list[Span] = [_S("ctx ", _DEFAULT)]
-    if state.has_turn:
-        ctx_spans.append(_S(f"{state.ctx_pressure:.0%} ", _DEFAULT))
-    ctx_spans.append(_S(_ctx_size(eff_win) if eff_win else "default", _GREY))
-    segs.append(Segment(ctx_spans, priority=2))
-
-    # cache: prompt tokens processed last turn, prefixed by the share the
-    # server served from its prefix cache when it reported one (oMLX does).
-    if state.has_turn:
-        cache_spans: list[Span] = [_S("cache ", _GREY)]
-        if state.cache_hit is not None:
-            cache_spans.append(_S(f"{state.cache_hit:.0%} ", _DEFAULT))
-        cache_spans.append(_S(_human(state.prompt_tokens), _GREY
-                              if state.cache_hit is not None else _DEFAULT))
-        segs.append(Segment(cache_spans, priority=8))
-
-    # pp/tg: server-measured prefill and decode tokens/s of the last turn.
-    if state.has_turn and (state.prefill_tps or state.decode_tps):
-        from luxe.chat.perf import rate
-        rate_spans: list[Span] = []
-        if state.prefill_tps:
-            rate_spans += [_S("pp ", _GREY), _S(rate(state.prefill_tps), _DEFAULT)]
-        if state.decode_tps:
-            if rate_spans:
-                rate_spans.append(_S(" ", _GREY))
-            rate_spans += [_S("tg ", _GREY), _S(rate(state.decode_tps), _DEFAULT)]
-        rate_spans.append(_S(" t/s", _GREY))
-        segs.append(Segment(rate_spans, priority=6))
-
-    # $ spent this session — only on a BILLABLE backend (or once real cost data
-    # has arrived), mirroring the `backend` segment's gate below. On every local
-    # endpoint this segment does not exist, because "$0.00" would assert a
-    # measurement nothing made. Warn-coloured once the cap is close.
-    _cost_seg = _cost_segment(session, slots, state)
-    if _cost_seg is not None:
-        segs.append(_cost_seg)
-
-    # start / last (separate segments, droppable) ------------------------
-    if state.opened_at:
-        started = time.strftime("%H:%M", time.localtime(state.opened_at))
-        segs.append(Segment([_S("start ", _GREY), _S(started, _DEFAULT)], priority=7))
-    now = time.strftime("%H:%M", time.localtime())
-    segs.append(Segment([_S("last ", _GREY), _S(now, _DEFAULT)], priority=7))
-
-    # write on/off · bash on/off — ON=success, OFF=MUTED. Off is the safe
-    # default, not a failure: rendering it in the error role put two reds in
-    # every default session's bar (reported 2026-07-30). Red is for errors.
-    _on = theme_mod.styles_for("success")
-    _off = theme_mod.styles_for("muted")
-    segs.append(Segment([_S("write ", _DEFAULT),
-                         _S("on" if session.write_enabled else "off",
-                            _on if session.write_enabled else _off)], priority=3))
-    segs.append(Segment([_S("bash ", _DEFAULT),
-                         _S("on" if session.unrestricted_bash else "off",
-                            _on if session.unrestricted_bash else _off)], priority=3))
-    # web on/off — same shape as write/bash, always visible (operator request
-    # 2026-08-03: the gate state should be readable at a glance either way,
-    # like write/bash — "off" is information, not clutter).
-    web_on = getattr(session, "web_enabled", False)
-    segs.append(Segment([_S("web ", _DEFAULT),
-                         _S("on" if web_on else "off",
-                            _on if web_on else _off)], priority=3))
-    # ephemeral — shown ONLY when on, unlike write/bash/web. Those three are
-    # gates whose "off" state is the safe default worth confirming; this one is
-    # off in every ordinary session, so a permanent "eph off" would be pure
-    # noise. When it IS on the user is running without a transcript or debug
-    # log, which they must be able to see at a glance — hence priority 1
-    # (protected from the responsive drop, like git/ctx/model; `fit` drops
-    # HIGHEST priority numbers first) and the warning colour.
-    if _ephemeral.is_ephemeral():
-        segs.append(Segment([_S("eph ", _DEFAULT),
-                             _S("on", theme_mod.styles_for("warning"))],
-                            priority=1))
-
-    # loop limits (/steps, /maxtokens, /loopguard, /frontier) — shown ONLY when
-    # a session override is in force, like eph: the config defaults are what
-    # every ordinary turn runs, so a permanent chip would be noise. When the
-    # three match the /frontier preset, it is labelled as such.
-    from luxe.chat.session import frontier_active
-    limit_bits: list[str] = []
-    if getattr(session, "max_steps_override", None):
-        limit_bits.append(f"steps {session.max_steps_override}")
-    if getattr(session, "max_tokens_override", None):
-        limit_bits.append(f"tok {_human(session.max_tokens_override)}")
-    if not getattr(session, "loop_guard", True):
-        limit_bits.append("loopguard off")
-    if limit_bits:
-        label = "frontier " if frontier_active(session) else "limits "
-        segs.append(Segment([_S(label, _DEFAULT),
-                             _S(" ".join(limit_bits),
-                                theme_mod.styles_for("warning"))],
-                            priority=3))
-
-    # backend name — only when the config offers >1 endpoint (multi-backend is
-    # the exception, not the rule; single-backend bars stay untouched). Mid
-    # drop-priority: nice to see, not protected like git/ctx/model.
-    try:
-        multi = len(slots.cfg.backend_entries()) > 1
-    except Exception:
-        multi = False
-    if multi:
-        segs.append(Segment([_S("backend ", _GREY),
-                             _S(getattr(slots, "backend_name", "?"), _DEFAULT)],
-                            priority=5))
-
-    # session mode chip — non-default observability flags (verbose / reasoning /
-    # compact / terse-off), in the same vein as write/bash. Omitted when all
-    # default so the bar stays clean. (write/bash have their own chips above.)
-    mode_bits: list[str] = []
-    if getattr(session, "verbose_level", "off") not in ("", "off"):
-        mode_bits.append(f"verbose:{session.verbose_level}")
-    if getattr(session, "show_reasoning", False):
-        mode_bits.append("reason")
-    if getattr(session, "compact", False):
-        mode_bits.append("compact")
-    if not getattr(session, "terse", True):
-        mode_bits.append("terse:off")
-    if mode_bits:
-        segs.append(Segment([_S("mode ", _DEFAULT),
-                             _S(" ".join(mode_bits), theme_mod.styles_for("info"))],
-                            priority=4))
-
-    # luxe mode (slot) — theme `slot` role (calm, not the old dominant purple);
-    # then the model name in the theme `model` role.
-    segs.append(Segment([_S(state.slot, theme_mod.styles_for("slot"))], priority=2))
-    model = state.model or slots.model_for("chat")
-    # Origin glyph rides WITH the model name (same protected segment):
-    # ☁ network-backed weights · ⇅ remote endpoint, warn-coloured — that's a turn
-    # crossing the wire, which the bar used to hide entirely. Local weights get
-    # no glyph at all.
-    spans: list[Span] = []
-    glyph = _ORIGIN_GLYPHS.get(state.model_origin)
-    if glyph:
-        spans.append(_S(glyph + " ", theme_mod.styles_for("warn")))
-    spans.append(_S(_short_model(model), theme_mod.styles_for("model")))
-    segs.append(Segment(spans, priority=1))
-
-    return segs
+    segs = [
+        _path_segment(repo),
+        _git_or_project_segment(session, repo, background=background_git,
+                                on_update=on_git_update),
+        _ctx_segment(session, state),
+        _cache_segment(state),
+        _rate_segment(state),
+        # $ spent this session — only on a BILLABLE backend (or once real cost
+        # data has arrived), mirroring the `backend` segment's gate. On every
+        # local endpoint this segment does not exist, because "$0.00" would
+        # assert a measurement nothing made. Warn-coloured once the cap is close.
+        _cost_segment(session, slots, state),
+        _start_segment(state),
+        _last_segment(),
+        *_gate_segments(session),
+        _ephemeral_segment(),
+        _limits_segment(session),
+        _backend_segment(slots),
+        _mode_segment(session),
+        _slot_segment(state),
+        _model_segment(slots, state),
+    ]
+    return [seg for seg in segs if seg is not None]
 
 
 # ------------------------------------------------------- responsive fit ----
