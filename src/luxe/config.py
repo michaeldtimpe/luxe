@@ -23,6 +23,21 @@ ENGINE_OPENROUTER = "openrouter"
 KNOWN_ENGINES = (ENGINE_OMLX, ENGINE_LLAMA_SERVER, ENGINE_OPENROUTER)
 
 
+#: HuggingFace orgs `luxe pull` / `/pull` fetch from without asking
+#: (2026-10, model provenance). A chat template is Jinja that runs on every
+#: prompt, and models from unknown publishers (abliterated merges, re-uploads)
+#: are the highest-risk class for a tool-using agent. An HF pull from an org
+#: NOT on this list is refused unless `--allow-untrusted`. Overridable per
+#: config file via the top-level `trusted_publishers:` key (an out-of-tree
+#: host config such as neo's sets its own). Matched case-insensitively — HF
+#: org names are. Chat/pull/doctor only; the benchmark path never reads it.
+DEFAULT_TRUSTED_PUBLISHERS: tuple[str, ...] = (
+    "mlx-community", "lmstudio-community", "Qwen", "bartowski", "unsloth",
+    "ggml-org", "google", "meta-llama", "mistralai", "deepseek-ai", "zai-org",
+    "THUDM", "microsoft", "nvidia", "ibm-granite", "LiquidAI",
+)
+
+
 #: `/reasoning` settings. "" is "say nothing and let the provider decide",
 #: which is distinct from "off" (ask it not to return reasoning at all).
 REASONING_EFFORTS = ("low", "medium", "high")
@@ -438,6 +453,11 @@ class PipelineConfig(BaseModel):
     # `turn_carry_max_fraction` of the window. Benchmark/maintain never read it.
     turn_carry: bool = True
     turn_carry_max_fraction: float = 0.5
+    # Publisher allowlist for `luxe pull` / `/pull` (see
+    # DEFAULT_TRUSTED_PUBLISHERS) and `/doctor`'s template lines. Chat/pull
+    # only — benchmark/maintain never read it.
+    trusted_publishers: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_TRUSTED_PUBLISHERS))
 
     def role(self, name: str) -> RoleConfig:
         if name not in self.roles:

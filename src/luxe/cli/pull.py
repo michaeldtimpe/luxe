@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import click
+from rich.markup import escape
 
 from luxe.cli._common import _chat_cfg, _omlx_base_url_from_config, console, main
 
@@ -25,17 +26,21 @@ from luxe.cli._common import _chat_cfg, _omlx_base_url_from_config, console, mai
               help="Delete <ref> from the LOCAL store instead of fetching. "
                    "Refuses this host's manifest models unless --force.")
 @click.option("--force", is_flag=True, help="Replace an existing model directory.")
+@click.option("--allow-untrusted", is_flag=True,
+              help="Fetch from a publisher not in trusted_publishers.")
 @click.option("--yes", "-y", "assume_yes", is_flag=True, help="Don't ask to confirm.")
 @click.option("--base-url", default="", help="oMLX endpoint (default: local).")
 @click.option("--models-dir", default="",
               help="oMLX model store (default: ~/.omlx/models).")
 def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
-             force_hf: bool, remove_state: bool, force: bool, assume_yes: bool,
-             base_url: str, models_dir: str):
+             force_hf: bool, remove_state: bool, force: bool,
+             allow_untrusted: bool, assume_yes: bool, base_url: str,
+             models_dir: str):
     """Fetch model weights: `luxe pull <hf-repo-id>` or `luxe pull <name> --from <dir>`.
 
     Prefers a copy already on a mounted volume (kappa/alpha over SMB) — same
     bytes at LAN speed — and falls back to HuggingFace via the oMLX downloader.
+    Pulls only from `trusted_publishers` unless --allow-untrusted.
     """
     from luxe import modelstore as ms
 
@@ -84,7 +89,9 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
             # first, a dangling link's HF repo, then the sources.
             plan = ms.plan_pull(ref, admin=admin, from_path=from_path,
                                 include_mounts=not force_hf, force=force,
-                                models_dir=dest_dir, on_resolve=_resolving)
+                                models_dir=dest_dir, on_resolve=_resolving,
+                                trusted_publishers=_trusted_publishers(),
+                                allow_untrusted=allow_untrusted)
             if not plan.resolved:
                 console.print(f"[yellow]· {plan.name} is already in {dest_dir} "
                               "— pass --force to replace it.[/]")
@@ -104,7 +111,14 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 sys.exit(2)
 
             chosen = sources[0]
+            if plan.refusal:
+                # The publisher allowlist, at PLAN level: nothing has been
+                # downloaded or copied, and nothing will be.
+                console.print(f"[red]✗ {escape(plan.refusal)}[/]")
+                sys.exit(2)
             console.print(f"[bold]{plan.name}[/] ← {chosen.describe()}")
+            console.print(f"  [dim]publisher: "
+                          f"{_publisher_label(plan.publisher, plan.trusted)}[/]")
             if len(sources) > 1:
                 for alt in sources[1:]:
                     console.print(f"  [dim]alt: {alt.describe()}[/]")
@@ -124,6 +138,22 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
         except KeyboardInterrupt:
             console.print("\n[yellow]· interrupted (partial copy removed)[/]")
             sys.exit(130)
+
+
+def _trusted_publishers() -> list[str] | None:
+    """The config's `trusted_publishers:` (None = the built-in default)."""
+    try:
+        return list(_chat_cfg().trusted_publishers)
+    except Exception:
+        return None
+
+
+def _publisher_label(publisher: str, trusted) -> str:
+    if not publisher:
+        return "unknown (no org in its path — allowed, recorded as unknown)"
+    if trusted is False:
+        return f"{publisher} — NOT in trusted_publishers (--allow-untrusted)"
+    return f"{publisher} (trusted)"
 
 
 def _default_engine_from_config() -> str:

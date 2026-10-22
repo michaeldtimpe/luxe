@@ -156,6 +156,32 @@ hosts:
   # m4 (M4 Pro, 48 GB) — RETIRED from the fleet 2026-10; its manifest entry
   # was removed. A host with no entry here behaves as before (champion).
 
+# Publisher allowlist (2026-10, model provenance): `luxe pull` / `/pull` fetch
+# from HuggingFace only when the repo's org is listed here (case-insensitive);
+# anything else is refused unless `--allow-untrusted`, and its template pin then
+# records `trusted: false` so `/doctor` keeps warning. A mount copy is checked
+# when its path names an org (`models--org--Name`); a plain directory on the
+# NAS is allowed and pinned as publisher-unknown. Every fleet model today is
+# mlx-community. An out-of-tree host config (neo.yaml) sets its own list with
+# the same key; omit the key to get exactly this default.
+trusted_publishers:
+  - mlx-community
+  - lmstudio-community
+  - Qwen
+  - bartowski
+  - unsloth
+  - ggml-org
+  - google
+  - meta-llama
+  - mistralai
+  - deepseek-ai
+  - zai-org
+  - THUDM
+  - microsoft
+  - nvidia
+  - ibm-granite
+  - LiquidAI
+
 # Chat-only roster: the ONLY models `/model` offers and slots may resolve to
 # (this host's manifest models are always allowed on top). gemma dropped
 # 2026-07-30 — no tool support (template roles are system/user/assistant only;

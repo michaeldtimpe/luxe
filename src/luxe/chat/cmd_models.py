@@ -370,6 +370,10 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
     `/pull <repo|name>`         PREVIEW: where it would come from, and its size
     `/pull <repo|name> --yes`   actually transfer it
     `/pull <name> --from <dir>` import an explicit directory (mounted volume)
+    `… --allow-untrusted`       a publisher not in trusted_publishers
+
+    Same publisher allowlist as `luxe pull` (the plan is
+    `modelstore.plan_pull`).
 
     The preview step is the consent step: a chat command has no confirmation
     prompt, and a pull can move tens of gigabytes. Transfers run on the command
@@ -427,9 +431,13 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
 
             # The same plan as `luxe pull` (`modelstore.plan_pull`): store
             # state first, a dangling link's HF repo, then the sources.
+            cfg = getattr(ctx.slots, "cfg", None)
             plan = ms.plan_pull(ref, admin=admin, from_path=from_path,
                                 include_mounts="--hf" not in flags,
-                                force="--force" in flags, on_resolve=_searching)
+                                force="--force" in flags, on_resolve=_searching,
+                                trusted_publishers=getattr(
+                                    cfg, "trusted_publishers", None),
+                                allow_untrusted="--allow-untrusted" in flags)
             if not plan.resolved:
                 ctx.console.print(f"[yellow]· {plan.name} is already in the "
                                   "local store — add --force to replace it[/]")
@@ -448,6 +456,9 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
                         "Try `/pull --search <query>`.[/]")
                 return CommandResult(handled=True)
 
+            if plan.refusal:
+                ctx.console.print(f"[red]✗ {escape(plan.refusal)}[/]")
+                return CommandResult(handled=True)
             ctx.console.print(f"[bold]{plan.name}[/] ← {chosen.describe()}")
             if "--yes" not in flags:
                 ctx.console.print(f"[dim]· preview only — run "

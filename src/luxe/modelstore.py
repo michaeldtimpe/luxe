@@ -32,6 +32,7 @@ from typing import Callable, Iterable
 import httpx
 
 from luxe.backend import is_loopback_url
+from luxe.config import DEFAULT_TRUSTED_PUBLISHERS
 from luxe.mounts import network_mounts
 from luxe.fswalk import DEFAULT_SKIP_DIRS
 
@@ -242,6 +243,88 @@ def hf_repo_for(name: str, models_dir: Path | None = None) -> str:
             if org and repo:
                 return f"{org}/{repo}"
     return ""
+
+
+# --- publishers (2026-10, model provenance) --------------------------------
+#
+# WHO published a model is read from STRUCTURE only — an HF repo id, an
+# HF-cache path component (`models--org--Name`), or the store's own nesting
+# (`<store>/<org>/<Name>`, how oMLX lands HF downloads). Never from a README
+# or config inside the weights: those are the publisher's own words, and an
+# attacker's re-upload would simply claim a trusted org. No structural signal
+# means the publisher is UNKNOWN (""), which is a state, not a verdict.
+
+
+def publisher_from_ref(ref: str) -> str:
+    """The org of an HF repo id (`org/Name` → `org`), or "" for a bare name
+    or a filesystem path."""
+    ref = (ref or "").strip()
+    if ref.startswith(("/", ".", "~")) or ref.count("/") != 1:
+        return ""
+    org, _, name = ref.partition("/")
+    return org if org and name else ""
+
+
+def publisher_from_path(path: str | os.PathLike[str]) -> str:
+    """The org named by an HF-cache component (`models--org--Name`) anywhere
+    in `path`, or "" — a plain directory says nothing about who made it."""
+    for part in Path(path).parts:
+        if part.startswith("models--"):
+            org, _, repo = part[len("models--"):].partition("--")
+            if org and repo:
+                return org
+    return ""
+
+
+def store_publisher(name: str, models_dir: Path | None = None) -> str:
+    """Who published the store entry serving `name`, from its layout: the
+    org namespace dir it is nested under, else the HF-cache repo its links
+    point into, else "" (unknown — e.g. a top-level copy from a mount)."""
+    root = Path(models_dir or DEFAULT_MODELS_DIR)
+    p = store_entry(name, root)
+    if p is None:
+        return ""
+    if p.parent != root:
+        return p.parent.name
+    repo = hf_repo_for(name, root)
+    if repo:
+        return repo.split("/", 1)[0]
+    try:
+        return publisher_from_path(os.path.realpath(p))
+    except OSError:
+        return ""
+
+
+def publisher_trust(publisher: str,
+                    trusted: Iterable[str] | None = None) -> bool | None:
+    """True/False for a known publisher on/off the allowlist (matched
+    case-insensitively — HF org names are); None when it is unknown."""
+    if not publisher:
+        return None
+    allowed = {t.lower() for t in (DEFAULT_TRUSTED_PUBLISHERS
+                                   if trusted is None else trusted)}
+    return publisher.lower() in allowed
+
+
+def source_publisher(source: "ModelSource") -> str:
+    """The publisher of a pull SOURCE: an HF source's repo org, a mount
+    source's HF-cache path component (else unknown)."""
+    if source.kind == "hf":
+        return publisher_from_ref(source.ref)
+    return publisher_from_path(source.ref)
+
+
+def untrusted_refusal(publisher: str, ref: str, *,
+                      flag: str = "--allow-untrusted") -> str:
+    """Plain-text refusal (no markup) for a pull from an untrusted publisher,
+    shared by `luxe pull` and `/pull` so the two cannot word it differently."""
+    return (f"refusing to pull {ref}: publisher {publisher!r} is not in "
+            "trusted_publishers (configs/chat.yaml). Models from unknown "
+            "publishers — abliterated merges, re-uploads — are the riskiest "
+            "thing to hand a tool-using agent, and a chat template runs on "
+            f"every prompt. Pass {flag} to fetch it anyway (its pin records "
+            f"trusted: false and /doctor keeps warning), or add {publisher} "
+            "to trusted_publishers: if you vouch for it.")
 
 
 def hf_cache_dir_for(repo_id: str) -> Path:
@@ -781,6 +864,13 @@ class PullPlan:
     source_ref: str                 # what was resolved (a dangling link's repo)
     sources: list[ModelSource] = field(default_factory=list)
     resolved: bool = False
+    # Provenance of the CHOSEN source (2026-10): the publisher ("" =
+    # unknown), whether it is on the allowlist (None = unknown), and — when
+    # it is not and the caller did not pass allow_untrusted — the refusal
+    # both surfaces print instead of transferring anything.
+    publisher: str = ""
+    trusted: bool | None = None
+    refusal: str = ""
 
     @property
     def chosen(self) -> ModelSource | None:
@@ -791,6 +881,8 @@ def plan_pull(ref: str, *, admin: OmlxAdmin | None = None,
               from_path: str = "", include_mounts: bool = True,
               force: bool = False, models_dir: Path | None = None,
               on_resolve: Callable[[PullPlan], None] | None = None,
+              trusted_publishers: Iterable[str] | None = None,
+              allow_untrusted: bool = False,
               ) -> PullPlan:
     """Plan a pull of `ref`: the ONE decision path behind `luxe pull` and
     `/pull`, which each render, confirm and transfer it their own way.
@@ -804,6 +896,18 @@ def plan_pull(ref: str, *, admin: OmlxAdmin | None = None,
     `on_resolve(plan)` runs just before the source scan so a surface can
     say what it is about to do. Sources come from `resolve_pull_sources`
     (the parity pin in tests/test_modelstore.py). Prints nothing.
+
+    PUBLISHER CHECK (2026-10): the chosen source's publisher is checked
+    against `trusted_publishers` (None = `DEFAULT_TRUSTED_PUBLISHERS`). An
+    HF source from an org off the list sets `plan.refusal` unless
+    `allow_untrusted` — the plan level, so nothing is downloaded or copied.
+    A MOUNT source is checked the same way when its path names an org (an
+    HF-cache copy, `models--org--Name`); a plain directory on a mount has
+    no structural publisher, and is allowed as UNKNOWN (`trusted` None): the
+    mount is this fleet's own NAS, the trust decision was taken when the
+    weights first landed there, and refusing would break the kappa recovery
+    path the fallback kit depends on. The template pin `luxe pull` records
+    afterwards is what catches a later swap either way.
     """
     name = store_name_for(ref)
     plan = PullPlan(name=name, state=model_state(name, models_dir),
@@ -818,6 +922,12 @@ def plan_pull(ref: str, *, admin: OmlxAdmin | None = None,
                                         from_path=from_path,
                                         include_mounts=include_mounts)
     plan.resolved = True
+    chosen = plan.chosen
+    if chosen is not None:
+        plan.publisher = source_publisher(chosen)
+        plan.trusted = publisher_trust(plan.publisher, trusted_publishers)
+        if plan.trusted is False and not allow_untrusted:
+            plan.refusal = untrusted_refusal(plan.publisher, chosen.ref)
     return plan
 
 
