@@ -513,6 +513,35 @@ class TestPullSourceParity:
         srcs = ms.resolve_pull_sources("org/Champ", include_mounts=False)
         assert [s.kind for s in srcs] == ["hf"]
 
+    def test_plan_leaves_present_weights_alone_without_scanning(
+            self, tmp_path, monkeypatch):
+        """`plan_pull` checks the store BEFORE the ≤20s mount scan: weights
+        that resolve are not replaced without force, and nothing is scanned."""
+        _model_dir(tmp_path / "Champ")
+        monkeypatch.setattr(ms, "resolve_pull_sources",
+                            lambda *a, **k: pytest.fail("scanned"))
+        plan = ms.plan_pull("org/Champ", models_dir=tmp_path,
+                            on_resolve=lambda p: pytest.fail("announced"))
+        assert (plan.name, plan.state, plan.resolved) == ("Champ", "ok", False)
+        assert plan.chosen is None
+
+    def test_plan_reaches_a_dangling_links_hf_repo_from_a_bare_name(
+            self, tmp_path, monkeypatch):
+        hub = tmp_path / "hub" / "models--mlx-community--Champ" / "snapshots"
+        (tmp_path / "Champ").symlink_to(hub / "abc")
+        seen: list = []
+        monkeypatch.setattr(ms, "resolve_pull_sources",
+                            lambda ref, **k: seen.append((ref, k)) or [])
+        announced: list = []
+        plan = ms.plan_pull("Champ", models_dir=tmp_path, include_mounts=False,
+                            on_resolve=lambda p: announced.append(p.state))
+        assert plan.state == "dangling" and plan.resolved
+        assert plan.source_ref == "mlx-community/Champ"
+        assert announced == ["dangling"]
+        assert seen == [("mlx-community/Champ",
+                         {"admin": None, "from_path": "",
+                          "include_mounts": False})]
+
     def test_both_surfaces_call_it_with_the_same_arguments(self, monkeypatch):
         """The CLI and the chat command are driven with equivalent input and
         must reach `resolve_pull_sources` with the same ref and flags."""

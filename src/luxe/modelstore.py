@@ -766,6 +766,61 @@ def resolve_pull_sources(ref: str, *, admin: OmlxAdmin | None = None,
     return resolve_sources(ref, admin=admin, include_mounts=include_mounts)
 
 
+@dataclass
+class PullPlan:
+    """What a pull of one ref would do — `plan_pull`'s answer.
+
+    `state` is the store entry's `model_state` BEFORE the pull. `sources` is
+    empty both when nothing was resolved (`state == "ok"` without force: the
+    weights are already here) and when nothing has the weights; `resolved`
+    tells the two apart.
+    """
+
+    name: str                       # the store name the pull writes
+    state: str                      # "ok" | "dangling" | "missing"
+    source_ref: str                 # what was resolved (a dangling link's repo)
+    sources: list[ModelSource] = field(default_factory=list)
+    resolved: bool = False
+
+    @property
+    def chosen(self) -> ModelSource | None:
+        return self.sources[0] if self.sources else None
+
+
+def plan_pull(ref: str, *, admin: OmlxAdmin | None = None,
+              from_path: str = "", include_mounts: bool = True,
+              force: bool = False, models_dir: Path | None = None,
+              on_resolve: Callable[[PullPlan], None] | None = None,
+              ) -> PullPlan:
+    """Plan a pull of `ref`: the ONE decision path behind `luxe pull` and
+    `/pull`, which each render, confirm and transfer it their own way.
+
+    Store state is checked FIRST — before the ≤20s mount scan — and keyed on
+    whether the weights RESOLVE, not on the name being listed: an entry
+    whose weights are present is left alone unless `force` (returned
+    unresolved), while a DANGLING entry (the HF-cache-wipe signature) is
+    replaceable, and its link text names the HF repo to re-fetch when only a
+    bare name was given — a bare name can only be found on a mount.
+    `on_resolve(plan)` runs just before the source scan so a surface can
+    say what it is about to do. Sources come from `resolve_pull_sources`
+    (the parity pin in tests/test_modelstore.py). Prints nothing.
+    """
+    name = store_name_for(ref)
+    plan = PullPlan(name=name, state=model_state(name, models_dir),
+                    source_ref=ref)
+    if plan.state == "ok" and not force:
+        return plan
+    if plan.state == "dangling" and "/" not in ref and not from_path:
+        plan.source_ref = hf_repo_for(name, models_dir) or ref
+    if on_resolve is not None:
+        on_resolve(plan)
+    plan.sources = resolve_pull_sources(plan.source_ref, admin=admin,
+                                        from_path=from_path,
+                                        include_mounts=include_mounts)
+    plan.resolved = True
+    return plan
+
+
 def resolve_sources(ref: str, *, admin: OmlxAdmin | None = None,
                     mount_roots: Iterable[str] | None = None,
                     include_mounts: bool = True) -> list[ModelSource]:

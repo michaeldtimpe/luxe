@@ -69,34 +69,27 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                               "`--search <query>`, or `--list`.[/]")
                 sys.exit(2)
 
-            name = ms.store_name_for(ref)
-            # Store state FIRST — before a ≤20s mount scan, and keyed on
-            # whether the weights RESOLVE, not on the name being listed. A
-            # dangling entry (the HF-cache-wipe signature) used to hit
-            # "already in the store — pass --force", so the fix `/doctor`
-            # printed for it did nothing. A broken entry is replaceable.
-            state = ms.model_state(name, dest_dir)
-            if state == "ok" and not force:
-                console.print(f"[yellow]· {name} is already in {dest_dir} "
+            def _resolving(plan) -> None:
+                # A dangling entry (the HF-cache-wipe signature) used to hit
+                # "already in the store — pass --force", so the fix `/doctor`
+                # printed for it did nothing. A broken entry is replaceable.
+                if plan.state == "dangling":
+                    console.print(f"[dim]· {plan.name} is in the store but "
+                                  "its weights don't resolve (dangling) — "
+                                  "replacing it[/]")
+                if not from_path and not force_hf:
+                    console.print("[dim]· scanning mounted volumes…[/]")
+
+            # The same plan as `/pull` (`modelstore.plan_pull`): store state
+            # first, a dangling link's HF repo, then the sources.
+            plan = ms.plan_pull(ref, admin=admin, from_path=from_path,
+                                include_mounts=not force_hf, force=force,
+                                models_dir=dest_dir, on_resolve=_resolving)
+            if not plan.resolved:
+                console.print(f"[yellow]· {plan.name} is already in {dest_dir} "
                               "— pass --force to replace it.[/]")
                 sys.exit(0)
-            source_ref = ref
-            if state not in ("missing", "ok"):
-                console.print(f"[dim]· {name} is in the store but its "
-                              f"weights don't resolve ({state}) — replacing "
-                              "it[/]")
-                # A bare name can only be found on a mount; the dangling
-                # link itself names the HF repo it pointed at, so offer that
-                # too instead of "an HF fetch needs a full repo id".
-                if "/" not in ref and not from_path:
-                    guessed = ms.hf_repo_for(name, dest_dir)
-                    if guessed:
-                        source_ref = guessed
-            if not from_path and not force_hf:
-                console.print("[dim]· scanning mounted volumes…[/]")
-            sources = ms.resolve_pull_sources(
-                source_ref, admin=admin, from_path=from_path,
-                include_mounts=not force_hf)
+            sources = plan.sources
             if not sources:
                 # With --from the only empty case is "not a model directory";
                 # without it, nothing anywhere has these weights.
@@ -111,7 +104,7 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
                 sys.exit(2)
 
             chosen = sources[0]
-            console.print(f"[bold]{name}[/] ← {chosen.describe()}")
+            console.print(f"[bold]{plan.name}[/] ← {chosen.describe()}")
             if len(sources) > 1:
                 for alt in sources[1:]:
                     console.print(f"  [dim]alt: {alt.describe()}[/]")
