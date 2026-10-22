@@ -51,8 +51,6 @@ from luxe.chat.session import ChatSession
 from luxe.chat.status import StatusState
 from luxe.chat.turn import TurnOutcome, TurnPrep
 
-_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
 logger = logging.getLogger(__name__)
 
 
@@ -637,32 +635,24 @@ class ChatApp(App):
         if self._ctx_pressure:
             self.status.ctx_pressure = self._ctx_pressure
             self.status.has_turn = True
-        elapsed = time.time() - self._gen_started if self._gen_started else 0.0
-        frame = _SPINNER[int(elapsed * 10) % len(_SPINNER)]
         if self._activity is not None:
             # gitkit/compare drive a phased activity string (coalesced, no flood).
-            body = f"{self._activity} · {elapsed:4.1f}s · esc to interrupt"
+            parts = [(self._activity, "cyan")]
         else:
-            tools = " · ".join(f"{n} ({c})" for n, c in self._tool_counts.most_common(4))
-            # The command currently EXECUTING (set at bash dispatch, cleared on
-            # completion) — a hung command names itself instead of the line
-            # showing only counts of finished calls.
+            # Counts of finished calls, then the command currently EXECUTING
+            # (set at bash dispatch, cleared on completion) — a hung command
+            # names itself.
             running = self._running_cmd
-            if running:
-                tools = (tools + " · " if tools else "") + f"$ {running[:80]}"
-            # Reasoning channel: counts only, never the text (chat.sdd). A
-            # thinking model can be silent for minutes before its first
-            # content token — measured at 10.5 min with nothing on screen.
-            if self._reasoning_since:
-                think_s = max(0.0, time.time() - self._reasoning_since)
-                tools = ((tools + " · " if tools else "")
-                         + f"thinking {think_s:.0f}s")
-            body = (f"{elapsed:4.1f}s" + (f" · {tools}" if tools else "")
-                    + " · esc to interrupt")
+            parts = [(" · ".join(f"{n} ({c})" for n, c
+                                 in self._tool_counts.most_common(4)),
+                      "bright_black"),
+                     (f"$ {running[:80]}" if running else "", "yellow")]
+        line = status_mod.activity_line(self._gen_started, parts,
+                                        reasoning_since=self._reasoning_since,
+                                        suffix="esc to interrupt")
         tail = self._stream_tail[-200:].replace("\n", " ")
         try:
-            self._gen.update(Text(f"{frame} {body}", style="cyan")
-                             + Text(f"  {tail}", style="dim"))
+            self._gen.update(line + Text(f"  {tail}", style="dim"))
         except Exception:
             return
         self.refresh_status()
