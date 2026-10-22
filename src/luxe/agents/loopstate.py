@@ -126,7 +126,6 @@ class LoopState:
 
     # --- early_bail band response (v1.10.4) --------------------------------
     suppression_count_in_trajectory: int = 0
-    breadth_probe_fire_count: int = 0
 
     # v1.9 — convergence proxy. Track read_file call signatures so the gate
     # can suppress itself when the model has revisited the same file (strong

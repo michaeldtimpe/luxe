@@ -671,11 +671,10 @@ def run_agent(
         )
         if eb_outcome is not None:
             # Apply state mutations the loop owns. The guard tells us how
-            # much to change suppression_count / breadth_probe_fire_count,
-            # whether to set early_bail_fired, and which intervention-kind
-            # to record on the trackers.
+            # much to change suppression_count, whether to set
+            # early_bail_fired, and which intervention-kind to record on the
+            # trackers.
             st.suppression_count_in_trajectory += eb_outcome.suppression_count_delta
-            st.breadth_probe_fire_count += eb_outcome.breadth_probe_fire_delta
             if eb_outcome.sets_early_bail_fired:
                 st.early_bail_fired = True
                 st.early_bail_step = step
