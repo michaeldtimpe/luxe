@@ -443,7 +443,6 @@ def run_agent(
     # LUXE_EARLY_BAIL_MODE (default/no_abstain/soft_anchor/...), read once
     # with the other switches instead of by EarlyBailGuard on every step.
     early_bail_mode = flags.early_bail_mode
-    post_write_idle_repeats = flags.post_write_idle_repeats
     repeat_read_stub_enabled = flags.repeat_read_stub
     reread_note_enabled = flags.reread_note
     truncated_turn_retry_enabled = flags.truncated_turn_retry
@@ -1324,8 +1323,7 @@ def run_agent(
             # Captured BEFORE the dedup branch and before `seen_calls.add(key)`
             # further down, so it means "this exact call already ran this run".
             # Distinct from `step_had_repeat`, which the dedup exemption keeps
-            # False for read_file — the very tool that produced the blind spot
-            # this feeds (see the post-write idle branch below).
+            # False for read_file.
             call_is_repeat = key in st.seen_calls
             # LUXE_REPEAT_READ_STUB (opt-in, default OFF). `call_is_repeat`
             # already means "no write since" — a write prunes every non-write
@@ -1475,16 +1473,11 @@ def run_agent(
                     if st.post_intervention_consecutive_writes > st.post_intervention_write_burst_max:
                         st.post_intervention_write_burst_max = st.post_intervention_consecutive_writes
             elif st.writes_seen > 0:
-                # A repeat returns content, so without the opt-in it RESETS
-                # the streak and the guard never arms. Demonstrated on m1
-                # 2026-08-10 (Qwen3.6-35B-A3B-4bit code drill): step 1 reads
-                # key f0ee19e9; after the edit at step 9, step 10 reads the
-                # SAME key again — dup=False (read_file is dedup-exempt),
-                # bytes=78 — so the streak reset. Neither this guard nor
-                # consecutive_repeat could see it.
+                # A dedup-exempt repeat (read_file) returns content, so it
+                # RESETS the streak. Counting such repeats as idle was benched
+                # twice and refuted (LUXE_POST_WRITE_IDLE_REPEATS, removed
+                # 2026-10-22; agents.sdd "Removed mechanisms").
                 idle = executed.bytes_out == 0 or executed.error
-                if post_write_idle_repeats and call_is_repeat:
-                    idle = True
                 if idle:
                     st.post_write_idle_tools += 1
                 else:
