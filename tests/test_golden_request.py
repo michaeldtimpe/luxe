@@ -44,29 +44,17 @@ from luxe.agents.single import run_single
 from luxe.backend import Backend
 from luxe.config import load_config
 from luxe.tools import fs
+from tests._golden_env import GOLDEN_SWITCHES
 
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 REQUEST_GOLDEN = GOLDEN_DIR / "run_single_request.json"
 REGISTRY_GOLDEN = GOLDEN_DIR / "prompt_registry.json"
 
-# Env vars that gate opt-in behaviour. Cleared so the snapshot describes the
-# DEFAULT substrate regardless of what the developer has exported.
-_GATED_ENV = (
-    "LUXE_REFLECT",
-    "LUXE_ADAPTIVE_POLICY",
-    "LUXE_LOAD_PRIORS",
-    "LUXE_EARLY_BAIL",
-    "LUXE_EARLY_BAIL_TRAJECTORY_SHAPE",
-    "LUXE_EARLY_BAIL_COMMIT_ONLY",
-    "LUXE_WRITE_PRESSURE",
-    "LUXE_TIERED_COMPACT",
-    "LUXE_TIERED_COMPACT_THRESHOLD",
-    "LUXE_TIERED_COMPACT_PHASE_THRESHOLDS",
-    "LUXE_SUPPRESS_TOOL_LOG",
-    "LUXE_LOG_TOOL_CALLS",
-    "LUXE_TOKEN_LOG_INTERVAL",
-)
+# Every LUXE_* switch run_single can reach, derived from RunFlags
+# (tests/_golden_env.py). Cleared so the snapshot describes the DEFAULT
+# substrate regardless of what the developer has exported.
+_GATED_ENV = GOLDEN_SWITCHES
 
 _SDD = """\
 # src

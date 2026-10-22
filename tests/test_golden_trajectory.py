@@ -50,28 +50,14 @@ from luxe.run_state import run_dir
 from luxe.spec import Requirement, Spec
 from luxe.tools import fs
 from luxe.tools.base import ToolDef
+from tests._golden_env import GOLDEN_SWITCHES
 
 GOLDEN_DIR = Path(__file__).parent / "golden" / "trajectory"
 
-# Every LUXE_* switch the loop (or anything it calls) reads. Cleared before
-# each scenario so a snapshot describes exactly the env the scenario sets.
-_ALL_LUXE_SWITCHES = (
-    "LUXE_REFLECT", "LUXE_ADAPTIVE_POLICY", "LUXE_LOAD_PRIORS",
-    "LUXE_RESPOND_TERMINAL", "LUXE_EARLY_BAIL", "LUXE_EARLY_BAIL_MODE",
-    "LUXE_EARLY_BAIL_TRAJECTORY_SHAPE", "LUXE_EARLY_BAIL_COMMIT_ONLY",
-    "LUXE_EARLY_BAIL_BAND_RESPONSE", "LUXE_WRITE_PRESSURE",
-    "LUXE_PROSE_BURST", "LUXE_ACTION_DENSITY_GATE", "LUXE_CONVERGENCE_GATE",
-    "LUXE_POST_WRITE_IDLE_REPEATS", "LUXE_TRUNCATED_TURN_RETRY",
-    "LUXE_TRUNCATED_TURN_MAX_RETRIES", "LUXE_EMPTY_TURN_RETRY",
-    "LUXE_CTX_SERVER_TRUTH", "LUXE_CTX_CAL_DAMP", "LUXE_CTX_CAL_TOOLS",
-    "LUXE_CTX_CAL_UNMEASURED_RATIO", "LUXE_TOOL_RESULT_CLAMP",
-    "LUXE_TIERED_COMPACT", "LUXE_TIERED_COMPACT_THRESHOLD",
-    "LUXE_TIERED_COMPACT_PHASE_THRESHOLDS", "LUXE_ADAPTIVE_NO_WRITE",
-    "LUXE_ADAPTIVE_SCORE_TREND", "LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP",
-    "LUXE_SUPPRESS_TOOL_LOG", "LUXE_LOG_TOOL_CALLS", "LUXE_TOOL_BUDGET_CTX",
-    "LUXE_REASONING_ROUNDTRIP", "LUXE_COMPACT_CACHE_FRIENDLY",
-    "LUXE_REPEAT_READ_STUB", "LUXE_REREAD_NOTE",
-)
+# Every LUXE_* switch the loop (or anything it calls) reads, derived from
+# RunFlags (tests/_golden_env.py). Cleared before each scenario so a snapshot
+# describes exactly the env the scenario sets.
+_ALL_LUXE_SWITCHES = GOLDEN_SWITCHES
 
 # A deterministic ~9 KB file so a read of it moves context pressure enough
 # for compaction to fire at the small windows the scenarios use.
@@ -457,6 +443,17 @@ def _assert_golden(name: str, actual: dict) -> None:
 @pytest.mark.parametrize("sc", SCENARIOS, ids=[s.name for s in SCENARIOS])
 def test_trajectory_matches_golden(sc: Scenario, tmp_path, monkeypatch):
     _assert_golden(sc.name, _run_scenario(sc, tmp_path, monkeypatch))
+
+
+def test_cleared_switches_track_run_flags():
+    """The clear-list is recorded from RunFlags.from_env, not hand-kept: a
+    broken recorder would silently clear nothing."""
+    names = set(_ALL_LUXE_SWITCHES)
+    assert {"LUXE_TIERED_COMPACT", "LUXE_EARLY_BAIL", "LUXE_EARLY_BAIL_MODE",
+            "LUXE_REASONING_ROUNDTRIP", "LUXE_CTX_CAL_TOOLS"} <= names
+    # No switch removed on 2026-10-22 lingers.
+    assert not names & {"LUXE_POST_WRITE_IDLE_REPEATS", "LUXE_LOAD_PRIORS",
+                        "LUXE_EARLY_BAIL_COMMIT_ONLY", "LUXE_REREAD_NOTE"}
 
 
 def test_trajectory_is_deterministic(tmp_path, monkeypatch):
