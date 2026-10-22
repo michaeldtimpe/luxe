@@ -479,6 +479,50 @@ GIT_WORKFLOW_HINT = (
 )
 
 
+# `maintain_pipeline`'s reprompt 2nd pass (luxe/maintain.py; benchmark path).
+# Moved here byte-identically from inline f-strings (2026-10-22); maintain
+# fills them with `.format`, which substitutes values without re-parsing them,
+# so a goal or diff containing braces renders exactly as the f-string did.
+# SpecDD gate: the lead-in; maintain appends format_unsatisfied_for_reprompt().
+REPROMPT_SPEC_TEMPLATE = (
+    "You completed an initial pass on this goal:\n  {goal}\n\n"
+)
+
+# v1.3 directive gate, prose-mode signature (0 additions, >1000 chars of
+# final report): persist the stranded report. `prior_text` is the report's
+# first 6000 chars.
+REPROMPT_STRANDED_PROSE_TEMPLATE = (
+    "PROBLEM: You completed a pass on this goal but did NOT "
+    "call write_file or edit_file. The working tree has 0 "
+    "added lines. You produced extensive prose in your "
+    "final report but it is stranded — not saved to disk.\n\n"
+    "Original goal:\n  {goal}\n\n"
+    "Your prior final report (which you must now persist "
+    "to disk):\n\n{prior_text}\n\n"
+    "Action: identify the file path the goal asks for "
+    "(e.g., 'CONFIG.md' for an env-var documentation task; "
+    "the path is named in the goal). Call write_file with "
+    "that path and a coherent document body derived from "
+    "the report above. Do this on your FIRST tool call. "
+    "Do not explore more files first. After write_file "
+    "succeeds, you may continue if the content needs "
+    "refinement."
+)
+
+# v1.3 directive gate, otherwise: the diff is below the threshold.
+REPROMPT_SMALL_DIFF_TEMPLATE = (
+    "You completed an initial pass on this goal:\n  {goal}\n\n"
+    "The diff so far is small ({additions} added / "
+    "{deletions} deleted lines):\n"
+    "```diff\n{diff_text}\n```\n\n"
+    "Re-read the goal carefully. Identify each named deliverable. "
+    "For any deliverable NOT yet reflected in the diff, make the "
+    "missing edits now via edit_file or write_file. If you "
+    "believe the diff is complete, make no further edits and "
+    "explain in your response which lines satisfy each "
+    "deliverable."
+)
+
 # LUXE_STEP_LIMIT_FINISH (opt-in, unbenched; luxe/steplimit.py). Goal for the
 # bounded pass after a run stops at max steps with a change on disk. Positive
 # imperatives only (lessons: "rather than X" framing reads as wrap-up).

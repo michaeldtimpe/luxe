@@ -22,6 +22,11 @@ from typing import Callable
 import click
 from rich.console import Console
 
+from luxe.agents.prompts import (
+    REPROMPT_SMALL_DIFF_TEMPLATE,
+    REPROMPT_SPEC_TEMPLATE,
+    REPROMPT_STRANDED_PROSE_TEMPLATE,
+)
 from luxe.agents.tasktype import infer_task_type
 from luxe.config import load_config
 from luxe.gitclone import resolve_repo
@@ -91,6 +96,30 @@ def _should_reprompt_for_under_engagement(task_type: str, additions: int) -> boo
     if os.environ.get("LUXE_REPROMPT_ON_DOC") != "1":
         return False
     return task_type == "document" and additions < _REPROMPT_DOC_ADDITIONS_THRESHOLD
+
+
+def _v1_3_followup_goal(goal: str, additions: int, deletions: int,
+                        diff_text: str, prior_text: str) -> str:
+    """The v1.3 directive reprompt's goal — for fixtures without a spec.
+    Branches on the prose-mode signature (additions==0 AND substantial
+    prior prose). Wording lives in agents/prompts.py."""
+    if additions == 0 and len(prior_text) > 1000:
+        return REPROMPT_STRANDED_PROSE_TEMPLATE.format(
+            goal=goal, prior_text=prior_text[:6000])
+    return REPROMPT_SMALL_DIFF_TEMPLATE.format(
+        goal=goal, additions=additions, deletions=deletions,
+        diff_text=diff_text)
+
+
+def _merge_pass(into, other) -> None:
+    """Fold a second pass's (reprompt / step-limit finish) counters and
+    tool calls into the main pass's AgentResult."""
+    into.tool_calls_total += other.tool_calls_total
+    into.schema_rejects += other.schema_rejects
+    into.prompt_tokens += other.prompt_tokens
+    into.completion_tokens += other.completion_tokens
+    into.wall_s += other.wall_s
+    into.tool_calls.extend(other.tool_calls)
 
 
 def maintain_pipeline(
@@ -401,7 +430,7 @@ def maintain_pipeline(
                              threshold=_REPROMPT_DOC_ADDITIONS_THRESHOLD,
                              gate="spec")
                 followup_goal = (
-                    f"You completed an initial pass on this goal:\n  {goal}\n\n"
+                    REPROMPT_SPEC_TEMPLATE.format(goal=goal)
                     + format_unsatisfied_for_reprompt(_spec_validation)
                 )
             else:
@@ -417,38 +446,9 @@ def maintain_pipeline(
                              additions=additions, deletions=deletions,
                              threshold=_REPROMPT_DOC_ADDITIONS_THRESHOLD,
                              gate="v1_3_directive")
-                prior_text = single_result.final_text or ""
-                if additions == 0 and len(prior_text) > 1000:
-                    followup_goal = (
-                        f"PROBLEM: You completed a pass on this goal but did NOT "
-                        f"call write_file or edit_file. The working tree has 0 "
-                        f"added lines. You produced extensive prose in your "
-                        f"final report but it is stranded — not saved to disk.\n\n"
-                        f"Original goal:\n  {goal}\n\n"
-                        f"Your prior final report (which you must now persist "
-                        f"to disk):\n\n{prior_text[:6000]}\n\n"
-                        f"Action: identify the file path the goal asks for "
-                        f"(e.g., 'CONFIG.md' for an env-var documentation task; "
-                        f"the path is named in the goal). Call write_file with "
-                        f"that path and a coherent document body derived from "
-                        f"the report above. Do this on your FIRST tool call. "
-                        f"Do not explore more files first. After write_file "
-                        f"succeeds, you may continue if the content needs "
-                        f"refinement."
-                    )
-                else:
-                    followup_goal = (
-                        f"You completed an initial pass on this goal:\n  {goal}\n\n"
-                        f"The diff so far is small ({additions} added / "
-                        f"{deletions} deleted lines):\n"
-                        f"```diff\n{diff_text}\n```\n\n"
-                        f"Re-read the goal carefully. Identify each named deliverable. "
-                        f"For any deliverable NOT yet reflected in the diff, make the "
-                        f"missing edits now via edit_file or write_file. If you "
-                        f"believe the diff is complete, make no further edits and "
-                        f"explain in your response which lines satisfy each "
-                        f"deliverable."
-                    )
+                followup_goal = _v1_3_followup_goal(
+                    goal, additions, deletions, diff_text,
+                    single_result.final_text or "")
             second_result = run_single(
                 backend, cfg.role("monolith"),
                 goal=followup_goal,
@@ -459,12 +459,7 @@ def maintain_pipeline(
                 run_id=spec.run_id,
                 phase="reprompt",
             )
-            single_result.tool_calls_total += second_result.tool_calls_total
-            single_result.schema_rejects += second_result.schema_rejects
-            single_result.prompt_tokens += second_result.prompt_tokens
-            single_result.completion_tokens += second_result.completion_tokens
-            single_result.wall_s += second_result.wall_s
-            single_result.tool_calls.extend(second_result.tool_calls)
+            _merge_pass(single_result, second_result)
             if second_result.aborted:
                 single_result.aborted = True
                 single_result.abort_reason = (
@@ -522,12 +517,7 @@ def maintain_pipeline(
                         run_id=spec.run_id,
                         phase="step_limit_finish",
                     )
-                    single_result.tool_calls_total += _fin.tool_calls_total
-                    single_result.schema_rejects += _fin.schema_rejects
-                    single_result.prompt_tokens += _fin.prompt_tokens
-                    single_result.completion_tokens += _fin.completion_tokens
-                    single_result.wall_s += _fin.wall_s
-                    single_result.tool_calls.extend(_fin.tool_calls)
+                    _merge_pass(single_result, _fin)
                     append_event(spec.run_id, "step_limit_finish_done",
                                  aborted=_fin.aborted,
                                  abort_reason=_fin.abort_reason,
