@@ -26,7 +26,6 @@ from luxe.chat.doctor import (  # noqa: F401  (re-export: the /doctor surface)
     _fetch_catalog,
     _LIVENESS_TIMEOUT_S,
     _weights_fix,
-    backend_entry_for,
     endpoint_fixes,
     hostwide_view,
     render_doctor,

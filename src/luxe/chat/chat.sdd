@@ -94,7 +94,11 @@ never touches this module.
   is empty for every other entry, so their bodies stay byte-identical. Every
   supported engine is OpenAI-compatible, which is the whole reason one client
   can drive all three. Owns: `BackendEntry.is_omlx/is_openrouter/engine_label/
-  needs_api_key/body_extras`, `inspection.backend_entry_for/_engine_facts`.
+  needs_api_key/body_extras`, and the GUARDED predicates every chat surface
+  asks the active entry through — `SlotManager.active_entry/engine_label/
+  is_omlx/is_cloud/is_billable` (unknown entry = local oMLX; one owner since
+  2026-10, where doctor, cost and five command sites each had their own
+  try/except copy).
   Introduced 2026-08-13 for neo, whose 8 GB cannot hold an MLX model at
   production context (probe: `acceptance/mlx_neo_probe_2026_08/REPORT.md`)
 - `engine: openrouter` is the CLOUD carve-out (2026-08-17, luxe.sdd): opt-in

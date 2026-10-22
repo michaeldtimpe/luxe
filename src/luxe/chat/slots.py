@@ -199,11 +199,7 @@ class SlotManager:
         from luxe.chat.session import BILLABLE_DEFAULT_NUM_CTX
 
         role = self.role_for(slot)
-        entry = self.active_entry()
-        try:
-            if entry is None or not entry.is_billable():
-                return role.num_ctx
-        except Exception:
+        if not self.is_billable():
             return role.num_ctx
         return min(BILLABLE_DEFAULT_NUM_CTX, self.ctx_ceiling(slot)) or role.num_ctx
 
@@ -225,12 +221,7 @@ class SlotManager:
             return 0
         cached = self._catalog_cache.get(self.backend_name)
         if cached is None:
-            entry = self.active_entry()
-            try:
-                billable = entry is not None and entry.is_billable()
-            except Exception:
-                billable = False
-            if not billable:
+            if not self.is_billable():
                 return 0
             cached = self.catalog()
         for rec in cached or []:
@@ -305,23 +296,44 @@ class SlotManager:
     def active_entry(self) -> BackendEntry | None:
         """The `backends:` entry behind the active endpoint, or None.
 
-        Guarded like `inspection.backend_entry_for`: every caller has a sane
-        default for None, so a config luxe cannot read degrades to the
-        pre-multi-engine behaviour instead of raising into a render path.
+        Guarded: every caller has a sane default for None, so a config luxe
+        cannot read degrades to the pre-multi-engine behaviour instead of
+        raising into a render path. The predicates below are the ONE guarded
+        way to ask the entry a question (doctor, cost, and the commands used
+        to each wrap `active_entry().is_…()` in their own try/except).
         """
         try:
             return self.cfg.backend_entry(self.backend_name)
         except Exception:
             return None
 
+    def _ask_entry(self, question: str, default):
+        entry = self.active_entry()
+        if entry is None:
+            return default
+        try:
+            return getattr(entry, question)()
+        except Exception:
+            return default
+
     def engine_label(self) -> str:
         """How to name the active endpoint in user-facing text ("oMLX" by
         default) — so a message never asserts the wrong serving stack."""
-        entry = self.active_entry()
-        try:
-            return entry.engine_label() if entry is not None else "oMLX"
-        except Exception:
-            return "oMLX"
+        return self._ask_entry("engine_label", "oMLX")
+
+    def is_omlx(self) -> bool:
+        """The active endpoint runs oMLX (the default when unknown)."""
+        return bool(self._ask_entry("is_omlx", True))
+
+    def is_cloud(self) -> bool:
+        """The active endpoint is the hosted cloud engine (openrouter): no
+        local process to start, no weights on this disk, and a key that is
+        fatal rather than cosmetic. False when unknown."""
+        return bool(self._ask_entry("is_openrouter", False))
+
+    def is_billable(self) -> bool:
+        """Tokens on the active endpoint cost money. False when unknown."""
+        return bool(self._ask_entry("is_billable", False))
 
     def available_models(self) -> list[str]:
         """Selectable model ids: what the server serves, filtered to the roster.

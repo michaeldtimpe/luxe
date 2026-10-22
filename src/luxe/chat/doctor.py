@@ -57,9 +57,9 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool,
     """
     try:
         cfg = slots.cfg
-        entry = backend_entry_for(slots)
-        is_omlx, engine_label = _engine_facts(slots)
-        if entry is not None and entry.is_billable():
+        entry = slots.active_entry()
+        is_omlx, engine_label = slots.is_omlx(), slots.engine_label()
+        if slots.is_billable():
             # A billable endpoint is never a manifest main/fallback (luxe.sdd
             # cloud carve-out), so "add a hosts: entry for it" would be a fix
             # the contract forbids. Its catalog is the provider's, not a host's.
@@ -222,43 +222,6 @@ def endpoint_fixes(entry) -> dict[str, str]:
     return {"start": start, "restart": restart, "served": served}
 
 
-def backend_entry_for(slots):
-    """The `backends:` entry behind the active endpoint, or None.
-
-    Guarded on purpose: doctor must never raise, and every caller below has a
-    sane oMLX-shaped default for the None case, so a config luxe cannot read
-    degrades to exactly the pre-2026-08-13 behaviour.
-    """
-    try:
-        return slots.cfg.backend_entry(slots.backend_name)
-    except Exception:
-        return None
-
-
-def _engine_facts(slots) -> tuple[bool, str]:
-    """(is_omlx, label) for the active endpoint. Defaults to oMLX."""
-    entry = backend_entry_for(slots)
-    if entry is None:
-        return True, "oMLX"
-    try:
-        return entry.is_omlx(), entry.engine_label()
-    except Exception:
-        return True, "oMLX"
-
-
-def _is_cloud(slots) -> bool:
-    """True when the active endpoint is the billable cloud engine — no local
-    process to start, no weights on this disk, and a key that is fatal rather
-    than cosmetic. Guarded: doctor must never raise."""
-    entry = backend_entry_for(slots)
-    if entry is None:
-        return False
-    try:
-        return bool(entry.is_openrouter())
-    except Exception:
-        return False
-
-
 def stale_build_check(base_url: str, *, is_omlx: bool = True
                       ) -> tuple[str, str, str] | None:
     """`(state, detail, fix)` for whether the local oMLX is running the Cellar
@@ -407,8 +370,8 @@ def _endpoint_checks(doc: Doctor, slots) -> tuple[bool, list[str] | None]:
     # otherwise, so every host but neo is unchanged. It switches only the
     # DIAGNOSTIC lines — a fix that reads `brew services start omlx` is
     # worse than no fix at all on a box with no omlx formula.
-    is_omlx, engine_label = _engine_facts(slots)
-    fixes = endpoint_fixes(backend_entry_for(slots))
+    is_omlx, engine_label = slots.is_omlx(), slots.engine_label()
+    fixes = endpoint_fixes(slots.active_entry())
 
     # Liveness AND catalog from one bounded GET (see `_fetch_catalog`). A
     # non-200 is "there but not answering" (restart); anything else — refused,
@@ -440,19 +403,17 @@ def _endpoint_checks(doc: Doctor, slots) -> tuple[bool, list[str] | None]:
 
 
 def _key_check(doc: Doctor, slots) -> None:
-    is_omlx, engine_label = _engine_facts(slots)
-    entry = backend_entry_for(slots)
-    key_env = getattr(entry, "api_key_env", "") or "OMLX_API_KEY"
+    key_env = getattr(slots.active_entry(), "api_key_env", "") or "OMLX_API_KEY"
     if getattr(slots.backend, "api_key", ""):
         doc.add("API key", OK, "present")
-    elif _is_cloud(slots):
+    elif slots.is_cloud():
         # FAIL, not WARN: on a cloud endpoint every single request 401s without
         # it, so this is the whole session, not a caveat. The env var is named;
         # its VALUE never appears here (chat.sdd Must-not).
         doc.add("API key", FAIL, f"no {key_env} resolved for this endpoint",
                 f"`echo '{key_env}=<key>' >> ~/.luxe/secrets.env` "
                 "(or export it in this shell), then restart the session")
-    elif is_omlx:
+    elif slots.is_omlx():
         # The ENTRY's variable, not a hard-coded OMLX_API_KEY: the m5 entry
         # reads OMLX_API_KEY_M5, and writing the other name fixes nothing.
         doc.add("API key", WARN, "no key resolved for this endpoint",
@@ -462,7 +423,7 @@ def _key_check(doc: Doctor, slots) -> None:
         # llama-server is keyless unless started with --api-key. A standing
         # yellow line whose fix changes nothing trains people to ignore the
         # yellow lines that matter.
-        doc.add("API key", OK, f"not required by {engine_label}")
+        doc.add("API key", OK, f"not required by {slots.engine_label()}")
 
 
 def _model_checks(doc: Doctor, slots, reachable: bool,
@@ -494,14 +455,14 @@ def _model_checks(doc: Doctor, slots, reachable: bool,
 def _origin_check(doc: Doctor, slots, model: str,
                   served: list[str] | None) -> None:
     backend = slots.backend
-    is_omlx, engine_label = _engine_facts(slots)
+    engine_label = slots.engine_label()
     org = origin_mod.cached_origin_for(backend, model)
     if org.kind == "unknown":
         try:
             org = origin_mod.origin_for(backend, model, served=served)
         except Exception:
             pass
-    if _is_cloud(slots):
+    if slots.is_cloud():
         # Provider-hosted: there is nothing on this disk to check and
         # nothing to `luxe pull`. The fact worth stating is that the turns
         # are billed, which no local endpoint has to say.
@@ -517,7 +478,7 @@ def _origin_check(doc: Doctor, slots, model: str,
                 "prompts should not cross the network")
     elif org.kind == "local":
         doc.add("weights", OK, f"{org.glyph} local disk")
-    elif is_omlx:
+    elif slots.is_omlx():
         doc.add("weights", WARN, "location unreported by oMLX")
     else:
         # llama-server has no `/v1/models/status`, so there is no path to

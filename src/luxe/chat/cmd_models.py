@@ -36,12 +36,8 @@ def _warn_model_not_offered(ctx: CommandContext, model_id: str) -> None:
     else:
         # `/pull` is meaningless where the provider hosts the weights: point at
         # the catalog search instead, which is how you find a real id there.
-        try:
-            hosted = ctx.slots.active_entry().is_openrouter()
-        except Exception:
-            hosted = False
         fix = ("`/model find <text>` for the exact id"
-               if hosted else f"`/pull {model_id} --yes` to fetch it")
+               if ctx.slots.is_cloud() else f"`/pull {model_id} --yes` to fetch it")
         ctx.console.print(
             f"  [yellow]· {model_id} isn't in this endpoint's catalog[/] "
             f"[dim]— {fix}, or `/model` for the list. The next turn will fail "
