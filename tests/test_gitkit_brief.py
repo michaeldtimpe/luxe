@@ -19,14 +19,6 @@ from luxe.gitkit import brief as brief_mod
 from luxe.memory import project as project_mem
 
 
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-
-
 class _Result:
     def __init__(self, text):
         self.final_text = text

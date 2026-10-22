@@ -18,14 +18,6 @@ from luxe.config import PipelineConfig, RoleConfig
 from luxe.memory import project as project_mem
 
 
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-
-
 def _resp(text: str):
     """The REAL response type. A hand-rolled stub with a `.content` attribute
     is what let `distil` read the wrong field and silently do nothing on every
