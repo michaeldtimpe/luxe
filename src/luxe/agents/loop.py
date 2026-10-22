@@ -320,11 +320,12 @@ def run_agent(
         once per requirement.
 
     `early_bail_message` (v1.8 Track 3) overrides the default
-    `_EARLY_BAIL_MESSAGE` for this run. SWE-bench adapter passes a
-    variant without the abstain branch ("explicitly state the existing
-    code is correct"), which was the source of 3 wrong→empty regressions
-    in v1.7's B.5. maintain_suite uses the default (abstain is sometimes
-    a legitimate outcome there). Pass None to use the default.
+    `_EARLY_BAIL_MESSAGE` for this run; it takes precedence over
+    `LUXE_EARLY_BAIL_MODE`. No production caller passes it today — the
+    SWE-bench adapter selects its variant through the env var instead
+    (`LUXE_EARLY_BAIL_MODE=soft_anchor`), and maintain_suite uses the
+    default (abstain is sometimes a legitimate outcome there). Pass None
+    to use the default.
 
     `on_notice` (2026-08-11) receives one-line, human-facing statements about
     the loop acting on its own — today, the truncated-turn retry. It exists
@@ -472,12 +473,14 @@ def run_agent(
         ) if tiered_compact_enabled else None
     )
 
-    # v1.11 Phase 1 — adaptive policy substrate. Computation + observability
-    # ONLY in Phase 1; modulation does NOT yet influence intervention
-    # dispatch (deferred to Phase 3a so any behavior change is gated under
-    # archetype-probe testing). Disable-equivalence invariant: when
-    # LUXE_ADAPTIVE_POLICY=0 (or unset), zero adaptive_state events are
-    # emitted and zero new state is computed — v1.10.5 byte-identical.
+    # v1.11 adaptive policy substrate. Phase 3a wired the slew-rate-limited
+    # modulation into WritePressureGuard, but the write_pressure/early_bail
+    # biases are pinned at 0.0 (Phase B: no_write retired) and the
+    # soft_anchor consumer was reverted, so in practice it is observability
+    # (the adaptive_state event) — agents.sdd "Stage 3 / v1.11".
+    # Disable-equivalence invariant: when LUXE_ADAPTIVE_POLICY=0 (or unset),
+    # zero adaptive_state events are emitted and zero new state is
+    # computed — v1.10.5 byte-identical.
     adaptive_policy_enabled = flags.adaptive_policy
     # Per-signal ablation toggles (default ON when adaptive_policy_enabled).
     adaptive_no_write_enabled = flags.adaptive_no_write
@@ -573,10 +576,10 @@ def run_agent(
         # v1.9 binary `same_file_read_twice_step` skip — see
         # luxe.agents.convergence module docstring for the design rationale.
         convergence_score = compute_convergence_score(st.tool_history)
-        # v1.11 Phase 1 — append to score_log + compute adaptive state.
-        # Guarded by LUXE_ADAPTIVE_POLICY to preserve disable-equivalence.
-        # Phase 1 behavior: emit observability event only; state does NOT
-        # influence intervention dispatch this phase.
+        # v1.11 — append to score_log + compute adaptive state. Guarded by
+        # LUXE_ADAPTIVE_POLICY to preserve disable-equivalence. The only
+        # dispatch consumer is WritePressureGuard's modulation, held at
+        # neutral 1.0 by the pinned bias; see the substrate note above.
         if adaptive_policy_enabled:
             st.score_log.append(convergence_score)
             # Bounded growth: cap at 64 entries (covers max_steps for current
@@ -649,7 +652,7 @@ def run_agent(
         # Early-bail intervention (v1.7 priority #1). Same checkpoint as
         # write_pressure but fires earlier — at step 4 with 4+ non-write
         # tool calls and zero writes. Trace-derived thresholds; see the
-        # block comment on _EARLY_BAIL_MIN_STEP above for the empirical
+        # block comment on guardrails._EARLY_BAIL_MIN_STEP for the empirical
         # basis. The message gives the model a binary recovery gradient:
         # edit OR explicitly decline-with-justification. Mutually
         # compatible with WRITE_PRESSURE — both can fire in the same run
@@ -791,19 +794,6 @@ def run_agent(
                     step=step,
                     **adg_suppressed,
                 )
-
-        # v1.10.2 — post-exploratory escalation REMOVED before ship.
-        # The probe revealed matplotlib-14623 (W3 founding recovery)
-        # and pylint-6528 (W3 collateral) have CONTRADICTORY needs at
-        # the same convergence-score band: pylint-6528 NEEDED escalation
-        # pressure to commit (step 8 escalation → step 8 edit_file);
-        # matplotlib-14623 was on a successful late-commit trajectory
-        # (step 14 write in v1.10.1) that the escalation cascade
-        # interrupted, regressing it to habituation_exit at step 20
-        # with 0 writes. Single-mechanism escalation can't satisfy both;
-        # v1.10.3 needs a discriminator at fire-time. v1.10.2 ships as
-        # observability-only (no model-behavior change beyond the
-        # diversity gate's minimal-trajectory fallback).
 
         # v1.10.1 — habituation clean-exit. When ≥3 distinct interventions
         # have fired this run AND the model has produced ZERO post-intervention
