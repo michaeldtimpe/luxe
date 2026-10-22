@@ -249,6 +249,33 @@ def _run_chat_cmd(monkeypatch, start_dir, front_end):
     return result.output
 
 
+def test_startup_flags_reach_the_front_end_as_one_value(_home, monkeypatch):
+    """`_run_interactive` hands the front-end ONE `StartupFlags` (2026-10;
+    sixteen keyword arguments were threaded, and written out twice, before)."""
+    from click.testing import CliRunner
+
+    import luxe.chat as chat_pkg
+    from luxe import cli as cli_mod
+
+    plain = _home / "notes"
+    plain.mkdir()
+    seen = {}
+    monkeypatch.setattr(chat_pkg, "run_chat_repl",
+                        lambda cfg, repo, langs, **kw: seen.update(kw))
+    monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: False, raising=False)
+    result = CliRunner().invoke(cli_mod.chat_cmd, [
+        "--repo", str(plain), "--keep-loaded", "--dev", "--web",
+        "--verbose", "diff", "--no-terse", "--compact", "--ctx", "large",
+        "--theme", "mono"])
+    assert result.exit_code == 0, result.output
+    f = seen["flags"]
+    assert (f.keep_loaded, f.dev_mode, f.start_web, f.start_write) == \
+        (True, True, True, False)
+    assert (f.verbose, f.no_terse, f.compact, f.ctx_tier, f.theme_name) == \
+        ("diff", True, True, "large", "mono")
+    assert f.project_kind == "none" and callable(seen["on_project"])
+
+
 def test_starting_in_a_plain_directory_builds_no_index(_home, monkeypatch):
     from luxe import search as search_mod
     from luxe import symbols as symbols_mod
@@ -259,7 +286,7 @@ def test_starting_in_a_plain_directory_builds_no_index(_home, monkeypatch):
     seen = {}
 
     def front_end(cfg, repo_path, languages, **kw):
-        seen["kind"] = kw.get("project_kind")
+        seen["kind"] = kw["flags"].project_kind
         seen["bm25"] = search_mod.get_index()
         seen["symbols"] = symbols_mod.get_index()
         seen["languages"] = languages
@@ -285,7 +312,7 @@ def test_starting_in_a_repo_subdir_indexes_the_whole_repo(_home, monkeypatch):
 
     def front_end(cfg, repo_path, languages, **kw):
         seen["root"] = repo_path
-        seen["kind"] = kw.get("project_kind")
+        seen["kind"] = kw["flags"].project_kind
         seen["paths"] = list(search_mod.get_index().paths)
 
     _run_chat_cmd(monkeypatch, sub, front_end)

@@ -24,6 +24,7 @@ from rich.text import Text
 from luxe.chat import commands as cmd
 from luxe.chat.controller import (
     ChatController,
+    StartupFlags,
     TurnHooks,
     banner_markup,
     build_hint_markup,
@@ -146,34 +147,15 @@ def run_chat_repl(
     languages: frozenset,
     *,
     console: Console,
-    keep_loaded: bool = False,
-    resume_session_id: str | None = None,
+    flags: StartupFlags = StartupFlags(),
     reader: Callable[[], str] | None = None,
     infer_task_type: Callable[[str], str] | None = None,
-    dev_mode: bool = False,
-    start_web: bool = False,
-    start_write: bool = False,
-    startup_verbose: str | None = None,
-    startup_show_reasoning: bool = False,
-    startup_no_terse: bool = False,
-    startup_debug: bool = False,
-    startup_compact: bool = False,
-    theme_name: str | None = None,
-    startup_ctx_tier: str | None = None,
     on_project: Callable[[str | None], dict] | None = None,
-    project_kind: str = "git",
 ) -> None:
     ctl = ChatController.build(
         cfg, repo_path, languages,
         on_status=lambda m: console.print(Text(f"· {m}", style="dim")),
-        keep_loaded=keep_loaded, infer_task_type=infer_task_type,
-        theme_name=theme_name, project_kind=project_kind, log=logger,
-        dev_mode=dev_mode, start_web=start_web, start_write=start_write,
-        startup_verbose=startup_verbose,
-        startup_show_reasoning=startup_show_reasoning,
-        startup_no_terse=startup_no_terse, startup_debug=startup_debug,
-        startup_compact=startup_compact, startup_ctx_tier=startup_ctx_tier,
-    )
+        flags=flags, infer_task_type=infer_task_type, log=logger)
     session, slots, status = ctl.session, ctl.slots, ctl.status
 
     # Static status line, printed inline above each prompt (chat.sdd
@@ -192,8 +174,8 @@ def run_chat_repl(
     # console on the line path.
     ctl.command_context(console, reader=console.input, on_project=on_project)
 
-    if resume_session_id:
-        ctl.ctx.on_resume(resume_session_id)
+    if flags.resume_session_id:
+        ctl.ctx.on_resume(flags.resume_session_id)
 
     # The status line (above the prompt) already shows repo path, slot/model,
     # and write/bash state — so the banner stays minimal to avoid duplicating

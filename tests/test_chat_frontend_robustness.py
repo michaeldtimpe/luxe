@@ -22,6 +22,7 @@ from luxe.chat import repl as repl_mod
 from luxe.chat import slots as slots_mod
 from luxe.chat import turn as turn_mod
 from luxe.chat import controller as controller_mod
+from luxe.chat.controller import StartupFlags
 from luxe.chat.render import ChatCancelled
 from luxe.chat.session import ChatSession, ChatTurn
 from luxe.config import PipelineConfig, RoleConfig
@@ -109,7 +110,7 @@ def _reader(lines):
 def _repl(lines, *, repo="", on_project=None, cfg=None, **kw):
     console, out = _console()
     repl_mod.run_chat_repl(cfg or _cfg(), repo, frozenset(), console=console,
-                           keep_loaded=True, reader=_reader(lines),
+                           flags=StartupFlags(keep_loaded=True), reader=_reader(lines),
                            infer_task_type=lambda m: "review",
                            on_project=on_project, **kw)
     return out.getvalue()
@@ -316,7 +317,7 @@ def test_4_a_mid_turn_quit_still_unloads_at_session_end(monkeypatch):
     monkeypatch.setattr(tui_mod.ChatApp, "exit", lambda self, *a, **k: None)
     # Not mounted: no screen stack to look at for an open modal.
     monkeypatch.setattr(tui_mod.ChatApp, "screen", property(lambda self: None))
-    tui_mod.run_chat_app(_cfg(), "", frozenset(), keep_loaded=False)
+    tui_mod.run_chat_app(_cfg(), "", frozenset())  # keep_loaded off
     assert unloads == [1]
 
 
