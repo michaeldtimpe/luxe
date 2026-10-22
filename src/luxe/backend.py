@@ -577,6 +577,163 @@ def _usage_cost(usage: dict[str, Any]) -> float | None:
         return None
 
 
+def _parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
+    """One SSE line → (payload, chunk), or None for a line carrying no chunk.
+
+    Blank lines, comments, `[DONE]`, non-JSON and non-object JSON are all
+    skipped rather than raised: none of them is an answer, and `[DONE]` is
+    not a terminator (the server closing the body is). `payload` is the line
+    with its `data: ` prefix and surrounding whitespace removed — what an
+    in-band error reports as the body.
+    """
+    if not line:
+        return None
+    if line.startswith("data: "):
+        line = line[len("data: "):]
+    line = line.strip()
+    if not line or line == "[DONE]":
+        return None
+    try:
+        chunk = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(chunk, dict):
+        return None
+    return line, chunk
+
+
+@dataclass
+class _StreamAccumulator:
+    """Everything one streaming attempt has received, plus its progress clock.
+
+    Owned by `Backend._stream_once`, one per attempt, so a retried attempt
+    starts from nothing. Every method that sees a fragment updates the clock
+    and `_Attempt.output` BEFORE firing the fragment's callback — a sink that
+    raises must not leave the attempt looking output-free (and so retryable).
+    """
+    t0: float
+    text_parts: list[str] = field(default_factory=list)
+    reasoning_parts: list[str] = field(default_factory=list)
+    reasoning_chars: int = 0
+    tool_frags: dict[int, dict[str, Any]] = field(default_factory=dict)
+    finish_reason: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    timings: dict[str, Any] | None = None
+    ttft: float = 0.0
+    started: bool = False
+    # Distinct from `started` (which pins ttft to the first *content*
+    # token): tool-call fragments are progress too, and a tool-only
+    # turn must still get the tighter decode bound.
+    decoding: bool = False
+    # Time of the last event that advanced the work. Set when the response
+    # headers arrive; keepalives never touch it.
+    last_progress: float = 0.0
+
+    def check_progress(self, stall_timeout_s: float,
+                       decode_stall_timeout_s: float) -> None:
+        """Raise `ProgressStall` once the gap since progress exceeds its bound."""
+        now = time.monotonic()
+        bound = decode_stall_timeout_s if self.decoding else stall_timeout_s
+        if now - self.last_progress > bound:
+            raise ProgressStall(
+                f"progress stall: {now - self.last_progress:.0f}s of "
+                f"keepalive chunks with no "
+                f"{'tokens' if self.decoding else 'first token'} "
+                f"(bound={bound:.0f}s)"
+            )
+
+    def add_chunk(
+        self,
+        chunk: dict[str, Any],
+        progress: _Attempt,
+        on_token: Callable[[str], None] | None,
+        on_reasoning: Callable[[str], None],
+    ) -> None:
+        """Fold one (non-error) chunk in: usage, timings, then each choice."""
+        # Usage-only terminal chunk has empty choices.
+        if isinstance(chunk.get("usage"), dict):
+            self.usage = chunk["usage"]
+            self.last_progress = time.monotonic()
+        if isinstance(chunk.get("timings"), dict):
+            # llama-server's per-request accounting (final chunk).
+            self.timings = chunk["timings"]
+        for choice in chunk.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta", {}) or {}
+            self._add_delta(delta, progress, on_token, on_reasoning)
+            if choice.get("finish_reason"):
+                self.finish_reason = choice["finish_reason"]
+                self.last_progress = time.monotonic()
+
+    def _add_delta(
+        self,
+        delta: dict[str, Any],
+        progress: _Attempt,
+        on_token: Callable[[str], None] | None,
+        on_reasoning: Callable[[str], None],
+    ) -> None:
+        """One choice's delta, channel by channel: reasoning, content, tools."""
+        # REASONING CHANNEL. Counts as progress — a reasoning model can think
+        # for minutes before its first content token, and those chunks used
+        # to be invisible to both clocks, so a working request looked like a
+        # stall and died as a "timeout". It deliberately does NOT set
+        # `decoding`: no answer token has arrived, so the generous
+        # pre-first-token bound is still the right one.
+        think = _reasoning_text(delta)
+        if think:
+            self.reasoning_parts.append(think)
+            self.reasoning_chars += len(think)
+            self.last_progress = time.monotonic()
+            progress.output = True
+            on_reasoning(think)
+        piece = delta.get("content") or ""
+        if piece:
+            if not self.started:
+                self.ttft = time.monotonic() - self.t0
+                self.started = True
+            self.text_parts.append(piece)
+            self.last_progress = time.monotonic()
+            self.decoding = True
+            progress.output = True
+            if on_token:
+                on_token(piece)
+        for tc in delta.get("tool_calls") or []:
+            self._add_tool_fragment(tc, progress)
+
+    def _add_tool_fragment(self, tc: dict[str, Any], progress: _Attempt) -> None:
+        """Merge one tool-call fragment into its slot (keyed by `index`)."""
+        self.last_progress = time.monotonic()
+        self.decoding = True
+        progress.output = True
+        idx = tc.get("index", 0)
+        slot = self.tool_frags.setdefault(
+            idx, {"id": "", "name": "", "arguments": ""}
+        )
+        if tc.get("id"):
+            slot["id"] = tc["id"]
+        fn = tc.get("function") or {}
+        if fn.get("name"):
+            slot["name"] = fn["name"]
+        if fn.get("arguments"):
+            slot["arguments"] += fn["arguments"]
+
+    def tool_calls(self) -> list[ToolCallResponse]:
+        """The assembled native tool calls, in index order."""
+        tc_list: list[ToolCallResponse] = []
+        for idx in sorted(self.tool_frags):
+            frag = self.tool_frags[idx]
+            raw = frag["arguments"] or "{}"
+            try:
+                args = json.loads(raw)
+            except json.JSONDecodeError:
+                args = {"_raw": raw}
+            tc_list.append(ToolCallResponse(
+                id=frag["id"], name=frag["name"], arguments=args,
+            ))
+        return tc_list
+
+
 class Backend:
     def __init__(
         self,
@@ -1116,137 +1273,30 @@ class Backend:
     ) -> ChatResponse:
         """One streaming attempt. Marks `progress.output` as output leaves."""
         t0 = time.monotonic()
-        text_parts: list[str] = []
-        tool_frags: dict[int, dict[str, Any]] = {}
-        finish_reason = ""
-        usage: dict[str, Any] = {}
-        timings: dict[str, Any] | None = None
-        reasoning_parts: list[str] = []
-        reasoning_chars = 0
-        ttft = 0.0
-        started = False
-        # Distinct from `started` (which pins ttft to the first *content*
-        # token): tool-call fragments are progress too, and a tool-only
-        # turn must still get the tighter decode bound.
-        decoding = False
+        acc = _StreamAccumulator(t0=t0)
         with self._client.stream("POST", "/v1/chat/completions", json=body) as resp:
             if resp.status_code >= 400:
                 resp.read()
                 raise _StatusFailure(resp.status_code, resp.text)
 
-            last_progress = time.monotonic()
+            acc.last_progress = time.monotonic()
             for line in resp.iter_lines():
                 # Checked BEFORE the blank-line skip, and before the
                 # keepalive chunks are discarded below: those are
                 # precisely the events that must not count as progress.
-                now = time.monotonic()
-                bound = (self.decode_stall_timeout_s if decoding
-                         else self.stall_timeout_s)
-                if now - last_progress > bound:
-                    raise ProgressStall(
-                        f"progress stall: {now - last_progress:.0f}s of "
-                        f"keepalive chunks with no "
-                        f"{'tokens' if decoding else 'first token'} "
-                        f"(bound={bound:.0f}s)"
-                    )
-                if not line:
+                acc.check_progress(self.stall_timeout_s,
+                                   self.decode_stall_timeout_s)
+                parsed = _parse_sse_line(line)
+                if parsed is None:
                     continue
-                if line.startswith("data: "):
-                    line = line[len("data: "):]
-                line = line.strip()
-                if not line or line == "[DONE]":
-                    continue
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(chunk, dict):
-                    continue
+                payload, chunk = parsed
                 if chunk.get("error"):
-                    # In-band failure after a 200 (OpenRouter documents this
-                    # shape: `error` beside a `finish_reason: "error"`
-                    # choice). It used to be skipped, and the stream read as
-                    # an ordinary — empty or truncated — completion.
-                    # Terminal whether or not tokens preceded it: the
-                    # provider has already run (and billed) the attempt.
-                    decision = RetryDecision(
-                        retry=False, reason=_STREAM_ERROR_CHUNK_REASON)
-                    raise _StatusFailure(
-                        200, line, decision=decision,
-                        message=(f"{self.engine_label} stream returned an "
-                                 f"error: {_error_text(chunk['error'])} "
-                                 f"({decision.reason})"))
-                # Usage-only terminal chunk has empty choices.
-                if isinstance(chunk.get("usage"), dict):
-                    usage = chunk["usage"]
-                    last_progress = time.monotonic()
-                if isinstance(chunk.get("timings"), dict):
-                    # llama-server's per-request accounting (final chunk).
-                    timings = chunk["timings"]
-                for choice in chunk.get("choices") or []:
-                    if not isinstance(choice, dict):
-                        continue
-                    delta = choice.get("delta", {}) or {}
-                    # REASONING CHANNEL. Counts as progress — a
-                    # reasoning model can think for minutes before its
-                    # first content token, and those chunks used to be
-                    # invisible to both clocks, so a working request
-                    # looked like a stall and died as a "timeout".
-                    # It deliberately does NOT set `decoding`: no
-                    # answer token has arrived, so the generous
-                    # pre-first-token bound is still the right one.
-                    think = _reasoning_text(delta)
-                    if think:
-                        reasoning_parts.append(think)
-                        reasoning_chars += len(think)
-                        last_progress = time.monotonic()
-                        progress.output = True
-                        if self.on_reasoning:
-                            self.on_reasoning(think)
-                    piece = delta.get("content") or ""
-                    if piece:
-                        if not started:
-                            ttft = time.monotonic() - t0
-                            started = True
-                        text_parts.append(piece)
-                        last_progress = time.monotonic()
-                        decoding = True
-                        progress.output = True
-                        if on_token:
-                            on_token(piece)
-                    for tc in delta.get("tool_calls") or []:
-                        last_progress = time.monotonic()
-                        decoding = True
-                        progress.output = True
-                        idx = tc.get("index", 0)
-                        slot = tool_frags.setdefault(
-                            idx, {"id": "", "name": "", "arguments": ""}
-                        )
-                        if tc.get("id"):
-                            slot["id"] = tc["id"]
-                        fn = tc.get("function") or {}
-                        if fn.get("name"):
-                            slot["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            slot["arguments"] += fn["arguments"]
-                    if choice.get("finish_reason"):
-                        finish_reason = choice["finish_reason"]
-                        last_progress = time.monotonic()
+                    raise self._stream_error(payload, chunk)
+                acc.add_chunk(chunk, progress, on_token, self._emit_reasoning)
 
         wall = time.monotonic() - t0
-        tc_list: list[ToolCallResponse] = []
-        for idx in sorted(tool_frags):
-            frag = tool_frags[idx]
-            raw = frag["arguments"] or "{}"
-            try:
-                args = json.loads(raw)
-            except json.JSONDecodeError:
-                args = {"_raw": raw}
-            tc_list.append(ToolCallResponse(
-                id=frag["id"], name=frag["name"], arguments=args,
-            ))
-
-        text = "".join(text_parts)
+        tc_list = acc.tool_calls()
+        text = "".join(acc.text_parts)
         if not tc_list:
             # Same text-channel salvage as the non-streaming path.
             # The raw JSON already streamed to `on_token` (the UI
@@ -1260,18 +1310,43 @@ class Backend:
         return ChatResponse(
             text=text,
             tool_calls=tc_list,
-            finish_reason=finish_reason,
+            finish_reason=acc.finish_reason,
             timing=GenerationTiming(
-                prompt_tokens=usage.get("prompt_tokens", 0),
-                completion_tokens=usage.get("completion_tokens", 0),
+                prompt_tokens=acc.usage.get("prompt_tokens", 0),
+                completion_tokens=acc.usage.get("completion_tokens", 0),
                 total_s=wall,
-                time_to_first_token_s=ttft,
-                cost_usd=self._note_cost(_usage_cost(usage)),
-                **_server_perf(usage, timings),
+                time_to_first_token_s=acc.ttft,
+                cost_usd=self._note_cost(_usage_cost(acc.usage)),
+                **_server_perf(acc.usage, acc.timings),
             ),
-            reasoning_chars=reasoning_chars,
-            reasoning_text="".join(reasoning_parts),
+            reasoning_chars=acc.reasoning_chars,
+            reasoning_text="".join(acc.reasoning_parts),
         )
+
+    def _stream_error(self, payload: str, chunk: dict[str, Any]) -> _StatusFailure:
+        """The TERMINAL failure for an in-band `{"error": …}` chunk.
+
+        In-band failure after a 200 (OpenRouter documents this shape:
+        `error` beside a `finish_reason: "error"` choice). It used to be
+        skipped, and the stream read as an ordinary — empty or truncated —
+        completion. Terminal whether or not tokens preceded it: the provider
+        has already run (and billed) the attempt.
+        """
+        decision = RetryDecision(retry=False, reason=_STREAM_ERROR_CHUNK_REASON)
+        return _StatusFailure(
+            200, payload, decision=decision,
+            message=(f"{self.engine_label} stream returned an "
+                     f"error: {_error_text(chunk['error'])} "
+                     f"({decision.reason})"))
+
+    def _emit_reasoning(self, think: str) -> None:
+        """Hand a reasoning fragment to `on_reasoning`, when one is attached.
+
+        Reads the attribute per fragment, as the inline loop always did, so a
+        sink attached or cleared mid-stream takes effect from the next one.
+        """
+        if self.on_reasoning:
+            self.on_reasoning(think)
 
     def health(self, timeout_s: float | None = None) -> bool:
         # OSError as well as httpx.HTTPError: a socket-level ETIMEDOUT (macOS
