@@ -577,14 +577,14 @@ def test_12_memory_edit_under_ephemeral_does_not_create_the_file(tmp_path):
 def test_13_an_interrupted_turn_does_not_cancel_the_next_command(monkeypatch, tmp_path):
     seen = {}
 
-    def _hook(console, cfg, session, cancel=None):
+    def _hook(console, reader, cfg, session, cancel=None):
         seen["cancel"] = cancel
 
         def _git(kind, deep=None):
             seen["requested_at_call"] = cancel.requested
         return _git
 
-    monkeypatch.setattr(repl_mod, "_make_git_analysis_hook", _hook)
+    monkeypatch.setattr(controller_mod, "make_git_analysis_hook", _hook)
 
     def _interrupted(*a, **k):
         seen["cancel"].requested = True
@@ -595,6 +595,26 @@ def test_13_an_interrupted_turn_does_not_cancel_the_next_command(monkeypatch, tm
     repo.mkdir()
     _repl(["hello", "/gitaudit"], repo=str(repo))
     assert seen["requested_at_call"] is False
+
+
+def test_13b_repl_gitaudit_gets_the_sub_prompt_reader(monkeypatch, tmp_path):
+    """Drift (2026-10 review): the TUI's /gitaudit hook hands gitkit the
+    front-end's sub-prompt reader (the clone-URL question); the REPL's passed
+    none, so its sub-prompts went wherever gitkit's default happened to point.
+    Both hooks are built once now (`ChatController.command_context`) and
+    the line path's reader is `console.input`."""
+    import luxe.gitkit as gitkit
+
+    seen: dict = {}
+    monkeypatch.setattr(gitkit, "run_git_report",
+                        lambda kind, **kw: seen.update(kw))
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _repl(["/gitaudit"], repo=str(repo))
+    reader = seen.get("reader")
+    assert reader is not None
+    assert getattr(reader, "__name__", "") == "input"
+    assert isinstance(getattr(reader, "__self__", None), Console)
 
 
 # --- 14. /clear resets the carried state and marks the transcript ----------

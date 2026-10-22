@@ -38,7 +38,6 @@ from luxe.chat.render import (
     pick_no_adjacent_repeats,
 )
 from luxe.chat import status as status_mod
-from luxe.chat.session import ChatSession
 from luxe.chat.status import StatusState
 from luxe.config import PipelineConfig
 
@@ -189,18 +188,9 @@ def run_chat_repl(
     if (_eph_notice := ephemeral_notice_markup()):
         console.print(_eph_notice)
 
-    ctl.ctx = cmd.CommandContext(
-        console=console,
-        session=session,
-        slots=slots,
-        on_resume=_make_resume_hook(console, session),
-        on_compare=_make_compare_hook(console, cfg, session, slots),
-        on_compare_review=_make_compare_review_hook(console),
-        on_git_analysis=_make_git_analysis_hook(console, cfg, session, ctl.cancel),
-        on_project=_make_project_hook(session, on_project),
-        status=status,
-        session_log=ctl.dbglog,
-    )
+    # Sub-prompts (gitkit's clone URL, the compare vote) read from the
+    # console on the line path.
+    ctl.command_context(console, reader=console.input, on_project=on_project)
 
     if resume_session_id:
         ctl.ctx.on_resume(resume_session_id)
@@ -409,81 +399,3 @@ class LineSink:
         # Built once by the controller (the TUI prints the same list).
         for line in self.ctl.outcome_lines(outcome, prep):
             self.console.print(line)
-
-
-def _make_project_hook(session, on_project):
-    """Wrap cli's attach hook so the SESSION follows the new project too.
-
-    cli owns the lock and the indexes; the session owns repo_path / project_kind
-    / index_head, which drive the prompt frame, the git segment, and `/diff`.
-    Returns None when the front-end wasn't given a hook (tests, embedders)."""
-    if on_project is None:
-        return None
-
-    def _hook(target: str | None) -> dict:
-        summary = on_project(target)
-        apply_project_summary(session, summary)
-        return summary
-
-    return _hook
-
-
-# -- hooks (resume now; compare wired in the compare phase) -----------------
-
-
-def _make_resume_hook(console: Console, session: ChatSession):
-    def _resume(session_id: str) -> None:
-        from luxe.chat.resume import list_resumable, resume_into
-
-        if not session_id:
-            list_resumable(console)
-            return
-        resume_into(session_id, session, console)
-
-    return _resume
-
-
-def _make_compare_hook(console, cfg, session, slots):
-    def _compare(task: str) -> None:
-        try:
-            from luxe.compare.run_pair import interactive_compare
-        except Exception:
-            console.print("[yellow]compare module unavailable.[/]")
-            return
-        # Read at call time: `/project` moves both.
-        interactive_compare(task, cfg, session.repo_path, session.languages,
-                            console=console)
-
-    return _compare
-
-
-def _make_compare_review_hook(console):
-    def _review(compare_id: str) -> None:
-        try:
-            from luxe.compare.store import review as review_compare
-        except Exception:
-            console.print("[yellow]compare review unavailable.[/]")
-            return
-        review_compare(compare_id, console=console)
-
-    return _review
-
-
-def _make_git_analysis_hook(console, cfg, session: ChatSession, cancel=None):
-    """Hook for /gitaudit (and /gitchange) — a read-only gitkit
-    report. Targets the SESSION repo, reusing its resident indices (warns if
-    HEAD moved); if the session dir isn't a git repo, the runner prompts to
-    clone a URL into a local copy and analyzes that, restoring session state."""
-    def _git(kind: str, deep: bool | None = None) -> None:
-        try:
-            from luxe.gitkit import run_git_report
-        except Exception:
-            console.print("[yellow]gitkit module unavailable.[/]")
-            return
-        run_git_report(
-            kind, cfg=cfg, repo_path=session.repo_path,
-            console=console, save=True, expected_head=session.index_head,
-            verbose=(session.verbose_level == "full"), cancel=cancel, deep=deep,
-        )
-
-    return _git

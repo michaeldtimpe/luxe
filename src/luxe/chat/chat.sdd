@@ -492,7 +492,9 @@ never touches this module.
   assembled identically for both front-ends so the benchmark path stays
   byte-identical. Other interactive sub-prompts (gitkit clone URL, compare
   vote) go through the `reader`/`prompt_user` seam — `console.input` on the
-  line path, a modal on the TUI. `repl` re-exports the moved names
+  line path, a modal on the TUI — handed to ONE set of command hooks
+  (`ChatController.command_context(console, reader=, run_external=,
+  on_project=)`, 2026-10; the line REPL's copy had never passed its reader). `repl` re-exports the moved names
   (`repl.prepare_turn` etc. keep working), but code that stubs a lookup must
   patch the module that performs it: `turn.run_single`,
   `controller.prepare_turn`, `controller.start_session_gc`.
