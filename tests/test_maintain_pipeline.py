@@ -329,6 +329,25 @@ def test_empty_final_text_writes_no_report_and_skips_lint(h):
     assert t.synthesizer is None and "=" * 60 not in t.console
 
 
+def test_read_budget_comes_from_the_role_the_run_uses(h, monkeypatch):
+    from luxe.config import load_config
+    from luxe.tools import fs
+    num_ctx = 65536  # not the shipped 32768, so a hardcoded window shows
+
+    def load(path):
+        cfg = load_config(path)
+        cfg.roles["monolith"].num_ctx = num_ctx
+        return cfg
+
+    monkeypatch.setattr(maintain, "load_config", load)
+    t = h.run(task="review", goal="Review calc")
+    assert t.event("read_budget_applied") == {
+        "kind": "read_budget_applied",
+        "max_bytes": fs.budget_for_ctx(num_ctx), "num_ctx": num_ctx}
+    assert (f"· Tool read budget: {fs.budget_for_ctx(num_ctx):,} bytes "
+            f"(LUXE_TOOL_BUDGET_CTX=1, num_ctx={num_ctx})") in t.console
+
+
 def test_read_budget_off_emits_no_event(h, monkeypatch):
     monkeypatch.setenv("LUXE_TOOL_BUDGET_CTX", "0")
     t = h.run(task="review", goal="Review calc")

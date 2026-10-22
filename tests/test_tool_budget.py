@@ -458,14 +458,17 @@ class TestTheBenchmarkPathCanReachTheSwitch:
     def test_the_pipeline_passes_the_role_num_ctx(self):
         """Pin the call site: `maintain_pipeline` must read num_ctx off the
         role config it hands to `run_single`, so an A/B of this flag measures
-        the window the run really used."""
-        src = inspect.getsource(maintain.maintain_pipeline)
+        the window the run really used. Scanned over the whole module, not
+        just `maintain_pipeline`'s own source (2026-10-22): the pipeline is
+        split into step helpers. The behaviour is pinned end to end in
+        `tests/test_maintain_pipeline.py`."""
+        src = inspect.getsource(maintain)
         assert 'apply_ctx_read_budget(cfg.role("monolith").num_ctx)' in src
 
     def test_the_bench_arm_announces_itself(self):
         """Liveness: an ON arm must be checkable in `events.jsonl` rather than
         assumed live — that assumption is what made this flag inert."""
-        src = inspect.getsource(maintain.maintain_pipeline)
+        src = inspect.getsource(maintain)
         assert '"read_budget_applied"' in src
 
     def test_chat_keeps_its_own_wiring(self):
