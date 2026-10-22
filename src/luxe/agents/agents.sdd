@@ -12,6 +12,16 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   bare locals had. Configuration read once from `RunFlags` and per-step
   scratch values stay locals. `loop.py` remains the sole mutator; the counter
   discipline below applies to the fields unchanged
+- `run_agent` is a short driver over module-level step helpers in `loop.py`
+  (2026-10-22, behavior-preserving: `_step_window`, `_pre_step_guards`,
+  `_compact_step`, `_account_usage`, `_no_tool_calls`, `_dispatch_one`,
+  `_end_of_step`, `_finalize`, …). They take the per-call configuration as
+  ONE frozen `_Run` record (arguments, `RunFlags`, tool maps, compactor,
+  callbacks), plus `st`, `result` and `emit` explicitly, and mutate only
+  `LoopState` / `AgentResult`. The `backend.chat` call site stays in
+  `run_agent` itself (chat.sdd Must-not). The structural tests
+  (`test_loop_telemetry`, `test_run_flags`) scan the whole module, so a
+  helper is held to the same emit()/no-os.environ rules as the body
 - Every `events.jsonl` record `run_agent` writes goes through `emit(kind,
   **fields)` (`loop._event_emitter`), which owns the `log_calls` gate and the
   leading `phase=` field, so field names AND order match what
