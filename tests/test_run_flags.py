@@ -325,23 +325,40 @@ def test_run_agent_reads_its_switches_through_run_flags(monkeypatch):
     assert seen == [False]
 
 
-def test_loop_preamble_has_no_direct_environ_reads():
-    """The whole point of the extraction. `run_agent`'s body may not reach
-    into os.environ — new switches go through RunFlags."""
+def test_loop_module_has_no_direct_environ_reads():
+    """The whole point of the extraction. No function in the loop module may
+    reach into os.environ — new switches go through RunFlags. Scanned over
+    the WHOLE module (2026-10-22), not just `run_agent`'s own source, so a
+    helper split out of the loop body cannot escape it. The one sanctioned
+    module-level read is `LUXE_TOKEN_LOG_INTERVAL` (agents.sdd)."""
     import ast
     import inspect
 
     from luxe.agents import loop as loop_mod
 
-    tree = ast.parse(inspect.getsource(loop_mod.run_agent))
-    offenders = [
-        node for node in ast.walk(tree)
+    tree = ast.parse(inspect.getsource(loop_mod))
+    in_functions = [
+        f"{fn.name}:{node.lineno}"
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+        for node in ast.walk(fn)
         if isinstance(node, ast.Attribute) and node.attr == "environ"
     ]
-    assert not offenders, (
-        "run_agent reads os.environ directly again — add the switch to "
-        "luxe/agents/flags.py instead."
+    assert not in_functions, (
+        f"loop.py reads os.environ inside {in_functions} — add the switch "
+        "to luxe/agents/flags.py instead."
     )
+    reads = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "environ"
+    ]
+    names = [r.args[0].value for r in reads if isinstance(r.args[0], ast.Constant)]
+    assert names == ["LUXE_TOKEN_LOG_INTERVAL"] and len(reads) == len([
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Attribute) and n.attr == "environ"
+    ]), "loop.py gained a module-level os.environ read"
 
 
 @pytest.mark.parametrize("value,expected", [
