@@ -1,5 +1,20 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-10-22, m1 + m5) — secrets never reach model-driven subprocesses or the model (PR #47)
+
+Prompted by a review of a local-AI security video. Main is `20b39b2`.
+
+- **What shipped:** an env scrub for every model-driven subprocess and for luxe's own git calls, redaction of known
+  secret values from tool results, refusal of tool calls whose arguments carry a known value, a `.git` write guard,
+  and a chat warning when web tools and bash are both on. It is not a sandbox; tools.sdd lists the residuals.
+- **The first m5 A/B caught a bug:** the scrub dropped `GIT_CONFIG_KEY_0`, which killed every bench run at
+  preflight. It was fixed in `20b39b2`.
+- **Second A/B:** 30/30 in both arms, with 0 guard events in the 30 treatment runs. Smoke READY on all three hosts.
+- **Report:** `acceptance/secret_scrub_ab_2026_10/REPORT.md`.
+- **Still open from the same review:** template pinning in `luxe pull` and `/doctor`; narrowing m5 oMLX's `*:8000`
+  bind (the firewall is off; it is key-protected); an API key on neo's llama-server; m5 oMLX 0.7.0 → 0.7.2; and a
+  provenance allowlist for `luxe pull`.
+
 ## ⇒ SESSION HANDOFF (2026-10-22, m1 + m5) — refactor/tech-debt pass closed: PRs #33–#39 landed
 
 This is the second whole-project review. Seven PRs landed as signed fast-forwards; main is now `385daf4`.
