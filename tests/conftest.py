@@ -338,6 +338,28 @@ def stub_public_dns(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _stub)
 
 
+@pytest.fixture
+def serve_http():
+    """Start socketserver-style servers on daemon threads; stop them at teardown.
+
+    `serve_http(srv)` returns `srv`, already serving. `shutdown()` waits for
+    `serve_forever` to notice, and at the default 0.5 s poll every test server
+    cost half a second of teardown; 0.05 s makes that wait negligible.
+    """
+    started = []
+
+    def _serve(srv):
+        threading.Thread(target=srv.serve_forever,
+                         kwargs={"poll_interval": 0.05}, daemon=True).start()
+        started.append(srv)
+        return srv
+
+    yield _serve
+    for srv in reversed(started):
+        srv.shutdown()
+        srv.server_close()
+
+
 @pytest.fixture(autouse=True)
 def _reset_web_key_cache():
     """`luxe.web.keys` caches provider-key lookups for the process; a value

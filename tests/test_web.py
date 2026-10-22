@@ -9,7 +9,6 @@ addresses it must refuse.
 from __future__ import annotations
 
 import http.server
-import threading
 
 import pytest
 
@@ -173,13 +172,10 @@ class _FastServer(http.server.HTTPServer):
 
 
 @pytest.fixture()
-def server(monkeypatch):
+def server(monkeypatch, serve_http):
     monkeypatch.setenv("LUXE_WEB_ALLOW_PRIVATE", "1")
-    srv = _FastServer(("127.0.0.1", 0), _Handler)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    yield f"http://127.0.0.1:{srv.server_port}"
-    srv.shutdown()
+    srv = serve_http(_FastServer(("127.0.0.1", 0), _Handler))
+    return f"http://127.0.0.1:{srv.server_port}"
 
 
 def test_fetch_html_and_extract(server):
