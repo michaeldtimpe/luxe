@@ -119,6 +119,42 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   `repo_index._git_recent_files` (which also gained a 30s timeout) and
   `secrets._from_keychain` (`tests/test_spawn_stdin.py`)
 
+- No MODEL-DRIVEN spawn sees a secret-named variable (2026-10-22). Every
+  subprocess whose command or executed code the model controls runs with
+  `luxe.secrets.scrubbed_env()`: `shell._bash` (its `env=None` default —
+  the benchmark path — now means "process env minus secrets", not
+  "inherit"), `shell._chat_bash_env` (chat allowlisted/unrestricted/
+  cancellable bash), `analysis._run_tool` (analyzers execute repo code:
+  mypy plugins, eslint configs, cargo build scripts, setup.py),
+  `pr._do_test`, `spec_validator._eval_tests_pass`,
+  `gitkit.apply._run_verify`, and the `luxe smoke --code` drill's pytest.
+  Why: luxe never exports a secret itself, but its launch wrappers do
+  (`luxe-web`, the bench scripts: `set -a; . ~/.luxe/secrets.env`), and the
+  allowlist includes `python`/`pip`/`npx`/`make` — "allowlisted" bash could
+  read the environment and reach the network. `is_secret_name` is the one
+  definition (names in secrets.env, names luxe resolved, credential-shaped
+  KEY/TOKEN/SECRET/PASSW/CREDENTIAL/PRIVATE/COOKIE or `*_PAT`/`*_AUTH`, minus
+  a small keep-list) and it is a DENYLIST on purpose: an allowlist would
+  break JAVA_HOME/GOPATH/CARGO_HOME/… in arbitrary projects, and the
+  fallback kit must work in whatever repo it is pointed at. Tool
+  DESCRIPTIONS are unchanged (golden-pinned). Deliberately NOT scrubbed —
+  luxe's own fixed commands: git/gh in the PR flow (`pr._run` otherwise,
+  `gitcmd`, `citations`, `cleanup`, `repo_index`, `fswalk`), `secrets`'
+  Keychain read, `repair`'s brew restart, `claudecode`/`staleproc` probes,
+  `mcp_pdf` (fixed argv), and `fs._grep` (rg executes nothing; the model's
+  pattern sits behind `--`). MCP stdio children already get only the SDK's
+  allowlist + the relays.yaml env block. Caveat: `bash -lc` (test step,
+  tests_pass) sources the login profile, which can re-export what the scrub
+  removed — keep secrets out of shell profiles. Pinned by
+  `tests/test_secrets_scrub.py` (real spawns, fake values)
+
+- A tool call never carries a known secret OUT (2026-10-22). The agent loop
+  refuses, before dispatch, any call whose arguments hold a known secret
+  value — raw, percent-encoded, or base64 (`luxe.secrets.secret_in_args`) —
+  and redacts known values out of every result (agents.sdd § "Secret
+  redaction + egress refusal"). It sits in the loop, not in each tool, so
+  bash, web_*, MCP relays and every future tool are covered by construction
+
 - Tool truncation is ANNOUNCED, never silent (2026-08-12). `_grep_result`
   reports both of grep's caps — ripgrep's per-file `--max-count=150` and the
   32 KB byte slice — because a model asked to count something with 1,286
@@ -270,6 +306,9 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)
 - Wire unrestricted bash into the benchmark/maintain path or the default
   `TOOL_FNS` — it is a chat-front-end carve-out only
+- Spawn a model-driven subprocess with the inherited environment (`env=None`
+  to subprocess, or `dict(os.environ)`) — use `luxe.secrets.scrubbed_env()`;
+  and never define a second "what is a secret" list outside `luxe.secrets`
 
 ## Owns
 - src/luxe/tools/**

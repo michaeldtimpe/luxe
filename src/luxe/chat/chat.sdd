@@ -1348,6 +1348,20 @@ never touches this module.
   (preview · activity · status) when `console.is_terminal`, else `Status` + line
   streaming. Both feed off the chat-only `on_token` seam (`stream=True`); the
   benchmark/maintain path (`on_token=None`, `stream=False`) is untouched.
+- "Split the two powers" (2026-10-22): a model holding BOTH web tools and a
+  shell can fetch content and execute it — the shape a prompt-injected page
+  needs. `ChatSession.fetch_and_execute_notice()` is the one predicate + text
+  (web_enabled AND write_enabled — bash is exposed only in write mode, so
+  `/bash` alone is inert; the text says UNRESTRICTED when `/bash` is on);
+  `controller.fetch_execute_notice_markup` renders it. It is printed at the
+  moment the combination becomes ACTIVE: `/web` turning on with write on,
+  `/write` turning on with web on, `/bash` turning unrestricted with both on
+  (an escalation), and at startup in BOTH front-ends when the posture
+  (`--web` with `--dev` / `luxe code`) begins there. Turning a power OFF
+  never prints it. A WARNING, never a block — the operator may need both.
+  The secrets guards that make the combination survivable live below the
+  chat layer (tools.sdd env scrub; agents.sdd redaction + egress refusal).
+  Pinned by `tests/test_secrets_chat_warning.py`
 
 ## Must not
 - Modify `agents/loop.py`'s `backend.chat` call site or `run_agent` signature
