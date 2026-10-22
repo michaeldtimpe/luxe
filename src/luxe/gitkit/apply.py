@@ -22,7 +22,9 @@ import shlex
 import subprocess
 import sys
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from rich.markup import escape
 
@@ -292,15 +294,133 @@ def _run_verify(cmd: str, repo: Path, timeout: int, *, console,
         return False, str(e)
 
 
+@dataclass
+class _Checkout:
+    """Where the run started and the dedicated branch it works on."""
+    branch: str
+    orig_branch: str
+    orig_sha: str
+    head: str
+
+    def abort(self, repo: Path, console) -> None:
+        _abort_branch(repo, console, self.branch, self.orig_branch,
+                      self.orig_sha)
+
+
+@dataclass
+class _ApplyRun:
+    """Everything the step loop shares — and the ONE object the Ctrl-C /
+    BaseException handlers read to decide what to revert.
+
+    `baseline` is what was untracked when the CURRENT step began (operator
+    files, a stopped step's leftovers — never this step's to delete) and
+    `step_files` freezes the step's own creations when its pass returns.
+    Before that (a raise / Ctrl-C mid-pass) the step owns everything new
+    since `baseline`; after it, exactly `step_files` — a file the operator
+    makes while reviewing the diff is not the step's."""
+    repo: Path
+    console: Any
+    reader: Any
+    run_single_fn: Any
+    backend: Any
+    role: Any
+    languages: Any
+    plan: dict
+    survey: str
+    timeout: int
+    branch: str
+    branch_head: str = ""
+    baseline: set[str] = field(default_factory=set)
+    step_files: list[str] | None = None
+    kept: list[str] = field(default_factory=list)
+    discarded: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+    interrupted: bool = False
+    stopped: bool = False
+
+    def begin_step(self) -> None:
+        # what is untracked NOW is not this step's (operator files,
+        # a stopped step's leftovers) — revert/keep never touch it
+        _git(self.repo, "reset", "-q")
+        self.baseline = _untracked(self.repo)
+        self.step_files = None
+
+    def this_step(self) -> list[str]:
+        # frozen after the pass; before that (a raise / Ctrl-C mid-pass),
+        # everything new since the step began
+        return self.step_files if self.step_files is not None \
+            else _step_new_files(self.repo, self.baseline)
+
+    def revert_step(self) -> None:
+        _revert_to_head(self.repo, self.this_step())
+
+
 def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = None,
               rebuild_map: bool = False, run_single_fn=None) -> int:
     """Execute a saved gitchange against a LOCAL repo under the six invariants.
     Returns a process exit code (0 ok, non-zero on abort)."""
-    from luxe.gitkit import health, plan as plan_mod
     from luxe import pr
     reader = reader or console.input
     repo = Path(repo_path)
 
+    co = _preflight(repo, console)
+    if isinstance(co, int):
+        return co
+    loaded = _load_or_generate_plan(repo, co, cfg=cfg, console=console,
+                                    reader=reader, deep=deep,
+                                    rebuild_map=rebuild_map)
+    if isinstance(loaded, int):
+        return loaded
+    plan, steps = loaded
+
+    # --- write environment (the inverse of gitkit-today: FULL role, not read-only)
+    from luxe.backend import Backend
+    from luxe.gitkit.workspace import indexed_target
+    if run_single_fn is None:
+        from luxe.agents.single import run_single as run_single_fn
+
+    run = _ApplyRun(
+        repo=repo, console=console, reader=reader, run_single_fn=run_single_fn,
+        backend=Backend(base_url=cfg.omlx_base_url,
+                        model=cfg.model_for_slot("chat")),
+        role=cfg.role("monolith"),    # FULL, write-enabled — NOT make_read_only_role
+        languages=_detect_languages_for_repo(str(repo)),
+        plan=plan,
+        # The cached survey is context only when the map is FRESH for this
+        # HEAD (the runner's rule) — a map from another commit describes
+        # another tree.
+        survey=(fresh_survey_notes(repo, head=co.head) or "")[:4000],
+        timeout=int(getattr(cfg, "test_timeout_s", 300) or 300),
+        branch=co.branch)
+
+    with indexed_target(str(repo), reuse=False, note=""):
+        run.branch_head = pr.head_sha(repo)
+        run.baseline = _untracked(repo)
+        try:
+            for step in steps:
+                if not _apply_step(run, step):
+                    break
+        except (KeyboardInterrupt, ChatCancelled):
+            # Ctrl-C mid-step: the in-flight step's writes are reverted (kept
+            # steps are commits and survive); the summary still prints.
+            run.revert_step()
+            run.interrupted = True
+            console.print("\n[yellow]· interrupted — the in-flight step was "
+                          "reverted; kept steps stay committed.[/]")
+        except BaseException:
+            run.revert_step()
+            raise
+
+    return _print_summary(run, co)
+
+
+def _preflight(repo: Path, console) -> _Checkout | int:
+    """Invariants (1)-(4) up to the dedicated branch: a git checkout, a TTY,
+    a clean tree, and a fresh `gitchange/*` branch (the tree re-checked
+    after creating it). Returns the checkout, or an exit code."""
+    from luxe import pr
+    from luxe.gitkit import health
     # (1) must be a git working tree — apply NEVER clones.
     if not health.is_git_repo(repo):
         console.print(f"[red]· {repo} is not a git repository — gitapply needs a checkout.[/]")
@@ -333,177 +453,167 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
         return 2
     console.print(f"[green]·[/] applying on branch [cyan]{branch}[/] "
                   f"(original: {orig_label}) — main is never touched")
+    co = _Checkout(branch=branch, orig_branch=orig_branch, orig_sha=orig_sha,
+                   head=head)
     if not _require_clean(repo, console, "after branch creation"):
-        _abort_branch(repo, console, branch, orig_branch, orig_sha)
+        co.abort(repo, console)
         return 2
+    return co
 
-    # (5) load (or generate) the plan for the current HEAD.
-    plan = plan_mod.latest_plan_for(repo, head)
+
+def _load_or_generate_plan(repo: Path, co: _Checkout, *, cfg, console,
+                           reader, deep: bool | None, rebuild_map: bool,
+                           ) -> tuple[dict, list[dict]] | int:
+    """(5) the saved plan for this HEAD, generating one (read-only) when
+    there is none; then the clean tree re-checked (plan generation can run
+    for hours) and (6) the steps ordered. Returns (plan, ordered steps), or
+    an exit code after restoring the original checkout."""
+    from luxe.gitkit import plan as plan_mod
+    plan = plan_mod.latest_plan_for(repo, co.head)
     if plan is None:
         console.print("[dim]· no saved plan for this HEAD — generating one (read-only)…[/]")
         from luxe.gitkit import run_git_report
         run_git_report("gitchange", cfg=cfg, repo_path=str(repo), console=console,
                        reader=reader, save=True, deep=deep, rebuild_map=rebuild_map)
-        plan = plan_mod.latest_plan_for(repo, head)
+        plan = plan_mod.latest_plan_for(repo, co.head)
     # plan generation can run for a long time — re-check invariant 2 before
     # any step touches the tree.
     _restore_tracked_mirror(repo)
     if not _require_clean(repo, console, "during plan generation"):
-        _abort_branch(repo, console, branch, orig_branch, orig_sha)
+        co.abort(repo, console)
         return 2
     if not plan or not plan.get("steps"):
         console.print("[yellow]· no plan steps to apply.[/]")
-        _abort_branch(repo, console, branch, orig_branch, orig_sha)
+        co.abort(repo, console)
         return 1
     # (6) order (abort on dependency cycle).
     try:
         steps = plan_mod.order_steps(plan)
     except ValueError as e:
         console.print(f"[red]· plan has a dependency cycle: {e}[/]")
-        _abort_branch(repo, console, branch, orig_branch, orig_sha)
+        co.abort(repo, console)
         return 2
+    return plan, steps
 
-    # --- write environment (the inverse of gitkit-today: FULL role, not read-only)
-    from luxe.backend import Backend
-    from luxe.gitkit.workspace import indexed_target
-    if run_single_fn is None:
-        from luxe.agents.single import run_single as run_single_fn
 
-    # The cached survey is context only when the map is FRESH for this HEAD
-    # (the runner's rule) — a map from another commit describes another tree.
-    survey = (fresh_survey_notes(repo, head=head) or "")[:4000]
+def _apply_step(run: _ApplyRun, step: dict) -> bool:
+    """One plan step under invariant 4: ONE pass, its diff, the confirmed
+    verify, keep|discard. Records the outcome on `run`; False = stop the
+    loop (an abort after a raised pass, or a commit that failed)."""
+    from luxe import pr
+    console = run.console
+    if any(d not in run.kept for d in step.get("depends_on", [])):
+        console.print(f"[yellow]· skip {step['id']} — a prerequisite was "
+                      "not kept.[/]")
+        run.skipped.append(step["id"])
+        return True
+    console.print(f"\n[bold]· {step['id']}: {step['title']}[/]  "
+                  f"(risk: {step.get('risk', '?')})")
+    run.begin_step()
+    # ONE mono pass — no retry / repair loop (invariant 6: a raised
+    # pass is reverted and recorded, NEVER re-run).
+    try:
+        run.run_single_fn(
+            run.backend, run.role,
+            goal=prompts.GIT_APPLY_STEP_GOAL,
+            task_type="implement", languages=run.languages,
+            extra_context=_step_block(step, run.plan, run.survey),
+            run_id=f"gitchange-apply-{step['id']}", phase="main")
+        # the step's creations = what appeared DURING its pass;
+        # a file the operator adds while reviewing is not in it
+        run.step_files = _step_new_files(run.repo, run.baseline)
+    except Exception as e:
+        console.print(f"[red]· step {step['id']} raised: "
+                      f"{type(e).__name__}: {e}[/]")
+        # Kept steps are already committed (keep => commit before
+        # the next pass starts), so this full-tree revert only
+        # ever discards the FAILED step's partial writes.
+        run.revert_step()
+        run.failed.append(step["id"])
+        ans = run.reader("  [c]ontinue with next step / [a]bort? [c/A]: ").strip().lower()
+        if ans in ("c", "continue"):
+            return True
+        console.print("[yellow]· aborted — remaining steps not run.[/]")
+        return False
+    try:
+        _adds, _dels, diff = pr.diff_against_base(run.repo, run.branch_head)
+    except pr.GitDiffError as e:
+        # "git broke" is not "the step wrote nothing" — a step whose
+        # result cannot be shown must not be silently skipped past.
+        console.print(f"[red]· could not read the diff for step "
+                      f"{step['id']}: {e}[/]")
+        run.revert_step()
+        run.failed.append(step["id"])
+        return True
+    if not diff.strip():
+        console.print("[yellow]· no changes produced — skipping.[/]")
+        run.revert_step()
+        run.skipped.append(step["id"])
+        return True
+    if not _review_keep(run, step, diff):
+        run.revert_step()
+        run.discarded.append(step["id"])
+        console.print(f"[yellow]· discarded {step['id']}[/]")
+        return True
+    return _keep_step(run, step)
 
-    backend = Backend(base_url=cfg.omlx_base_url, model=cfg.model_for_slot("chat"))
-    role = cfg.role("monolith")    # FULL, write-enabled — NOT make_read_only_role
-    languages = _detect_languages_for_repo(str(repo))
-    timeout = int(getattr(cfg, "test_timeout_s", 300) or 300)
 
-    kept: list[str] = []
-    discarded: list[str] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-    interrupted = False
-    stopped = False
-    baseline: set[str] = set()
-    step_files: list[str] | None = None
+def _review_keep(run: _ApplyRun, step: dict, diff: str) -> bool:
+    """Show the diff, run the step's verify only if confirmed, and ask
+    keep|discard (default keep unless verify FAILED)."""
+    from rich.syntax import Syntax
+    console = run.console
+    console.print(Syntax(diff[:8000], "diff", theme="ansi_dark",
+                         word_wrap=True))
+    ok, tail = _run_verify(step.get("verify", ""), run.repo, run.timeout,
+                           console=console, reader=run.reader)
+    if ok is True:
+        console.print("[green]· verify passed[/]")
+    elif ok is False:
+        console.print(f"[red]· verify FAILED[/]\n[dim]{escape(tail[-600:])}[/]")
+    else:
+        console.print(f"[dim]· verify (not run): {step.get('verify', '—')}[/]")
+    default_keep = ok is not False
+    prompt = "  keep or discard? [" + ("K/d" if default_keep else "k/D") + "]: "
+    ans = run.reader(prompt).strip().lower()
+    return ans in ("k", "keep", "y", "yes") or (ans == "" and default_keep)
 
-    def _this_step() -> list[str]:
-        # frozen after the pass; before that (a raise / Ctrl-C mid-pass),
-        # everything new since the step began
-        return step_files if step_files is not None \
-            else _step_new_files(repo, baseline)
 
-    with indexed_target(str(repo), reuse=False, note=""):
-        branch_head = pr.head_sha(repo)
-        baseline = _untracked(repo)
-        try:
-            for step in steps:
-                if any(d not in kept for d in step.get("depends_on", [])):
-                    console.print(f"[yellow]· skip {step['id']} — a prerequisite was "
-                                  "not kept.[/]")
-                    skipped.append(step["id"])
-                    continue
-                console.print(f"\n[bold]· {step['id']}: {step['title']}[/]  "
-                              f"(risk: {step.get('risk', '?')})")
-                # what is untracked NOW is not this step's (operator files,
-                # a stopped step's leftovers) — revert/keep never touch it
-                _git(repo, "reset", "-q")
-                baseline = _untracked(repo)
-                step_files = None
-                # ONE mono pass — no retry / repair loop (invariant 6: a raised
-                # pass is reverted and recorded, NEVER re-run).
-                try:
-                    run_single_fn(
-                        backend, role,
-                        goal=prompts.GIT_APPLY_STEP_GOAL,
-                        task_type="implement", languages=languages,
-                        extra_context=_step_block(step, plan, survey),
-                        run_id=f"gitchange-apply-{step['id']}", phase="main")
-                    # the step's creations = what appeared DURING its pass;
-                    # a file the operator adds while reviewing is not in it
-                    step_files = _step_new_files(repo, baseline)
-                except Exception as e:
-                    console.print(f"[red]· step {step['id']} raised: "
-                                  f"{type(e).__name__}: {e}[/]")
-                    # Kept steps are already committed (keep => commit before
-                    # the next pass starts), so this full-tree revert only
-                    # ever discards the FAILED step's partial writes.
-                    _revert_to_head(repo, _this_step())
-                    failed.append(step["id"])
-                    ans = reader("  [c]ontinue with next step / [a]bort? [c/A]: ").strip().lower()
-                    if ans in ("c", "continue"):
-                        continue
-                    console.print("[yellow]· aborted — remaining steps not run.[/]")
-                    break
-                try:
-                    _adds, _dels, diff = pr.diff_against_base(repo, branch_head)
-                except pr.GitDiffError as e:
-                    # "git broke" is not "the step wrote nothing" — a step whose
-                    # result cannot be shown must not be silently skipped past.
-                    console.print(f"[red]· could not read the diff for step "
-                                  f"{step['id']}: {e}[/]")
-                    _revert_to_head(repo, _this_step())
-                    failed.append(step["id"])
-                    continue
-                if not diff.strip():
-                    console.print("[yellow]· no changes produced — skipping.[/]")
-                    _revert_to_head(repo, _this_step())
-                    skipped.append(step["id"])
-                    continue
-                from rich.syntax import Syntax
-                console.print(Syntax(diff[:8000], "diff", theme="ansi_dark",
-                                     word_wrap=True))
-                ok, tail = _run_verify(step.get("verify", ""), repo, timeout,
-                                       console=console, reader=reader)
-                if ok is True:
-                    console.print("[green]· verify passed[/]")
-                elif ok is False:
-                    console.print(f"[red]· verify FAILED[/]\n[dim]{escape(tail[-600:])}[/]")
-                else:
-                    console.print(f"[dim]· verify (not run): {step.get('verify', '—')}[/]")
-                default_keep = ok is not False
-                prompt = "  keep or discard? [" + ("K/d" if default_keep else "k/D") + "]: "
-                ans = reader(prompt).strip().lower()
-                keep = ans in ("k", "keep", "y", "yes") or (ans == "" and default_keep)
-                if not keep:
-                    _revert_to_head(repo, _this_step())
-                    discarded.append(step["id"])
-                    console.print(f"[yellow]· discarded {step['id']}[/]")
-                    continue
-                committed, err = _commit_step(
-                    repo, f"gitchange {step['id']}: {step['title']}",
-                    step_files or [])
-                if not committed:
-                    # NOT kept: a step reported "kept" while uncommitted would
-                    # be wiped by the next discard's revert. Stop here with
-                    # the work left in the tree for the operator to commit.
-                    failed.append(step["id"])
-                    console.print(f"[red]· could not commit {step['id']} — it is "
-                                  f"NOT kept. git said:[/]\n[dim]{escape(err[-600:])}[/]")
-                    console.print("[yellow]· stopping; the step's changes are left "
-                                  "uncommitted on the branch — fix the cause and "
-                                  "commit them, or `git reset --hard` to drop "
-                                  "them.[/]")
-                    stopped = True
-                    break
-                branch_head = pr.head_sha(repo)
-                kept.append(step["id"])
-                console.print(f"[green]· kept {step['id']} (committed on {branch})[/]")
-        except (KeyboardInterrupt, ChatCancelled):
-            # Ctrl-C mid-step: the in-flight step's writes are reverted (kept
-            # steps are commits and survive); the summary still prints.
-            _revert_to_head(repo, _this_step())
-            interrupted = True
-            console.print("\n[yellow]· interrupted — the in-flight step was "
-                          "reverted; kept steps stay committed.[/]")
-        except BaseException:
-            _revert_to_head(repo, _this_step())
-            raise
+def _keep_step(run: _ApplyRun, step: dict) -> bool:
+    """Commit a kept step on the branch. False (and `stopped`) when the
+    commit fails: the step is NOT kept and its work stays in the tree."""
+    from luxe import pr
+    console = run.console
+    committed, err = _commit_step(
+        run.repo, f"gitchange {step['id']}: {step['title']}",
+        run.step_files or [])
+    if not committed:
+        # NOT kept: a step reported "kept" while uncommitted would
+        # be wiped by the next discard's revert. Stop here with
+        # the work left in the tree for the operator to commit.
+        run.failed.append(step["id"])
+        console.print(f"[red]· could not commit {step['id']} — it is "
+                      f"NOT kept. git said:[/]\n[dim]{escape(err[-600:])}[/]")
+        console.print("[yellow]· stopping; the step's changes are left "
+                      "uncommitted on the branch — fix the cause and "
+                      "commit them, or `git reset --hard` to drop "
+                      "them.[/]")
+        run.stopped = True
+        return False
+    run.branch_head = pr.head_sha(run.repo)
+    run.kept.append(step["id"])
+    console.print(f"[green]· kept {step['id']} (committed on {run.branch})[/]")
+    return True
 
-    tally = (f"kept={len(kept)} discarded={len(discarded)} "
-             f"skipped={len(skipped)} failed={len(failed)}")
-    back = orig_sha if orig_branch in ("", "HEAD") else orig_branch
-    if stopped:
+
+def _print_summary(run: _ApplyRun, co: _Checkout) -> int:
+    """The closing tally + how to review / merge / discard. Exit code: 1
+    when a kept step could not be committed, 130 after Ctrl-C, else 0."""
+    console, repo, branch = run.console, run.repo, co.branch
+    tally = (f"kept={len(run.kept)} discarded={len(run.discarded)} "
+             f"skipped={len(run.skipped)} failed={len(run.failed)}")
+    back = co.orig_sha if co.orig_branch in ("", "HEAD") else co.orig_branch
+    if run.stopped:
         # a failed commit is not a finished run: no merge instructions
         console.print(f"\n[red]· stopped — a kept step could not be committed.[/] "
                       f"{tally} on branch [cyan]{branch}[/]")
@@ -518,4 +628,4 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
                   f"git merge {branch}   (you do this — apply never merges)[/]")
     console.print(f"[dim]  discard: git -C {repo} checkout {back} && "
                   f"git branch -D {branch}[/]")
-    return 130 if interrupted else 0
+    return 130 if run.interrupted else 0
