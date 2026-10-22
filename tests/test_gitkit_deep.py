@@ -823,6 +823,25 @@ def test_save_map_writes_breadcrumb(tmp_path):
     assert isinstance(bc["mapped_at"], int) and bc["mapped_at"] > 0
 
 
+def test_load_map_reuses_a_caller_supplied_status(tmp_path, monkeypatch):
+    """run_deep_report classifies the map once and hands that status to
+    load_map (up to three parses per run before)."""
+    target = tmp_path / "repo"
+    _seed_map(target, head="h1")
+    status = deep.map_status(target, head="h1")
+    calls = []
+    real = deep.mapcache.map_status
+    monkeypatch.setattr(deep.mapcache, "map_status",
+                        lambda *a, **k: calls.append(1) or real(*a, **k))
+    assert deep.load_map(target, head="h1", status=status)["survey_notes"].strip() == "notes"
+    assert deep.load_map(target, head="h1", allow_stale=True, status=status)
+    assert calls == []
+    # the supplied status is authoritative
+    missing = deep.MapStatus(deep.MapState.MISSING)
+    assert deep.load_map(target, head="h1", status=missing) is None
+    assert deep.load_map(target, head="h1") is not None and calls == [1]
+
+
 def test_map_status_fresh_after_save(tmp_path):
     target = tmp_path / "repo"
     _seed_map(target, head="h1")

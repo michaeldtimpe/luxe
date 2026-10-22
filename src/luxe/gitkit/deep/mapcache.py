@@ -154,16 +154,18 @@ def map_status(target: str | Path, *, head: str) -> MapStatus:
 
 
 def load_map(target: str | Path, *, head: str, rebuild: bool = False,
-             allow_stale: bool = False) -> dict | None:
+             allow_stale: bool = False,
+             status: MapStatus | None = None) -> dict | None:
     """Return the cached survey+chunks for `target` iff the map is FRESH (delegates
     to `map_status` — single source of truth for "valid cache"); else None. The
     return shape (survey_notes / chunks / content_budget / framing) is unchanged.
     `allow_stale=True` also accepts a STALE map (HEAD moved) — the incremental
     re-audit path, which keeps the survey + partition and re-runs only dirty
-    chunks."""
+    chunks. `status` is a `map_status(target, head=head)` the caller already
+    computed — passing it skips re-parsing the breadcrumb + heavy files."""
     if rebuild:
         return None
-    state = map_status(target, head=head).state
+    state = (status or map_status(target, head=head)).state
     ok = state is MapState.FRESH or (allow_stale and state is MapState.STALE)
     if not ok:
         return None

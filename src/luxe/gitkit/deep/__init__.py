@@ -331,7 +331,8 @@ def run_deep_report(
         skip_map_io = True  # no map read/write in diff mode
     else:
         status = map_status(target, head=head)
-        cached = None if rebuild_map else load_map(target, head=head)
+        cached = None if rebuild_map else load_map(target, head=head,
+                                                   status=status)
         if not rebuild_map and status.state is MapState.PARTIAL:
             if _handle_partial_map(status) is CacheDecision.CANCEL:
                 console.print("[yellow]· cancelled.[/]")
@@ -350,7 +351,8 @@ def run_deep_report(
             # delta chunks, and let the sha-validated notes cache decide which
             # chunks actually re-run. plan_incremental is pure; any rebuild
             # trigger is logged loudly (never silently skipped).
-            stale = load_map(target, head=head, allow_stale=True)
+            stale = load_map(target, head=head, allow_stale=True,
+                             status=status)
             if stale is not None:
                 current_shas = worktree_file_shas(target)
                 added = sorted(set(current_shas) - set(status.files))
