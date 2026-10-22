@@ -372,8 +372,8 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
     `/pull <name> --from <dir>` import an explicit directory (mounted volume)
     `… --allow-untrusted`       a publisher not in trusted_publishers
 
-    Same publisher allowlist as `luxe pull` (the plan is
-    `modelstore.plan_pull`).
+    Same publisher allowlist and template pin as `luxe pull` (the plan is
+    `modelstore.plan_pull`); `--pin`/`--show-template` stay CLI-only.
 
     The preview step is the consent step: a chat command has no confirmation
     prompt, and a pull can move tens of gigabytes. Transfers run on the command
@@ -467,8 +467,9 @@ def _pull(args, ctx: CommandContext) -> CommandResult:
 
             if chosen.kind == "mount":
                 _pull_copy(ctx, chosen, force="--force" in flags)
-            else:
-                _pull_download(ctx, admin, chosen)
+                _pull_pin(ctx, plan, chosen)
+            elif _pull_download(ctx, admin, chosen):
+                _pull_pin(ctx, plan, chosen)
     except (ms.ModelStoreError, OSError) as e:
         ctx.console.print(f"[red]✗ {escape(str(e))}[/]")
     return CommandResult(handled=True)
@@ -530,7 +531,38 @@ def _pull_copy(ctx: CommandContext, source, *, force: bool) -> None:
                       f"{res.seconds:.0f}s)[/]")
 
 
-def _pull_download(ctx: CommandContext, admin, source) -> None:
+def _pull_pin(ctx: CommandContext, plan, chosen) -> None:
+    """Pin the just-pulled model's template (same record as `luxe pull`).
+    An `--ephemeral` session records nothing; say so, since `/doctor` will
+    then report the model unpinned."""
+    from luxe import modelpins
+
+    try:
+        tset = modelpins.locate_templates(plan.name)
+        if tset is None:
+            ctx.console.print(f"[yellow]· template not pinned — run `luxe pull "
+                              f"--pin {escape(plan.name)}` once it is in the "
+                              "store[/]")
+            return
+        path = modelpins.record_pin(tset, source=chosen.ref,
+                                    publisher=plan.publisher,
+                                    trusted=plan.trusted, via="pull")
+    except Exception as e:
+        ctx.console.print(f"[yellow]· template not pinned ({escape(str(e))})[/]")
+        return
+    if path is None:
+        ctx.console.print("[dim]· ephemeral session — template NOT pinned; "
+                          f"`luxe pull --pin {escape(plan.name)}` later[/]")
+        return
+    findings = tset.lint()
+    ctx.console.print(f"[dim]· template pinned (sha {tset.sha256[:8] or 'none'}"
+                      f" · {escape(plan.publisher or 'publisher unknown')})"
+                      + (f" · lint: {len(findings)} finding(s) — `luxe pull "
+                         f"--show-template {escape(plan.name)}`" if findings
+                         else "") + "[/]")
+
+
+def _pull_download(ctx: CommandContext, admin, source) -> bool:
     from luxe.modelstore import human_bytes
 
     task = admin.start_download(source.ref)
@@ -548,9 +580,10 @@ def _pull_download(ctx: CommandContext, admin, source) -> None:
     if final.status == "completed":
         ctx.console.print(f"[green]✓[/] {final.repo_id} downloaded "
                           "[dim](/model to select it)[/]")
-    else:
-        ctx.console.print(f"[red]✗ {final.repo_id}: "
-                          f"{escape(str(final.error or final.status))}[/]")
+        return True
+    ctx.console.print(f"[red]✗ {final.repo_id}: "
+                      f"{escape(str(final.error or final.status))}[/]")
+    return False
 
 
 def _unload(args, ctx: CommandContext) -> CommandResult:

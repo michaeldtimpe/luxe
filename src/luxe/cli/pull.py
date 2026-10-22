@@ -26,21 +26,30 @@ from luxe.cli._common import _chat_cfg, _omlx_base_url_from_config, console, mai
               help="Delete <ref> from the LOCAL store instead of fetching. "
                    "Refuses this host's manifest models unless --force.")
 @click.option("--force", is_flag=True, help="Replace an existing model directory.")
+@click.option("--pin", "pin_state", is_flag=True,
+              help="Pin <ref>'s chat template as it is on disk NOW (no fetch). "
+                   "Use `org/Name` to record the publisher of a top-level copy.")
+@click.option("--show-template", "show_template", is_flag=True,
+              help="Print <ref>'s chat template(s) verbatim, with hash, pin "
+                   "status and lint — read before re-pinning.")
 @click.option("--allow-untrusted", is_flag=True,
-              help="Fetch from a publisher not in trusted_publishers.")
+              help="Fetch/pin from a publisher not in trusted_publishers "
+                   "(the pin records trusted: false).")
 @click.option("--yes", "-y", "assume_yes", is_flag=True, help="Don't ask to confirm.")
 @click.option("--base-url", default="", help="oMLX endpoint (default: local).")
 @click.option("--models-dir", default="",
               help="oMLX model store (default: ~/.omlx/models).")
 def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
-             force_hf: bool, remove_state: bool, force: bool,
-             allow_untrusted: bool, assume_yes: bool, base_url: str,
-             models_dir: str):
+             force_hf: bool, remove_state: bool, force: bool, pin_state: bool,
+             show_template: bool, allow_untrusted: bool, assume_yes: bool,
+             base_url: str, models_dir: str):
     """Fetch model weights: `luxe pull <hf-repo-id>` or `luxe pull <name> --from <dir>`.
 
     Prefers a copy already on a mounted volume (kappa/alpha over SMB) — same
     bytes at LAN speed — and falls back to HuggingFace via the oMLX downloader.
-    Pulls only from `trusted_publishers` unless --allow-untrusted.
+    Pulls only from `trusted_publishers` unless --allow-untrusted, and pins
+    the new model's chat template (`--pin` / `--show-template` for weights
+    already on disk).
     """
     from luxe import modelstore as ms
 
@@ -52,6 +61,12 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
 
     if remove_state:
         _pull_remove(ref, dest_dir, force=force, assume_yes=assume_yes)
+        return
+    # `--pin` / `--show-template` read (and `--pin` records) THIS disk's
+    # template — no admin API, so they work on llama-server too.
+    if pin_state or show_template:
+        _pull_template(ref, dest_dir, engine=engine, pin=pin_state,
+                       show=show_template, allow_untrusted=allow_untrusted)
         return
 
     # `--list` and `--remove` are local-store reads and stay available
@@ -128,8 +143,9 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
 
             if chosen.kind == "mount":
                 _pull_from_mount(chosen, dest_dir, force)
-            else:
-                _pull_from_hf(admin, chosen)
+                _pin_after_pull(plan, chosen, dest_dir)
+            elif _pull_from_hf(admin, chosen):
+                _pin_after_pull(plan, chosen, None)
         except (ms.ModelStoreError, OSError) as e:
             # OSError too: a full disk, a vanished mount, or a permission
             # error mid-copy is an operator-facing failure, not a traceback.
@@ -138,6 +154,15 @@ def pull_cmd(ref: str, search_query: str, list_state: bool, from_path: str,
         except KeyboardInterrupt:
             console.print("\n[yellow]· interrupted (partial copy removed)[/]")
             sys.exit(130)
+
+
+def _default_entry_from_config():
+    """The config's DEFAULT backend entry, or None when it can't be read."""
+    try:
+        cfg = _chat_cfg()
+        return cfg.backend_entry(cfg.default_backend_name())
+    except Exception:
+        return None
 
 
 def _trusted_publishers() -> list[str] | None:
@@ -154,6 +179,124 @@ def _publisher_label(publisher: str, trusted) -> str:
     if trusted is False:
         return f"{publisher} — NOT in trusted_publishers (--allow-untrusted)"
     return f"{publisher} (trusted)"
+
+
+def _print_lint(tset) -> None:
+    findings = tset.lint()
+    if not findings:
+        console.print("  [dim]lint: no findings[/]")
+        return
+    console.print(f"  [yellow]lint: {len(findings)} finding(s) — report-only; "
+                  "read the template before trusting it:[/]")
+    for name, f in findings:
+        console.print(f"    [yellow]· {escape(name)}: {escape(f.describe())}[/]")
+
+
+def _pin_after_pull(plan, chosen, dest_dir) -> None:
+    """Record the just-provisioned model's template pin (`luxe pull` is the
+    sanctioned writer). Best-effort: a failed pin never fails the pull — the
+    model then shows as unpinned in `/doctor`, which names the fix."""
+    from luxe import modelpins
+
+    try:
+        tset = modelpins.locate_templates(plan.name, models_dir=dest_dir)
+        if tset is None:
+            console.print(f"[yellow]· template not pinned — {plan.name} is not "
+                          f"in the store; `luxe pull --pin {plan.name}` once "
+                          "it is[/]")
+            return
+        modelpins.record_pin(tset, source=chosen.ref, publisher=plan.publisher,
+                             trusted=plan.trusted, via="pull")
+    except Exception as e:
+        console.print(f"[yellow]· template not pinned ({escape(str(e))}) — "
+                      f"`luxe pull --pin {plan.name}`[/]")
+        return
+    console.print(f"[green]✓[/] template pinned [dim](sha "
+                  f"{tset.sha256[:8] or 'none'} · "
+                  f"{_publisher_label(plan.publisher, plan.trusted)})[/]")
+    _print_lint(tset)
+
+
+def _pull_template(ref: str, dest_dir, *, engine: str, pin: bool, show: bool,
+                   allow_untrusted: bool) -> None:
+    """`luxe pull --pin <ref>` / `luxe pull --show-template <ref>`."""
+    from luxe import modelpins
+    from luxe import modelstore as ms
+    from luxe.config import ENGINE_LLAMA_SERVER, ENGINE_OMLX
+
+    flag = "--pin" if pin else "--show-template"
+    if not ref:
+        console.print(f"[red]✗ {flag} needs a model "
+                      f"(`luxe pull {flag} <name>`).[/]")
+        sys.exit(2)
+    if engine not in (ENGINE_OMLX, ENGINE_LLAMA_SERVER):
+        console.print(f"[red]✗ {flag}: a {engine} endpoint has no weights on "
+                      "this disk — there is no template to read.[/]")
+        sys.exit(2)
+    entry = _default_entry_from_config()
+    preset = getattr(entry, "models_preset", "") if entry is not None else ""
+    if engine == ENGINE_LLAMA_SERVER and not preset:
+        console.print(f"[red]✗ {flag}: {modelpins.PRESET_HINT}.[/]")
+        sys.exit(2)
+    name = ms.store_name_for(ref)
+    models_dir = dest_dir if engine == ENGINE_OMLX else None
+
+    if show:
+        tset = modelpins.locate_templates(name, engine=engine,
+                                          models_dir=models_dir, preset=preset)
+        if tset is None or (tset.error and not tset.sources):
+            why = tset.error if tset is not None else "not on this disk"
+            console.print(f"[red]✗ {escape(name)}: {escape(why)}[/]")
+            sys.exit(2)
+        _show_template(tset)
+        if not pin:
+            return
+
+    try:
+        out = modelpins.pin_model(ref, engine=engine, models_dir=models_dir,
+                                  preset=preset,
+                                  trusted_publishers=_trusted_publishers(),
+                                  allow_untrusted=allow_untrusted)
+    except modelpins.PinRefused as e:
+        console.print(f"[red]✗ {escape(str(e))}[/]")
+        sys.exit(2)
+    where = out.path or "nowhere (ephemeral)"
+    console.print(f"[green]✓[/] {escape(name)} — template pinned "
+                  f"[dim](sha {out.tset.sha256[:8] or 'none'} · "
+                  f"{_publisher_label(out.publisher, out.trusted)} → "
+                  f"{escape(str(where))})[/]")
+    if out.readme_hint:
+        console.print(f"  [dim]its README claims {escape(out.readme_hint)} — "
+                      f"if that is right, record it: `luxe pull --pin "
+                      f"{escape(out.readme_hint)}/{escape(name)}`[/]")
+    _print_lint(out.tset)
+
+
+def _show_template(tset) -> None:
+    """Print a template set VERBATIM — `click.echo`, never Rich markup: a
+    template is full of `[`…`]` that Rich would eat or render."""
+    from luxe import modelpins
+
+    pin = modelpins.load_pins().get(tset.model)
+    if pin is None:
+        status = "NOT PINNED"
+    elif pin.get("template_sha256") == tset.sha256:
+        status = f"matches the pin from {str(pin.get('pinned_at', ''))[:10]}"
+    else:
+        status = (f"DIFFERS from the pin of {str(pin.get('pinned_at', ''))[:10]}"
+                  f" (pinned sha {str(pin.get('template_sha256', ''))[:8]})")
+    click.echo(f"{tset.model} — {len(tset.sources)} template source(s) at "
+               f"{tset.location}")
+    click.echo(f"  sha256 {tset.sha256 or '(no template)'} · {status}")
+    findings = tset.lint()
+    click.echo(f"  lint: {len(findings)} finding(s)" if findings
+               else "  lint: no findings")
+    for name, f in findings:
+        click.echo(f"    · {name}: {f.describe()}")
+    for src in tset.sources:
+        click.echo(f"──── {src.name} (sha {src.sha256[:8]}) ────")
+        click.echo(src.text)
+    click.echo("────")
 
 
 def _default_engine_from_config() -> str:
@@ -327,7 +470,7 @@ def _pull_from_mount(source, dest_dir, force: bool) -> None:
                   "(`luxe pull --list` to confirm)[/]")
 
 
-def _pull_from_hf(admin, source) -> None:
+def _pull_from_hf(admin, source) -> bool:
     from rich.progress import (BarColumn, DownloadColumn, Progress,
                                TextColumn, TimeRemainingColumn)
 
@@ -352,8 +495,10 @@ def _pull_from_hf(admin, source) -> None:
             console.print(f"[green]✓[/] {source.name} — real bytes in the store")
         else:
             _materialize_from_hf_cache(source)
-    elif final.status == "cancelled":
+        return True
+    if final.status == "cancelled":
         console.print(f"[yellow]· {final.repo_id} download cancelled[/]")
+        return False
     else:
         console.print(f"[red]✗ {final.repo_id} failed: "
                       f"{final.error or final.status}[/]")

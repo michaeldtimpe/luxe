@@ -143,6 +143,13 @@ class BackendEntry(BaseModel):
     # cost. Empty for every other entry, and omitted from `backend_kwargs()`
     # when empty, so their requests stay byte-identical.
     body_extras: dict[str, Any] = Field(default_factory=dict)
+    # llama-server only (diagnostic, like `engine`): the `--models-preset` ini
+    # this server was started with. It maps each model id to its GGUF file,
+    # which is where the chat template lives — the one thing luxe needs it
+    # for is pinning and linting that template (`luxe pull --pin`, `/doctor`'s
+    # `template:<id>` lines). Empty = templates on this endpoint are not
+    # checked, and doctor says how to turn it on. Never changes a request.
+    models_preset: str = ""
 
     @field_validator("engine")
     @classmethod
