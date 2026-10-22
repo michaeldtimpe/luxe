@@ -457,13 +457,21 @@ out of scope; three guards, one definition (`src/luxe/secrets.py`):
   verify, smoke --code pytest) runs with `scrubbed_env()`: secret-named vars
   dropped (secrets.env names, names luxe resolved, KEY/TOKEN/SECRET/PASSW/
   CREDENTIAL/PRIVATE/COOKIE, `*_PAT`/`*_AUTH`). A denylist on purpose —
-  JAVA_HOME/GOPATH/… must keep working. luxe's own git/gh/security/brew calls
-  are left alone. tools.sdd.
+  JAVA_HOME/GOPATH/… must keep working. Every git luxe runs for itself gets
+  the same scrub (hooks/`diff.external` execute); `gh` doesn't. tools.sdd.
+- **`.git/**` is not writable** by `write_file`/`edit_file` (any component,
+  case-insensitive); `.gitignore`/`.github/…` still are.
 - **Redaction + egress refusal** in `loop._dispatch_one` (covers every tool,
   web/MCP included): known values in results → `[REDACTED:<NAME>]`; a call
   whose args carry one (raw/percent/base64) is not run. Events
   `secret_redacted`/`secret_egress_refused` carry NAMES only. agents.sdd.
 - **Warning** (chat) when web + bash are both on. chat.sdd.
+
+**This is NOT a sandbox.** Allowlisted bash includes `python`, so a model can
+write code that reads `~/.luxe/secrets.env` from disk and sends it out within
+one command — the scrub and the argument check never see that. Only
+sandboxing closes it (out of scope). `bash -lc` re-sourcing a login profile
+is the other known residual (no fleet profile exports secrets).
 
 No flag; byte-identical when no secret value appears (goldens unchanged).
 Verify: `tests/test_secrets_{scrub,redact,chat_warning}.py`, or live with a
