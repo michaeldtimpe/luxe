@@ -219,28 +219,10 @@ def _run_interactive(
     from luxe.chat import run_chat_repl
     from luxe.chat.controller import StartupFlags
     # Late, and from `cli` on purpose: see the module docstring.
-    from luxe.cli import (
-        _chat_cfg,
-        _default_mcp_config_hint,
-        _languages_from_paths,
-        _select_backend,
-    )
-    from luxe.locks import LockHeld, acquire_repo_lock
+    from luxe.cli import _chat_cfg, _select_backend
     from luxe.tools.fs import set_repo_root
 
-    # Ephemeral is switched on BEFORE anything can persist — the session
-    # directory is created during startup, so a later flip would already be
-    # too late. `--resume` needs a transcript on disk, which is precisely what
-    # this mode refuses to produce, so the combination is rejected rather than
-    # silently starting a fresh session under a resumed-looking id.
-    if ephemeral:
-        if resume_session_id:
-            raise click.UsageError(
-                "--ephemeral cannot be combined with --resume: an ephemeral "
-                "session writes no transcript, so there is nothing to resume "
-                "and nothing this session could be resumed from.")
-        eph.enable()
-
+    _enable_ephemeral(ephemeral, resume_session_id)
     theme_name = _resolve_theme_name(theme_name)
 
     repo_path = resolve_repo(repo)
@@ -259,15 +241,78 @@ def _run_interactive(
     # default entry (chat-only; SlotManager reads default_backend_name()).
     _select_backend(cfg, backend_name)
 
-    # What is this session about? A git root above cwd, a marker-bearing
-    # directory, or nothing at all (chat from anywhere). `--repo` given
-    # explicitly is honoured as-is; the default "." resolves upward.
+    project = _resolve_project(repo_path, require_project=require_project)
+    repo_path = project.root
+    set_repo_root(repo_path)
+
+    # Cache the `.sdd` contract scan per repo root for this session (chat-only;
+    # see spec_resolver). `run_single` rebuilds the contract block every turn
+    # and the scan walks the whole root — ~19s per turn with `--repo ~`.
+    # `finalize_turn` drops the entry when a turn writes a `.sdd`.
+    spec_resolver.enable_scan_cache()
+
+    attached = _AttachedProject(repo_path)
+    languages: frozenset[str] = frozenset()
+    if project.is_project:
+        languages, _stats = _index_project(repo_path)
+        attached.lock()
+    else:
+        # No project here: skip indexing entirely (it cost 210s from `$HOME` for
+        # coverage the model can't rely on). Read tools still work against cwd;
+        # `/index` or `/project <path>` turns code search on later. No repo
+        # lock either (see `_AttachedProject.lock`).
+        console.print(
+            f"[dim]· no project at {escape(_tilde(repo_path))} — chat mode "
+            "(read tools on; `/project <path>` or `/index` to add code "
+            "search)[/]")
+
+    mcp_mgr = (_start_mcp(mcp_servers, mcp_config_path, read_only=mcp_read_only)
+               if mcp_servers else None)
+    run_app = _pick_front_end()
+    flags = StartupFlags(
+        keep_loaded=keep_loaded, resume_session_id=resume_session_id,
+        project_kind=project.kind, theme_name=theme_name, dev_mode=dev_mode,
+        start_web=start_web, start_write=start_write, verbose=startup_verbose,
+        show_reasoning=startup_show_reasoning, no_terse=startup_no_terse,
+        debug=startup_debug, compact=startup_compact, ctx_tier=ctx_tier)
+    try:
+        if run_app is not None:
+            run_app(cfg, repo_path, languages, flags=flags,
+                    on_project=attached.attach)
+        else:
+            run_chat_repl(cfg, repo_path, languages, console=console,
+                          flags=flags, on_project=attached.attach)
+    finally:
+        _teardown(mcp_mgr, attached)
+
+
+def _enable_ephemeral(ephemeral: bool, resume_session_id: str | None) -> None:
+    """Ephemeral is switched on BEFORE anything can persist — the session
+    directory is created during startup, so a later flip would already be
+    too late. `--resume` needs a transcript on disk, which is precisely what
+    this mode refuses to produce, so the combination is rejected rather than
+    silently starting a fresh session under a resumed-looking id."""
+    if not ephemeral:
+        return
+    if resume_session_id:
+        raise click.UsageError(
+            "--ephemeral cannot be combined with --resume: an ephemeral "
+            "session writes no transcript, so there is nothing to resume "
+            "and nothing this session could be resumed from.")
+    eph.enable()
+
+
+def _resolve_project(repo_path: str, *, require_project: bool):
+    """What is this session about? A git root above cwd, a marker-bearing
+    directory, or nothing at all (chat from anywhere).
+
+    ALWAYS resolves upward, flag or not: the `luxe-chat` wrapper passes
+    `--repo "$PWD"` on every invocation, so treating an explicit --repo as
+    "pin exactly here" would silently defeat walk-up for the primary entry
+    point (caught by tests/test_chat_project.py). `luxe code`
+    (`require_project`) outside a project exits 2 with the fix."""
     from luxe import project as project_mod
 
-    # ALWAYS resolve upward, flag or not: the `luxe-chat` wrapper passes
-    # `--repo "$PWD"` on every invocation, so treating an explicit --repo as
-    # "pin exactly here" would silently defeat walk-up for the primary entry
-    # point (caught by tests/test_chat_project.py).
     project = project_mod.resolve(repo_path)
     if require_project and not project.is_project:
         # `luxe code` is dead simple on purpose: inside a project it just
@@ -281,181 +326,189 @@ def _run_interactive(
     if project.root != repo_path and project.is_project:
         console.print(f"[dim]· {escape(_tilde(repo_path))} is inside "
                       f"{escape(_tilde(project.root))} — using the project root[/]")
-    repo_path = project.root
-    set_repo_root(repo_path)
+    return project
 
-    # Cache the `.sdd` contract scan per repo root for this session (chat-only;
-    # see spec_resolver). `run_single` rebuilds the contract block every turn
-    # and the scan walks the whole root — ~19s per turn with `--repo ~`.
-    # `finalize_turn` drops the entry when a turn writes a `.sdd`.
-    spec_resolver.enable_scan_cache()
 
-    from luxe import search as search_mod
-    from luxe import symbols as symbols_mod
+class _AttachedProject:
+    """The session's project root and the repo lock that goes with it.
 
-    languages: frozenset[str] = frozenset()
-    if project.is_project:
-        bm25, sym_idx, scan = _build_chat_indexes(repo_path)
-        search_mod.set_index(bm25)
-        symbols_mod.set_index(sym_idx)
-        # Languages come from the scan we just did — no third walk of the tree.
-        languages = _languages_from_paths(scan.paths)
-    else:
-        # No project here: skip indexing entirely (it cost 210s from `$HOME` for
-        # coverage the model can't rely on). Read tools still work against cwd;
-        # `/index` or `/project <path>` turns code search on later.
-        console.print(
-            f"[dim]· no project at {escape(_tilde(repo_path))} — chat mode "
-            "(read tools on; `/project <path>` or `/index` to add code "
-            "search)[/]")
+    The repo lock serialises luxe runs against ONE codebase; a no-project
+    session has no codebase to protect, and locking `$HOME` would stop you
+    opening a second chat window — so only a real project is ever locked.
+    `attach` is the front-ends' `on_project` hook (`/project`, `/index`)."""
 
-    # The repo lock serialises luxe runs against ONE codebase; a no-project
-    # session has no codebase to protect, and locking `$HOME` would stop you
-    # opening a second chat window.
-    ctx = None
-    if project.is_project:
+    def __init__(self, root: str) -> None:
+        self.root = root
+        self._lock = None
+
+    def lock(self) -> None:
+        """Take the lock on `root` at startup; a busy repo exits 3."""
+        from luxe.locks import LockHeld
+
         try:
-            ctx = acquire_repo_lock(repo_path, f"chat-{int(time.time())}")
-            ctx.__enter__()
+            self._lock = _enter_lock(self.root)
         except LockHeld as e:
             console.print(f"[red]✗ {e}[/]")
             sys.exit(3)
 
-    def _attach_project(target: str | None) -> dict:
+    def attach(self, target: str | None) -> dict:
         """`/project [path]` and `/index [path]`: re-resolve, re-index, and move
         the repo lock. Returns a summary dict for the command to render; raises
         LockHeld when the new project is busy (the session stays where it is)."""
-        nonlocal ctx, repo_path, languages
-        new = (project_mod.resolve(target) if target
-               else project_mod.resolve(repo_path))
-        new_ctx = None
-        if new.is_project and new.root != repo_path:
+        from luxe import project as project_mod
+        from luxe import search as search_mod
+        from luxe import symbols as symbols_mod
+        from luxe.tools.fs import set_repo_root
+
+        new = project_mod.resolve(target if target else self.root)
+        if new.is_project and new.root != self.root:
             # Acquire the new lock BEFORE releasing the old one, so a failure
             # leaves the session exactly as it was.
-            new_ctx = acquire_repo_lock(new.root, f"chat-{int(time.time())}")
-            new_ctx.__enter__()
-        if new_ctx is not None:
-            if ctx is not None:
-                try:
-                    ctx.__exit__(None, None, None)
-                except Exception:
-                    pass
-            ctx = new_ctx
-        repo_path = new.root
-        set_repo_root(repo_path)
+            new_lock = _enter_lock(new.root)
+            self.release()
+            self._lock = new_lock
+        self.root = new.root
+        set_repo_root(self.root)
         spec_resolver.invalidate_scan_cache()
         search_mod.reset_index()
         symbols_mod.reset_index()
         summary = {"root": new.root, "kind": new.kind, "label": new.label,
                    "files": 0, "symbols": 0, "truncated": "", "used_git": False}
+        languages: frozenset = frozenset()
         if new.is_project:
-            bm, sy, sc = _build_chat_indexes(new.root)
-            search_mod.set_index(bm)
-            symbols_mod.set_index(sy)
-            languages = _languages_from_paths(sc.paths)
-            summary.update(files=len(bm.paths), symbols=len(sy.symbols),
-                           truncated=sc.truncated, used_git=sc.used_git)
-        else:
-            languages = frozenset()
-        # The front-ends' session follows this (repl.apply_project_summary):
+            languages, stats = _index_project(new.root)
+            summary.update(stats)
+        # The front-ends' session follows this (controller.apply_project_summary):
         # turn setup reads `session.languages`, so lint/typecheck target the
         # project actually attached rather than the one the session started in.
         summary["languages"] = languages
         return summary
 
-    # `--mcp <name>` (chat-only): connect the named servers from the MCP
-    # config and publish their tool surface via chat.mcptools; prepare_turn
-    # injects it through the extra-tool seam. A server that fails to connect
-    # is reported and skipped — an unreachable relay must not stop a chat
-    # session from starting (this is the fallback tool).
-    mcp_mgr = None
-    if mcp_servers:
-        from luxe.chat import mcptools
-        from luxe.mcp.client import (
-            MCPClientConfig,
-            MCPClientManager,
-            load_mcp_config,
-        )
-        mcp_cfg = load_mcp_config(mcp_config_path)
-        known = {s.name: s for s in mcp_cfg.servers}
-        unknown = [n for n in mcp_servers if n not in known]
-        if unknown:
-            console.print(
-                f"[red]✗ unknown MCP server(s): {', '.join(unknown)}. "
-                f"Configured: {', '.join(known) or '(none)'} "
-                f"[dim]({mcp_config_path or _default_mcp_config_hint()})[/][/]")
-            sys.exit(2)
-        selected = MCPClientConfig(
-            servers=[known[n] for n in dict.fromkeys(mcp_servers)],
-            circuit_breaker=mcp_cfg.circuit_breaker,
-        )
-        mcp_mgr = MCPClientManager(selected).start()
-        defs, fns = mcp_mgr.discover_tools()
-        always_defs = [d for d in defs if not mcp_mgr.is_write_gated(d.name)]
-        gated_defs = [d for d in defs if mcp_mgr.is_write_gated(d.name)]
-        if mcp_read_only and gated_defs:
-            console.print(f"[dim]· MCP: {len(gated_defs)} mutating tool(s) "
-                          "dropped (--mcp-read-only)[/]")
-            fns = {k: v for k, v in fns.items()
-                   if k not in {d.name for d in gated_defs}}
-            gated_defs = []
-        up = [s for s in mcp_mgr.server_status() if not s["down"]]
-        console.print(f"[dim]· MCP: {len(always_defs)} tool(s)"
-                      + (f" + {len(gated_defs)} write-gated" if gated_defs else "")
-                      + f" from {len(up)} server(s): "
-                      + ", ".join(s['name'] for s in up) + "[/]")
-        for s in mcp_mgr.server_status():
-            if s["down"]:
-                console.print(f"[yellow]· MCP server {s['name']} DOWN: "
-                              f"{s['down_reason']}[/]")
-        mcptools.set_surface(mcptools.MCPSurface(
-            always_defs=always_defs, gated_defs=gated_defs, fns=fns,
-            status_fn=mcp_mgr.server_status,
-        ))
+    def release(self) -> None:
+        if self._lock is not None:
+            try:
+                self._lock.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._lock = None
 
-    # Front-end selection: the full-screen Textual TUI when stdout is a real
-    # terminal AND textual is installed; otherwise the line REPL (CI / pipes /
-    # textual-absent). --resume rides either front-end (the TUI replays the
-    # transcript on mount). chat.sdd.
-    run_app = None
-    if sys.stdout.isatty():
-        try:
-            from luxe.chat.tui import run_chat_app as run_app
-        except Exception:
-            run_app = None
-            console.print("[dim]· textual not installed — using the line REPL. "
-                          "Run `uv sync --extra chat` (repo root) to restore "
-                          "the full-screen UI.[/]")
 
-    flags = StartupFlags(
-        keep_loaded=keep_loaded, resume_session_id=resume_session_id,
-        project_kind=project.kind, theme_name=theme_name, dev_mode=dev_mode,
-        start_web=start_web, start_write=start_write, verbose=startup_verbose,
-        show_reasoning=startup_show_reasoning, no_terse=startup_no_terse,
-        debug=startup_debug, compact=startup_compact, ctx_tier=ctx_tier)
+def _enter_lock(root: str):
+    from luxe.locks import acquire_repo_lock
+
+    lock = acquire_repo_lock(root, f"chat-{int(time.time())}")
+    lock.__enter__()
+    return lock
+
+
+def _pick_front_end():
+    """The full-screen Textual TUI's entry point when stdout is a real
+    terminal AND textual is installed; otherwise None = the line REPL (CI /
+    pipes / textual-absent). --resume rides either front-end (the TUI
+    replays the transcript on mount). chat.sdd."""
+    if not sys.stdout.isatty():
+        return None
     try:
-        if run_app is not None:
-            run_app(cfg, repo_path, languages, flags=flags,
-                    on_project=_attach_project)
-        else:
-            run_chat_repl(cfg, repo_path, languages, console=console,
-                          flags=flags, on_project=_attach_project)
-    finally:
-        search_mod.reset_index()
-        symbols_mod.reset_index()
-        spec_resolver.enable_scan_cache(False)  # also clears it
-        if mcp_mgr is not None:
-            from luxe.chat import mcptools
-            mcptools.clear()
-            try:
-                mcp_mgr.close()
-            except Exception:
-                pass
-        if ctx is not None:
-            try:
-                ctx.__exit__(None, None, None)
-            except Exception:
-                pass
+        from luxe.chat.tui import run_chat_app
+    except Exception:
+        console.print("[dim]· textual not installed — using the line REPL. "
+                      "Run `uv sync --extra chat` (repo root) to restore "
+                      "the full-screen UI.[/]")
+        return None
+    return run_chat_app
+
+
+def _teardown(mcp_mgr, attached: _AttachedProject) -> None:
+    """Session over (or startup failed after the lock): drop the published
+    indexes and the scan cache, close MCP, release the repo lock."""
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+
+    search_mod.reset_index()
+    symbols_mod.reset_index()
+    spec_resolver.enable_scan_cache(False)  # also clears it
+    if mcp_mgr is not None:
+        from luxe.chat import mcptools
+        mcptools.clear()
+        try:
+            mcp_mgr.close()
+        except Exception:
+            pass
+    attached.release()
+
+
+def _index_project(root: str) -> tuple[frozenset, dict]:
+    """Index `root` for this session (`_build_chat_indexes`), publish both
+    indexes, and return `(languages, stats)` — the languages from the SAME
+    scan (no third walk of the tree), the stats in `/project`'s summary
+    shape. One copy for startup and `/project`/`/index`."""
+    from luxe import search as search_mod
+    from luxe import symbols as symbols_mod
+    # Late, and from `cli` on purpose: see the module docstring.
+    from luxe.cli import _languages_from_paths
+
+    bm25, sym_idx, scan = _build_chat_indexes(root)
+    search_mod.set_index(bm25)
+    symbols_mod.set_index(sym_idx)
+    return _languages_from_paths(scan.paths), {
+        "files": len(bm25.paths), "symbols": len(sym_idx.symbols),
+        "truncated": scan.truncated, "used_git": scan.used_git}
+
+
+def _start_mcp(names: tuple[str, ...], config_path: str | None, *,
+               read_only: bool):
+    """`--mcp <name>` (chat-only): connect the named servers from the MCP
+    config and publish their tool surface via chat.mcptools; prepare_turn
+    injects it through the extra-tool seam. Returns the started manager (the
+    caller closes it). An unknown name exits 2 with the configured list; a
+    server that fails to connect is reported and skipped — an unreachable
+    relay must not stop a chat session from starting (this is the fallback
+    tool). `read_only` drops the `gate_tools`-matching tools entirely."""
+    from luxe.chat import mcptools
+    # Late, and from `cli` on purpose: see the module docstring.
+    from luxe.cli import _default_mcp_config_hint
+    from luxe.mcp.client import (
+        MCPClientConfig,
+        MCPClientManager,
+        load_mcp_config,
+    )
+    mcp_cfg = load_mcp_config(config_path)
+    known = {s.name: s for s in mcp_cfg.servers}
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        console.print(
+            f"[red]✗ unknown MCP server(s): {', '.join(unknown)}. "
+            f"Configured: {', '.join(known) or '(none)'} "
+            f"[dim]({config_path or _default_mcp_config_hint()})[/][/]")
+        sys.exit(2)
+    selected = MCPClientConfig(
+        servers=[known[n] for n in dict.fromkeys(names)],
+        circuit_breaker=mcp_cfg.circuit_breaker,
+    )
+    mgr = MCPClientManager(selected).start()
+    defs, fns = mgr.discover_tools()
+    always_defs = [d for d in defs if not mgr.is_write_gated(d.name)]
+    gated_defs = [d for d in defs if mgr.is_write_gated(d.name)]
+    if read_only and gated_defs:
+        console.print(f"[dim]· MCP: {len(gated_defs)} mutating tool(s) "
+                      "dropped (--mcp-read-only)[/]")
+        fns = {k: v for k, v in fns.items()
+               if k not in {d.name for d in gated_defs}}
+        gated_defs = []
+    up = [s for s in mgr.server_status() if not s["down"]]
+    console.print(f"[dim]· MCP: {len(always_defs)} tool(s)"
+                  + (f" + {len(gated_defs)} write-gated" if gated_defs else "")
+                  + f" from {len(up)} server(s): "
+                  + ", ".join(s['name'] for s in up) + "[/]")
+    for s in mgr.server_status():
+        if s["down"]:
+            console.print(f"[yellow]· MCP server {s['name']} DOWN: "
+                          f"{s['down_reason']}[/]")
+    mcptools.set_surface(mcptools.MCPSurface(
+        always_defs=always_defs, gated_defs=gated_defs, fns=fns,
+        status_fn=mgr.server_status,
+    ))
+    return mgr
 
 
 def _apply_slot_overrides(cfg, chat_model, plan_model, code_model) -> None:
