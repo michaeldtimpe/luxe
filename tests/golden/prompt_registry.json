@@ -38,12 +38,6 @@
       "task_prefix_len": 551,
       "task_prefix_sha256": "aeadf98ae37695fa8b1c4e49e5b824aebc842f2c37ddb8cf052f1414ad769ac2"
     },
-    "commit_first": {
-      "system_len": 1543,
-      "system_sha256": "d88e039537a1a1bf4bdf93f89d3db8149360dd73635ff73b44d03309fbeacaea",
-      "task_prefix_len": 96,
-      "task_prefix_sha256": "f30491c596527d182cf57d2e1f81ab9bfb456b07d27f39632e6691f3bfaf0115"
-    },
     "cot": {
       "system_len": 972,
       "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
