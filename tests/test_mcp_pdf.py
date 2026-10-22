@@ -341,12 +341,42 @@ def test_images_to_pdf_needs_images(tmp_path: Path):
 
 
 # --- printing (argv only — nothing is ever spooled here) -------------------
+#
+# No test here touches the host's CUPS: `lp`/`lpstat` exist on every Mac but
+# not on a Linux runner, and the real `lpstat -p` lists whatever printers this
+# box has (or fails when cupsd is down). The validation under test runs before
+# any spool, so the binaries only have to look present.
 
-def test_pdf_printers_shape():
+@pytest.fixture
+def fake_cups(monkeypatch):
+    monkeypatch.setattr(ops, "_require_bin", lambda name: name)
+
+
+_LPSTAT = {
+    "-p": "printer Doc_Printer is idle.  enabled since Mon 01 Jan 00:00\n"
+          "printer Acme_QL_820NWB is idle.  enabled since Mon 01 Jan 00:00\n",
+    "-d": "system default destination: Doc_Printer\n",
+}
+
+
+def test_pdf_printers_shape(fake_cups, monkeypatch):
+    monkeypatch.setattr(ops, "_lpstat", lambda flag: subprocess.CompletedProcess(
+        ["lpstat", flag], 0, _LPSTAT[flag], ""))
     got = ops.pdf_printers()
     assert isinstance(got["printers"], list)
     for p in got["printers"]:
         assert {"name", "state", "label_printer"} <= set(p)
+    by_name = {p["name"]: p for p in got["printers"]}
+    assert by_name["Doc_Printer"]["state"] == "idle"
+    assert by_name["Acme_QL_820NWB"]["label_printer"] is True
+    assert got["default"] == "Doc_Printer"
+
+
+def test_pdf_printers_cups_down_is_an_error_not_an_empty_list(fake_cups, monkeypatch):
+    monkeypatch.setattr(ops, "_lpstat", lambda flag: subprocess.CompletedProcess(
+        ["lpstat", flag], 1, "", "lpstat: Unable to connect to server"))
+    with pytest.raises(ops.PdfToolError, match="NOT an empty printer list"):
+        ops.pdf_printers()
 
 
 def test_label_printer_detection():
@@ -356,7 +386,7 @@ def test_label_printer_detection():
     assert ops._is_label_printer("HP_LaserJet") is False
 
 
-def test_pdf_print_dry_run_builds_expected_argv(plain: Path, monkeypatch):
+def test_pdf_print_dry_run_builds_expected_argv(plain: Path, monkeypatch, fake_cups):
     monkeypatch.setattr(ops, "pdf_printers", lambda: {
         "printers": [{"name": "Doc_Printer", "state": "idle",
                       "label_printer": False}],
@@ -374,7 +404,7 @@ def test_pdf_print_dry_run_builds_expected_argv(plain: Path, monkeypatch):
     ]
 
 
-def test_pdf_print_refuses_label_printer(plain: Path, monkeypatch):
+def test_pdf_print_refuses_label_printer(plain: Path, monkeypatch, fake_cups):
     monkeypatch.setattr(ops, "pdf_printers", lambda: {
         "printers": [{"name": "Acme_QL_820NWB", "state": "idle",
                       "label_printer": True}],
@@ -388,7 +418,7 @@ def test_pdf_print_refuses_label_printer(plain: Path, monkeypatch):
     assert res["spooled"] is False
 
 
-def test_pdf_print_unknown_printer(plain: Path, monkeypatch):
+def test_pdf_print_unknown_printer(plain: Path, monkeypatch, fake_cups):
     monkeypatch.setattr(ops, "pdf_printers", lambda: {
         "printers": [{"name": "Doc_Printer", "state": "idle",
                       "label_printer": False}],
@@ -398,7 +428,7 @@ def test_pdf_print_unknown_printer(plain: Path, monkeypatch):
         ops.pdf_print(str(plain), printer="Ghost", dry_run=True)
 
 
-def test_pdf_print_rejects_junk_page_range(plain: Path, monkeypatch):
+def test_pdf_print_rejects_junk_page_range(plain: Path, monkeypatch, fake_cups):
     monkeypatch.setattr(ops, "pdf_printers", lambda: {
         "printers": [{"name": "Doc_Printer", "state": "idle",
                       "label_printer": False}],
@@ -411,7 +441,7 @@ def test_pdf_print_rejects_junk_page_range(plain: Path, monkeypatch):
 
 @pytest.mark.parametrize("media", ["A4,-o,job-hold-until=indefinite",
                                    "Letter number-up=4", "A4\nx", ""])
-def test_pdf_print_validates_media(plain: Path, monkeypatch, media):
+def test_pdf_print_validates_media(plain: Path, monkeypatch, fake_cups, media):
     """`media` went into lp's argv verbatim; a comma or space smuggles in
     further CUPS options."""
     monkeypatch.setattr(ops, "pdf_printers", lambda: {
@@ -428,7 +458,7 @@ def test_pdf_print_validates_media(plain: Path, monkeypatch, media):
                       dry_run=True)
 
 
-def test_pdf_print_accepts_a_real_media_name(plain: Path, monkeypatch):
+def test_pdf_print_accepts_a_real_media_name(plain: Path, monkeypatch, fake_cups):
     monkeypatch.setattr(ops, "pdf_printers", lambda: {
         "printers": [{"name": "Doc_Printer", "state": "idle",
                       "label_printer": False}],
