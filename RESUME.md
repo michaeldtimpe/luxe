@@ -28,6 +28,8 @@ This is the second whole-project review. Seven PRs landed as signed fast-forward
     `benchmarks/maintain_suite/gates.py` (#42); `backend._stream_once` 28 → 7 (#41); one `tests/_git.py` (#40).
   - 78 new characterization tests. Second no-harm A/B: 30/30 both arms. One trt document-config doc invented
     risk defaults, the known Mode B, not harness-caused (see the report). Smoke READY on all three hosts.
+  - Then the last three hotspots (main `1adbd5e`): `/model` 25 → 7 (#44), taxonomy `collect` 33 → 3 (#45),
+    `status.fields` 28 → 2 (#46). Nothing outside vendored fixtures is above C901 24.
 
 ## ⇒ SESSION NOTE (2026-09-28, m5) — SWE-bench n=75 baseline: 36.3/75 = 48.4% harness-resolved (3 reps: 38/36/35)
 
