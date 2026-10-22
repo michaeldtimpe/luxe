@@ -127,6 +127,12 @@ class Scenario:
     runner: str = "single"
     spec: Spec | None = None
     task_type: str = "implement"
+    # "agent" runner only: handed to run_agent as `prior_messages` (turn carry).
+    prior: list[dict] | None = None
+    # Also record the display-only callbacks (on_notice / on_progress /
+    # on_tool_event) and AgentResult.messages / .carried under "observed".
+    # Off for the original nine, whose snapshots predate the key.
+    observe: bool = False
 
 
 def _read_only_walk(n: int, completion: int) -> list[dict]:
@@ -283,6 +289,137 @@ SCENARIOS: list[Scenario] = [
             _reply("Answer after two calls."),
         ],
     ),
+    # Turn carry (chat-only `prior_messages=`): the prior conversation starts
+    # with THIS run's system message, so the run continues it.
+    Scenario(
+        name="turn_carry",
+        runner="agent",
+        observe=True,
+        prior=[
+            {"role": "system",
+             "content": "You answer questions with the lookup tool."},
+            {"role": "user", "content": "Question: what is y?"},
+            {"role": "assistant", "content": "y is 2."},
+        ],
+        role={"num_ctx": 8192, "max_steps": 5},
+        script=[
+            _reply("Checking.", [_call("lookup", {"q": "x"})]),
+            _reply("x is 1."),
+        ],
+    ),
+    # Turn carry REJECTED: the system prompt changed, so the run starts fresh.
+    Scenario(
+        name="turn_carry_rejected",
+        runner="agent",
+        observe=True,
+        prior=[
+            {"role": "system", "content": "An older system prompt."},
+            {"role": "user", "content": "Question: what is y?"},
+            {"role": "assistant", "content": "y is 2."},
+        ],
+        role={"num_ctx": 8192, "max_steps": 5},
+        script=[_reply("x is 1.")],
+    ),
+    # LUXE_REASONING_ROUNDTRIP=1 on the main path: reasoning rides back on the
+    # acting assistant message and on a truncated turn's replayed text.
+    Scenario(
+        name="reasoning_roundtrip",
+        env={"LUXE_REASONING_ROUNDTRIP": "1"},
+        observe=True,
+        role={"num_ctx": 32768, "max_steps": 6, "max_tokens_per_turn": 900},
+        script=[
+            _reply("Reading.", [_read("src/widget.py")],
+                   reasoning="I should read the widget first."),
+            _reply("The widget returns a str", finish="length",
+                   completion=900, reasoning="Composing the answer..."),
+            _reply("", [_read("src/util.py")]),
+            _reply("The widget renders a string.", reasoning="Done."),
+        ],
+    ),
+    # LUXE_REASONING_ROUNDTRIP=1 on both SpecDD replays: the zero-calls block
+    # (assistant text without tool_calls) and the min_tool_calls reprompt.
+    Scenario(
+        name="reasoning_roundtrip_spec",
+        runner="agent",
+        observe=True,
+        env={"LUXE_REASONING_ROUNDTRIP": "1"},
+        spec=Spec(goal="decline", requirements=[
+            Requirement(id="R1", must="decline", done_when="no calls",
+                        kind="expects_zero_calls"),
+            Requirement(id="R2", must="call lookup", done_when=">=1 call",
+                        kind="min_tool_calls", min_matches=1),
+        ]),
+        role={"num_ctx": 8192, "max_steps": 6},
+        script=[
+            _reply("Let me look it up.", [_call("lookup", {"q": "x"})],
+                   reasoning="A lookup would settle it."),
+            _reply("Out of scope.", reasoning="Declining."),
+            _reply("Still out of scope.", reasoning="Declining again."),
+        ],
+    ),
+    # Truncated-turn retry exhausted (max 1): the second cut-off turn ENDS
+    # the run — terminal_turn_truncated, and the "retry already used" notice.
+    Scenario(
+        name="terminal_truncated",
+        env={"LUXE_TRUNCATED_TURN_MAX_RETRIES": "1"},
+        observe=True,
+        role={"num_ctx": 32768, "max_steps": 6, "max_tokens_per_turn": 900},
+        script=[
+            _reply("", [_read("src/widget.py")]),
+            _reply("The answer begins", finish="length", completion=900),
+            _reply("The answer begins again", finish="length", completion=900),
+        ],
+    ),
+    # Empty-turn retry used, then a second empty reply ENDS the run —
+    # terminal_turn_empty, with the reasoning-count notice on the retry.
+    Scenario(
+        name="terminal_empty",
+        observe=True,
+        role={"num_ctx": 32768, "max_steps": 6},
+        script=[
+            _reply("", [_read("src/widget.py")]),
+            _reply("", completion=5, reasoning="hmm, thinking"),
+            _reply("  \n", completion=3),
+        ],
+    ),
+    # Truncated-turn retry OFF: an EMPTY cut-off turn ends the run at once
+    # with both terminal records and the "without retrying" notice (the
+    # empty-turn guard leaves finish_reason=length to the truncation guard).
+    Scenario(
+        name="terminal_truncated_no_retry",
+        env={"LUXE_TRUNCATED_TURN_RETRY": "0"},
+        observe=True,
+        role={"num_ctx": 32768, "max_steps": 6, "max_tokens_per_turn": 900},
+        script=[
+            _reply("", [_read("src/widget.py")]),
+            _reply("", finish="length", completion=900),
+        ],
+    ),
+    # `/loopguard off` (RoleConfig.stuck_loop_abort=False): consecutive dedup
+    # steps record stuck_loop_suppressed and the run carries on to an answer.
+    Scenario(
+        name="stuck_loop_suppressed",
+        observe=True,
+        role={"num_ctx": 32768, "max_steps": 8, "stuck_loop_abort": False},
+        script=[
+            _reply("", [_ls("src")]),
+            _reply("", [_ls("src")]),
+            _reply("", [_ls("src")]),
+            _reply("", [_ls("src")]),
+            _DONE,
+        ],
+    ),
+    # A backend failure mid-run (a terminal 4xx) aborts with "Backend error".
+    Scenario(
+        name="backend_error_abort",
+        observe=True,
+        role={"num_ctx": 32768, "max_steps": 6},
+        script=[
+            _reply("Reading.", [_read("src/widget.py")]),
+            {"status": 400,
+             "json": {"error": {"message": "context length exceeded"}}},
+        ],
+    ),
 ]
 
 
@@ -313,6 +450,8 @@ def _run_scenario(sc: Scenario, tmp_path: Path, monkeypatch) -> dict:
         bodies.append(json.loads(raw))
         idx = len(bodies) - 1
         r = script[idx] if idx < len(script) else _DONE
+        if "status" in r:
+            return httpx.Response(r["status"], json=r["json"])
         return httpx.Response(200, json={
             "choices": [{"message": r["message"],
                          "finish_reason": r["finish_reason"]}],
@@ -327,6 +466,19 @@ def _run_scenario(sc: Scenario, tmp_path: Path, monkeypatch) -> dict:
     backend._client = httpx.Client(base_url=backend.base_url,
                                    transport=httpx.MockTransport(handler))
 
+    notices: list[str] = []
+    progress: list[float] = []
+    tool_events: list[dict] = []
+    callbacks: dict[str, Any] = {}
+    if sc.observe:
+        callbacks = {
+            "on_notice": notices.append,
+            "on_progress": progress.append,
+            "on_tool_event": lambda tc: tool_events.append(
+                {"id": tc.id, "name": tc.name, "duplicate": tc.duplicate,
+                 "error": tc.error}),
+        }
+
     run_id = f"golden-{sc.name}"
     events_path = run_dir(run_id) / "events.jsonl"
     events_path.unlink(missing_ok=True)  # a second run in one test appends
@@ -340,7 +492,7 @@ def _run_scenario(sc: Scenario, tmp_path: Path, monkeypatch) -> dict:
                 backend=backend, role_cfg=role_cfg,
                 goal="Make render() return 'widget!'.",
                 task_type=sc.task_type, languages=frozenset({"python"}),
-                run_id=run_id,
+                run_id=run_id, **callbacks,
             )
         else:
             from luxe.config import RoleConfig
@@ -357,7 +509,8 @@ def _run_scenario(sc: Scenario, tmp_path: Path, monkeypatch) -> dict:
                 system_prompt="You answer questions with the lookup tool.",
                 task_prompt="Question: what is x?",
                 tool_defs=[_lookup_tool()], tool_fns={"lookup": lookup},
-                run_id=run_id, spec=sc.spec,
+                run_id=run_id, spec=sc.spec, prior_messages=sc.prior,
+                **callbacks,
             )
     finally:
         fs._REPO_ROOT = prev_root
@@ -393,6 +546,14 @@ def _run_scenario(sc: Scenario, tmp_path: Path, monkeypatch) -> dict:
             ],
         },
     }
+    if sc.observe:
+        snapshot["observed"] = {
+            "notices": notices,
+            "progress": [round(p, 9) for p in progress],
+            "tool_events": tool_events,
+            "carried": result.carried,
+            "messages": result.messages,
+        }
     text = json.dumps(snapshot, indent=1)
     for p in {str(repo), os.path.realpath(repo)}:
         text = text.replace(p, "<REPO>")
@@ -436,6 +597,8 @@ def _assert_golden(name: str, actual: dict) -> None:
     assert [e["kind"] for e in actual["events"]] == \
         [e["kind"] for e in expected["events"]], f"{name}: event sequence differs"
     assert actual["result"] == expected["result"], f"{name}: AgentResult differs"
+    assert actual.get("observed") == expected.get("observed"), (
+        f"{name}: callbacks / AgentResult.messages differ")
     # Finally the exact rendering, which also pins key order everywhere.
     assert rendered == path.read_text(), f"{name}: snapshot rendering differs"
 
@@ -489,6 +652,17 @@ _EXPECTED_KINDS = {
     "no_abstain_max_steps": {"early_bail_fired"},
     "spec_zero_calls": {"spec_predispatch_blocked"},
     "spec_min_calls": {"spec_reprompt_fired"},
+    "turn_carry": {"turn_carry", "tool_call"},
+    "turn_carry_rejected": {"turn_carry_rejected"},
+    "reasoning_roundtrip": {"truncated_turn_retry", "tool_call"},
+    "reasoning_roundtrip_spec": {"spec_predispatch_blocked",
+                                 "spec_reprompt_fired"},
+    "terminal_truncated": {"truncated_turn_retry", "terminal_turn_truncated"},
+    "terminal_empty": {"empty_turn_retry", "terminal_turn_empty"},
+    "terminal_truncated_no_retry": {"terminal_turn_truncated",
+                                    "terminal_turn_empty"},
+    "stuck_loop_suppressed": {"stuck_loop_suppressed", "tool_step_done"},
+    "backend_error_abort": {"compaction_phase_at_resolve", "tool_call"},
 }
 
 
