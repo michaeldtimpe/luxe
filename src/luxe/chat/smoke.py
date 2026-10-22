@@ -588,6 +588,17 @@ def run_smoke(cfg, *, backend_name: str | None = None,
         report.add("weights", "pass",
                    f"not checked — {entry.engine_label()} loads its own "
                    "preset's files (the main turn below is the proof)")
+    # 2b. Chat-template pins + lint — `/doctor`'s implementation
+    #     (`modelpins.endpoint_template_checks`). WARN at worst: a changed
+    #     template never fails the drill, it is put in front of the operator.
+    if local:
+        from luxe.modelpins import endpoint_template_checks
+        for mid, state, detail, fix in endpoint_template_checks(
+                [m for m in [main, fallback, *keep] if m], entry,
+                trusted_publishers=getattr(cfg, "trusted_publishers", None)):
+            report.add(f"template {mid}" if mid else "templates",
+                       _SMOKE_STATE[state],
+                       f"{detail} — {fix}" if fix else detail, model=mid)
 
     # 3. Endpoint. Bounded: this is a liveness question, not a generation.
     try:

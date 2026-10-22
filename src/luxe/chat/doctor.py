@@ -109,6 +109,17 @@ def _manifest_checks(doc: Doctor, slots, reachable: bool,
             doc.add("weights:store", OK,
                     f"n/a — {engine_label} loads the files its own preset "
                     "names (a real turn is the proof: `luxe smoke`)")
+        if local:
+            # Chat-template pins + lint (2026-10, model provenance): a
+            # swapped template is a WARN, never a FAIL — ready stays exit 0
+            # so the kit starts during an outage, but the line says so loudly.
+            from luxe.modelpins import endpoint_template_checks
+            for mid, state, detail, fix in endpoint_template_checks(
+                    manifest.all_models(), entry,
+                    trusted_publishers=getattr(cfg, "trusted_publishers",
+                                               None)):
+                doc.add(f"template:{mid}" if mid else "templates", state,
+                        detail, fix)
         if reachable and served:
             served_set = set(served)
             served_fix = endpoint_fixes(entry)["served"]
