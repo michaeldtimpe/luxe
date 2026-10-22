@@ -32,10 +32,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from benchmarks.maintain_suite.grade import (  # noqa: E402
-    FixtureResult,
-    apply_strict_gates,
-)
+from benchmarks.maintain_suite.gates import apply_strict_gates  # noqa: E402
+from benchmarks.maintain_suite.grade import FixtureResult  # noqa: E402
 
 
 _PR_URL_RX = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")

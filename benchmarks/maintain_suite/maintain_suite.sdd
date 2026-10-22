@@ -74,7 +74,8 @@ single pipeline; new fixtures must declare their per-requirement spec.
   The information-loss prong structurally cannot see it — a line-numbered copy
   of a file preserves every word
 - A git failure during GRADING is a harness ERROR, never a verdict
-  (2026-08-12): grade.py's diff/grep helpers raise `GitRunError` instead of
+  (2026-08-12): the grader's diff/grep helpers (grade.py, gates.py) raise
+  `GitRunError` (proc.py's `run_git`) instead of
   returning the empty-diff shape ([] / (0,0) / ""), and run.py's per-fixture
   handler records the fixture as ERRORED — the scoreboard already separates
   that from FAILED. Before this, an index.lock race or corrupt base_sha
@@ -82,6 +83,11 @@ single pipeline; new fixtures must declare their per-requirement spec.
   `git grep` keeps rc 1 as a legitimate no-match (ok_codes=(0,1)); the
   vacuous-test worktree gate keeps its documented fail-open (it only ever
   removes points)
+- The strict gates (`check_*`, `apply_strict_gates`, their thresholds) live
+  in `gates.py` (2026-10-22); `grade_fixture` is their caller and the git
+  readers that build their inputs (`_diff_hunks`, `_doc_headings`) stay in
+  grade.py. Both share `proc.py`'s subprocess layer — gates.py never imports
+  grade.py
 - ONE fixtures.yaml loader (2026-09): `fixtures.py:load_fixtures` host-remaps
   the `/Users/<someone>/.luxe/fixture-cache/...` paths the YAML pins; run.py,
   `scripts/regrade_local.py` and `scripts/_archive/opencode_harness.py` all read
