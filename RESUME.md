@@ -1,5 +1,28 @@
 # luxe — session resume document
 
+## ⇒ SESSION HANDOFF (2026-10-22, m1 + m5) — refactor/tech-debt pass closed: PRs #33–#39 landed
+
+This is the second whole-project review. Seven PRs landed as signed fast-forwards; main is now `385daf4`.
+
+- **Bugs fixed:** 11 bugs plus test host coupling. Among them:
+  - compare's bare side left two levers on;
+  - a TUI freeze (recovery ran on the UI thread);
+  - a startup hang on a wedged endpoint;
+  - `/pull` on non-oMLX engines;
+  - regrade grading a reused branch name (`run.py` now records `head_sha_used` + `diff.patch`).
+- **Removed:** seven refuted or inert levers (PWIR, repeat-read stub, re-read note, `commit_first`, trajectory-shape,
+  commit-only, cohort priors); see agents.sdd's "Removed mechanisms". The harness bake-off is archived to
+  `scripts/_archive/`.
+- **Structural:**
+  - `run_agent` C901 95 → 12, with 9 new golden trajectories;
+  - gitkit hotspots now ≤ 14;
+  - `chat/doctor.py` and `chat/supervisor.py` split out, plus `StartupFlags`;
+  - test probes stubbed, and CI now runs the `[pdf]` tests.
+- **Bench:** m5 no-harm A/B, champion 10×3, 30/30 both arms, 9/10 fixtures byte-identical.
+- **Smoke:** READY on m1, m5 and neo. neo needed its llama-server LaunchAgent re-bootstrapped after a reboot
+  (the known BTM gap).
+- **Report and open items:** `acceptance/review_2026_10/REPORT.md`.
+
 ## ⇒ SESSION NOTE (2026-09-28, m5) — SWE-bench n=75 baseline: 36.3/75 = 48.4% harness-resolved (3 reps: 38/36/35)
 
 This is the first full SWE-bench run since the 2026-09 review and the first graded on m5 (colima + Rosetta,
