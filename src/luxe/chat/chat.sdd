@@ -473,7 +473,9 @@ never touches this module.
   call → spend settlement in a `finally` → `turn.finalize_turn`),
   `contain()`/`dispatch()` (interrupt / BackendError record + self-repair →
   degrade → hint / crash record, "the session is still alive"),
-  `run_plan(sink)`/`run_goal(sink)` (the /plan and /goal supervisors), the
+  `run_plan(sink)`/`run_goal(sink)` (the /plan and /goal supervisors — their
+  bodies live in `chat/supervisor.py` since 2026-10, re-exported by
+  `controller` and `repl`), the
   post-turn decisions both renderers show (`apply_turn_status`, `suggest_ctx`,
   `aborted_report`) and the finished turn's lines themselves
   (`outcome_lines`: answer, `render.footer_lines`, ctx suggestion, verbose
