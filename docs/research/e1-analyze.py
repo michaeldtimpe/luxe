@@ -24,7 +24,7 @@ from collections import Counter, defaultdict
 from glob import glob
 from pathlib import Path
 
-LUXE_ROOT = Path("~/Downloads/luxe")
+LUXE_ROOT = Path("~/Downloads/luxe").expanduser()
 ACCEPTANCE = LUXE_ROOT / "acceptance"
 OUT_DIR = Path(__file__).resolve().parent
 

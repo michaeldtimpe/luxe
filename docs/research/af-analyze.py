@@ -21,7 +21,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-LUXE_ROOT = Path("~/Downloads/luxe")
+LUXE_ROOT = Path("~/Downloads/luxe").expanduser()
 ACCEPTANCE = LUXE_ROOT / "acceptance"
 OUT_DIR = Path(__file__).resolve().parent
 CLIFF_OUTCOMES = {"CONTEXT_EXHAUSTED", "EMPTY_PATCH_CONTEXT_EXHAUSTED"}
