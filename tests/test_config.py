@@ -380,7 +380,7 @@ def test_chat_yaml_ships_local_default_and_m5():
     assert cfg.default_backend_name() == "local"
     assert cfg.backend_entry("local").base_url == "http://127.0.0.1:8000"
     m5 = cfg.backend_entry("m5")
-    assert m5.base_url == "http://m5.example.ts.net:8000"
+    assert m5.base_url == "http://m5:8000"
     assert m5.api_key_env == "OMLX_API_KEY_M5"
     assert m5.timeout_s == 2400.0
 

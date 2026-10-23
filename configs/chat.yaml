@@ -11,7 +11,7 @@ backends:
     base_url: "http://127.0.0.1:8000"
     default: true
   m5:
-    base_url: "http://m5.example.ts.net:8000"
+    base_url: "http://m5:8000"
     api_key_env: OMLX_API_KEY_M5
     timeout_s: 2400
     # Progress deadline (B6), raised to match timeout_s. A dense 16384-tok

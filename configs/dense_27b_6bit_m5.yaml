@@ -4,11 +4,11 @@
 # replaces the old hardcoded Backend hack: dense 16384-tok turns can run
 # ~25 min, and a 600s read-timeout over the tunnel left dead-request hangs.
 # This file supersedes the earlier 127.0.0.1:8001 SSH-tunnel variant.
-omlx_base_url: "http://m5.example.ts.net:8000"
+omlx_base_url: "http://m5:8000"
 
 backends:
   m5:
-    base_url: "http://m5.example.ts.net:8000"
+    base_url: "http://m5:8000"
     api_key_env: OMLX_API_KEY_M5
     timeout_s: 2400
     default: true
