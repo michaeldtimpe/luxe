@@ -81,7 +81,9 @@ never touches this module.
   Fleet 2026-07-30: m5 = 35B-A3B-6bit / 27B-6bit; m1 + m4 = 35B-A3B-4bit /
   27B-4bit (MoE main — Qwen3.6 is multimodal, oMLX serves it on the slow vlm
   engine; dense-27B prefill is ~65 tok/s with no cache reuse, MoE ~10s turns);
-  m1 also keeps the bench champion (keep:). neo (8 GB) has no entry in THIS
+  m1 also keeps the bench champion (keep:). 2026-10-23: m5's fallback is
+  ThinkingCap-Qwen3.6-27B-mlx-6Bit (same dense 27B, thinking-trimmed;
+  thinkingcap_27b_2026_10) and the 27B-6bit moved to m5's keep:. neo (8 GB) has no entry in THIS
   repo's chat.yaml on purpose — it has one, in `~/dotfiles/luxe/neo.yaml`,
   because an earlier in-tree deploy hid its edits with `--skip-worktree` and
   cost 78 commits of drift. Out-of-tree per-host configs reach the commands

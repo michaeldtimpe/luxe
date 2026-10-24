@@ -1,5 +1,21 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-10-23, m1 + m5) — m5 fallback is now ThinkingCap-Qwen3.6-27B-6bit
+
+- **What changed:** m5's manifest fallback went from `Qwen3.6-27B-6bit` to `ThinkingCap-Qwen3.6-27B-mlx-6Bit`
+  (bottlecapai's thinking-trim fine-tune of the same model, from mlx-community; template byte-identical to
+  upstream). The old 27B-6bit moved to m5's `keep:`, so reverting is one line in `configs/chat.yaml`.
+- **Evidence:** maintain_suite 10×3×2 on m5. Both arms printed 30/30; ThinkingCap hand-verified **30/30 REAL**
+  (3 cosmetic nits), −21% output tokens, −34% reasoning chars, −24% wall, same verify-call rate. Confound: the
+  reference loads on oMLX's vlm engine, ThinkingCap (no vision weights) on the llm engine.
+  `acceptance/thinkingcap_27b_2026_10/HAND-VERIFY.md` (m5, local).
+- **Parked, for some other time (user decision 2026-10-23):** the m1 side, meaning a ThinkingCap **4-bit** for m1's
+  fallback + `luxe code` main (`Qwen3.6-27B-4bit`). Untested. On m1 the dense-27B cost is mostly prefill, which
+  shorter thinking does not cut, so expect a smaller win than on m5. Build options: self-convert q4 g64 from the gated
+  `bottlecapai/ThinkingCap-Qwen3.6-27B` (needs an HF login), `mlx-community/ThinkingCap-Qwen3.6-27B-OptiQ-4bit`
+  (bundles MTP/vision extras; load-check first), or `t-prazak/ThinkingCap-Qwen3.6-27B-MLX-4bit` (not on the
+  publisher allowlist). The Gemma-4 ThinkingCap was rejected on paper: its base failed on verification behavior.
+
 ## ⇒ SESSION NOTE (2026-10-22, m1 + m5) — secrets never reach model-driven subprocesses or the model (PR #47)
 
 Prompted by a review of a local-AI security video. Main is `20b39b2`.

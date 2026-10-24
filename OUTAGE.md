@@ -41,7 +41,7 @@ gate, not a missing feature — `/write`.
 
 | host | RAM | engine | interactive main | fallback | also cached |
 |------|-----|--------|------------------|----------|-------------|
-| m5 | 128 GB | oMLX | `Qwen3.6-35B-A3B-6bit` | `Qwen3.6-27B-6bit` | `GLM-4.5-Air-4bit` |
+| m5 | 128 GB | oMLX | `Qwen3.6-35B-A3B-6bit` | `ThinkingCap-Qwen3.6-27B-mlx-6Bit` | `Qwen3.6-27B-6bit`, `GLM-4.5-Air-4bit` |
 | m1 | 64 GB | oMLX | `Qwen3.6-35B-A3B-4bit` (`luxe code`: `Qwen3.6-27B-4bit`) | `Qwen3.6-27B-4bit` (`luxe code`: the MoE) | `Qwen3.6-35B-A3B-6bit` (bench champion) |
 | ~~m4~~ | — | — | retired 2026-10 | — | — |
 | neo | 8 GB | llama-server :8080 | `Qwen3-4B-Instruct-2507` | same model, said loudly | — |

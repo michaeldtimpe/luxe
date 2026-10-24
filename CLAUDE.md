@@ -55,7 +55,8 @@ benchmark/maintain path (luxe.sdd):
 (a) opt-in `chat`/`plan`/`code` model slots via `configs/chat.yaml` `slots:`;
 (b) **per-host manifests** (`hosts:` in chat.yaml, 2026-07-30 fallback-kit
 pivot): each fleet host declares an interactive main + fallback pair sized to
-its RAM — m5 (128 GB) = champion + 27B-6bit; m1 (64 GB) =
+its RAM — m5 (128 GB) = champion + ThinkingCap-27B-6bit (2026-10-23; the
+plain 27B-6bit is in m5's `keep:`); m1 (64 GB) =
 35B-A3B-4bit main + 27B-4bit fallback, **but `luxe code` on m1 starts on the
 27B-4bit** (manifest `code_main`, 2026-10-17 user decision after
 m5max_moe_r2: 30/30 vs 23/30 hand-verified, ~3.5× the wall; m4 retired 2026-10) (MoE-first, flipped 2026-07-30: Qwen3.6

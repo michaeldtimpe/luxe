@@ -242,7 +242,8 @@ class TestVisibleModels:
         cfg = load_config("configs/chat.yaml")
         assert set(cfg.visible_models) == {
             "Qwen3.6-35B-A3B-6bit",     # bench champion · m5 main
-            "Qwen3.6-27B-6bit",         # m5 fallback
+            "ThinkingCap-Qwen3.6-27B-mlx-6Bit",  # m5 fallback
+            "Qwen3.6-27B-6bit",         # m5 keep: previous fallback
             "Qwen3.6-27B-4bit",         # m1/m4 main
             "Qwen3.6-35B-A3B-4bit",     # m1/m4 fallback
             "GLM-4.5-Air-4bit",         # m5 keep: opt-in capacity model

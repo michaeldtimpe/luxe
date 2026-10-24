@@ -116,8 +116,15 @@ turn_carry_max_fraction: 0.5
 hosts:
   m5:                                  # M5 Max, 128 GB
     main: "Qwen3.6-35B-A3B-6bit"
-    fallback: "Qwen3.6-27B-6bit"
+    # ThinkingCap (2026-10-23, thinkingcap_27b_2026_10): bottlecapai's
+    # thinking-trim fine-tune of the same dense 27B, template byte-identical.
+    # maintain_suite 10x3: 30/30 hand-verified REAL vs the 27B-6bit's 30/30,
+    # -21% output tokens, -24% wall. No vision weights, so oMLX serves it on
+    # the llm engine (cache reuse) rather than the slow vlm path.
+    fallback: "ThinkingCap-Qwen3.6-27B-mlx-6Bit"
     keep:
+      # The previous fallback, kept on disk for a one-line revert.
+      - "Qwen3.6-27B-6bit"
       # Capacity experiment (2026-08-03): bake-off-validated big MoE for
       # turns where depth beats speed. Opt-in per session via /model —
       # never a main/fallback, never routed to by default.
@@ -190,7 +197,8 @@ trusted_publishers:
 # Benchmark/maintain ignore this key.
 visible_models:
   - Qwen3.6-35B-A3B-6bit              # bench champion · m5 main
-  - Qwen3.6-27B-6bit                  # m5 fallback
+  - ThinkingCap-Qwen3.6-27B-mlx-6Bit  # m5 fallback (2026-10-23)
+  - Qwen3.6-27B-6bit                  # m5 keep: previous fallback
   - Qwen3.6-35B-A3B-4bit              # m1 main (MoE — fast on vlm engine)
   - Qwen3.6-27B-4bit                  # m1 fallback + `luxe code` main (dense — slow prefill)
   # Capacity model (2026-08-03): 106B-A12B MoE, 10/10 on the m5max_moe
