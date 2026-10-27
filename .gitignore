@@ -176,3 +176,7 @@ acceptance/omlx_tail_race_2026_10/*
 !acceptance/m5max_moe_r2_2026_10/
 acceptance/m5max_moe_r2_2026_10/*
 !acceptance/m5max_moe_r2_2026_10/*.md
+
+# Survival mode (local-only, never committed): survival-llm checkout, its
+# offline library (mixed CC BY-SA / non-commercial licenses) and the MCP glue.
+/survival/
