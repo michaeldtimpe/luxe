@@ -10,7 +10,7 @@
 
 client:
   servers:
-    # codex-one — the 40k 11th-edition dataset (private ~/Downloads/codex-one
+    # codex-one — the 40k 11th-edition dataset (private ~/Downloads/minis/codex-one
     # repo). THIN wrapper: all query logic lives in that repo's `codexdb`
     # module (stdlib-only by design — must gain no dependencies). Needs:
     # dotfiles luxe/mcp/codex_one/setup.sh, and codex-one's own
@@ -29,7 +29,7 @@ client:
       max_calls_per_session: 100
 
     # cpa — Marvel Crisis Protocol card/rules data (private
-    # ~/Downloads/crisis-protocol-analysis repo). THIN wrapper around that
+    # ~/Downloads/minis/crisis-protocol-analysis repo). THIN wrapper around that
     # repo's cpa.cli; never modifies it. Invoked by direct script path
     # (not `-m cpa.server`) because this module's own package is also named
     # `cpa` — `-m` would put dotfiles/luxe/mcp on sys.path first and shadow
