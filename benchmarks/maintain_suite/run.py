@@ -28,6 +28,7 @@ Outputs under --output (default ./acceptance/):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -78,6 +79,13 @@ class FixtureState:
     # regrade_local checks out this sha instead. "" = recorded before
     # 2026-10-22, or the attempt never reached grading.
     head_sha_used: str = ""
+    # Configuration fingerprint (2026-10-30, harvest candidate 3): what
+    # produced this attempt, so a resumed bench never credits a DONE cell
+    # produced under a different config. `config_fp_fields` holds per-field
+    # short hashes (env values are HASHED, never stored). "" = recorded
+    # before fingerprints existed.
+    config_fp: str = ""
+    config_fp_fields: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -96,6 +104,8 @@ class FixtureState:
             repo_path_used=str(d.get("repo_path_used", "")),
             base_sha_used=str(d.get("base_sha_used", "")),
             head_sha_used=str(d.get("head_sha_used", "")),
+            config_fp=str(d.get("config_fp", "")),
+            config_fp_fields=dict(d.get("config_fp_fields") or {}),
         )
 
 
@@ -162,6 +172,74 @@ class Variant:
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
+
+
+def _sha(data: bytes, n: int = 12) -> str:
+    return hashlib.sha256(data).hexdigest()[:n]
+
+
+def config_fingerprint(variant: "Variant | None",
+                       environ: dict | None = None) -> tuple[str, dict[str, str]]:
+    """(fingerprint, fields) for what a fixture run is about to be produced
+    under: the base config, the variant cell, luxe's code (HEAD, plus a dirty
+    marker for uncommitted src/configs/benchmarks edits), and every LUXE_*
+    switch. Env values are hashed, never recorded: some may be secrets."""
+    env = os.environ if environ is None else environ
+    root = _project_root()
+    fields: dict[str, str] = {
+        "config": _sha((root / "configs" / "single_64gb.yaml").read_bytes()),
+        "variant": (_sha(json.dumps(asdict(variant), sort_keys=True).encode())
+                    if variant is not None else "none"),
+        "code": _code_identity(root),
+    }
+    for name in sorted(k for k in env if k.startswith("LUXE_")):
+        fields[f"env:{name}"] = _sha(str(env[name]).encode(), 8)
+    return _sha(json.dumps(fields, sort_keys=True).encode(), 16), fields
+
+
+def _code_identity(root: Path) -> str:
+    def git(*a: str) -> str:
+        try:
+            return subprocess.run(["git", "-C", str(root), *a], capture_output=True,
+                                  text=True, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    head = git("rev-parse", "--short=12", "HEAD") or "unknown"
+    dirty = git("status", "--porcelain", "--", "src", "configs", "benchmarks")
+    return head + ("+dirty" if dirty else "")
+
+
+def fingerprint_diff(old: dict, new: dict) -> list[str]:
+    """Field names whose value differs (a field present on one side only counts)."""
+    return sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+
+
+def stale_done_cells(output: Path, plan: list, *,
+                     environ: dict | None = None) -> tuple[list[str], int]:
+    """(stale, legacy) over the plan's DONE cells. Stale = recorded under a
+    different fingerprint, with the changed fields named. Legacy = DONE with
+    no fingerprint (predates 2026-10-30): reused, but counted so it is said."""
+    stale: list[str] = []
+    legacy = 0
+    cache: dict[str, tuple[str, dict]] = {}
+    for variant, f in plan:
+        vid = variant.variant_id if variant else ""
+        p = (output / vid / f.id if vid else output / f.id) / "state.json"
+        if not p.is_file():
+            continue
+        st = load_state(output, f.id, variant_id=vid)
+        if st.status != FixtureStatus.DONE:
+            continue
+        if not st.config_fp:
+            legacy += 1
+            continue
+        if vid not in cache:
+            cache[vid] = config_fingerprint(variant, environ)
+        fp, fields = cache[vid]
+        if st.config_fp != fp:
+            changed = fingerprint_diff(st.config_fp_fields, fields)
+            stale.append(f"{vid + '/' if vid else ''}{f.id}: {', '.join(changed) or 'fingerprint'}")
+    return stale, legacy
 
 
 def make_overlay(variant: Variant, overlay_dir: Path) -> Path:
@@ -1348,6 +1426,7 @@ def run_fixture(
     state.repo_path_used = str(repo)
     state.base_sha_used = fixture.base_sha or _head_sha(repo)
     state.head_sha_used = ""
+    state.config_fp, state.config_fp_fields = config_fingerprint(variant)
     state.attempts += 1
     state.last_attempt_ts = time.time()
     state.status = FixtureStatus.RUNNING
@@ -2022,6 +2101,27 @@ def _report_ledger(output: Path, plan: list) -> None:
         print(f"  ledger     : audit failed ({type(e).__name__}: {e})")
 
 
+def _fingerprint_preflight(output: Path, plan: list, args) -> bool:
+    """Refuse to resume over DONE cells produced under another configuration.
+    Crediting them would mix arms; re-running them would delete their
+    evidence. So stop, name them and the changed fields, and let the operator
+    choose: --force re-runs, a new --output keeps both."""
+    stale, legacy = stale_done_cells(output, plan)
+    if legacy:
+        print(f"  note: {legacy} done cell(s) predate config fingerprints "
+              f"and are reused unchecked")
+    if not stale or args.force:
+        return True
+    print(f"\n✗ {len(stale)} done cell(s) in {output} were produced under a "
+          f"different configuration:")
+    for line in stale[:20]:
+        print(f"    {line}")
+    if len(stale) > 20:
+        print(f"    … {len(stale) - 20} more")
+    print("  Re-run them with --force, or use a new --output to keep both.")
+    return False
+
+
 def main() -> int:
     _ensure_luxe_importable()
     args = _build_parser().parse_args()
@@ -2051,6 +2151,8 @@ def main() -> int:
     plan: list[tuple[Variant | None, Fixture]] = (
         [(v, f) for v in variants for f in fixtures] if variants
         else [(None, f) for f in fixtures])
+    if not _fingerprint_preflight(output, plan, args):
+        return 2
     bench = _BenchRun(
         args=args, output=output, work_dir=work_dir,
         overlay_dir=output / "_overlays" if variants else None,
