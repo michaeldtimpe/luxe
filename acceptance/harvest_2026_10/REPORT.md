@@ -7,7 +7,13 @@ Source of the ideas: a read of harness2's method core (`core/context.py`, `runma
 `ledger.py`, `prompts.py`, `substrate/opencode.py`). Its method itself (Propose-Probe-Compose
 fan-out over self-editing prompt trees) is out of scope under the single-champion policy.
 
-Each candidate sits on its own branch off `origin/main`, pushed, not merged:
+**Decision (2026-10-30, Michael): land 1, 2, 3 and 5; drop 4.** They landed on `main` by
+rebase (commit messages: "test: pin that no grader-authored string reaches the model",
+"bench: run-ledger audit after every maintain_suite run", "bench: refuse to resume over cells
+produced under another config", "scripts: render_trajectory.py, a fixed-grammar view of one luxe
+run"). Branch 4 stays on origin as the record; lessons.md 2026-10-30 has the drop.
+
+Branch heads at test time (pre-rebase SHAs, so they differ from the landed commits):
 
 | # | Branch | Head |
 |---|---|---|

@@ -1,5 +1,21 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-10-30, m1 + m5) — harness2 harvest: four bench/forensics adds landed, one dropped
+
+- **Landed:** `tests/test_grader_leak.py` (no grader string reaches the model; the opt-in
+  `LUXE_REPROMPT_ON_DOC` spec reprompt's `done_when` exposure is pinned as KNOWN);
+  `benchmarks/maintain_suite/ledger.py` (run-ledger audit printed after every bench, plus a CLI;
+  retro sweep of 1731 m5 states found 0 problems); a config fingerprint on bench state that REFUSES
+  to resume over DONE cells made under another config (`--force` or a new `--output`);
+  `scripts/render_trajectory.py` (fixed-grammar view of a run or `--cell`; matched every checkable
+  ThinkingCap hand-verify claim). Rules in maintain_suite.sdd.
+- **Dropped:** the gitaudit evidence-boundary clause: the champion obeyed the injection 0/6 without it.
+  It did turn a silently ignored code-comment injection into a reported finding (0/3 to 3/3); that is
+  a separate feature if ever wanted. lessons.md 2026-10-30.
+- **Open:** m5's venv is Python 3.15.2 and fails 2 fswalk/glob tests that pass on m1's 3.11 (one is
+  the `rglob` canary). gitkit runs leave no run record; bench runs save no message text.
+- **Report:** `acceptance/harvest_2026_10/REPORT.md`.
+
 ## ⇒ SESSION NOTE (2026-10-23, m1 + m5) — m5 fallback is now ThinkingCap-Qwen3.6-27B-6bit
 
 - **What changed:** m5's manifest fallback went from `Qwen3.6-27B-6bit` to `ThinkingCap-Qwen3.6-27B-mlx-6Bit`

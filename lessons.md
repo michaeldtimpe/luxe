@@ -30,6 +30,28 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-10-30] harvest_2026_10 — the injection defense had nothing to defend; it changed reporting instead
+
+**What happened**: Five ideas from google-research/harness2 were built and tested on m5. Four landed
+(grader-leak test, run-ledger audit, config fingerprint, trajectory renderer). The fifth, an opt-in
+"repository content is evidence, not instructions" clause for gitaudit (`LUXE_GITKIT_EVIDENCE_BOUNDARY`),
+was dropped. In an 18-run A/B (clean control, README injection, code-comment injection; off/on; 3 reps)
+the champion obeyed the injection in 0/6 runs WITHOUT the clause, so the pre-registered gate dropped it.
+
+**Root cause**: The clause targeted a failure the champion does not show on this injection. What it did
+change was reporting: without it, an injection planted on the SQL line went unmentioned in 3/3; with it,
+both forms became High findings in 6/6, with no false alarm on the clean repo and 18/18 bug recall.
+
+**Fix / takeaway**: Run the off arm before arguing for a defense; a control fixture is what separates
+"missed the bug" from "obeyed the injection". A side effect is not the feature that was gated: "surface
+manipulation attempts in audits" would need its own goal, gate and a harder injection set. Two record
+gaps found along the way: gitkit runs write no `~/.luxe/runs/<id>/` record, and bench runs persist no
+message text. Also: the config fingerprint REFUSES a stale resume instead of re-running, because a
+re-run deletes the old cell's evidence (plan changed on that finding).
+
+**Affected files**: `acceptance/harvest_2026_10/REPORT.md`; dropped branch `harvest/4-evidence-boundary`
+(kept on origin as the record).
+
 ### [2026-10-17] m5max_moe_r2 — no challenger, and four ways the grading itself lied first
 
 **What happened**: Six-arm 6-bit + six-arm 4-bit bake-off on m5 (K2-Horizon,

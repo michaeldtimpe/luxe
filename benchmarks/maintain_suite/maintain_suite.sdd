@@ -118,6 +118,24 @@ single pipeline; new fixtures must declare their per-requirement spec.
   gate — oMLX picks parsers through several layers, so preflight never
   guesses one statically. A FAIL drops that arm, never the bake-off
 
+- No grader-authored string reaches the model (2026-10-30, harvest_2026_10):
+  `tests/test_grader_leak.py` asserts every fixture's first request carries no
+  `expected_outcome` pattern/command or requirement pattern/`done_when`, and
+  that the default path never runs the spec validator. KNOWN exposure, pinned:
+  `LUXE_REPROMPT_ON_DOC=1` shows the model each unmet requirement's `done_when`
+- Every bench prints a run-ledger audit after the Summary (2026-10-30,
+  `ledger.py`): a luxe_run_id or graded commit credited twice (duplicates
+  first), a DONE with a sha but no diff.patch, a planned cell with no state.
+  Scoped to the plan's cells; report-only, never changes the exit code. CLI:
+  `python -m benchmarks.maintain_suite.ledger <dir>...` audits old output
+- Each attempt stamps `config_fp` + per-field hashes (2026-10-30): base config,
+  variant, luxe HEAD (+dirty for src/configs/benchmarks), every `LUXE_*` switch
+  (values HASHED, never stored). A planned DONE cell with a different
+  fingerprint STOPS the bench (exit 2) naming the cells and fields; `--force`
+  re-runs, a new `--output` keeps both. It refuses rather than re-runs because a
+  re-run deletes the old cell's result and diff. Pre-fingerprint DONE cells are
+  reused and counted in a note. HEAD is in it, so a docs commit mid-bench stops
+  a resume until `--force`
 ## Must not
 - Run bench without `--keep-loaded` (post-run unload fires by default)
 - Let the branch backlog grow unpruned. Before 2026-08-11 nothing removed bench
