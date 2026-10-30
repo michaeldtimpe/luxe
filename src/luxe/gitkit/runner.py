@@ -27,6 +27,7 @@ from luxe.gitkit.kinds import (  # re-exported: tests + scripts import these fro
     _activity_callbacks as _activity_callbacks,
     extract_report as extract_report,
     run_with_activity,
+    with_evidence_boundary,
 )
 from luxe.gitkit.output import finish_report
 from luxe.gitkit.workspace import indexed_target
@@ -363,7 +364,7 @@ def run_git_report(
         # mid-thought. A copy — never mutates the shared role / chat.yaml.
         role_cfg = make_read_only_role(cfg.role("monolith")).model_copy(
             update={"max_tokens_per_turn": GITKIT_MAX_TOKENS})
-        goal = f"{ask}\n\n{hint}"
+        goal = with_evidence_boundary(f"{ask}\n\n{hint}")
 
         # Single-pass (default for small/medium) vs staged deep mode (large repos
         # or --deep). The footprint decision reuses the just-built symbol index.
@@ -377,7 +378,7 @@ def run_git_report(
         if base is not None:
             kind = "gitaudit-diff"
             task_type, ask, hint = KINDS[kind]
-            goal = f"{ask}\n\n{hint}"
+            goal = with_evidence_boundary(f"{ask}\n\n{hint}")
             scope = _prepare_diff_scope(target, base, role_cfg=role_cfg,
                                         console=console)
             if scope is None:

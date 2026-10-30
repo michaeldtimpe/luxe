@@ -61,7 +61,12 @@ from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.context import estimate_tokens
 from luxe.gitkit import health
 from luxe.gitkit import plan as plan_mod
-from luxe.gitkit.kinds import _TITLES, extract_report, run_with_activity
+from luxe.gitkit.kinds import (
+    _TITLES,
+    extract_report,
+    run_with_activity,
+    with_evidence_boundary,
+)
 from luxe.gitkit.output import finish_report
 
 
@@ -620,7 +625,7 @@ def _analyze_chunk(run: _DeepRun, c: Chunk, total: int,
     if extra_block is not None:
         extra += f"\n\n{extra_block}"
     ask = prompts.GIT_CHUNK_ASK.format(n=c.index + 1, total=total)
-    goal = f"{ask}\n\n{_CHUNK_HINTS[run.kind]}"
+    goal = with_evidence_boundary(f"{ask}\n\n{_CHUNK_HINTS[run.kind]}")
     res = run.pass_(goal, extra, f"chunk-{c.index + 1}")
     # Enrich the just-recorded chunk timing with its footprint — defensively
     # (a mid-pass throw would have raised before appending, so guard the

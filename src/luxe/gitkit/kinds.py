@@ -46,6 +46,15 @@ KINDS: dict[str, tuple[str, str, str]] = {
     ),
 }
 
+def with_evidence_boundary(goal: str) -> str:
+    """Append the evidence-boundary clause when LUXE_GITKIT_EVIDENCE_BOUNDARY=1
+    (exact string). Unset: `goal` is returned unchanged, byte for byte."""
+    import os
+    if os.environ.get("LUXE_GITKIT_EVIDENCE_BOUNDARY") != "1":
+        return goal
+    return f"{goal}\n\n{prompts.GITKIT_EVIDENCE_BOUNDARY}"
+
+
 _TITLES = {
     "gitaudit": "Repository audit",
     "gitchange": "Change plan",
