@@ -2010,6 +2010,18 @@ def _bench_end_unload() -> None:
         print(f"\n[bench end] model unload skipped: {e}")
 
 
+def _report_ledger(output: Path, plan: list) -> None:
+    """Print the run-ledger audit (ledger.py). Report-only: it never changes
+    the exit code, and an audit bug is printed, not raised, so it can't cost
+    a finished bench its summary."""
+    from benchmarks.maintain_suite.ledger import check_ledger, render
+    expected = [(v.variant_id if v else "", f.id) for v, f in plan]
+    try:
+        print(render(check_ledger(output, expected)))
+    except Exception as e:  # noqa: BLE001 — the audit must not fail the bench
+        print(f"  ledger     : audit failed ({type(e).__name__}: {e})")
+
+
 def main() -> int:
     _ensure_luxe_importable()
     args = _build_parser().parse_args()
@@ -2047,6 +2059,7 @@ def main() -> int:
         for run_idx, (variant, f) in enumerate(plan, start=1):
             _bench_one(bench, run_idx, variant, f)
         summary = _report_summary(bench)
+        _report_ledger(output, plan)
         if bench.by_variant:
             _report_comparison(bench, len(fixtures))
         return 0 if summary["v1_release_gate"] else 1
