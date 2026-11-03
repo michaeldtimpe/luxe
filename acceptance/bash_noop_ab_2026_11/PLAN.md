@@ -34,17 +34,51 @@ rules are unchanged in effect, but it is a relaxation of "a refused command
 never runs", and promoting it is the user's call regardless of the numbers.
 `hint` changes only an error string.
 
+## Re-scope after the slice (user decision 2026-11-03)
+
+The first slice (hint/strip on lpe strict-flag + neon reset) still ended all
+4 runs via `post_write_idle_exit`. DEBUG dispatch logs showed three feeders,
+not one:
+
+1. **`python` exits 127 on m5's bench PATH** (brew ships `python3` only;
+   `python3` is not allowlisted). The model then tries `python3` (refused)
+   and `which python python3 2>/dev/null || ...` (refused). m1's login PATH
+   has `python` (brew `python@3/libexec/bin`), m5's does not, so every m5
+   bench run so far gave the model a broken `python`.
+2. **Python analyzers refuse `.js` files** (PR #50). The refusal is an error,
+   errors count as idle, and 4 such calls in one step trip the gate.
+3. **Redirect/chain habits** (`2>&1`, `|| true`, `| tail`): the lever above.
+
+The common sink is the gate ending the run on an acting turn, with no
+report. User chose: fix the environment first as an opt-in arm (not a new
+default), then test the suffix lever and a loop-level fix on top of it.
+
+## Levers (all opt-in, unset = byte-identical)
+
+- `LUXE_BENCH_PY_PATH=1`: luxe's venv bin first on the bench bash PATH (the
+  prepend chat already does), so `python` and `pytest` resolve on every host.
+- `LUXE_BASH_NOOP=hint|strip`: as above.
+- `LUXE_IDLE_EXIT_FINAL_TURN=1`: when (only) `post_write_idle_exit` ends the
+  run, one more `backend.chat` with no tools and a fixed "write your final
+  report now" message (prompts.py); its text becomes the report.
+
 ## Design
 
-- Champion `Qwen3.6-35B-A3B-6bit`, all 10 maintain_suite fixtures, 3 reps,
-  arms ctl / hint / strip interleaved per rep. A fresh ctl: the oMLX server
-  was restarted (0.7.3rc1 to 0.7.3) between the previous A/B and this one.
-- Slice first: 1 rep x {lpe-rope-calc-implement-strict-flag,
-  neon-rain-implement-reset-shortcut} x {hint, strip}, reading the
-  `bash_noop_stats` events and the reports.
-- Hand-verify: a patch whose `git patch-id` matches one already classified in
-  `acceptance/validation_context_ab_2026_11/HAND-VERIFY-champ.json` inherits
-  that verdict; every new patch is read.
+Champion, all 10 fixtures, 3 reps, interleaved per rep, 5 arms:
+
+| Arm | Env |
+|---|---|
+| ctl | none |
+| py | `LUXE_BENCH_PY_PATH=1` |
+| py_hint | py + `LUXE_BASH_NOOP=hint` |
+| py_strip | py + `LUXE_BASH_NOOP=strip` |
+| py_final | py + `LUXE_IDLE_EXIT_FINAL_TURN=1` |
+
+Slice first: 1 rep x {lpe strict-flag, neon reset} x {py, py_final},
+checking `bench_venv_path` / `idle_exit_final_turn` events and the reports.
+Hand-verify: patch-ids already classified in
+`acceptance/validation_context_ab_2026_11/HAND-VERIFY-champ.json` inherit
+their verdict; every new patch is read.
 
 ## Measurements
 
@@ -55,19 +89,25 @@ hand-verified class, wall, prompt tokens.
 
 ## Gates
 
-- **Abort:** any treatment run without `bash_noop_mode`; an infra failure in
-  more than 1 run in an arm; the slice shows a cleaned command that is not a
-  prefix of the request.
-- **Regression (3-rep rule):** a fixture REAL 3/3 in ctl drops to 1/3 or
-  less; hand-verified REAL drops by more than 1; wall +15% or more.
-- **Success:** no regression, and runs ending with an empty report fall from
-  ctl's count to 1/30 or fewer, and refused/empty bash calls fall by 50% or
-  more.
+- **Abort:** a treatment run missing its liveness event (`bench_venv_path`,
+  `bash_noop_mode`); an infra failure in more than 1 run in an arm.
+- **Regression (3-rep rule, each arm vs ctl):** a fixture REAL 3/3 in ctl
+  drops to 1/3 or less; hand-verified REAL drops by more than 1; wall +15%
+  or more.
+- **py success:** no regression, plus (a) a DEBUG-logged diag run on lpe
+  strict-flag shows `python ...` succeeding (events carry no error text, so
+  127 is not visible in the full run), and (b) `post_write_idle_exit` on the
+  Python fixtures (lpe, isomer, nothing-ever-happens) falls against ctl.
+- **Report fix success (hint / strip / final, judged against py, since they
+  all include it):** no regression vs ctl, and runs ending with an empty
+  report fall to 1/30 or fewer.
 - **Verdict:**
-  - `hint` succeeds: promote default-ON (an error-string change).
-  - Only `strip` succeeds: report it and ask before promoting (security note).
-  - Both succeed: promote `hint`, and report `strip`'s margin over it.
-  - Neither: keep opt-in, record why.
+  - py succeeds: promote it default-ON as an environment fix, and record
+    that m5 baselines before it ran with a broken `python`.
+  - final succeeds: promote it (a loop change, but tool-less and only after a
+    gate exit).
+  - hint succeeds: promote it (an error string).
+  - strip: report it; ask before promoting (security note above).
 
 ## Risks
 
