@@ -83,6 +83,14 @@ def test_flag_is_opt_in():
     assert RunFlags.from_env({"LUXE_IDLE_NARROW": "1"}).idle_narrow is True
     for v in ("", "0", "true", "on"):
         assert RunFlags.from_env({"LUXE_IDLE_NARROW": v}).idle_narrow is False
+    w = RunFlags.from_env({"LUXE_IDLE_NARROW": "wide"})
+    assert w.idle_narrow and w.idle_narrow_wide
+    assert not RunFlags.from_env({"LUXE_IDLE_NARROW": "1"}).idle_narrow_wide
+
+
+def test_wide_spares_refusals():
+    assert _narrow_idle_spares(_tc("", "exit code 127"), wide=True) == "refusal"
+    assert _narrow_idle_spares(_tc("", "Unknown tool: x"), wide=True) == "refusal"
 
 
 VERIFY = ["py-compile#a", "eslint#b", "pytest-fail#c", "py-compile#d"]
@@ -147,3 +155,29 @@ def test_spare_reasons(out, err, want):
     tc = ToolCall(id="", name="bash", arguments={})
     tc.result, tc.error, tc.bytes_out = out, err, len(out.encode())
     assert _narrow_idle_spares(tc) == want
+
+
+def _tc(out, err):
+    tc = ToolCall(id="", name="bash", arguments={})
+    tc.result, tc.error, tc.bytes_out = out, err, len(out.encode())
+    return tc
+
+
+def test_wide_does_not_end_on_refusals(monkeypatch):
+    monkeypatch.setenv("LUXE_IDLE_NARROW", "wide")
+    events = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: events.append((kind, f)))
+    backend = ScriptedBackend([_write_resp()] + [_bash_resp(c) for c in
+        ["refused#a", "missing#b", "timeout#c", "noexec#d"]] + [_terminal_resp()])
+    result = run_agent(
+        backend=backend, role_cfg=_make_role(max_steps=30),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_write_tool(), _BASH_DEF],
+        tool_fns={"write_file": lambda a: ("ok", None),
+                  "bash": lambda a: _RESULTS[a["command"].split("#")[0]]},
+        run_id="idle-wide-test",
+    )
+    kinds = [k for k, _ in events]
+    assert "post_write_idle_exit" not in kinds and result.final_text == "done"

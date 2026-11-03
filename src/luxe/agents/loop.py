@@ -1217,7 +1217,7 @@ _EXIT_CODE_RE = re.compile(r"exit code (-?\d+)")
 _DID_NOT_RUN_EXIT = {126, 127}
 
 
-def _narrow_idle_spares(executed: ToolCall) -> str | None:
+def _narrow_idle_spares(executed: ToolCall, wide: bool = False) -> str | None:
     """LUXE_IDLE_NARROW: why a call legacy counts idle is NOT idle, or None.
 
     Output is information whatever the exit status; a non-zero exit from a
@@ -1232,7 +1232,7 @@ def _narrow_idle_spares(executed: ToolCall) -> str | None:
     m = _EXIT_CODE_RE.fullmatch(executed.error.strip())
     if m and int(m.group(1)) not in _DID_NOT_RUN_EXIT:
         return "nonzero_exit"
-    return None
+    return "refusal" if wide else None
 
 
 def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
@@ -1270,7 +1270,8 @@ def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
         # 2026-10-22; agents.sdd "Removed mechanisms").
         idle = bool(executed.bytes_out == 0 or executed.error)
         if idle and run.flags.idle_narrow:
-            spared = _narrow_idle_spares(executed)
+            spared = _narrow_idle_spares(executed,
+                                         wide=run.flags.idle_narrow_wide)
             if spared is not None:
                 idle = False
                 emit("idle_narrow_spared", step=step, name=tc.name,

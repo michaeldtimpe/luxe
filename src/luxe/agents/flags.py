@@ -150,6 +150,9 @@ class RunFlags:
     # (a refusal, unknown tool, timeout, exit 126/127) is idle; repeats are
     # still idle through the dedup short-circuit. agents.sdd "Narrow idle".
     idle_narrow: bool = False
+    # LUXE_IDLE_NARROW=wide (slice probe, 2026-11-03): refusals are spared
+    # too, so only the dedup short-circuit (an identical repeat) is idle.
+    idle_narrow_wide: bool = False
 
 
     # Cache-friendly compaction: phase 1 batches its truncations and never
@@ -270,7 +273,8 @@ class RunFlags:
             # Opt-in: only the exact string "1" enables it.
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
             # Opt-in: only the exact string "1" enables it.
-            idle_narrow=e.get("LUXE_IDLE_NARROW") == "1",
+            idle_narrow=e.get("LUXE_IDLE_NARROW") in ("1", "wide"),
+            idle_narrow_wide=e.get("LUXE_IDLE_NARROW") == "wide",
             # Default ON: only the exact string "0" disables it.
             compact_cache_friendly=(
                 e.get("LUXE_COMPACT_CACHE_FRIENDLY", "1") != "0"

@@ -822,5 +822,5 @@ def test_idle_narrow_off_by_default(h):
 def test_idle_narrow_on_is_announced(h, monkeypatch):
     monkeypatch.setenv("LUXE_IDLE_NARROW", "1")
     t = h.run()
-    assert t.event("idle_narrow_mode")["on"] is True
+    assert t.event("idle_narrow_mode")["mode"] == "1"
     assert "LUXE_IDLE_NARROW=1" in t.console
