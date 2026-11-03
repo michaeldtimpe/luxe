@@ -41,6 +41,45 @@ On the-game and lpe-rope-calc (4 of 10 fixtures), the pack's commit-subject
 and recent-files parts carry almost nothing. Only the BM25 and related-test
 pointers are informative there. A null #2 result on those fixtures says little.
 
+## Step-2 slice findings (2026-11-03, before the full run)
+
+Slice: 1 rep x {lpe-rope-calc-implement-strict-flag,
+neon-rain-implement-reset-shortcut} x {menu, pack}. All 4 runs passed and
+logged `main_context_injected`. Runner rc=1 is the runner's "v1 release"
+gate (at least 8/10 per cell), which a 2-fixture slice cannot clear.
+
+1. **The menu run on neon-rain ended with no report.** DEBUG dispatch logging
+   on a rerun showed the champion running `npm test --silent 2>&1`, then
+   `npm test --silent 2>&1 || true`. Bench bash refuses redirects and chains
+   (`shell._CHAIN_TOKENS`/`_REDIRECT_TOKENS`). Each refusal is an idle call,
+   and the third triggered `post_write_idle_exit` before the final turn. The
+   command itself runs fine through the tool (558 bytes, 0.5 s). Fixed in the
+   menu's wording (run it exactly as written; stderr is already included;
+   redirects, pipes and `&&`/`||`/`;` are refused). Rerun: the command ran
+   cleanly, followed by `git_diff`, and the report was 1,787 chars.
+2. **`lint` on a .js file returned ~62 to 65 KB of `invalid-syntax`
+   findings** (ruff lints any file named explicitly). Tool bug, fixed on its
+   own branch (PR #50). Check tools in the menu now carry language labels.
+3. **The pack run on neon-rain ended the same way.** The pack names no
+   command; the champion runs tests as `npm test 2>&1 | tail -40`, then
+   `npm test 2>&1`, then `npx vitest run 2>&1`, and all three are refused.
+   This is a pre-existing trap between model habit, the hardened bash and
+   the idle gate; the pack's test pointer just makes it fire. The pack is
+   left pure (pointers only) and the trap is reported as a finding, not
+   patched inside this lever.
+4. The lpe menu run's report ended with a correct Checks table: lint and
+   typecheck ran, git_diff reviewed, and "Tests: Not run (no test command
+   detected)".
+
+**Bench tree:** `ddc6073` on m5 = this branch at `20653e8` + PR #50's
+`0294940` cherry-picked (detached, never pushed). Every arm, ctl included,
+runs with the lint fix.
+
+**Measurement limit:** `tool_call` events carry no arguments, so a bash call
+cannot be matched to the test command. `analyze.py` counts successful bash
+(bytes_out>0) as test runs and uses only a conservative false-claim check;
+the rest is left to the hand read.
+
 ## Steps
 
 1. Implement and test (RED on old code, full suite green). Done: m1 4449 passed.
