@@ -38,7 +38,8 @@ from tests._git import git
 _SWITCHES = ("LUXE_REPROMPT_ON_DOC", "LUXE_STEP_LIMIT_LABEL",
              "LUXE_STEP_LIMIT_FINISH", "LUXE_CLEANUP_TURN",
              "LUXE_TOOL_BUDGET_CTX", "LUXE_VALIDATION_MENU",
-             "LUXE_CONTEXT_PACK", "LUXE_BASH_NOOP")
+             "LUXE_CONTEXT_PACK", "LUXE_BASH_NOOP",
+             "LUXE_BENCH_PY_PATH", "LUXE_IDLE_EXIT_FINAL_TURN")
 
 
 @dataclass
@@ -783,3 +784,20 @@ def test_bash_noop_unknown_value_is_off(h, monkeypatch):
     monkeypatch.setenv("LUXE_BASH_NOOP", "yes")
     t = h.run()
     assert "bash_noop_mode" not in t.kinds()
+
+
+def test_bench_py_path_off_by_default_and_reset(h, monkeypatch):
+    from luxe.tools import shell
+    shell.set_bench_venv_path(True)       # stale state from a previous run
+    t = h.run()
+    assert shell._bench_venv_path is False
+    assert "bench_venv_path" not in t.kinds()
+
+
+def test_bench_py_path_on_is_announced(h, monkeypatch):
+    from luxe.tools import shell
+    monkeypatch.setenv("LUXE_BENCH_PY_PATH", "1")
+    t = h.run()
+    assert t.event("bench_venv_path")["on"] is True
+    assert "LUXE_BENCH_PY_PATH=1" in t.console
+    shell.set_bench_venv_path(False)

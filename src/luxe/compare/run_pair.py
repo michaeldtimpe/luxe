@@ -50,6 +50,7 @@ _BARE_SUBSTRATE_ENV = {
     "LUXE_CTX_CAL_DAMP": "0",
     "LUXE_TOOL_RESULT_CLAMP": "0",
     "LUXE_REASONING_ROUNDTRIP": "0",
+    "LUXE_IDLE_EXIT_FINAL_TURN": "0",
     # opt-in levers read outside RunFlags
     "LUXE_REFLECT": "0",
 }

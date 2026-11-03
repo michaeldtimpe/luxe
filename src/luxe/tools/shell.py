@@ -262,6 +262,30 @@ _NOOP_SUFFIXES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\s+2>&1\s*$"),
      "2>&1 (stderr is already included in the output)"),
 )
+# LUXE_BENCH_PY_PATH=1 (opt-in, 2026-11; set by maintain via
+# `set_bench_venv_path`). The benchmark bash env is the process env minus
+# secrets; on a host whose non-login PATH has no unversioned `python` (m5:
+# brew ships `python3` only, and `python3` is not allowlisted) every
+# `python ...` the model ran exited 127. Chat already prepends luxe's venv
+# bin (`_chat_bash_env`); this is the same prepend for the benchmark path,
+# opt-in until benched (acceptance/bash_noop_ab_2026_11). False = unchanged.
+_bench_venv_path: bool = False
+
+
+def set_bench_venv_path(on: bool) -> None:
+    global _bench_venv_path
+    _bench_venv_path = bool(on)
+
+
+def _bench_env() -> dict[str, str]:
+    env = scrubbed_env()
+    if _bench_venv_path:
+        import sys
+        from pathlib import Path
+        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    return env
+
+
 _NOOP_MODES = ("hint", "strip")
 _noop_mode: str | None = None
 _noop_stats: Counter = Counter()
@@ -339,7 +363,7 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
     if repo_root is None:
         return "", "Repo root not set"
     if env is None:
-        env = scrubbed_env()
+        env = _bench_env()
 
     command = args["command"]
     note = ""

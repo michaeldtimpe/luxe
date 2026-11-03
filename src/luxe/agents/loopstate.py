@@ -160,6 +160,9 @@ class LoopState:
     prev_tool_calls_total_at_sample: int = 0  # v1.9 — for next_action_was_tool_call
     writes_seen: int = 0
     post_write_idle_tools: int = 0
+    # Set by _end_of_step when post_write_idle_exit ends the run; read once,
+    # after the loop, by the opt-in idle-exit final turn.
+    idle_exited: bool = False
 
     # SpecDD Lever 1 mid-loop state (v1.7). actual_tool_calls accumulates
     # (name, args) for every dispatched call so the spec validator sees the

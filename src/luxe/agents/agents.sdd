@@ -611,6 +611,21 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   The JOIN is done in the chat layer only (`render.compose_answer`) — do not
   fold it into `final_text` here, or every grader's input changes.
 
+### Idle-exit final turn (opt-in 2026-11, `LUXE_IDLE_EXIT_FINAL_TURN=1`)
+
+- `post_write_idle_exit` ends the run on an ACTING turn (tool calls, rarely
+  prose), so the run's report was lost: 6/30 control runs in
+  acceptance/validation_context_ab_2026_11 ended with an empty report. Feeders
+  seen: refused `2>&1`/`| tail`/`|| true` bash, `python` exiting 127 on m5's
+  bench PATH, Python analyzers refusing `.js` files.
+- When the flag is on and (only) that gate fired, `run_agent` appends ONE user
+  message (`prompts.IDLE_EXIT_FINAL_TURN`) and makes ONE `backend.chat` with
+  `tools=None`; non-empty text replaces `final_text`. The call site is in
+  `run_agent` (chat.sdd Must-not). A failure or empty answer keeps what the
+  run had and is recorded (`idle_exit_final_turn`, ok/chars/error). Never
+  fires on any other exit. Off = byte-identical (no extra call, no event).
+- A/B: acceptance/bash_noop_ab_2026_11/.
+
 ### Removed mechanisms (2026-09 agent-loop cleanup)
 
 Each was re-verified dead or refuted before deletion; the default-flag

@@ -142,6 +142,13 @@ class RunFlags:
     # "Prefix-cache accounting + the two cache experiments".
     reasoning_roundtrip: bool = False
 
+    # When post_write_idle_exit ends the run, make ONE more tool-less call so
+    # the model writes its final report (2026-11, opt-in). The gate exits on
+    # the last acting turn, which carries tool calls and usually no prose, so
+    # the report is lost (6/30 control runs, validation_context_ab_2026_11).
+    # Default OFF = byte-identical. See agents.sdd "Idle-exit final turn".
+    idle_exit_final_turn: bool = False
+
 
     # Cache-friendly compaction: phase 1 batches its truncations and never
     # re-truncates an already-truncated result, so the server's prefix cache
@@ -260,6 +267,7 @@ class RunFlags:
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
             # Opt-in: only the exact string "1" enables it.
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
+            idle_exit_final_turn=e.get("LUXE_IDLE_EXIT_FINAL_TURN") == "1",
             # Default ON: only the exact string "0" disables it.
             compact_cache_friendly=(
                 e.get("LUXE_COMPACT_CACHE_FRIENDLY", "1") != "0"

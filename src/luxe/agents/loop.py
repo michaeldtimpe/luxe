@@ -75,6 +75,7 @@ from luxe.agents.guardrails import (  # noqa: F401  (re-exported for tests)
 )
 from luxe.agents.flags import RunFlags
 from luxe.agents.loopstate import TOOL_HISTORY_MAX, LoopState
+from luxe.agents.prompts import IDLE_EXIT_FINAL_TURN
 from luxe.backend import Backend, ChatResponse, ToolCallResponse
 from luxe.config import RoleConfig
 from luxe.context import (
@@ -1472,6 +1473,7 @@ def _end_of_step(run: _Run, st: LoopState, result: AgentResult,
     )
     if pwi_exit is not None:
         result.final_text = resp.text or ""
+        st.idle_exited = True
         emit(
             "post_write_idle_exit",
             step=step,
@@ -1790,6 +1792,33 @@ def run_agent(
         result.final_text = resp.text if resp else ""
         result.aborted = True
         result.abort_reason = f"Max steps reached ({role_cfg.max_steps})"
+
+    # LUXE_IDLE_EXIT_FINAL_TURN (opt-in, 2026-11; agents.sdd "Idle-exit final
+    # turn"). The idle gate exits on an acting turn, which rarely carries the
+    # report. One tool-less call asks for it. The call site stays here, in
+    # run_agent (chat.sdd Must-not). Off, or any other exit: nothing happens.
+    if flags.idle_exit_final_turn and st.idle_exited and not result.aborted:
+        st.messages.append({"role": "user", "content": IDLE_EXIT_FINAL_TURN})
+        try:
+            final = backend.chat(
+                st.messages,
+                tools=None,
+                max_tokens=role_cfg.max_tokens_per_turn,
+                temperature=role_cfg.temperature,
+                num_ctx=role_cfg.num_ctx,
+                repeat_penalty=role_cfg.repeat_penalty,
+                stream=on_token is not None,
+                on_token=on_token,
+            )
+        except Exception as e:  # the run already succeeded; keep what it has
+            emit("idle_exit_final_turn", ok=False,
+                 error=f"{type(e).__name__}: {e}"[:200])
+        else:
+            _account_usage(result, final, result.steps, emit)
+            text = (final.text or "").strip()
+            if text:
+                result.final_text = text
+            emit("idle_exit_final_turn", ok=bool(text), chars=len(text))
 
     _finalize(run, st, result, emit)
     result.wall_s = time.monotonic() - t0

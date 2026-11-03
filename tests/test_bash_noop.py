@@ -22,8 +22,10 @@ from luxe.tools import fs, shell
 def repo(tmp_path: Path):
     fs.set_repo_root(tmp_path)
     shell.set_noop_mode(None)
+    shell.set_bench_venv_path(False)
     yield tmp_path
     shell.set_noop_mode(None)
+    shell.set_bench_venv_path(False)
     fs._REPO_ROOT = None
 
 
@@ -83,19 +85,21 @@ def test_hint_names_the_command_and_runs_nothing(repo):
 
 
 def test_strip_runs_the_cleaned_command_with_a_note(repo):
+    # echo/ls, not python: m5's non-interactive PATH has no `python` (127)
     shell.set_noop_mode("strip")
-    out, err = shell._bash({"command": "python -c \"print('hello')\" 2>&1 || true"})
+    out, err = shell._bash({"command": "echo hello 2>&1 || true"})
     assert err is None
-    assert out.startswith("[luxe ran `python -c \"print('hello')\"`")
-    assert "hello" in out
+    assert out.startswith("[luxe ran `echo hello`")
+    assert out.endswith("hello\n")
     assert shell.noop_stats() == {"strip": 1}
 
 
 def test_strip_keeps_the_exit_code(repo):
     shell.set_noop_mode("strip")
-    out, err = shell._bash({"command": "python -c \"raise SystemExit(3)\" 2>&1"})
-    assert err == "exit code 3"
-    assert out.startswith("[luxe ran")
+    out, err = shell._bash({"command": "ls definitely-missing-file 2>&1"})
+    assert err and err.startswith("exit code ") and err != "exit code 0"
+    assert err != "exit code 127"
+    assert out.startswith("[luxe ran `ls definitely-missing-file`")
 
 
 @pytest.mark.parametrize("cmd", [
@@ -124,3 +128,34 @@ def test_cancellable_runner_carries_the_note(repo):
     out, err = shell._bash({"command": "echo hi 2>&1"}, cancel=token)
     assert err is None
     assert out.startswith("[luxe ran `echo hi`") and out.endswith("hi\n")
+
+
+# --- LUXE_BENCH_PY_PATH (opt-in, 2026-11) ------------------------------------
+
+def test_bench_env_unchanged_when_off(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    shell.set_bench_venv_path(False)
+    assert shell._bench_env()["PATH"] == "/usr/bin:/bin"
+
+
+def test_bench_env_puts_the_venv_bin_first_when_on(monkeypatch):
+    import sys
+    from pathlib import Path as _P
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    shell.set_bench_venv_path(True)
+    try:
+        path = shell._bench_env()["PATH"]
+    finally:
+        shell.set_bench_venv_path(False)
+    assert path == str(_P(sys.executable).parent) + ":/usr/bin:/bin"
+
+
+def test_python_resolves_with_a_python_less_path(repo, monkeypatch):
+    """The m5 case: a PATH with no unversioned `python`."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    shell.set_bench_venv_path(True)
+    try:
+        out, err = shell._bash({"command": "python -c \"print('py-ok')\""})
+    finally:
+        shell.set_bench_venv_path(False)
+    assert err is None and out.strip() == "py-ok"
