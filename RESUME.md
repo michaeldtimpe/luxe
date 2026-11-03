@@ -1,5 +1,16 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-03 pm, m1 + m5) — "redirect trap" = the idle gate; four levers inert or refuted
+
+- **A/B** (`acceptance/bash_noop_ab_2026_11/REPORT.md`, champion 5 arms x 10 x 3): `LUXE_BENCH_PY_PATH`,
+  `LUXE_BASH_NOOP=hint|strip` inert on the trap (kept opt-in); the idle-exit final turn REFUTED and removed
+  (answered with a tool call 9/9). No regression anywhere (hand-verified the 30 varying patches).
+- **Root cause:** post_write_idle_exit counts executed verification as idle (`bytes_out == 0 or error`:
+  silent `python -c` successes, `npx eslint` exit 2 with output). **Next:** A/B a narrower idle test.
+- **Open decision:** promote `LUXE_BENCH_PY_PATH` as an env fix? m5's bench PATH has no `python`, so every
+  m5 model `python ...` has exited 127 to date (m1 is fine). Its outcome gate was not met.
+- **Branch:** `feat/bash-noop-suffixes` (PR, not landed).
+
 ## ⇒ SESSION NOTE (2026-11-03, m1 + m5) — validation menu REFUTED, context pack inert (opt-in), lint-on-JS fixed
 
 - **A/B** (`acceptance/validation_context_ab_2026_11/REPORT.md`): champion 4 arms x 10 x 3 + gemma-4-26b
@@ -7,7 +18,7 @@
   28 -> 25/30 (isomer quickstart THIN 3/3, deterministic), gemma fabricated its Checks section in 7/30.
   `LUXE_CONTEXT_PACK` inert (REAL 28/30 both arms), kept opt-in. lessons.md 2026-11-03.
 - **PRs:** #50 Python analyzers refuse non-Python files (ruff on `.js` returned 63 KB of noise);
-  #51 context pack + the A/B record. Both pushed, not landed.
+  #51 context pack + the A/B record. Both LANDED 2026-11-03 (main `5a7d865`; fleet updated).
 - **Found, not fixed:** the redirect trap (`npm test 2>&1` refused by bench bash -> 3 idle calls ->
   post_write_idle_exit, no report; ctl 6/30 runs); `detect_test_command` offers `npm test` for a
   `package.json` with no `scripts.test`. m5's oMLX ran a deleted 0.7.3rc1 Cellar for a week

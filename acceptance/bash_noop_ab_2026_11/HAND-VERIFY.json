@@ -1,0 +1,362 @@
+[
+ {
+  "dir": "000_champ_neon-rain-implement-reset-shortcut_16c1c7b8b4",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "16c1c7b8b4",
+  "arms": [
+   "py"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Nit: the handler calls _startNewGame(this.state?.persona), but _startNewGame reads data?.persona, so the persona is dropped exactly as with no argument (harmless no-op intent bug).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "001_champ_neon-rain-implement-reset-shortcut_27c2a26109",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "27c2a26109",
+  "arms": [
+   "py_strip"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "002_champ_neon-rain-implement-reset-shortcut_347565948a",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "347565948a",
+  "arms": [
+   "py"
+  ],
+  "class": "FAIL",
+  "reason": "Listener lives in the Game.js constructor, not the src/input/ system the goal names, and it never works in a running game. _startNewGame gains `document.removeEventListener('keydown', this._onKeyDown);`, so the first game start (from the menu) unbinds the shortcut for good. Shift+R works only on the title screen, where it starts a persona-less game. Nothing pre-existing is broken.",
+  "report_mismatch": "report.md is only a leaked thinking fragment ('The lint tool only works on Python files...'); no final report.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "003_champ_neon-rain-implement-reset-shortcut_45d54b1229",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "45d54b1229",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "004_champ_neon-rain-implement-reset-shortcut_661fc5bd2b",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "661fc5bd2b",
+  "arms": [
+   "py_final"
+  ],
+  "class": "REAL",
+  "reason": "Shift+R in HtmlInputHandler emits the existing 'game:start' event with no payload, which runs _startNewGame(undefined), the same path as the existing Restart confirm. Reuses existing wiring, no Game.js change; listener removed in dispose.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "005_champ_neon-rain-implement-reset-shortcut_66b025947a",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "66b025947a",
+  "arms": [
+   "py_final"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "006_champ_neon-rain-implement-reset-shortcut_77a8866b0d",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "77a8866b0d",
+  "arms": [
+   "py_hint"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Uses a 'game:reset' event name and excludes Ctrl/Alt.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "007_champ_neon-rain-implement-reset-shortcut_82d6e24fc1",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "82d6e24fc1",
+  "arms": [
+   "py_strip"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Excludes Ctrl/Alt.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "008_champ_neon-rain-implement-reset-shortcut_ad2c45b2b5",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "ad2c45b2b5",
+  "arms": [
+   "py_strip"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Excludes Ctrl/Alt.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "009_champ_neon-rain-implement-reset-shortcut_c27cebce24",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "c27cebce24",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Uses a 'game:reset' event name.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "010_champ_neon-rain-implement-reset-shortcut_d6a3067344",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "d6a3067344",
+  "arms": [
+   "py_hint"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Excludes Ctrl/Alt.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "011_champ_neon-rain-implement-reset-shortcut_e2e38b85e6",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "e2e38b85e6",
+  "arms": [
+   "py"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Excludes Ctrl/Alt.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "012_champ_neon-rain-implement-reset-shortcut_e9c06f3636",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "e9c06f3636",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Uses 'game:reset' and excludes Ctrl/Alt.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "013_champ_neon-rain-implement-reset-shortcut_f4743bee41",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "f4743bee41",
+  "arms": [
+   "py_hint"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024. Excludes Ctrl/Alt.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "014_champ_neon-rain-implement-reset-shortcut_fbc018feb3",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "fbc018feb3",
+  "arms": [
+   "py_final"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in src/input/HtmlInputHandler (Shift+R, preventDefault) emits a bus event that Game._wireEvents maps to _startNewGame(), the same call the existing Restart confirm uses; the listener is removed in dispose. Same as champion batch-1 019-024.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "015_champ_nothing-ever-happens-document-config_07e302d520",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "07e302d520",
+  "arms": [
+   "py_strip"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "016_champ_nothing-ever-happens-document-config_29ecdd5f7a",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "29ecdd5f7a",
+  "arms": [
+   "py_final"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "017_champ_nothing-ever-happens-document-config_3ad5a8a5ca",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "3ad5a8a5ca",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "018_champ_nothing-ever-happens-document-config_3b2494985a",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "3b2494985a",
+  "arms": [
+   "py"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "019_champ_nothing-ever-happens-document-config_5175c7091b",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "5175c7091b",
+  "arms": [
+   "py_hint"
+  ],
+  "class": "REAL",
+  "reason": "54/55 (BOT_VARIANT missing) documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "Report says every startup env var is documented; BOT_VARIANT is missing.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "020_champ_nothing-ever-happens-document-config_62a190f241",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "62a190f241",
+  "arms": [
+   "py_hint"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "021_champ_nothing-ever-happens-document-config_7062e5e8c5",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "7062e5e8c5",
+  "arms": [
+   "py_final"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "022_champ_nothing-ever-happens-document-config_82fd70ce17",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "82fd70ce17",
+  "arms": [
+   "py_hint"
+  ],
+  "class": "REAL",
+  "reason": "54/55 (PM_BACKGROUND_EXECUTOR_WORKERS missing) documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "Report says every startup env var is documented; PM_BACKGROUND_EXECUTOR_WORKERS is missing.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "023_champ_nothing-ever-happens-document-config_a88f228f2f",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "a88f228f2f",
+  "arms": [
+   "py_strip"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "024_champ_nothing-ever-happens-document-config_ab51229e43",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "ab51229e43",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose). Cross-references are per-section 'Read in' file notes plus a file-to-variable table (no line numbers).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "025_champ_nothing-ever-happens-document-config_bdbebbfcac",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "bdbebbfcac",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "026_champ_nothing-ever-happens-document-config_c1a36478a0",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "c1a36478a0",
+  "arms": [
+   "py"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "027_champ_nothing-ever-happens-document-config_ce6d077a2c",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "ce6d077a2c",
+  "arms": [
+   "py_strip"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose). Cross-references are per-section 'Read in' file:line ranges.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "028_champ_nothing-ever-happens-document-config_e4db531589",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "e4db531589",
+  "arms": [
+   "py_final"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "029_champ_nothing-ever-happens-document-config_eef9d9fdbb",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "eef9d9fdbb",
+  "arms": [
+   "py"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented. Defaults spot-checked against base for all PM_NH_*, all six PM_RISK_* (1500/1000/0/900/1800/3), recovery, redeemer, ledger, paper and executor vars, with no mismatch. No misnamed or invented vars; POSTGRES_PASSWORD is real (.env.example/docker-compose).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ }
+]

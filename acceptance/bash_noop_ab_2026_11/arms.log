@@ -1,0 +1,34 @@
+REP 1 ARM ctl start 2026-11-03 14:21:58
+REP 1 ARM ctl end 2026-11-03 14:26:33 rc=0
+REP 1 ARM py start 2026-11-03 14:26:33
+REP 1 ARM py end 2026-11-03 14:31:37 rc=0
+REP 1 ARM py_hint start 2026-11-03 14:31:37
+REP 1 ARM py_hint end 2026-11-03 14:36:10 rc=0
+REP 1 ARM py_strip start 2026-11-03 14:36:10
+REP 1 ARM py_strip end 2026-11-03 14:40:35 rc=0
+REP 1 ARM py_final start 2026-11-03 14:40:35
+REP 1 ARM py_final end 2026-11-03 14:45:16 rc=0
+REP 2 ARM ctl start 2026-11-03 14:45:16
+REP 2 ARM ctl end 2026-11-03 14:50:05 rc=0
+REP 2 ARM py start 2026-11-03 14:50:05
+REP 2 ARM py end 2026-11-03 14:54:50 rc=0
+REP 2 ARM py_hint start 2026-11-03 14:54:50
+REP 2 ARM py_hint end 2026-11-03 14:59:25 rc=0
+REP 2 ARM py_strip start 2026-11-03 14:59:25
+REP 2 ARM py_strip end 2026-11-03 15:04:22 rc=0
+REP 2 ARM py_final start 2026-11-03 15:04:22
+REP 2 ARM py_final end 2026-11-03 15:08:59 rc=0
+REP 3 ARM ctl start 2026-11-03 15:08:59
+REP 3 ARM ctl end 2026-11-03 15:13:47 rc=0
+REP 3 ARM py start 2026-11-03 15:13:47
+REP 3 ARM py end 2026-11-03 15:18:51 rc=0
+REP 3 ARM py_hint start 2026-11-03 15:18:51
+REP 3 ARM py_hint end 2026-11-03 15:23:42 rc=0
+REP 3 ARM py_strip start 2026-11-03 15:23:42
+REP 3 ARM py_strip end 2026-11-03 15:28:12 rc=0
+REP 3 ARM py_final start 2026-11-03 15:28:12
+REP 3 ARM py_final end 2026-11-03 15:32:58 rc=0
+DONE champ 2026-11-03 15:32:58
+REP 1 ARM py start 2026-11-03 15:34:56
+REP 1 ARM py end 2026-11-03 15:35:51 rc=1
+DONE dbg 2026-11-03 15:35:51

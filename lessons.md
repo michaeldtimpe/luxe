@@ -30,6 +30,33 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-11-03] bash_noop_ab_2026_11: the "redirect trap" was the idle gate counting verification as idle
+
+**What happened**: Runs ending via post_write_idle_exit with no report (8/30
+champion control runs) looked like a redirect-habit problem (`npm test 2>&1`
+refused). Four opt-in arms (bench `python` on PATH; refusal hint; strip
+trailing no-ops; a tool-less final report turn) changed nothing: empty
+reports 8/7/8/10/5, and the final turn was answered with a tool call 9/9.
+
+**Root cause**: The gate's idle test is `bytes_out == 0 or error`. DEBUG logs
+of real bench cells show it counting a successful silent `python -c
+"py_compile..."`, a fixture-building `python -c`, and `npx eslint` exiting 2
+with 491 bytes of output as idle. The champion was verifying; the gate was
+built for another model's empty-check drift. Also: m5's bench PATH has no
+`python` (127 on every model `python ...`, every m5 bench run to date), and
+hand-built "same as bench" diag runs did not reproduce bench trajectories
+(the harness injects a `forbids_create` `.sdd`).
+
+**Fix / takeaway**: Final turn removed (agents.sdd); the other levers kept
+opt-in. Next: change what counts as idle (an executed call with output or a
+non-zero exit is information), with its own A/B. For bench forensics, get
+DEBUG logs from the real cell via `sitecustomize.py` on the runner's
+`PYTHONPATH`, not a hand-built replay.
+
+**Affected files**: `src/luxe/tools/shell.py`, `src/luxe/maintain.py`,
+`src/luxe/agents/agents.sdd`, `src/luxe/tools/tools.sdd`. Evidence:
+`acceptance/bash_noop_ab_2026_11/{REPORT.md,HAND-VERIFY.json,debug/}`.
+
 ### [2026-11-03] validation_context_ab_2026_11: a required "Checks" section is a template a weak model fills, and a doc task reads it as "be minimal"
 
 **What happened**: Two harness patterns from an external write-up were benched

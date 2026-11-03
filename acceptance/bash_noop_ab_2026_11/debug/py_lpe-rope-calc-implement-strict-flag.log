@@ -1,0 +1,84 @@
+2026-11-03 15:34:57,326 step=1 ctx_pressure=1.4% (est=1.3% cal=1.00x) num_ctx=32768 effective_ctx=31250 msgs=2
+2026-11-03 15:34:58,265 ctx calibration 1.00x -> 1.13x (server=2208 est=1950)
+2026-11-03 15:34:58,269 tool dispatch step=1 name=list_dir args={"path": "."}
+2026-11-03 15:34:58,270 tool done name=list_dir wall_s=0.00 error=None bytes_out=149
+2026-11-03 15:34:58,270 tool dispatch step=1 name=bm25_search args={"query": "pe_scan.py CLI argument parsing"}
+2026-11-03 15:34:58,271 tool done name=bm25_search wall_s=0.00 error=None bytes_out=45
+2026-11-03 15:34:58,271 step=2 ctx_pressure=2.0% (est=1.7% cal=1.13x) num_ctx=32768 effective_ctx=27421 msgs=5
+2026-11-03 15:34:58,918 ctx calibration 1.13x -> 1.14x (server=2362 est=2074)
+2026-11-03 15:34:58,919 tool dispatch step=2 name=read_file args={"limit": 100, "offset": 0, "path": "pe_scan.py"}
+2026-11-03 15:34:58,920 tool done name=read_file wall_s=0.00 error=None bytes_out=4048
+2026-11-03 15:34:58,920 step=3 ctx_pressure=5.9% (est=4.9% cal=1.14x) num_ctx=32768 effective_ctx=27254 msgs=7
+2026-11-03 15:34:59,772 ctx calibration 1.14x -> 1.17x (server=3669 est=3130)
+2026-11-03 15:34:59,772 tool dispatch step=3 name=read_file args={"limit": 100, "offset": 100, "path": "pe_scan.py"}
+2026-11-03 15:34:59,773 tool done name=read_file wall_s=0.00 error=None bytes_out=4546
+2026-11-03 15:34:59,774 step=4 ctx_pressure=10.6% (est=8.5% cal=1.17x) num_ctx=32768 effective_ctx=26436 msgs=9
+2026-11-03 15:35:00,760 ctx calibration 1.17x -> 1.22x (server=5268 est=4313)
+2026-11-03 15:35:00,760 tool dispatch step=4 name=read_file args={"limit": 100, "offset": 200, "path": "pe_scan.py"}
+2026-11-03 15:35:00,761 tool done name=read_file wall_s=0.00 error=None bytes_out=4091
+2026-11-03 15:35:00,762 step=5 ctx_pressure=15.3% (est=11.8% cal=1.22x) num_ctx=32768 effective_ctx=25309 msgs=11
+2026-11-03 15:35:01,644 ctx calibration 1.22x -> 1.22x (server=6572 est=5381)
+2026-11-03 15:35:01,644 tool dispatch step=5 name=read_file args={"limit": 100, "offset": 300, "path": "pe_scan.py"}
+2026-11-03 15:35:01,645 tool done name=read_file wall_s=0.00 error=None bytes_out=3538
+2026-11-03 15:35:01,645 step=6 ctx_pressure=18.9% (est=14.6% cal=1.22x) num_ctx=32768 effective_ctx=25311 msgs=13
+2026-11-03 15:35:02,448 ctx calibration 1.22x -> 1.23x (server=7755 est=6312)
+2026-11-03 15:35:02,449 tool dispatch step=6 name=read_file args={"limit": 100, "offset": 400, "path": "pe_scan.py"}
+2026-11-03 15:35:02,450 tool done name=read_file wall_s=0.00 error=None bytes_out=4878
+2026-11-03 15:35:02,450 step=7 ctx_pressure=24.1% (est=18.5% cal=1.23x) num_ctx=32768 effective_ctx=25152 msgs=15
+2026-11-03 15:35:03,346 ctx calibration 1.23x -> 1.23x (server=9341 est=7573)
+2026-11-03 15:35:03,347 tool dispatch step=7 name=read_file args={"limit": 100, "offset": 500, "path": "pe_scan.py"}
+2026-11-03 15:35:03,347 tool done name=read_file wall_s=0.00 error=None bytes_out=1278
+2026-11-03 15:35:03,348 step=8 ctx_pressure=25.6% (est=19.6% cal=1.23x) num_ctx=32768 effective_ctx=25047 msgs=17
+2026-11-03 15:35:13,845 ctx calibration 1.23x -> 1.24x (server=9838 est=7939)
+2026-11-03 15:35:13,845 tool dispatch step=8 name=edit_file args={"new_string": "def scan_gguf_dir(root: Path, source: str) -> tuple[list[PEInfo], list[Path]]:\n    out: list[PEInfo] = []\n    bad: list[Path] = []\n    if not root.exists():\n        return out, bad\n    for path in root.rglob(\"*.gguf\"):\n        meta = parse_gguf_metadata(path)\n        if meta…
+2026-11-03 15:35:13,847 tool done name=edit_file wall_s=0.00 error=None bytes_out=33
+2026-11-03 15:35:13,847 step=9 ctx_pressure=27.8% (est=21.1% cal=1.24x) num_ctx=32768 effective_ctx=24924 msgs=19
+2026-11-03 15:35:20,486 ctx calibration 1.24x -> 1.23x (server=10363 est=8436)
+2026-11-03 15:35:20,487 tool dispatch step=9 name=edit_file args={"new_string": "def scan_ollama(root: Path) -> tuple[list[PEInfo], list[Path]]:\n    out: list[PEInfo] = []\n    bad: list[Path] = []\n    manifests = root / \"manifests\"\n    blobs = root / \"blobs\"\n    if not manifests.exists() or not blobs.exists():\n        return out, bad\n    for mf in mani…
+2026-11-03 15:35:20,488 tool done name=edit_file wall_s=0.00 error=None bytes_out=33
+2026-11-03 15:35:20,489 step=10 ctx_pressure=31.6% (est=24.3% cal=1.23x) num_ctx=32768 effective_ctx=25156 msgs=21
+2026-11-03 15:35:25,121 ctx calibration 1.23x -> 1.19x (server=11259 est=9467)
+2026-11-03 15:35:25,122 tool dispatch step=10 name=edit_file args={"new_string": "def scan_lmstudio(root: Path) -> tuple[list[PEInfo], list[Path]]:\n    \"\"\"LM Studio mixes GGUF and MLX/safetensors model dirs.\"\"\"\n    out: list[PEInfo] = []\n    bad: list[Path] = []\n    if not root.exists():\n        return out, bad\n    gguf_out, gguf_bad = scan_gguf_dir(ro…
+2026-11-03 15:35:25,123 tool done name=edit_file wall_s=0.00 error=None bytes_out=33
+2026-11-03 15:35:25,124 step=11 ctx_pressure=32.9% (est=26.2% cal=1.19x) num_ctx=32768 effective_ctx=26034 msgs=23
+2026-11-03 15:35:29,425 ctx calibration 1.19x -> 1.18x (server=11884 est=10092)
+2026-11-03 15:35:29,426 tool dispatch step=11 name=edit_file args={"new_string": "    ap.add_argument(\"--no-default-paths\", action=\"store_true\",\n                    help=\"Skip default Ollama/LM Studio/HF paths\")\n    ap.add_argument(\"--strict\", action=\"store_true\",\n                    help=\"Exit with non-zero status if any scanned GGUF file has \"\n  …
+2026-11-03 15:35:29,427 tool done name=edit_file wall_s=0.00 error=None bytes_out=33
+2026-11-03 15:35:29,428 step=12 ctx_pressure=34.6% (est=27.8% cal=1.18x) num_ctx=32768 effective_ctx=26308 msgs=25
+2026-11-03 15:35:31,611 ctx calibration 1.18x -> 1.17x (server=12412 est=10629)
+2026-11-03 15:35:31,612 tool dispatch step=12 name=edit_file args={"new_string": "    print(f\"\\nTotal: {len(records)} model{'s' if len(records)!=1 else ''}\")\n\n    if args.strict and bad_gguf:\n        print(f\"\\n[strict] {len(bad_gguf)} GGUF file(s) with missing/unreadable headers:\")\n        for p in bad_gguf:\n            print(f\"  {p}\")\n        return…
+2026-11-03 15:35:31,613 tool done name=edit_file wall_s=0.00 error=None bytes_out=33
+2026-11-03 15:35:31,614 step=13 ctx_pressure=35.0% (est=28.3% cal=1.17x) num_ctx=32768 effective_ctx=26542 msgs=27
+2026-11-03 15:35:32,318 ctx calibration 1.17x -> 1.17x (server=12623 est=10805)
+2026-11-03 15:35:32,318 tool dispatch step=13 name=read_file args={"limit": 60, "offset": 254, "path": "pe_scan.py"}
+2026-11-03 15:35:32,319 tool done name=read_file wall_s=0.00 error=None bytes_out=2341
+2026-11-03 15:35:32,319 step=14 ctx_pressure=37.4% (est=30.3% cal=1.17x) num_ctx=32768 effective_ctx=26530 msgs=29
+2026-11-03 15:35:33,084 ctx calibration 1.17x -> 1.17x (server=13397 est=11447)
+2026-11-03 15:35:33,084 tool dispatch step=14 name=read_file args={"limit": 80, "offset": 368, "path": "pe_scan.py"}
+2026-11-03 15:35:33,085 tool done name=read_file wall_s=0.00 error=None bytes_out=3361
+2026-11-03 15:35:33,086 step=15 ctx_pressure=40.8% (est=33.0% cal=1.17x) num_ctx=32768 effective_ctx=26480 msgs=31
+2026-11-03 15:35:34,025 ctx calibration 1.17x -> 1.18x (server=14500 est=12331)
+2026-11-03 15:35:34,026 tool dispatch step=15 name=read_file args={"limit": 60, "offset": 485, "path": "pe_scan.py"}
+2026-11-03 15:35:34,027 tool done name=read_file wall_s=0.00 error=None bytes_out=2354
+2026-11-03 15:35:34,027 step=16 ctx_pressure=43.4% (est=34.9% cal=1.18x) num_ctx=32768 effective_ctx=26348 msgs=33
+2026-11-03 15:35:34,961 ctx calibration 1.18x -> 1.18x (server=15291 est=12965)
+2026-11-03 15:35:34,961 tool dispatch step=16 name=read_file args={"limit": 20, "offset": 545, "path": "pe_scan.py"}
+2026-11-03 15:35:34,962 tool done name=read_file wall_s=0.00 error=None bytes_out=634
+2026-11-03 15:35:34,962 step=17 ctx_pressure=44.4% (est=35.6% cal=1.18x) num_ctx=32768 effective_ctx=26265 msgs=35
+2026-11-03 15:35:36,113 ctx calibration 1.18x -> 1.18x (server=15583 est=13169)
+2026-11-03 15:35:36,113 tool dispatch step=17 name=bash args={"command": "python -c \"import py_compile; py_compile.compile('pe_scan.py', doraise=True)\""}
+2026-11-03 15:35:36,173 tool done name=bash wall_s=0.06 error=None bytes_out=0
+2026-11-03 15:35:36,173 tool dispatch step=17 name=bash args={"command": "python pe_scan.py --help"}
+2026-11-03 15:35:36,226 tool done name=bash wall_s=0.05 error=None bytes_out=1181
+2026-11-03 15:35:36,226 step=18 ctx_pressure=46.1% (est=36.8% cal=1.18x) num_ctx=32768 effective_ctx=26173 msgs=38
+2026-11-03 15:35:37,874 ctx calibration 1.18x -> 1.18x (server=15983 est=13577)
+2026-11-03 15:35:37,875 tool dispatch step=18 name=bash args={"command": "cd /tmp && mkdir -p test_gguf && echo \"not a gguf\" > test_gguf/bad.gguf && python /app/pe_scan.py --path /tmp/test_gguf --no-default-paths; echo \"Exit code: $?\""}
+2026-11-03 15:35:37,875 tool done name=bash wall_s=0.00 error=Shell chain/redirect operators not allowed: ['&&', '&&', '>', '&&', ';']. Issue separate bash calls for each command, or use read_file/write_file/edit_file instead of redirects. bytes_out=0
+2026-11-03 15:35:37,876 step=19 ctx_pressure=46.3% (est=37.2% cal=1.18x) num_ctx=32768 effective_ctx=26317 msgs=40
+2026-11-03 15:35:38,486 ctx calibration 1.18x -> 1.18x (server=16136 est=13714)
+2026-11-03 15:35:38,486 tool dispatch step=19 name=bash args={"command": "mkdir -p /tmp/test_gguf"}
+2026-11-03 15:35:38,486 tool done name=bash wall_s=0.00 error=Command 'mkdir' not in allowlist. Allowed: ['cargo', 'cat', 'echo', 'find', 'git', 'go', 'grep', 'head', 'ls', 'make', 'npm', 'npx', 'pip', 'pytest', 'python', 'ruff', 'sed', 'sort', 'tail', 'tree', ' bytes_out=0
+2026-11-03 15:35:38,487 step=20 ctx_pressure=46.7% (est=37.5% cal=1.18x) num_ctx=32768 effective_ctx=26331 msgs=42
+2026-11-03 15:35:39,490 ctx calibration 1.18x -> 1.18x (server=16263 est=13806)
+2026-11-03 15:35:39,491 tool dispatch step=20 name=bash args={"command": "python -c \"\nimport os\nos.makedirs('/tmp/test_gguf', exist_ok=True)\nwith open('/tmp/test_gguf/bad.gguf', 'w') as f:\n    f.write('not a gguf')\n\""}
+2026-11-03 15:35:39,536 tool done name=bash wall_s=0.04 error=None bytes_out=0
