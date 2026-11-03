@@ -35,6 +35,7 @@ from luxe.config import load_config
 from luxe.gitclone import resolve_repo
 from luxe.pr import GitDiffError, diff_against_base as _diff_against_base
 from luxe.repo_index import _detect_languages_for_repo
+from luxe.tools import shell as shell_mod
 
 if TYPE_CHECKING:
     from luxe.agents.loop import AgentResult
@@ -372,6 +373,18 @@ def _load_model(p: _Pipeline, config_path: str | None) -> None:
     # (tools.sdd). The announce line is pinned to the treatment arm's
     # wording so the shipped default is byte-equivalent to what was
     # measured with the flag set to "1".
+    # LUXE_BASH_NOOP=hint|strip (opt-in, 2026-11; tools/shell.py): what the
+    # bench bash does with a refused command whose only problem is a trailing
+    # no-op suffix (`2>&1`, `| tail -N`, `|| true`). Set on EVERY run so the
+    # module state can never leak from a previous one; unset = None =
+    # byte-identical. Announced + recorded for arm liveness.
+    _noop = os.environ.get("LUXE_BASH_NOOP") or None
+    shell_mod.set_noop_mode(_noop)
+    if shell_mod._noop_mode is not None:
+        console.print(f"[yellow]· Bash no-op suffixes:[/] [dim]"
+                      f"LUXE_BASH_NOOP={shell_mod._noop_mode}[/]")
+        p.emit("bash_noop_mode", mode=shell_mod._noop_mode)
+
     _read_budget = apply_ctx_read_budget(cfg.role("monolith").num_ctx)
     if _read_budget is not None:
         console.print(
@@ -453,6 +466,10 @@ def _main_pass(p: _Pipeline) -> AgentResult:
            abort_reason=result.abort_reason,
            final_text_chars=len(result.final_text or ""),
            peak_context_pressure=result.peak_context_pressure)
+    if shell_mod._noop_mode is not None:
+        p.emit("bash_noop_stats", mode=shell_mod._noop_mode,
+               **{k: shell_mod.noop_stats().get(k, 0)
+                  for k in ("hint", "strip", "unfixable")})
     if p.writes:
         _record_diff_stat(p, "after_main_pass")
     p.report = result.final_text or ""

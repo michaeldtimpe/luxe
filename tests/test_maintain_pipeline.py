@@ -38,7 +38,7 @@ from tests._git import git
 _SWITCHES = ("LUXE_REPROMPT_ON_DOC", "LUXE_STEP_LIMIT_LABEL",
              "LUXE_STEP_LIMIT_FINISH", "LUXE_CLEANUP_TURN",
              "LUXE_TOOL_BUDGET_CTX", "LUXE_VALIDATION_MENU",
-             "LUXE_CONTEXT_PACK")
+             "LUXE_CONTEXT_PACK", "LUXE_BASH_NOOP")
 
 
 @dataclass
@@ -754,3 +754,32 @@ def test_context_pack_failure_is_recorded_and_the_run_continues(h, monkeypatch):
     assert t.event("context_pack_failed")["error"] == "RuntimeError: index exploded"
     assert t.passes[0]["extra_context"] is None
     assert t.event("main_context_injected")["pack_chars"] == 0
+
+
+# --- LUXE_BASH_NOOP wiring (opt-in, 2026-11) --------------------------------
+
+def test_bash_noop_off_by_default_and_reset_every_run(h, monkeypatch):
+    from luxe.tools import shell
+    shell.set_noop_mode("strip")          # stale state from a previous run
+    t = h.run()
+    assert shell._noop_mode is None
+    assert "bash_noop_mode" not in t.kinds()
+    assert "bash_noop_stats" not in t.kinds()
+
+
+@pytest.mark.parametrize("mode", ["hint", "strip"])
+def test_bash_noop_mode_is_announced_and_counted(h, monkeypatch, mode):
+    from luxe.tools import shell
+    monkeypatch.setenv("LUXE_BASH_NOOP", mode)
+    t = h.run()
+    assert t.event("bash_noop_mode")["mode"] == mode
+    stats = t.event("bash_noop_stats")
+    assert stats["mode"] == mode and stats["hint"] == stats["strip"] == 0
+    assert f"LUXE_BASH_NOOP={mode}" in t.console
+    shell.set_noop_mode(None)
+
+
+def test_bash_noop_unknown_value_is_off(h, monkeypatch):
+    monkeypatch.setenv("LUXE_BASH_NOOP", "yes")
+    t = h.run()
+    assert "bash_noop_mode" not in t.kinds()

@@ -21,9 +21,11 @@ is preserved for the single, allowlisted binary.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import signal
 import subprocess
+from collections import Counter
 from typing import Any
 
 from luxe.secrets import scrubbed_env
@@ -234,6 +236,91 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
                 return "", f"Command timed out after {timeout}s"
 
 
+# --- no-op suffixes (opt-in, 2026-11; acceptance/bash_noop_ab_2026_11) ------
+#
+# The champion habitually runs tests as `npm test 2>&1`, `... | tail -40`,
+# `... || true`. The validator refuses each (redirect / pipe / chain); each
+# refusal is an idle call; three in a row end the run via
+# post_write_idle_exit with NO final report (6/30 control runs in
+# validation_context_ab_2026_11). Each suffix below is a no-op for THIS tool:
+# output is already stdout+stderr, already clipped to head+tail, and a
+# non-zero exit is reported while the output is still returned.
+#
+# Mode is set by the maintain pipeline (`set_noop_mode`, read from
+# LUXE_BASH_NOOP); None (the default, and always in chat) = byte-identical.
+#   "hint":  keep the refusal; append why and the cleaned command to run.
+#   "strip": run the cleaned command, with a one-line note before its output.
+# Safety: only TRAILING suffixes from this fixed grammar are removed, the
+# result goes through the full validator + allowlist again, so what runs is
+# always a prefix of what the model asked for. Nothing new can execute.
+_NOOP_SUFFIXES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\s*\|\s*(?:tail|head)(?:\s+-n\s*\d+|\s+-\d+|\s+--lines=\d+)?\s*$"),
+     "a pipe to tail/head (long output is already clipped to its first 2 KB "
+     "and last 6 KB)"),
+    (re.compile(r"\s*\|\|\s*true\s*$"),
+     "|| true (a non-zero exit is reported, and the output is still returned)"),
+    (re.compile(r"\s+2>&1\s*$"),
+     "2>&1 (stderr is already included in the output)"),
+)
+_NOOP_MODES = ("hint", "strip")
+_noop_mode: str | None = None
+_noop_stats: Counter = Counter()
+
+
+def set_noop_mode(mode: str | None) -> None:
+    """None (off) | "hint" | "strip". Anything else is treated as off."""
+    global _noop_mode
+    _noop_mode = mode if mode in _NOOP_MODES else None
+    _noop_stats.clear()
+
+
+def noop_stats() -> dict[str, int]:
+    """Counts since the last `set_noop_mode` (keys: hint, strip, unfixable)."""
+    return dict(_noop_stats)
+
+
+def strip_noop_suffixes(command: str) -> tuple[str, list[str]]:
+    """`(cleaned, reasons)`. Peels known no-op suffixes off the END only,
+    repeatedly (`npm test 2>&1 | tail -40` -> `npm test`). `reasons` is empty
+    when nothing matched."""
+    reasons: list[str] = []
+    changed = True
+    while changed:
+        changed = False
+        for rx, why in _NOOP_SUFFIXES:
+            m = rx.search(command)
+            if m and m.start() > 0:
+                command = command[: m.start()]
+                reasons.append(why)
+                changed = True
+    return command.rstrip(), reasons
+
+
+def _noop_rescue(command: str, err: str,
+                 allow: frozenset[str]) -> tuple[str | None, str]:
+    """For a chain/redirect refusal: `(cleaned_command_or_None, err)`.
+
+    hint mode returns `(None, err + hint)`; strip mode returns the cleaned
+    command to run. Off, or nothing safely cleanable: `(None, err)` unchanged.
+    """
+    if _noop_mode is None or "operators not allowed" not in err:
+        return None, err
+    cleaned, reasons = strip_noop_suffixes(command)
+    if not reasons or not cleaned:
+        _noop_stats["unfixable"] += 1
+        return None, err
+    toks, cerr = _validate_command(cleaned)
+    if cerr is not None or toks[0] not in allow:
+        _noop_stats["unfixable"] += 1
+        return None, err
+    if _noop_mode == "strip":
+        _noop_stats["strip"] += 1
+        return cleaned, err
+    _noop_stats["hint"] += 1
+    return None, (f"{err} This tool needs none of: {'; '.join(reasons)}. "
+                  f"Run instead: `{cleaned}`")
+
+
 def _bash(args: dict[str, Any], *, unrestricted: bool = False,
           env: dict[str, str] | None = None,
           cancel=None,
@@ -255,6 +342,7 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         env = scrubbed_env()
 
     command = args["command"]
+    note = ""
     if unrestricted:
         # Opt-in `luxe chat` dev mode (chat.sdd): no allowlist, no chain/redirect
         # rejection. cwd is the repo root but this is NOT a sandbox.
@@ -264,7 +352,13 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
     else:
         tokens, err = _validate_command(command)
         if err:
-            return "", err
+            cleaned, err = _noop_rescue(command, err, _ALLOWLIST | extra_allow)
+            if cleaned is None:
+                return "", err
+            note = (f"[luxe ran `{cleaned}`: the dropped suffix is a no-op "
+                    f"for this tool]\n")
+            command = cleaned
+            tokens, _ = _validate_command(command)
         binary = tokens[0]
         if binary not in _ALLOWLIST and binary not in extra_allow:
             return "", (f"Command '{binary}' not in allowlist. "
@@ -272,8 +366,9 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         timeout = _TIMEOUT
 
     if cancel is not None:
-        return _run_cancellable(command, cwd=repo_root, env=env,
-                                timeout=timeout, cancel=cancel)
+        out, rerr = _run_cancellable(command, cwd=repo_root, env=env,
+                                     timeout=timeout, cancel=cancel)
+        return (note + out if note else out), rerr
 
     # Popen + its own session rather than subprocess.run (2026-09-26): on
     # timeout, run() kills only the direct child, so anything the command
@@ -310,6 +405,8 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         _reap(proc)
         return "", f"Command timed out after {timeout}s"
     output = _clip_output(stdout + stderr)
+    if note:
+        output = note + output
     return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
 
 

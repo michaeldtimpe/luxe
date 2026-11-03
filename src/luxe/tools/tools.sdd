@@ -352,6 +352,15 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   `invalid-syntax` findings. Directories pass through unchanged (the
   analyzers filter a walk by extension). `tests/test_analysis_args.py`
 
+- Trailing no-op suffixes on the RESTRICTED bash are opt-in
+  (`LUXE_BASH_NOOP=hint|strip`, set by maintain via `shell.set_noop_mode`;
+  chat never sets it; unset = byte-identical). Only `2>&1`, `|| true` and
+  `| tail/head [-N]` at the END are recognized, the remainder must pass the
+  full validator and allowlist again, so what runs is always a prefix of the
+  request; a chain hidden before the suffix is still refused and never runs.
+  `hint` keeps the refusal and names the cleaned command; `strip` runs it
+  with a one-line note. A/B: acceptance/bash_noop_ab_2026_11/.
+
 ## Must not
 - Bypass `_safe()` path scoping in any new tool
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)
