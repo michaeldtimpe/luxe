@@ -39,6 +39,7 @@ from luxe.agents.prompts import (
     VALIDATION_MENU_NO_TEST_LINE,
     VALIDATION_MENU_TEMPLATE,
     VALIDATION_MENU_TEST_LINE,
+    VALIDATION_MENU_TOOL_LABELS,
     VALIDATION_MENU_TOOL_LINE,
 )
 from luxe import search as search_mod
@@ -82,7 +83,8 @@ def validation_menu(test_command: str, tool_names: list[str] | set[str]) -> str:
                  if test_command.strip() else VALIDATION_MENU_NO_TEST_LINE)
     present = [t for t in CHECK_TOOLS if t in set(tool_names)]
     tool_line = VALIDATION_MENU_TOOL_LINE.format(
-        tools=", ".join(present) if present else "none")
+        tools=", ".join(VALIDATION_MENU_TOOL_LABELS.get(t, t) for t in present)
+        if present else "none")
     return VALIDATION_MENU_TEMPLATE.format(test_line=test_line,
                                            tool_line=tool_line)
 

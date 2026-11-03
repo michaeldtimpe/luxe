@@ -555,9 +555,30 @@ VALIDATION_MENU_TEMPLATE = (
     "check you ran with its result, and each one you did not run with the "
     "reason."
 )
-VALIDATION_MENU_TEST_LINE = "Test command (run it with bash): `{command}`"
+# The bench bash refuses redirects, pipes and chains (tools/shell.py
+# _CHAIN_TOKENS/_REDIRECT_TOKENS) and already returns stdout+stderr. The
+# 2026-11-03 slice showed the champion appending `2>&1`, then `|| true`; each
+# refusal counted as an idle call and post_write_idle_exit ended the run
+# before its report. So the line says how to run it, not just what.
+VALIDATION_MENU_TEST_LINE = (
+    "Test command: `{command}`. Run it with bash exactly as written: its "
+    "output already includes stderr, and bash here refuses redirects (such "
+    "as 2>&1), pipes, and chained commands (&&, ||, ;)."
+)
 VALIDATION_MENU_NO_TEST_LINE = "No test command was detected for this repository."
 VALIDATION_MENU_TOOL_LINE = "Check tools you can call: {tools}"
+#: Language label per check tool, so a mixed repo's menu does not send a
+#: JavaScript change to the Python linter (the same slice: `lint` on two .js
+#: files returned ~62 KB and ~65 KB of noise).
+VALIDATION_MENU_TOOL_LABELS = {
+    "lint": "lint (Python files)",
+    "typecheck": "typecheck (Python files)",
+    "lint_js": "lint_js (JavaScript/TypeScript files)",
+    "typecheck_ts": "typecheck_ts (TypeScript)",
+    "lint_rust": "lint_rust (Rust)",
+    "vet_go": "vet_go (Go)",
+    "git_diff": "git_diff (your change so far)",
+}
 
 # LUXE_CONTEXT_PACK (opt-in, 2026-11; luxe/runcontext.py). Pointers gathered
 # deterministically (BM25 on the goal, git history, test naming) before the

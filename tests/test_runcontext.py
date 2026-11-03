@@ -33,9 +33,11 @@ def test_gates_are_exact_string_one(value, on):
 def test_menu_names_the_test_command_and_only_exposed_check_tools():
     out = rc.validation_menu("pytest -q",
                              {"read_file", "git_diff", "typecheck", "lint", "bash"})
-    assert "Test command (run it with bash): `pytest -q`" in out
-    # CHECK_TOOLS order, only those present, non-check tools never listed
-    assert "Check tools you can call: lint, typecheck, git_diff" in out
+    assert "Test command: `pytest -q`. Run it with bash exactly as written" in out
+    # CHECK_TOOLS order, only those present, each with its language label,
+    # non-check tools never listed
+    assert ("Check tools you can call: lint (Python files), typecheck "
+            "(Python files), git_diff (your change so far)") in out
     assert "read_file" not in out and "bash, " not in out
     assert 'section headed "Checks"' in out
     assert out.startswith("\n\n## Checks available in this repository")
@@ -149,3 +151,23 @@ def test_pack_with_nothing_to_point_at_is_empty(tmp_path):
     empty = tmp_path / "e"
     empty.mkdir()
     assert rc.context_pack(empty, "anything", None) == ""
+
+
+def test_menu_says_how_to_run_the_command_on_the_hardened_bash():
+    """2026-11-03 slice: the champion appended `2>&1`, then `|| true`; bench
+    bash refused both and post_write_idle_exit ended the run unreported."""
+    out = rc.validation_menu("npm test --silent", {"bash"})
+    assert "exactly as written" in out and "2>&1" in out
+    assert "already includes stderr" in out
+
+
+def test_menu_operator_list_matches_what_bash_refuses():
+    from luxe.tools import shell
+    for tok in ("&&", "||", ";"):
+        assert tok in shell._CHAIN_TOKENS
+        assert tok in prompts.VALIDATION_MENU_TEST_LINE
+    assert "2>&1" in shell._REDIRECT_TOKENS
+
+
+def test_every_check_tool_has_a_label():
+    assert set(rc.CHECK_TOOLS) == set(prompts.VALIDATION_MENU_TOOL_LABELS)

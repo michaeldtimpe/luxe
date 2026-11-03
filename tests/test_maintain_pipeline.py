@@ -730,7 +730,7 @@ def test_validation_menu_reaches_the_main_pass_only(h, monkeypatch):
     t = h.run(task="document", goal="Document the calc module")
     main = t.passes[0]
     assert main["phase"] == "main"
-    assert "Test command (run it with bash): `pytest -q`" in main["extra_context"]
+    assert "Test command: `pytest -q`. Run it with bash" in main["extra_context"]
     assert 'section headed "Checks"' in main["extra_context"]
     assert "git_diff" in main["extra_context"]
     assert all(p["extra_context"] is None for p in t.passes[1:])
