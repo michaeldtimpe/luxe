@@ -1,7 +1,6 @@
-"""luxe/runcontext.py: the opt-in validation menu and context pack.
+"""luxe/runcontext.py: the opt-in context pack.
 
-Pins the wording contract (filled from prompts.py, nothing invented here),
-the exact-"1" gates, test-file matching, the pack's cap, that the pack
+Pins the exact-"1" gate, test-file matching, the pack's cap, that the pack
 carries pointers and never file contents, and that git trouble degrades to a
 shorter block instead of raising.
 """
@@ -22,44 +21,9 @@ from tests._git import git
 
 @pytest.mark.parametrize("value,on", [("1", True), ("0", False), ("true", False),
                                       ("", False), (None, False)])
-def test_gates_are_exact_string_one(value, on):
-    env = {} if value is None else {rc.MENU_ENV: value, rc.PACK_ENV: value}
-    assert rc.menu_enabled(env) is on
+def test_gate_is_exact_string_one(value, on):
+    env = {} if value is None else {rc.PACK_ENV: value}
     assert rc.pack_enabled(env) is on
-
-
-# --- validation menu ---------------------------------------------------------
-
-def test_menu_names_the_test_command_and_only_exposed_check_tools():
-    out = rc.validation_menu("pytest -q",
-                             {"read_file", "git_diff", "typecheck", "lint", "bash"})
-    assert "Test command: `pytest -q`. Run it with bash exactly as written" in out
-    # CHECK_TOOLS order, only those present, each with its language label,
-    # non-check tools never listed
-    assert ("Check tools you can call: lint (Python files), typecheck "
-            "(Python files), git_diff (your change so far)") in out
-    assert "read_file" not in out and "bash, " not in out
-    assert 'section headed "Checks"' in out
-    assert out.startswith("\n\n## Checks available in this repository")
-
-
-def test_menu_without_a_test_command_says_so():
-    out = rc.validation_menu("  ", {"git_diff"})
-    assert prompts.VALIDATION_MENU_NO_TEST_LINE in out
-    assert "Test command" not in out
-
-
-def test_menu_with_no_check_tools_says_none():
-    assert "Check tools you can call: none" in rc.validation_menu("make test", set())
-
-
-def test_menu_wording_is_outcome_and_escape_not_absolutes():
-    """Harness pattern 7: no ALWAYS/NEVER/MUST; a check that can't run is
-    reported, not worked around."""
-    text = prompts.VALIDATION_MENU_TEMPLATE
-    for word in ("ALWAYS", "NEVER", "MUST"):
-        assert word not in text
-    assert "cannot run here" in text and "do not work around it" in text
 
 
 # --- test-file matching ------------------------------------------------------
@@ -152,22 +116,3 @@ def test_pack_with_nothing_to_point_at_is_empty(tmp_path):
     empty.mkdir()
     assert rc.context_pack(empty, "anything", None) == ""
 
-
-def test_menu_says_how_to_run_the_command_on_the_hardened_bash():
-    """2026-11-03 slice: the champion appended `2>&1`, then `|| true`; bench
-    bash refused both and post_write_idle_exit ended the run unreported."""
-    out = rc.validation_menu("npm test --silent", {"bash"})
-    assert "exactly as written" in out and "2>&1" in out
-    assert "already includes stderr" in out
-
-
-def test_menu_operator_list_matches_what_bash_refuses():
-    from luxe.tools import shell
-    for tok in ("&&", "||", ";"):
-        assert tok in shell._CHAIN_TOKENS
-        assert tok in prompts.VALIDATION_MENU_TEST_LINE
-    assert "2>&1" in shell._REDIRECT_TOKENS
-
-
-def test_every_check_tool_has_a_label():
-    assert set(rc.CHECK_TOOLS) == set(prompts.VALIDATION_MENU_TOOL_LABELS)
