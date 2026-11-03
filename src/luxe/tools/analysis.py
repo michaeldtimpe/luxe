@@ -196,6 +196,30 @@ def _run_tool(cmd: list[str], parse_json: bool = False,
         return "", f"{cmd[0]} timed out after {_TIMEOUT}s"
 
 
+#: Suffixes the Python analyzers (ruff, mypy, bandit) actually understand.
+_PY_SUFFIXES = frozenset({".py", ".pyi"})
+
+
+def _python_file_error(tool: str, path: str) -> str | None:
+    """Refuse a single non-Python FILE before spawning a Python analyzer.
+
+    ruff/mypy/bandit analyse any file named explicitly, whatever its
+    extension: `lint(path="src/Game.js")` returned `status: ok` with ~63 KB of
+    `invalid-syntax` findings, one per token (validation_context_ab_2026_11
+    slice, neon-rain). A directory is passed through untouched, since the
+    analyzers filter a directory walk by extension themselves.
+    """
+    try:
+        resolved, _ = _resolve_rel(path)
+    except (PermissionError, ValueError, OSError):
+        return None  # _path_arg already vetted it; nothing more to add
+    if resolved.is_file() and resolved.suffix.lower() not in _PY_SUFFIXES:
+        return (f"{tool} checks Python files only; {path!r} is not one. "
+                "For JavaScript/TypeScript use lint_js (and typecheck_ts "
+                "for TypeScript types), if this run offers them.")
+    return None
+
+
 def _run_resolved(tool: str, tail: list[str], *, module: str | None = None,
                   allow_uvx: bool = False, parse_json: bool = False,
                   **kw: Any) -> tuple[str, str | None]:
@@ -209,12 +233,18 @@ def _lint(args: dict[str, Any]) -> tuple[str, str | None]:
     path, err = _path_arg(args)
     if err:
         return "", err
+    err = _python_file_error("lint", path)
+    if err:
+        return "", err
     return _run_resolved("ruff", ["check", "--output-format=json", "--", path],
                          module="ruff", allow_uvx=True, parse_json=True)
 
 
 def _typecheck(args: dict[str, Any]) -> tuple[str, str | None]:
     path, err = _path_arg(args)
+    if err:
+        return "", err
+    err = _python_file_error("typecheck", path)
     if err:
         return "", err
     return _run_resolved("mypy", ["--no-color-output", "--no-error-summary",
@@ -236,6 +266,9 @@ def _security_scan(args: dict[str, Any]) -> tuple[str, str | None]:
     or log line on stdout can never corrupt — or be parsed as — the JSON.
     """
     path, err = _path_arg(args)
+    if err:
+        return "", err
+    err = _python_file_error("security_scan", path)
     if err:
         return "", err
     fd, tmp = tempfile.mkstemp(prefix="luxe-bandit-", suffix=".json")

@@ -345,6 +345,12 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   requirements*.txt`, else the project dir, else `skipped`) and flattens
   `dependencies[].vulns`; both go through the same 150-finding announced cap
   (`tests/test_analysis_args.py`)
+- The Python analyzers (`lint`, `typecheck`, `security_scan`) refuse a single
+  non-Python FILE (suffix not `.py`/`.pyi`) with an error naming `lint_js`,
+  before spawning (2026-11-03). ruff/mypy/bandit analyse any file named
+  explicitly: `lint` on a `.js` file returned `status: ok` with ~63 KB of
+  `invalid-syntax` findings. Directories pass through unchanged (the
+  analyzers filter a walk by extension). `tests/test_analysis_args.py`
 
 ## Must not
 - Bypass `_safe()` path scoping in any new tool

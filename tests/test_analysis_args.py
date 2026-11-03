@@ -176,3 +176,31 @@ class TestDepsAuditTargetsTheRepo:
         payload = json.loads(analysis._deps_audit({})[0])
         assert payload["status"] == "skipped"
         assert spy.cmds == []
+
+
+class TestPythonAnalyzersRefuseNonPythonFiles:
+    """ruff/mypy/bandit analyse any file named explicitly: `lint` on a .js
+    file returned `status: ok` + ~63 KB of invalid-syntax findings
+    (acceptance/validation_context_ab_2026_11 slice, 2026-11-03)."""
+
+    @pytest.mark.parametrize("fn", ["lint", "typecheck", "security_scan"])
+    def test_js_file_refused_without_spawning(self, repo, spy, fn):
+        (repo / "Game.js").write_text("export const x = 1;\n")
+        out, err = analysis._ANALYZERS[fn]["fn"]({"path": "Game.js"})
+        assert out == "" and err and "Python files only" in err
+        assert "lint_js" in err
+        assert spy.cmds == []
+
+    @pytest.mark.parametrize("fn", ["lint", "typecheck", "security_scan"])
+    @pytest.mark.parametrize("name", ["a.py", "stubs.pyi", "A.PY"])
+    def test_python_files_still_run(self, repo, spy, fn, name):
+        (repo / name).write_text("x = 1\n")
+        analysis._ANALYZERS[fn]["fn"]({"path": name})
+        assert spy.cmds and spy.cmds[0][-1] == name
+
+    @pytest.mark.parametrize("fn", ["lint", "typecheck", "security_scan"])
+    def test_directories_pass_through(self, repo, spy, fn):
+        (repo / "web").mkdir()
+        (repo / "web" / "Game.js").write_text("export const x = 1;\n")
+        analysis._ANALYZERS[fn]["fn"]({"path": "web"})
+        assert spy.cmds and spy.cmds[0][-1] == "web"
