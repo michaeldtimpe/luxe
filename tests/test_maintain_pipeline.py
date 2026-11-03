@@ -37,7 +37,8 @@ from tests._git import git
 
 _SWITCHES = ("LUXE_REPROMPT_ON_DOC", "LUXE_STEP_LIMIT_LABEL",
              "LUXE_STEP_LIMIT_FINISH", "LUXE_CLEANUP_TURN",
-             "LUXE_TOOL_BUDGET_CTX")
+             "LUXE_TOOL_BUDGET_CTX", "LUXE_VALIDATION_MENU",
+             "LUXE_CONTEXT_PACK")
 
 
 @dataclass
@@ -124,6 +125,7 @@ class Harness:
                 "extra_tool_defs": kw["extra_tool_defs"],
                 "extra_tool_fns": kw["extra_tool_fns"],
                 "run_id": kw["run_id"], "backend_model": backend.model,
+                "extra_context": kw.get("extra_context", None),
                 "diff_before": pr_mod.diff_against_base(h.repo, h.base_sha),
             })
             p = h.script.pop(0) if h.script else Pass()
@@ -710,3 +712,67 @@ def test_mcp_server_not_enabled_is_never_started(h):
     h.mcp_servers = [MCPServerConfig(name="c", enabled_for=["implement"])]
     h.run(task="review", goal="Review calc")
     assert h.mcp_events == []
+
+
+# --- main-pass context (LUXE_VALIDATION_MENU / LUXE_CONTEXT_PACK) ---------
+
+def test_main_context_off_by_default_passes_no_extra_context(h):
+    t = h.run()
+    assert [p["extra_context"] for p in t.passes] == [None] * len(t.passes)
+    assert "main_context_injected" not in t.kinds()
+    assert "Main-pass context" not in t.console
+
+
+def test_validation_menu_reaches_the_main_pass_only(h, monkeypatch):
+    monkeypatch.setenv("LUXE_VALIDATION_MENU", "1")
+    monkeypatch.setenv("LUXE_REPROMPT_ON_DOC", "1")
+    h.script = [Pass(text="Done.", writes={"docs/x.md": "a\n"}), Pass()]
+    t = h.run(task="document", goal="Document the calc module")
+    main = t.passes[0]
+    assert main["phase"] == "main"
+    assert "Test command (run it with bash): `pytest -q`" in main["extra_context"]
+    assert 'section headed "Checks"' in main["extra_context"]
+    assert "git_diff" in main["extra_context"]
+    assert all(p["extra_context"] is None for p in t.passes[1:])
+    ev = t.event("main_context_injected")
+    assert ev["menu"] is True and ev["pack"] is False
+    assert ev["test_command"] == "pytest -q" and ev["pack_chars"] == 0
+    assert "menu=on" in t.console
+
+
+def test_validation_menu_is_never_given_to_a_read_only_task(h, monkeypatch):
+    monkeypatch.setenv("LUXE_VALIDATION_MENU", "1")
+    t = h.run(task="review", goal="Review calc")
+    assert t.passes[0]["extra_context"] is None
+    assert "main_context_injected" not in t.kinds()
+
+
+def test_context_pack_points_at_the_matching_file(h, monkeypatch):
+    monkeypatch.setenv("LUXE_CONTEXT_PACK", "1")
+    t = h.run(goal="Add a mul function next to add in calc")
+    ctx = t.passes[0]["extra_context"]
+    assert ctx.startswith("\n\n## Context gathered before you started")
+    assert "src/calc.py" in ctx
+    assert "Checks available" not in ctx
+    ev = t.event("main_context_injected")
+    assert ev["pack"] is True and ev["menu"] is False and ev["pack_chars"] == len(ctx)
+
+
+def test_both_on_puts_the_pack_before_the_menu(h, monkeypatch):
+    monkeypatch.setenv("LUXE_CONTEXT_PACK", "1")
+    monkeypatch.setenv("LUXE_VALIDATION_MENU", "1")
+    ctx = h.run(goal="Add a mul function next to add in calc").passes[0]["extra_context"]
+    assert ctx.index("## Context gathered") < ctx.index("## Checks available")
+
+
+def test_context_pack_failure_is_recorded_and_the_run_continues(h, monkeypatch):
+    from luxe import runcontext
+
+    def boom(*a, **k):
+        raise RuntimeError("index exploded")
+    monkeypatch.setattr(runcontext, "context_pack", boom)
+    monkeypatch.setenv("LUXE_CONTEXT_PACK", "1")
+    t = h.run()
+    assert t.event("context_pack_failed")["error"] == "RuntimeError: index exploded"
+    assert t.passes[0]["extra_context"] is None
+    assert t.event("main_context_injected")["pack_chars"] == 0

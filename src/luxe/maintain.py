@@ -385,10 +385,14 @@ def _load_model(p: _Pipeline, config_path: str | None) -> None:
 
 
 def _run_pass(p: _Pipeline, goal: str, phase: str,
-              role: RoleConfig | None = None) -> AgentResult:
+              role: RoleConfig | None = None,
+              extra_context: str = "") -> AgentResult:
     """One `run_single` pass with the run's backend, languages and tools;
-    `role` replaces the monolith role (the step-limit finish pass)."""
+    `role` replaces the monolith role (the step-limit finish pass).
+    `extra_context` is passed only when non-empty, so a pass without it
+    calls `run_single` exactly as before (byte-identical request)."""
     from luxe.agents.single import run_single
+    kw: dict[str, Any] = {"extra_context": extra_context} if extra_context else {}
     return run_single(
         p.backend, role if role is not None else p.cfg.role("monolith"),
         goal=goal,
@@ -398,7 +402,43 @@ def _run_pass(p: _Pipeline, goal: str, phase: str,
         extra_tool_fns=p.extra_tool_fns or None,
         run_id=p.spec.run_id,
         phase=phase,
+        **kw,
     )
+
+
+def _main_context(p: _Pipeline) -> str:
+    """LUXE_VALIDATION_MENU / LUXE_CONTEXT_PACK (both opt-in, exact "1";
+    luxe/runcontext.py). "" when both are off: no git call, no event, no
+    console line. Main pass only; reprompt, finish and cleanup passes never
+    carry it. Announced and recorded so a bench arm can be checked for
+    liveness (the read-budget convention)."""
+    from luxe import runcontext
+    menu_on = runcontext.menu_enabled() and p.writes
+    pack_on = runcontext.pack_enabled()
+    if not (menu_on or pack_on):
+        return ""
+    menu = pack = ""
+    if menu_on:
+        from luxe.agents.single import _build_full_tool_surface
+        role = p.cfg.role("monolith")
+        defs, _ = _build_full_tool_surface(p.languages, role.tools or None,
+                                           task_type=p.task)
+        # MCP extras are namespaced (mcp__*) and never a CHECK_TOOLS name.
+        menu = runcontext.validation_menu(p.prep.test_command,
+                                          {d.name for d in defs})
+    if pack_on:
+        try:
+            pack = runcontext.context_pack(p.repo_path, p.goal)
+        except Exception as e:  # pointers are optional; never fail the run
+            p.emit("context_pack_failed", error=f"{type(e).__name__}: {e}"[:300])
+            pack = ""
+    p.emit("main_context_injected", menu=menu_on, pack=pack_on,
+           menu_chars=len(menu), pack_chars=len(pack),
+           test_command=p.prep.test_command if menu_on else "")
+    console.print(f"[yellow]· Main-pass context:[/] [dim]"
+                  f"menu={'on' if menu_on else 'off'} ({len(menu)} chars), "
+                  f"pack={'on' if pack_on else 'off'} ({len(pack)} chars)[/]")
+    return pack + menu
 
 
 def _record_diff_stat(p: _Pipeline, checkpoint: str) -> None:
@@ -415,7 +455,7 @@ def _record_diff_stat(p: _Pipeline, checkpoint: str) -> None:
 
 def _main_pass(p: _Pipeline) -> AgentResult:
     console.print(f"\n[bold cyan]▶ Mono mode[/]  (model: {p.cfg.model_for_role('monolith')})")
-    result = _run_pass(p, p.goal, "main")
+    result = _run_pass(p, p.goal, "main", extra_context=_main_context(p))
     p.emit("single_mode_done",
            wall_s=result.wall_s,
            prompt_tokens=result.prompt_tokens,

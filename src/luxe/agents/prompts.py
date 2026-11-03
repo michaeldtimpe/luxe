@@ -536,6 +536,43 @@ STEP_LIMIT_FINISH_TEMPLATE = (
     "complete, stop calling tools and reply with one sentence saying so."
 )
 
+# LUXE_VALIDATION_MENU (opt-in, 2026-11; luxe/runcontext.py). Appended to the
+# main pass of a write task: the checks this repo actually offers, cheapest
+# first, and a closing "Checks" section in the report. Worded as outcome +
+# procedure + an honest way out (a check that can't run is reported, not
+# worked around), not as ALWAYS/NEVER rules a newer model applies literally.
+# Python fills {test_line} and {tool_line}; no wording lives in runcontext.py.
+VALIDATION_MENU_TEMPLATE = (
+    "\n\n## Checks available in this repository\n\n"
+    "{test_line}\n"
+    "{tool_line}\n\n"
+    "Use them in order of cost: the static checks while you work, the test "
+    "command once before you finish, and git_diff to review exactly what you "
+    "changed. If a check cannot run here (a missing dependency, a timeout, or "
+    "it does not cover the files you changed), do not work around it; note it "
+    "and move on.\n\n"
+    "End your final report with a section headed \"Checks\" that lists each "
+    "check you ran with its result, and each one you did not run with the "
+    "reason."
+)
+VALIDATION_MENU_TEST_LINE = "Test command (run it with bash): `{command}`"
+VALIDATION_MENU_NO_TEST_LINE = "No test command was detected for this repository."
+VALIDATION_MENU_TOOL_LINE = "Check tools you can call: {tools}"
+
+# LUXE_CONTEXT_PACK (opt-in, 2026-11; luxe/runcontext.py). Pointers gathered
+# deterministically (BM25 on the goal, git history, test naming) before the
+# main pass. Paths and commit subjects only, never file contents; the caveat
+# keeps the model from treating a noisy retrieval as an instruction.
+CONTEXT_PACK_HEADER = (
+    "\n\n## Context gathered before you started\n\n"
+    "Pointers chosen automatically from the goal text and git history. They "
+    "may be incomplete or off target: read a file before relying on it."
+)
+CONTEXT_PACK_FILES = "Files that best match the goal, with their latest commits:"
+CONTEXT_PACK_TESTS = "Tests that look related to those files:"
+CONTEXT_PACK_RECENT = "Most recently changed files in this repository:"
+CONTEXT_PACK_TRUNCATED = "(list truncated)"
+
 # LUXE_CLEANUP_TURN (default ON since 2026-10-18; luxe/cleanup.py). One tool-less chat
 # call after the agent's work, before the commit: the model sees the files it
 # created that nothing else references (plus generated caches) and says which
