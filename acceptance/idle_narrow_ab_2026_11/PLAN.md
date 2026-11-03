@@ -87,3 +87,37 @@ label, aborted, wall, prompt tokens, liveness (`bench_venv_path`,
 | A model that is done keeps running distinct commands until max_steps | Step-limit / aborted gate; max_steps and step-limit labelling remain the backstop |
 | More post-write steps shift compaction, so patches change | patch-id comparison per fixture; every new patch hand-read |
 | The report that replaces an empty one fabricates checks | Read each such report against its tool calls (the menu A/B showed this failure mode for gemma) |
+
+## Re-scope after the slice (2026-11-03, 17:40 to 17:50)
+
+Slice, 1 rep x the 3 trap fixtures:
+
+| Arm | empty reports | post_write_idle_exit | aborted | median steps |
+|---|---|---|---|---|
+| narrow | 3/3 | 2 | 1 (stuck-loop) | 26 |
+| ns (narrow + `LUXE_BASH_NOOP=strip`) | 0/3 | 0 | 0 | 22 |
+| wide (`LUXE_IDLE_NARROW=wide`) | 0/3 | 0 | 0 | 21 |
+
+DEBUG logs of two narrow cells (`debug/`) show narrow worked as designed
+(10 spares) and the remaining idle calls were refusals: `lint`/`typecheck`
+on `.js` (Python analyzers, PR #50), `npx eslint ... 2>&1 || true`, `node`
+(not allowlisted), and an identical repeat of a refusal. Narrow keeps all of
+those idle, so it cannot meet the success gate alone.
+
+Added `LUXE_IDLE_NARROW=wide`: refusals are spared too, so only the dedup
+short-circuit (an identical repeat) is idle and back-to-back repeats still
+hit the stuck-loop guard. In effect it retires the gate's refusal counting.
+
+Full run: 4 arms, same gates, each treatment judged against ctl:
+
+| Arm | Env |
+|---|---|
+| ctl | shipped defaults |
+| narrow | `LUXE_IDLE_NARROW=1` |
+| ns | `LUXE_IDLE_NARROW=1 LUXE_BASH_NOOP=strip` |
+| wide | `LUXE_IDLE_NARROW=wide` |
+
+Promotion note: ns depends on `strip`, which runs a validated prefix of a
+command the validator refused as written (security note in
+`acceptance/bash_noop_ab_2026_11/PLAN.md`); if ns and wide both pass, wide
+is preferred as the single, loop-only change. Bench tree `3f1b3d1`.
