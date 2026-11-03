@@ -411,10 +411,3 @@ def test_the_ratio_is_independent_of_the_damping_switch():
     got = RunFlags.from_env({"LUXE_CTX_CAL_UNMEASURED_RATIO": "1.6"})
     assert got.ctx_cal_damp is False
     assert got.ctx_cal_unmeasured_ratio == 1.6
-
-
-def test_idle_exit_final_turn_is_opt_in_exact_one():
-    assert RunFlags.from_env({}).idle_exit_final_turn is False
-    assert RunFlags.from_env({"LUXE_IDLE_EXIT_FINAL_TURN": "1"}).idle_exit_final_turn is True
-    for v in ("0", "true", "yes", ""):
-        assert RunFlags.from_env({"LUXE_IDLE_EXIT_FINAL_TURN": v}).idle_exit_final_turn is False

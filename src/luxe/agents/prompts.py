@@ -536,16 +536,6 @@ STEP_LIMIT_FINISH_TEMPLATE = (
     "complete, stop calling tools and reply with one sentence saying so."
 )
 
-# LUXE_IDLE_EXIT_FINAL_TURN (opt-in, 2026-11; agents/loop.py). Sent as a user
-# message, with NO tools offered, after post_write_idle_exit ends a run, so the
-# model writes the report the gate would otherwise cut off. Positive
-# imperative (loop-design lessons: comparative wording reads as "wrap up").
-IDLE_EXIT_FINAL_TURN = (
-    "Your recent tool calls returned nothing new, so tool use has ended for "
-    "this task. Write your final report now: what you changed, and which "
-    "checks you ran with their results."
-)
-
 # LUXE_CONTEXT_PACK (opt-in, 2026-11; luxe/runcontext.py). Pointers gathered
 # deterministically (BM25 on the goal, git history, test naming) before the
 # main pass. Paths and commit subjects only, never file contents; the caveat

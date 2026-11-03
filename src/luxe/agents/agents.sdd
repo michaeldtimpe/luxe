@@ -611,20 +611,20 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   The JOIN is done in the chat layer only (`render.compose_answer`) — do not
   fold it into `final_text` here, or every grader's input changes.
 
-### Idle-exit final turn (opt-in 2026-11, `LUXE_IDLE_EXIT_FINAL_TURN=1`)
+### Idle-exit final turn: benched 2026-11-03, REFUTED, not in the code
 
-- `post_write_idle_exit` ends the run on an ACTING turn (tool calls, rarely
-  prose), so the run's report was lost: 6/30 control runs in
-  acceptance/validation_context_ab_2026_11 ended with an empty report. Feeders
-  seen: refused `2>&1`/`| tail`/`|| true` bash, `python` exiting 127 on m5's
-  bench PATH, Python analyzers refusing `.js` files.
-- When the flag is on and (only) that gate fired, `run_agent` appends ONE user
-  message (`prompts.IDLE_EXIT_FINAL_TURN`) and makes ONE `backend.chat` with
-  `tools=None`; non-empty text replaces `final_text`. The call site is in
-  `run_agent` (chat.sdd Must-not). A failure or empty answer keeps what the
-  run had and is recorded (`idle_exit_final_turn`, ok/chars/error). Never
-  fires on any other exit. Off = byte-identical (no extra call, no event).
-- A/B: acceptance/bash_noop_ab_2026_11/.
+- Tried: when `post_write_idle_exit` ended a run, one more `backend.chat`
+  with `tools=None` and a "write your final report now" message.
+- Result (acceptance/bash_noop_ab_2026_11): it fired 9 times in 30 runs and
+  the champion answered with a TOOL CALL every time (`finish=tool_calls`;
+  `bash` or `read_file`, parsed by the server with no tools offered). The
+  three "non-empty" answers were 46-78 char preambles, not reports. A
+  message cannot stop a model that is mid-verification.
+- Root cause it was aimed at: the gate's idle test (`bytes_out == 0 or
+  error`) counts SUCCESSFUL silent commands (`python -c "py_compile..."`)
+  and failing commands WITH output (`npx eslint` exit 2, 491 bytes) as idle.
+  The champion was verifying, not drifting. Fix the definition, not the
+  aftermath. Don't re-add a post-exit report turn.
 
 ### Removed mechanisms (2026-09 agent-loop cleanup)
 
