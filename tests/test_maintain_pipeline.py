@@ -106,6 +106,11 @@ class Harness:
             monkeypatch.delenv(name, raising=False)
         from luxe.tools import fs
         monkeypatch.setattr(fs, "_REPO_ROOT", fs._REPO_ROOT)
+        # maintain sets these module switches on every run (bench PATH is
+        # default ON); restore them so later test files see the defaults.
+        from luxe.tools import shell as _shell
+        monkeypatch.setattr(_shell, "_bench_venv_path", False)
+        monkeypatch.setattr(_shell, "_noop_mode", None)
         monkeypatch.setattr(maintain, "console", Console(
             file=self.buf, width=400, color_system=None, force_terminal=False))
         self._install_stubs()
@@ -266,7 +271,7 @@ _MAIN_DONE = {
 def test_read_only_task_runs_one_pass_and_opens_no_pr(h):
     t = h.run(task="review", goal="Review calc")
     assert t.exit_code is None
-    assert t.kinds() == ["preflight_ok", "read_budget_applied",
+    assert t.kinds() == ["preflight_ok", "bench_venv_path", "read_budget_applied",
                          "single_mode_done", "citation_lint_passed"]
     assert t.events[0] == {"kind": "preflight_ok", "base_branch": "main",
                            "branch_name": "luxe/x",
@@ -295,7 +300,7 @@ def test_write_task_records_diff_stat_cleans_up_and_opens_the_pr(h):
     h.script = [Pass(writes={"src/calc.py": "def add(a, b):\n    return a + b\n"
                              "\n\ndef mul(a, b):\n    return a * b\n"})]
     t = h.run()
-    assert t.kinds() == ["preflight_ok", "read_budget_applied",
+    assert t.kinds() == ["preflight_ok", "bench_venv_path", "read_budget_applied",
                          "single_mode_done", "diff_stat",
                          "citation_lint_passed", "cleanup_turn"]
     assert t.event("diff_stat") == {"kind": "diff_stat",
@@ -326,7 +331,7 @@ def test_header_and_test_command_lines(h):
 def test_empty_final_text_writes_no_report_and_skips_lint(h):
     h.script = [Pass(text="")]
     t = h.run(task="review", goal="Review calc")
-    assert t.kinds() == ["preflight_ok", "read_budget_applied",
+    assert t.kinds() == ["preflight_ok", "bench_venv_path", "read_budget_applied",
                          "single_mode_done"]
     assert t.synthesizer is None and "=" * 60 not in t.console
 
@@ -399,7 +404,7 @@ def test_v1_3_reprompt_fires_on_a_small_doc_diff(h, monkeypatch):
                      writes={"CONFIG.md": "# Config\n\nmore\n"},
                      tool_calls_total=5)]
     t = h.run(task="document", goal="Document calc in CONFIG.md")
-    assert t.kinds() == ["preflight_ok", "read_budget_applied",
+    assert t.kinds() == ["preflight_ok", "bench_venv_path", "read_budget_applied",
                          "single_mode_done", "diff_stat",
                          "citation_lint_passed", "reprompt_fired",
                          "reprompt_done", "diff_stat", "cleanup_turn"]
@@ -463,7 +468,7 @@ def test_spec_reprompt_names_the_unmet_requirement(h, tmp_path, monkeypatch):
     h.script = [Pass(text="", writes={"src/m.py": "def mul(a, b):\n    return a*b\n"}),
                 Pass(text="second")]
     t = h.run(goal="Add mul and div", spec_yaml_path=_spec_file(tmp_path))
-    assert t.kinds() == ["preflight_ok", "read_budget_applied",
+    assert t.kinds() == ["preflight_ok", "bench_venv_path", "read_budget_applied",
                          "single_mode_done", "diff_stat", "spec_validation",
                          "reprompt_fired", "reprompt_done", "diff_stat",
                          "cleanup_turn"]
@@ -523,7 +528,7 @@ def test_step_limit_with_a_change_is_labelled_and_drafted(h):
     h.script = [Pass(aborted=True, reason="Max steps reached (30)",
                      writes={"src/calc.py": "half\n"})]
     t = h.run()
-    assert t.kinds() == ["preflight_ok", "read_budget_applied",
+    assert t.kinds() == ["preflight_ok", "bench_venv_path", "read_budget_applied",
                          "single_mode_done", "diff_stat",
                          "citation_lint_passed", "step_limit_incomplete",
                          "cleanup_turn"]
@@ -560,7 +565,7 @@ def test_finish_pass_that_ends_on_its_own_clears_the_label(h, monkeypatch):
                      writes={"src/calc.py": "half\n"}),
                 Pass(text="fin", tool_calls_total=4)]
     t = h.run()
-    assert t.kinds() == ["preflight_ok", "read_budget_applied",
+    assert t.kinds() == ["preflight_ok", "bench_venv_path", "read_budget_applied",
                          "single_mode_done", "diff_stat",
                          "citation_lint_passed", "step_limit_finish_begin",
                          "step_limit_finish_done", "cleanup_turn"]
@@ -786,18 +791,25 @@ def test_bash_noop_unknown_value_is_off(h, monkeypatch):
     assert "bash_noop_mode" not in t.kinds()
 
 
-def test_bench_py_path_off_by_default_and_reset(h, monkeypatch):
+def test_bench_py_path_on_by_default(h, monkeypatch):
     from luxe.tools import shell
-    shell.set_bench_venv_path(True)       # stale state from a previous run
+    shell.set_bench_venv_path(False)      # stale state from a previous run
     t = h.run()
-    assert shell._bench_venv_path is False
-    assert "bench_venv_path" not in t.kinds()
-
-
-def test_bench_py_path_on_is_announced(h, monkeypatch):
-    from luxe.tools import shell
-    monkeypatch.setenv("LUXE_BENCH_PY_PATH", "1")
-    t = h.run()
+    assert shell._bench_venv_path is True
     assert t.event("bench_venv_path")["on"] is True
-    assert "LUXE_BENCH_PY_PATH=1" in t.console
+    assert "LUXE_BENCH_PY_PATH" not in t.console     # default is quiet
     shell.set_bench_venv_path(False)
+
+
+@pytest.mark.parametrize("val,on", [("0", False), ("1", True), ("", True),
+                                    ("off", True)])
+def test_bench_py_path_only_exact_zero_disables(h, monkeypatch, val, on):
+    from luxe.tools import shell
+    shell.set_bench_venv_path(not on)     # stale state from a previous run
+    monkeypatch.setenv("LUXE_BENCH_PY_PATH", val)
+    t = h.run()
+    assert shell._bench_venv_path is on
+    assert t.event("bench_venv_path")["on"] is on
+    assert ("LUXE_BENCH_PY_PATH=0" in t.console) is (not on)
+    shell.set_bench_venv_path(False)
+

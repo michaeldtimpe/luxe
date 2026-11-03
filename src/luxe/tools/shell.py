@@ -262,13 +262,14 @@ _NOOP_SUFFIXES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\s+2>&1\s*$"),
      "2>&1 (stderr is already included in the output)"),
 )
-# LUXE_BENCH_PY_PATH=1 (opt-in, 2026-11; set by maintain via
-# `set_bench_venv_path`). The benchmark bash env is the process env minus
-# secrets; on a host whose non-login PATH has no unversioned `python` (m5:
-# brew ships `python3` only, and `python3` is not allowlisted) every
-# `python ...` the model ran exited 127. Chat already prepends luxe's venv
-# bin (`_chat_bash_env`); this is the same prepend for the benchmark path,
-# opt-in until benched (acceptance/bash_noop_ab_2026_11). False = unchanged.
+# LUXE_BENCH_PY_PATH (set by maintain via `set_bench_venv_path`; default ON
+# there since 2026-11-03, exact "0" disables). The benchmark bash env is the
+# process env minus secrets; on a host whose non-login PATH has no
+# unversioned `python` (m5: brew ships `python3` only, and `python3` is not
+# allowlisted) every `python ...` the model ran exited 127. Chat already
+# prepends luxe's venv bin (`_chat_bash_env`); this is the same prepend for
+# the benchmark path (acceptance/bash_noop_ab_2026_11). The module default
+# stays False: only maintain turns it on, so other callers are unchanged.
 _bench_venv_path: bool = False
 
 

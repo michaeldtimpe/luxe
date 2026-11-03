@@ -360,12 +360,15 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   request; a chain hidden before the suffix is still refused and never runs.
   `hint` keeps the refusal and names the cleaned command; `strip` runs it
   with a one-line note. A/B: acceptance/bash_noop_ab_2026_11/.
-- `LUXE_BENCH_PY_PATH=1` (opt-in, set by maintain via
-  `shell.set_bench_venv_path`) prepends luxe's venv bin to the BENCHMARK bash
-  PATH, the prepend chat already does (`_chat_bash_env`). Without it, on a
-  host whose non-login PATH has no unversioned `python` (m5), every model
-  `python ...` exited 127. Off = unchanged env. Graders' own commands
-  (`tests_pass`, the PR test step) never read it.
+- `LUXE_BENCH_PY_PATH` (DEFAULT ON in maintain since 2026-11-03, an
+  environment fix; exact "0" disables; set via `shell.set_bench_venv_path`)
+  prepends luxe's venv bin to the BENCHMARK bash PATH, the prepend chat
+  already does (`_chat_bash_env`). Without it, on a host whose non-login PATH
+  has no unversioned `python` (m5), every model `python ...` exited 127, so
+  m5 bench numbers before 2026-11-03 had a broken `python`. Benched as an arm
+  in acceptance/bash_noop_ab_2026_11 (no regression; outcome-neutral). The
+  shell module default stays False (only maintain sets it). Graders' own
+  commands (`tests_pass`, the PR test step) never read it.
 
 ## Must not
 - Bypass `_safe()` path scoping in any new tool

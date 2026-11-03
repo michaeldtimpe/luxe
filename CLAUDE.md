@@ -618,6 +618,18 @@ the schemas join the estimate and come off the window as a fixed charge.
   the measurement. `acceptance/ctx_cal_tools_2026_10/REPORT.md`.
 - **Disable for ablation**: `LUXE_CTX_CAL_TOOLS=0` (exact string).
 
+## Default-ON: `python` on the bench bash PATH
+
+`LUXE_BENCH_PY_PATH` defaults to **ON** in maintain as of 2026-11-03 (an
+environment fix, `tools/shell.py` `_bench_env`): luxe's venv bin goes first on
+the BENCHMARK bash PATH, the prepend chat already did. m5's non-login PATH has
+no unversioned `python` (brew ships `python3`, which is not allowlisted), so
+**every model `python ...` in every m5 bench before 2026-11-03 exited 127**;
+past arm comparisons hold (all arms equal), absolute verification on the
+Python fixtures was understated. Benched as an arm, no regression:
+`acceptance/bash_noop_ab_2026_11/REPORT.md`. **Disable for ablation**:
+`LUXE_BENCH_PY_PATH=0` (exact string).
+
 ## Opt-in modes (default off, byte-identical when disabled)
 
 Two subsystems are gated by env vars and default to **off**. Each has

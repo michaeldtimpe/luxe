@@ -385,15 +385,18 @@ def _load_model(p: _Pipeline, config_path: str | None) -> None:
                       f"LUXE_BASH_NOOP={shell_mod._noop_mode}[/]")
         p.emit("bash_noop_mode", mode=shell_mod._noop_mode)
 
-    # LUXE_BENCH_PY_PATH=1 (opt-in, 2026-11; tools/shell.py): luxe's venv bin
-    # first on the bench bash PATH, so `python` resolves on hosts whose
-    # non-login PATH lacks it (m5). Set every run; off = unchanged.
-    _pypath = os.environ.get("LUXE_BENCH_PY_PATH") == "1"
+    # LUXE_BENCH_PY_PATH (default ON since 2026-11-03, an environment fix;
+    # tools/shell.py): luxe's venv bin first on the bench bash PATH, so
+    # `python` resolves on hosts whose non-login PATH lacks it (m5, where
+    # every model `python ...` exited 127 before). Exact "0" disables it for
+    # ablation. Set every run so module state never leaks; the event records
+    # which env the run had either way.
+    _pypath = os.environ.get("LUXE_BENCH_PY_PATH") != "0"
     shell_mod.set_bench_venv_path(_pypath)
-    if _pypath:
-        console.print("[yellow]· Bench bash PATH:[/] [dim]venv bin first "
-                      "(LUXE_BENCH_PY_PATH=1)[/]")
-        p.emit("bench_venv_path", on=True)
+    if not _pypath:
+        console.print("[yellow]· Bench bash PATH:[/] [dim]inherited, venv "
+                      "bin NOT prepended (LUXE_BENCH_PY_PATH=0)[/]")
+    p.emit("bench_venv_path", on=_pypath)
 
     _read_budget = apply_ctx_read_budget(cfg.role("monolith").num_ctx)
     if _read_budget is not None:
