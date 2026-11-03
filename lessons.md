@@ -30,6 +30,44 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-11-03] validation_context_ab_2026_11: a required "Checks" section is a template a weak model fills, and a doc task reads it as "be minimal"
+
+**What happened**: Two harness patterns from an external write-up were benched
+as opt-in maintain levers. A validation menu named the repo's test command and
+check tools and asked for a closing "Checks" section in the report; a context
+pack gave the main pass pointers (BM25 files, commit subjects, related tests).
+On the champion the menu raised verification everywhere (check-tool calls 15
+to 84 over 30 runs) and its Checks sections were honest, but it turned
+isomer-document-quickstart from REAL 3/3 into THIN 3/3, deterministically: same
+trajectory, one edit, now a 3-line comment touch-up instead of a 26-line
+rewrite. On gemma-4-26b the menu did not create verification (fixtures with a
+check 2/10 to 4/10) but 7/30 runs wrote "git_diff: Ran to verify changes" with
+no git_diff call. Hand-verified REAL fell 10 to 5 while printed passes rose 27
+to 30. The pack was inert on the champion (REAL 28/30 both arms).
+
+**Root cause**: The menu is framed for code checks; on a document goal the
+model complied by making the smallest verifiable edit. A required
+self-report rewards the report, not the act: a model that does not verify
+produces the section anyway. Separately, the slice found a pre-existing
+trap in every arm: the champion runs tests as `npm test 2>&1`; bench bash
+refuses redirects; each refusal is an idle call; three end the run via
+post_write_idle_exit with no report (ctl 6/30 runs).
+
+**Fix / takeaway**: Menu dropped from the code (luxe.sdd says why); pack kept
+opt-in. Do not add a required self-reported checks/verification section to a
+prompt; if verification matters, observe it from events (tool calls), never
+from the model's report. Read prompt levers per task type: one fixture class
+can regress while the rest stay identical. The redirect trap is a separate
+candidate lever on the shared bash path (refusal wording, or tolerate a
+trailing `2>&1`), needing its own A/B. Also found: Python analyzers linted
+`.js` files (63 KB of noise, PR #50); `detect_test_command` keys on
+`package.json` existing, not `scripts.test`; m5's oMLX had been running from a
+deleted Cellar for a week, which only a new model load exposed (`luxe repair`).
+
+**Affected files**: `src/luxe/runcontext.py`, `src/luxe/maintain.py`,
+`src/luxe/agents/prompts.py`, `src/luxe/luxe.sdd`; `src/luxe/tools/analysis.py`
+(PR #50). Evidence: `acceptance/validation_context_ab_2026_11/{REPORT,HAND-VERIFY}.md`.
+
 ### [2026-10-30] harvest_2026_10 — the injection defense had nothing to defend; it changed reporting instead
 
 **What happened**: Five ideas from google-research/harness2 were built and tested on m5. Four landed

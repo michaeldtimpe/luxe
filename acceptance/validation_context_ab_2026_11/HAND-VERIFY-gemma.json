@@ -1,0 +1,314 @@
+[
+ {
+  "dir": "000_gemma2_isomer-document-quickstart_12b34c47b2",
+  "fixture": "isomer-document-quickstart",
+  "patch_id": "12b34c47b2",
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "Restructures Quick Start into 3 steps and keeps every setup command (.env/ISOMER_SECRET, bootstrap password, ISOMER_BOOTSTRAP_PASSWORD), but never references docker-compose.yml or app.py as the goal requires, and drops the 'loopback-only; put nginx in front for remote' note. Champion REAL arms (001/003) cited both files.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "001_gemma2_isomer-document-quickstart_65f8667670",
+  "fixture": "isomer-document-quickstart",
+  "patch_id": "65f8667670",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "Same as 000, plus a mention of the isomer_data volume. Still names neither docker-compose.yml nor app.py's default port, and drops the loopback/nginx note.",
+  "report_mismatch": "Report says it references the configuration in docker-compose.yml and that the port matches app.py; the README text names neither file.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "002_gemma2_isomer-implement-healthcheck_26ac98e1e5",
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "26ac98e1e5",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "@app.route('/health') returning jsonify({'status':'ok'}), 200 on the existing app, in its own section before Auth. Same as champion 004.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "003_gemma2_isomer-implement-healthcheck_5a5e699d3c",
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "5a5e699d3c",
+  "arms": [
+   "ctl"
+  ],
+  "class": "DAMAGING",
+  "reason": "The /health route itself is correct, but the patch also commits a root-level test_health.py that pytest will collect. It does `import requests` (not in requirements.txt: Flask, Werkzeug, Flask-WTF, gunicorn) and `subprocess.Popen([sys.executable, \"app.py\"])` without ISOMER_SECRET, which app.py refuses to start without. So it is a broken test where base had none.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": true
+ },
+ {
+  "dir": "004_gemma2_lpe-rope-calc-document-typing_2eeaa312eb",
+  "fixture": "lpe-rope-calc-document-typing",
+  "patch_id": "2eeaa312eb",
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "Annotates the one untyped parameter as `f: Any`, which adds no type information (champion used BinaryIO). The other edits (dict[str, Any], a local `lines: list[str]`) are refinements of already-typed code.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "005_gemma2_lpe-rope-calc-document-typing_6f3f974fa0",
+  "fixture": "lpe-rope-calc-document-typing",
+  "patch_id": "6f3f974fa0",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "`f: IO` fills the one real gap. Also adds dict[str, Any] refinements and `rope_dim: Optional[int]` on ntk_theta, which is honest because the body checks for None. Behaviour unchanged.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "006_gemma2_lpe-rope-calc-document-typing_800f0fa600",
+  "fixture": "lpe-rope-calc-document-typing",
+  "patch_id": "800f0fa600",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "Same as 004 (`f: Any` plus dict[str, Any] refinements). On target but uninformative.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "007_gemma2_lpe-rope-calc-implement-strict-flag_6de1f5afaa",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "6de1f5afaa",
+  "arms": [
+   "ctl"
+  ],
+  "class": "DAMAGING",
+  "reason": "Step-limit run that breaks the default invocation. scan_hf_cache now returns a tuple, but the default-path loop still does `records += scan_hf_cache(root)`, which appends a list and a bool into records. The dedupe step then hits `r.source` on a list and raises AttributeError. It also moves the `--path` loop under `else:`, so --path is ignored unless --no-default-paths is given.",
+  "report_mismatch": "Report is only the step-limit banner.",
+  "worse_than_base": true
+ },
+ {
+  "dir": "008_gemma2_lpe-rope-calc-implement-strict-flag_f1dc648714",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "f1dc648714",
+  "arms": [
+   "menu"
+  ],
+  "class": "DAMAGING",
+  "reason": "Typo makes the script crash at startup on every invocation: `ap.add.argument(\"--no-default-paths\", action=\"store_true\",` (ArgumentParser has no attribute 'add'). The --strict logic is otherwise reasonable. The grader passed it on regex.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": true
+ },
+ {
+  "dir": "009_gemma2_neon-rain-document-modules_2a06304ec4",
+  "fixture": "neon-rain-document-modules",
+  "patch_id": "2a06304ec4",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "Subdirectories section lists all 9 dirs, EventBus mentioned, existing content preserved. Each entry is a generic one-liner (e.g. 'ai/: Implements the server's decision-making logic.') with no module names, well short of the champion entries.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "010_gemma2_neon-rain-document-modules_dce7860c0b",
+  "fixture": "neon-rain-document-modules",
+  "patch_id": "dce7860c0b",
+  "arms": [
+   "ctl"
+  ],
+  "class": "DAMAGING",
+  "reason": "Rewrote ARCHITECTURE.md with read_file line-number prefixes baked into every line (`-# Architecture` became `+1\t# Architecture` ... `+132\t```), corrupting all 132 lines and adding no Subdirectories section. The grader correctly failed it (destructive_diff).",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": true
+ },
+ {
+  "dir": "011_gemma2_neon-rain-implement-reset-shortcut_2cb3442b30",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "2cb3442b30",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "window keydown listener in HtmlInputHandler: Shift+R (e.code KeyR) emits game:reset, and Game._wireEvents maps game:reset to _startNewGame(). The listener is removed in dispose. Same design as champion 019.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "012_gemma2_neon-rain-implement-reset-shortcut_8848fa1d21",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "8848fa1d21",
+  "arms": [
+   "menu"
+  ],
+  "class": "DAMAGING",
+  "reason": "The shortcut does nothing and existing behaviour regresses. The handler does `this.eventBus.emit('__restart')`, but no listener exists for that event: '__restart' is an action type routed via `eventBus.on('action:request', ...)` -> _handleAction. Separately it changes `this.modals.showConfirm('Restart current game?', () => this._startNewGame());` to `this._startNewGame();`, so the existing Restart button now restarts without confirmation.",
+  "report_mismatch": "Report is only the step-limit banner.",
+  "worse_than_base": true
+ },
+ {
+  "dir": "013_gemma2_nothing-ever-happens-document-config_2f89ca18f3",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "2f89ca18f3",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "54/55 startup vars (only STRATEGY_PROFILE missing), spot-checked defaults correct (BOT_MODE paper, PM_RISK_MAX_TOTAL 1500, etc.). Cross-references are file-only, no line numbers.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "014_gemma2_nothing-ever-happens-document-config_58b95e59ad",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "58b95e59ad",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "54/55 vars (TRADE_LEDGER_PATH missing), defaults correct, file-level cross-references. DASHBOARD_PORT 8080 matches .env.example/dashboard.py.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "015_gemma2_nothing-ever-happens-document-config_7f8ee994f4",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "7f8ee994f4",
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "49/55, omitting all six PM_RISK_* risk limits (exposure caps, drawdown, kill cooldown); the rest is accurate with file:line refs.",
+  "report_mismatch": "Report says it documents all environment variables; the PM_RISK_* family is missing.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "016_gemma2_nothing-ever-happens-document-config_b6b0de39b7",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "b6b0de39b7",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "40/55, missing all PM_RISK_*, the PM_RECOVERY_*, redeemer, ledger, BOT_VARIANT and STRATEGY_PROFILE vars; file-only refs.",
+  "report_mismatch": "Report says 'a comprehensive list of all environment variables'; 15 are missing.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "017_gemma2_nothing-ever-happens-document-config_eb0e98cc8f",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "eb0e98cc8f",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "54/55 (STRATEGY_PROFILE missing), defaults correct, file-level refs.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "018_gemma2_nothing-ever-happens-document-config_ecd0d32660",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "ecd0d32660",
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "48/55, omitting all six PM_RISK_* plus PM_BACKGROUND_EXECUTOR_WORKERS; the rest is accurate with file:line refs.",
+  "report_mismatch": "Report says it documents all environment variables; the PM_RISK_* family is missing.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "019_gemma2_nothing-ever-happens-manage-deps-audit_6de5c9da7a",
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "patch_id": "6de5c9da7a",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "Only two real findings (python-dotenv GHSA-mf9w-mj56-hr94, web3 GHSA-5hr4-253g-cpx2). The third is padding the report itself admits does not apply: sqlalchemy CVE-2019-7548 '<1.2.19' vs current >=2.0.0, 'included here to demonstrate the audit process'. The goal requires at least three concrete findings. requirements.txt untouched.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "020_gemma2_nothing-ever-happens-manage-deps-audit_6e4919a1dd",
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "patch_id": "6e4919a1dd",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Three applicable findings (python-dotenv, web3, aiohttp CVE-2024-52303 fixed 3.10.11) with in-major upgrade constraints; requirements.txt untouched. Less thorough on aiohttp than the champion (stops at 3.10.11).",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "021_gemma2_the-game-document-architecture_35d823b27a",
+  "fixture": "the-game-document-architecture",
+  "patch_id": "35d823b27a",
+  "arms": [
+   "ctl"
+  ],
+  "class": "DAMAGING",
+  "reason": "Deletes the existing '## Features' section (all 7 bullets, e.g. '- 5-second splash animation on first load', '- TMDB poster caching to avoid rate limits') to make room for 'How It Works'. The new text also says the 6-movie window is 'centered around that random pick'; server.js:112 picks a random positionInGroup.",
+  "report_mismatch": "Report describes adding a section and never mentions deleting Features.",
+  "worse_than_base": true
+ },
+ {
+  "dir": "022_gemma2_the-game-document-architecture_4887d57d60",
+  "fixture": "the-game-document-architecture",
+  "patch_id": "4887d57d60",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "How It Works names selectWithNeighbors/server.js and shuffle/App.jsx, but misdescribes the core step: 'Selects a window of 6 movies centered around that random movie' (server.js:112 uses a random positionInGroup). It also omits how studio picks are chosen. Separately it fixes a README config typo (plexLibraries -> tmdbApiKey, matching config.example.json), which is out of scope but correct.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "023_gemma2_the-game-implement-shuffle-shortcut_281fe372e6",
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "patch_id": "281fe372e6",
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "r/R shortcut works and skips inputs/textarea/contentEditable, but uses `}, [shuffle]);` where shuffle is a plain function recreated every render, so the listener is re-bound on every render. That violates the goal's 'bind the listener once on page load'.",
+  "report_mismatch": "",
+  "worse_than_base": false
+ },
+ {
+  "dir": "024_gemma2_the-game-implement-shuffle-shortcut_81e8034aa4",
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "patch_id": "81e8034aa4",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Wraps shuffle in useCallback([]) so the [shuffle]-keyed effect binds once; r/R ignored in inputs. Stray unrelated edit: adds `xmlns=\"http://www.w3.org/1999/xhtml\"` to two <h2> elements (harmless noise an engineer would ask to drop).",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": false
+ },
+ {
+  "dir": "025_gemma2_the-game-implement-shuffle-shortcut_a2ea6e6e49",
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "patch_id": "a2ea6e6e49",
+  "arms": [
+   "menu"
+  ],
+  "class": "DAMAGING",
+  "reason": "Replaces the existing mount effect instead of adding a new one, deleting `shuffle();` and the splash timer (`setTimeout(() => setShowSplash(false), 800)`). That was the only code that hides the splash, so the app stays on the splash screen forever and never loads data.",
+  "report_mismatch": "No report.md.",
+  "worse_than_base": true
+ }
+]

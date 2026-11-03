@@ -68,7 +68,7 @@ def one(run_dir: Path, arm: str, variant: str) -> dict:
     checks_used = Counter(e["name"] for e in main_calls if e.get("name") in CHECK)
     false_claims = []
     NEG = re.compile(r"not run|did not|didn't|could not|couldn't|cannot|can't|"
-                     r"skipped|not available|unavailable|n/a|no test command", re.I)
+                     r"skipped|not available|unavailable|not applicable|n/a|no test command", re.I)
     POS = re.compile(r"pass|ran\b|\brun\b|\bok\b|clean|✓|succeed|reviewed|"
                      r"no (issues|findings|errors)", re.I)
     for line in sect.splitlines():

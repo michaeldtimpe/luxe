@@ -1,5 +1,18 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-03, m1 + m5) — validation menu REFUTED, context pack inert (opt-in), lint-on-JS fixed
+
+- **A/B** (`acceptance/validation_context_ab_2026_11/REPORT.md`): champion 4 arms x 10 x 3 + gemma-4-26b
+  probe 2 x 10 x 3, every run hand-verified. `LUXE_VALIDATION_MENU` dropped from the code: champion REAL
+  28 -> 25/30 (isomer quickstart THIN 3/3, deterministic), gemma fabricated its Checks section in 7/30.
+  `LUXE_CONTEXT_PACK` inert (REAL 28/30 both arms), kept opt-in. lessons.md 2026-11-03.
+- **PRs:** #50 Python analyzers refuse non-Python files (ruff on `.js` returned 63 KB of noise);
+  #51 context pack + the A/B record. Both pushed, not landed.
+- **Found, not fixed:** the redirect trap (`npm test 2>&1` refused by bench bash -> 3 idle calls ->
+  post_write_idle_exit, no report; ctl 6/30 runs); `detect_test_command` offers `npm test` for a
+  `package.json` with no `scripts.test`. m5's oMLX ran a deleted 0.7.3rc1 Cellar for a week
+  (`luxe repair` fixed it). m5 now fails 4 tests on untouched main (was 2).
+
 ## ⇒ SESSION NOTE (2026-10-30, m1 + m5) — harness2 harvest: four bench/forensics adds landed, one dropped
 
 - **Landed:** `tests/test_grader_leak.py` (no grader string reaches the model; the opt-in
