@@ -1818,7 +1818,12 @@ def run_agent(
             text = (final.text or "").strip()
             if text:
                 result.final_text = text
-            emit("idle_exit_final_turn", ok=bool(text), chars=len(text))
+            # finish + any tool calls the model emitted anyway: the slice saw
+            # 65-149 completion tokens and no text, twice.
+            emit("idle_exit_final_turn", ok=bool(text), chars=len(text),
+                 finish=final.finish_reason or "",
+                 tool_calls=[tc.name for tc in (final.tool_calls or [])],
+                 completion_tokens=final.timing.completion_tokens)
 
     _finalize(run, st, result, emit)
     result.wall_s = time.monotonic() - t0

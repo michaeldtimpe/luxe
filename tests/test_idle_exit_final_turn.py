@@ -97,6 +97,20 @@ def test_empty_answer_keeps_the_previous_text(monkeypatch):
     assert len(backend.calls) == 5
     ev = [kw for k, kw in events if k == "idle_exit_final_turn"][0]
     assert ev["ok"] is False and ev["chars"] == 0
+    assert ev["finish"] == "stop" and ev["tool_calls"] == []
+
+
+def test_a_tool_call_instead_of_a_report_is_recorded(monkeypatch):
+    from luxe.backend import ToolCallResponse
+    stray = ChatResponse(text="", finish_reason="tool_calls",
+                         tool_calls=[ToolCallResponse(id="c9", name="bash",
+                                                      arguments={"command": "ls"})],
+                         timing=GenerationTiming(prompt_tokens=50, completion_tokens=65))
+    result, backend, events = _idle_run(monkeypatch, on=True, extra=[stray])
+    ev = [kw for k, kw in events if k == "idle_exit_final_turn"][0]
+    assert ev["ok"] is False and ev["tool_calls"] == ["bash"]
+    assert ev["completion_tokens"] == 65
+    assert len(backend.calls) == 5          # still exactly one extra call
 
 
 def test_backend_failure_is_recorded_not_raised(monkeypatch):
