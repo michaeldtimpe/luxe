@@ -1,0 +1,533 @@
+[
+ {
+  "dir": "000_champ_isomer-document-quickstart_14d046eaa6",
+  "fixture": "isomer-document-quickstart",
+  "patch_id": "14d046eaa6",
+  "arms": [
+   "both"
+  ],
+  "class": "THIN",
+  "reason": "Two README comment lines touched: adds a parenthetical pointing at docker-compose.yml and rewords the URL comment to cite app.py's default port. On target and accurate, but no real clarification of the run/access flow (contrast 001/003, which restructure the Quick Start into steps with a dashboard section).",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "001_champ_isomer-document-quickstart_24370bd8a4",
+  "fixture": "isomer-document-quickstart",
+  "patch_id": "24370bd8a4",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Restructures Quick Start into 4 steps, keeps every original command incl. ISOMER_SECRET/.env and bootstrap password, links docker-compose.yml and app.py, port 27001 / 127.0.0.1 publish verified at base (app.py:1138, docker-compose.yml:13). Minor slip: says 'the app binds to 127.0.0.1' (app binds 0.0.0.0; compose publishes on loopback).",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "002_champ_isomer-document-quickstart_8d0fd341b5",
+  "fixture": "isomer-document-quickstart",
+  "patch_id": "8d0fd341b5",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "Same shape as 000: one parenthetical plus two comment lines citing app.py:1138 and docker-compose.yml:13. Accurate but a touch-up, not the clarified run/access walkthrough the goal asks for.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "003_champ_isomer-document-quickstart_fe4b084c56",
+  "fixture": "isomer-document-quickstart",
+  "patch_id": "fe4b084c56",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "Same restructure as 001 (4 subsections, all original steps preserved verbatim, dashboard section citing app.py default port and docker-compose.yml loopback binding, links existing #production-deployment section). Accurate.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "004_champ_isomer-implement-healthcheck_0d37a64c57",
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "0d37a64c57",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Adds @app.route('/health', GET) returning jsonify({'status':'ok'}), 200 on the existing app; jsonify already imported; before_request hook is a no-op without a session, so unauthenticated GET works.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "005_champ_isomer-implement-healthcheck_80e70e42dc",
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "80e70e42dc",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "Same handler as 004 plus a redundant-but-harmless @csrf.exempt (CSRF does not apply to GET). Correct.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "006_champ_isomer-implement-healthcheck_94bea5f4fb",
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "94bea5f4fb",
+  "arms": [
+   "both"
+  ],
+  "class": "REAL",
+  "reason": "Same as 005 (csrf.exempt + route), placed after the CSRF error handler; default GET method. Correct.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "007_champ_isomer-implement-healthcheck_a461183829",
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "a461183829",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same handler as 004 with blank-line spacing. Correct.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "008_champ_lpe-rope-calc-document-typing_5c380ca4b7",
+  "fixture": "lpe-rope-calc-document-typing",
+  "patch_id": "5c380ca4b7",
+  "arms": [
+   "both",
+   "ctl",
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "The only untyped top-level parameter at base is `f` in _read_gguf_value; annotated as BinaryIO with the import added. Exactly the gap, no behaviour change.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "009_champ_lpe-rope-calc-document-typing_f8ba9403df",
+  "fixture": "lpe-rope-calc-document-typing",
+  "patch_id": "f8ba9403df",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same BinaryIO fix as 008 plus tightening _pe_from_gguf's bare dict to dict[str, Any]. Correct and harmless.",
+  "report_mismatch": "Report says there were 'two untyped parameters'; meta was already typed (bare dict), only f was untyped."
+ },
+ {
+  "dir": "010_champ_lpe-rope-calc-implement-strict-flag_40b1b5cc3a",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "40b1b5cc3a",
+  "arms": [
+   "both"
+  ],
+  "class": "REAL",
+  "reason": "--strict flag; scan_ollama/scan_gguf_dir/scan_lmstudio return (records, missing paths) on parse_gguf_metadata()==None; all call sites unpacked; main returns 1 and lists files only when --strict, default path still returns 0.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "011_champ_lpe-rope-calc-implement-strict-flag_4f4e2cba08",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "4f4e2cba08",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Same design as 010 (list of bad paths, printed, exit 1 under --strict; default unchanged). Correct.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "012_champ_lpe-rope-calc-implement-strict-flag_5fe548d8f2",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "5fe548d8f2",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "Same design as 010 but tracks a count instead of paths; exits 1 under --strict, default 0. Correct.",
+  "report_mismatch": "report.md is effectively empty (no final report)."
+ },
+ {
+  "dir": "013_champ_lpe-rope-calc-implement-strict-flag_93a9a00f7b",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "93a9a00f7b",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same count-based design as 012. Correct.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "014_champ_lpe-rope-calc-implement-strict-flag_e3885c2702",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "e3885c2702",
+  "arms": [
+   "pack"
+  ],
+  "class": "FAIL",
+  "reason": "Step-limit run. --strict never fires: main sets bad_files = [] and scan_gguf_dir does `(bad_files or []).append(path)`; an empty list is falsy so a fresh throwaway list is appended to and bad_files stays empty, so `if args.strict and bad_files` is never true. scan_ollama also accepts the params but never records anything.",
+  "report_mismatch": "Report is only the step-limit banner plus 'Now let me do a quick functional test...'; no final report."
+ },
+ {
+  "dir": "015_champ_neon-rain-document-modules_743e9219e6",
+  "fixture": "neon-rain-document-modules",
+  "patch_id": "743e9219e6",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Adds '## Subdirectories' after the file tree, all 9 dirs covered, existing content untouched, EventBus mentioned. Contents match base file lists. One wrong clause: render/ 'both emit rendered state via the EventBus' (renderers at base never reference eventBus).",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "016_champ_neon-rain-document-modules_78cb14fb6d",
+  "fixture": "neon-rain-document-modules",
+  "patch_id": "78cb14fb6d",
+  "arms": [
+   "both"
+  ],
+  "class": "REAL",
+  "reason": "Subdirectories section covering all 9 dirs, EventBus mentioned (input emits card:selected/deck:clicked, verified at base). Some ui/ and state/ files omitted, acceptable within 1-2 sentences.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "017_champ_neon-rain-document-modules_ce10b972dc",
+  "fixture": "neon-rain-document-modules",
+  "patch_id": "ce10b972dc",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "Subdirectories section covering all 9 dirs with full file lists, EventBus mentioned. Minor looseness: render/ 'listens to EventBus events' (Game.js does the wiring, not the renderer).",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "018_champ_neon-rain-document-modules_e146ece086",
+  "fixture": "neon-rain-document-modules",
+  "patch_id": "e146ece086",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same as 016: all 9 dirs, EventBus mentioned, accurate. Existing content preserved.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "019_champ_neon-rain-implement-reset-shortcut_a1236be6b9",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "a1236be6b9",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "keydown listener in HtmlInputHandler (Shift+R, e.key==='R') emits game:restart; Game._wireEvents maps it to _startNewGame(), the same call the existing restart confirm uses (Game.js:292); dispose removes the listener. No page reload.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "020_champ_neon-rain-implement-reset-shortcut_af33ea1850",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "af33ea1850",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Identical code to 019 plus a header doc line.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "021_champ_neon-rain-implement-reset-shortcut_b4897dc199",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "b4897dc199",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "Identical code to 019/020 plus JSDoc comments.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "022_champ_neon-rain-implement-reset-shortcut_b8681f53f4",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "b8681f53f4",
+  "arms": [
+   "both"
+  ],
+  "class": "REAL",
+  "reason": "Same as 020; game:restart listener registered after game:quit instead of before game:over.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "023_champ_neon-rain-implement-reset-shortcut_d51dafa8b1",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "d51dafa8b1",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Same as 022 with an extra doc comment.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "024_champ_neon-rain-implement-reset-shortcut_f2524b9af4",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "f2524b9af4",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same as 021.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "025_champ_nothing-ever-happens-document-config_0227878c78",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "0227878c78",
+  "arms": [
+   "both"
+  ],
+  "class": "DAMAGING",
+  "reason": "Full coverage (54/55 vars) but it documents env vars the code never reads: '| `PM_NH_FIXED_TRADE_AMOUNT` | `0.0` | ... | `bot/config.py:223` |' (base reads PM_NH_FIXED_TRADE_AMOUNT_USD, so setting the documented name does nothing) and '| `PM_NH_CATEGORY_KEYWORDS` | ... | `bot/config.py:267` |' (line 267 is strat.get('category_keywords') from config.json, not env). Also PM_RISK_KILL_COOLDOWN_SEC default given as `1.0` (actual 900.0; 1.0 is the max() floor).",
+  "report_mismatch": "Report claims every variable documented; PM_NH_FIXED_TRADE_AMOUNT_USD is missing (replaced by a wrong name)."
+ },
+ {
+  "dir": "026_champ_nothing-ever-happens-document-config_19e97286ef",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "19e97286ef",
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "Documents 30 of 55 startup vars: omits all 25 PM_NH_* strategy overrides plus CONFIG_PATH and FUNDER_ADDRESS. Also BOT_MODE default given as '(none)' (base: os.getenv('BOT_MODE', 'paper')).",
+  "report_mismatch": "Report: 'All 26 environment variables have been identified'; ~25 more exist."
+ },
+ {
+  "dir": "027_champ_nothing-ever-happens-document-config_28d3cbc230",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "28d3cbc230",
+  "arms": [
+   "ctl"
+  ],
+  "class": "DAMAGING",
+  "reason": "Full name coverage but false risk-limit defaults in a trading bot: '| `PM_RISK_MAX_TOTAL_OPEN_EXPOSURE_USD` | `10000.0` |' (base RiskConfig: 1_500.0) and '| `PM_RISK_KILL_COOLDOWN_SEC` | `300.0` |' (base: 900.0). Misstates the default exposure cap by ~6.7x.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "028_champ_nothing-ever-happens-document-config_3938b83533",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "3938b83533",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "All 55 startup vars documented with file:line refs; spot-checked defaults (BOT_MODE, DRY_RUN, PM_NH_*, PM_RISK_*, recovery, redeemer, dashboard) all match base.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "029_champ_nothing-ever-happens-document-config_39a18e6676",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "39a18e6676",
+  "arms": [
+   "both"
+  ],
+  "class": "REAL",
+  "reason": "All 55 vars, spot-checked defaults match base, with file references.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "030_champ_nothing-ever-happens-document-config_548abe1519",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "548abe1519",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "All 55 vars with refs and no wrong defaults found; 4 PM_RISK_* defaults are deferred to '(see RiskConfig)' instead of stated, a minor gap.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "031_champ_nothing-ever-happens-document-config_6208826d03",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "6208826d03",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "All 55 vars, spot-checked defaults match base.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "032_champ_nothing-ever-happens-document-config_abfc83d530",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "abfc83d530",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "Documents 32 of 55 vars and omits every PM_NH_* strategy override (23 missing). What is present is accurate.",
+  "report_mismatch": "Report says every env var documented ('32 environment variables'); the PM_NH_* family is missing."
+ },
+ {
+  "dir": "033_champ_nothing-ever-happens-document-config_b0c7e1e985",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "b0c7e1e985",
+  "arms": [
+   "menu"
+  ],
+  "class": "THIN",
+  "reason": "Documents 31 of 55 vars and omits all PM_NH_* overrides plus FUNDER_ADDRESS. What is present is accurate.",
+  "report_mismatch": "Report claims 'all 31 environment variables'; 55 are read at startup."
+ },
+ {
+  "dir": "034_champ_nothing-ever-happens-document-config_e3a218470f",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "e3a218470f",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "All 55 vars, spot-checked defaults match base.",
+  "report_mismatch": "Report says 42 variables; the file actually covers all 55 (undercount, harmless)."
+ },
+ {
+  "dir": "035_champ_nothing-ever-happens-document-config_ea0337e12d",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "ea0337e12d",
+  "arms": [
+   "pack"
+  ],
+  "class": "THIN",
+  "reason": "Documents 32 of 55 vars and omits all PM_NH_* overrides. Accurate note that CHAIN_ID/SIGNATURE_TYPE come from config.json.",
+  "report_mismatch": "Report claims every env var documented; the PM_NH_* family is missing."
+ },
+ {
+  "dir": "036_champ_nothing-ever-happens-document-config_f01b162b70",
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "f01b162b70",
+  "arms": [
+   "both"
+  ],
+  "class": "THIN",
+  "reason": "Covers 51 of 55 but omits exactly the live-trading gate and credential vars (PRIVATE_KEY, FUNDER_ADDRESS, LIVE_TRADING_ENABLED, DRY_RUN), the most important ones for this bot. Also PM_NH_MARKET_REFRESH_INTERVAL_SEC default given as 60 (base: 600).",
+  "report_mismatch": "Report claims every startup env var documented; the 4 above are missing."
+ },
+ {
+  "dir": "037_champ_nothing-ever-happens-manage-deps-audit_94f3b44865",
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "patch_id": "94f3b44865",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "SECURITY-AUDIT.md only (requirements.txt untouched), 3 findings (python-dotenv GHSA-mf9w-mj56-hr94, web3 GHSA-5hr4-253g-cpx2, aiohttp CVE-2024-23334 etc.) sourced from the OSV cve_lookup tool, proposes in-major upgrades. Same findings as 038-040.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "038_champ_nothing-ever-happens-manage-deps-audit_9dacf22cd0",
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "patch_id": "9dacf22cd0",
+  "arms": [
+   "both"
+  ],
+  "class": "REAL",
+  "reason": "Same 3 tool-sourced findings and in-major upgrade proposals as 037; lists clean packages. requirements.txt untouched.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "039_champ_nothing-ever-happens-manage-deps-audit_bf9c26bc9a",
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "patch_id": "bf9c26bc9a",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same 3 findings with more aiohttp advisories enumerated; in-major upgrades proposed. requirements.txt untouched.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "040_champ_nothing-ever-happens-manage-deps-audit_ed6faaacc3",
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "patch_id": "ed6faaacc3",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Same 3 findings. Cosmetic issues: 'Date: 2025-07-10' is wrong and one NVD URL is malformed (nvd.nist.gov/detail/...). requirements.txt untouched.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "041_champ_the-game-document-architecture_21bc968598",
+  "fixture": "the-game-document-architecture",
+  "patch_id": "21bc968598",
+  "arms": [
+   "both"
+  ],
+  "class": "REAL",
+  "reason": "'How it works' section correctly says the selection lives in server.js (selectWithNeighbors at server.js:103, verified; studio picks via Math.random at line 141) and that App.jsx shuffle() (line 26, verified) fetches /api/shuffle. Small slip: implies useEffect fires on every button click (the button calls shuffle directly).",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "042_champ_the-game-document-architecture_365bb790d2",
+  "fixture": "the-game-document-architecture",
+  "patch_id": "365bb790d2",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Same content as 041, split into backend/frontend; line refs (103, 141, 26, 41) verified; mentions tmdbCache.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "043_champ_the-game-document-architecture_5895d2684c",
+  "fixture": "the-game-document-architecture",
+  "patch_id": "5895d2684c",
+  "arms": [
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same content, more concise, placed after the API table instead of near the top; accurate.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "044_champ_the-game-document-architecture_f4beff14b1",
+  "fixture": "the-game-document-architecture",
+  "patch_id": "f4beff14b1",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "Same content as 042, with all four studio-list files named (verified). Accurate.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "045_champ_the-game-implement-shuffle-shortcut_339d716c51",
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "patch_id": "339d716c51",
+  "arms": [
+   "pack"
+  ],
+  "class": "REAL",
+  "reason": "useEffect([]) binds window keydown once; 'r' with no Ctrl/Meta/Alt calls shuffle(), skips INPUT/TEXTAREA/SELECT targets, cleans up on unmount.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "046_champ_the-game-implement-shuffle-shortcut_5c8e6ac0be",
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "patch_id": "5c8e6ac0be",
+  "arms": [
+   "both",
+   "menu"
+  ],
+  "class": "REAL",
+  "reason": "Same as 045 but no modifier check, so Cmd/Ctrl+R also triggers a (harmless) shuffle before the browser reloads. Acceptable.",
+  "report_mismatch": ""
+ },
+ {
+  "dir": "047_champ_the-game-implement-shuffle-shortcut_6636cde2d9",
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "patch_id": "6636cde2d9",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Binds the document keydown once, handles r/R, skips inputs/textareas/contentEditable. Nit: preventDefault without a modifier check swallows Ctrl/Cmd+R page reload.",
+  "report_mismatch": ""
+ }
+]
