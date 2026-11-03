@@ -1,21 +1,15 @@
-"""Context blocks for the maintain main pass: validation menu + context pack.
+"""Context pack for the maintain main pass (opt-in).
 
-Both opt-in (exact string "1"), both OFF by default, and with both off
-`maintain` passes no `extra_context` at all, so the request is byte-identical
-to the pre-2026-11 path by construction. Neither is read anywhere else: the
-benchmark harness reaches them only through `luxe maintain`, chat never.
-
-- `LUXE_VALIDATION_MENU=1` (write tasks only): the repo's detected test
-  command (`pr.detect_test_command`, until now used only by the PR step after
-  the run), the check tools the run's own tool surface exposes, and a closing
-  "Checks" section in the report. Origin: deepsense.ai harness pattern 4, and
-  the 2026-08-19 Gemma 4 hand-verify (zero lint/typecheck/git_diff calls on
-  any fixture).
-- `LUXE_CONTEXT_PACK=1`: a capped block of POINTERS assembled with no model
-  call: top BM25 files for the goal (the index `maintain._build_indices`
-  already built), each file's last commit subjects, tests matched by naming
-  convention, and the most recently changed paths. Paths and subjects only,
-  never file contents. Origin: harness pattern 2 (just-in-time context).
+`LUXE_CONTEXT_PACK=1` (exact string): a capped block of POINTERS assembled
+with no model call: top BM25 files for the goal (the index
+`maintain._build_indices` already built), each file's last commit subjects,
+tests matched by naming convention, and the most recently changed paths.
+Paths and subjects only, never file contents. Origin: deepsense.ai harness
+pattern 2 (just-in-time context). OFF by default; off means `maintain` passes
+no `extra_context` at all, so the request is byte-identical by construction.
+Benched 2026-11-03 as inert on the champion (no regression, no gate cleared):
+acceptance/validation_context_ab_2026_11/REPORT.md. Its sibling, a
+validation menu (pattern 4), was benched with it and dropped.
 
 All wording lives in `agents/prompts.py` (agents.sdd); this module only
 fills it in. Every git call is scrubbed (tools.sdd: git luxe runs for itself
@@ -36,22 +30,11 @@ from luxe.agents.prompts import (
     CONTEXT_PACK_RECENT,
     CONTEXT_PACK_TESTS,
     CONTEXT_PACK_TRUNCATED,
-    VALIDATION_MENU_NO_TEST_LINE,
-    VALIDATION_MENU_TEMPLATE,
-    VALIDATION_MENU_TEST_LINE,
-    VALIDATION_MENU_TOOL_LABELS,
-    VALIDATION_MENU_TOOL_LINE,
 )
 from luxe import search as search_mod
 from luxe.secrets import scrubbed_env
 
-MENU_ENV = "LUXE_VALIDATION_MENU"
 PACK_ENV = "LUXE_CONTEXT_PACK"
-
-#: Tools that check work rather than produce it, in the order the menu lists
-#: them. Only those the run's tool surface actually exposes are named.
-CHECK_TOOLS = ("lint", "typecheck", "lint_js", "typecheck_ts", "lint_rust",
-               "vet_go", "git_diff")
 
 #: Context-pack limits. The cap is in characters (the read-budget work showed
 #: every KB costs window); sections fill in order and stop at the cap.
@@ -67,26 +50,8 @@ _GIT_TIMEOUT_S = 15
 _TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs"})
 
 
-def menu_enabled(environ: dict | None = None) -> bool:
-    return (environ if environ is not None else os.environ).get(MENU_ENV) == "1"
-
-
 def pack_enabled(environ: dict | None = None) -> bool:
     return (environ if environ is not None else os.environ).get(PACK_ENV) == "1"
-
-
-# --- validation menu --------------------------------------------------------
-
-def validation_menu(test_command: str, tool_names: list[str] | set[str]) -> str:
-    """The menu block for a run whose tool surface is `tool_names`."""
-    test_line = (VALIDATION_MENU_TEST_LINE.format(command=test_command)
-                 if test_command.strip() else VALIDATION_MENU_NO_TEST_LINE)
-    present = [t for t in CHECK_TOOLS if t in set(tool_names)]
-    tool_line = VALIDATION_MENU_TOOL_LINE.format(
-        tools=", ".join(VALIDATION_MENU_TOOL_LABELS.get(t, t) for t in present)
-        if present else "none")
-    return VALIDATION_MENU_TEMPLATE.format(test_line=test_line,
-                                           tool_line=tool_line)
 
 
 # --- context pack -----------------------------------------------------------

@@ -536,50 +536,6 @@ STEP_LIMIT_FINISH_TEMPLATE = (
     "complete, stop calling tools and reply with one sentence saying so."
 )
 
-# LUXE_VALIDATION_MENU (opt-in, 2026-11; luxe/runcontext.py). Appended to the
-# main pass of a write task: the checks this repo actually offers, cheapest
-# first, and a closing "Checks" section in the report. Worded as outcome +
-# procedure + an honest way out (a check that can't run is reported, not
-# worked around), not as ALWAYS/NEVER rules a newer model applies literally.
-# Python fills {test_line} and {tool_line}; no wording lives in runcontext.py.
-VALIDATION_MENU_TEMPLATE = (
-    "\n\n## Checks available in this repository\n\n"
-    "{test_line}\n"
-    "{tool_line}\n\n"
-    "Use them in order of cost: the static checks while you work, the test "
-    "command once before you finish, and git_diff to review exactly what you "
-    "changed. If a check cannot run here (a missing dependency, a timeout, or "
-    "it does not cover the files you changed), do not work around it; note it "
-    "and move on.\n\n"
-    "End your final report with a section headed \"Checks\" that lists each "
-    "check you ran with its result, and each one you did not run with the "
-    "reason."
-)
-# The bench bash refuses redirects, pipes and chains (tools/shell.py
-# _CHAIN_TOKENS/_REDIRECT_TOKENS) and already returns stdout+stderr. The
-# 2026-11-03 slice showed the champion appending `2>&1`, then `|| true`; each
-# refusal counted as an idle call and post_write_idle_exit ended the run
-# before its report. So the line says how to run it, not just what.
-VALIDATION_MENU_TEST_LINE = (
-    "Test command: `{command}`. Run it with bash exactly as written: its "
-    "output already includes stderr, and bash here refuses redirects (such "
-    "as 2>&1), pipes, and chained commands (&&, ||, ;)."
-)
-VALIDATION_MENU_NO_TEST_LINE = "No test command was detected for this repository."
-VALIDATION_MENU_TOOL_LINE = "Check tools you can call: {tools}"
-#: Language label per check tool, so a mixed repo's menu does not send a
-#: JavaScript change to the Python linter (the same slice: `lint` on two .js
-#: files returned ~62 KB and ~65 KB of noise).
-VALIDATION_MENU_TOOL_LABELS = {
-    "lint": "lint (Python files)",
-    "typecheck": "typecheck (Python files)",
-    "lint_js": "lint_js (JavaScript/TypeScript files)",
-    "typecheck_ts": "typecheck_ts (TypeScript)",
-    "lint_rust": "lint_rust (Rust)",
-    "vet_go": "vet_go (Go)",
-    "git_diff": "git_diff (your change so far)",
-}
-
 # LUXE_CONTEXT_PACK (opt-in, 2026-11; luxe/runcontext.py). Pointers gathered
 # deterministically (BM25 on the goal, git history, test naming) before the
 # main pass. Paths and commit subjects only, never file contents; the caveat

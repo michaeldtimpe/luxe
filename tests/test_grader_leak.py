@@ -17,10 +17,8 @@ Three pins:
    LUXE_REPROMPT_ON_DOC=1 the spec reprompt shows the model each unmet
    requirement's `done_when`, which describes the grading regex. Changing
    that is a deliberate decision; when it changes, update this test.
-4. The opt-in main-pass blocks (LUXE_VALIDATION_MENU / LUXE_CONTEXT_PACK,
-   runcontext.py) carry no grader string for any fixture, with one KNOWN
-   overlap accepted 2026-11-03: the menu's test command for a package.json
-   repo (`npm test --silent`) contains neon-rain's `npm test` grader.
+4. The opt-in context pack (LUXE_CONTEXT_PACK, runcontext.py) carries no
+   grader string for any fixture.
 
 A failure here is a leak, not a false positive to narrow the search around.
 Find the code path that put the string into the request.
@@ -170,15 +168,11 @@ def test_opt_in_spec_reprompt_exposes_done_when_KNOWN():
     assert "Graded by:" in text
 
 
-# --- LUXE_VALIDATION_MENU / LUXE_CONTEXT_PACK (opt-in, 2026-11) -------------
+# --- LUXE_CONTEXT_PACK (opt-in, 2026-11) ------------------------------------
 #
-# Both blocks are built from the repo and the goal only, never from a fixture
-# field. Pin that for every fixture, plus the one KNOWN overlap the plan
-# accepted (user decision 2026-11-03): a repo's own test command, read from
-# its marker file, can equal a fixture's tests_pass grading command.
+# Built from the repo and the goal only, never from a fixture field.
 
-def _treatment_blocks(tmp_path: Path, goal: str, markers: tuple[str, ...] = ()) -> str:
-    from luxe import pr as pr_mod
+def _pack_block(tmp_path: Path, goal: str) -> str:
     from luxe import runcontext
     from luxe import search as search_mod
     repo = tmp_path / "repo"
@@ -186,30 +180,11 @@ def _treatment_blocks(tmp_path: Path, goal: str, markers: tuple[str, ...] = ()) 
     (repo / "src" / "widget.py").write_text("def render():\n    return 'widget'\n")
     (repo / "src" / "gadget.py").write_text("def spin():\n    return 1\n")
     (repo / "README.md").write_text("# fixture\n")
-    for m in markers:
-        (repo / m).write_text("{}\n")
-    cmd = pr_mod.detect_test_command(repo, pr_mod.load_pr_config())
-    menu = runcontext.validation_menu(cmd, set(runcontext.CHECK_TOOLS))
-    pack = runcontext.context_pack(repo, goal, search_mod.build_bm25_index(repo))
-    return pack + menu
+    return runcontext.context_pack(repo, goal, search_mod.build_bm25_index(repo))
 
 
 @pytest.mark.parametrize("fx", _fixtures(), ids=lambda f: f.id)
-def test_menu_and_pack_carry_no_grader_string(fx, tmp_path):
-    text = _treatment_blocks(tmp_path, fx.goal, markers=("pyproject.toml",))
+def test_context_pack_carries_no_grader_string(fx, tmp_path):
+    text = _pack_block(tmp_path, fx.goal)
     leaked = [(field, value) for field, value in _grader_strings(fx) if value in text]
-    assert not leaked, f"{fx.id}: grader text reached the menu/pack: {leaked}"
-
-
-def test_menu_test_command_matches_neon_rain_grader_KNOWN(tmp_path):
-    """KNOWN EXPOSURE (accepted 2026-11-03). neon-rain-implement-reset-shortcut
-    is graded by `npm test`; for any repo with package.json the menu names
-    `npm test --silent`. It is the command a developer reads off the marker
-    file, and the model could always read package.json itself. Report this
-    fixture separately in any menu A/B. If this starts failing, the overlap
-    changed: confirm it was deliberate, then update this test."""
-    fx = next(f for f in _fixtures() if f.id == "neon-rain-implement-reset-shortcut")
-    graded_by = (fx.expected_outcome or {}).get("command", "")
-    assert graded_by == "npm test"
-    text = _treatment_blocks(tmp_path, fx.goal, markers=("package.json",))
-    assert f"`{graded_by} --silent`" in text
+    assert not leaked, f"{fx.id}: grader text reached the context pack: {leaked}"

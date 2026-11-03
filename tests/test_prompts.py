@@ -756,22 +756,18 @@ class TestChatSelfIdentity:
         assert "luxe" not in v.system
 
 
-class TestMainPassContextPrompts:
-    """LUXE_VALIDATION_MENU / LUXE_CONTEXT_PACK wording (runcontext.py fills
-    it in; agents.sdd keeps prompt text in prompts.py)."""
-
-    def test_menu_template_fields(self):
-        from luxe.agents import prompts as P
-        out = P.VALIDATION_MENU_TEMPLATE.format(test_line="T", tool_line="L")
-        assert "\nT\nL\n" in out and '"Checks"' in out
-        assert "{command}" in P.VALIDATION_MENU_TEST_LINE
-        assert "{tools}" in P.VALIDATION_MENU_TOOL_LINE
+class TestContextPackPrompts:
+    """LUXE_CONTEXT_PACK wording (runcontext.py fills it in; agents.sdd keeps
+    prompt text in prompts.py)."""
 
     def test_pack_header_carries_the_caveat(self):
         from luxe.agents import prompts as P
         assert "read a file before relying on it" in P.CONTEXT_PACK_HEADER
 
-    def test_neither_is_a_registry_variant(self):
+    def test_dropped_menu_wording_is_gone(self):
+        from luxe.agents import prompts as P
+        assert not any(n.startswith("VALIDATION_MENU") for n in dir(P))
+
+    def test_pack_is_not_a_registry_variant(self):
         texts = [v.system + v.task_prefix for v in PROMPT_REGISTRY.values()]
-        assert not any("Checks available" in t or "Context gathered" in t
-                       for t in texts)
+        assert not any("Context gathered" in t for t in texts)

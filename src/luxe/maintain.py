@@ -407,38 +407,25 @@ def _run_pass(p: _Pipeline, goal: str, phase: str,
 
 
 def _main_context(p: _Pipeline) -> str:
-    """LUXE_VALIDATION_MENU / LUXE_CONTEXT_PACK (both opt-in, exact "1";
-    luxe/runcontext.py). "" when both are off: no git call, no event, no
-    console line. Main pass only; reprompt, finish and cleanup passes never
-    carry it. Announced and recorded so a bench arm can be checked for
-    liveness (the read-budget convention)."""
+    """LUXE_CONTEXT_PACK (opt-in, exact "1"; luxe/runcontext.py). "" when
+    off: no git call, no event, no console line. Main pass only; reprompt,
+    finish and cleanup passes never carry it. Announced and recorded so a
+    bench arm can be checked for liveness (the read-budget convention).
+
+    Its sibling LUXE_VALIDATION_MENU was benched with it and dropped
+    (acceptance/validation_context_ab_2026_11/REPORT.md)."""
     from luxe import runcontext
-    menu_on = runcontext.menu_enabled() and p.writes
-    pack_on = runcontext.pack_enabled()
-    if not (menu_on or pack_on):
+    if not runcontext.pack_enabled():
         return ""
-    menu = pack = ""
-    if menu_on:
-        from luxe.agents.single import _build_full_tool_surface
-        role = p.cfg.role("monolith")
-        defs, _ = _build_full_tool_surface(p.languages, role.tools or None,
-                                           task_type=p.task)
-        # MCP extras are namespaced (mcp__*) and never a CHECK_TOOLS name.
-        menu = runcontext.validation_menu(p.prep.test_command,
-                                          {d.name for d in defs})
-    if pack_on:
-        try:
-            pack = runcontext.context_pack(p.repo_path, p.goal)
-        except Exception as e:  # pointers are optional; never fail the run
-            p.emit("context_pack_failed", error=f"{type(e).__name__}: {e}"[:300])
-            pack = ""
-    p.emit("main_context_injected", menu=menu_on, pack=pack_on,
-           menu_chars=len(menu), pack_chars=len(pack),
-           test_command=p.prep.test_command if menu_on else "")
+    try:
+        pack = runcontext.context_pack(p.repo_path, p.goal)
+    except Exception as e:  # pointers are optional; never fail the run
+        p.emit("context_pack_failed", error=f"{type(e).__name__}: {e}"[:300])
+        pack = ""
+    p.emit("main_context_injected", pack=True, pack_chars=len(pack))
     console.print(f"[yellow]· Main-pass context:[/] [dim]"
-                  f"menu={'on' if menu_on else 'off'} ({len(menu)} chars), "
-                  f"pack={'on' if pack_on else 'off'} ({len(pack)} chars)[/]")
-    return pack + menu
+                  f"pack=on ({len(pack)} chars)[/]")
+    return pack
 
 
 def _record_diff_stat(p: _Pipeline, checkpoint: str) -> None:

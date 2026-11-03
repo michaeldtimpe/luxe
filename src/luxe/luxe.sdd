@@ -283,17 +283,18 @@ auto-memory.
   (`LUXE_STEP_LIMIT_FINISH=1`, ≤8 steps, shows the model its diff) is
   OPT-IN and unbenched; a finish pass that ends on its own clears the label.
 
-- **Main-pass context blocks are OPT-IN (2026-11; `runcontext.py`).**
-  `LUXE_VALIDATION_MENU=1` (write tasks) appends the repo's detected test
-  command, the check tools the run's surface exposes, and a closing "Checks"
-  report section; `LUXE_CONTEXT_PACK=1` appends a ≤2048-char block of
-  POINTERS (BM25 files for the goal, their last commit subjects, tests by
-  naming convention, recently changed paths), never file contents. Main pass
-  only, via `run_single(extra_context=)`; both off ⇒ no `extra_context` kwarg,
-  no git call, no event (byte-identical). Wording lives in prompts.py. Built
-  from the repo + goal only, never a fixture field (test_grader_leak.py, with
-  the KNOWN neon-rain `npm test` overlap pinned). A/B:
-  acceptance/validation_context_ab_2026_11/.
+- **Context pack is OPT-IN (2026-11; `runcontext.py`).** `LUXE_CONTEXT_PACK=1`
+  appends a <=2048-char block of POINTERS to the maintain main pass (BM25
+  files for the goal, their last commit subjects, tests by naming convention,
+  recently changed paths), never file contents, via `run_single(extra_context=)`.
+  Off => no `extra_context` kwarg, no git call, no event (byte-identical).
+  Wording in prompts.py; built from the repo + goal only, never a fixture
+  field (test_grader_leak.py). Benched INERT on the champion (no regression,
+  no success gate cleared). Its sibling `LUXE_VALIDATION_MENU` was REFUTED in
+  the same A/B and is not in the code: on the champion it turned a doc task
+  THIN 3/3 (hand-verified REAL 28 -> 25/30); on gemma-4-26b the required
+  "Checks" section was fabricated in 7/30 runs. Don't re-add a required
+  self-reported checks section. acceptance/validation_context_ab_2026_11/.
 
 ## Must not
 - No cloud provider backends on the BENCHMARK/MAINTAIN path — that path reads
