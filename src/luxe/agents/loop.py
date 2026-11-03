@@ -1212,6 +1212,29 @@ def _track_write(run: _Run, st: LoopState, step: int,
             st.post_intervention_write_burst_max = st.post_intervention_consecutive_writes
 
 
+_EXIT_CODE_RE = re.compile(r"exit code (-?\d+)")
+# 126 = found but not executable, 127 = not found: nothing ran.
+_DID_NOT_RUN_EXIT = {126, 127}
+
+
+def _narrow_idle_spares(executed: ToolCall) -> str | None:
+    """LUXE_IDLE_NARROW: why a call legacy counts idle is NOT idle, or None.
+
+    Output is information whatever the exit status; a non-zero exit from a
+    command that RAN is information; a silent success is a check that
+    passed (an identical repeat never gets here: the dedup short-circuit
+    counts it idle). What stays idle: nothing returned and nothing ran
+    (validator/allowlist refusal, analyzer refusal, timeout, 126/127)."""
+    if executed.bytes_out > 0:
+        return "output"
+    if not executed.error:
+        return "silent_success"
+    m = _EXIT_CODE_RE.fullmatch(executed.error.strip())
+    if m and int(m.group(1)) not in _DID_NOT_RUN_EXIT:
+        return "nonzero_exit"
+    return None
+
+
 def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
                       executed: ToolCall, key: str, path: str | None,
                       step: int, emit: Callable[..., None]) -> None:
@@ -1245,7 +1268,13 @@ def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
         # RESETS the streak. Counting such repeats as idle was benched
         # twice and refuted (LUXE_POST_WRITE_IDLE_REPEATS, removed
         # 2026-10-22; agents.sdd "Removed mechanisms").
-        idle = executed.bytes_out == 0 or executed.error
+        idle = bool(executed.bytes_out == 0 or executed.error)
+        if idle and run.flags.idle_narrow:
+            spared = _narrow_idle_spares(executed)
+            if spared is not None:
+                idle = False
+                emit("idle_narrow_spared", step=step, name=tc.name,
+                     reason=spared, bytes_out=executed.bytes_out)
         if idle:
             st.post_write_idle_tools += 1
         else:

@@ -39,7 +39,7 @@ _SWITCHES = ("LUXE_REPROMPT_ON_DOC", "LUXE_STEP_LIMIT_LABEL",
              "LUXE_STEP_LIMIT_FINISH", "LUXE_CLEANUP_TURN",
              "LUXE_TOOL_BUDGET_CTX", "LUXE_VALIDATION_MENU",
              "LUXE_CONTEXT_PACK", "LUXE_BASH_NOOP",
-             "LUXE_BENCH_PY_PATH")
+             "LUXE_BENCH_PY_PATH", "LUXE_IDLE_NARROW")
 
 
 @dataclass
@@ -813,3 +813,14 @@ def test_bench_py_path_only_exact_zero_disables(h, monkeypatch, val, on):
     assert ("LUXE_BENCH_PY_PATH=0" in t.console) is (not on)
     shell.set_bench_venv_path(False)
 
+
+def test_idle_narrow_off_by_default(h):
+    t = h.run()
+    assert "idle_narrow_mode" not in t.kinds()
+
+
+def test_idle_narrow_on_is_announced(h, monkeypatch):
+    monkeypatch.setenv("LUXE_IDLE_NARROW", "1")
+    t = h.run()
+    assert t.event("idle_narrow_mode")["on"] is True
+    assert "LUXE_IDLE_NARROW=1" in t.console

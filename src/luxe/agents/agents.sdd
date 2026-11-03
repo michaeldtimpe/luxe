@@ -626,6 +626,24 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   The champion was verifying, not drifting. Fix the definition, not the
   aftermath. Don't re-add a post-exit report turn.
 
+### Narrow idle test (`LUXE_IDLE_NARROW=1`, opt-in 2026-11-03)
+
+- Flag `RunFlags.idle_narrow` (exact "1"); off = the legacy test, byte-identical.
+- On: a post-write call legacy counts idle (`bytes_out == 0 or error`) is
+  NOT idle when it returned output (any exit), exited non-zero from a command
+  that RAN (`exit code N`, N not 126/127), or succeeded silently. It stays
+  idle when it returned nothing and nothing ran: validator/allowlist refusal,
+  analyzer refusal, unknown tool, timeout, exit 126/127.
+- Identical repeats are unaffected: the dedup short-circuit still counts them
+  idle, and back-to-back repeats still hit the stuck-loop guard first.
+- Each spare emits `idle_narrow_spared(step, name, reason, bytes_out)`;
+  maintain emits `idle_narrow_mode` for arm liveness.
+- Risk: a model that keeps running distinct commands with output after it is
+  done is no longer ended by this gate; max_steps (and step-limit labelling)
+  is the backstop. Measured in acceptance/idle_narrow_ab_2026_11 (steps, wall).
+- Must not: change the dedup short-circuit's idle count, or consult the
+  command text (the test reads only `bytes_out` and the error string).
+
 ### Removed mechanisms (2026-09 agent-loop cleanup)
 
 Each was re-verified dead or refuted before deletion; the default-flag

@@ -142,6 +142,15 @@ class RunFlags:
     # "Prefix-cache accounting + the two cache experiments".
     reasoning_roundtrip: bool = False
 
+    # Narrow idle test for the post-write idle exit (2026-11-03, opt-in until
+    # benched; acceptance/idle_narrow_ab_2026_11). Legacy counts a call idle
+    # when it returned no bytes OR any error, which ends real verification
+    # (a silent `python -c` compile, `npx eslint` exiting 2 with output).
+    # Narrow: only a call that returned nothing AND failed without running
+    # (a refusal, unknown tool, timeout, exit 126/127) is idle; repeats are
+    # still idle through the dedup short-circuit. agents.sdd "Narrow idle".
+    idle_narrow: bool = False
+
 
     # Cache-friendly compaction: phase 1 batches its truncations and never
     # re-truncates an already-truncated result, so the server's prefix cache
@@ -260,6 +269,8 @@ class RunFlags:
             tool_result_clamp=e.get("LUXE_TOOL_RESULT_CLAMP") == "1",
             # Opt-in: only the exact string "1" enables it.
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
+            # Opt-in: only the exact string "1" enables it.
+            idle_narrow=e.get("LUXE_IDLE_NARROW") == "1",
             # Default ON: only the exact string "0" disables it.
             compact_cache_friendly=(
                 e.get("LUXE_COMPACT_CACHE_FRIENDLY", "1") != "0"

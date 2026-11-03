@@ -398,6 +398,13 @@ def _load_model(p: _Pipeline, config_path: str | None) -> None:
                       "bin NOT prepended (LUXE_BENCH_PY_PATH=0)[/]")
     p.emit("bench_venv_path", on=_pypath)
 
+    # LUXE_IDLE_NARROW=1 (opt-in, 2026-11; read by the loop via RunFlags):
+    # announced + recorded here for arm liveness only.
+    if os.environ.get("LUXE_IDLE_NARROW") == "1":
+        console.print("[yellow]· Post-write idle test:[/] [dim]narrow "
+                      "(LUXE_IDLE_NARROW=1)[/]")
+        p.emit("idle_narrow_mode", on=True)
+
     _read_budget = apply_ctx_read_budget(cfg.role("monolith").num_ctx)
     if _read_budget is not None:
         console.print(
