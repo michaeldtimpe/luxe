@@ -8,7 +8,7 @@
   (refusals not idle either; only identical repeats) took empty reports 7 -> 0 and idle exits 7 -> 0, 30/30,
   all varying patches REAL, recovered reports accurate. **Wall +18.2% trips the +15% gate** (the time the gate
   used to cut off), prompt tokens +30%. narrow alone insufficient (refusals left). Not promoted.
-- **Open decision:** promote wide (default ON) despite the wall gate? **Branch:** `feat/idle-narrow` (PR, not landed).
+- **Decision (user, 2026-11-03):** keep `LUXE_IDLE_NARROW` opt-in. PR #53 LANDED (main `110642e`).
 
 ## ⇒ SESSION NOTE (2026-11-03 pm, m1 + m5) — "redirect trap" = the idle gate; four levers inert or refuted
 
