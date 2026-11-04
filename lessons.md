@@ -30,6 +30,26 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-11-03] idle_narrow_ab_2026_11: the idle gate's refusal counting was the whole problem for the champion
+
+**What happened.** Narrowing post_write_idle_exit's idle test to "returned nothing AND did not run"
+(silent successes and non-zero exits with output no longer idle) still left 3/3 trap runs with no
+report in the slice. DEBUG logs: the remaining idle calls were refusals (Python `lint`/`typecheck`
+on `.js`, `2>&1 || true`, `node` not allowlisted, a repeat of a refusal). Sparing refusals too
+(`LUXE_IDLE_NARROW=wide`, only identical repeats idle) took empty reports 7 -> 0 over 30 runs with
+every patch REAL and accurate reports, and neither max_steps nor the stuck-loop guard had to step in.
+
+**Why.** The gate was tuned on a different model's drift (repeated empty checks after success). The
+champion's post-write behavior is exploring the tool surface: it hits refusals, adapts, and stops on
+its own within ~25 steps. Counting each refusal as "no new information" ends that exploration.
+
+**Changed.** Opt-in `LUXE_IDLE_NARROW=1|wide`. Not promoted: +18.2% wall trips the pre-registered
++15% gate, and that wall is exactly the verification the gate used to cut off. A wall gate measured
+against a control that is cut short penalizes finishing; state that trade in the gate next time
+(e.g. judge wall on runs that finish in both arms). Also: relaunching a bench by killing the parent
+left a luxe child holding the repo lock (one infra cell); wait for `pgrep` to be empty before
+relaunching. `acceptance/idle_narrow_ab_2026_11/{REPORT.md,HAND-VERIFY.json,debug/}`.
+
 ### [2026-11-03] bash_noop_ab_2026_11: the "redirect trap" was the idle gate counting verification as idle
 
 **What happened**: Runs ending via post_write_idle_exit with no report (8/30

@@ -1,0 +1,137 @@
+[
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "831b1e1ed2",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "HtmlInputHandler adds a document keydown listener (Shift+R, preventDefault) that emits game:restart; Game._wireEvents maps it to _startNewGame(); the listener is removed in dispose. Persona is dropped on restart (same known nit as earlier champion patches).",
+  "verified_by": "read by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "45d54b1229",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Inherited verdict (validation_context_ab_2026_11 / bash_noop_ab_2026_11 hand-verify).",
+  "verified_by": "read by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "88d0d61442",
+  "arms": [
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "Game constructor adds a document keydown listener for Shift+R that calls _startNewGame() only while a game is in progress (state exists, not gameOver); _startNewGame falls back to a stored _currentPersona, so the persona survives the reset. Better than the known patches on persona. Listener never removed (Game is a page-lifetime singleton).",
+  "verified_by": "read by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "6bb9b3f14c",
+  "arms": [
+   "wide",
+   "ns"
+  ],
+  "class": "REAL",
+  "reason": "Game constructor adds a document keydown listener for Shift+R calling _startNewGame(). Nits: no in-progress guard, so Shift+R on the title screen starts a game, and the persona is dropped (known nit).",
+  "verified_by": "read by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "5e88982f47",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "--strict argparse flag; scan_ollama / scan_gguf_dir / scan_lmstudio take strict + failures and record GGUF files whose header parse returns None; main prints them and returns 1 when --strict and any failed. Default behavior unchanged. Optional already imported (pe_scan.py:24).",
+  "verified_by": "read by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "9ffdfc325b",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Same behavior via a refactor: the three scanners return (records, bad) tuples and every call site is updated; --strict prints the bad files and returns 1. ctl rep1, the run ended by post_write_idle_exit with an empty report.",
+  "verified_by": "read by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "1320528d9d",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Documents all 55 env variables read by the base (PM_NH_*, PM_RISK_*, PM_RECOVERY_*, redeemer, ledger, dashboard, paper) with correct defaults and a variable-to-file:line index. Error shared by all six: DASHBOARD_PORT given a default of 8080, but main.py:193 starts the dashboard only when PORT or DASHBOARD_PORT is set.",
+  "verified_by": "sonnet subagent, spot-checked (DASHBOARD_PORT claim vs main.py:193)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "4f1aaa696a",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "54 of 55 variables with citations and correct defaults; omits PM_BACKGROUND_EXECUTOR_WORKERS (main.py:158). Adds POSTGRES_PASSWORD (real: docker-compose.yml). Shared DASHBOARD_PORT=8080 error.",
+  "verified_by": "sonnet subagent, spot-checked (DASHBOARD_PORT claim vs main.py:193)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "d5e42376ce",
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "All 55 variables with citations and correct defaults. Describes STRATEGY_PROFILE as surfaced only by dashboard.py:242, though nothing_happens.py:307 also reads it (incomplete, not false). Shared DASHBOARD_PORT=8080 error.",
+  "verified_by": "sonnet subagent, spot-checked (DASHBOARD_PORT claim vs main.py:193)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "5f03970681",
+  "arms": [
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "All 55 variables with citations; every compared default matches (PM_REDEEM_CHECK_INTERVAL_SEC 30, PM_REDEEMER_MAX_GAS_GWEI 150, PM_TRADE_LEDGER_QUEUE_MAXSIZE 4096). Shared DASHBOARD_PORT=8080 error.",
+  "verified_by": "sonnet subagent, spot-checked (DASHBOARD_PORT claim vs main.py:193)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "a03d561626",
+  "arms": [
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "All 55 variables with citations and correct defaults and semantics (PM_RISK_MAX_DAILY_DRAWDOWN_USD 0 = disabled). STRATEGY_PROFILE example names not verified. Shared DASHBOARD_PORT=8080 error.",
+  "verified_by": "sonnet subagent, spot-checked (DASHBOARD_PORT claim vs main.py:193)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "e11a966cbf",
+  "arms": [
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "All 55 variables with citations and correct defaults and semantics. STRATEGY_PROFILE example names not verified. Shared DASHBOARD_PORT=8080 error.",
+  "verified_by": "sonnet subagent, spot-checked (DASHBOARD_PORT claim vs main.py:193)",
+  "worse_than_base": false
+ }
+]

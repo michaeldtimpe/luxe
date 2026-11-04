@@ -1,5 +1,15 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-03 eve, m1 + m5) — idle test A/B: wide fixes the empty reports at +18% wall
+
+- **Landed:** #52 (bash no-op levers + record, main `2d17eef`); `LUXE_BENCH_PY_PATH` now DEFAULT ON
+  (`7bc3bfc`, `=0` disables; m5 bench `python` worked for the first time).
+- **A/B** (`acceptance/idle_narrow_ab_2026_11/REPORT.md`, champion ctl vs wide x 10 x 3): `LUXE_IDLE_NARROW=wide`
+  (refusals not idle either; only identical repeats) took empty reports 7 -> 0 and idle exits 7 -> 0, 30/30,
+  all varying patches REAL, recovered reports accurate. **Wall +18.2% trips the +15% gate** (the time the gate
+  used to cut off), prompt tokens +30%. narrow alone insufficient (refusals left). Not promoted.
+- **Open decision:** promote wide (default ON) despite the wall gate? **Branch:** `feat/idle-narrow` (PR, not landed).
+
 ## ⇒ SESSION NOTE (2026-11-03 pm, m1 + m5) — "redirect trap" = the idle gate; four levers inert or refuted
 
 - **A/B** (`acceptance/bash_noop_ab_2026_11/REPORT.md`, champion 5 arms x 10 x 3): `LUXE_BENCH_PY_PATH`,
@@ -7,9 +17,7 @@
   (answered with a tool call 9/9). No regression anywhere (hand-verified the 30 varying patches).
 - **Root cause:** post_write_idle_exit counts executed verification as idle (`bytes_out == 0 or error`:
   silent `python -c` successes, `npx eslint` exit 2 with output). **Next:** A/B a narrower idle test.
-- **Open decision:** promote `LUXE_BENCH_PY_PATH` as an env fix? m5's bench PATH has no `python`, so every
-  m5 model `python ...` has exited 127 to date (m1 is fine). Its outcome gate was not met.
-- **Branch:** `feat/bash-noop-suffixes` (PR, not landed).
+- `LUXE_BENCH_PY_PATH` promoted default ON and #52 landed (see the note above).
 
 ## ⇒ SESSION NOTE (2026-11-03, m1 + m5) — validation menu REFUTED, context pack inert (opt-in), lint-on-JS fixed
 

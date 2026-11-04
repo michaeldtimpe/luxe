@@ -1,0 +1,38 @@
+REP 1 ARM narrow start 2026-11-03 17:40:04
+REP 1 ARM narrow end 2026-11-03 17:42:02 rc=1
+DONE slice 2026-11-03 17:42:02
+REP 1 ARM ns start 2026-11-03 17:44:44
+REP 1 ARM ns end 2026-11-03 17:47:32 rc=1
+REP 1 ARM wide start 2026-11-03 17:47:32
+REP 1 ARM wide end 2026-11-03 17:50:18 rc=1
+DONE slice 2026-11-03 17:50:18
+REP 1 ARM ctl start 2026-11-03 17:50:43
+RELAUNCH 2026-11-03 17:50:53 (first launch killed: ssh-bound)
+REP 1 ARM ctl start 2026-11-03 17:50:53
+REP 1 ARM ctl end 2026-11-03 17:56:11 rc=0
+REP 1 ARM narrow start 2026-11-03 17:56:11
+REP 1 ARM narrow end 2026-11-03 18:02:42 rc=0
+REP 1 ARM ns start 2026-11-03 18:02:42
+REP 1 ARM ns end 2026-11-03 18:09:17 rc=0
+REP 1 ARM wide start 2026-11-03 18:09:17
+REP 1 ARM wide end 2026-11-03 18:15:24 rc=0
+REP 2 ARM ctl start 2026-11-03 18:15:24
+REP 2 ARM ctl end 2026-11-03 18:21:06 rc=0
+REP 2 ARM narrow start 2026-11-03 18:21:06
+REP 2 ARM narrow end 2026-11-03 18:27:09 rc=0
+REP 2 ARM ns start 2026-11-03 18:27:09
+STOPPED 2026-11-03 18:31:46 at ns rep2 (user: full A/B on the slice winner only; wide chosen over ns)
+REP 1 ARM ctl start 2026-11-03 18:31:46
+REP 1 ARM ctl end 2026-11-03 18:31:46 rc=0
+REP 1 ARM wide start 2026-11-03 18:31:46
+REP 1 ARM wide end 2026-11-03 18:31:46 rc=0
+REP 2 ARM ctl start 2026-11-03 18:31:46
+REP 2 ARM ctl end 2026-11-03 18:31:46 rc=0
+REP 2 ARM wide start 2026-11-03 18:31:46
+REP 2 ARM wide end 2026-11-03 18:38:01 rc=0
+REP 3 ARM ctl start 2026-11-03 18:38:01
+REP 3 ARM ctl end 2026-11-03 18:43:51 rc=0
+REP 3 ARM wide start 2026-11-03 18:43:51
+REP 3 ARM wide end 2026-11-03 18:51:46 rc=0
+DONE champ 2026-11-03 18:51:46
+RETRY 2026-11-03 18:53:16 ctl rep1 lpe-rope-calc-document-typing (lock held by the killed first launch)

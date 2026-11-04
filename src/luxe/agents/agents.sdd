@@ -643,6 +643,12 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   is the backstop. Measured in acceptance/idle_narrow_ab_2026_11 (steps, wall).
 - Must not: change the dedup short-circuit's idle count, or consult the
   command text (the test reads only `bytes_out` and the error string).
+- `LUXE_IDLE_NARROW=wide` additionally spares refusals (reason `refusal`), so
+  only the dedup short-circuit counts idle. A/B 2026-11-03 (champion, ctl vs
+  wide x 10 x 3): empty reports 7 -> 0, idle exits 7 -> 0, all varying
+  patches REAL; wall +18.2% trips the +15% gate, so NOT promoted (user's
+  call). narrow alone left the refusals idle and did not fix the empty
+  reports. acceptance/idle_narrow_ab_2026_11/REPORT.md.
 
 ### Removed mechanisms (2026-09 agent-loop cleanup)
 
