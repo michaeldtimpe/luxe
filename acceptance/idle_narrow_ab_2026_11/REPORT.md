@@ -3,8 +3,10 @@
 2026-11-03, m5. Plan, slice re-scope and gates: `PLAN.md`. Per-run data:
 `runs.json` (`analyze.py`; every row carries its `run_id`). Hand-verify:
 `HAND-VERIFY.json`. DEBUG dispatch logs of two narrow cells: `debug/`. Raw
-run directories on m5 under
-`~/luxe-bench-tmp/inab/acceptance/idle_narrow_ab_2026_11/champ-<arm>/`.
+run directories were on m5 under
+`~/luxe-bench-tmp/inab/acceptance/idle_narrow_ab_2026_11/champ-<arm>/` and
+were deleted with that worktree on 2026-11-03 (user request); the per-run
+`events.jsonl` and reports remain in m5's `~/.luxe/runs/<run_id>/`.
 
 ## Verdicts
 
