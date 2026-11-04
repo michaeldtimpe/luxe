@@ -3,9 +3,9 @@
 2026-11-03, m5. Plan, gates and user decisions: `PLAN.md`. Per-run data:
 `runs.json` (180 runs, produced by `analyze.py`). Hand-verify verdicts:
 `HAND-VERIFY-champ.json` (48 unique patches) and `HAND-VERIFY-gemma.json` (26),
-summarized in `HAND-VERIFY.md`. Raw run directories live on m5 under
+summarized in `HAND-VERIFY.md`. Raw run directories were on m5 under
 `~/luxe-bench-tmp/vcab/acceptance/validation_context_ab_2026_11/<label>-<arm>/`
-(events in `~/.luxe/runs/<run_id>/`; every row of `runs.json` carries its
+and were deleted with that worktree on 2026-11-03 (user request) (events in `~/.luxe/runs/<run_id>/`; every row of `runs.json` carries its
 `run_id`).
 
 ## Verdicts

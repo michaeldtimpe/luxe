@@ -3,9 +3,11 @@
 2026-11-03, m5. Plan, re-scope and gates: `PLAN.md`. Per-run data:
 `runs.json` (150 runs, `analyze.py`). Hand-verify: `HAND-VERIFY.json`
 (the 30 patches that differ between arms). DEBUG dispatch logs of two real
-bench cells: `debug/`. Raw run directories on m5 under
-`~/luxe-bench-tmp/bnab/acceptance/bash_noop_ab_2026_11/champ-<arm>/`; every
-`runs.json` row carries its `run_id`.
+bench cells: `debug/`. Raw run directories were on m5 under
+`~/luxe-bench-tmp/bnab/acceptance/bash_noop_ab_2026_11/champ-<arm>/` and were
+deleted with that worktree on 2026-11-03 (user request); events and reports
+remain in m5's `~/.luxe/runs/<run_id>/`, and every `runs.json` row carries
+its `run_id`.
 
 ## Verdicts
 
