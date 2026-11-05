@@ -145,6 +145,12 @@ the periphery. It landed PRs #10–#28 plus a CI fix: ripgrep on the runner, whe
 All benchmark verdicts and the open items are in `acceptance/review_2026_09/REPORT.md`, including the held
 compaction-marker change and two fixes that need cold-storage benchmarks. **Benchmarks now run on m5, not m1**
 (user preference). Use worktrees in `~/luxe-bench-tmp` there and an m5 baseline.
+**Bench artifacts before 2026-11-05 are archived, not on m5:** every arm that was under `m5:~/luxe-bench-tmp/`
+(r2, sx_out, rd_out, hv_*, ... 107,057 files, 105 GB) is in
+`kappa:/volume1/homes/mysterice/backups/m5-archive-20261105/luxe-bench-tmp.tar.zst` (+ `.sha256`). A REPORT
+path `m5:~/luxe-bench-tmp/<x>` resolves with
+`ssh kappa cat <that file> | zstd -dc | tar -xf - luxe-bench-tmp/<x>`. The m5 folder is empty and still the
+place for new worktrees.
 
 ## ⇒ SESSION NOTE (2026-09-11, m1) — stale-oMLX self-repair landed (`luxe.repair`)
 
