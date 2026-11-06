@@ -87,5 +87,16 @@
     "sympy__sympy-13091",
     "sympy__sympy-13877",
     "sympy__sympy-17318"
-  ]
+  ],
+  "ungradeable": {
+    "flagged_at": "2026-11-06",
+    "reason": "Tests call live httpbin over TLS; the instance image's bundled CA certs fail with SSL CERTIFICATE_VERIFY_FAILED, so these grade unresolved regardless of patch. Kept in instance_ids for comparability with every historical n=75 number; report n=75 and n=71 (excluding these). Do not disable TLS verification to grade them.",
+    "evidence": "acceptance/swebench/n75_ab_2026_11_06/REPORT.md",
+    "instance_ids": [
+      "psf__requests-1724",
+      "psf__requests-1766",
+      "psf__requests-1921",
+      "psf__requests-2317"
+    ]
+  }
 }
