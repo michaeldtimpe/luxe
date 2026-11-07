@@ -1,5 +1,20 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-06, m5) — SWE-bench 128K ctx / read-budget A/B: HOLD, 35.7 vs 35.7
+
+- **A/B** (`acceptance/swebench/n75_ab_2026_11_06/REPORT.md`, champion, n=75 x 3 reps, main `65fd43c`):
+  control (32K, 13.6 KB read budget) 34/34/39, ctxonly (`num_ctx` 131072 only, 54.6 KB budget) 38/33/36.
+  **Both average 35.7/75**, level with the 2026-09-28 baseline (36.3). Rep 1's +4 was noise. The 42/75
+  gate (38/71) is not met. unbudgeted (+150 steps, 32K tokens/turn) ran rep 1 only: 38, +40% wall.
+- **Mechanism real, net zero:** control has 10-13 oversize-read refusals per rep, ctxonly 0. django-11333 is
+  a deterministic budget win (control's step-0 refusal on `resolvers.py` means it never opens `base.py`);
+  django-10880 a deterministic loss (more reading, broader wrong edit). No default change.
+- **pylint-6528 `no_report`** was a model-patch infinite loop (`os.path.dirname('/') == '/'`), not infra.
+- **requests 1724/1766/1921/2317 are ungradeable** (live httpbin, image CA certs): flagged in
+  `v1_baseline_n75.json` `ungradeable`, not dropped; report n=75 and n=71.
+- **Open lever if wanted:** what a refused whole-file read returns (first window + outline instead of an
+  error), tested at 32K with django-11333/10880 as paired probes. Not started.
+
 ## ⇒ SESSION NOTE (2026-11-03 eve, m1 + m5) — idle test A/B: wide fixes the empty reports at +18% wall
 
 - **Landed:** #52 (bash no-op levers + record, main `2d17eef`); `LUXE_BENCH_PY_PATH` now DEFAULT ON

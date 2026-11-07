@@ -1,0 +1,4726 @@
+{
+ "rows": [
+  {
+   "rep": "rep1",
+   "arm": "control",
+   "resolved_n75": 34,
+   "resolved_n71": 34,
+   "empty": 6,
+   "errors": {
+    "pylint-dev__pylint-6528": "no_report"
+   },
+   "wall_min": 60,
+   "runs_mined": 75,
+   "read_caps": [
+    13653
+   ],
+   "reads": 460,
+   "capped_reads": 7,
+   "read_bytes": 1065647,
+   "refused_large": 11
+  },
+  {
+   "rep": "rep1",
+   "arm": "ctxonly",
+   "resolved_n75": 38,
+   "resolved_n71": 38,
+   "empty": 6,
+   "errors": {},
+   "wall_min": 64,
+   "runs_mined": 75,
+   "read_caps": [
+    54613
+   ],
+   "reads": 440,
+   "capped_reads": 0,
+   "read_bytes": 1372357,
+   "refused_large": 0
+  },
+  {
+   "rep": "rep1",
+   "arm": "unbudgeted",
+   "resolved_n75": 38,
+   "resolved_n71": 38,
+   "empty": 5,
+   "errors": {
+    "pylint-dev__pylint-6528": "no_report"
+   },
+   "wall_min": 90,
+   "runs_mined": 75,
+   "read_caps": [
+    54613
+   ],
+   "reads": 435,
+   "capped_reads": 0,
+   "read_bytes": 1380600,
+   "refused_large": 0
+  },
+  {
+   "rep": "rep2",
+   "arm": "control",
+   "resolved_n75": 34,
+   "resolved_n71": 34,
+   "empty": 8,
+   "errors": {},
+   "wall_min": 58,
+   "runs_mined": 75,
+   "read_caps": [
+    13653
+   ],
+   "reads": 441,
+   "capped_reads": 6,
+   "read_bytes": 1058584,
+   "refused_large": 10
+  },
+  {
+   "rep": "rep2",
+   "arm": "ctxonly",
+   "resolved_n75": 33,
+   "resolved_n71": 33,
+   "empty": 7,
+   "errors": {},
+   "wall_min": 67,
+   "runs_mined": 75,
+   "read_caps": [
+    54613
+   ],
+   "reads": 442,
+   "capped_reads": 0,
+   "read_bytes": 1417532,
+   "refused_large": 0
+  },
+  {
+   "rep": "rep3",
+   "arm": "control",
+   "resolved_n75": 39,
+   "resolved_n71": 39,
+   "empty": 5,
+   "errors": {},
+   "wall_min": 66,
+   "runs_mined": 75,
+   "read_caps": [
+    13653
+   ],
+   "reads": 476,
+   "capped_reads": 6,
+   "read_bytes": 1093483,
+   "refused_large": 13
+  },
+  {
+   "rep": "rep3",
+   "arm": "ctxonly",
+   "resolved_n75": 36,
+   "resolved_n71": 36,
+   "empty": 6,
+   "errors": {},
+   "wall_min": 71,
+   "runs_mined": 75,
+   "read_caps": [
+    54613
+   ],
+   "reads": 443,
+   "capped_reads": 0,
+   "read_bytes": 1453799,
+   "refused_large": 0
+  }
+ ],
+ "matrix": {
+  "astropy__astropy-12907": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "astropy__astropy-13033": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "astropy__astropy-13236": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "astropy__astropy-13453": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "astropy__astropy-13977": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "astropy__astropy-14096": {
+   "control": "001",
+   "ctxonly": "100",
+   "unbudgeted": "0"
+  },
+  "astropy__astropy-14182": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "astropy__astropy-8707": {
+   "control": "111",
+   "ctxonly": "101",
+   "unbudgeted": "1"
+  },
+  "django__django-10097": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "django__django-10880": {
+   "control": "111",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "django__django-10914": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "django__django-10973": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "django__django-10999": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "django__django-11333": {
+   "control": "000",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "django__django-11532": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "django__django-11734": {
+   "control": "EEE",
+   "ctxonly": "EEE",
+   "unbudgeted": "E"
+  },
+  "matplotlib__matplotlib-13989": {
+   "control": "101",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "matplotlib__matplotlib-14623": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "matplotlib__matplotlib-20488": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "matplotlib__matplotlib-20676": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "matplotlib__matplotlib-20826": {
+   "control": "EEE",
+   "ctxonly": "EEE",
+   "unbudgeted": "E"
+  },
+  "matplotlib__matplotlib-24870": {
+   "control": "000",
+   "ctxonly": "010",
+   "unbudgeted": "1"
+  },
+  "matplotlib__matplotlib-25479": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "matplotlib__matplotlib-25775": {
+   "control": "EE1",
+   "ctxonly": "EEE",
+   "unbudgeted": "E"
+  },
+  "mwaskom__seaborn-3069": {
+   "control": "EEE",
+   "ctxonly": "EEE",
+   "unbudgeted": "E"
+  },
+  "mwaskom__seaborn-3187": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "pallets__flask-5014": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "psf__requests-1142": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "psf__requests-1724": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "psf__requests-1766": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "psf__requests-1921": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "psf__requests-2317": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "psf__requests-2931": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "psf__requests-5414": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "psf__requests-6028": {
+   "control": "EEE",
+   "ctxonly": "EEE",
+   "unbudgeted": "E"
+  },
+  "pydata__xarray-2905": {
+   "control": "111",
+   "ctxonly": "100",
+   "unbudgeted": "1"
+  },
+  "pydata__xarray-3095": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pydata__xarray-3151": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pydata__xarray-3305": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pydata__xarray-3677": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pydata__xarray-6938": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "pylint-dev__pylint-4604": {
+   "control": "0E0",
+   "ctxonly": "E00",
+   "unbudgeted": "0"
+  },
+  "pylint-dev__pylint-4661": {
+   "control": "000",
+   "ctxonly": "011",
+   "unbudgeted": "1"
+  },
+  "pylint-dev__pylint-4970": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "pylint-dev__pylint-6386": {
+   "control": "0E1",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "pylint-dev__pylint-6528": {
+   "control": "000",
+   "ctxonly": "100",
+   "unbudgeted": "0"
+  },
+  "pytest-dev__pytest-10051": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "pytest-dev__pytest-10081": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pytest-dev__pytest-5262": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pytest-dev__pytest-5631": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pytest-dev__pytest-5809": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "pytest-dev__pytest-5840": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "pytest-dev__pytest-8399": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "scikit-learn__scikit-learn-10297": {
+   "control": "111",
+   "ctxonly": "101",
+   "unbudgeted": "1"
+  },
+  "scikit-learn__scikit-learn-10844": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "scikit-learn__scikit-learn-10908": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "scikit-learn__scikit-learn-11310": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "scikit-learn__scikit-learn-11578": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "scikit-learn__scikit-learn-12682": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "sphinx-doc__sphinx-10323": {
+   "control": "00E",
+   "ctxonly": "1EE",
+   "unbudgeted": "1"
+  },
+  "sphinx-doc__sphinx-10435": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "sphinx-doc__sphinx-10449": {
+   "control": "EE1",
+   "ctxonly": "111",
+   "unbudgeted": "0"
+  },
+  "sphinx-doc__sphinx-10466": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "sphinx-doc__sphinx-10614": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "sphinx-doc__sphinx-10673": {
+   "control": "011",
+   "ctxonly": "0E1",
+   "unbudgeted": "1"
+  },
+  "sphinx-doc__sphinx-7462": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "sphinx-doc__sphinx-8120": {
+   "control": "111",
+   "ctxonly": "101",
+   "unbudgeted": "1"
+  },
+  "sympy__sympy-11618": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "sympy__sympy-12096": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "sympy__sympy-12419": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "sympy__sympy-12481": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "sympy__sympy-13031": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "sympy__sympy-13091": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  },
+  "sympy__sympy-13877": {
+   "control": "111",
+   "ctxonly": "111",
+   "unbudgeted": "1"
+  },
+  "sympy__sympy-17318": {
+   "control": "000",
+   "ctxonly": "000",
+   "unbudgeted": "0"
+  }
+ },
+ "ungradeable": [
+  "psf__requests-1724",
+  "psf__requests-1766",
+  "psf__requests-1921",
+  "psf__requests-2317"
+ ],
+ "mech": {
+  "rep1/control": {
+   "psf__requests-2931": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5381,
+    "steps": 11
+   },
+   "scikit-learn__scikit-learn-10844": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3834,
+    "steps": 11
+   },
+   "pytest-dev__pytest-5840": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6341,
+    "steps": 18
+   },
+   "django__django-10973": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4488,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-10466": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 1,
+    "refused_large": 0,
+    "read_bytes": 19097,
+    "steps": 12
+   },
+   "sphinx-doc__sphinx-10673": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 14847,
+    "steps": 11
+   },
+   "astropy__astropy-14096": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9685,
+    "steps": 17
+   },
+   "pallets__flask-5014": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 5443,
+    "steps": 13
+   },
+   "astropy__astropy-12907": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17782,
+    "steps": 9
+   },
+   "pytest-dev__pytest-10051": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8216,
+    "steps": 15
+   },
+   "scikit-learn__scikit-learn-10297": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13357,
+    "steps": 8
+   },
+   "mwaskom__seaborn-3069": {
+    "cap": 13653,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26765,
+    "steps": 20
+   },
+   "scikit-learn__scikit-learn-11310": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 2,
+    "refused_large": 0,
+    "read_bytes": 33373,
+    "steps": 14
+   },
+   "sympy__sympy-13091": {
+    "cap": 13653,
+    "reads": 16,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21970,
+    "steps": 30
+   },
+   "matplotlib__matplotlib-13989": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22091,
+    "steps": 18
+   },
+   "matplotlib__matplotlib-20676": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22427,
+    "steps": 19
+   },
+   "pytest-dev__pytest-5262": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 10
+   },
+   "django__django-10097": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12756,
+    "steps": 13
+   },
+   "sphinx-doc__sphinx-10435": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17496,
+    "steps": 21
+   },
+   "psf__requests-6028": {
+    "cap": 13653,
+    "reads": 1,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2146,
+    "steps": 11
+   },
+   "psf__requests-2317": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3553,
+    "steps": 12
+   },
+   "astropy__astropy-8707": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 20677,
+    "steps": 17
+   },
+   "pytest-dev__pytest-5809": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9136,
+    "steps": 8
+   },
+   "scikit-learn__scikit-learn-12682": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38611,
+    "steps": 24
+   },
+   "astropy__astropy-13236": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3969,
+    "steps": 15
+   },
+   "sympy__sympy-13031": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11686,
+    "steps": 22
+   },
+   "pytest-dev__pytest-10081": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 17492,
+    "steps": 17
+   },
+   "psf__requests-1142": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9216,
+    "steps": 14
+   },
+   "django__django-11734": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27754,
+    "steps": 20
+   },
+   "astropy__astropy-13033": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4746,
+    "steps": 7
+   },
+   "sphinx-doc__sphinx-8120": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 16577,
+    "steps": 14
+   },
+   "matplotlib__matplotlib-20488": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19824,
+    "steps": 19
+   },
+   "psf__requests-1724": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 10819,
+    "steps": 23
+   },
+   "astropy__astropy-13977": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22968,
+    "steps": 20
+   },
+   "matplotlib__matplotlib-25775": {
+    "cap": 13653,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26416,
+    "steps": 20
+   },
+   "pydata__xarray-3677": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14770,
+    "steps": 16
+   },
+   "sphinx-doc__sphinx-10449": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26610,
+    "steps": 20
+   },
+   "pydata__xarray-3305": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15775,
+    "steps": 25
+   },
+   "astropy__astropy-14182": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 12478,
+    "steps": 14
+   },
+   "pylint-dev__pylint-4970": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 16846,
+    "steps": 17
+   },
+   "sphinx-doc__sphinx-10614": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 8031,
+    "steps": 16
+   },
+   "sympy__sympy-12419": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3152,
+    "steps": 12
+   },
+   "pydata__xarray-6938": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14096,
+    "steps": 20
+   },
+   "pydata__xarray-3151": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14457,
+    "steps": 12
+   },
+   "django__django-10999": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5502,
+    "steps": 7
+   },
+   "sympy__sympy-12096": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7611,
+    "steps": 16
+   },
+   "psf__requests-1766": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7077,
+    "steps": 6
+   },
+   "matplotlib__matplotlib-20826": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 1,
+    "refused_large": 0,
+    "read_bytes": 27104,
+    "steps": 20
+   },
+   "scikit-learn__scikit-learn-10908": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13424,
+    "steps": 19
+   },
+   "pylint-dev__pylint-4661": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11749,
+    "steps": 14
+   },
+   "pytest-dev__pytest-5631": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8432,
+    "steps": 14
+   },
+   "pylint-dev__pylint-6386": {
+    "cap": 13653,
+    "reads": 20,
+    "capped_reads": 2,
+    "refused_large": 1,
+    "read_bytes": 61614,
+    "steps": 30
+   },
+   "matplotlib__matplotlib-25479": {
+    "cap": 13653,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 26335,
+    "steps": 22
+   },
+   "pydata__xarray-2905": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5703,
+    "steps": 12
+   },
+   "scikit-learn__scikit-learn-11578": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8683,
+    "steps": 9
+   },
+   "matplotlib__matplotlib-14623": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21092,
+    "steps": 20
+   },
+   "django__django-10914": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3275,
+    "steps": 11
+   },
+   "astropy__astropy-13453": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 1,
+    "refused_large": 1,
+    "read_bytes": 28926,
+    "steps": 20
+   },
+   "pydata__xarray-3095": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8096,
+    "steps": 14
+   },
+   "sympy__sympy-17318": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9263,
+    "steps": 18
+   },
+   "sympy__sympy-13877": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4738,
+    "steps": 10
+   },
+   "sphinx-doc__sphinx-10323": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 16880,
+    "steps": 23
+   },
+   "django__django-10880": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7726,
+    "steps": 11
+   },
+   "psf__requests-1921": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3560,
+    "steps": 9
+   },
+   "sympy__sympy-11618": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 1730,
+    "steps": 12
+   },
+   "matplotlib__matplotlib-24870": {
+    "cap": 13653,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 43462,
+    "steps": 25
+   },
+   "mwaskom__seaborn-3187": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7444,
+    "steps": 19
+   },
+   "django__django-11333": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 2650,
+    "steps": 13
+   },
+   "sympy__sympy-12481": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12012,
+    "steps": 12
+   },
+   "psf__requests-5414": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4187,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-7462": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3852,
+    "steps": 10
+   },
+   "pylint-dev__pylint-4604": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24813,
+    "steps": 18
+   },
+   "django__django-11532": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2650,
+    "steps": 9
+   },
+   "pylint-dev__pylint-6528": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27433,
+    "steps": 18
+   },
+   "pytest-dev__pytest-8399": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6713,
+    "steps": 19
+   }
+  },
+  "rep1/ctxonly": {
+   "sphinx-doc__sphinx-8120": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15164,
+    "steps": 13
+   },
+   "psf__requests-1766": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7710,
+    "steps": 8
+   },
+   "psf__requests-1724": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11484,
+    "steps": 16
+   },
+   "pydata__xarray-6938": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11888,
+    "steps": 19
+   },
+   "psf__requests-1142": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6623,
+    "steps": 11
+   },
+   "psf__requests-5414": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7793,
+    "steps": 16
+   },
+   "pytest-dev__pytest-5262": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 10
+   },
+   "psf__requests-2931": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5799,
+    "steps": 10
+   },
+   "mwaskom__seaborn-3187": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8087,
+    "steps": 17
+   },
+   "django__django-10973": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4488,
+    "steps": 11
+   },
+   "astropy__astropy-13453": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26740,
+    "steps": 18
+   },
+   "pytest-dev__pytest-10081": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11963,
+    "steps": 13
+   },
+   "pylint-dev__pylint-4970": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 54947,
+    "steps": 10
+   },
+   "sympy__sympy-13877": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4472,
+    "steps": 9
+   },
+   "scikit-learn__scikit-learn-10844": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3834,
+    "steps": 8
+   },
+   "matplotlib__matplotlib-25775": {
+    "cap": 54613,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26184,
+    "steps": 20
+   },
+   "matplotlib__matplotlib-20676": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22427,
+    "steps": 19
+   },
+   "pylint-dev__pylint-4604": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 16126,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-10466": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19097,
+    "steps": 12
+   },
+   "scikit-learn__scikit-learn-11310": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26201,
+    "steps": 18
+   },
+   "scikit-learn__scikit-learn-11578": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8683,
+    "steps": 9
+   },
+   "matplotlib__matplotlib-14623": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21092,
+    "steps": 20
+   },
+   "matplotlib__matplotlib-20488": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19824,
+    "steps": 19
+   },
+   "sympy__sympy-13031": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11686,
+    "steps": 22
+   },
+   "sympy__sympy-12481": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18059,
+    "steps": 14
+   },
+   "pytest-dev__pytest-5809": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9136,
+    "steps": 8
+   },
+   "django__django-11734": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 30383,
+    "steps": 20
+   },
+   "mwaskom__seaborn-3069": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27398,
+    "steps": 20
+   },
+   "pydata__xarray-3151": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15516,
+    "steps": 12
+   },
+   "django__django-11333": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38560,
+    "steps": 17
+   },
+   "django__django-11532": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2650,
+    "steps": 9
+   },
+   "pallets__flask-5014": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27433,
+    "steps": 9
+   },
+   "sympy__sympy-12419": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19775,
+    "steps": 11
+   },
+   "psf__requests-1921": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5540,
+    "steps": 12
+   },
+   "astropy__astropy-13977": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 41701,
+    "steps": 17
+   },
+   "sympy__sympy-13091": {
+    "cap": 54613,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 16974,
+    "steps": 26
+   },
+   "pytest-dev__pytest-8399": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6713,
+    "steps": 20
+   },
+   "pydata__xarray-3677": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14770,
+    "steps": 16
+   },
+   "pylint-dev__pylint-6528": {
+    "cap": 54613,
+    "reads": 16,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33215,
+    "steps": 30
+   },
+   "pylint-dev__pylint-4661": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18466,
+    "steps": 29
+   },
+   "django__django-10097": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12756,
+    "steps": 13
+   },
+   "pydata__xarray-3305": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15775,
+    "steps": 25
+   },
+   "pydata__xarray-2905": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8589,
+    "steps": 14
+   },
+   "astropy__astropy-14182": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 28483,
+    "steps": 13
+   },
+   "sympy__sympy-17318": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6224,
+    "steps": 12
+   },
+   "django__django-10999": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5502,
+    "steps": 7
+   },
+   "pydata__xarray-3095": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8096,
+    "steps": 14
+   },
+   "astropy__astropy-14096": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6851,
+    "steps": 10
+   },
+   "scikit-learn__scikit-learn-10908": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13424,
+    "steps": 19
+   },
+   "sympy__sympy-12096": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7611,
+    "steps": 16
+   },
+   "sympy__sympy-11618": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33803,
+    "steps": 11
+   },
+   "astropy__astropy-8707": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18727,
+    "steps": 17
+   },
+   "pytest-dev__pytest-10051": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7061,
+    "steps": 12
+   },
+   "sphinx-doc__sphinx-10449": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 28641,
+    "steps": 23
+   },
+   "matplotlib__matplotlib-25479": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 32233,
+    "steps": 17
+   },
+   "matplotlib__matplotlib-24870": {
+    "cap": 54613,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 46406,
+    "steps": 30
+   },
+   "astropy__astropy-13033": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4746,
+    "steps": 7
+   },
+   "astropy__astropy-13236": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6054,
+    "steps": 15
+   },
+   "django__django-10880": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13134,
+    "steps": 15
+   },
+   "sphinx-doc__sphinx-10614": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 52452,
+    "steps": 12
+   },
+   "sphinx-doc__sphinx-10323": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 23562,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-10673": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 40771,
+    "steps": 12
+   },
+   "django__django-10914": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3777,
+    "steps": 9
+   },
+   "astropy__astropy-12907": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17782,
+    "steps": 9
+   },
+   "pytest-dev__pytest-5840": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6004,
+    "steps": 16
+   },
+   "matplotlib__matplotlib-13989": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22091,
+    "steps": 18
+   },
+   "pylint-dev__pylint-6386": {
+    "cap": 54613,
+    "reads": 14,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 43767,
+    "steps": 26
+   },
+   "sphinx-doc__sphinx-10435": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11993,
+    "steps": 19
+   },
+   "matplotlib__matplotlib-20826": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24429,
+    "steps": 20
+   },
+   "psf__requests-2317": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4951,
+    "steps": 14
+   },
+   "psf__requests-6028": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 72400,
+    "steps": 7
+   },
+   "pytest-dev__pytest-5631": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5302,
+    "steps": 15
+   },
+   "scikit-learn__scikit-learn-12682": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38393,
+    "steps": 23
+   },
+   "scikit-learn__scikit-learn-10297": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13357,
+    "steps": 8
+   },
+   "sphinx-doc__sphinx-7462": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3852,
+    "steps": 10
+   }
+  },
+  "rep1/unbudgeted": {
+   "psf__requests-2931": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 12
+   },
+   "pytest-dev__pytest-8399": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6713,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-10466": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19097,
+    "steps": 12
+   },
+   "matplotlib__matplotlib-20826": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24429,
+    "steps": 20
+   },
+   "django__django-10097": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12756,
+    "steps": 13
+   },
+   "mwaskom__seaborn-3069": {
+    "cap": 54613,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 36045,
+    "steps": 20
+   },
+   "sympy__sympy-12481": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18059,
+    "steps": 14
+   },
+   "scikit-learn__scikit-learn-10908": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13424,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-10673": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 39045,
+    "steps": 20
+   },
+   "sphinx-doc__sphinx-8120": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15164,
+    "steps": 13
+   },
+   "scikit-learn__scikit-learn-12682": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38393,
+    "steps": 23
+   },
+   "astropy__astropy-14182": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 28483,
+    "steps": 13
+   },
+   "pylint-dev__pylint-6528": {
+    "cap": 54613,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27433,
+    "steps": 18
+   },
+   "pytest-dev__pytest-5809": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9136,
+    "steps": 8
+   },
+   "django__django-10999": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5502,
+    "steps": 7
+   },
+   "astropy__astropy-14096": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6739,
+    "steps": 9
+   },
+   "pylint-dev__pylint-6386": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 47514,
+    "steps": 16
+   },
+   "matplotlib__matplotlib-14623": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21092,
+    "steps": 20
+   },
+   "astropy__astropy-8707": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 20175,
+    "steps": 18
+   },
+   "astropy__astropy-13033": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4746,
+    "steps": 7
+   },
+   "sympy__sympy-11618": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33803,
+    "steps": 11
+   },
+   "scikit-learn__scikit-learn-10844": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3834,
+    "steps": 8
+   },
+   "pylint-dev__pylint-4970": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 54947,
+    "steps": 10
+   },
+   "django__django-11532": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2650,
+    "steps": 9
+   },
+   "astropy__astropy-13236": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4436,
+    "steps": 13
+   },
+   "sphinx-doc__sphinx-10323": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 23043,
+    "steps": 11
+   },
+   "pytest-dev__pytest-10051": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8205,
+    "steps": 14
+   },
+   "matplotlib__matplotlib-25479": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 32233,
+    "steps": 17
+   },
+   "pytest-dev__pytest-5840": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6341,
+    "steps": 18
+   },
+   "scikit-learn__scikit-learn-11578": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8683,
+    "steps": 9
+   },
+   "psf__requests-6028": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 72400,
+    "steps": 7
+   },
+   "astropy__astropy-12907": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17782,
+    "steps": 9
+   },
+   "sympy__sympy-13031": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11686,
+    "steps": 22
+   },
+   "pydata__xarray-3095": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8096,
+    "steps": 14
+   },
+   "pydata__xarray-3677": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14770,
+    "steps": 16
+   },
+   "mwaskom__seaborn-3187": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8559,
+    "steps": 17
+   },
+   "pydata__xarray-6938": {
+    "cap": 54613,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14096,
+    "steps": 20
+   },
+   "django__django-10973": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4488,
+    "steps": 11
+   },
+   "psf__requests-2317": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3553,
+    "steps": 12
+   },
+   "django__django-11734": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33338,
+    "steps": 20
+   },
+   "django__django-10880": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13134,
+    "steps": 15
+   },
+   "pytest-dev__pytest-5631": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9652,
+    "steps": 16
+   },
+   "sympy__sympy-17318": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6224,
+    "steps": 12
+   },
+   "pydata__xarray-3305": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15775,
+    "steps": 25
+   },
+   "sphinx-doc__sphinx-7462": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3852,
+    "steps": 10
+   },
+   "pytest-dev__pytest-5262": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 10
+   },
+   "pytest-dev__pytest-10081": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11963,
+    "steps": 13
+   },
+   "psf__requests-5414": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4206,
+    "steps": 15
+   },
+   "matplotlib__matplotlib-20676": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22427,
+    "steps": 19
+   },
+   "matplotlib__matplotlib-20488": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19824,
+    "steps": 19
+   },
+   "sympy__sympy-12419": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17526,
+    "steps": 12
+   },
+   "sphinx-doc__sphinx-10435": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11993,
+    "steps": 19
+   },
+   "pydata__xarray-3151": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 16165,
+    "steps": 12
+   },
+   "matplotlib__matplotlib-13989": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22091,
+    "steps": 18
+   },
+   "astropy__astropy-13977": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 16209,
+    "steps": 20
+   },
+   "sphinx-doc__sphinx-10449": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 20795,
+    "steps": 21
+   },
+   "sympy__sympy-12096": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7611,
+    "steps": 16
+   },
+   "sympy__sympy-13877": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4472,
+    "steps": 9
+   },
+   "pylint-dev__pylint-4661": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11342,
+    "steps": 24
+   },
+   "matplotlib__matplotlib-24870": {
+    "cap": 54613,
+    "reads": 15,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 53987,
+    "steps": 28
+   },
+   "psf__requests-1921": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3178,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-10614": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 52452,
+    "steps": 12
+   },
+   "django__django-11333": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38911,
+    "steps": 17
+   },
+   "psf__requests-1142": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7641,
+    "steps": 13
+   },
+   "pallets__flask-5014": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27433,
+    "steps": 9
+   },
+   "psf__requests-1766": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7077,
+    "steps": 9
+   },
+   "django__django-10914": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3275,
+    "steps": 11
+   },
+   "psf__requests-1724": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11484,
+    "steps": 16
+   },
+   "pylint-dev__pylint-4604": {
+    "cap": 54613,
+    "reads": 15,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 44545,
+    "steps": 23
+   },
+   "sympy__sympy-13091": {
+    "cap": 54613,
+    "reads": 21,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 30121,
+    "steps": 35
+   },
+   "astropy__astropy-13453": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26740,
+    "steps": 18
+   },
+   "pydata__xarray-2905": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5504,
+    "steps": 12
+   },
+   "scikit-learn__scikit-learn-11310": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26201,
+    "steps": 18
+   },
+   "scikit-learn__scikit-learn-10297": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13357,
+    "steps": 8
+   },
+   "matplotlib__matplotlib-25775": {
+    "cap": 54613,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 23031,
+    "steps": 20
+   }
+  },
+  "rep2/control": {
+   "astropy__astropy-14182": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 12478,
+    "steps": 15
+   },
+   "pytest-dev__pytest-8399": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6713,
+    "steps": 19
+   },
+   "astropy__astropy-13236": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4406,
+    "steps": 17
+   },
+   "pydata__xarray-6938": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15125,
+    "steps": 20
+   },
+   "scikit-learn__scikit-learn-11310": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 2,
+    "refused_large": 0,
+    "read_bytes": 33373,
+    "steps": 14
+   },
+   "pydata__xarray-3095": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8096,
+    "steps": 14
+   },
+   "astropy__astropy-13033": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4746,
+    "steps": 7
+   },
+   "sympy__sympy-12419": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3994,
+    "steps": 12
+   },
+   "django__django-10914": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6616,
+    "steps": 9
+   },
+   "pydata__xarray-3305": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15775,
+    "steps": 25
+   },
+   "matplotlib__matplotlib-20826": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 1,
+    "refused_large": 0,
+    "read_bytes": 27104,
+    "steps": 20
+   },
+   "sympy__sympy-13091": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 16443,
+    "steps": 20
+   },
+   "psf__requests-1724": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 10485,
+    "steps": 17
+   },
+   "psf__requests-1921": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6006,
+    "steps": 11
+   },
+   "django__django-10973": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4488,
+    "steps": 11
+   },
+   "pylint-dev__pylint-6386": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 1,
+    "refused_large": 0,
+    "read_bytes": 43229,
+    "steps": 30
+   },
+   "pydata__xarray-3151": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13225,
+    "steps": 11
+   },
+   "matplotlib__matplotlib-25479": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 20438,
+    "steps": 20
+   },
+   "mwaskom__seaborn-3187": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7444,
+    "steps": 16
+   },
+   "sphinx-doc__sphinx-7462": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3852,
+    "steps": 10
+   },
+   "astropy__astropy-12907": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17782,
+    "steps": 9
+   },
+   "matplotlib__matplotlib-25775": {
+    "cap": 13653,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24037,
+    "steps": 20
+   },
+   "pydata__xarray-3677": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14770,
+    "steps": 16
+   },
+   "psf__requests-6028": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 20998,
+    "steps": 20
+   },
+   "pytest-dev__pytest-10081": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 17492,
+    "steps": 17
+   },
+   "django__django-11333": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 2650,
+    "steps": 13
+   },
+   "psf__requests-1142": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5795,
+    "steps": 11
+   },
+   "pytest-dev__pytest-5809": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9136,
+    "steps": 8
+   },
+   "sphinx-doc__sphinx-10673": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 26951,
+    "steps": 17
+   },
+   "pylint-dev__pylint-4604": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 23279,
+    "steps": 21
+   },
+   "pylint-dev__pylint-6528": {
+    "cap": 13653,
+    "reads": 14,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27362,
+    "steps": 29
+   },
+   "pytest-dev__pytest-5840": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6341,
+    "steps": 18
+   },
+   "django__django-10880": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7726,
+    "steps": 11
+   },
+   "psf__requests-2931": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5381,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-10466": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 1,
+    "refused_large": 0,
+    "read_bytes": 19097,
+    "steps": 12
+   },
+   "matplotlib__matplotlib-13989": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22091,
+    "steps": 18
+   },
+   "django__django-11532": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2650,
+    "steps": 9
+   },
+   "pytest-dev__pytest-5262": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 10
+   },
+   "sympy__sympy-12481": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12012,
+    "steps": 12
+   },
+   "mwaskom__seaborn-3069": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9401,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-10449": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 30228,
+    "steps": 20
+   },
+   "scikit-learn__scikit-learn-10844": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3834,
+    "steps": 8
+   },
+   "pylint-dev__pylint-4661": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18741,
+    "steps": 18
+   },
+   "astropy__astropy-13453": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 1,
+    "refused_large": 1,
+    "read_bytes": 28926,
+    "steps": 20
+   },
+   "psf__requests-5414": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8315,
+    "steps": 16
+   },
+   "pytest-dev__pytest-5631": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8432,
+    "steps": 14
+   },
+   "sphinx-doc__sphinx-10435": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11993,
+    "steps": 19
+   },
+   "django__django-10097": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12756,
+    "steps": 13
+   },
+   "scikit-learn__scikit-learn-11578": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8683,
+    "steps": 9
+   },
+   "astropy__astropy-13977": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21977,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-8120": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15809,
+    "steps": 15
+   },
+   "sphinx-doc__sphinx-10323": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 17294,
+    "steps": 20
+   },
+   "sphinx-doc__sphinx-10614": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 8031,
+    "steps": 16
+   },
+   "astropy__astropy-8707": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21826,
+    "steps": 18
+   },
+   "pytest-dev__pytest-10051": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7051,
+    "steps": 14
+   },
+   "pydata__xarray-2905": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8187,
+    "steps": 14
+   },
+   "matplotlib__matplotlib-20488": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19824,
+    "steps": 19
+   },
+   "sympy__sympy-12096": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7611,
+    "steps": 16
+   },
+   "matplotlib__matplotlib-14623": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21092,
+    "steps": 20
+   },
+   "pallets__flask-5014": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 5443,
+    "steps": 13
+   },
+   "sympy__sympy-11618": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 1730,
+    "steps": 12
+   },
+   "scikit-learn__scikit-learn-12682": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38611,
+    "steps": 24
+   },
+   "sympy__sympy-13031": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11686,
+    "steps": 22
+   },
+   "matplotlib__matplotlib-24870": {
+    "cap": 13653,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 46705,
+    "steps": 26
+   },
+   "django__django-10999": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5502,
+    "steps": 7
+   },
+   "scikit-learn__scikit-learn-10908": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13424,
+    "steps": 19
+   },
+   "psf__requests-2317": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5038,
+    "steps": 13
+   },
+   "sympy__sympy-13877": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4738,
+    "steps": 10
+   },
+   "pylint-dev__pylint-4970": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 12819,
+    "steps": 14
+   },
+   "sympy__sympy-17318": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9263,
+    "steps": 18
+   },
+   "astropy__astropy-14096": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9278,
+    "steps": 11
+   },
+   "matplotlib__matplotlib-20676": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21805,
+    "steps": 19
+   },
+   "django__django-11734": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27754,
+    "steps": 20
+   },
+   "psf__requests-1766": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7077,
+    "steps": 6
+   },
+   "scikit-learn__scikit-learn-10297": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13357,
+    "steps": 8
+   }
+  },
+  "rep2/ctxonly": {
+   "astropy__astropy-13033": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4746,
+    "steps": 7
+   },
+   "pytest-dev__pytest-10081": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11963,
+    "steps": 13
+   },
+   "pydata__xarray-2905": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 10992,
+    "steps": 16
+   },
+   "astropy__astropy-12907": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17782,
+    "steps": 9
+   },
+   "django__django-11333": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 37892,
+    "steps": 16
+   },
+   "scikit-learn__scikit-learn-11310": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26201,
+    "steps": 18
+   },
+   "sphinx-doc__sphinx-10673": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 34812,
+    "steps": 20
+   },
+   "pylint-dev__pylint-4970": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 54947,
+    "steps": 10
+   },
+   "pytest-dev__pytest-5840": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6341,
+    "steps": 18
+   },
+   "sympy__sympy-12419": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18501,
+    "steps": 12
+   },
+   "psf__requests-5414": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7793,
+    "steps": 16
+   },
+   "matplotlib__matplotlib-20826": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24429,
+    "steps": 20
+   },
+   "django__django-10880": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13134,
+    "steps": 15
+   },
+   "django__django-11734": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 30383,
+    "steps": 20
+   },
+   "sphinx-doc__sphinx-7462": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3852,
+    "steps": 10
+   },
+   "sphinx-doc__sphinx-10435": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17496,
+    "steps": 21
+   },
+   "pytest-dev__pytest-8399": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6713,
+    "steps": 20
+   },
+   "astropy__astropy-14096": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9851,
+    "steps": 9
+   },
+   "psf__requests-6028": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 72400,
+    "steps": 7
+   },
+   "sphinx-doc__sphinx-10466": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19097,
+    "steps": 12
+   },
+   "django__django-10914": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3275,
+    "steps": 11
+   },
+   "pydata__xarray-6938": {
+    "cap": 54613,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14329,
+    "steps": 20
+   },
+   "matplotlib__matplotlib-25479": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 32233,
+    "steps": 17
+   },
+   "sphinx-doc__sphinx-10449": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 29001,
+    "steps": 21
+   },
+   "sympy__sympy-13877": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4472,
+    "steps": 9
+   },
+   "psf__requests-2931": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5799,
+    "steps": 10
+   },
+   "psf__requests-1142": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9316,
+    "steps": 12
+   },
+   "pylint-dev__pylint-4661": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13380,
+    "steps": 21
+   },
+   "pydata__xarray-3151": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17446,
+    "steps": 13
+   },
+   "pydata__xarray-3095": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8096,
+    "steps": 14
+   },
+   "matplotlib__matplotlib-25775": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26215,
+    "steps": 20
+   },
+   "matplotlib__matplotlib-14623": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21092,
+    "steps": 20
+   },
+   "matplotlib__matplotlib-24870": {
+    "cap": 54613,
+    "reads": 15,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 53987,
+    "steps": 28
+   },
+   "pylint-dev__pylint-6386": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 82542,
+    "steps": 21
+   },
+   "scikit-learn__scikit-learn-10297": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13357,
+    "steps": 8
+   },
+   "django__django-10973": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4488,
+    "steps": 11
+   },
+   "scikit-learn__scikit-learn-11578": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8683,
+    "steps": 9
+   },
+   "pylint-dev__pylint-6528": {
+    "cap": 54613,
+    "reads": 14,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33642,
+    "steps": 30
+   },
+   "matplotlib__matplotlib-20676": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22427,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-10323": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22134,
+    "steps": 5
+   },
+   "pylint-dev__pylint-4604": {
+    "cap": 54613,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33059,
+    "steps": 20
+   },
+   "django__django-11532": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2650,
+    "steps": 9
+   },
+   "pydata__xarray-3677": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14770,
+    "steps": 16
+   },
+   "mwaskom__seaborn-3187": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8087,
+    "steps": 17
+   },
+   "pytest-dev__pytest-5809": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9136,
+    "steps": 8
+   },
+   "mwaskom__seaborn-3069": {
+    "cap": 54613,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 29208,
+    "steps": 20
+   },
+   "pytest-dev__pytest-5262": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 10
+   },
+   "django__django-10999": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5502,
+    "steps": 7
+   },
+   "psf__requests-2317": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5503,
+    "steps": 17
+   },
+   "astropy__astropy-14182": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 28483,
+    "steps": 13
+   },
+   "astropy__astropy-8707": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9590,
+    "steps": 14
+   },
+   "sphinx-doc__sphinx-8120": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15164,
+    "steps": 13
+   },
+   "astropy__astropy-13977": {
+    "cap": 54613,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21638,
+    "steps": 20
+   },
+   "pytest-dev__pytest-10051": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8216,
+    "steps": 15
+   },
+   "astropy__astropy-13236": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6019,
+    "steps": 16
+   },
+   "sympy__sympy-11618": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33803,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-10614": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 52452,
+    "steps": 12
+   },
+   "matplotlib__matplotlib-20488": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19824,
+    "steps": 19
+   },
+   "psf__requests-1766": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7077,
+    "steps": 7
+   },
+   "psf__requests-1921": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4386,
+    "steps": 11
+   },
+   "django__django-10097": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12756,
+    "steps": 13
+   },
+   "scikit-learn__scikit-learn-10908": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13424,
+    "steps": 19
+   },
+   "scikit-learn__scikit-learn-12682": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38393,
+    "steps": 23
+   },
+   "pallets__flask-5014": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27433,
+    "steps": 9
+   },
+   "sympy__sympy-17318": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6224,
+    "steps": 12
+   },
+   "astropy__astropy-13453": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26740,
+    "steps": 18
+   },
+   "matplotlib__matplotlib-13989": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22091,
+    "steps": 18
+   },
+   "sympy__sympy-12096": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7611,
+    "steps": 16
+   },
+   "sympy__sympy-12481": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18059,
+    "steps": 14
+   },
+   "sympy__sympy-13091": {
+    "cap": 54613,
+    "reads": 17,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22786,
+    "steps": 30
+   },
+   "scikit-learn__scikit-learn-10844": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3881,
+    "steps": 8
+   },
+   "pytest-dev__pytest-5631": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4626,
+    "steps": 12
+   },
+   "sympy__sympy-13031": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11686,
+    "steps": 22
+   },
+   "psf__requests-1724": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11484,
+    "steps": 16
+   },
+   "pydata__xarray-3305": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15775,
+    "steps": 25
+   }
+  },
+  "rep3/control": {
+   "sphinx-doc__sphinx-10614": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 8031,
+    "steps": 16
+   },
+   "pydata__xarray-2905": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8139,
+    "steps": 12
+   },
+   "scikit-learn__scikit-learn-10297": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13357,
+    "steps": 8
+   },
+   "scikit-learn__scikit-learn-10844": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3834,
+    "steps": 8
+   },
+   "astropy__astropy-13033": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4746,
+    "steps": 7
+   },
+   "matplotlib__matplotlib-25479": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 21066,
+    "steps": 23
+   },
+   "psf__requests-1724": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 10819,
+    "steps": 23
+   },
+   "psf__requests-5414": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3745,
+    "steps": 11
+   },
+   "mwaskom__seaborn-3069": {
+    "cap": 13653,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 31609,
+    "steps": 20
+   },
+   "matplotlib__matplotlib-14623": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21092,
+    "steps": 20
+   },
+   "sympy__sympy-13091": {
+    "cap": 13653,
+    "reads": 16,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24253,
+    "steps": 29
+   },
+   "django__django-10914": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3275,
+    "steps": 11
+   },
+   "pydata__xarray-6938": {
+    "cap": 13653,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15522,
+    "steps": 23
+   },
+   "scikit-learn__scikit-learn-10908": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13424,
+    "steps": 19
+   },
+   "matplotlib__matplotlib-13989": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22091,
+    "steps": 18
+   },
+   "pytest-dev__pytest-5631": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9652,
+    "steps": 16
+   },
+   "pydata__xarray-3151": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14798,
+    "steps": 12
+   },
+   "psf__requests-2317": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4332,
+    "steps": 16
+   },
+   "django__django-10973": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4488,
+    "steps": 11
+   },
+   "mwaskom__seaborn-3187": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7444,
+    "steps": 16
+   },
+   "pylint-dev__pylint-6386": {
+    "cap": 13653,
+    "reads": 13,
+    "capped_reads": 1,
+    "refused_large": 1,
+    "read_bytes": 50769,
+    "steps": 30
+   },
+   "sphinx-doc__sphinx-10323": {
+    "cap": 13653,
+    "reads": 1,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 0,
+    "steps": 7
+   },
+   "scikit-learn__scikit-learn-11578": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8683,
+    "steps": 9
+   },
+   "psf__requests-2931": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4975,
+    "steps": 10
+   },
+   "matplotlib__matplotlib-25775": {
+    "cap": 13653,
+    "reads": 17,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27960,
+    "steps": 30
+   },
+   "pytest-dev__pytest-5809": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9136,
+    "steps": 8
+   },
+   "sympy__sympy-17318": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6224,
+    "steps": 12
+   },
+   "pydata__xarray-3305": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15775,
+    "steps": 25
+   },
+   "django__django-11734": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27754,
+    "steps": 20
+   },
+   "astropy__astropy-13977": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22968,
+    "steps": 20
+   },
+   "pallets__flask-5014": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 5443,
+    "steps": 13
+   },
+   "astropy__astropy-12907": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17782,
+    "steps": 9
+   },
+   "astropy__astropy-14096": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 10266,
+    "steps": 12
+   },
+   "sympy__sympy-13031": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11686,
+    "steps": 22
+   },
+   "pytest-dev__pytest-10051": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8216,
+    "steps": 15
+   },
+   "sphinx-doc__sphinx-10435": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17496,
+    "steps": 21
+   },
+   "scikit-learn__scikit-learn-12682": {
+    "cap": 13653,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38611,
+    "steps": 24
+   },
+   "django__django-10097": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12756,
+    "steps": 13
+   },
+   "matplotlib__matplotlib-20826": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 1,
+    "refused_large": 0,
+    "read_bytes": 27104,
+    "steps": 20
+   },
+   "django__django-10880": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7726,
+    "steps": 11
+   },
+   "sphinx-doc__sphinx-8120": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17681,
+    "steps": 17
+   },
+   "psf__requests-1766": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7077,
+    "steps": 7
+   },
+   "psf__requests-1142": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9216,
+    "steps": 14
+   },
+   "pylint-dev__pylint-4604": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24541,
+    "steps": 28
+   },
+   "matplotlib__matplotlib-20488": {
+    "cap": 13653,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19824,
+    "steps": 19
+   },
+   "sympy__sympy-12481": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12012,
+    "steps": 12
+   },
+   "django__django-11333": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 2650,
+    "steps": 13
+   },
+   "psf__requests-1921": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4196,
+    "steps": 11
+   },
+   "django__django-11532": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2650,
+    "steps": 9
+   },
+   "scikit-learn__scikit-learn-11310": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 2,
+    "refused_large": 0,
+    "read_bytes": 34100,
+    "steps": 14
+   },
+   "astropy__astropy-13453": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 1,
+    "refused_large": 1,
+    "read_bytes": 28926,
+    "steps": 20
+   },
+   "sympy__sympy-11618": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 1730,
+    "steps": 12
+   },
+   "sympy__sympy-12096": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7611,
+    "steps": 16
+   },
+   "django__django-10999": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5502,
+    "steps": 7
+   },
+   "pydata__xarray-3677": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14770,
+    "steps": 16
+   },
+   "matplotlib__matplotlib-24870": {
+    "cap": 13653,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 46705,
+    "steps": 26
+   },
+   "pytest-dev__pytest-5262": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 10
+   },
+   "sphinx-doc__sphinx-10449": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26554,
+    "steps": 19
+   },
+   "pylint-dev__pylint-4661": {
+    "cap": 13653,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11749,
+    "steps": 14
+   },
+   "pylint-dev__pylint-4970": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 12819,
+    "steps": 14
+   },
+   "sympy__sympy-13877": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4738,
+    "steps": 10
+   },
+   "pytest-dev__pytest-10081": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 17492,
+    "steps": 17
+   },
+   "pydata__xarray-3095": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8096,
+    "steps": 14
+   },
+   "pytest-dev__pytest-8399": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6713,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-7462": {
+    "cap": 13653,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3852,
+    "steps": 10
+   },
+   "matplotlib__matplotlib-20676": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22427,
+    "steps": 19
+   },
+   "psf__requests-6028": {
+    "cap": 13653,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 18245,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-10466": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 1,
+    "refused_large": 0,
+    "read_bytes": 19097,
+    "steps": 12
+   },
+   "pylint-dev__pylint-6528": {
+    "cap": 13653,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27180,
+    "steps": 28
+   },
+   "astropy__astropy-8707": {
+    "cap": 13653,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22030,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-10673": {
+    "cap": 13653,
+    "reads": 15,
+    "capped_reads": 0,
+    "refused_large": 2,
+    "read_bytes": 43470,
+    "steps": 27
+   },
+   "astropy__astropy-14182": {
+    "cap": 13653,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 1,
+    "read_bytes": 13996,
+    "steps": 14
+   },
+   "pytest-dev__pytest-5840": {
+    "cap": 13653,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6341,
+    "steps": 18
+   },
+   "astropy__astropy-13236": {
+    "cap": 13653,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4406,
+    "steps": 14
+   },
+   "sympy__sympy-12419": {
+    "cap": 13653,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3283,
+    "steps": 12
+   }
+  },
+  "rep3/ctxonly": {
+   "pytest-dev__pytest-10081": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11963,
+    "steps": 13
+   },
+   "scikit-learn__scikit-learn-11578": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8683,
+    "steps": 9
+   },
+   "django__django-11333": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38911,
+    "steps": 17
+   },
+   "pytest-dev__pytest-5809": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 9136,
+    "steps": 8
+   },
+   "pytest-dev__pytest-5631": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8976,
+    "steps": 16
+   },
+   "mwaskom__seaborn-3187": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7444,
+    "steps": 16
+   },
+   "pydata__xarray-2905": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7039,
+    "steps": 14
+   },
+   "pydata__xarray-3095": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8096,
+    "steps": 14
+   },
+   "astropy__astropy-14096": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13065,
+    "steps": 16
+   },
+   "psf__requests-1921": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27850,
+    "steps": 11
+   },
+   "django__django-10097": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 12756,
+    "steps": 13
+   },
+   "matplotlib__matplotlib-24870": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 42826,
+    "steps": 26
+   },
+   "sphinx-doc__sphinx-10673": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 44106,
+    "steps": 17
+   },
+   "psf__requests-1724": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11484,
+    "steps": 16
+   },
+   "pydata__xarray-6938": {
+    "cap": 54613,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14096,
+    "steps": 20
+   },
+   "sphinx-doc__sphinx-10435": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11993,
+    "steps": 19
+   },
+   "pytest-dev__pytest-5840": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6341,
+    "steps": 18
+   },
+   "astropy__astropy-13236": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4591,
+    "steps": 12
+   },
+   "matplotlib__matplotlib-25479": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 32233,
+    "steps": 17
+   },
+   "scikit-learn__scikit-learn-10844": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3834,
+    "steps": 8
+   },
+   "psf__requests-2317": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4951,
+    "steps": 20
+   },
+   "scikit-learn__scikit-learn-11310": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 26201,
+    "steps": 18
+   },
+   "sympy__sympy-17318": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6224,
+    "steps": 12
+   },
+   "pytest-dev__pytest-8399": {
+    "cap": 54613,
+    "reads": 6,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6713,
+    "steps": 19
+   },
+   "sphinx-doc__sphinx-7462": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3852,
+    "steps": 10
+   },
+   "pylint-dev__pylint-4604": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22719,
+    "steps": 22
+   },
+   "psf__requests-2931": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5799,
+    "steps": 10
+   },
+   "sphinx-doc__sphinx-10323": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22134,
+    "steps": 5
+   },
+   "matplotlib__matplotlib-25775": {
+    "cap": 54613,
+    "reads": 12,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27549,
+    "steps": 20
+   },
+   "sympy__sympy-13877": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4472,
+    "steps": 9
+   },
+   "psf__requests-5414": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5733,
+    "steps": 15
+   },
+   "matplotlib__matplotlib-20826": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 24429,
+    "steps": 20
+   },
+   "pylint-dev__pylint-6386": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 79199,
+    "steps": 17
+   },
+   "pallets__flask-5014": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 27433,
+    "steps": 9
+   },
+   "matplotlib__matplotlib-14623": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 21092,
+    "steps": 20
+   },
+   "astropy__astropy-13977": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 41597,
+    "steps": 17
+   },
+   "sphinx-doc__sphinx-10449": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38532,
+    "steps": 24
+   },
+   "sympy__sympy-11618": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 33803,
+    "steps": 11
+   },
+   "sympy__sympy-13091": {
+    "cap": 54613,
+    "reads": 17,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 25383,
+    "steps": 30
+   },
+   "sympy__sympy-12096": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7611,
+    "steps": 16
+   },
+   "django__django-11734": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 30383,
+    "steps": 20
+   },
+   "scikit-learn__scikit-learn-12682": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 38393,
+    "steps": 23
+   },
+   "django__django-10880": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13134,
+    "steps": 15
+   },
+   "mwaskom__seaborn-3069": {
+    "cap": 54613,
+    "reads": 13,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 30351,
+    "steps": 20
+   },
+   "sphinx-doc__sphinx-8120": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15164,
+    "steps": 13
+   },
+   "django__django-11532": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 2650,
+    "steps": 9
+   },
+   "pylint-dev__pylint-4970": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 54947,
+    "steps": 10
+   },
+   "django__django-10973": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4488,
+    "steps": 11
+   },
+   "astropy__astropy-13033": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4746,
+    "steps": 7
+   },
+   "scikit-learn__scikit-learn-10297": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13357,
+    "steps": 8
+   },
+   "sympy__sympy-13031": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11686,
+    "steps": 22
+   },
+   "django__django-10914": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 3777,
+    "steps": 9
+   },
+   "psf__requests-6028": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 72400,
+    "steps": 7
+   },
+   "scikit-learn__scikit-learn-10908": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13424,
+    "steps": 19
+   },
+   "matplotlib__matplotlib-20676": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22427,
+    "steps": 19
+   },
+   "pydata__xarray-3677": {
+    "cap": 54613,
+    "reads": 8,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 14770,
+    "steps": 16
+   },
+   "astropy__astropy-14182": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 28483,
+    "steps": 13
+   },
+   "psf__requests-1766": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 8843,
+    "steps": 7
+   },
+   "django__django-10999": {
+    "cap": 54613,
+    "reads": 2,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 5502,
+    "steps": 7
+   },
+   "pylint-dev__pylint-6528": {
+    "cap": 54613,
+    "reads": 14,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 30049,
+    "steps": 26
+   },
+   "sympy__sympy-12419": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19206,
+    "steps": 11
+   },
+   "pydata__xarray-3305": {
+    "cap": 54613,
+    "reads": 11,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 15775,
+    "steps": 25
+   },
+   "matplotlib__matplotlib-13989": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 22091,
+    "steps": 18
+   },
+   "pylint-dev__pylint-4661": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13380,
+    "steps": 21
+   },
+   "sphinx-doc__sphinx-10614": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 52452,
+    "steps": 12
+   },
+   "astropy__astropy-8707": {
+    "cap": 54613,
+    "reads": 7,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 11942,
+    "steps": 17
+   },
+   "sympy__sympy-12481": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 18059,
+    "steps": 14
+   },
+   "pytest-dev__pytest-10051": {
+    "cap": 54613,
+    "reads": 5,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 7979,
+    "steps": 14
+   },
+   "psf__requests-1142": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 6345,
+    "steps": 11
+   },
+   "pytest-dev__pytest-5262": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 4757,
+    "steps": 10
+   },
+   "sphinx-doc__sphinx-10466": {
+    "cap": 54613,
+    "reads": 3,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19097,
+    "steps": 12
+   },
+   "astropy__astropy-13453": {
+    "cap": 54613,
+    "reads": 9,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 31728,
+    "steps": 24
+   },
+   "pydata__xarray-3151": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 13559,
+    "steps": 11
+   },
+   "matplotlib__matplotlib-20488": {
+    "cap": 54613,
+    "reads": 10,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 19824,
+    "steps": 19
+   },
+   "astropy__astropy-12907": {
+    "cap": 54613,
+    "reads": 4,
+    "capped_reads": 0,
+    "refused_large": 0,
+    "read_bytes": 17782,
+    "steps": 9
+   }
+  }
+ }
+}

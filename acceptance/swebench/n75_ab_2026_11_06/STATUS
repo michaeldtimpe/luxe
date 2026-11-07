@@ -1,0 +1,26 @@
+start 2026-11-06 00:46:34 head=65fd43c
+ctxonly run start 2026-11-06 00:46:34 cfg=configs/single_64gb_swebench_ctxonly.yaml
+ctxonly run exit=0 2026-11-06 01:50:38
+ctxonly grade exit=0 2026-11-06 02:56:40
+unbudgeted run start 2026-11-06 02:56:40 cfg=configs/single_64gb_swebench_unbudgeted.yaml
+unbudgeted run exit=0 2026-11-06 04:26:35
+unbudgeted grade exit=0 2026-11-06 05:41:40
+control run start 2026-11-06 05:41:40 cfg=configs/single_64gb_swebench.yaml
+control run exit=0 2026-11-06 06:41:59
+control grade exit=0 2026-11-06 08:00:13
+ALL DONE 2026-11-06 08:00:13
+pylint-6528 regrade (control patch, 3600s timeout) still running tests after ~30 min; stopped 2026-11-06 08:49:01 ahead of the m5 maintenance reboot. Unresolved: harness timeout, not model. Rerun: regrade6528.py
+reps start 2026-11-06 10:41:54 head=65fd43c
+rep2 control run start 2026-11-06 10:41:54 cfg=configs/single_64gb_swebench.yaml
+rep2 control run exit=0 2026-11-06 11:39:51
+rep2 control grade exit=0 2026-11-06 12:33:43
+rep2 ctxonly run start 2026-11-06 12:33:43 cfg=configs/single_64gb_swebench_ctxonly.yaml
+rep2 ctxonly run exit=0 2026-11-06 13:40:37
+rep2 ctxonly grade exit=0 2026-11-06 14:30:42
+rep3 ctxonly run start 2026-11-06 14:30:42 cfg=configs/single_64gb_swebench_ctxonly.yaml
+rep3 ctxonly run exit=0 2026-11-06 15:42:03
+rep3 ctxonly grade exit=0 2026-11-06 16:43:59
+rep3 control run start 2026-11-06 16:43:59 cfg=configs/single_64gb_swebench.yaml
+rep3 control run exit=0 2026-11-06 17:49:50
+rep3 control grade exit=0 2026-11-06 18:43:27
+REPS DONE 2026-11-06 18:43:27
