@@ -437,6 +437,123 @@ def _too_large_message(rel: str, size: int, path: Path, canon: str) -> str:
     )
 
 
+#: Opt-in (2026-11-08): an UNWINDOWED read of a file over `read_limit()`
+#: returns an outline plus the first window instead of the refusal.
+#: Why: in acceptance/swebench/n75_ab_2026_11_06 the champion's step-0
+#: whole-file read of django/urls/resolvers.py (29.6 KB, 13.6 KB cap) was
+#: refused in 3/3 control reps; it then grepped, read one 2 KB window, and
+#: never opened the caller that also needed the fix (django-11333, 0/3 vs
+#: 3/3 at 128K). The refusal costs a step and hands back nothing about the
+#: file's shape. Exact string "1" enables; anything else (unset included)
+#: keeps the refusal, so the benchmark request stream is byte-identical OFF.
+_OVERSIZE_WINDOW_ENV = "LUXE_READ_OVERSIZE_WINDOW"
+#: Share of `read_limit()` the outline may use; the window gets the rest.
+_OUTLINE_FRACTION = 0.25
+_OUTLINE_RE = re.compile(r"^(?P<indent>[ \t]*)(?:async[ \t]+def|def|class)[ \t]+\w+")
+
+
+def oversize_window_enabled() -> bool:
+    return os.environ.get(_OVERSIZE_WINDOW_ENV) == "1"
+
+
+def _python_outline(lines: list[str], budget: int) -> str:
+    """`def`/`class` lines with their line numbers, top level and one nesting
+    level (methods), clipped to `budget` bytes. Python only: every SWE-bench
+    repo is Python, and a regex over other languages would be guesswork. If
+    the full outline does not fit, nested entries are dropped first, then the
+    tail, with the count of what was left out."""
+    entries: list[tuple[int, str, bool]] = []
+    for i, line in enumerate(lines, 1):
+        m = _OUTLINE_RE.match(line)
+        if not m:
+            continue
+        depth = len(m.group("indent").expandtabs(4))
+        if depth > 4:
+            continue
+        entries.append((i, line.rstrip()[:160], depth == 0))
+    if not entries:
+        return ""
+
+    def render(es: list[tuple[int, str, bool]]) -> str:
+        return "".join(f"{n}\t{text}\n" for n, text, _ in es)
+
+    out = render(entries)
+    if len(out) <= budget:
+        return out
+    top = [e for e in entries if e[2]]
+    dropped = len(entries) - len(top)
+    out = render(top)
+    kept = top
+    while kept and len(out) > budget:
+        kept = kept[: max(0, len(kept) * 3 // 4)]
+        out = render(kept)
+    left = len(entries) - len(kept)
+    note = f"... {left} more definition(s) not shown"
+    if dropped and len(kept) == len(top):
+        note = f"... {dropped} nested definition(s) not shown"
+    return out + note + "\n"
+
+
+def _oversize_window(rel: str, size: int, path: Path, canon: str, offset: int) -> str:
+    """The opt-in alternative to `_too_large_message`: same facts and the same
+    next calls, but with an outline and the first window already served, so
+    the step that tried to read the file still learns something about it.
+    Total output stays within `read_limit()`."""
+    limit_b = read_limit()
+    lines: list[str] = []
+    try:
+        if size <= _LINE_COUNT_MAX_BYTES:
+            with path.open("r", errors="replace") as fh:
+                lines = fh.readlines()
+    except OSError:
+        lines = []
+    outline = ""
+    if lines and path.suffix == ".py":
+        outline = _python_outline(lines, int(limit_b * _OUTLINE_FRACTION))
+    n_lines = len(lines)
+
+    header = (
+        f"[{rel} is {size:,} bytes"
+        + (f", {n_lines:,} lines" if n_lines else "")
+        + f" — over the {limit_b:,}-byte whole-file limit, so this read "
+        f"returns an outline and the first window instead of the whole file]\n"
+    )
+    parts = [header]
+    if outline:
+        parts.append(f"Outline (line numbers for read_file offset=):\n{outline}\n")
+
+    # Window: stream from `offset` so files too large to load still serve one.
+    reserve = 400  # footer
+    room = limit_b - sum(len(p) for p in parts) - reserve
+    numbered: list[str] = []
+    used = 0
+    try:
+        with path.open("r", errors="replace") as fh:
+            for _ in itertools.islice(fh, offset):
+                pass
+            for i, line in enumerate(fh):
+                entry = f"{i + offset + 1}\t{line}"
+                if used + len(entry) > room:
+                    break
+                numbered.append(entry)
+                used += len(entry)
+    except OSError:
+        numbered = []
+    nxt = offset + len(numbered)
+    if numbered:
+        parts.append(f"Lines {offset + 1}-{nxt}:\n")
+        parts.append("".join(numbered))
+    more = (not n_lines) or nxt < n_lines
+    if more:
+        parts.append(
+            f"\n[continue with read_file(path=\"{rel}\", offset={nxt}, "
+            f"limit={max(1, len(numbered)) if numbered else 200}), jump to a "
+            f"definition with its outline line number as offset=, or "
+            f"grep(pattern=\"...\", glob=\"{canon}\")]\n"
+        )
+    return "".join(parts)
+
+
 def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
     path, canon = _resolve_rel(args["path"])
     if not path.is_file():
@@ -485,6 +602,8 @@ def _read_file(args: dict[str, Any]) -> tuple[str, str | None]:
     # window has already bounded what comes back, and `_MAX_READ_BYTES` below
     # bounds it again regardless of how large `limit` is.
     if size > read_limit() and limit is None:
+        if oversize_window_enabled():
+            return _oversize_window(args["path"], size, path, canon, offset), None
         return "", _too_large_message(args["path"], size, path, canon)
 
     # Stream the window rather than materialising the file: `limit` is allowed

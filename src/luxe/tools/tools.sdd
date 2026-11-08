@@ -68,6 +68,17 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   (`tests/test_golden_request.py`); this is an error-path + capability fix, so
   the benchmark request body stays byte-identical
 
+- `LUXE_READ_OVERSIZE_WINDOW=1` (opt-in, 2026-11-08; exact string "1"):
+  the unwindowed over-budget read returns an outline (Python `def`/`class`,
+  top level + one nesting level, ≤25% of `read_limit()`) plus the first
+  window, as OUTPUT with no error, instead of the refusal. Total output MUST
+  stay within `read_limit()` and MUST carry the resume `offset=`. Unset/any
+  other value MUST return the refusal unchanged (benchmark path
+  byte-identical OFF). Windowed reads and under-budget reads are untouched
+  either way. Evidence + A/B: `acceptance/swebench/n75_ab_2026_11_06/REPORT.md`
+  (motivation), `acceptance/swebench/oversize_window_2026_11_08/` (arm).
+  Tests: `tests/test_read_oversize_window.py`
+
 - `_grep` MUST pass `stdin=subprocess.DEVNULL` (2026-08-12). Invoked with no
   path argument, ripgrep chooses between "search cwd" and "read stdin" by
   inspecting stdin, and an inherited OPEN PIPE sends it down the stdin branch
