@@ -1,0 +1,27 @@
+[
+  {
+    "instance_id": "django__django-11333",
+    "model_patch": "diff --git a/django/urls/base.py b/django/urls/base.py\nindex 0e1c3d909c..a63475beeb 100644\n--- a/django/urls/base.py\n+++ b/django/urls/base.py\n@@ -7,7 +7,7 @@ from django.utils.functional import lazy\n from django.utils.translation import override\n \n from .exceptions import NoReverseMatch, Resolver404\n-from .resolvers import get_ns_resolver, get_resolver\n+from .resolvers import _get_resolver, get_ns_resolver, get_resolver\n from .utils import get_callable\n \n # SCRIPT_NAME prefixes for each thread are stored here. If there's no entry for\n@@ -92,7 +92,7 @@ reverse_lazy = lazy(reverse, str)\n \n def clear_url_caches():\n     get_callable.cache_clear()\n-    get_resolver.cache_clear()\n+    _get_resolver.cache_clear()\n     get_ns_resolver.cache_clear()\n \n \ndiff --git a/django/urls/resolvers.py b/django/urls/resolvers.py\nindex 247e3680c0..0e3bd2ce0b 100644\n--- a/django/urls/resolvers.py\n+++ b/django/urls/resolvers.py\n@@ -64,10 +64,14 @@ class ResolverMatch:\n \n \n @functools.lru_cache(maxsize=None)\n+def _get_resolver(urlconf):\n+    return URLResolver(RegexPattern(r'^/'), urlconf)\n+\n+\n def get_resolver(urlconf=None):\n     if urlconf is None:\n         urlconf = settings.ROOT_URLCONF\n-    return URLResolver(RegexPattern(r'^/'), urlconf)\n+    return _get_resolver(urlconf)\n \n \n @functools.lru_cache(maxsize=None)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "django__django-10880",
+    "model_patch": "diff --git a/django/db/models/aggregates.py b/django/db/models/aggregates.py\nindex ac0b62d0bf..ea88c54b0d 100644\n--- a/django/db/models/aggregates.py\n+++ b/django/db/models/aggregates.py\n@@ -68,7 +68,7 @@ class Aggregate(Func):\n         return []\n \n     def as_sql(self, compiler, connection, **extra_context):\n-        extra_context['distinct'] = 'DISTINCT' if self.distinct else ''\n+        extra_context['distinct'] = 'DISTINCT ' if self.distinct else ''\n         if self.filter:\n             if connection.features.supports_aggregate_filter_clause:\n                 filter_sql, filter_params = self.filter.as_sql(compiler, connection)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10323",
+    "model_patch": "diff --git a/sphinx/directives/code.py b/sphinx/directives/code.py\nindex dc44ed314..fe3bec004 100644\n--- a/sphinx/directives/code.py\n+++ b/sphinx/directives/code.py\n@@ -387,8 +387,8 @@ class LiteralInclude(SphinxDirective):\n         'end-before': directives.unchanged_required,\n         'start-at': directives.unchanged_required,\n         'end-at': directives.unchanged_required,\n-        'prepend': directives.unchanged_required,\n-        'append': directives.unchanged_required,\n+        'prepend': directives.unchanged,\n+        'append': directives.unchanged,\n         'emphasize-lines': directives.unchanged_required,\n         'caption': directives.unchanged,\n         'class': directives.class_option,\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10673",
+    "model_patch": "diff --git a/sphinx/environment/adapters/toctree.py b/sphinx/environment/adapters/toctree.py\nindex 9678e3c7c..b791f9931 100644\n--- a/sphinx/environment/adapters/toctree.py\n+++ b/sphinx/environment/adapters/toctree.py\n@@ -139,6 +139,16 @@ class TocTree:\n                         item = nodes.list_item('', para)\n                         # don't show subitems\n                         toc = nodes.bullet_list('', item)\n+                    elif ref in ('genindex', 'modindex', 'search'):\n+                        # special documents (genindex, modindex, search) are not\n+                        # real documents, but they are valid toctree entries\n+                        reference = nodes.reference('', '', internal=True,\n+                                                    refuri=ref,\n+                                                    anchorname='',\n+                                                    *[nodes.Text(title or ref)])\n+                        para = addnodes.compact_paragraph('', '', reference)\n+                        item = nodes.list_item('', para)\n+                        toc = nodes.bullet_list('', item)\n                     else:\n                         if ref in parents:\n                             logger.warning(__('circular toctree references '\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-6386",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  }
+]

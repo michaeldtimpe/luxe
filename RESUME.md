@@ -1,5 +1,18 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-08, m5) — oversize-read window lever: opt-in, not promoted (34.7 vs 35.7)
+
+- **Lever:** `LUXE_READ_OVERSIZE_WINDOW=1` (opt-in, exact "1"; `tools/fs.py`, tools.sdd): an oversize
+  unwindowed `read_file` returns outline + first window + resume offset instead of the refusal. OFF
+  byte-identical; `tests/test_read_oversize_window.py`.
+- **A/B** (`acceptance/swebench/oversize_window_2026_11_08/REPORT.md`, n=75 x 3 vs the 11-06 control reps):
+  34/35/35 = 34.7 vs 35.7. Fires 18-20x per rep, 0 refusals. Target django-11333 0/3 -> 3/3 and
+  django-10880 holds 3/3 (unlike 128K), but sphinx-10673 2/3 -> 0/3 and pylint-6386 1/3 -> 0/3:
+  net 0 on touched instances. With the 11-06 result: the read path is not where the champion's
+  SWE-bench misses are. Don't re-open read-budget levers on SWE-bench without new evidence.
+- **Known local test failures on m5** (not CI): `test_pathlib_rglob_is_still_unsafe`,
+  `test_glob_returns_partial_results_when_a_subtree_dies` fail on main under the m5 venv's Python 3.15.
+
 ## ⇒ SESSION NOTE (2026-11-06, m5) — SWE-bench 128K ctx / read-budget A/B: HOLD, 35.7 vs 35.7
 
 - **A/B** (`acceptance/swebench/n75_ab_2026_11_06/REPORT.md`, champion, n=75 x 3 reps, main `65fd43c`):

@@ -104,6 +104,8 @@ def main() -> None:
     ap.add_argument("--json", type=Path)
     ap.add_argument("--dir", type=Path, default=HERE, help="results dir (default: this file's dir)")
     ap.add_argument("--subset", type=Path, default=SUBSET)
+    ap.add_argument("--arm", action="append", default=[],
+                    help="NAME:DIR[,DIR...] (one DIR per rep); replaces the default layout")
     a = ap.parse_args()
     base = a.dir.resolve()
 
@@ -112,7 +114,14 @@ def main() -> None:
     ungr = set(sub.get("ungradeable", {}).get("instance_ids", []))
 
     rows, data = [], {}
-    for rep, arm, d in arm_reps(base):
+    specs = arm_reps(base)
+    if a.arm:
+        specs = []
+        for spec in a.arm:
+            name, dirs = spec.split(":", 1)
+            for i, dd in enumerate(dirs.split(",")):
+                specs.append((f"rep{i + 1}", name, Path(dd).expanduser().resolve()))
+    for rep, arm, d in specs:
         L = load(d)
         s = L["summary"]
         mech = mechanism(a.runs, (s["started_at"], s["finished_at"])) if a.runs.is_dir() else {}

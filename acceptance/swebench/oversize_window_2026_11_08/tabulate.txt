@@ -1,0 +1,94 @@
+rep   arm         n75  n71  empty wall_m runs cap        reads capped refused read_MB errors
+rep1  control       34   34     6     60   75 [13653]      460      7      11    1.07 {'pylint-dev__pylint-6528': 'no_report'}
+rep2  control       34   34     8     58   75 [13653]      441      6      10    1.06 {}
+rep3  control       39   39     5     66   75 [13653]      476      6      13    1.09 {}
+rep1  window        34   34     8     69   75 [13653]      458     18       0    1.20 {}
+rep2  window        35   35     6     62   75 [13653]      428     18       0    1.14 {}
+rep3  window        35   35     6     59   75 [13653]      460     20       0    1.24 {}
+rep1  ctxonly       38   38     6     64   75 [54613]      440      0       0    1.37 {}
+rep2  ctxonly       33   33     7     67   75 [54613]      442      0       0    1.42 {}
+rep3  ctxonly       36   36     6     71   75 [54613]      443      0       0    1.45 {}
+
+arm         reps  n75 mean (sd)     n71 mean (sd)     per-rep n75
+control        3   35.7 (2.9)      35.7 (2.9)     [34, 34, 39]
+window         3   34.7 (0.6)      34.7 (0.6)     [34, 35, 35]
+ctxonly        3   35.7 (2.5)      35.7 (2.5)     [38, 33, 36]
+
+per-instance resolve counts (only rows that differ between arms or flip within an arm)
+instance                                   control       ctxonly        window
+astropy__astropy-12907                         111           111           110
+    control: steps=9 reads=4 refused=0 capped=0 | steps=9 reads=4 refused=0 capped=0 | steps=9 reads=4 refused=0 capped=0
+    ctxonly: steps=9 reads=4 refused=0 capped=0 | steps=9 reads=4 refused=0 capped=0 | steps=9 reads=4 refused=0 capped=0
+    window: steps=9 reads=4 refused=0 capped=0 | steps=9 reads=4 refused=0 capped=0 | steps=9 reads=4 refused=0 capped=0
+astropy__astropy-14096                         001           100           000
+    control: steps=17 reads=6 refused=0 capped=0 | steps=11 reads=5 refused=0 capped=0 | steps=12 reads=5 refused=0 capped=0
+    ctxonly: steps=10 reads=3 refused=0 capped=0 | steps=9 reads=5 refused=0 capped=0 | steps=16 reads=8 refused=0 capped=0
+    window: steps=16 reads=5 refused=0 capped=0 | steps=12 reads=3 refused=0 capped=0 | steps=26 reads=13 refused=0 capped=0
+astropy__astropy-8707                          111           101           111
+    control: steps=17 reads=8 refused=0 capped=0 | steps=18 reads=9 refused=0 capped=0 | steps=19 reads=9 refused=0 capped=0
+    ctxonly: steps=17 reads=8 refused=0 capped=0 | steps=14 reads=5 refused=0 capped=0 | steps=17 reads=7 refused=0 capped=0
+    window: steps=18 reads=8 refused=0 capped=0 | steps=18 reads=8 refused=0 capped=0 | steps=14 reads=5 refused=0 capped=0
+django__django-10880                           111           000           111
+    control: steps=11 reads=2 refused=0 capped=0 | steps=11 reads=2 refused=0 capped=0 | steps=11 reads=2 refused=0 capped=0
+    ctxonly: steps=15 reads=4 refused=0 capped=0 | steps=15 reads=4 refused=0 capped=0 | steps=15 reads=4 refused=0 capped=0
+    window: steps=11 reads=2 refused=0 capped=0 | steps=11 reads=2 refused=0 capped=0 | steps=11 reads=2 refused=0 capped=0
+django__django-10973                           111           111           011
+    control: steps=11 reads=3 refused=0 capped=0 | steps=11 reads=3 refused=0 capped=0 | steps=11 reads=3 refused=0 capped=0
+    ctxonly: steps=11 reads=3 refused=0 capped=0 | steps=11 reads=3 refused=0 capped=0 | steps=11 reads=3 refused=0 capped=0
+    window: steps=14 reads=5 refused=0 capped=0 | steps=11 reads=3 refused=0 capped=0 | steps=11 reads=3 refused=0 capped=0
+django__django-11333                           000           111           111
+    control: steps=13 reads=3 refused=1 capped=0 | steps=13 reads=3 refused=1 capped=0 | steps=13 reads=3 refused=1 capped=0
+    ctxonly: steps=17 reads=7 refused=0 capped=0 | steps=16 reads=6 refused=0 capped=0 | steps=17 reads=7 refused=0 capped=0
+    window: steps=14 reads=5 refused=0 capped=1 | steps=12 reads=4 refused=0 capped=1 | steps=12 reads=4 refused=0 capped=1
+matplotlib__matplotlib-13989                   101           111           111
+    control: steps=18 reads=5 refused=0 capped=0 | steps=18 reads=5 refused=0 capped=0 | steps=18 reads=5 refused=0 capped=0
+    ctxonly: steps=18 reads=5 refused=0 capped=0 | steps=18 reads=5 refused=0 capped=0 | steps=18 reads=5 refused=0 capped=0
+    window: steps=18 reads=5 refused=0 capped=0 | steps=18 reads=5 refused=0 capped=0 | steps=18 reads=5 refused=0 capped=0
+matplotlib__matplotlib-24870                   000           010           000
+    control: steps=25 reads=12 refused=0 capped=0 | steps=26 reads=12 refused=0 capped=0 | steps=26 reads=12 refused=0 capped=0
+    ctxonly: steps=30 reads=13 refused=0 capped=0 | steps=28 reads=15 refused=0 capped=0 | steps=26 reads=11 refused=0 capped=0
+    window: steps=26 reads=12 refused=0 capped=0 | steps=25 reads=12 refused=0 capped=0 | steps=26 reads=12 refused=0 capped=0
+matplotlib__matplotlib-25775                   EE1           EEE           E0E
+    control: steps=20 reads=13 refused=0 capped=0 | steps=20 reads=12 refused=0 capped=0 | steps=30 reads=17 refused=0 capped=0
+    ctxonly: steps=20 reads=13 refused=0 capped=0 | steps=20 reads=11 refused=0 capped=0 | steps=20 reads=12 refused=0 capped=0
+    window: steps=20 reads=13 refused=0 capped=0 | steps=30 reads=17 refused=0 capped=0 | steps=20 reads=12 refused=0 capped=0
+pydata__xarray-2905                            111           100           011
+    control: steps=12 reads=4 refused=0 capped=0 | steps=14 reads=6 refused=0 capped=0 | steps=12 reads=5 refused=0 capped=0
+    ctxonly: steps=14 reads=6 refused=0 capped=0 | steps=16 reads=6 refused=0 capped=0 | steps=14 reads=5 refused=0 capped=0
+    window: steps=11 reads=4 refused=0 capped=0 | steps=15 reads=5 refused=0 capped=0 | steps=11 reads=4 refused=0 capped=0
+pylint-dev__pylint-4661                        000           011           000
+    control: steps=14 reads=5 refused=0 capped=0 | steps=18 reads=5 refused=0 capped=0 | steps=14 reads=5 refused=0 capped=0
+    ctxonly: steps=29 reads=11 refused=0 capped=0 | steps=21 reads=7 refused=0 capped=0 | steps=21 reads=7 refused=0 capped=0
+    window: steps=25 reads=8 refused=0 capped=0 | steps=14 reads=5 refused=0 capped=0 | steps=14 reads=5 refused=0 capped=0
+pylint-dev__pylint-6386                        0E1           000           000
+    control: steps=30 reads=20 refused=1 capped=2 | steps=30 reads=9 refused=0 capped=1 | steps=30 reads=13 refused=1 capped=1
+    ctxonly: steps=26 reads=14 refused=0 capped=0 | steps=21 reads=10 refused=0 capped=0 | steps=17 reads=8 refused=0 capped=0
+    window: steps=30 reads=13 refused=0 capped=3 | steps=20 reads=10 refused=0 capped=4 | steps=30 reads=14 refused=0 capped=5
+pylint-dev__pylint-6528                        000           100           EE0
+    control: steps=18 reads=9 refused=0 capped=0 | steps=29 reads=14 refused=0 capped=0 | steps=28 reads=13 refused=0 capped=0
+    ctxonly: steps=30 reads=16 refused=0 capped=0 | steps=30 reads=14 refused=0 capped=0 | steps=26 reads=14 refused=0 capped=0
+    window: steps=19 reads=10 refused=0 capped=0 | steps=22 reads=9 refused=0 capped=0 | steps=26 reads=12 refused=0 capped=0
+pytest-dev__pytest-5262                        111           111           101
+    control: steps=10 reads=4 refused=0 capped=0 | steps=10 reads=4 refused=0 capped=0 | steps=10 reads=4 refused=0 capped=0
+    ctxonly: steps=10 reads=4 refused=0 capped=0 | steps=10 reads=4 refused=0 capped=0 | steps=10 reads=4 refused=0 capped=0
+    window: steps=10 reads=4 refused=0 capped=0 | steps=10 reads=4 refused=0 capped=0 | steps=10 reads=4 refused=0 capped=0
+scikit-learn__scikit-learn-10297               111           101           111
+    control: steps=8 reads=4 refused=0 capped=0 | steps=8 reads=4 refused=0 capped=0 | steps=8 reads=4 refused=0 capped=0
+    ctxonly: steps=8 reads=4 refused=0 capped=0 | steps=8 reads=4 refused=0 capped=0 | steps=8 reads=4 refused=0 capped=0
+    window: steps=8 reads=4 refused=0 capped=0 | steps=8 reads=4 refused=0 capped=0 | steps=8 reads=4 refused=0 capped=0
+sphinx-doc__sphinx-10323                       00E           1EE           E00
+    control: steps=23 reads=5 refused=1 capped=0 | steps=20 reads=5 refused=1 capped=0 | steps=7 reads=1 refused=1 capped=0
+    ctxonly: steps=11 reads=3 refused=0 capped=0 | steps=5 reads=2 refused=0 capped=0 | steps=5 reads=2 refused=0 capped=0
+    window: steps=4 reads=2 refused=0 capped=1 | steps=19 reads=4 refused=0 capped=1 | steps=13 reads=4 refused=0 capped=1
+sphinx-doc__sphinx-10449                       EE1           111           111
+    control: steps=20 reads=9 refused=0 capped=0 | steps=20 reads=8 refused=0 capped=0 | steps=19 reads=8 refused=0 capped=0
+    ctxonly: steps=23 reads=10 refused=0 capped=0 | steps=21 reads=8 refused=0 capped=0 | steps=24 reads=10 refused=0 capped=0
+    window: steps=20 reads=8 refused=0 capped=0 | steps=19 reads=7 refused=0 capped=0 | steps=19 reads=7 refused=0 capped=0
+sphinx-doc__sphinx-10673                       011           0E1           000
+    control: steps=11 reads=5 refused=1 capped=0 | steps=17 reads=8 refused=1 capped=0 | steps=27 reads=15 refused=2 capped=0
+    ctxonly: steps=12 reads=5 refused=0 capped=0 | steps=20 reads=3 refused=0 capped=0 | steps=17 reads=7 refused=0 capped=0
+    window: steps=18 reads=5 refused=0 capped=2 | steps=21 reads=4 refused=0 capped=1 | steps=20 reads=10 refused=0 capped=2
+sphinx-doc__sphinx-8120                        111           101           111
+    control: steps=14 reads=5 refused=0 capped=0 | steps=15 reads=5 refused=0 capped=0 | steps=17 reads=6 refused=0 capped=0
+    ctxonly: steps=13 reads=4 refused=0 capped=0 | steps=13 reads=4 refused=0 capped=0 | steps=13 reads=4 refused=0 capped=0
+    window: steps=14 reads=5 refused=0 capped=0 | steps=16 reads=7 refused=0 capped=0 | steps=14 reads=4 refused=0 capped=0

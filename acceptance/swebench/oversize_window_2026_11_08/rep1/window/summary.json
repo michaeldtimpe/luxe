@@ -1,0 +1,11 @@
+{
+  "n": 75,
+  "n_with_patch": 67,
+  "patch_rate": 0.8933333333333333,
+  "n_setup_failed": 0,
+  "setup_failed": [],
+  "total_wall_s": 4150.443028123031,
+  "model_name": "luxe-qwen3.6-35b-a3b-6bit",
+  "started_at": 1794155710.245196,
+  "finished_at": 1794159860.709846
+}

@@ -642,6 +642,10 @@ invariants in its `.sdd` you must read before enabling:
   intervention-intensity modulation. **Bias-not-lock**: never gates dispatch.
   Slew-rate limited via `LUXE_ADAPTIVE_MAX_INTENSITY_DELTA_PER_STEP`. See
   `agents.sdd` § "Stage 3 / v1.11 adaptive-policy invariants".
+- **Oversize-read window** (`LUXE_READ_OVERSIZE_WINDOW=1`, 2026-11-08) — an
+  over-budget unwindowed `read_file` serves outline + first window instead of
+  refusing. Benched n=75 x 3: 34.7 vs 35.7, not promoted. See `tools.sdd` and
+  `acceptance/swebench/oversize_window_2026_11_08/REPORT.md`.
 - **Removed 2026-10-22** (refuted or inert, off by default): cohort priors,
   trajectory-shape and commit-only early_bail, post-write idle repeat
   counting, repeat-read stub, re-read note, `commit_first` — see `agents.sdd`
