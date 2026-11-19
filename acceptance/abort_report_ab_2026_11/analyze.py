@@ -162,7 +162,9 @@ def one(run_dir: Path, arm: str, variant: str) -> dict:
         "steps": (max(e.get("step", 0) for e in main_calls) + 1) if main_calls else 0,
         "calls_after_write": len(post),
         "aborted": bool(done.get("aborted")),
-        "stuck_abort": kinds.get("stuck_loop_abort", 0) + kinds.get("consecutive_repeat_abort", 0),
+        # no stuck-loop event kind exists; the reason is only on single_mode_done
+        "stuck_abort": int("stuck in loop" in (done.get("abort_reason") or "").lower()),
+        "abort_reason": done.get("abort_reason") or "",
     }
 
 
@@ -187,7 +189,7 @@ def summarize(rows: list[dict]) -> None:
     hdr = ("label arm n pass wall_sum ptok_M compaction pwi_exit empty_report "
            "fallback no_report "
            "checks_sect false_claims verify_runs med_explore med_first_write "
-           "refused test_bash_runs step_limit aborted med_steps calls_after_write "
+           "refused test_bash_runs step_limit aborted stuck_abort med_steps calls_after_write "
            "spared max_refusal_streak budget_spent liveness")
     print(hdr)
     for (label, arm), rs in sorted(by.items()):
@@ -209,6 +211,7 @@ def summarize(rows: list[dict]) -> None:
               sum(1 for r in rs if r["test_bash"]),
               sum(1 for r in rs if r["step_limit"]),
               sum(1 for r in rs if r["aborted"]),
+              sum(r["stuck_abort"] for r in rs),
               median([r["steps"] for r in rs]),
               sum(r["calls_after_write"] for r in rs),
               dict(sum((Counter(r["spared"]) for r in rs), Counter())),

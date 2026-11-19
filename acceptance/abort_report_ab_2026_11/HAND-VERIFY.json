@@ -1,0 +1,253 @@
+[
+ {
+  "patch_id": "27755b6e4bf67f007c2b07d714565ea75b658c03",
+  "fixture": "isomer-document-quickstart",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "Quick Start now names docker-compose.yml, the loopback 127.0.0.1:27001 mapping and the dashboard URL; port matches app.py:1138, Dockerfile and docker-compose.yml:13; ISOMER_SECRET/.env steps kept.",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ },
+ {
+  "patch_id": "b56cdae8e31f6304a658a23385d8bf4f08514edd",
+  "fixture": "isomer-implement-healthcheck",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "@app.route('/health') returns jsonify({'status':'ok'}), 200; jsonify already imported, before_request does not block anonymous requests. Litter: commits a 14-line scratch _test_health.py (sets a placeholder ISOMER_SECRET); cleanup turn offered 0 candidates.",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ },
+ {
+  "patch_id": "8fcff185ac9565c7fa8c354a249da26557215ac9",
+  "fixture": "lpe-rope-calc-document-typing",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "Types the one untyped parameter (_read_gguf_value f: IO[bytes]) and narrows parse_gguf_metadata, _pe_from_gguf and _pe_from_hf_config to dict[str, Any]; annotation-only, no behavior change, no redundant docstring. Superset of 92e2d5d8b4 (BinaryIO there).",
+  "verified_by": "read by hand (diff vs base source), this A/B"
+ },
+ {
+  "patch_id": "400bed02fb21ec9816809370ce0e40d3adb902ed",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "arms": [
+   "wide"
+  ],
+  "cells": [
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "pe_scan.py change byte-identical to 7daa217e67. Litter: commits test_pe_scan/fake.gguf ('not a gguf file') created with write_file to exercise strict mode (rm refused; cleanup turn never offers non-code files), same pattern as 6be7809313. Strict behavior verified in-run: verify_strict.py printed exit 0 without --strict, exit 1 with it.",
+  "verified_by": "read by hand (diff vs base source), this A/B"
+ },
+ {
+  "patch_id": "7daa217e6775a9807d2bbd345b97d74e69033867",
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "arms": [
+   "ctl"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "--strict (store_true); scan_ollama/scan_gguf_dir/scan_lmstudio return (records, skipped) counting parse_gguf_metadata None, scan_hf_cache returns 0; all six call sites in main() and the scan_lmstudio->scan_gguf_dir call updated (base has no other callers); returns 1 with a stderr line only when strict and skipped > 0, default exit 0 kept. Same logic as d0405f5631. Strict path itself never executed in the run (test commands refused).",
+  "verified_by": "read by hand (diff vs base source), this A/B"
+ },
+ {
+  "patch_id": "40b32861156cbc5ee8a4a3ec1719bd4d35c50a5b",
+  "fixture": "neon-rain-document-modules",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "Adds a Subdirectories section covering all nine src/ dirs with accurate contents (spot-checked: DebugLayout Ctrl+Shift+D at DebugLayout.js:37, file lists of actions/state/ui/data); existing content preserved.",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ },
+ {
+  "patch_id": "00fa69e67c1d6f80be1ec8adfa0011d7a001c75b",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "arms": [
+   "ctl"
+  ],
+  "cells": [
+   "ctl/rep1"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "HtmlInputHandler document keydown (Shift+R, preventDefault) emits game:restart, removed in dispose; Game._restartGame restarts via _startNewGame({persona: this.state.persona}) so the persona survives; no-op before any game (state null).",
+  "verified_by": "read by hand (diff vs base source), this A/B"
+ },
+ {
+  "patch_id": "40b24affb24fcb8611af6ad6def0e69970a2bab3",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "arms": [
+   "ctl"
+  ],
+  "cells": [
+   "ctl/rep2"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "Same shape as 00fa69e67c but game:restart calls _startNewGame() with no data, so the persona is dropped, same as the existing Restart menu action (Game.js:292). Listener on document, removed in dispose.",
+  "verified_by": "read by hand (diff vs base source), this A/B"
+ },
+ {
+  "patch_id": "47fe9d05bb484c2dd9342d0b27964e16bdb3f850",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "arms": [
+   "wide"
+  ],
+  "cells": [
+   "wide/rep2"
+  ],
+  "class": "THIN",
+  "worse_than_base": false,
+  "reason": "Keydown listener is bound to the board element (main#game-board, given tabindex=0 in index.html) instead of document, so Shift+R only fires while the board has focus: nothing in src focuses it, so after starting a game from the menu or clicking the HUD/modals the shortcut does nothing until the player clicks the board. Restart itself is the _startNewGame() shape of 40b24affb2. Run hit the step limit (labelled incomplete).",
+  "verified_by": "read by hand (diff vs base source), this A/B"
+ },
+ {
+  "patch_id": "a1236be6b93f3d6f88ea6c417d92e2ab1ff2f444",
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "Same shape as 4824837552 without the Ctrl/Alt guard.",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ },
+ {
+  "patch_id": "5d290a5ee5b139e2c7c7577fe0813c6fd85d7685",
+  "fixture": "nothing-ever-happens-document-config",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "THIN",
+  "worse_than_base": false,
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Gets PORT precedence right; only patch that leaves out POSTGRES_PASSWORD (compose-only).",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ },
+ {
+  "patch_id": "a1eae595494bbbe98ce0448414e8ffcd599b9165",
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "SECURITY-AUDIT.md with findings for aiohttp, web3, python-dotenv and others; all 13 advisory ids cited appear in the run's cve_lookup (OSV) tool output, so none are invented; requirements.txt untouched. Advisory content not re-verified against OSV here (offline).",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ },
+ {
+  "patch_id": "d379bd70a05d94c94f0b0d05cea7c9cb30e34086",
+  "fixture": "the-game-document-architecture",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "'How it Works' section: selectWithNeighbors (window of 6, random position), studio-lists/*.txt + TMDB poster lookup, App.jsx shuffle (line 26) and mount useEffect (line 41); all match base. 'Play' button is ShuffleButton ('Play'/'Play Again').",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ },
+ {
+  "patch_id": "ca29d8f8e5822aedb4d67a56c9b56f861557734a",
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "class": "REAL",
+  "worse_than_base": false,
+  "reason": "useEffect binds one document keydown on mount, skips INPUT/TEXTAREA/SELECT/contentEditable, calls shuffle (uses only setters, no stale-closure issue), removed on unmount. Nit: no modifier check, so Cmd/Ctrl+R is preventDefault'ed and reshuffles instead of reloading.",
+  "verified_by": "reused from idle_capped_ab_2026_11/HAND-VERIFY.json (patch-id match)"
+ }
+]
