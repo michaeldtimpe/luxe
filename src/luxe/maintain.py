@@ -401,10 +401,16 @@ def _load_model(p: _Pipeline, config_path: str | None) -> None:
     # LUXE_IDLE_NARROW=1 (opt-in, 2026-11; read by the loop via RunFlags):
     # announced + recorded here for arm liveness only.
     _narrow = os.environ.get("LUXE_IDLE_NARROW")
-    if _narrow in ("1", "wide"):
+    if _narrow in ("1", "wide", "capped"):
         console.print("[yellow]· Post-write idle test:[/] [dim]narrow "
                       f"(LUXE_IDLE_NARROW={_narrow})[/]")
-        p.emit("idle_narrow_mode", on=True, mode=_narrow)
+        if _narrow == "capped":
+            # The loop's budget, parsed the same way (RunFlags.from_env).
+            from luxe.agents.flags import RunFlags
+            p.emit("idle_narrow_mode", on=True, mode=_narrow,
+                   refusal_spares=RunFlags.from_env().idle_refusal_spares)
+        else:
+            p.emit("idle_narrow_mode", on=True, mode=_narrow)
 
     _read_budget = apply_ctx_read_budget(cfg.role("monolith").num_ctx)
     if _read_budget is not None:
