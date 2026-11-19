@@ -1,0 +1,19 @@
+REP 1 ARM ctl start 2026-11-19 10:34:01
+REP 1 ARM ctl end 2026-11-19 10:41:55 rc=0
+REP 1 ARM wide start 2026-11-19 10:41:55
+REP 1 ARM wide end 2026-11-19 10:46:44 rc=0
+REP 1 ARM capped start 2026-11-19 10:46:44
+REP 1 ARM capped end 2026-11-19 10:51:26 rc=0
+REP 2 ARM ctl start 2026-11-19 10:51:26
+REP 2 ARM ctl end 2026-11-19 10:55:42 rc=0
+REP 2 ARM wide start 2026-11-19 10:55:42
+REP 2 ARM wide end 2026-11-19 11:00:14 rc=0
+REP 2 ARM capped start 2026-11-19 11:00:14
+REP 2 ARM capped end 2026-11-19 11:04:40 rc=0
+REP 3 ARM ctl start 2026-11-19 11:04:40
+REP 3 ARM ctl end 2026-11-19 11:08:40 rc=0
+REP 3 ARM wide start 2026-11-19 11:08:40
+REP 3 ARM wide end 2026-11-19 11:13:20 rc=0
+REP 3 ARM capped start 2026-11-19 11:13:20
+REP 3 ARM capped end 2026-11-19 11:18:09 rc=0
+DONE champ 2026-11-19 11:18:09

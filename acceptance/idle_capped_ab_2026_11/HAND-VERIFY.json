@@ -1,0 +1,459 @@
+[
+ {
+  "fixture": "isomer-document-quickstart",
+  "patch_id": "27755b6e4b",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "capped/rep3",
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "Quick Start now names docker-compose.yml, the loopback 127.0.0.1:27001 mapping and the dashboard URL; port matches app.py:1138, Dockerfile and docker-compose.yml:13; ISOMER_SECRET/.env steps kept.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "3d01f7892c",
+  "cells": [
+   "capped/rep3"
+  ],
+  "arms": [
+   "capped"
+  ],
+  "class": "REAL",
+  "reason": "Same endpoint. Litter: _test_health.py left as an empty file (the model blanked it, rm is not allowlisted); report's functional-test claim matches a real run (Status 200).",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "a625d695bd",
+  "cells": [
+   "ctl/rep1"
+  ],
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Same endpoint as b56cdae8e3. Litter: 17-line scratch _test_health.py with a try/except wrapper.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "isomer-implement-healthcheck",
+  "patch_id": "b56cdae8e3",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "@app.route('/health') returns jsonify({'status':'ok'}), 200; jsonify already imported, before_request does not block anonymous requests. Litter: commits a 14-line scratch _test_health.py (sets a placeholder ISOMER_SECRET); cleanup turn offered 0 candidates.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "lpe-rope-calc-document-typing",
+  "patch_id": "92e2d5d8b4",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "capped/rep3",
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "Types the one untyped top-level parameter (_read_gguf_value f: BinaryIO) and narrows _pe_from_gguf meta to dict[str, Any]; no behavior change, no redundant docstring.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "6be7809313",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "capped/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "pe_scan.py change byte-identical to d0405f5631. Litter: commits test_bad.gguf ('not a gguf file') at repo root, made to verify strict mode (rm refused; cleanup turn deleted verify_strict_flag.py but never offers non-code files). Report accurate: verify script really printed exit 0 / exit 1; it does not mention the leftover file.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "lpe-rope-calc-implement-strict-flag",
+  "patch_id": "d0405f5631",
+  "cells": [
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3"
+  ],
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "--strict (store_true); scan_ollama/scan_gguf_dir/scan_lmstudio return (records, skipped) counting parse_gguf_metadata None; every caller updated; returns 1 only when strict and skipped > 0, default exit 0 kept.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-document-modules",
+  "patch_id": "40b3286115",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "capped/rep3",
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "Adds a Subdirectories section covering all nine src/ dirs with accurate contents (spot-checked: DebugLayout Ctrl+Shift+D at DebugLayout.js:37, file lists of actions/state/ui/data); existing content preserved.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "4824837552",
+  "cells": [
+   "ctl/rep1"
+  ],
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "HtmlInputHandler document keydown (Shift+R, no Ctrl/Alt, preventDefault) emits game:restart; Game._wireEvents maps it to _startNewGame(); listener removed in dispose. Persona dropped on restart, same as the existing Restart menu action (Game.js:292).",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "4b2486ed66",
+  "cells": [
+   "capped/rep2"
+  ],
+  "arms": [
+   "capped"
+  ],
+  "class": "REAL",
+  "reason": "Same shape, no preventDefault (harmless for Shift+R).",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "643cccc3d5",
+  "cells": [
+   "capped/rep3"
+  ],
+  "arms": [
+   "capped"
+  ],
+  "class": "REAL",
+  "reason": "Same shape as a1236be6b9; method inserted after the constructor, structure verified.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "70be85e740",
+  "cells": [
+   "ctl/rep2"
+  ],
+  "arms": [
+   "ctl"
+  ],
+  "class": "REAL",
+  "reason": "Keydown listener added in Game.js (not via src/input/ as the goal asks), restarts only while PLAYING; never removed (Game is a page-lifetime singleton). Works; style nit on the input-system instruction.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "9508b5e6f0",
+  "cells": [
+   "wide/rep2"
+  ],
+  "arms": [
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "Same shape, case-insensitive key match.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "a1236be6b9",
+  "cells": [
+   "ctl/rep3",
+   "wide/rep1"
+  ],
+  "arms": [
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "Same shape as 4824837552 without the Ctrl/Alt guard.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "a47e0a3717",
+  "cells": [
+   "wide/rep3"
+  ],
+  "arms": [
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "Emits game:reset; new Game._resetGame restarts only while PLAYING and passes the current persona through, so the persona survives. Best of the set.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "neon-rain-implement-reset-shortcut",
+  "patch_id": "e4f47a86e3",
+  "cells": [
+   "capped/rep1"
+  ],
+  "arms": [
+   "capped"
+  ],
+  "class": "REAL",
+  "reason": "Same shape as a1236be6b9 but restart passes { persona: this.state?.persona }, keeping the persona. Report accurate (test:basic 12/0, test:mechanics 56/0 match the tool output).",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "21b4c75100",
+  "cells": [
+   "ctl/rep3"
+  ],
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Gets PORT precedence right; intro wrongly says strategy params live only in JSON.",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "2de017fbdc",
+  "cells": [
+   "wide/rep1",
+   "wide/rep2"
+  ],
+  "arms": [
+   "wide"
+  ],
+  "class": "THIN",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Also: PORT precedence backwards; PM_RISK_DRAWDOWN_ARM_AFTER_SEC misdescribed.",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "5d290a5ee5",
+  "cells": [
+   "wide/rep3"
+  ],
+  "arms": [
+   "wide"
+  ],
+  "class": "THIN",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Gets PORT precedence right; only patch that leaves out POSTGRES_PASSWORD (compose-only).",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "6a2c0ff50c",
+  "cells": [
+   "ctl/rep1"
+  ],
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Also: PORT called a fallback (it takes precedence); PRIVATE_KEY/FUNDER_ADDRESS cited at .env.example.",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "9654f4f405",
+  "cells": [
+   "capped/rep1"
+  ],
+  "arms": [
+   "capped"
+  ],
+  "class": "THIN",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Only patch with all six PM_RISK_* defaults right (1500/1000/0=disabled/900/1800/3); best of the eight.",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "a544a00024",
+  "cells": [
+   "capped/rep3"
+  ],
+  "arms": [
+   "capped"
+  ],
+  "class": "DAMAGING",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Wrong PM_RISK_* defaults 1000/500/200/300 vs code 1500/1000/0/900 (risk_controls.py:22-25): tells an operator a $200 daily-drawdown kill switch is on by default when it is disabled. Also invents 'read in bot/main.py via eth_account' for PRIVATE_KEY/FUNDER_ADDRESS.",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": true
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "c9c228c68e",
+  "cells": [
+   "capped/rep2"
+  ],
+  "arms": [
+   "capped"
+  ],
+  "class": "THIN",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Thinnest cross-references (BOT_VARIANT, TRADE_LEDGER_PATH partial).",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-document-config",
+  "patch_id": "d5cf32650c",
+  "cells": [
+   "ctl/rep2"
+  ],
+  "arms": [
+   "ctl"
+  ],
+  "class": "THIN",
+  "reason": "32/55 env vars; all 23 PM_NH_* strategy overrides (bot/config.py:198-291) missing; DASHBOARD_PORT given default 8080 (no default in code, bot/main.py:193-196); PM_REDEEM_CHECK_INTERVAL_SEC described as live though main.py:183 passes PM_NH_REDEEMER_INTERVAL_SEC. Also: PORT called a fallback; 4 of 6 risk defaults deferred to RiskConfig.",
+  "verified_by": "subagent check of all 55 env vars at base 59b8874, risk defaults and PM_NH_* gap re-checked by hand",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "nothing-ever-happens-manage-deps-audit",
+  "patch_id": "a1eae59549",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "capped/rep3",
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "SECURITY-AUDIT.md with findings for aiohttp, web3, python-dotenv and others; all 13 advisory ids cited appear in the run's cve_lookup (OSV) tool output, so none are invented; requirements.txt untouched. Advisory content not re-verified against OSV here (offline).",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "the-game-document-architecture",
+  "patch_id": "d379bd70a0",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "capped/rep3",
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "'How it Works' section: selectWithNeighbors (window of 6, random position), studio-lists/*.txt + TMDB poster lookup, App.jsx shuffle (line 26) and mount useEffect (line 41); all match base. 'Play' button is ShuffleButton ('Play'/'Play Again').",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ },
+ {
+  "fixture": "the-game-implement-shuffle-shortcut",
+  "patch_id": "ca29d8f8e5",
+  "cells": [
+   "capped/rep1",
+   "capped/rep2",
+   "capped/rep3",
+   "ctl/rep1",
+   "ctl/rep2",
+   "ctl/rep3",
+   "wide/rep1",
+   "wide/rep2",
+   "wide/rep3"
+  ],
+  "arms": [
+   "capped",
+   "ctl",
+   "wide"
+  ],
+  "class": "REAL",
+  "reason": "useEffect binds one document keydown on mount, skips INPUT/TEXTAREA/SELECT/contentEditable, calls shuffle (uses only setters, no stale-closure issue), removed on unmount. Nit: no modifier check, so Cmd/Ctrl+R is preventDefault'ed and reshuffles instead of reloading.",
+  "verified_by": "read by hand (diff vs base source)",
+  "worse_than_base": false
+ }
+]
