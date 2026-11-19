@@ -209,6 +209,15 @@ class RunFlags:
     # runners export it by default (`--no-save-messages` opts out).
     save_messages: bool = False
 
+    # LUXE_FAILED_OUTPUT (opt-in, exact "1"; 2026-11-19, being A/B'd in
+    # acceptance/failed_output_ab_2026_11). A tool that returns BOTH an error
+    # and output (bash on a non-zero exit: `exit code N` + the test/build
+    # output) has always reached the model as the bare error line, because
+    # `_dispatch_one` sends `error or result`. On: the tool message is
+    # `error + "\n" + result`, through the same redaction + clamp. Off =
+    # byte-identical (golden snapshots unchanged).
+    failed_output: bool = False
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "RunFlags":
         """Read the switches. `env` defaults to `os.environ`.
@@ -330,4 +339,6 @@ class RunFlags:
             adaptive_max_delta=max_delta,
             # Opt-in: only the exact string "1" enables it.
             save_messages=e.get("LUXE_SAVE_MESSAGES") == "1",
+            # Opt-in: only the exact string "1" enables it.
+            failed_output=e.get("LUXE_FAILED_OUTPUT") == "1",
         )

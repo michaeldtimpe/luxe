@@ -243,8 +243,11 @@ def _run_cancellable(command: str, *, cwd, env, timeout: int,
 # refusal is an idle call; three in a row end the run via
 # post_write_idle_exit with NO final report (6/30 control runs in
 # validation_context_ab_2026_11). Each suffix below is a no-op for THIS tool:
-# output is already stdout+stderr, already clipped to head+tail, and a
-# non-zero exit is reported while the output is still returned.
+# output is already stdout+stderr and already clipped to head+tail. On a
+# non-zero exit this tool returns (output, "exit code N"), but the agent loop
+# sends `error or result`, so by default the MODEL sees only `exit code N` and
+# never the failing output (since v1.0; acceptance/swebench/diag_misses_2026_11).
+# LUXE_FAILED_OUTPUT=1 (opt-in, agents.sdd) sends the error line + the output.
 #
 # Mode is set by the maintain pipeline (`set_noop_mode`, read from
 # LUXE_BASH_NOOP); None (the default, and always in chat) = byte-identical.
