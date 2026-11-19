@@ -21,6 +21,7 @@ Workflow per instance:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -39,6 +40,16 @@ class SweBenchInvocationResult:
     stdout_log: str = ""
     stderr_log: str = ""
     error: str = ""
+    # The `luxe maintain` run id (parsed from its stdout banner), so a
+    # diagnosis can open ~/.luxe/runs/<id>/ directly. "" when not found.
+    luxe_run_id: str = ""
+
+
+def extract_luxe_run_id(stdout: str) -> str:
+    """The run id `luxe maintain` prints as `run_id=<hex>` (same pattern
+    maintain_suite parses). "" when absent (setup failure, crash)."""
+    m = re.search(r"run_id=([0-9a-f]{8,})", stdout or "")
+    return m.group(1) if m else ""
 
 
 def _run(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None,
@@ -278,6 +289,7 @@ def run_instance(
     tiered_compact: bool = False,
     tiered_compact_threshold: float | None = None,
     tiered_compact_phase_thresholds: str | None = None,
+    save_messages: bool = True,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -364,6 +376,11 @@ def run_instance(
                 **(extra_env or {}),
                 "LUXE_TIERED_COMPACT_PHASE_THRESHOLDS": tiered_compact_phase_thresholds,
             }
+    # Recording-only (agents.sdd "Saved messages"): the run's conversation
+    # lands in <run_dir>/messages*.jsonl.gz. An explicit LUXE_SAVE_MESSAGES
+    # in the caller's environment wins.
+    if save_messages and "LUXE_SAVE_MESSAGES" not in os.environ:
+        extra_env = {**(extra_env or {}), "LUXE_SAVE_MESSAGES": "1"}
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
@@ -380,6 +397,7 @@ def run_instance(
         rc=rc,
         stdout_log=str(log_dir / "stdout.log"),
         stderr_log=str(log_dir / "stderr.log"),
+        luxe_run_id=extract_luxe_run_id(out),
     )
 
 

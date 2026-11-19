@@ -178,6 +178,17 @@ def _sha(data: bytes, n: int = 12) -> str:
     return hashlib.sha256(data).hexdigest()[:n]
 
 
+# Recording-only switches: they change what a run WRITES to its run dir, never
+# what it does, so a cell made with or without them is the same experiment.
+# Excluded from the fingerprint (resume must not refuse over them).
+_RECORDING_ONLY_ENV = frozenset({"LUXE_SAVE_MESSAGES"})
+
+# LUXE_SAVE_MESSAGES=1 is exported to every `luxe maintain` child unless
+# `--no-save-messages` (main() clears this). setdefault, so an explicit
+# LUXE_SAVE_MESSAGES in the caller's environment still wins.
+_SAVE_MESSAGES = True
+
+
 def config_fingerprint(variant: "Variant | None",
                        environ: dict | None = None) -> tuple[str, dict[str, str]]:
     """(fingerprint, fields) for what a fixture run is about to be produced
@@ -192,7 +203,8 @@ def config_fingerprint(variant: "Variant | None",
                     if variant is not None else "none"),
         "code": _code_identity(root),
     }
-    for name in sorted(k for k in env if k.startswith("LUXE_")):
+    for name in sorted(k for k in env if k.startswith("LUXE_")
+                       and k not in _RECORDING_ONLY_ENV):
         fields[f"env:{name}"] = _sha(str(env[name]).encode(), 8)
     return _sha(json.dumps(fields, sort_keys=True).encode(), 16), fields
 
@@ -941,6 +953,10 @@ def _luxe_maintain(
     # an explicit override from the caller (setdefault, not assignment)
     # so ablations can still run with LUXE_WRITE_PRESSURE=0.
     env.setdefault("LUXE_WRITE_PRESSURE", "1")
+    # Recording-only (agents.sdd "Saved messages"): the run's conversation
+    # lands in <run_dir>/messages*.jsonl.gz for failure diagnosis.
+    if _SAVE_MESSAGES:
+        env.setdefault("LUXE_SAVE_MESSAGES", "1")
     rc, out, err = _run_capture(cmd, log_dir, env=env, timeout_s=timeout_s)
     excerpt = _stderr_excerpt(err) if rc != 0 else ""
     return rc, _extract_run_id(out + err), excerpt
@@ -1692,6 +1708,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              "luxe_run_id cleared so --retry-errors restarts it "
                              "fresh. Recommended for long-running runs (e.g. "
                              "--per-fixture-timeout 1200 = 20 min).")
+    parser.add_argument("--no-save-messages", action="store_true",
+                        help="Don't export LUXE_SAVE_MESSAGES=1 to luxe "
+                             "(default: each run saves its conversation to "
+                             "<run_dir>/messages.jsonl.gz). Recording-only; "
+                             "not part of the config fingerprint.")
     return parser
 
 
@@ -2125,6 +2146,8 @@ def _fingerprint_preflight(output: Path, plan: list, args) -> bool:
 def main() -> int:
     _ensure_luxe_importable()
     args = _build_parser().parse_args()
+    global _SAVE_MESSAGES
+    _SAVE_MESSAGES = not args.no_save_messages
 
     fixtures_path = Path(args.fixtures) if args.fixtures else \
         Path(__file__).parent / "fixtures.yaml"

@@ -18,9 +18,18 @@ Then the final report (synthesizer.md) and the graded diff, each clipped
 separately. Telemetry kinds that fire every step are omitted from the trace and
 counted in the footer, so their absence is stated rather than silent.
 
-What it CANNOT show: bench runs do not persist message text, so tool
-observations and the model's prose between calls are absent. That is a fact
-about the records, not something to infer around.
+Message text: when the run saved its conversation (LUXE_SAVE_MESSAGES=1, the
+bench runners' default since 2026-11-19), each `messages*.jsonl.gz` in the run
+dir is rendered as a Conversation section, in message order:
+
+    [SYSTEM] / [USER]           the prompt messages
+    [PROSE]                     assistant text
+    [CALL] tool(args)           an assistant tool call
+    [OBSERVATION] tool          a tool result, as the model saw it
+
+clipped at 400 chars each. Without that file (older runs, or opted out), tool
+observations and the model's prose between calls are absent, and the footer
+says so. That is a fact about the records, not something to infer around.
 
 Usage:
     python scripts/render_trajectory.py <run_id | run dir> [--diff PATCH]
@@ -32,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import gzip
 import json
 import sys
 from pathlib import Path
@@ -40,6 +50,7 @@ TRUNC = "…[+{n} chars — render clip]"
 REPORT_CLIP = 20_000
 DIFF_CLIP = 40_000
 FIELD_CLIP = 300
+MESSAGE_CLIP = 400
 
 # Omitted from the trace (per-step telemetry); counted in the footer.
 TELEMETRY = frozenset({
@@ -104,6 +115,61 @@ def render_event(e: dict) -> str | None:
     return f"[UNKNOWN {k}] {kv(e)}"
 
 
+def message_files(run_dir: Path) -> list[Path]:
+    """`messages.jsonl.gz` (the first pass) first, then later passes'
+    `messages-<phase>[-n].jsonl.gz` in the order they were written."""
+    first = run_dir / "messages.jsonl.gz"
+    rest = sorted((p for p in run_dir.glob("messages-*.jsonl.gz") if p.is_file()),
+                  key=lambda p: (p.stat().st_mtime, p.name))
+    return ([first] if first.is_file() else []) + rest
+
+
+def _text(content) -> str:
+    if content is None:
+        return ""
+    return content if isinstance(content, str) else json.dumps(content)
+
+
+def render_messages(path: Path) -> tuple[list[str], int]:
+    """(lines, message count) for one saved conversation file."""
+    out: list[str] = []
+    n = 0
+    try:
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as f:
+            raw_lines = f.read().splitlines()
+    except (OSError, EOFError) as e:
+        return [f"(unreadable {path.name}: {e})"], 0
+    names: dict[str, str] = {}
+    for raw in raw_lines:
+        try:
+            m = json.loads(raw)
+        except json.JSONDecodeError:
+            out.append("(unparseable message line)")
+            continue
+        if not isinstance(m, dict):
+            continue
+        n += 1
+        role = m.get("role")
+        text = _text(m.get("content")).strip()
+        if role in ("system", "user"):
+            out.append(f"  [{role.upper()}] {clip(text, MESSAGE_CLIP)}")
+        elif role == "assistant":
+            if text:
+                out.append(f"  [PROSE] {clip(text, MESSAGE_CLIP)}")
+            for tc in m.get("tool_calls") or []:
+                fn = (tc or {}).get("function") or {}
+                name = fn.get("name", "?")
+                if tc.get("id"):
+                    names[tc["id"]] = name
+                out.append(f"  [CALL] {name}({clip(_text(fn.get('arguments')), FIELD_CLIP)})")
+        elif role == "tool":
+            name = m.get("name") or names.get(m.get("tool_call_id", ""), "?")
+            out.append(f"  [OBSERVATION] {name}: {clip(text, MESSAGE_CLIP)}")
+        else:
+            out.append(f"  [{str(role).upper()}] {clip(text, MESSAGE_CLIP)}")
+    return out, n
+
+
 def render(run_dir: Path, diff_path: Path | None = None) -> str:
     out: list[str] = []
     meta_p = run_dir / "run.json"
@@ -149,6 +215,14 @@ def render(run_dir: Path, diff_path: Path | None = None) -> str:
     if not lines:
         out.append("(no events.jsonl)")
 
+    msg_files = message_files(run_dir)
+    msg_total = 0
+    for mp in msg_files:
+        out += ["", f"## Conversation ({mp.name})", ""]
+        lines_m, n = render_messages(mp)
+        msg_total += n
+        out += lines_m
+
     out += ["", "## Final report (synthesizer.md)", ""]
     rep = run_dir / "synthesizer.md"
     out.append(clip(rep.read_text(errors="replace"), REPORT_CLIP) if rep.is_file()
@@ -169,7 +243,11 @@ def render(run_dir: Path, diff_path: Path | None = None) -> str:
                    + ", ".join(f"{k}×{n}" for k, n in sorted(unknown.items())))
     if bad_lines:
         out.append(f"unparseable event lines: {bad_lines}")
-    out.append("not recorded by luxe: tool observations and model prose between calls")
+    if msg_files:
+        out.append(f"messages: {msg_total} across {len(msg_files)} file(s); "
+                   f"prose/observations clipped at {MESSAGE_CLIP} chars")
+    else:
+        out.append("not recorded by luxe: tool observations and model prose between calls")
     return "\n".join(out) + "\n"
 
 
