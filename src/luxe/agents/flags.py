@@ -29,17 +29,17 @@ from typing import Mapping
 
 from luxe.agents.convergence import _DEFAULT_MAX_DELTA
 from luxe.agents.guardrails import _TRUNCATED_TURN_MAX_RETRIES
+from luxe.context import (
+    CALIBRATION_MAX,
+    CALIBRATION_MIN,
+    CALIBRATION_UNMEASURED_RATIO,
+)
 
 # LUXE_IDLE_NARROW=capped default budget (2026-11-19). From the wide arm of
 # acceptance/idle_narrow_ab_2026_11: the runs wide recovered a report on had
 # 2-6 refusal spares; replaying their event streams, a budget of 3 or less
 # would still have ended 3-6 of them at the idle exit, 4 ends none.
 _IDLE_REFUSAL_SPARES_DEFAULT = 4
-from luxe.context import (
-    CALIBRATION_MAX,
-    CALIBRATION_MIN,
-    CALIBRATION_UNMEASURED_RATIO,
-)
 
 #: Fallback compaction trigger; also the value any out-of-band override
 #: silently degrades to (see `from_env`).
