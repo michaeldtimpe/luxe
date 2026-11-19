@@ -1,5 +1,6 @@
 """Tests for tool implementations."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -684,10 +685,35 @@ def test_glob_returns_partial_results_when_a_subtree_dies(tmp_path, monkeypatch)
     matches, stopped = fs._glob_matches_tolerant(tmp_path, "*.py")
     assert [m.name for m in matches] == ["a.py"] and stopped == ""
 
-    _fail_scandir_under(monkeypatch, tmp_path,
+    # Deterministic on every Python: <3.12 pathlib raises mid-iteration, 3.12+
+    # swallows it inside the selector, so inject the raise at the iterator.
+    def dying_glob(self, pattern, *a, **k):
+        yield tmp_path / "a.py"
+        raise OSError(errno.ETIMEDOUT, "Operation timed out")
+
+    monkeypatch.setattr(type(tmp_path), "glob", dying_glob)
+    matches, stopped = fs._glob_matches_tolerant(tmp_path, "**/*.py")
+    assert [m.name for m in matches] == ["a.py"]   # partial results kept
+    assert "timed out" in stopped        # reported, not raised
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12),
+                    reason="3.12+ pathlib swallows scandir OSError itself")
+def test_glob_silently_skips_dead_subtree_on_312_plus(tmp_path, monkeypatch):
+    import errno
+
+    from luxe.tools import fs
+
+    (tmp_path / "a.py").write_text("x")
+    doomed = tmp_path / "nas"
+    doomed.mkdir()
+    (doomed / "b.py").write_text("y")
+    fs.set_repo_root(str(tmp_path))
+    _fail_scandir_under(monkeypatch, doomed,
                         OSError(errno.ETIMEDOUT, "Operation timed out"))
     matches, stopped = fs._glob_matches_tolerant(tmp_path, "**/*.py")
-    assert "timed out" in stopped        # reported, not raised
+    names = [m.name for m in matches]
+    assert "a.py" in names and "b.py" not in names and stopped == ""
 
 
 class TestProseAwareWriteFns:
