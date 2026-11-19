@@ -628,7 +628,8 @@ strings; the registry pattern keeps variant cells coupled to runtime.
 
 ### Narrow idle test (`LUXE_IDLE_NARROW=1`, opt-in 2026-11-03)
 
-- Flag `RunFlags.idle_narrow` (exact "1"); off = the legacy test, byte-identical.
+- Flag `RunFlags.idle_narrow` (exact "1", "wide" or "capped"); off = the
+  legacy test, byte-identical.
 - On: a post-write call legacy counts idle (`bytes_out == 0 or error`) is
   NOT idle when it returned output (any exit), exited non-zero from a command
   that RAN (`exit code N`, N not 126/127), or succeeded silently. It stays
@@ -649,6 +650,17 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   patches REAL; wall +18.2% trips the +15% gate, so NOT promoted (user's
   call). narrow alone left the refusals idle and did not fix the empty
   reports. acceptance/idle_narrow_ab_2026_11/REPORT.md.
+- `LUXE_IDLE_NARROW=capped` (opt-in 2026-11-19, being A/B'd in
+  acceptance/idle_capped_ab_2026_11): narrow, plus refusals are spared up to
+  a per-RUN budget `LUXE_IDLE_REFUSAL_SPARES` (`RunFlags.idle_refusal_spares`,
+  non-negative int, malformed -> default 4 silently). Executed checks reset
+  the idle streak but never refund the budget. Once spent, a refusal counts
+  idle again; the first such refusal emits `idle_refusal_budget_spent(step,
+  name, budget)` once. Default 4: the wide-arm runs that recovered a report
+  had 2-6 refusal spares, and replaying their event streams a budget <= 3
+  still ends 3-6 of them at the idle exit; 4 ends none. `idle_narrow_mode`
+  carries `refusal_spares` in this mode only. "1" and "wide" are unchanged
+  (they ignore the budget).
 
 ### Removed mechanisms (2026-09 agent-loop cleanup)
 

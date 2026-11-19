@@ -160,6 +160,10 @@ class LoopState:
     prev_tool_calls_total_at_sample: int = 0  # v1.9 — for next_action_was_tool_call
     writes_seen: int = 0
     post_write_idle_tools: int = 0
+    # LUXE_IDLE_NARROW=capped: refusals spared so far this run, and whether
+    # idle_refusal_budget_spent has been emitted.
+    idle_refusal_spares_used: int = 0
+    idle_refusal_budget_spent: bool = False
 
     # SpecDD Lever 1 mid-loop state (v1.7). actual_tool_calls accumulates
     # (name, args) for every dispatched call so the spec validator sees the

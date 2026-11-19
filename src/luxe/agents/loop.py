@@ -1270,8 +1270,21 @@ def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
         # 2026-10-22; agents.sdd "Removed mechanisms").
         idle = bool(executed.bytes_out == 0 or executed.error)
         if idle and run.flags.idle_narrow:
-            spared = _narrow_idle_spares(executed,
-                                         wide=run.flags.idle_narrow_wide)
+            capped = run.flags.idle_narrow_capped
+            spared = _narrow_idle_spares(
+                executed, wide=run.flags.idle_narrow_wide or capped)
+            if spared == "refusal" and capped:
+                # Budgeted: the first `idle_refusal_spares` refusals of the
+                # run are spared; after that a refusal is idle again.
+                if st.idle_refusal_spares_used < run.flags.idle_refusal_spares:
+                    st.idle_refusal_spares_used += 1
+                else:
+                    spared = None
+                    if not st.idle_refusal_budget_spent:
+                        st.idle_refusal_budget_spent = True
+                        emit("idle_refusal_budget_spent", step=step,
+                             name=tc.name,
+                             budget=run.flags.idle_refusal_spares)
             if spared is not None:
                 idle = False
                 emit("idle_narrow_spared", step=step, name=tc.name,

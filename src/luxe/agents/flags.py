@@ -29,6 +29,12 @@ from typing import Mapping
 
 from luxe.agents.convergence import _DEFAULT_MAX_DELTA
 from luxe.agents.guardrails import _TRUNCATED_TURN_MAX_RETRIES
+
+# LUXE_IDLE_NARROW=capped default budget (2026-11-19). From the wide arm of
+# acceptance/idle_narrow_ab_2026_11: the runs wide recovered a report on had
+# 2-6 refusal spares; replaying their event streams, a budget of 3 or less
+# would still have ended 3-6 of them at the idle exit, 4 ends none.
+_IDLE_REFUSAL_SPARES_DEFAULT = 4
 from luxe.context import (
     CALIBRATION_MAX,
     CALIBRATION_MIN,
@@ -153,6 +159,14 @@ class RunFlags:
     # LUXE_IDLE_NARROW=wide (slice probe, 2026-11-03): refusals are spared
     # too, so only the dedup short-circuit (an identical repeat) is idle.
     idle_narrow_wide: bool = False
+    # LUXE_IDLE_NARROW=capped (opt-in, being A/B'd in
+    # acceptance/idle_capped_ab_2026_11): narrow, plus refusals are spared
+    # until a per-run budget of LUXE_IDLE_REFUSAL_SPARES (default
+    # _IDLE_REFUSAL_SPARES_DEFAULT) is spent; after that a refusal counts
+    # idle again. Wide fixed the empty reports at +18% wall; the cap keeps
+    # the recovery while bounding a run that keeps getting refused.
+    idle_narrow_capped: bool = False
+    idle_refusal_spares: int = _IDLE_REFUSAL_SPARES_DEFAULT
 
 
     # Cache-friendly compaction: phase 1 batches its truncations and never
@@ -227,6 +241,15 @@ class RunFlags:
         except ValueError:
             max_tt_retries = _TRUNCATED_TURN_MAX_RETRIES
 
+        # Refusal-spare budget for LUXE_IDLE_NARROW=capped: a non-negative
+        # int, anything else degrades silently to the default.
+        try:
+            refusal_spares = int(e.get("LUXE_IDLE_REFUSAL_SPARES", ""))
+            if refusal_spares < 0:
+                refusal_spares = _IDLE_REFUSAL_SPARES_DEFAULT
+        except ValueError:
+            refusal_spares = _IDLE_REFUSAL_SPARES_DEFAULT
+
         # Unmeasured-material ratio: same grammar and same silent degradation
         # as LUXE_TIERED_COMPACT_THRESHOLD above. Out of the pinned
         # [CALIBRATION_MIN, CALIBRATION_MAX] band or unparseable falls back to
@@ -273,8 +296,10 @@ class RunFlags:
             # Opt-in: only the exact string "1" enables it.
             reasoning_roundtrip=e.get("LUXE_REASONING_ROUNDTRIP") == "1",
             # Opt-in: only the exact string "1" enables it.
-            idle_narrow=e.get("LUXE_IDLE_NARROW") in ("1", "wide"),
+            idle_narrow=e.get("LUXE_IDLE_NARROW") in ("1", "wide", "capped"),
             idle_narrow_wide=e.get("LUXE_IDLE_NARROW") == "wide",
+            idle_narrow_capped=e.get("LUXE_IDLE_NARROW") == "capped",
+            idle_refusal_spares=refusal_spares,
             # Default ON: only the exact string "0" disables it.
             compact_cache_friendly=(
                 e.get("LUXE_COMPACT_CACHE_FRIENDLY", "1") != "0"

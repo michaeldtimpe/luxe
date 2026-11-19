@@ -181,3 +181,105 @@ def test_wide_does_not_end_on_refusals(monkeypatch):
     )
     kinds = [k for k, _ in events]
     assert "post_write_idle_exit" not in kinds and result.final_text == "done"
+
+
+# --- LUXE_IDLE_NARROW=capped (2026-11-19): refusals spared up to a budget ---
+
+def test_capped_flag_parsing():
+    from luxe.agents.flags import _IDLE_REFUSAL_SPARES_DEFAULT
+    c = RunFlags.from_env({"LUXE_IDLE_NARROW": "capped"})
+    assert c.idle_narrow and c.idle_narrow_capped and not c.idle_narrow_wide
+    assert c.idle_refusal_spares == _IDLE_REFUSAL_SPARES_DEFAULT == 4
+    for mode in ("1", "wide", "", "Capped"):
+        assert not RunFlags.from_env({"LUXE_IDLE_NARROW": mode}).idle_narrow_capped
+    assert not RunFlags.from_env({"LUXE_IDLE_NARROW": "Capped"}).idle_narrow
+    env = {"LUXE_IDLE_NARROW": "capped"}
+    assert RunFlags.from_env({**env, "LUXE_IDLE_REFUSAL_SPARES": "2"}
+                             ).idle_refusal_spares == 2
+    assert RunFlags.from_env({**env, "LUXE_IDLE_REFUSAL_SPARES": "0"}
+                             ).idle_refusal_spares == 0
+    for bad in ("", "x", "-1", "2.5"):
+        assert RunFlags.from_env({**env, "LUXE_IDLE_REFUSAL_SPARES": bad}
+                                 ).idle_refusal_spares == 4
+
+
+def _run_mode(monkeypatch, mode, cmds, budget=None):
+    monkeypatch.setenv("LUXE_IDLE_NARROW", mode)
+    if budget is None:
+        monkeypatch.delenv("LUXE_IDLE_REFUSAL_SPARES", raising=False)
+    else:
+        monkeypatch.setenv("LUXE_IDLE_REFUSAL_SPARES", str(budget))
+    events: list[tuple[str, dict]] = []
+    import luxe.agents.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "append_event",
+                        lambda run_id, kind, **f: events.append((kind, f)))
+    backend = ScriptedBackend(
+        [_write_resp()] + [_bash_resp(c) for c in cmds] + [_terminal_resp()])
+    result = run_agent(
+        backend=backend, role_cfg=_make_role(max_steps=30),
+        system_prompt="sys", task_prompt="do work",
+        tool_defs=[_write_tool(), _BASH_DEF],
+        tool_fns={"write_file": lambda a: ("ok", None),
+                  "bash": lambda a: _RESULTS[a["command"].split("#")[0]]},
+        run_id="idle-capped-test",
+    )
+    return result, [k for k, _ in events], events
+
+
+REFUSALS = ["refused#a", "missing#b", "timeout#c", "noexec#d"]
+
+
+def test_capped_spares_refusals_under_budget(monkeypatch):
+    result, kinds, events = _run_mode(monkeypatch, "capped", REFUSALS)
+    assert "post_write_idle_exit" not in kinds and result.final_text == "done"
+    assert [f["reason"] for k, f in events if k == "idle_narrow_spared"] \
+        == ["refusal"] * 4
+    assert "idle_refusal_budget_spent" not in kinds
+
+
+def test_capped_over_budget_counts_idle_and_exits_at_three(monkeypatch):
+    """Budget 1: refusal #1 spared, #2 announces the spent budget and is
+    idle (1), #3 idle (2), #4 idle (3) -> the idle exit fires."""
+    _, kinds, events = _run_mode(monkeypatch, "capped",
+                                 REFUSALS + ["refused#e"], budget=1)
+    assert "post_write_idle_exit" in kinds
+    assert kinds.count("idle_narrow_spared") == 1
+    assert kinds.count("idle_refusal_budget_spent") == 1
+    spent = next(f for k, f in events if k == "idle_refusal_budget_spent")
+    assert spent["budget"] == 1 and spent["name"] == "bash"
+    assert kinds.index("idle_refusal_budget_spent") < kinds.index(
+        "post_write_idle_exit")
+    exit_ev = next(f for k, f in events if k == "post_write_idle_exit")
+    assert exit_ev["idle_tools"] == 3
+
+
+def test_capped_budget_is_per_run_not_per_streak(monkeypatch):
+    """Executed checks reset the idle streak but never refund the budget."""
+    cmds = ["refused#a", "py-compile#b", "refused#c", "py-compile#d",
+            "missing#e", "timeout#f", "noexec#g"]
+    _, kinds, events = _run_mode(monkeypatch, "capped", cmds, budget=2)
+    assert "post_write_idle_exit" in kinds
+    assert [f["reason"] for k, f in events if k == "idle_narrow_spared"] \
+        == ["refusal", "silent_success", "refusal", "silent_success"]
+    assert kinds.count("idle_refusal_budget_spent") == 1
+
+
+def test_capped_keeps_narrow_spares_without_spending_budget(monkeypatch):
+    result, kinds, events = _run_mode(monkeypatch, "capped",
+                                      VERIFY + ["refused#z"], budget=1)
+    assert "post_write_idle_exit" not in kinds and result.final_text == "done"
+    assert [f["reason"] for k, f in events if k == "idle_narrow_spared"] \
+        == ["silent_success", "output", "nonzero_exit", "silent_success",
+            "refusal"]
+
+
+@pytest.mark.parametrize("mode,exits", [("1", True), ("wide", False)])
+def test_other_modes_ignore_the_budget(monkeypatch, mode, exits):
+    """narrow and wide behave as before even with a budget set."""
+    _, kinds, _ = _run_mode(monkeypatch, mode, REFUSALS, budget=0)
+    assert ("post_write_idle_exit" in kinds) is exits
+    assert "idle_refusal_budget_spent" not in kinds
+    if mode == "1":
+        assert "idle_narrow_spared" not in kinds
+    else:
+        assert kinds.count("idle_narrow_spared") == 4
