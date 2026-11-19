@@ -1,0 +1,232 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_patch": "diff --git a/astropy/modeling/separable.py b/astropy/modeling/separable.py\nindex a308e27297..45bea36085 100644\n--- a/astropy/modeling/separable.py\n+++ b/astropy/modeling/separable.py\n@@ -242,7 +242,7 @@ def _cstack(left, right):\n         cright = _coord_matrix(right, 'right', noutp)\n     else:\n         cright = np.zeros((noutp, right.shape[1]))\n-        cright[-right.shape[0]:, -right.shape[1]:] = 1\n+        cright[-right.shape[0]:, -right.shape[1]:] = right\n \n     return np.hstack([cleft, cright])\n \n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "astropy__astropy-13033",
+    "model_patch": "diff --git a/astropy/timeseries/core.py b/astropy/timeseries/core.py\nindex c279f35f87..05fe349dc0 100644\n--- a/astropy/timeseries/core.py\n+++ b/astropy/timeseries/core.py\n@@ -78,7 +78,9 @@ class BaseTimeSeries(QTable):\n \n                 raise ValueError(\"{} object is invalid - expected '{}' \"\n                                  \"as the first column{} but found '{}'\"\n-                                 .format(self.__class__.__name__, required_columns[0], plural, self.colnames[0]))\n+                                 .format(self.__class__.__name__, \"', '\".join(required_columns),\n+                                         's' if len(required_columns) > 1 else '',\n+                                         \"', '\".join(self.colnames)))\n \n             if (self._required_columns_relax\n                     and self._required_columns == self.colnames[:len(self._required_columns)]):\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "astropy__astropy-13236",
+    "model_patch": "diff --git a/astropy/table/table.py b/astropy/table/table.py\nindex 5afe2127a3..13073f7fae 100644\n--- a/astropy/table/table.py\n+++ b/astropy/table/table.py\n@@ -32,7 +32,6 @@ from .row import Row\n from .info import TableInfo\n from .index import Index, _IndexModeContext, get_index\n from .connect import TableRead, TableWrite\n-from .ndarray_mixin import NdarrayMixin\n from .mixins.registry import get_mixin_handler\n from . import conf\n \n@@ -1239,13 +1238,6 @@ class Table:\n                                 f'{fully_qualified_name} '\n                                 'did not return a valid mixin column')\n \n-        # Structured ndarray gets viewed as a mixin unless already a valid\n-        # mixin class\n-        if (not isinstance(data, Column) and not data_is_mixin\n-                and isinstance(data, np.ndarray) and len(data.dtype) > 1):\n-            data = data.view(NdarrayMixin)\n-            data_is_mixin = True\n-\n         # Get the final column name using precedence.  Some objects may not\n         # have an info attribute. Also avoid creating info as a side effect.\n         if not name:\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "astropy__astropy-13453",
+    "model_patch": "diff --git a/astropy/io/ascii/html.py b/astropy/io/ascii/html.py\nindex 266cf229cc..32a808c3ac 100644\n--- a/astropy/io/ascii/html.py\n+++ b/astropy/io/ascii/html.py\n@@ -354,6 +354,7 @@ class HTML(core.BaseReader):\n             self.data.fill_values = [self.data.fill_values]\n \n         self.data._set_fill_values(cols)\n+        self.data._set_col_formats()\n \n         lines = []\n \n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "astropy__astropy-13977",
+    "model_patch": "diff --git a/astropy/units/quantity.py b/astropy/units/quantity.py\nindex b98abfafb0..a864054f7f 100644\n--- a/astropy/units/quantity.py\n+++ b/astropy/units/quantity.py\n@@ -667,7 +667,13 @@ class Quantity(np.ndarray):\n         arrays = []\n         for input_, converter in zip(inputs, converters):\n             input_ = getattr(input_, \"value\", input_)\n-            arrays.append(converter(input_) if converter else input_)\n+            try:\n+                arrays.append(converter(input_) if converter else input_)\n+            except (ValueError, TypeError):\n+                # If conversion fails (e.g., for a duck type that is not\n+                # compatible), return NotImplemented to allow the reflected\n+                # operation to be tried on the other operand.\n+                return NotImplemented\n \n         # Call our superclass's __array_ufunc__\n         result = super().__array_ufunc__(function, method, *arrays, **kwargs)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "astropy__astropy-14096",
+    "model_patch": "diff --git a/astropy/coordinates/sky_coordinate.py b/astropy/coordinates/sky_coordinate.py\nindex ab475f7d0d..608df8468c 100644\n--- a/astropy/coordinates/sky_coordinate.py\n+++ b/astropy/coordinates/sky_coordinate.py\n@@ -894,6 +894,18 @@ class SkyCoord(ShapedLikeNDArray):\n             if frame_cls is not None and self.frame.is_transformable_to(frame_cls):\n                 return self.transform_to(attr)\n \n+        # Check if attr is a property on the class hierarchy. If so, the\n+        # AttributeError was raised from within the property getter (e.g.,\n+        # accessing a non-existent attribute inside the property), and Python\n+        # has called __getattr__ with the property name. Raise a more\n+        # informative error rather than saying the property doesn't exist.\n+        for cls in type(self).__mro__:\n+            if attr in cls.__dict__ and isinstance(cls.__dict__[attr], property):\n+                raise AttributeError(\n+                    f\"'{self.__class__.__name__}' object's property '{attr}' \"\n+                    f\"raised an AttributeError\"\n+                )\n+\n         # Fail\n         raise AttributeError(\n             f\"'{self.__class__.__name__}' object has no attribute '{attr}'\"\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "astropy__astropy-14182",
+    "model_patch": "diff --git a/astropy/io/ascii/rst.py b/astropy/io/ascii/rst.py\nindex abdeba8efb..ca3b898a78 100644\n--- a/astropy/io/ascii/rst.py\n+++ b/astropy/io/ascii/rst.py\n@@ -57,8 +57,10 @@ class RST(FixedWidth):\n     data_class = SimpleRSTData\n     header_class = SimpleRSTHeader\n \n-    def __init__(self):\n-        super().__init__(delimiter_pad=None, bookend=False)\n+    def __init__(self, header_rows=None):\n+        if header_rows is None:\n+            header_rows = [\"name\"]\n+        super().__init__(delimiter_pad=None, bookend=False, header_rows=header_rows)\n \n     def write(self, lines):\n         lines = super().write(lines)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "astropy__astropy-8707",
+    "model_patch": "diff --git a/astropy/io/fits/card.py b/astropy/io/fits/card.py\nindex 8c1ac5d738..58d9825385 100644\n--- a/astropy/io/fits/card.py\n+++ b/astropy/io/fits/card.py\n@@ -553,6 +553,9 @@ class Card(_Verify):\n         card(s).\n         \"\"\"\n \n+        if isinstance(image, bytes):\n+            image = image.decode('ascii')\n+\n         card = cls()\n         card._image = _pad(image)\n         card._verified = False\ndiff --git a/astropy/io/fits/header.py b/astropy/io/fits/header.py\nindex ad07e6d52d..0c8076f4e0 100644\n--- a/astropy/io/fits/header.py\n+++ b/astropy/io/fits/header.py\n@@ -348,6 +348,9 @@ class Header:\n             A new `Header` instance.\n         \"\"\"\n \n+        if isinstance(data, bytes):\n+            data = data.decode('ascii')\n+\n         cards = []\n \n         # If the card separator contains characters that may validly appear in\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "django__django-10880",
+    "model_patch": "diff --git a/django/db/models/aggregates.py b/django/db/models/aggregates.py\nindex ac0b62d0bf..ea88c54b0d 100644\n--- a/django/db/models/aggregates.py\n+++ b/django/db/models/aggregates.py\n@@ -68,7 +68,7 @@ class Aggregate(Func):\n         return []\n \n     def as_sql(self, compiler, connection, **extra_context):\n-        extra_context['distinct'] = 'DISTINCT' if self.distinct else ''\n+        extra_context['distinct'] = 'DISTINCT ' if self.distinct else ''\n         if self.filter:\n             if connection.features.supports_aggregate_filter_clause:\n                 filter_sql, filter_params = self.filter.as_sql(compiler, connection)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "django__django-10973",
+    "model_patch": "diff --git a/django/db/backends/postgresql/client.py b/django/db/backends/postgresql/client.py\nindex 7fca6eff30..cf31b84801 100644\n--- a/django/db/backends/postgresql/client.py\n+++ b/django/db/backends/postgresql/client.py\n@@ -2,17 +2,9 @@ import os\n import signal\n import subprocess\n \n-from django.core.files.temp import NamedTemporaryFile\n from django.db.backends.base.client import BaseDatabaseClient\n \n \n-def _escape_pgpass(txt):\n-    \"\"\"\n-    Escape a fragment of a PostgreSQL .pgpass file.\n-    \"\"\"\n-    return txt.replace('\\\\', '\\\\\\\\').replace(':', '\\\\:')\n-\n-\n class DatabaseClient(BaseDatabaseClient):\n     executable_name = 'psql'\n \n@@ -34,38 +26,18 @@ class DatabaseClient(BaseDatabaseClient):\n             args += ['-p', str(port)]\n         args += [dbname]\n \n-        temp_pgpass = None\n+        env = os.environ.copy()\n+        if passwd:\n+            env['PGPASSWORD'] = passwd\n+\n         sigint_handler = signal.getsignal(signal.SIGINT)\n         try:\n-            if passwd:\n-                # Create temporary .pgpass file.\n-                temp_pgpass = NamedTemporaryFile(mode='w+')\n-                try:\n-                    print(\n-                        _escape_pgpass(host) or '*',\n-                        str(port) or '*',\n-                        _escape_pgpass(dbname) or '*',\n-                        _escape_pgpass(user) or '*',\n-                        _escape_pgpass(passwd),\n-                        file=temp_pgpass,\n-                        sep=':',\n-                        flush=True,\n-                    )\n-                    os.environ['PGPASSFILE'] = temp_pgpass.name\n-                except UnicodeEncodeError:\n-                    # If the current locale can't encode the data, let the\n-                    # user input the password manually.\n-                    pass\n             # Allow SIGINT to pass to psql to abort queries.\n             signal.signal(signal.SIGINT, signal.SIG_IGN)\n-            subprocess.check_call(args)\n+            subprocess.run(args, env=env, check=True)\n         finally:\n             # Restore the original SIGINT handler.\n             signal.signal(signal.SIGINT, sigint_handler)\n-            if temp_pgpass:\n-                temp_pgpass.close()\n-                if 'PGPASSFILE' in os.environ:  # unit tests need cleanup\n-                    del os.environ['PGPASSFILE']\n \n     def runshell(self):\n         DatabaseClient.runshell_db(self.connection.get_connection_params())\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "django__django-10999",
+    "model_patch": "diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py\nindex 8d08b7d1d3..a037758784 100644\n--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -29,7 +29,7 @@ datetime_re = re.compile(\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "django__django-11333",
+    "model_patch": "diff --git a/django/urls/base.py b/django/urls/base.py\nindex 0e1c3d909c..a63475beeb 100644\n--- a/django/urls/base.py\n+++ b/django/urls/base.py\n@@ -7,7 +7,7 @@ from django.utils.functional import lazy\n from django.utils.translation import override\n \n from .exceptions import NoReverseMatch, Resolver404\n-from .resolvers import get_ns_resolver, get_resolver\n+from .resolvers import _get_resolver, get_ns_resolver, get_resolver\n from .utils import get_callable\n \n # SCRIPT_NAME prefixes for each thread are stored here. If there's no entry for\n@@ -92,7 +92,7 @@ reverse_lazy = lazy(reverse, str)\n \n def clear_url_caches():\n     get_callable.cache_clear()\n-    get_resolver.cache_clear()\n+    _get_resolver.cache_clear()\n     get_ns_resolver.cache_clear()\n \n \ndiff --git a/django/urls/resolvers.py b/django/urls/resolvers.py\nindex 247e3680c0..0e3bd2ce0b 100644\n--- a/django/urls/resolvers.py\n+++ b/django/urls/resolvers.py\n@@ -64,10 +64,14 @@ class ResolverMatch:\n \n \n @functools.lru_cache(maxsize=None)\n+def _get_resolver(urlconf):\n+    return URLResolver(RegexPattern(r'^/'), urlconf)\n+\n+\n def get_resolver(urlconf=None):\n     if urlconf is None:\n         urlconf = settings.ROOT_URLCONF\n-    return URLResolver(RegexPattern(r'^/'), urlconf)\n+    return _get_resolver(urlconf)\n \n \n @functools.lru_cache(maxsize=None)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "django__django-11734",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-13989",
+    "model_patch": "diff --git a/lib/matplotlib/axes/_axes.py b/lib/matplotlib/axes/_axes.py\nindex 4b73d52293..bc5461ad9f 100644\n--- a/lib/matplotlib/axes/_axes.py\n+++ b/lib/matplotlib/axes/_axes.py\n@@ -6686,7 +6686,7 @@ optional.\n \n         density = bool(density) or bool(normed)\n         if density and not stacked:\n-            hist_kwargs = dict(density=density)\n+            hist_kwargs['density'] = density\n \n         # List to store all the top coordinates of the histograms\n         tops = []\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-14623",
+    "model_patch": "diff --git a/lib/matplotlib/ticker.py b/lib/matplotlib/ticker.py\nindex 209a3f92ce..a791b4acdd 100644\n--- a/lib/matplotlib/ticker.py\n+++ b/lib/matplotlib/ticker.py\n@@ -2379,8 +2379,6 @@ class LogLocator(Locator):\n         if not np.isfinite(vmin) or not np.isfinite(vmax):\n             return 1, 10  # initial range, no data plotted yet\n \n-        if vmin > vmax:\n-            vmin, vmax = vmax, vmin\n         if vmax <= 0:\n             cbook._warn_external(\n                 \"Data has no positive values, and therefore cannot be \"\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-20676",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-20826",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-24870",
+    "model_patch": "diff --git a/lib/matplotlib/contour.py b/lib/matplotlib/contour.py\nindex 144eadeae2..bfa0ffaa5d 100644\n--- a/lib/matplotlib/contour.py\n+++ b/lib/matplotlib/contour.py\n@@ -1123,7 +1123,13 @@ class ContourSet(cm.ScalarMappable, ContourLabeler):\n         \"\"\"\n         if self.levels is None:\n             if len(args) == 0:\n-                levels_arg = 7  # Default, hard-wired.\n+                if getattr(self, '_is_bool_data', False):\n+                    if self.filled:\n+                        levels_arg = [0, 0.5, 1]\n+                    else:\n+                        levels_arg = [0.5]\n+                else:\n+                    levels_arg = 7  # Default, hard-wired.\n             else:\n                 levels_arg = args[0]\n         else:\n@@ -1447,11 +1453,14 @@ class QuadContourSet(ContourSet):\n             fn = 'contour'\n         nargs = len(args)\n         if nargs <= 2:\n-            z = ma.asarray(args[0], dtype=np.float64)\n+            z = ma.asarray(args[0])\n+            self._is_bool_data = z.dtype == np.bool_\n+            z = ma.asarray(z, dtype=np.float64)\n             x, y = self._initialize_x_y(z)\n             args = args[1:]\n         elif nargs <= 4:\n             x, y, z = self._check_xyz(args[:3], kwargs)\n+            self._is_bool_data = z.dtype == np.bool_\n             args = args[3:]\n         else:\n             raise _api.nargs_error(fn, takes=\"from 1 to 4\", given=nargs)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-25479",
+    "model_patch": "diff --git a/lib/matplotlib/pyplot.py b/lib/matplotlib/pyplot.py\nindex 58ce4c03fa..0913aa1f20 100644\n--- a/lib/matplotlib/pyplot.py\n+++ b/lib/matplotlib/pyplot.py\n@@ -2278,9 +2278,10 @@ def set_cmap(cmap: Colormap | str) -> None:\n     matplotlib.cm.register_cmap\n     matplotlib.cm.get_cmap\n     \"\"\"\n+    cmap_name = cmap if isinstance(cmap, str) else cmap.name\n     cmap = get_cmap(cmap)\n \n-    rc('image', cmap=cmap.name)\n+    rc('image', cmap=cmap_name)\n     im = gci()\n \n     if im is not None:\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-25775",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "mwaskom__seaborn-3069",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "mwaskom__seaborn-3187",
+    "model_patch": "diff --git a/seaborn/_core/scales.py b/seaborn/_core/scales.py\nindex 55874bf2..aa493887 100644\n--- a/seaborn/_core/scales.py\n+++ b/seaborn/_core/scales.py\n@@ -379,6 +379,10 @@ class ContinuousBase(Scale):\n             locs = axis.major.locator()\n             locs = locs[(vmin <= locs) & (locs <= vmax)]\n             labels = axis.major.formatter.format_ticks(locs)\n+            # Include offset in legend labels if present\n+            offset_str = axis.major.formatter.format_offset()\n+            if offset_str:\n+                labels = [f\"{label} {offset_str}\" for label in labels]\n             new._legend = list(locs), list(labels)\n \n         return new\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "psf__requests-2931",
+    "model_patch": "diff --git a/requests/models.py b/requests/models.py\nindex 9c624d3c..157e2b54 100644\n--- a/requests/models.py\n+++ b/requests/models.py\n@@ -80,7 +80,9 @@ class RequestEncodingMixin(object):\n         if parameters are supplied as a dict.\n         \"\"\"\n \n-        if isinstance(data, (str, bytes)):\n+        if isinstance(data, bytes):\n+            return data\n+        elif isinstance(data, str):\n             return to_native_string(data)\n         elif hasattr(data, 'read'):\n             return data\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "psf__requests-5414",
+    "model_patch": "diff --git a/requests/models.py b/requests/models.py\nindex e7d292d5..a7dc7f7b 100644\n--- a/requests/models.py\n+++ b/requests/models.py\n@@ -405,6 +405,11 @@ class PreparedRequest(RequestEncodingMixin, RequestHooksMixin):\n                 raise InvalidURL('URL has an invalid label.')\n         elif host.startswith(u'*'):\n             raise InvalidURL('URL has an invalid label.')\n+        else:\n+            try:\n+                host = self._get_idna_encoded_host(host)\n+            except UnicodeError:\n+                raise InvalidURL('URL has an invalid label.')\n \n         # Carefully reconstruct the network location\n         netloc = auth or ''\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "psf__requests-6028",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pydata__xarray-2905",
+    "model_patch": "diff --git a/xarray/core/variable.py b/xarray/core/variable.py\nindex 45553eb9..3c1e2031 100644\n--- a/xarray/core/variable.py\n+++ b/xarray/core/variable.py\n@@ -218,7 +218,12 @@ def as_compatible_data(data, fastpath=False):\n         data = np.timedelta64(getattr(data, \"value\", data), \"ns\")\n \n     # we don't want nested self-described arrays\n-    data = getattr(data, \"values\", data)\n+    if (\n+        hasattr(data, \"ndim\")\n+        and hasattr(data, \"shape\")\n+        and hasattr(data, \"dtype\")\n+    ):\n+        data = getattr(data, \"values\", data)\n \n     if isinstance(data, np.ma.MaskedArray):\n         mask = np.ma.getmaskarray(data)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pydata__xarray-6938",
+    "model_patch": "diff --git a/xarray/core/dataset.py b/xarray/core/dataset.py\nindex c775d05c..aeebf50d 100644\n--- a/xarray/core/dataset.py\n+++ b/xarray/core/dataset.py\n@@ -3772,8 +3772,9 @@ class Dataset(\n         for k, v in self.variables.items():\n             dims = tuple(dims_dict.get(dim, dim) for dim in v.dims)\n             if k in result_dims:\n-                var = v.to_index_variable()\n-                var.dims = dims\n+                var = IndexVariable(\n+                    dims, v._data, v._attrs, encoding=v._encoding, fastpath=True\n+                )\n                 if k in self._indexes:\n                     indexes[k] = self._indexes[k]\n                     variables[k] = var\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-4604",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-4661",
+    "model_patch": "diff --git a/pylint/config/__init__.py b/pylint/config/__init__.py\nindex 84774d0e3..3d39978f3 100644\n--- a/pylint/config/__init__.py\n+++ b/pylint/config/__init__.py\n@@ -61,9 +61,9 @@ if \"PYLINTHOME\" in os.environ:\n     if USER_HOME == \"~\":\n         USER_HOME = os.path.dirname(PYLINT_HOME)\n elif USER_HOME == \"~\":\n-    PYLINT_HOME = \".pylint.d\"\n+    PYLINT_HOME = \".cache/pylint\"\n else:\n-    PYLINT_HOME = os.path.join(USER_HOME, \".pylint.d\")\n+    PYLINT_HOME = os.path.join(USER_HOME, \".cache\", \"pylint\")\n \n \n def _get_pdata_path(base_name, recurs):\n@@ -110,7 +110,7 @@ ENV_HELP = (\n The following environment variables are used:\n     * PYLINTHOME\n     Path to the directory where persistent data for the run will be stored. If\n-not found, it defaults to ~/.pylint.d/ or .pylint.d (in the current working\n+not found, it defaults to ~/.cache/pylint/ or .cache/pylint (in the current\n directory).\n     * PYLINTRC\n     Path to the configuration file. See the documentation for the method used\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-4970",
+    "model_patch": "diff --git a/pylint/checkers/similar.py b/pylint/checkers/similar.py\nindex c65b1c893..1986409ee 100644\n--- a/pylint/checkers/similar.py\n+++ b/pylint/checkers/similar.py\n@@ -390,6 +390,8 @@ class Similar:\n \n     def run(self) -> None:\n         \"\"\"start looking for similarities and display results on stdout\"\"\"\n+        if self.min_lines <= 0:\n+            return\n         self._display_sims(self._compute_sims())\n \n     def _compute_sims(self) -> List[Tuple[int, Set[LinesChunkLimits_T]]]:\n@@ -830,6 +832,8 @@ class SimilarChecker(BaseChecker, Similar, MapReduceMixin):\n \n     def close(self):\n         \"\"\"compute and display similarities on closing (i.e. end of parsing)\"\"\"\n+        if self.min_lines <= 0:\n+            return\n         total = sum(len(lineset) for lineset in self.linesets)\n         duplicated = 0\n         stats = self.stats\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-6386",
+    "model_patch": "diff --git a/pylint/config/callback_actions.py b/pylint/config/callback_actions.py\nindex 761995399..7479d7873 100644\n--- a/pylint/config/callback_actions.py\n+++ b/pylint/config/callback_actions.py\n@@ -45,6 +45,32 @@ class _DoNothingAction(_CallbackAction):\n     without erroring when they are then processed again by argparse.\n     \"\"\"\n \n+    def __init__(\n+        self,\n+        option_strings: Sequence[str],\n+        dest: str,\n+        nargs: None = None,\n+        const: None = None,\n+        default: None = None,\n+        type: None = None,\n+        choices: None = None,\n+        required: bool = False,\n+        help: str = \"\",\n+        metavar: str = \"\",\n+    ) -> None:\n+        super().__init__(\n+            option_strings,\n+            dest,\n+            0,\n+            const,\n+            default,\n+            type,\n+            choices,\n+            required,\n+            help,\n+            metavar,\n+        )\n+\n     def __call__(\n         self,\n         parser: argparse.ArgumentParser,\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-6528",
+    "model_patch": "diff --git a/pylint/lint/pylinter.py b/pylint/lint/pylinter.py\nindex 53345a6b1..66cbcf4f8 100644\n--- a/pylint/lint/pylinter.py\n+++ b/pylint/lint/pylinter.py\n@@ -564,8 +564,7 @@ class PyLinter(\n             if not msg.may_be_emitted():\n                 self._msgs_state[msg.msgid] = False\n \n-    @staticmethod\n-    def _discover_files(files_or_modules: Sequence[str]) -> Iterator[str]:\n+    def _discover_files(self, files_or_modules: Sequence[str]) -> Iterator[str]:\n         \"\"\"Discover python modules and packages in sub-directory.\n \n         Returns iterator of paths to discovered modules and packages.\n@@ -579,6 +578,21 @@ class PyLinter(\n                     if any(root.startswith(s) for s in skip_subtrees):\n                         # Skip subtree of already discovered package.\n                         continue\n+                    # Skip directories matching ignore patterns\n+                    basename = os.path.basename(root)\n+                    if (\n+                        basename in self.config.ignore\n+                        or any(\n+                            pattern.match(basename)\n+                            for pattern in self.config.ignore_patterns\n+                        )\n+                        or any(\n+                            pattern.match(root)\n+                            for pattern in self._ignore_paths\n+                        )\n+                    ):\n+                        skip_subtrees.append(root)\n+                        continue\n                     if \"__init__.py\" in files:\n                         skip_subtrees.append(root)\n                         yield root\n@@ -587,6 +601,15 @@ class PyLinter(\n                             os.path.join(root, file)\n                             for file in files\n                             if file.endswith(\".py\")\n+                            and file not in self.config.ignore\n+                            and not any(\n+                                pattern.match(file)\n+                                for pattern in self.config.ignore_patterns\n+                            )\n+                            and not any(\n+                                pattern.match(os.path.join(root, file))\n+                                for pattern in self._ignore_paths\n+                            )\n                         )\n             else:\n                 yield something\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-10051",
+    "model_patch": "diff --git a/src/_pytest/logging.py b/src/_pytest/logging.py\nindex a4f4214b1..b60465cb4 100644\n--- a/src/_pytest/logging.py\n+++ b/src/_pytest/logging.py\n@@ -342,7 +342,7 @@ class LogCaptureHandler(logging_StreamHandler):\n         super().emit(record)\n \n     def reset(self) -> None:\n-        self.records = []\n+        self.records.clear()\n         self.stream = StringIO()\n \n     def handleError(self, record: logging.LogRecord) -> None:\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5262",
+    "model_patch": "diff --git a/src/_pytest/capture.py b/src/_pytest/capture.py\nindex 25eab7fdf..2f9c70fba 100644\n--- a/src/_pytest/capture.py\n+++ b/src/_pytest/capture.py\n@@ -429,6 +429,18 @@ class EncodedFile(object):\n         self.buffer = buffer\n         self.encoding = encoding\n \n+    @property\n+    def mode(self):\n+        \"\"\"Return the mode of the underlying buffer, without the 'b' flag.\n+\n+        The underlying buffer may have a binary mode (e.g. 'rb+', 'wb'),\n+        but this wrapper is a text stream. Downstream code (e.g. youtube-dl)\n+        inspects ``.mode`` to decide whether to write bytes or str; exposing\n+        the binary flag would cause it to write bytes to a text stream,\n+        raising ``TypeError``.\n+        \"\"\"\n+        return self.buffer.mode.replace(\"b\", \"\")\n+\n     def write(self, obj):\n         if isinstance(obj, six.text_type):\n             obj = obj.encode(self.encoding, \"replace\")\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5840",
+    "model_patch": "diff --git a/src/_pytest/pathlib.py b/src/_pytest/pathlib.py\nindex 0403b6947..d0abed878 100644\n--- a/src/_pytest/pathlib.py\n+++ b/src/_pytest/pathlib.py\n@@ -11,7 +11,6 @@ from functools import partial\n from os.path import expanduser\n from os.path import expandvars\n from os.path import isabs\n-from os.path import normcase\n from os.path import sep\n from posixpath import sep as posix_sep\n \n@@ -343,4 +342,4 @@ def unique_path(path):\n \n     This is needed only for ``py.path.local``; ``pathlib.Path`` handles this\n     natively with ``resolve()``.\"\"\"\n-    return type(path)(normcase(str(path.realpath())))\n+    return type(path)(str(Path(path.realpath()).resolve()))\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-10297",
+    "model_patch": "diff --git a/sklearn/linear_model/ridge.py b/sklearn/linear_model/ridge.py\nindex 911c74ae3b..6469cdbcfc 100644\n--- a/sklearn/linear_model/ridge.py\n+++ b/sklearn/linear_model/ridge.py\n@@ -1301,6 +1301,12 @@ class RidgeClassifierCV(LinearClassifierMixin, _BaseRidgeCV):\n         weights inversely proportional to class frequencies in the input data\n         as ``n_samples / (n_classes * np.bincount(y))``\n \n+    store_cv_values : boolean, default=False\n+        Flag indicating if the cross-validation values corresponding to\n+        each alpha should be stored in the `cv_values_` attribute (see\n+        below). This flag is only compatible with `cv=None` (i.e. using\n+        Generalized Cross-Validation).\n+\n     Attributes\n     ----------\n     cv_values_ : array, shape = [n_samples, n_alphas] or \\\n@@ -1333,10 +1339,11 @@ class RidgeClassifierCV(LinearClassifierMixin, _BaseRidgeCV):\n     advantage of the multi-variate response support in Ridge.\n     \"\"\"\n     def __init__(self, alphas=(0.1, 1.0, 10.0), fit_intercept=True,\n-                 normalize=False, scoring=None, cv=None, class_weight=None):\n+                 normalize=False, scoring=None, cv=None, class_weight=None,\n+                 store_cv_values=False):\n         super(RidgeClassifierCV, self).__init__(\n             alphas=alphas, fit_intercept=fit_intercept, normalize=normalize,\n-            scoring=scoring, cv=cv)\n+            scoring=scoring, cv=cv, store_cv_values=store_cv_values)\n         self.class_weight = class_weight\n \n     def fit(self, X, y, sample_weight=None):\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-12682",
+    "model_patch": "diff --git a/sklearn/decomposition/dict_learning.py b/sklearn/decomposition/dict_learning.py\nindex a318c957fe..0e4aac7759 100644\n--- a/sklearn/decomposition/dict_learning.py\n+++ b/sklearn/decomposition/dict_learning.py\n@@ -127,7 +127,7 @@ def _sparse_encode(X, dictionary, gram, cov=None, algorithm='lasso_lars',\n             lasso_lars = LassoLars(alpha=alpha, fit_intercept=False,\n                                    verbose=verbose, normalize=False,\n                                    precompute=gram, fit_path=False,\n-                                   positive=positive)\n+                                   positive=positive, max_iter=max_iter)\n             lasso_lars.fit(dictionary.T, X.T, Xy=cov)\n             new_code = lasso_lars.coef_\n         finally:\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10323",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10435",
+    "model_patch": "diff --git a/sphinx/writers/latex.py b/sphinx/writers/latex.py\nindex e0c7d56f8..d6f96ddf2 100644\n--- a/sphinx/writers/latex.py\n+++ b/sphinx/writers/latex.py\n@@ -1712,7 +1712,7 @@ class LaTeXTranslator(SphinxTranslator):\n         hlcode = hlcode.replace(r'\\begin{Verbatim}[commandchars=\\\\\\{\\}]',\n                                 r'\\sphinxcode{\\sphinxupquote{')\n         # get consistent trailer\n-        hlcode = hlcode.rstrip()[:-14]  # strip \\end{Verbatim}\n+        hlcode = hlcode.strip()[:-14]  # strip \\end{Verbatim}\n         self.body.append(hlcode)\n         self.body.append('}}')\n         raise nodes.SkipNode\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10449",
+    "model_patch": "",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10614",
+    "model_patch": "diff --git a/sphinx/ext/inheritance_diagram.py b/sphinx/ext/inheritance_diagram.py\nindex 6e3985512..3be885ed8 100644\n--- a/sphinx/ext/inheritance_diagram.py\n+++ b/sphinx/ext/inheritance_diagram.py\n@@ -33,6 +33,7 @@ from __future__ import annotations\n import builtins\n import hashlib\n import inspect\n+import posixpath\n import re\n from collections.abc import Iterable\n from importlib import import_module\n@@ -413,12 +414,14 @@ def html_visit_inheritance_diagram(self: HTML5Translator, node: inheritance_diag\n     for child in pending_xrefs:\n         if child.get('refuri') is not None:\n             if graphviz_output_format == 'SVG':\n-                urls[child['reftitle']] = \"../\" + child.get('refuri')\n+                urls[child['reftitle']] = posixpath.relpath(child.get('refuri'),\n+                                                             self.builder.imgpath)\n             else:\n                 urls[child['reftitle']] = child.get('refuri')\n         elif child.get('refid') is not None:\n             if graphviz_output_format == 'SVG':\n-                urls[child['reftitle']] = '../' + current_filename + '#' + child.get('refid')\n+                urls[child['reftitle']] = posixpath.relpath(current_filename,\n+                                                             self.builder.imgpath) + '#' + child.get('refid')\n             else:\n                 urls[child['reftitle']] = '#' + child.get('refid')\n \n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10673",
+    "model_patch": "diff --git a/sphinx/environment/adapters/toctree.py b/sphinx/environment/adapters/toctree.py\nindex 9678e3c7c..7af6e6636 100644\n--- a/sphinx/environment/adapters/toctree.py\n+++ b/sphinx/environment/adapters/toctree.py\n@@ -165,6 +165,10 @@ class TocTree:\n                                        ref, location=toctreenode)\n                 except KeyError:\n                     # this is raised if the included file does not exist\n+                    if ref in ('genindex', 'py-modindex', 'modindex', 'search'):\n+                        # these are special documents generated by Sphinx,\n+                        # not actual source documents\n+                        continue\n                     if excluded(self.env.doc2path(ref, False)):\n                         message = __('toctree contains reference to excluded document %r')\n                     elif not included(self.env.doc2path(ref, False)):\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7462",
+    "model_patch": "diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py\nindex 3ca730e30..b698996ad 100644\n--- a/sphinx/domains/python.py\n+++ b/sphinx/domains/python.py\n@@ -114,11 +114,15 @@ def _parse_annotation(annotation: str) -> List[Node]:\n             result.append(addnodes.desc_sig_punctuation('', ']'))\n             return result\n         elif isinstance(node, ast.Tuple):\n-            result = []\n-            for elem in node.elts:\n-                result.extend(unparse(elem))\n-                result.append(addnodes.desc_sig_punctuation('', ', '))\n-            result.pop()\n+            if node.elts:\n+                result = []\n+                for elem in node.elts:\n+                    result.extend(unparse(elem))\n+                    result.append(addnodes.desc_sig_punctuation('', ', '))\n+                result.pop()\n+            else:\n+                result = [addnodes.desc_sig_punctuation('', '('),\n+                          addnodes.desc_sig_punctuation('', ')')]\n             return result\n         else:\n             raise SyntaxError  # unsupported syntax\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8120",
+    "model_patch": "diff --git a/sphinx/application.py b/sphinx/application.py\nindex 385b74d8a..95d1848ae 100644\n--- a/sphinx/application.py\n+++ b/sphinx/application.py\n@@ -293,7 +293,7 @@ class Sphinx:\n                 if catalog.domain == 'sphinx' and catalog.is_outdated():\n                     catalog.write_mo(self.config.language)\n \n-            locale_dirs = [None, path.join(package_dir, 'locale')] + list(repo.locale_dirs)\n+            locale_dirs = list(repo.locale_dirs) + [None, path.join(package_dir, 'locale')]\n             self.translator, has_translation = locale.init(locale_dirs, self.config.language)\n             if has_translation or self.config.language == 'en':\n                 # \"en\" never needs to be translated\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sympy__sympy-13091",
+    "model_patch": "diff --git a/sympy/core/basic.py b/sympy/core/basic.py\nindex db4e971848..25390f44f2 100644\n--- a/sympy/core/basic.py\n+++ b/sympy/core/basic.py\n@@ -313,10 +313,10 @@ def __eq__(self, other):\n             try:\n                 other = _sympify(other)\n             except SympifyError:\n-                return False    # sympy != other\n+                return NotImplemented    # sympy != other\n \n             if type(self) != type(other):\n-                return False\n+                return NotImplemented\n \n         return self._hashable_content() == other._hashable_content()\n \ndiff --git a/sympy/core/numbers.py b/sympy/core/numbers.py\nindex 864d055087..d021d3daed 100644\n--- a/sympy/core/numbers.py\n+++ b/sympy/core/numbers.py\n@@ -1258,7 +1258,7 @@ def __eq__(self, other):\n         try:\n             other = _sympify(other)\n         except SympifyError:\n-            return False    # sympy != other  -->  not ==\n+            return NotImplemented    # sympy != other  -->  not ==\n         if isinstance(other, NumberSymbol):\n             if other.is_irrational:\n                 return False\n@@ -1273,7 +1273,7 @@ def __eq__(self, other):\n             # the mpf tuples\n             ompf = other._as_mpf_val(self._prec)\n             return bool(mlib.mpf_eq(self._mpf_, ompf))\n-        return False    # Float != non-Number\n+        return NotImplemented    # Float != non-Number\n \n     def __ne__(self, other):\n         return not self.__eq__(other)\n@@ -1719,7 +1719,7 @@ def __eq__(self, other):\n         try:\n             other = _sympify(other)\n         except SympifyError:\n-            return False    # sympy != other  -->  not ==\n+            return NotImplemented    # sympy != other  -->  not ==\n         if isinstance(other, NumberSymbol):\n             if other.is_irrational:\n                 return False\n@@ -3339,13 +3339,13 @@ def __eq__(self, other):\n         try:\n             other = _sympify(other)\n         except SympifyError:\n-            return False    # sympy != other  -->  not ==\n+            return NotImplemented    # sympy != other  -->  not ==\n         if self is other:\n             return True\n         if isinstance(other, Number) and self.is_irrational:\n             return False\n \n-        return False    # NumberSymbol != non-(Number|self)\n+        return NotImplemented    # NumberSymbol != non-(Number|self)\n \n     def __ne__(self, other):\n         return not self.__eq__(other)\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  },
+  {
+    "instance_id": "sympy__sympy-17318",
+    "model_patch": "diff --git a/sympy/simplify/radsimp.py b/sympy/simplify/radsimp.py\nindex 216ae26204..ace1bd1e94 100644\n--- a/sympy/simplify/radsimp.py\n+++ b/sympy/simplify/radsimp.py\n@@ -1077,6 +1077,8 @@ def split_surds(expr):\n     coeff_muls = [x.as_coeff_Mul() for x in args]\n     surds = [x[1]**2 for x in coeff_muls if x[1].is_Pow]\n     surds.sort(key=default_sort_key)\n+    if not surds:\n+        return 1, S.Zero, expr\n     g, b1, b2 = _split_gcd(*surds)\n     g2 = g\n     if not b2 and len(b1) >= 2:\n",
+    "model_name_or_path": "luxe-qwen3.6-35b-a3b-6bit"
+  }
+]

@@ -1,0 +1,47 @@
+iid,prior,resolved,patch_present,patch_lines,rc,wall_s,gold_files,gold_hunks,model_hunks,model_files,overlap,proximity,model_edits_tests,model_new_files,f2p_n,f2p_pass,f2p_total,p2p_fail,p2p_total,patch_applied,steps,tool_calls,aborted,abort_reason,exits,idle_tail,early_bail_n,early_bail_first,write_pressure_n,first_write_step,writes,bash_n,bash_refused,bash_dup,bash_cd_prefix,bash_pipe_or_2>&1,bash_ran_visible,bash_ran_output_hidden,testish_cmds,testish_ran,testish_ran_before_write,testish_ran_after_write,cmd_mentions_f2p_file,final_text_chars,has_messages,cmd_mentions_p2p_fail_file,bucket
+astropy__astropy-12907,flaky:8/9,True,True,13,5,32,1,1,1,1,same,overlap,0,0,2,2,2,0,13,True,10,10,False,,post_write_idle_exit,"bash,bash,bash",0,,0,3,1,3,3,0,3,2,0,0,3,0,0,0,3,71,True,0,resolved
+astropy__astropy-13033,never,False,True,15,5,40,1,2,1,1,same,overlap,0,0,1,0,1,0,20,True,15,14,False,,,,0,,0,2,4,1,0,0,0,0,1,0,1,1,0,1,0,1308,True,0,C/F
+astropy__astropy-13236,never,False,True,26,5,30,1,1,2,1,same,overlap,0,0,2,0,2,644,644,True,18,18,False,,post_write_idle_exit,"bash,bash,write_file",1,4,0,4,3,2,2,0,2,0,0,0,2,0,0,0,0,67,True,0,C/F
+astropy__astropy-13453,never,False,True,12,5,41,1,1,1,1,same,overlap,0,0,1,0,1,7,9,True,21,21,False,,post_write_idle_exit,"bash,bash,bash",1,4,1,15,1,3,3,0,3,2,0,0,3,0,0,0,3,71,True,1,C/F
+astropy__astropy-13977,never,False,True,19,5,40,1,1,1,1,same,overlap,0,0,20,12,20,4,322,True,18,18,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,11,1,3,2,1,3,0,0,0,3,0,0,0,0,178,True,0,C/F
+astropy__astropy-14096,flaky:2/9,False,True,23,5,56,1,1,1,1,same,overlap,0,0,1,0,1,0,426,True,12,12,False,,post_write_idle_exit,"bash,bash,write_file",1,4,0,5,2,2,2,0,2,0,0,0,2,0,0,0,0,48,True,0,C/F
+astropy__astropy-14182,never,False,True,17,5,36,1,3,1,1,same,overlap,0,0,1,0,1,0,9,True,15,15,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,8,1,3,3,0,3,2,0,0,3,0,0,0,3,78,True,0,C/F
+astropy__astropy-8707,flaky:8/9,True,True,28,5,27,2,6,2,2,same,overlap,0,0,1,1,1,0,11,True,16,16,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,9,2,3,1,1,0,1,0,1,3,1,0,1,0,94,True,0,resolved
+django__django-10880,flaky:6/9,True,True,13,5,48,1,1,1,1,same,overlap,0,0,1,1,1,0,55,True,26,26,False,,post_write_idle_exit,"bash,bash,bash",0,,0,4,3,4,4,0,4,3,0,0,3,0,0,0,3,72,True,0,resolved
+django__django-10973,flaky:8/9,True,True,66,5,32,1,2,2,1,same,overlap,0,0,5,5,5,0,0,True,18,18,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,6,2,3,3,0,3,2,0,0,3,0,0,0,3,118,True,0,resolved
+django__django-10999,never,False,True,13,5,23,1,1,1,1,same,overlap,0,0,2,0,2,0,10,True,7,7,False,,post_write_idle_exit,"bash,bash,bash",0,,0,2,1,3,1,1,2,0,0,1,3,1,0,1,0,83,True,0,C/F
+django__django-11333,flaky:6/9,True,True,42,5,43,2,3,3,2,same,overlap,0,0,1,1,1,0,2,True,19,19,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,4,4,3,2,0,0,2,0,1,3,1,0,1,0,93,True,0,resolved
+django__django-11734,never,False,False,0,5,45,3,3,0,0,none,na,0,0,1,,,,,,30,30,True,Max steps reached (30),step_limit_incomplete,,1,4,1,,0,6,4,2,6,1,0,0,0,0,0,0,0,436,True,0,A
+matplotlib__matplotlib-13989,flaky:8/9,True,True,13,5,21,1,1,1,1,same,overlap,0,0,1,1,1,0,411,True,12,12,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,7,1,3,3,0,3,2,0,0,3,0,0,0,3,208,True,0,resolved
+matplotlib__matplotlib-14623,never,True,True,13,5,105,3,6,1,1,partial,far,0,0,1,1,1,0,400,True,26,26,False,,post_write_idle_exit,"bash,bash,bash",1,17,1,17,1,3,2,1,3,3,0,0,3,0,0,0,0,206,True,0,resolved
+matplotlib__matplotlib-20676,never,False,False,0,5,146,1,1,0,0,none,na,0,0,2,,,,,,30,29,True,Max steps reached (30),step_limit_incomplete,,1,4,1,,0,4,4,0,4,3,0,0,0,0,0,0,0,15070,True,0,A
+matplotlib__matplotlib-20826,never,False,False,0,5,34,1,1,0,0,none,na,0,0,1,,,,,,20,20,False,,habituation_exit,,1,8,1,,0,0,0,0,0,0,0,0,0,0,0,0,0,435,True,0,A
+matplotlib__matplotlib-24870,flaky:1/9,False,True,35,5,48,2,5,2,1,partial,overlap,0,0,1,0,1,0,65,True,21,21,False,,post_write_idle_exit,"bash,bash,bash",1,11,0,14,2,3,3,0,3,3,0,0,3,0,0,0,3,92,True,0,C/F
+matplotlib__matplotlib-25479,never,False,True,16,5,46,2,2,1,1,disjoint,na,0,0,2,0,2,0,263,True,22,22,False,,post_write_idle_exit,"bash,bash,bash",1,7,1,17,1,3,2,0,0,0,0,1,3,1,0,1,0,67,True,0,B
+matplotlib__matplotlib-25775,flaky:1/9,False,False,0,5,24,3,12,0,0,none,na,0,0,7,,,,,,20,20,False,,habituation_exit,,1,13,1,,0,0,0,0,0,0,0,0,0,0,0,0,0,78,True,0,A
+mwaskom__seaborn-3069,never,False,False,0,5,14,1,4,0,0,none,na,0,0,2,,,,,,8,8,True,Stuck in loop - repeated same tool calls,,,1,4,0,,0,0,0,0,0,0,0,0,0,0,0,0,0,59,True,0,A
+mwaskom__seaborn-3187,never,False,True,15,5,54,2,2,1,1,partial,overlap,0,0,2,0,2,1,248,True,16,16,False,,post_write_idle_exit,"bash,bash,bash",1,4,1,5,2,9,7,0,0,3,0,2,7,2,0,2,0,90,True,0,C/F
+psf__requests-2931,never,False,True,15,5,26,1,2,1,1,same,overlap,0,0,1,1,1,1,84,True,13,13,False,,post_write_idle_exit,"bash,bash,bash",1,7,0,8,1,3,2,0,0,2,0,1,3,1,0,1,3,50,True,1,D
+psf__requests-5414,never,False,True,16,5,22,1,1,1,1,same,overlap,0,0,1,1,1,8,130,True,11,11,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,6,1,3,2,0,0,2,0,1,3,1,0,1,0,88,True,0,D
+psf__requests-6028,never,False,False,0,5,205,1,1,0,0,none,na,0,0,2,,,,,,16,13,False,,terminal_turn_empty|terminal_turn_truncated,,1,10,1,,0,2,0,0,0,0,2,0,0,0,0,0,0,427,True,0,A
+pydata__xarray-2905,flaky:6/9,True,True,18,5,128,1,1,1,1,same,overlap,0,0,1,1,1,0,364,True,16,15,False,,post_write_idle_exit,"bash,bash,bash",1,4,1,11,1,3,3,0,3,0,0,0,3,0,0,0,0,89,True,0,resolved
+pydata__xarray-6938,never,False,True,16,5,43,2,6,1,1,partial,overlap,0,0,1,0,1,0,430,True,21,21,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,13,1,3,2,1,3,1,0,0,3,0,0,0,0,171,True,0,C/F
+pylint-dev__pylint-4604,never,False,False,0,5,29,2,3,0,0,none,na,0,0,21,,,,,,24,24,True,Stuck in loop - repeated same tool calls,,,1,4,1,,0,0,0,0,0,0,0,0,0,0,0,0,0,384,True,0,A
+pylint-dev__pylint-4661,flaky:2/9,False,True,25,5,37,2,5,2,1,partial,overlap,0,0,1,0,1,0,0,True,19,18,False,,,,0,,0,9,2,0,0,0,0,0,0,0,0,0,0,0,0,1376,True,0,C/F
+pylint-dev__pylint-4970,never,True,True,22,5,39,1,1,2,1,same,overlap,0,0,1,1,1,0,17,True,20,20,False,,post_write_idle_exit,"bash,bash,bash",1,6,0,12,2,3,2,0,0,2,0,1,3,1,0,1,3,85,True,0,resolved
+pylint-dev__pylint-6386,flaky:1/9,False,True,37,5,34,4,8,1,1,disjoint,na,0,0,1,0,1,0,7,True,21,21,False,,post_write_idle_exit,"bash,bash,bash",1,5,1,15,1,3,3,0,3,2,0,0,3,0,0,0,0,48,True,0,B
+pylint-dev__pylint-6528,flaky:1/9,False,True,52,5,46,2,5,3,1,partial,overlap,0,0,4,0,4,7,171,True,20,20,False,,post_write_idle_exit,"bash,bash,bash",1,4,1,15,1,3,2,0,1,1,0,1,3,1,0,1,0,116,True,0,C/F
+pytest-dev__pytest-10051,never,False,True,13,5,18,1,3,1,1,same,overlap,0,0,1,0,1,1,15,True,12,12,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,4,1,3,2,0,0,2,0,1,3,1,0,1,0,187,True,0,C/F
+pytest-dev__pytest-5262,flaky:8/9,True,True,23,5,16,1,1,1,1,same,near,0,0,1,1,1,0,108,True,11,11,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,4,1,3,3,0,3,2,0,0,3,0,0,0,3,66,True,0,resolved
+pytest-dev__pytest-5840,never,False,True,18,5,22,2,7,2,1,partial,overlap,0,0,2,0,2,0,51,True,13,13,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,5,2,3,2,0,1,1,0,1,3,1,0,1,0,95,True,0,C/F
+scikit-learn__scikit-learn-10297,flaky:8/9,True,True,31,5,32,1,3,2,1,same,overlap,0,0,1,1,1,0,28,True,11,11,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,5,2,3,1,0,0,0,0,2,3,2,0,2,0,56,True,0,resolved
+scikit-learn__scikit-learn-12682,never,False,True,13,5,29,2,24,1,1,partial,overlap,0,0,1,0,1,0,66,True,20,20,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,10,1,3,1,0,0,1,0,2,3,2,0,2,2,189,True,0,C/F
+sphinx-doc__sphinx-10323,flaky:1/9,False,False,0,5,221,1,1,0,0,none,na,0,0,1,,,,,,18,15,False,,terminal_turn_empty|terminal_turn_truncated,,1,6,1,,0,0,0,0,0,0,0,0,0,0,0,0,0,49,True,0,A
+sphinx-doc__sphinx-10435,never,False,True,13,5,28,1,1,1,1,same,overlap,0,0,1,0,1,0,74,True,11,11,False,,post_write_idle_exit,"bash,bash,bash",1,5,0,5,1,3,3,0,3,2,0,0,3,0,0,0,3,48,True,0,C/F
+sphinx-doc__sphinx-10449,flaky:7/9,False,False,0,5,40,1,3,0,0,none,na,0,0,1,,,,,,20,20,False,,habituation_exit,,1,12,1,,0,0,0,0,0,0,0,0,0,0,0,0,0,100,True,0,A
+sphinx-doc__sphinx-10614,never,False,True,29,5,245,1,1,2,1,same,overlap,0,0,1,0,1,0,5,True,22,20,False,,post_write_idle_exit,"bash,bash,bash",1,4,1,15,2,3,3,0,3,2,0,0,3,0,0,0,3,128,True,0,C/F
+sphinx-doc__sphinx-10673,flaky:3/9,False,True,15,5,35,3,9,1,1,partial,near,0,0,1,0,1,0,9,True,16,16,False,,post_write_idle_exit,"bash,bash,bash",1,5,0,9,1,5,2,0,0,3,3,0,1,0,0,0,1,64,True,0,C/F
+sphinx-doc__sphinx-7462,never,False,True,25,5,22,2,2,1,1,partial,overlap,0,0,2,1,2,0,49,True,16,16,False,,post_write_idle_exit,"bash,bash,bash",0,,0,2,1,3,1,0,0,1,0,2,3,2,0,2,2,71,True,0,C/F
+sphinx-doc__sphinx-8120,flaky:8/9,True,True,13,5,26,2,3,1,1,partial,overlap,0,0,1,1,1,0,44,True,12,12,False,,post_write_idle_exit,"bash,bash,bash",0,,0,7,1,3,3,0,3,2,0,0,3,0,0,0,0,176,True,0,resolved
+sympy__sympy-13091,never,False,True,64,5,46,21,45,5,2,partial,overlap,0,0,2,0,2,14,89,True,30,30,True,Max steps reached (30),step_limit_incomplete,,1,5,1,15,6,2,1,0,0,1,1,0,0,0,0,0,0,181,True,0,C/F
+sympy__sympy-17318,never,False,True,13,5,654,2,3,1,1,partial,near,0,0,1,0,1,0,10,True,11,11,False,,post_write_idle_exit,"bash,bash,bash",1,4,0,5,1,3,1,2,3,0,0,0,3,0,0,0,0,74,True,0,C/F

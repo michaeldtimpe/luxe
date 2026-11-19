@@ -1,0 +1,192 @@
+{
+  "n": 46,
+  "n_resolved": 12,
+  "n_errors": 0,
+  "resolution_rate": 0.2608695652173913,
+  "instances": {
+    "astropy__astropy-12907": {
+      "resolved": true,
+      "error": ""
+    },
+    "astropy__astropy-13033": {
+      "resolved": false,
+      "error": ""
+    },
+    "astropy__astropy-13236": {
+      "resolved": false,
+      "error": ""
+    },
+    "astropy__astropy-13453": {
+      "resolved": false,
+      "error": ""
+    },
+    "astropy__astropy-13977": {
+      "resolved": false,
+      "error": ""
+    },
+    "astropy__astropy-14096": {
+      "resolved": false,
+      "error": ""
+    },
+    "astropy__astropy-14182": {
+      "resolved": false,
+      "error": ""
+    },
+    "astropy__astropy-8707": {
+      "resolved": true,
+      "error": ""
+    },
+    "django__django-10880": {
+      "resolved": true,
+      "error": ""
+    },
+    "django__django-10973": {
+      "resolved": true,
+      "error": ""
+    },
+    "django__django-10999": {
+      "resolved": false,
+      "error": ""
+    },
+    "django__django-11333": {
+      "resolved": true,
+      "error": ""
+    },
+    "django__django-11734": {
+      "resolved": false,
+      "error": ""
+    },
+    "matplotlib__matplotlib-13989": {
+      "resolved": true,
+      "error": ""
+    },
+    "matplotlib__matplotlib-14623": {
+      "resolved": true,
+      "error": ""
+    },
+    "matplotlib__matplotlib-20676": {
+      "resolved": false,
+      "error": ""
+    },
+    "matplotlib__matplotlib-20826": {
+      "resolved": false,
+      "error": ""
+    },
+    "matplotlib__matplotlib-24870": {
+      "resolved": false,
+      "error": ""
+    },
+    "matplotlib__matplotlib-25479": {
+      "resolved": false,
+      "error": ""
+    },
+    "matplotlib__matplotlib-25775": {
+      "resolved": false,
+      "error": ""
+    },
+    "mwaskom__seaborn-3069": {
+      "resolved": false,
+      "error": ""
+    },
+    "mwaskom__seaborn-3187": {
+      "resolved": false,
+      "error": ""
+    },
+    "psf__requests-2931": {
+      "resolved": false,
+      "error": ""
+    },
+    "psf__requests-5414": {
+      "resolved": false,
+      "error": ""
+    },
+    "psf__requests-6028": {
+      "resolved": false,
+      "error": ""
+    },
+    "pydata__xarray-2905": {
+      "resolved": true,
+      "error": ""
+    },
+    "pydata__xarray-6938": {
+      "resolved": false,
+      "error": ""
+    },
+    "pylint-dev__pylint-4604": {
+      "resolved": false,
+      "error": ""
+    },
+    "pylint-dev__pylint-4661": {
+      "resolved": false,
+      "error": ""
+    },
+    "pylint-dev__pylint-4970": {
+      "resolved": true,
+      "error": ""
+    },
+    "pylint-dev__pylint-6386": {
+      "resolved": false,
+      "error": ""
+    },
+    "pylint-dev__pylint-6528": {
+      "resolved": false,
+      "error": ""
+    },
+    "pytest-dev__pytest-10051": {
+      "resolved": false,
+      "error": ""
+    },
+    "pytest-dev__pytest-5262": {
+      "resolved": true,
+      "error": ""
+    },
+    "pytest-dev__pytest-5840": {
+      "resolved": false,
+      "error": ""
+    },
+    "scikit-learn__scikit-learn-10297": {
+      "resolved": true,
+      "error": ""
+    },
+    "scikit-learn__scikit-learn-12682": {
+      "resolved": false,
+      "error": ""
+    },
+    "sphinx-doc__sphinx-10323": {
+      "resolved": false,
+      "error": ""
+    },
+    "sphinx-doc__sphinx-10435": {
+      "resolved": false,
+      "error": ""
+    },
+    "sphinx-doc__sphinx-10449": {
+      "resolved": false,
+      "error": ""
+    },
+    "sphinx-doc__sphinx-10614": {
+      "resolved": false,
+      "error": ""
+    },
+    "sphinx-doc__sphinx-10673": {
+      "resolved": false,
+      "error": ""
+    },
+    "sphinx-doc__sphinx-7462": {
+      "resolved": false,
+      "error": ""
+    },
+    "sphinx-doc__sphinx-8120": {
+      "resolved": true,
+      "error": ""
+    },
+    "sympy__sympy-13091": {
+      "resolved": false,
+      "error": ""
+    },
+    "sympy__sympy-17318": {
+      "resolved": false,
+      "error": ""
+    }
+  }
+}
