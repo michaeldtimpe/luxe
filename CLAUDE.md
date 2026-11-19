@@ -681,9 +681,10 @@ unbiased flips can silently change benchmark behavior.
    re-staging (saved cached patch, not whole-file re-add). See
    `lessons.md` 2026-05-25 and 2026-08-12 + memory `feedback_git_linear_history`.
 8. **Never `Path.rglob`/`glob` a user-chosen root.** pathlib swallows only
-   `PermissionError`, so an unreachable network dir (`OSError(ETIMEDOUT)` from
-   a NAS mount or `~/Library/CloudStorage`) crashes the caller — that killed
-   the chat TUI on 2026-07-29. Use `luxe.fswalk.iter_files` (os.walk-based,
+   `PermissionError` on 3.11, so an unreachable network dir (`OSError(ETIMEDOUT)`
+   from a NAS mount or `~/Library/CloudStorage`) crashes the caller — that killed
+   the chat TUI on 2026-07-29; on 3.12+ it swallows the error and silently drops
+   the subtree (no signal). Use `luxe.fswalk.iter_files` (os.walk-based,
    prunes vendor dirs, logs skips). `luxe.sdd` Must-not.
 
 ## When the user asks for new work

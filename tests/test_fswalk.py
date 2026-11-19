@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -116,17 +117,25 @@ class TestFindAllSddTolerance:
         assert [sf.title for sf in find_all_sdd(tmp_path)] == ["src"]
 
 
-def test_pathlib_rglob_is_still_unsafe(tmp_path, monkeypatch):
-    """Documents WHY this module exists: `Path.rglob` propagates every OSError
-    that isn't PermissionError. If CPython ever fixes that, this test fails and
-    the workaround can be revisited."""
+def test_pathlib_rglob_is_still_unsafe_on_a_dead_subtree(tmp_path, monkeypatch):
+    """Documents WHY this module exists. Python <3.12: `Path.rglob` propagates
+    every OSError that isn't PermissionError (crash). Python >=3.12: it swallows
+    OSError from scandir and silently drops the dead subtree (no error, no
+    signal), so callers get a short list that looks complete. Either way it is
+    unsafe; fswalk raises nothing but logs every skip."""
+    (tmp_path / "ok.sdd").write_text("x")
     doomed = tmp_path / "CloudStorage"
     doomed.mkdir()
+    (doomed / "lost.sdd").write_text("y")
     _fail_scandir_under(monkeypatch, doomed,
                         OSError(errno.ETIMEDOUT, "Operation timed out"))
 
-    with pytest.raises(OSError):
-        list(tmp_path.rglob("*.sdd"))
+    if sys.version_info < (3, 12):
+        with pytest.raises(OSError):
+            list(tmp_path.rglob("*.sdd"))
+    else:
+        names = sorted(p.name for p in tmp_path.rglob("*.sdd"))
+        assert names == ["ok.sdd"]  # lost.sdd vanished with no signal
 
 
 # --- scan_source_files (bounded, shared index scan) --------------------------
