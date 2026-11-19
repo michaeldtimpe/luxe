@@ -39,7 +39,8 @@ _SWITCHES = ("LUXE_REPROMPT_ON_DOC", "LUXE_STEP_LIMIT_LABEL",
              "LUXE_STEP_LIMIT_FINISH", "LUXE_CLEANUP_TURN",
              "LUXE_TOOL_BUDGET_CTX", "LUXE_VALIDATION_MENU",
              "LUXE_CONTEXT_PACK", "LUXE_BASH_NOOP",
-             "LUXE_BENCH_PY_PATH", "LUXE_IDLE_NARROW")
+             "LUXE_BENCH_PY_PATH", "LUXE_IDLE_NARROW",
+             "LUXE_ABORT_REPORT")
 
 
 @dataclass
@@ -50,6 +51,7 @@ class Pass:
     reason: str = ""
     writes: dict[str, str] = field(default_factory=dict)
     tool_calls_total: int = 2
+    tool_calls: list = field(default_factory=list)
 
 
 @dataclass
@@ -142,6 +144,7 @@ class Harness:
             return AgentResult(final_text=p.text, aborted=p.aborted,
                                abort_reason=p.reason, steps=3,
                                tool_calls_total=p.tool_calls_total,
+                               tool_calls=list(p.tool_calls),
                                prompt_tokens=100, completion_tokens=10,
                                wall_s=1.0, peak_context_pressure=0.25)
 

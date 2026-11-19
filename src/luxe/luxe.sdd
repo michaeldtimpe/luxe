@@ -283,6 +283,18 @@ auto-memory.
   (`LUXE_STEP_LIMIT_FINISH=1`, ≤8 steps, shows the model its diff) is
   OPT-IN and unbenched; a finish pass that ends on its own clears the label.
 
+- **A write run with no model report gets a luxe-built one (2026-11-19;
+  `abortreport.py`, `maintain._abort_report`).** When the model's final text
+  is empty (stuck-loop abort, post-write idle exit, backend error), maintain
+  writes synthesizer.md / commit body / PR body from the run's records: a
+  header saying luxe wrote it and why the run ended, files changed vs base,
+  verification calls after the last write with exit status (refusals listed
+  as refused). No model call, no correctness claim. It lives in maintain,
+  NOT the loop: `AgentResult.final_text` and `single_mode_done.final_text_chars`
+  stay the model's text. Event `abort_report_written` (reason, files,
+  n_commands). Default ON; `LUXE_ABORT_REPORT=0` disables (byte-identical).
+  Benching: acceptance/abort_report_ab_2026_11.
+
 - **Context pack is OPT-IN (2026-11; `runcontext.py`).** `LUXE_CONTEXT_PACK=1`
   appends a <=2048-char block of POINTERS to the maintain main pass (BM25
   files for the goal, their last commit subjects, tests by naming convention,

@@ -618,6 +618,16 @@ the schemas join the estimate and come off the window as a fixed charge.
   the measurement. `acceptance/ctx_cal_tools_2026_10/REPORT.md`.
 - **Disable for ablation**: `LUXE_CTX_CAL_TOOLS=0` (exact string).
 
+## Default-ON (benching): abort report
+
+`LUXE_ABORT_REPORT` defaults to **ON** as of 2026-11-19 (`src/luxe/abortreport.py`,
+`maintain._abort_report`). A reporting change, **no model call**: a write run
+whose model text is empty (stuck-loop abort, idle exit, backend error) gets a
+Python-built report (luxe-written header + end reason, files changed vs base,
+commands after the last write with exit status) in synthesizer.md, commit and
+PR body. `final_text` is untouched; event `abort_report_written`, bench field
+`report_fallback`. A/B: `acceptance/abort_report_ab_2026_11/`. `=0` disables.
+
 ## Default-ON: `python` on the bench bash PATH
 
 `LUXE_BENCH_PY_PATH` defaults to **ON** in maintain as of 2026-11-03 (an

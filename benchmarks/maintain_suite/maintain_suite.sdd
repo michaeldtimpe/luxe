@@ -14,6 +14,11 @@ single pipeline; new fixtures must declare their per-requirement spec.
   unchanged — a complete change can also run out of steps. The bench prints
   a ⚠ on the row and `diagnostics.json` `events_kinds` carries the count;
   hand-verify before crediting (tuning_2026_10: one such PASS was broken)
+- A run whose report luxe wrote itself (`abort_report_written`;
+  luxe/abortreport.py) is NOT gated and its score is unchanged.
+  `diagnostics.json` `report_fallback` (additive, default False) records it;
+  "empty report" analyses keep reading `single_mode.final_text_chars`, which
+  is the MODEL's text, and count fallback reports in a separate column
 - `gates_triggered` entries use ONE key, `name` (vacuous_test/orphan_file
   wrote `gate` until 2026-09 — readers of old result.json accept both)
 - Diffs that feed grading run with `-M` and include the OLD side of every
