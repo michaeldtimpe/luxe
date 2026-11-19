@@ -187,6 +187,14 @@ class RunFlags:
     adaptive_score_trend: bool = True
     adaptive_max_delta: float = _DEFAULT_MAX_DELTA
 
+    # LUXE_SAVE_MESSAGES (opt-in, exact "1"; 2026-11-19). Write-only
+    # recording: at run end `run_agent` saves the final message list to
+    # `<run_dir>/messages*.jsonl.gz` so a bench failure can be read with its
+    # tool observations and prose. Never touches a request, a message,
+    # dispatch or control flow; off = no file, byte-identical run. The bench
+    # runners export it by default (`--no-save-messages` opts out).
+    save_messages: bool = False
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "RunFlags":
         """Read the switches. `env` defaults to `os.environ`.
@@ -295,4 +303,6 @@ class RunFlags:
             adaptive_no_write=e.get("LUXE_ADAPTIVE_NO_WRITE", "1") == "1",
             adaptive_score_trend=e.get("LUXE_ADAPTIVE_SCORE_TREND", "1") == "1",
             adaptive_max_delta=max_delta,
+            # Opt-in: only the exact string "1" enables it.
+            save_messages=e.get("LUXE_SAVE_MESSAGES") == "1",
         )

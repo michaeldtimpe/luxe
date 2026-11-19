@@ -90,7 +90,7 @@ from luxe.context import (
     tool_result_clamp_chars,
 )
 from luxe import secrets as _secrets
-from luxe.run_state import append_event
+from luxe.run_state import append_event, save_messages
 from luxe.spec import Spec
 from luxe.spec_validator import validate as spec_validate
 from luxe.tools.base import ToolDef, ToolCall, ToolFn, dispatch_tool, validate_args
@@ -1760,67 +1760,78 @@ def run_agent(
     # Was a latent NameError + a `'resp' in dir()` probe (ruff F821, 2026-07-29).
     resp: ChatResponse | None = None
 
-    for step in range(role_cfg.max_steps):
-        result.steps = step + 1
+    # LUXE_SAVE_MESSAGES: an exception escaping the loop still leaves its
+    # conversation on disk (recording only; the exception is re-raised as-is).
+    try:
+        for step in range(role_cfg.max_steps):
+            result.steps = step + 1
 
-        effective_ctx, pressure = _step_window(run, st, result, step)
+            effective_ctx, pressure = _step_window(run, st, result, step)
 
-        if _pre_step_guards(run, st, result, step, resp, emit):
-            break
+            if _pre_step_guards(run, st, result, step, resp, emit):
+                break
 
-        est_sent = _compact_step(run, st, effective_ctx, step, emit)
+            est_sent = _compact_step(run, st, effective_ctx, step, emit)
 
-        try:
-            resp = backend.chat(
-                st.messages,
-                tools=openai_tools,
-                max_tokens=role_cfg.max_tokens_per_turn,
-                temperature=role_cfg.temperature,
-                num_ctx=role_cfg.num_ctx,
-                repeat_penalty=role_cfg.repeat_penalty,
-                # Chat front-end only: stream tokens for the live tail. None
-                # (benchmark/maintain) → stream=False → byte-identical request.
-                stream=on_token is not None,
-                on_token=on_token,
-            )
-        except Exception as e:
-            result.aborted = True
-            result.abort_reason = f"Backend error: {e}"
-            break
+            try:
+                resp = backend.chat(
+                    st.messages,
+                    tools=openai_tools,
+                    max_tokens=role_cfg.max_tokens_per_turn,
+                    temperature=role_cfg.temperature,
+                    num_ctx=role_cfg.num_ctx,
+                    repeat_penalty=role_cfg.repeat_penalty,
+                    # Chat front-end only: stream tokens for the live tail. None
+                    # (benchmark/maintain) → stream=False → byte-identical request.
+                    stream=on_token is not None,
+                    on_token=on_token,
+                )
+            except Exception as e:
+                result.aborted = True
+                result.abort_reason = f"Backend error: {e}"
+                break
 
-        _account_usage(result, resp, step, emit)
-        if flags.ctx_server_truth:
-            _recalibrate(st, resp, est_sent)
-        _token_progress(st, result, step, pressure)
+            _account_usage(result, resp, step, emit)
+            if flags.ctx_server_truth:
+                _recalibrate(st, resp, est_sent)
+            _token_progress(st, result, step, pressure)
 
-        tool_calls = _resolve_tool_calls(run, resp, step, emit)
+            tool_calls = _resolve_tool_calls(run, resp, step, emit)
 
-        if not tool_calls:
-            if _no_tool_calls(run, st, result, resp, step, emit) is _Flow.CONTINUE:
+            if not tool_calls:
+                if _no_tool_calls(run, st, result, resp, step, emit) is _Flow.CONTINUE:
+                    continue
+                break
+
+            if spec_has_zero_calls and tool_calls:
+                _block_zero_call_dispatch(run, st, resp, tool_calls, step, emit)
+                # Skip the dispatch loop entirely. Tool calls are dropped on
+                # the floor — they never enter actual_tool_calls, so the BFCL
+                # grader sees zero calls. Continue to next step.
                 continue
-            break
 
-        if spec_has_zero_calls and tool_calls:
-            _block_zero_call_dispatch(run, st, resp, tool_calls, step, emit)
-            # Skip the dispatch loop entirely. Tool calls are dropped on
-            # the floor — they never enter actual_tool_calls, so the BFCL
-            # grader sees zero calls. Continue to next step.
-            continue
+            _append_acting_turn(run, st, result, resp, step)
 
-        _append_acting_turn(run, st, result, resp, step)
+            step_had_repeat = False
+            for tc in tool_calls:
+                if _dispatch_one(run, st, result, tc, step, effective_ctx, emit):
+                    step_had_repeat = True
 
-        step_had_repeat = False
-        for tc in tool_calls:
-            if _dispatch_one(run, st, result, tc, step, effective_ctx, emit):
-                step_had_repeat = True
-
-        if _end_of_step(run, st, result, resp, step, step_had_repeat, emit):
-            break
-    else:
-        result.final_text = resp.text if resp else ""
-        result.aborted = True
-        result.abort_reason = f"Max steps reached ({role_cfg.max_steps})"
+            if _end_of_step(run, st, result, resp, step, step_had_repeat, emit):
+                break
+        else:
+            result.final_text = resp.text if resp else ""
+            result.aborted = True
+            result.abort_reason = f"Max steps reached ({role_cfg.max_steps})"
+    except BaseException:
+        if flags.save_messages:
+            save_messages(run_id, phase, list(st.messages))
+        raise
 
     _finalize(run, st, result, emit)
+    # LUXE_SAVE_MESSAGES (opt-in, write-only): the final list, after
+    # `_finalize` appended the closing assistant text. Never raises.
+    if flags.save_messages:
+        save_messages(run_id, phase, result.messages)
     result.wall_s = time.monotonic() - t0
     return result

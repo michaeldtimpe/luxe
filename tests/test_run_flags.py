@@ -79,6 +79,7 @@ OPT_IN = [
     # arm yet, so the benchmark path must be byte-identical until one exists.
     ("LUXE_CTX_CAL_DAMP", "ctx_cal_damp"),
     ("LUXE_TOOL_RESULT_CLAMP", "tool_result_clamp"),
+    ("LUXE_SAVE_MESSAGES", "save_messages"),
 ]
 
 

@@ -912,10 +912,11 @@ def test_bare_compare_side_disables_default_on_levers(monkeypatch):
     _a, b = build_sides(1, model_id="Champ")
     with _env_overrides(b.substrate_env):
         f = RunFlags.from_env()
-    # suppress_tool_log is telemetry (what gets logged), not a loop lever.
+    # suppress_tool_log and save_messages are telemetry (what gets
+    # recorded), not loop levers.
     bools = [fl.name for fl in dataclasses.fields(RunFlags)
              if isinstance(getattr(RunFlags(), fl.name), bool)
-             and fl.name != "suppress_tool_log"]
+             and fl.name not in ("suppress_tool_log", "save_messages")]
     still_on = [n for n in bools if getattr(f, n)]
     assert still_on == [], f"bare compare side leaves levers on: {still_on}"
 

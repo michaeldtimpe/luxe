@@ -186,3 +186,55 @@ def gc_runs(retention_days: int = 7) -> int:
             shutil.rmtree(d, ignore_errors=True)
             removed += 1
     return removed
+
+
+MESSAGES_FILE = "messages.jsonl.gz"
+
+
+def _messages_path(rd: Path, phase: str) -> Path:
+    """`messages.jsonl.gz` for the run's first saved conversation; every
+    later `run_agent` under the same run_id (maintain's reprompt / finish
+    passes) gets `messages-<phase>.jsonl.gz`, then `-<phase>-<n>`, so no
+    pass ever overwrites another's record."""
+    first = rd / MESSAGES_FILE
+    if not first.exists():
+        return first
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in phase) or "run"
+    p = rd / f"messages-{safe}.jsonl.gz"
+    n = 2
+    while p.exists():
+        p = rd / f"messages-{safe}-{n}.jsonl.gz"
+        n += 1
+    return p
+
+
+def save_messages(run_id: str | None, phase: str,
+                  messages: list[dict]) -> Path | None:
+    """Write one run's final message list as gzip JSONL (LUXE_SAVE_MESSAGES).
+
+    Write-only telemetry: the caller's list is only read. NEVER raises — a
+    failure is logged and skipped, so recording can't change a run's outcome.
+    Each line is passed through `luxe.secrets.redact` as a second guard on
+    top of the redaction tool results already got in `loop._dispatch_one`.
+    Returns the written path, or None (no run_id, ephemeral, or a failure).
+    """
+    if not run_id or is_ephemeral():
+        return None
+    try:
+        import gzip
+        from luxe.secrets import redact
+        rd = run_dir(run_id)
+        rd.mkdir(parents=True, exist_ok=True)
+        p = _messages_path(rd, phase)
+        body = "".join(redact(json.dumps(m, default=str)) + "\n"
+                       for m in messages)
+        tmp = p.with_name(p.name + ".partial")
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            f.write(body)
+        tmp.replace(p)
+        return p
+    except Exception as e:  # noqa: BLE001 — recording never fails a run
+        import logging
+        logging.getLogger(__name__).warning(
+            "save_messages(%s, %s) skipped: %s", run_id, phase, e)
+        return None

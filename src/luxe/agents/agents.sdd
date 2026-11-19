@@ -450,6 +450,23 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   `benchmarks/maintain_suite/run.py` and the test corpus were swept, so there
   was no field-shape assumption to break.
 
+### Saved messages (LUXE_SAVE_MESSAGES, opt-in exact "1", 2026-11-19)
+
+- Write-only recording: at run end `run_agent` passes `result.messages` (after
+  `_finalize`, so the closing assistant text is in it) to
+  `run_state.save_messages`, which writes gzip JSONL to
+  `<run_dir>/messages.jsonl.gz`; a later `run_agent` under the same run_id
+  (maintain's reprompt / step-limit finish passes) writes
+  `messages-<phase>[-n].jsonl.gz`, never overwriting. An exception escaping the
+  step loop saves `st.messages` and re-raises unchanged. No run_id, ephemeral,
+  or off = no file. It must never add/alter a message, a request, dispatch or
+  control flow; off is byte-identical (golden snapshots unchanged) and on sends
+  the same requests (`tests/test_save_messages.py`). The writer NEVER raises
+  (log + skip). Persisted text is post-`_dispatch_one` redaction, and each line
+  is passed through `secrets.redact` again before it hits disk. The bench
+  runners (maintain_suite, swebench) export it by default; it is not a bench
+  arm and is excluded from maintain_suite's config fingerprint.
+
 ### Secret redaction + egress refusal (pinned 2026-10-22, ALWAYS ON, no flag)
 
 - ONE choke point: `loop._dispatch_one`, which every tool call of every run

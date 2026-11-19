@@ -158,6 +158,10 @@ def main() -> int:
     p.add_argument("--no-action-density-gate", action="store_true",
                    help="Disable LUXE_ACTION_DENSITY_GATE=1 wiring (v1.9 default-on). "
                         "Use for ablation against the staged-escalation gate.")
+    p.add_argument("--no-save-messages", action="store_true",
+                   help="Don't export LUXE_SAVE_MESSAGES=1 to luxe (default: "
+                        "each run saves its conversation to "
+                        "~/.luxe/runs/<id>/messages.jsonl.gz). Recording-only.")
     p.add_argument("--no-convergence-gate", action="store_true",
                    help="Disable LUXE_CONVERGENCE_GATE=1 wiring (v1.10 default-on). "
                         "Use for ablation against conditional intervention stacking; "
@@ -283,6 +287,7 @@ def main() -> int:
             tiered_compact=args.tiered_compact,
             tiered_compact_threshold=args.tiered_compact_threshold,
             tiered_compact_phase_thresholds=args.tiered_compact_phase_thresholds,
+            save_messages=not args.no_save_messages,
         )
         elapsed = time.time() - t0
         runtime_wall += elapsed
@@ -318,6 +323,7 @@ def main() -> int:
             "patch_present": bool(result.model_patch.strip()),
             "error": result.error,
             "model_patch": result.model_patch,
+            "luxe_run_id": result.luxe_run_id,
         }, indent=2))
 
         wall = time.time() - t0
