@@ -656,6 +656,10 @@ invariants in its `.sdd` you must read before enabling:
   over-budget unwindowed `read_file` serves outline + first window instead of
   refusing. Benched n=75 x 3: 34.7 vs 35.7, not promoted. See `tools.sdd` and
   `acceptance/swebench/oversize_window_2026_11_08/REPORT.md`.
+- **Failed-command output** (`LUXE_FAILED_OUTPUT=1`, 2026-11-19, being A/B'd)
+  — a tool returning error AND output (bash non-zero exit) sends
+  `exit code N\n<output>` instead of the bare error line. See `agents.sdd`
+  § "Failed-command output" and `acceptance/failed_output_ab_2026_11/PLAN.md`.
 - **Removed 2026-10-22** (refuted or inert, off by default): cohort priors,
   trajectory-shape and commit-only early_bail, post-write idle repeat
   counting, repeat-read stub, re-read note, `commit_first` — see `agents.sdd`

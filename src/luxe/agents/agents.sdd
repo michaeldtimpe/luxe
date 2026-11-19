@@ -467,6 +467,31 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   runners (maintain_suite, swebench) export it by default; it is not a bench
   arm and is excluded from maintain_suite's config fingerprint.
 
+### Failed-command output (LUXE_FAILED_OUTPUT, opt-in exact "1", 2026-11-19, being A/B'd)
+
+- `_dispatch_one` sends `executed.error or executed.result`, so a tool that
+  returns BOTH (bash on a non-zero exit: `exit code N` + stdout/stderr) has
+  shown the model only the error line since v1.0; the failing pytest/npm/
+  build output never reached it (`acceptance/swebench/diag_misses_2026_11`).
+- On: when error AND result are both non-empty, the tool message is
+  `error + "\n" + result`. General rule, not bash-only: a sweep found bash
+  (`tools/shell.py`, both exec paths) is the only built-in that returns both;
+  analyzers put failures in the result with `error=None`, the git tool and
+  the MCP client return `("", err)`, so the rule cannot fire elsewhere today,
+  and a future tool that returns both is the same situation. The error line
+  stays FIRST so `abortreport._EXIT_RE` (`^exit code`) and a reader of the
+  first line see what they saw before.
+- Order is unchanged: redaction (`_redact_secrets`) has already run on both
+  fields; the clamp (`LUXE_TOOL_RESULT_CLAMP`, its own flag) bounds the
+  combined content exactly as it bounds any result. `ToolCall.error/result`
+  and `bytes_out` are untouched (only the message content changes).
+- Telemetry: `failed_output_shown` (step, name, bytes = result bytes) only
+  when the flag changed the content. Chat and bench share `_dispatch_one`, so
+  the flag covers both paths. Off = byte-identical (goldens unchanged).
+  Tests: `tests/test_failed_output.py`. A/B:
+  `acceptance/failed_output_ab_2026_11/PLAN.md`. Do not default it ON
+  without that A/B.
+
 ### Secret redaction + egress refusal (pinned 2026-10-22, ALWAYS ON, no flag)
 
 - ONE choke point: `loop._dispatch_one`, which every tool call of every run

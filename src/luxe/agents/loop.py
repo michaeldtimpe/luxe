@@ -1494,6 +1494,13 @@ def _dispatch_one(run: _Run, st: LoopState, result: AgentResult,
     _track_dispatched(run, st, tc, executed, key, path, step, emit)
 
     content = executed.error or executed.result
+    if run.flags.failed_output and executed.error and executed.result:
+        # LUXE_FAILED_OUTPUT (opt-in; agents.sdd): a failing command's output
+        # (pytest/npm/build) used to be dropped here. Both fields were
+        # already redacted above; the clamp below still bounds the result.
+        content = f"{executed.error}\n{executed.result}"
+        emit("failed_output_shown", step=step, name=tc.name,
+             bytes=len(executed.result.encode("utf-8", errors="replace")))
     if run.flags.tool_result_clamp and content:
         content = _clamp_result(st, tc, executed, content, path,
                                 effective_ctx, step, emit)
