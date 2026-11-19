@@ -3,8 +3,8 @@
 # acceptance/swebench/diag_misses_2026_11/run.sh). The real test of the flag:
 # 13 C/D flip targets + 12 no-harm instances (subset fo_slice_2026_11.json,
 # per_instance_role says which), arms control vs fo, 3 reps interleaved
-# (each rep runs every arm, so arms share substrate drift). Each arm-rep is
-# graded right after it runs. LUXE_SAVE_MESSAGES is exported by the swebench
+# (each rep runs every arm, so arms share substrate drift). Grading runs
+# after all predictions. LUXE_SAVE_MESSAGES is exported by the swebench
 # runner by default (adapter.py).
 # Usage: swebench_slice.sh [reps]   (default 3). Output: $OUT/<arm>-rep<N>/.
 cd ~/Downloads/luxe-bench || exit 1
@@ -42,8 +42,13 @@ for rep in $(seq 1 $REPS); do
       --config $cfg --subset $SUB --per-instance-timeout 1800 \
       --output $OUT/$cell/ > $OUT/$cell.log 2>&1
     rc=$?
-    grade $cell
     echo "REP $rep ARM $arm end $(date "+%F %T") rc=$rc" >> $OUT/arms.log
   done
+done
+# Grade after all predictions so the GPU is never idle waiting on Docker
+# (grading is CPU-bound; the next GPU job can start while this runs).
+echo "PREDICT_DONE fo_slice $(date "+%F %T")" >> $OUT/arms.log
+for rep in $(seq 1 $REPS); do
+  for arm in $ARMS; do grade $arm-rep$rep; done
 done
 echo "DONE fo_slice $(date "+%F %T")" >> $OUT/arms.log
