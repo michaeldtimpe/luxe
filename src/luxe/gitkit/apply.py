@@ -31,6 +31,7 @@ from rich.markup import escape
 from luxe import gitcmd
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
+from luxe.gitkit import runrecord
 from luxe.gitkit.deep.mapcache import fresh_survey_notes
 from luxe.repo_index import _detect_languages_for_repo
 from luxe.secrets import scrubbed_env
@@ -333,6 +334,7 @@ class _ApplyRun:
     timeout: int
     branch: str
     branch_head: str = ""
+    run_id: str | None = None     # the invocation's run record (runrecord)
     baseline: set[str] = field(default_factory=set)
     step_files: list[str] | None = None
     kept: list[str] = field(default_factory=list)
@@ -396,6 +398,10 @@ def run_apply(*, repo_path: str, cfg, console, reader=None, deep: bool | None = 
         survey=(fresh_survey_notes(repo, head=co.head) or "")[:4000],
         timeout=int(getattr(cfg, "test_timeout_s", 300) or 300),
         branch=co.branch)
+    run.run_id = runrecord.start_run(
+        "gitchange-apply", target=str(repo), head=co.head, mode="apply",
+        model=cfg.model_for_slot("chat"), task_type="implement",
+        extra={"branch": co.branch, "n_steps": len(steps)})
 
     with indexed_target(str(repo), reuse=False, note=""):
         run.branch_head = pr.head_sha(repo)
@@ -521,7 +527,8 @@ def _apply_step(run: _ApplyRun, step: dict) -> bool:
             goal=prompts.GIT_APPLY_STEP_GOAL,
             task_type="implement", languages=run.languages,
             extra_context=_step_block(step, run.plan, run.survey),
-            run_id=f"gitchange-apply-{step['id']}", phase="main")
+            run_id=runrecord.pass_id(run.run_id, f"step-{step['id']}"),
+            phase="main")
         # the step's creations = what appeared DURING its pass;
         # a file the operator adds while reviewing is not in it
         run.step_files = _step_new_files(run.repo, run.baseline)

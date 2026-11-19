@@ -97,13 +97,18 @@ class PRState:
         return cls(**d2, steps=steps)
 
 
-def init_run_dir(spec: RunSpec) -> Path:
-    """Create the run directory and write run.json."""
+def init_run_dir(spec: RunSpec, extra: dict | None = None) -> Path:
+    """Create the run directory and write run.json.
+
+    `extra` merges caller-specific fields (e.g. gitkit's kind/mode/model) into
+    run.json after the RunSpec fields; `load_run_spec` ignores unknown keys,
+    so it round-trips unchanged."""
     rd = run_dir(spec.run_id)
     if is_ephemeral():
         return rd
     rd.mkdir(parents=True, exist_ok=True)
-    (rd / "run.json").write_text(json.dumps(spec.to_dict(), indent=2))
+    (rd / "run.json").write_text(
+        json.dumps({**spec.to_dict(), **(extra or {})}, indent=2))
     return rd
 
 

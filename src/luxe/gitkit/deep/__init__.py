@@ -59,7 +59,7 @@ from typing import Any
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled, raise_if_cancelled
 from luxe.context import estimate_tokens
-from luxe.gitkit import health
+from luxe.gitkit import health, runrecord
 from luxe.gitkit import plan as plan_mod
 from luxe.gitkit.kinds import _TITLES, extract_report, run_with_activity
 from luxe.gitkit.output import finish_report
@@ -230,6 +230,9 @@ class _DeepRun:
     digest: dict = field(default_factory=dict)
     work_dir: Path | None = None
     current_shas: dict[str, str] = field(default_factory=dict)
+    # The invocation's run id (runrecord.start_run); every pass logs under it.
+    # None = no run record (--no-save, or a direct caller that minted none).
+    run_id: str | None = None
 
     def emit(self, text: str) -> None:
         # NB: avoid a literal "[deep]" — Rich would parse it as a markup tag and
@@ -248,7 +251,7 @@ class _DeepRun:
                 self.backend, role, goal=goal, task_type=self.task_type,
                 languages=self.languages, extra_context=extra_context,
                 on_tool_event=on_e, on_token=on_t,
-                phase="chat", run_id=f"gitkit-deep-{self.kind}-{label}"),
+                phase="chat", run_id=runrecord.pass_id(self.run_id, label)),
             update_prefix=f"deep · {label} · ")
         # Read only public result fields (getattr-guarded — stubs + backends that
         # populate steps/tool_calls_total differently both stay safe).
@@ -326,6 +329,7 @@ def run_deep_report(
     extra_meta: dict | None = None,
     min_severity: str | None = None,
     no_incremental: bool = False,
+    run_id: str | None = None,
 ) -> tuple[str, Path | None]:
     """Run the staged deep analysis. Returns (report_text, saved_path | None);
     ("", None) on cancel/decline. The caller (runner) owns target resolution,
@@ -367,7 +371,7 @@ def run_deep_report(
         synth_ctx_win=synth_ctx_win,
         ceiling=int(eff_ctx * _DIGEST_CEILING_FRAC),
         head=health.current_head(target),
-        diff_mode=chunks_override is not None)
+        diff_mode=chunks_override is not None, run_id=run_id)
     content_budget = max(1, int(eff_ctx * _CONTENT_BUDGET_FRAC))
 
     # --- Stages 0+1: survey + chunk plan (cached per repo, HEAD-keyed) -------

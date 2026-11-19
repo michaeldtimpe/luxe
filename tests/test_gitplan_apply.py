@@ -73,11 +73,22 @@ _STEP = {"id": "S1", "title": "tweak f", "target_files": ["main.py"],
          "depends_on": []}
 
 
+
+def _step_label(run_id: str) -> str:
+    """Apply passes log under the invocation's record as `<run id>/step-<sid>`
+    (gitkit.sdd run record); map back to the legacy `gitchange-apply-<sid>`
+    label these assertions were written against."""
+    rid, _, step = run_id.rpartition("/step-")
+    assert rid.startswith("gitkit-gitchange-apply-"), run_id
+    return f"gitchange-apply-{step}"
+
+
 def _writer_stub(repo: Path, content="def g():\n    return 2\n"):
     """A run_single stub that edits main.py (so a diff appears), recording calls."""
     calls: list[str] = []
 
     def fake(backend, role, *, run_id="", **kw):
+        run_id = _step_label(run_id)
         calls.append(run_id)
         (repo / "main.py").write_text(content)
 
@@ -260,6 +271,7 @@ def _flaky_stub(repo: Path, raise_on: set[str]):
     calls: list[str] = []
 
     def fake(backend, role, *, run_id="", **kw):
+        run_id = _step_label(run_id)
         calls.append(run_id)
         sid = run_id.replace("gitchange-apply-", "")
         (repo / "main.py").write_text(f"def g():\n    return '{sid}'\n")
