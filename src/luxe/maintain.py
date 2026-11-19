@@ -143,7 +143,7 @@ class _Pipeline:
     `run_agent`). `cfg`, `backend` and `languages` are filled by `_load_model`
     inside the guarded block. `report` is the text that reaches
     synthesizer.md, the PR, the saved report and the console; the main pass
-    sets it, and the reprompt and step-limit label rewrite it."""
+    sets it, and the reprompt, step-limit label and abort report rewrite it."""
 
     repo_path: str
     goal: str
@@ -181,7 +181,7 @@ def maintain_pipeline(
     Preflight, the run dir, the repo lock, the indices and MCP come first and
     exit on failure (codes 2 and 3). The rest runs under `_teardown`: model
     load, main pass, citation lint, the opt-in reprompt, step-limit handling,
-    the cleanup turn, the PR cycle (codes 4 and 5) and the report."""
+    the cleanup turn, the abort report, the PR cycle (codes 4 and 5) and the report."""
     # Loaded here, before preflight, as they were before the step helpers
     # (which import from them) were split out of this function.
     import luxe.agents.single  # noqa: F401
@@ -226,6 +226,7 @@ def maintain_pipeline(
         _reprompt(p, result, loaded_spec)
         step_limited = _step_limit(p, result)
         _cleanup_turn(p)
+        _abort_report(p, result, step_limited)
         _pr_cycle(p, pr_cfg, watch_ci, step_limited)
         _emit_report(p, save_report, output_dir)
     finally:
@@ -770,6 +771,42 @@ def _cleanup_turn(p: _Pipeline) -> None:
             f"[dim]· cleanup turn: {len(_cl['candidates'])} candidate(s), "
             f"deleted {_cl['deleted'] or 'none'}"
             f"{' — ' + _cl['error'] if _cl['error'] else ''}[/]")
+
+
+def _abort_report(p: _Pipeline, result: AgentResult,
+                  step_limited: bool) -> None:
+    """LUXE_ABORT_REPORT (default ON; only the exact string "0" disables
+    it; luxe/abortreport.py): a write run whose MODEL text is empty (stuck
+    loop, post-write idle exit, backend error) gets a Python-built report
+    instead of none, so synthesizer.md, the commit body and the PR body say
+    why the run ended, what changed and what was run after the last write.
+    No model call; `result.final_text` is left as it is. Runs after the
+    cleanup turn so the file list is the one that gets committed; a
+    step-limited run keeps its incomplete note on top."""
+    from luxe import abortreport as _ar
+    if not (p.writes and _ar.enabled()) or (result.final_text or "").strip():
+        return
+    files: list[tuple[str, int, int]] | None
+    diff_error = ""
+    try:
+        files = _ar.files_changed(
+            _diff_against_base(p.repo_path, p.prep.base_sha)[2])
+    except GitDiffError as e:
+        files, diff_error = None, str(e)
+    reason = _ar.end_reason(result, _ar.event_kinds(
+        run_state.run_dir(p.spec.run_id) / "events.jsonl"))
+    commands = _ar.commands_after_last_write(result.tool_calls)
+    p.report = _ar.build_report(reason, files, commands, diff_error)
+    if step_limited:
+        from luxe import steplimit as _sl
+        p.report = _sl.label_report(p.report)
+    p.save_synthesizer()
+    p.emit("abort_report_written",
+           reason=reason[0], abort_reason=reason[1],
+           files=[f[0] for f in files] if files is not None else None,
+           n_commands=len(commands))
+    console.print(f"[yellow]· run ended without a model report "
+                  f"({reason[0]}) — wrote a luxe-generated report[/]")
 
 
 def _pr_cycle(p: _Pipeline, pr_cfg: PRConfig, watch_ci: bool,

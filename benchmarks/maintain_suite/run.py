@@ -892,6 +892,15 @@ def _diagnose_step_limit(diag) -> list[str]:
     return []
 
 
+def _diagnose_abort_report(diag) -> list[str]:
+    """The model wrote no report; luxe wrote one from the run's records
+    (luxe/abortreport.py). No score change."""
+    if getattr(diag, "report_fallback", False):
+        return ["model wrote no report — the report is luxe-generated "
+                "(abort_report_written)"]
+    return []
+
+
 def _extract_run_id(text: str) -> str:
     m = re.search(r"run_id=([0-9a-f]{8,})", text)
     return m.group(1) if m else ""
@@ -1015,6 +1024,11 @@ class Diagnostics:
                               # max-steps deaths; their bailout_reason
                               # ("max steps reached (N)") tells them apart.
     bailout_reason: str = ""  # human-readable evidence
+    # True when luxe wrote the run's report itself because the model's final
+    # text was empty (LUXE_ABORT_REPORT, luxe/abortreport.py; the
+    # `abort_report_written` event). single_mode.final_text_chars still
+    # measures the MODEL's text. Additive (2026-11-19); older records False.
+    report_fallback: bool = False
     # True when this record was replayed from disk for a SKIP_DONE fixture
     # (never persisted as True — only set on the in-memory copy).
     cached: bool = False
@@ -1143,6 +1157,8 @@ def build_diagnostics(state: FixtureState, artefacts: dict) -> Diagnostics:
         no_diff_warning=bool(artefacts.get("no_diff_warning", False)),
         bailout_type=bailout_type,
         bailout_reason=bailout_reason,
+        report_fallback=bool(
+            artefacts.get("events_kinds", {}).get("abort_report_written", 0)),
     )
 
 
@@ -1902,6 +1918,8 @@ def _print_run_notes(r: FixtureResult, d: Diagnostics, fdir: Path) -> None:
         print(f"        ⓘ {note}")
     for note in _diagnose_step_limit(d):
         print(f"        ⚠ {note}")
+    for note in _diagnose_abort_report(d):
+        print(f"        ⓘ {note}")
 
 
 def _bench_one(bench: _BenchRun, run_idx: int, variant: Variant | None,

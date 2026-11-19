@@ -642,6 +642,10 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   and failing commands WITH output (`npx eslint` exit 2, 491 bytes) as idle.
   The champion was verifying, not drifting. Fix the definition, not the
   aftermath. Don't re-add a post-exit report turn.
+- The empty-report symptom is handled WITHOUT a model call since 2026-11-19:
+  `maintain` writes a Python-built report from the run's records
+  (`luxe/abortreport.py`, `LUXE_ABORT_REPORT`, luxe.sdd). The loop is
+  unchanged by it and `final_text` stays the model's text.
 
 ### Narrow idle test (`LUXE_IDLE_NARROW=1`, opt-in 2026-11-03)
 
