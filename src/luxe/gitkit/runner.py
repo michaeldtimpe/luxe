@@ -17,7 +17,7 @@ from pathlib import Path
 from luxe import gitclone
 from luxe.cancel import ChatCancelled
 from luxe.gitkit import deep as deep_mod
-from luxe.gitkit import diffscope, health, store
+from luxe.gitkit import diffscope, health, runrecord, store
 from luxe.gitkit import plan as plan_mod
 from luxe.gitkit.deep.salvage import _plan_extract_pass
 from luxe.gitkit.kinds import (  # re-exported: tests + scripts import these from here
@@ -244,13 +244,15 @@ def _prior_findings(kind: str, target: str, console) -> str:
 
 
 def _single_extract_pass(run_single, backend, task_type, languages,
-                         goal: str, ctx: str, _label: str, role):
+                         run_id: str | None,
+                         goal: str, ctx: str, label: str, role):
     """The single-pass path's `pass_fn` for `_plan_extract_pass`: one
-    tool-callback-free `run_single` under its own run_id."""
+    tool-callback-free `run_single` logged under the invocation's run record
+    as its own pass sub-id (`<run_id>/<label>`)."""
     return run_single(
         backend, role, goal=goal, task_type=task_type,
         languages=languages, extra_context=ctx,
-        phase="chat", run_id="gitkit-gitchange-extract")
+        phase="chat", run_id=runrecord.pass_id(run_id, label))
 
 
 def _package_report(kind: str, text: str, *, target: str, head: str,
@@ -396,13 +398,23 @@ def run_git_report(
             use_deep = deep if deep is not None else scope.wants_deep()
         else:
             use_deep = deep_mod.should_use_deep(summary, role_cfg, override=deep)
+        # One run record per invocation (gitkit.sdd Must): every pass below
+        # logs under this id; None under --no-save (nothing in ~/.luxe/runs).
+        run_id = runrecord.start_run(
+            kind, target=target, head=health.current_head(target),
+            mode=("diff" if scope is not None
+                  else "deep" if use_deep else "single"),
+            model=model, task_type=task_type, save=save,
+            extra={"deep": bool(use_deep),
+                   **({"base": base} if base is not None else {})})
         if use_deep:
             deep_kw = dict(
                 target=target, task_type=task_type, backend=backend,
                 role_cfg=role_cfg, languages=languages, console=console,
                 reader=reader, summary=summary, symbol_index=sym_index,
                 save=save, verbose=verbose, cancel=cancel,
-                max_chunks=max_chunks, mirror=mirror, min_severity=min_severity)
+                max_chunks=max_chunks, mirror=mirror, min_severity=min_severity,
+                run_id=run_id)
             if scope is not None:
                 return deep_mod.run_deep_report(
                     kind, **deep_kw,
@@ -429,7 +441,7 @@ def run_git_report(
                 backend, role_cfg, goal=goal, task_type=task_type,
                 languages=languages, extra_context=extra_context,
                 on_tool_event=on_event, on_token=on_token,
-                phase="chat", run_id=f"gitkit-{kind}",
+                phase="chat", run_id=run_id,
             )
 
         # WS2: phased spinner + coalesced tool counts while the model works
@@ -445,7 +457,8 @@ def run_git_report(
 
         _head = health.current_head(target)
         extract_pass = functools.partial(
-            _single_extract_pass, run_single, backend, task_type, languages)
+            _single_extract_pass, run_single, backend, task_type, languages,
+            run_id)
         report = _package_report(
             kind, (result.final_text or "").strip(), target=target,
             head=_head, scope=scope, save=save, pass_fn=extract_pass,

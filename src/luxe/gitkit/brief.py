@@ -22,6 +22,8 @@ from pathlib import Path
 from luxe import project as project_mod
 from luxe.agents import prompts
 from luxe.cancel import ChatCancelled
+from luxe.gitkit import runrecord
+from luxe.gitkit.health import current_head
 from luxe.gitkit.kinds import GITKIT_MAX_TOKENS, run_with_activity
 from luxe.repo_index import _detect_languages_for_repo
 from luxe.roles import make_read_only_role
@@ -158,6 +160,10 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
         role_cfg = make_read_only_role(cfg.role("monolith")).model_copy(
             update={"max_tokens_per_turn": GITKIT_MAX_TOKENS})
         goal = prompts.GIT_BRIEF_GOAL
+        run_id = runrecord.start_run(
+            "brief", target=target, head=current_head(target), mode="single",
+            model=model, task_type="summarize",
+            extra={"dry_run": bool(dry_run)})
 
         def _do_run(on_event=None, on_token=None):
             return run_single_fn(
@@ -165,7 +171,7 @@ def run_init(path: str | Path, cfg, *, console, run_single_fn=None,
                 languages=_detect_languages_for_repo(target),
                 extra_context=ctx_block,
                 on_tool_event=on_event, on_token=on_token,
-                phase="chat", run_id="gitkit-brief")
+                phase="chat", run_id=run_id)
 
         try:
             result = run_with_activity(console, "reading the repo", cancel,

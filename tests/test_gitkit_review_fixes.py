@@ -143,7 +143,9 @@ def _stub(repo: Path, writes: dict[str, dict[str, str]],
     calls: list[str] = []
 
     def fake(backend, role, *, run_id="", **kw):
-        sid = run_id.replace("gitchange-apply-", "")
+        # gitkit.sdd run record: apply passes log as `<run id>/step-<sid>`
+        rid, _, sid = run_id.rpartition("/step-")
+        assert rid.startswith("gitkit-gitchange-apply-"), run_id
         calls.append(sid)
         for rel, text in writes.get(sid, {}).items():
             (repo / rel).parent.mkdir(parents=True, exist_ok=True)

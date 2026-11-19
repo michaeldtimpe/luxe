@@ -181,8 +181,10 @@ def test_gitchange_small_repo_auto_stays_single_pass(small_repo, _gitkit_cfg,
     _stub_run(monkeypatch, fake)
     run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=small_repo,
                    console=_QuietConsole(), save=True, deep=None)  # auto by footprint
-    assert calls == ["gitkit-gitchange"]
-    assert not any("deep" in c for c in calls)
+    # one pass under the invocation's run record — deep would add
+    # `<id>/<stage>` sub-pass ids (gitkit.sdd run record)
+    assert len(calls) == 1 and calls[0].startswith("gitkit-gitchange-")
+    assert "/" not in calls[0]
 
 
 def test_gitchange_recovers_via_extraction_pass(small_repo, _gitkit_cfg, monkeypatch):
@@ -201,7 +203,7 @@ def test_gitchange_recovers_via_extraction_pass(small_repo, _gitkit_cfg, monkeyp
     _stub_run(monkeypatch, fake)
     report, _ = run_git_report("gitchange", cfg=_gitkit_cfg, repo_path=small_repo,
                                console=_QuietConsole(), save=True, deep=False)
-    assert "gitkit-gitchange-extract" in calls                 # recovery fired
+    assert calls[-1] == f"{calls[0]}/plan-extract"           # recovery fired
     assert "## S1: Extract client factory" in report         # steps recovered
     rdir = Path.home() / ".luxe" / "reports" / repo_hash(small_repo)
     pj = json.loads(next(rdir.glob("plan-*.json")).read_text())

@@ -230,6 +230,17 @@ in the front-end. Survey map + chunk plan persist per repo under
   `tests/test_gitkit_deep_map_compat.py` loads and byte-for-byte re-writes a
   map saved by the pre-package code (`tests/golden/gitkit_deep_map_v2/`).
   A format change must bump the breadcrumb version, never mutate v2.
+- Give every invocation ONE run record (`runrecord.start_run`, 2026-11-19):
+  a unique id `gitkit-<kind>-<utc yyyymmddThhmmssZ>-<6 hex>` and
+  `~/.luxe/runs/<id>/run.json` (RunSpec fields + tool/kind/mode/model/
+  head_sha/started_at_utc). Every model pass of that invocation logs inside
+  that one dir: a single-pass report/brief turn under `<id>`, each further or
+  staged pass (plan-extract, deep survey/chunk-N/reduce-N/synthesis, apply
+  `step-<sid>`) under the sub-id `runrecord.pass_id(<id>, label)` =
+  `<id>/<label>` (label sanitized to one path component — step ids are
+  model-written). Never a fixed/shared run id. `--no-save` mints none
+  (`run_id=None`, nothing under `~/.luxe/runs/`); `--ephemeral` is guarded by
+  `run_state`. `tests/test_gitkit_run_record.py`.
 
 ## Must not
 - Write/edit the target repo, or require write mode — EXCEPT the `gitchange --apply`

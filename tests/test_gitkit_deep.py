@@ -446,7 +446,7 @@ def _stub_backend(monkeypatch):
 
 
 def _stage_of(run_id: str) -> str:
-    """Normalize a deep-mode run_id (`gitkit-deep-<kind>-<label>`) to its stage."""
+    """Normalize a deep-mode pass run_id (`<invocation id>/<label>`) to its stage."""
     for s in ("survey", "synthesis", "reduce", "chunk"):
         if s in run_id:
             return s
