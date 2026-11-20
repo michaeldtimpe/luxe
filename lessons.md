@@ -30,6 +30,26 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-11-20] Two cleanup-parser bugs in one afternoon, both silent
+
+**What happened.** Letting the cleanup turn offer data files (#65) changed the model's reply format: with a
+KEEP to justify, it also wrote `DELETE x.py -- reason`, and the parser (`DELETE path$`) dropped that line, so
+strict-flag failed on `orphan_file`. The fix (#66) widened the trailing match with `[\s:,;].*`. `\s` matches the
+newline, so the first DELETE line then swallowed every line after it, and a reply listing two files deleted
+one. That shipped to main for about 20 minutes, caught by the next live check (#67).
+
+**Root cause.** A reply parser keyed on exact line shape fails closed and silently: the model's intent is lost,
+not rejected. Changing what the model is shown (more candidates) changed how it writes, which surfaced the
+first bug. The second came from testing only single-line replies.
+
+**Fix / takeaway.** In a `re.MULTILINE` pattern, never use `\s` for "rest of the line"; use `[ \t]`. Test parsers
+with multi-line, mixed DELETE/KEEP replies, and replay every historical reply against a line-by-line reading
+before landing (0 mismatches over 96 after #67). A change to what a model is SHOWN needs a live check of
+what it then SAYS, not only of what code selects.
+
+**Affected files.** `src/luxe/cleanup.py` (`_DELETE_RE`), `tests/test_cleanup.py`,
+`acceptance/cleanup_data_check_2026_11/REPORT.md`.
+
 ### [2026-11-20] A failing command's output never reached the model (v1.0 to 2026-11-19)
 
 **What happened.** The SWE-bench miss diagnosis (`acceptance/swebench/diag_misses_2026_11`) found
