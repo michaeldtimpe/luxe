@@ -205,3 +205,11 @@ def test_several_delete_lines_each_count():
     reply = ("DELETE dir/b.gguf\nDELETE a.py -- scratch\n"
              "KEEP d.py -- needed\n- DELETE c.py\n")
     assert cleanup.parse_deletions(reply, cands) == ["dir/b.gguf", "a.py", "c.py"]
+
+
+def test_system_prompt_says_unread_data_is_scratch():
+    """The model kept an unreferenced `fake.gguf` as a "test fixture" 3/3
+    (acceptance/cleanup_data_check_2026_11) although no test reads it."""
+    from luxe.agents.prompts import CLEANUP_TURN_SYSTEM
+    assert "no code or test in the repository reads is scratch" in CLEANUP_TURN_SYSTEM
+    assert "including new tests meant to stay in the project" in CLEANUP_TURN_SYSTEM

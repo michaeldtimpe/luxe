@@ -609,7 +609,10 @@ CLEANUP_TURN_SYSTEM = (
     "throwaway verification scripts, temporary tests, debug output, or "
     "generated caches. Others are part of the deliverable. Decide for each "
     "file. Keep every file the goal asks for or that the change needs, "
-    "including new tests meant to stay in the project."
+    "including new tests meant to stay in the project. A data file (sample "
+    "input, binary, log, backup) that no code or test in the repository "
+    "reads is scratch, not a test fixture: delete it unless the goal asks "
+    "for it."
 )
 
 CLEANUP_TURN_TEMPLATE = (
