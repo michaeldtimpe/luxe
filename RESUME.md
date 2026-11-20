@@ -1,5 +1,36 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-20, m5) — open-items sweep: ThinkingCap-4bit, FAILED_OUTPUT landed, SWE-bench image exec landed + A/B running
+
+- **ThinkingCap 4-bit A/B** (`acceptance/thinkingcap_4bit_2026_11/REPORT.md`): tc4 vs Qwen3.6-27B-4bit,
+  10 x 3. Both printed 30/30. Hand-read: tc4 27 REAL + 3 THIN (document-config omits all 23
+  `PM_NH_*` vars every rep), ref4 REAL with a step-limit draft on strict-flag. tc4 is 40% less wall,
+  48% fewer completion and 31% fewer prompt tokens, but 19 GB vs 15 GB. **Faster, not better. m1's
+  manifest is untouched; this is Michael's call.** It also corrects the 6-bit report: its
+  document-config "32/32, beats ref" used an undercounted var set (6-bit TC was 34/34/55 of 57,
+  ref 57/43/50). Caveat: earlier reports' `envcheck.py` used a 27-var set that can't be
+  reconstructed, so document-config coverage isn't comparable across reports.
+- **LUXE_FAILED_OUTPUT landed** (PR #61, opt-in). The maintain no-harm A/B
+  (`acceptance/failed_output_ab_2026_11/REPORT.md`) printed 30/30 in both arms but was
+  **unexercised**: 0 non-zero exits in 60 runs (verified from saved messages), so it says nothing
+  about efficacy. Bug history in lessons.md 2026-11-20.
+- **SWE-bench image exec landed** (PRs #62, #63; bench path only; `run.py --image-exec` +
+  `configs/single_64gb_swebench_exec.yaml`). python/pytest/pip run in the instance's eval image,
+  a leading `cd X &&` is accepted, scratch reproducers are allowed and stripped, and there is a new
+  prompt variant `swebench_bugfix_exec`. Gates in `acceptance/swebench/image_exec_2026_11/PLAN.md`:
+  G0 unit RED to GREEN; G1 replay 84/98 refused commands now run, 95/95 executed in image (median
+  4.3 s); G2 smoke 2/3 resolved, including **requests-2931 (0/9 prior)** via repro, fix, test,
+  regression caught, refix.
+- **IN FLIGHT: G3**, the 3-arm slice (control / fo / ix) x 25 x 3 on `fo_slice_2026_11.json`,
+  started 10:28 from `luxe-bench` at 5f05acf. Output in `acceptance/swebench/image_exec_2026_11/slice/`
+  (`arms.log`; `PREDICT_DONE`, then grading, then `DONE`). Watcher:
+  `acceptance/failed_output_ab_2026_11/watch_stall.sh <dir> 40`. Next: analyze flips vs the 9-rep
+  prior, no-harm on the 12, read every new PASS, write REPORT.md. Watch Django (its testbed has no
+  pytest; does the model switch to `tests/runtests.py`?).
+- **Pending decisions (Michael):** ThinkingCap-4bit on m1 (see above). `LUXE_IDLE_NARROW=wide`
+  (recommendation still no). Both the idle and bash_noop verdicts were measured with failing output
+  hidden, so they deserve a re-run before being carried forward.
+
 ## ⇒ SESSION NOTE (2026-11-08, m5) — oversize-read window lever: opt-in, not promoted (34.7 vs 35.7)
 
 - **Lever:** `LUXE_READ_OVERSIZE_WINDOW=1` (opt-in, exact "1"; `tools/fs.py`, tools.sdd): an oversize

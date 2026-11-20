@@ -30,6 +30,36 @@ Each entry follows this structure:
 
 ## Entries
 
+### [2026-11-20] A failing command's output never reached the model (v1.0 to 2026-11-19)
+
+**What happened.** The SWE-bench miss diagnosis (`acceptance/swebench/diag_misses_2026_11`) found
+18 bash calls that ran, printed 82 to 2289 bytes, and showed the model only `exit code N`. Every
+failing pytest, npm test, eslint or build in every luxe run since v1.0 (`7332da1`) reached the model
+as that one line. A test-driven fix loop was impossible by construction: the model could tell that
+a test failed but never which one or why.
+
+**Root cause.** `tools/shell.py` returns `(output, "exit code N")` on a non-zero exit, and
+`agents/loop.py` `_dispatch_one` (line 1496 at the time) sends `executed.error or executed.result`,
+so the error wins whenever both are set. Each half looked correct alone. The shell comment said "a
+non-zero exit is reported while the output is still returned" (true at the tool boundary, false at
+the model boundary). Tests asserted tool return values, never the message content the model
+receives. Nothing recorded what the model saw until `LUXE_SAVE_MESSAGES` (2026-11-18), which is how
+it was found.
+
+**Fix / takeaway.** `LUXE_FAILED_OUTPUT=1` (opt-in, PR #61, landed 9b48595) sends
+`exit code N\n<output>` through the same redaction and clamp. Its maintain no-harm A/B is
+`acceptance/failed_output_ab_2026_11/`. The SWE-bench efficacy test, together with image exec, is
+`acceptance/swebench/image_exec_2026_11/`. General rules:
+- Assert what the MODEL sees (the tool message content, or saved messages), not what a tool returns.
+- Any A/B whose benefit depends on the model reading a failing command's output was confounded
+  before this. That includes `bash_noop_ab_2026_11` (strip/hint inert) and
+  `idle_narrow_ab_2026_11` / `idle_capped_ab_2026_11` (wide idle-narrow). Re-run them before carrying
+  their verdicts into a world where the output is visible.
+- A comment describing cross-layer behavior is a claim; test it at the far layer.
+
+**Affected files.** `src/luxe/agents/loop.py` (`_dispatch_one`), `src/luxe/tools/shell.py`,
+`src/luxe/agents/flags.py`, `tests/test_failed_output.py`.
+
 ### [2026-11-03] idle_narrow_ab_2026_11: the idle gate's refusal counting was the whole problem for the champion
 
 **What happened.** Narrowing post_write_idle_exit's idle test to "returned nothing AND did not run"
