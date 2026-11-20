@@ -501,7 +501,8 @@ def test_swebench_bugfix_exec_invites_verification_not_static_analysis():
     var = get("swebench_bugfix_exec").task_prefix
     assert "Do NOT create any new files" not in var
     assert "rather than executing reproducers" not in var
-    assert "scratch" in var and "removed before grading" in var
+    assert "scratch" in var and "removed automatically" in var
+    assert "do not try to delete them" in var
     assert "re-run" in var
     assert "Do not edit existing tests" in var
     assert "ONE tool per response" in var
