@@ -103,6 +103,13 @@ Re-scored against the 57-var set from that run's own `r1/*/diff.patch`:
 | ThinkingCap 6-bit | 34 | 34 | 55 |
 | Qwen3.6-27B-6bit ref | 57 | 43 | 50 |
 
+Caveat (added 2026-11-20 pm): other reports scored this fixture with an `envcheck.py`
+against a 27-var set (tuning_2026_10, m5max_moe_r2_2026_10, which names one `PM_NH_*` var
+as a miss). That script is no longer on disk and its definition can't be reconstructed (it is
+not `.env.example`, which has 12). The 57 here is the literal goal text traced through the
+code. Document-config coverage numbers are therefore not comparable across reports. The
+champion's own docs in `../failed_output_ab_2026_11/` cover 32/57 on every rep in both arms.
+
 So the 6-bit reference, not ThinkingCap, was ahead on document-config, and two of
 ThinkingCap's three reps were THIN. The 6-bit "30/30 REAL" becomes 28 REAL + 2 THIN.
 No other 6-bit verdict is affected. The finding is the same in both quantizations:
