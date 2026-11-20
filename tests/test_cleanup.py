@@ -176,3 +176,22 @@ def test_text_data_file_gets_a_content_preview(tmp_path):
     cands = cleanup.find_candidates(r, base)
     assert [(c.path, c.kind) for c in cands] == [("out.log", "data")]
     assert "debug: scanned 3 files" in cleanup.build_messages("g", cands, r)[1]["content"]
+
+
+@pytest.mark.parametrize("line", [
+    "DELETE verify_strict.py -- scratch verification script",
+    "DELETE `verify_strict.py` - throwaway",
+    "- DELETE verify_strict.py: temporary",
+    "DELETE verify_strict.py",
+])
+def test_delete_line_may_carry_a_reason(line):
+    cands = [cleanup.Candidate("verify_strict.py", "unreferenced"),
+             cleanup.Candidate("keep_me.py", "unreferenced")]
+    reply = f"{line}\nKEEP keep_me.py -- needed"
+    assert cleanup.parse_deletions(reply, cands) == ["verify_strict.py"]
+
+
+def test_reason_text_never_widens_what_is_deleted():
+    cands = [cleanup.Candidate("a.py", "unreferenced")]
+    assert cleanup.parse_deletions("DELETE a.py -- and also DELETE b.py", cands) == ["a.py"]
+    assert cleanup.parse_deletions("DELETE b.py -- a.py", cands) == []

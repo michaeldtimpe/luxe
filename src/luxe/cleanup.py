@@ -174,7 +174,12 @@ def _looks_binary(p: Path) -> bool:
         return True
 
 
-_DELETE_RE = re.compile(r"^\s*[-*]?\s*DELETE\s+`?([^\s`]+)`?\s*$", re.MULTILINE)
+#: `DELETE <path>`, optionally followed by a reason (`DELETE x.py -- scratch`).
+#: The trailing-text form used to be dropped silently: 3 of 2,422 cleanup turns
+#: had an intended DELETE ignored, and one left `verify_strict.py` behind to
+#: fail the `orphan_file` gate (acceptance/cleanup_data_check_2026_11). Safe to
+#: widen: only paths from the offered candidate list are ever deleted.
+_DELETE_RE = re.compile(r"^\s*[-*]?\s*DELETE\s+`?([^\s`]+?)`?(?:[\s:,;].*)?$", re.MULTILINE)
 
 
 def parse_deletions(reply: str, candidates: list[Candidate]) -> list[str]:
