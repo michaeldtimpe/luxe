@@ -43,6 +43,7 @@ RequirementKind = Literal[
     # contract in src/luxe/spec_validator.py.
     "expects_zero_calls",   # agent must emit zero tool calls (BFCL irrelevance)
     "min_tool_calls",       # agent must emit >= min_matches tool calls (BFCL parallel*)
+    "tokens_present",       # >= min_fraction of `tokens` appear (whole word) in added lines
 ]
 
 
@@ -66,6 +67,10 @@ class Requirement:
     pattern: str | None = None
     min_matches: int = 1
     command: str | None = None  # for tests_pass kind
+    # tokens_present (2026-11-20): an enumerated reference set (e.g. every env
+    # var a doc must cover) and the fraction of it that must appear.
+    tokens: tuple[str, ...] = ()
+    min_fraction: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.id or not self.id.startswith("R"):
@@ -83,6 +88,16 @@ class Requirement:
             raise ValueError(
                 f"Requirement {self.id} kind=tests_pass requires a `command`."
             )
+        if self.kind == "tokens_present":
+            if not self.tokens:
+                raise ValueError(
+                    f"Requirement {self.id} kind=tokens_present requires `tokens`."
+                )
+            if not 0.0 < self.min_fraction <= 1.0:
+                raise ValueError(
+                    f"Requirement {self.id} min_fraction must be in (0, 1] "
+                    f"(got {self.min_fraction})."
+                )
         if self.min_matches < 1:
             raise ValueError(
                 f"Requirement {self.id} min_matches must be >= 1 "
@@ -184,7 +199,7 @@ def _requirement_from_yaml_dict(d: dict[str, Any]) -> Requirement:
     kind = d["kind"]
     valid_kinds = {
         "regex_present", "regex_absent", "ast_query", "tests_pass", "manual",
-        "expects_zero_calls", "min_tool_calls",
+        "expects_zero_calls", "min_tool_calls", "tokens_present",
     }
     if kind not in valid_kinds:
         raise ValueError(
@@ -199,6 +214,8 @@ def _requirement_from_yaml_dict(d: dict[str, Any]) -> Requirement:
         pattern=d.get("pattern"),
         min_matches=int(d.get("min_matches", 1)),
         command=d.get("command"),
+        tokens=tuple(str(t) for t in (d.get("tokens") or ())),
+        min_fraction=float(d.get("min_fraction", 1.0)),
     )
 
 
@@ -230,6 +247,9 @@ def _requirement_to_yaml_dict(r: Requirement) -> dict[str, Any]:
         out["min_matches"] = r.min_matches
     if r.command is not None:
         out["command"] = r.command
+    if r.kind == "tokens_present":
+        out["tokens"] = list(r.tokens)
+        out["min_fraction"] = r.min_fraction
     return out
 
 

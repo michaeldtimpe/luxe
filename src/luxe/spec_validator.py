@@ -110,7 +110,7 @@ def validate(
     tool_calls = tool_calls or ()
 
     needs_diff = any(
-        r.kind in ("regex_present", "regex_absent")
+        r.kind in _DIFF_KINDS
         for r in spec.requirements
     )
     diff_error: str | None = None
@@ -128,7 +128,7 @@ def validate(
 
     results: list[RequirementResult] = []
     for req in spec.requirements:
-        if req.kind in ("regex_present", "regex_absent") and diff_error:
+        if req.kind in _DIFF_KINDS and diff_error:
             results.append(RequirementResult(
                 requirement=req,
                 satisfied=False,
@@ -140,6 +140,8 @@ def validate(
             results.append(_eval_regex_present(req, added_lines))
         elif req.kind == "regex_absent":
             results.append(_eval_regex_absent(req, added_lines))
+        elif req.kind == "tokens_present":
+            results.append(_eval_tokens_present(req, added_lines))
         elif req.kind == "tests_pass":
             results.append(_eval_tests_pass(req, repo))
         elif req.kind == "ast_query":
@@ -163,6 +165,9 @@ def validate(
 
 
 # --- diff parsing ----------------------------------------------------------
+
+#: Requirement kinds evaluated against the diff's added lines.
+_DIFF_KINDS = ("regex_present", "regex_absent", "tokens_present")
 
 #: Wall bound on the two local git calls below. Nothing here talks to a
 #: network, so a minute is already generous; the point is that a wedged git
@@ -218,6 +223,28 @@ def _added_lines_from_diff(repo: Path, base_sha: str) -> list[tuple[str, str]] |
 
 
 # --- per-kind evaluators ---------------------------------------------------
+
+
+def _eval_tokens_present(
+    req: Requirement,
+    added_lines: list[tuple[str, str]],
+) -> RequirementResult:
+    """>= min_fraction of `req.tokens` appear as whole words (not inside a
+    longer identifier) somewhere in the added lines. The detail always carries
+    the count, so a run that misses is visible even where the requirement is
+    observation-only (maintain_suite spec_validation never gates PASS)."""
+    text = "\n".join(body for _, body in added_lines)
+    hit = [t for t in req.tokens
+           if _compiled_pattern(rf"(?<![A-Za-z0-9_]){re.escape(t)}(?![A-Za-z0-9_])")
+           .search(text)]
+    missing = [t for t in req.tokens if t not in hit]
+    n, total = len(hit), len(req.tokens)
+    need = req.min_fraction * total
+    detail = f"{req.id} {n}/{total} tokens covered (need {need:g})"
+    if missing:
+        shown = ", ".join(missing[:12]) + (" ..." if len(missing) > 12 else "")
+        detail += f"; missing {len(missing)}: {shown}"
+    return RequirementResult(requirement=req, satisfied=n >= need, detail=detail)
 
 
 def _eval_regex_present(

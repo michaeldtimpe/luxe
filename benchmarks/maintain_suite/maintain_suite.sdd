@@ -30,6 +30,12 @@ single pipeline; new fixtures must declare their per-requirement spec.
 - New fixtures land with a `requirements:` block (SpecDD Lever 1 schema)
 - Bench runs use `--work-dir ~/.luxe/bench-workspace` (variance leak fix)
 - Sidecar regrade via `scripts/regrade_local.py` re-runs the citation linter against `synthesizer.md`
+- An "every X" document fixture grades coverage against an ENUMERATED reference set, not a token
+  count: `kind: tokens_present` (`tokens`, `min_fraction`), observation-only in spec_validation
+  like every requirement. nothing-ever-happens-document-config R4 = the 55 names
+  `scripts/doc_config_envcheck.py derive` finds (2026-11-20); change the set only through that
+  script (`derive --check` / the drift test), never by hand. Earlier hand-verifies used 23/27/32/57
+  and are reconciled in acceptance/doc_config_rescore_2026_11
 - A run records the commit it was GRADED at (2026-10-22): run.py writes the
   workspace HEAD after `luxe maintain` to state.json `head_sha_used` and a
   `diff.patch` (base_sha_used..head_sha_used, `--binary`, best-effort) beside
