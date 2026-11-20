@@ -146,3 +146,10 @@ have touched (0 candidates; it runs after the loop).
 - Both passes look like the ordinary Glimmer pass rate (stub arm 2/6,
   baseline doc-config 2/4). The two passes are not clearly attributable to
   the note.
+
+## Re-score note (2026-11-20)
+
+document-config was re-scored against the canonical 55-name set: the runs graded REAL here cover
+53 to 55 of 55 (champion 53 / 54 / 53, Glimmer 55 / 55, Qwen3.8 55), so "envcheck 27/27 REAL" stands.
+See `../doc_config_rescore_2026_11/REPORT.md` (canonical set from `scripts/doc_config_envcheck.py`;
+bench requirement R4 records it on every run since then).

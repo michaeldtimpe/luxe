@@ -438,3 +438,9 @@ are not needed for harness A/Bs; (3) the earlier "warm cache explains it" hypoth
 Bonus grades (envcheck): champion doc-config warm REAL / THIN (CLOB_* invented) / THIN (same) ; cold REAL / THIN
 (CHAIN_ID/HOST/SIGNATURE_TYPE invented, FUNDER_ADDRESS missed) / THIN (omits 23 PM_NH_*). All 6 printed PASS.
 Champion doc-config across every 6-bit run so far: 9 REAL / 16 (R2 2/4, H1 2/3, H2 3/3, det 2/6). 27B-6bit: 3 / 10.
+
+## Re-score note (2026-11-20)
+
+document-config was re-scored against the canonical 55-name set. The "27/27" counts here used an
+`envcheck.py` whose set left out the 23 `PM_NH_*` overrides, but this report judged their omission by
+hand, so no verdict changes. See `../doc_config_rescore_2026_11/REPORT.md` (canonical 55-name set from `scripts/doc_config_envcheck.py`; bench requirement R4 records it on every run since then).

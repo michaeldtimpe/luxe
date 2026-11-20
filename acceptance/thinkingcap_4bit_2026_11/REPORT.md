@@ -132,3 +132,10 @@ would buy and cost on m1:
 - against: 4 GB more weights (19 vs 15 GB) inside m1's ~36 GB wired budget next to the
   MoE main, and a reproducible coverage gap on enumerate-everything tasks (3/3 here, 2/3 at 6-bit).
 - not yet measured: m1 wall itself (the planned m1 slice).
+
+## Re-score note (2026-11-20, later the same day)
+
+The 57-name set above over-counted by 2 (`HEROKU_APP_NAME`, `POLYGONSCAN_API_KEY` are read only in
+`scripts/`, not by the bot). Against the canonical 55: tc4 32 / 32 / 31, ref4 55 / 55 / 49; 6-bit
+ThinkingCap 32 / 32 / 55, 6-bit reference 55 / 43 / 50; the champion 32. No verdict changes.
+See `../doc_config_rescore_2026_11/REPORT.md` (canonical 55-name set from `scripts/doc_config_envcheck.py`; bench requirement R4 records it on every run since then).

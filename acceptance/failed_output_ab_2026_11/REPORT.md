@@ -49,3 +49,8 @@ fixture). `arms.log`: 09:33 to 10:04, every arm rc=0. Analysis: `analyze.py cham
 
 Wall -8.8% is not a flag effect (the content was identical); it is ordering and substrate drift
 inside one session. No promotion decision follows from Part 1.
+
+## Re-score note (2026-11-20)
+
+Coverage above is 32 of the canonical **55** (not 57; two `scripts/`-only names were miscounted).
+See `../doc_config_rescore_2026_11/REPORT.md` (canonical 55-name set from `scripts/doc_config_envcheck.py`; bench requirement R4 records it on every run since then).
