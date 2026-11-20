@@ -112,3 +112,67 @@ def test_maintain_gate_is_default_on_and_exact_zero_disables():
     src = Path(cleanup.__file__).with_name("maintain.py").read_text()
     assert 'os.environ.get("LUXE_CLEANUP_TURN", "1") != "0"' in src
 
+
+
+# --- data-file litter (2026-11-20, acceptance/idle_wide_rerun_2026_11) -------
+
+def _data_repo(tmp_path: Path) -> tuple[Path, str]:
+    r = tmp_path / "d"
+    r.mkdir()
+    _git(r, "init", "-q")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    _git(r, "config", "commit.gpgsign", "false")
+    (r / "pe_scan.py").write_text("GGUF_MAGIC = b'GGUF'\n")
+    (r / "README.md").write_text("# scanner\nSee assets/logo.png\n")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-qm", "base")
+    return r, _git(r, "rev-parse", "HEAD").strip()
+
+
+def test_unreferenced_data_file_is_offered_with_a_binary_note(tmp_path):
+    """The exact shape wide left behind: a fixture file in a new test dir that
+    nothing names. The change itself (pe_scan.py) is not offered."""
+    r, base = _data_repo(tmp_path)
+    (r / "pe_scan.py").write_text("GGUF_MAGIC = b'GGUF'\nSTRICT = True\n")
+    (r / "test_pe_scan").mkdir()
+    (r / "test_pe_scan" / "fake.gguf").write_bytes(b"GGUF\x03\x00\x00\x00\x00")
+    cands = cleanup.find_candidates(r, base)
+    assert [(c.path, c.kind) for c in cands] == [("test_pe_scan/fake.gguf", "data")]
+    user = cleanup.build_messages("add --strict", cands, r)[1]["content"]
+    assert "test_pe_scan/fake.gguf (binary data file, 9 bytes)" in user
+    removed = cleanup.delete_paths(r, cleanup.parse_deletions(
+        "DELETE test_pe_scan/fake.gguf", cands))
+    assert removed == ["test_pe_scan/fake.gguf"]
+    assert not (r / "test_pe_scan").exists()          # emptied dir pruned
+
+
+def test_data_file_named_anywhere_is_not_offered(tmp_path):
+    r, base = _data_repo(tmp_path)
+    (r / "assets").mkdir()
+    (r / "assets" / "logo.png").write_bytes(b"\x89PNG\0")      # README names it
+    (r / "fixtures").mkdir()
+    (r / "fixtures" / "sample.gguf").write_bytes(b"GGUF\0")
+    (r / "test_scan.py").write_text("PATH = 'fixtures/sample.gguf'\n")  # a test uses it
+    paths = {c.path for c in cleanup.find_candidates(r, base)}
+    assert "assets/logo.png" not in paths
+    assert "fixtures/sample.gguf" not in paths
+
+
+@pytest.mark.parametrize("name", [
+    "CONFIG.md", "docs/guide.rst", "notes.txt", "settings.yaml", "pyproject.toml",
+    "data.json", ".env.example", ".gitignore", "Dockerfile", "LICENSE", "schema.sql",
+])
+def test_docs_config_dotfiles_and_extensionless_are_never_data(tmp_path, name):
+    r, base = _data_repo(tmp_path)
+    (r / name).parent.mkdir(parents=True, exist_ok=True)
+    (r / name).write_text("x\n")
+    assert not any(c.kind == "data" for c in cleanup.find_candidates(r, base))
+
+
+def test_text_data_file_gets_a_content_preview(tmp_path):
+    r, base = _data_repo(tmp_path)
+    (r / "out.log").write_text("debug: scanned 3 files\n")
+    cands = cleanup.find_candidates(r, base)
+    assert [(c.path, c.kind) for c in cands] == [("out.log", "data")]
+    assert "debug: scanned 3 files" in cleanup.build_messages("g", cands, r)[1]["content"]

@@ -581,7 +581,11 @@ commit, files the change ADDED that look like scratch (generated caches;
 code/test files whose stem nothing else references — the `orphan_file`
 gate's test) are shown to the model in ONE tool-less temp-0 call. It answers
 DELETE/KEEP per file, and Python deletes only offered paths. No candidate ⇒ no
-model call. Docs/config are never candidates.
+model call. Docs/config are never candidates. Since 2026-11-20 unreferenced
+DATA files the change added (not code, docs or config; e.g. a `fake.gguf`
+fixture) are candidates too: replayed over 553 past patches it offers only
+strict-flag litter (`fake.gguf`, `test_bad.gguf`, `pe_scan.py.bak`), nothing on
+any doc task (acceptance/idle_wide_rerun_2026_11).
 
 - **Benched** (`acceptance/tuning_2026_10/REPORT.md` §6, §9): Qwen3.8-27B
   healthcheck 0/3 → 3/3 and typing litter gone, with 0 legitimate files

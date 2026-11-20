@@ -16,9 +16,14 @@ Candidates are files new since `base_sha` (committed, staged, or untracked)
 that are either
   - generated caches (`__pycache__/`, `*.pyc`), or
   - code/test files whose stem no other file references (`git grep -w`,
-    untracked files included) — the `orphan_file` gate's second prong.
-Docs and config (`.md`, `.json`, …) are never candidates: document tasks add
-standalone files legitimately.
+    untracked files included) — the `orphan_file` gate's second prong, or
+  - data files (2026-11-20: anything that is not code, docs or config, e.g. a
+    `fake.gguf` test fixture) whose file NAME no other file mentions
+    (`git grep -F`). `LUXE_IDLE_NARROW=wide` committed
+    `test_pe_scan/fake.gguf` in 3/3 strict-flag runs because neither prong
+    above could see it (acceptance/idle_wide_rerun_2026_11).
+Docs and config (`.md`, `.json`, `.yaml`, `Dockerfile`, dotfiles, …) are never
+candidates: document tasks add standalone files legitimately.
 """
 
 from __future__ import annotations
@@ -39,6 +44,15 @@ _CODE_EXTS = frozenset({
     ".rb", ".php", ".cs", ".scala", ".sh",
 })
 _GREP_GLOBS = [f"*{e}" for e in sorted(_CODE_EXTS)]
+#: Never offered as a data candidate: docs and config are deliverables a
+#: document/manage task adds on purpose. Extensionless files (Makefile,
+#: Dockerfile, LICENSE) and dotfiles are excluded separately.
+_DOC_CONFIG_EXTS = frozenset({
+    ".md", ".markdown", ".rst", ".txt", ".adoc", ".org",
+    ".json", ".jsonc", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".env", ".lock", ".properties", ".xml", ".html", ".css", ".scss",
+    ".sql", ".ipynb",
+})
 
 #: Per-file preview shown to the model, and the cap on candidates offered.
 PREVIEW_CHARS = 2000
@@ -48,7 +62,7 @@ MAX_CANDIDATES = 12
 @dataclass(frozen=True)
 class Candidate:
     path: str
-    kind: str  # "generated" | "unreferenced"
+    kind: str  # "generated" | "unreferenced" | "data"
 
 
 def _git(repo: Path, *args: str) -> tuple[int, str]:
@@ -72,7 +86,7 @@ def _new_paths(repo: Path, base_sha: str) -> list[str]:
                 paths.append(parts[1].strip())
     rc, out = _git(repo, "ls-files", "--others", "--exclude-standard")
     if rc == 0:
-        paths.extend(l.strip() for l in out.splitlines() if l.strip())
+        paths.extend(ln.strip() for ln in out.splitlines() if ln.strip())
     return sorted(set(paths))
 
 
@@ -86,7 +100,26 @@ def _referenced_elsewhere(repo: Path, path: str) -> bool:
                    "--", *_GREP_GLOBS)
     if rc >= 2:
         return True  # fail closed: an unknown is never offered for deletion
-    hits = {l.strip() for l in out.splitlines() if l.strip()}
+    hits = {ln.strip() for ln in out.splitlines() if ln.strip()}
+    hits.discard(path)
+    return any(not _is_generated(h) for h in hits)
+
+
+def _is_data(path: str) -> bool:
+    name = Path(path).name
+    suffix = Path(path).suffix.lower()
+    return (bool(suffix) and not name.startswith(".")
+            and suffix not in _CODE_EXTS and suffix not in _DOC_CONFIG_EXTS)
+
+
+def _name_mentioned_elsewhere(repo: Path, path: str) -> bool:
+    """Does any OTHER file (tracked or untracked, any type) contain this
+    file's name? Fail closed like `_referenced_elsewhere`."""
+    name = Path(path).name
+    rc, out = _git(repo, "grep", "-l", "-F", "-I", "--untracked", "-e", name)
+    if rc >= 2:
+        return True
+    hits = {ln.strip() for ln in out.splitlines() if ln.strip()}
     hits.discard(path)
     return any(not _is_generated(h) for h in hits)
 
@@ -103,6 +136,8 @@ def find_candidates(repo: Path, base_sha: str) -> list[Candidate]:
               and not Path(p).stem.startswith("_")
               and not _referenced_elsewhere(repo, p)):
             out.append(Candidate(p, "unreferenced"))
+        elif _is_data(p) and not _name_mentioned_elsewhere(repo, p):
+            out.append(Candidate(p, "data"))
     return out[:MAX_CANDIDATES]
 
 
@@ -113,6 +148,13 @@ def build_messages(goal: str, candidates: list[Candidate],
         if c.kind == "generated":
             blocks.append(f"--- {c.path} (generated cache file)")
             continue
+        if c.kind == "data" and _looks_binary(repo / c.path):
+            try:
+                size = (repo / c.path).stat().st_size
+            except OSError:
+                size = 0
+            blocks.append(f"--- {c.path} (binary data file, {size:,} bytes)")
+            continue
         try:
             text = (repo / c.path).read_text(errors="replace")
         except OSError:
@@ -122,6 +164,14 @@ def build_messages(goal: str, candidates: list[Candidate],
     user = CLEANUP_TURN_TEMPLATE.format(goal=goal, files="\n\n".join(blocks))
     return [{"role": "system", "content": CLEANUP_TURN_SYSTEM},
             {"role": "user", "content": user}]
+
+
+def _looks_binary(p: Path) -> bool:
+    try:
+        with open(p, "rb") as f:
+            return b"\0" in f.read(4096)
+    except OSError:
+        return True
 
 
 _DELETE_RE = re.compile(r"^\s*[-*]?\s*DELETE\s+`?([^\s`]+)`?\s*$", re.MULTILINE)
