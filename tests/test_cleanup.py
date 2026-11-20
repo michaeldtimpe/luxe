@@ -195,3 +195,13 @@ def test_reason_text_never_widens_what_is_deleted():
     cands = [cleanup.Candidate("a.py", "unreferenced")]
     assert cleanup.parse_deletions("DELETE a.py -- and also DELETE b.py", cands) == ["a.py"]
     assert cleanup.parse_deletions("DELETE b.py -- a.py", cands) == []
+
+
+def test_several_delete_lines_each_count():
+    """09c9ca7's widened pattern let `\\s` match the newline: the first DELETE
+    line swallowed the rest, so only one file of several was deleted."""
+    cands = [cleanup.Candidate(p, "unreferenced")
+             for p in ("a.py", "dir/b.gguf", "c.py", "d.py")]
+    reply = ("DELETE dir/b.gguf\nDELETE a.py -- scratch\n"
+             "KEEP d.py -- needed\n- DELETE c.py\n")
+    assert cleanup.parse_deletions(reply, cands) == ["dir/b.gguf", "a.py", "c.py"]

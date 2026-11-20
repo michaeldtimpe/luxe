@@ -179,7 +179,12 @@ def _looks_binary(p: Path) -> bool:
 #: had an intended DELETE ignored, and one left `verify_strict.py` behind to
 #: fail the `orphan_file` gate (acceptance/cleanup_data_check_2026_11). Safe to
 #: widen: only paths from the offered candidate list are ever deleted.
-_DELETE_RE = re.compile(r"^\s*[-*]?\s*DELETE\s+`?([^\s`]+?)`?(?:[\s:,;].*)?$", re.MULTILINE)
+#: Horizontal whitespace only (`[ \t]`): a `\s` here matched the newline, so the
+#: first DELETE line swallowed every line after it and a reply listing several
+#: files deleted only the first (09c9ca7, caught the same afternoon).
+_DELETE_RE = re.compile(
+    r"^[ \t]*[-*]?[ \t]*DELETE[ \t]+`?([^\s`]+?)`?(?:[ \t:,;].*)?$",
+    re.MULTILINE)
 
 
 def parse_deletions(reply: str, candidates: list[Candidate]) -> list[str]:
