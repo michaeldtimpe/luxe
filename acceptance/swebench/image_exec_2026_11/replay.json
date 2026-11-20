@@ -1,0 +1,1118 @@
+[
+ {
+  "iid": "astropy__astropy-12907",
+  "i": 0,
+  "cmd": "cd /home/user/repo && python -m pytest astropy/modeling/tests/test_separable.py -v 2>&1 | tail -30",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/modeling/tests/test_separable.py -v",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-12907",
+  "i": 1,
+  "cmd": "cd /home/user/repo && python -m pytest astropy/modeling/tests/test_separable.py -v",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/modeling/tests/test_separable.py -v",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-12907",
+  "i": 2,
+  "cmd": "cd /home/user/repo && python -m pytest astropy/modeling/tests/test_separable.py -v 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/modeling/tests/test_separable.py -v",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-13033",
+  "i": 0,
+  "cmd": "python -c \"import ast; ast.parse(open('astropy/timeseries/core.py').read())\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"import ast; ast.parse(open('astropy/timeseries/core.py').read())\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-13236",
+  "i": 0,
+  "cmd": "cd /home/user/repos/astropy && python -c \"\nimport numpy as np\nfrom astropy.table import Table, Column\n\n# Test: structured array should now become a Column, not NdarrayMixin\ndt = np.dtype([('x', 'i4'), ('y', 'f8')])\ndata = np.array([(1, 2.0), (3, 4.0)], dtype=dt)\nt = Table()\nt['col'] = data\nprint(f'Type: {type(t[\\\"col\\\"])}')\nprint(f'Is Column: {isinstance(t[\\\"col\\\"], Column)}')\nprint(f'Column name: {t[\\\"col\\\"].name}')\nprint(f'Column dtype: {t[\\\"col\\\"].dtype}')\nprint('Success!')\n\"\n",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"\nimport numpy as np\nfrom astropy.table import Table, Column\n\n# Test: structured array should now become a Column, not NdarrayMixin\ndt = np.dtype([('x', 'i4'), ('y', 'f8')])\ndata = np.array([(1, 2.0), (3, 4.0)], dtype=dt)\nt = Table()\nt['col'] = data\nprint(f'Type: {type(t[\\\"col\\\"])}')\nprint(f'Is Column: {isinstance(t[\\\"col\\\"], Column)}')\nprint(f'Column name: {t[\\\"col\\\"].name}')\nprint(f'Column dtype: {t[\\\"col\\\"].dtype}')\nprint('Success!')\n\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-13236",
+  "i": 1,
+  "cmd": "cd /home/user/repos/astropy && python -c \"import numpy as np; from astropy.table import Table, Column; dt = np.dtype([('x', 'i4'), ('y', 'f8')]); data = np.array([(1, 2.0), (3, 4.0)], dtype=dt); t = Table(); t['col'] = data; print(f'Type: {type(t[\\\"col\\\"])}'); print(f'Is Column: {isinstance(t[\\\"col\\\"], Column)}'); print(f'Column name: {t[\\\"col\\\"].name}'); print(f'Column dtype: {t[\\\"col\\\"].dtype}'); print('Success!')\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"import numpy as np; from astropy.table import Table, Column; dt = np.dtype([('x', 'i4'), ('y', 'f8')]); data = np.array([(1, 2.0), (3, 4.0)], dtype=dt); t = Table(); t['col'] = data; print(f'Type: {type(t[\\\"col\\\"])}'); print(f'Is Column: {isinstance(t[\\\"col\\\"], Column)}'); print(f'Column name: {t[\\\"col\\\"].name}'); print(f'Column dtype: {t[\\\"col\\\"].dtype}'); print('Success!')\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-13453",
+  "i": 0,
+  "cmd": "cd /home/user && python -m pytest astropy/io/ascii/tests/test_html.py -x -q 2>&1 | tail -30",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/io/ascii/tests/test_html.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-13453",
+  "i": 1,
+  "cmd": "cd /home/user && python -m pytest astropy/io/ascii/tests/test_html.py -x -q 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/io/ascii/tests/test_html.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-13453",
+  "i": 2,
+  "cmd": "cd /home/user && python -m pytest astropy/io/ascii/tests/test_html.py -x -q",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/io/ascii/tests/test_html.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-13977",
+  "i": 0,
+  "cmd": "cd /home/user/repo && python -c \"\nimport numpy as np\nimport astropy.units as u\n\n# Test the original behavior still works for compatible types\nq1 = 1 * u.mm\nq2 = 1 * u.m\nresult = q1 + q2\nprint(f'Quantity + Quantity: {result}')\n\n# Test with array\na = np.array([1, 2, 3]) * u.mm\nresult2 = a + 1 * u.m\nprint(f'Quantity + scalar: {result2}')\n\n# Test that incompatible types return NotImplemented instead of raising\nclass DuckArray:\n    def __init__(self, value):\n        self._value = value\n    @property\n    def unit(self):\n        return u.mm\n    @property\n    def value(self):\n        return self._value\n\nduck = DuckArray(1)\ntry:\n    result3 = (1 * u.m) + duck\n    print(f'Quantity + DuckArray: {result3}')\nexcept ValueError as e:\n    print(f'ValueError raised (BUG): {e}')\nexcept TypeError as e:\n    print(f'TypeError (expected for incompatible): {e}')\n\"\n",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"\nimport numpy as np\nimport astropy.units as u\n\n# Test the original behavior still works for compatible types\nq1 = 1 * u.mm\nq2 = 1 * u.m\nresult = q1 + q2\nprint(f'Quantity + Quantity: {result}')\n\n# Test with array\na = np.array([1, 2, 3]) * u.mm\nresult2 = a + 1 * u.m\nprint(f'Quantity + scalar: {result2}')\n\n# Test that incompatible types return NotImplemented instead of raising\nclass DuckArray:\n    def __init__(self, value):\n        self._value = value\n    @property\n    def unit(self):\n        return u.mm\n    @property\n    def value(self):\n        return self._value\n\nduck = DuckArray(1)\ntry:\n    result3 = (1 * u.m) + duck\n    print(f'Quantity + DuckArray: {result3}')\nexcept ValueError as e:\n    print(f'ValueError raised (BUG): {e}')\nexcept TypeError as e:\n    print(f'TypeError (expected for incompatible): {e}')\n\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-13977",
+  "i": 1,
+  "cmd": "cd /home/user/repo && python -c \"\nimport numpy as np\nimport astropy.units as u\n\n# Test the original behavior still works for compatible types\nq1 = 1 * u.mm\nq2 = 1 * u.m\nresult = q1 + q2\nprint(f'Quantity + Quantity: {result}')\n\n# Test with array\na = np.array([1, 2, 3]) * u.mm\nresult2 = a + 1 * u.m\nprint(f'Quantity + scalar: {result2}')\n\n# Test that incompatible types return NotImplemented instead of raising\nclass DuckArray:\n    def __init__(self, value):\n        self._value = value\n    @property\n    def unit(self):\n        return u.mm\n    @property\n    def value(self):\n        return self._value\n\nduck = DuckArray(1)\ntry:\n    result3 = (1 * u.m) + duck\n    print(f'Quantity + DuckArray: {result3}')\nexcept ValueError as e:\n    print(f'ValueError raised (BUG): {e}')\nexcept TypeError as e:\n    print(f'TypeError (expected for incompatible): {e}')\n\"\n",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"\nimport numpy as np\nimport astropy.units as u\n\n# Test the original behavior still works for compatible types\nq1 = 1 * u.mm\nq2 = 1 * u.m\nresult = q1 + q2\nprint(f'Quantity + Quantity: {result}')\n\n# Test with array\na = np.array([1, 2, 3]) * u.mm\nresult2 = a + 1 * u.m\nprint(f'Quantity + scalar: {result2}')\n\n# Test that incompatible types return NotImplemented instead of raising\nclass DuckArray:\n    def __init__(self, value):\n        self._value = value\n    @property\n    def unit(self):\n        return u.mm\n    @property\n    def value(self):\n        return self._value\n\nduck = DuckArray(1)\ntry:\n    result3 = (1 * u.m) + duck\n    print(f'Quantity + DuckArray: {result3}')\nexcept ValueError as e:\n    print(f'ValueError raised (BUG): {e}')\nexcept TypeError as e:\n    print(f'TypeError (expected for incompatible): {e}')\n\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-13977",
+  "i": 2,
+  "cmd": "cd /home/user/repo && python -c \"import numpy as np; import astropy.units as u; q1 = 1 * u.mm; q2 = 1 * u.m; result = q1 + q2; print(f'Quantity + Quantity: {result}')\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"import numpy as np; import astropy.units as u; q1 = 1 * u.mm; q2 = 1 * u.m; result = q1 + q2; print(f'Quantity + Quantity: {result}')\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-14096",
+  "i": 0,
+  "cmd": "cd /tmp && python3 -c \"\nimport astropy.coordinates as coord\n\nclass custom_coord(coord.SkyCoord):\n    @property\n    def prop(self):\n        return self.random_attr\n\nc = custom_coord('00h42m30s', '+41d12m00s', frame='icrs')\ntry:\n    c.prop\nexcept AttributeError as e:\n    print(f'Error message: {e}')\n    if 'random_attr' in str(e) or 'property' in str(e):\n        print('SUCCESS: Error message is now informative')\n    else:\n        print('FAIL: Error message is still misleading')\n\"\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Command 'python3' not in allowlist. Allowed: ['cargo', 'cat', 'echo', 'find', 'git', 'go', 'grep', 'head', 'ls', 'make',",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-14096",
+  "i": 1,
+  "cmd": "cd /tmp && python3 -c \"import astropy.coordinates as coord; class custom_coord(coord.SkyCoord):\n    @property\n    def prop(self):\n        return self.random_attr\nc = custom_coord('00h42m30s', '+41d12m00s', frame='icrs')\ntry:\n    c.prop\nexcept AttributeError as e:\n    print(f'Error message: {e}')\n    if 'random_attr' in str(e) or 'property' in str(e):\n        print('SUCCESS: Error message is now informative')\n    else:\n        print('FAIL: Error message is still misleading')\"",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Command 'python3' not in allowlist. Allowed: ['cargo', 'cat', 'echo', 'find', 'git', 'go', 'grep', 'head', 'ls', 'make',",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-14182",
+  "i": 0,
+  "cmd": "cd /home/user/repos/astropy && python -m pytest astropy/io/ascii/tests/test_rst.py -v 2>&1 | head -50",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/io/ascii/tests/test_rst.py -v",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-14182",
+  "i": 1,
+  "cmd": "cd /home/user/repos/astropy && python -m pytest astropy/io/ascii/tests/test_rst.py -v",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/io/ascii/tests/test_rst.py -v",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-14182",
+  "i": 2,
+  "cmd": "cd /home/user/repos/astropy && python -m pytest astropy/io/ascii/tests/test_rst.py -v 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest astropy/io/ascii/tests/test_rst.py -v",
+  "testish": true
+ },
+ {
+  "iid": "astropy__astropy-8707",
+  "i": 0,
+  "cmd": "python -c \"from astropy.io.fits.header import Header; from astropy.io.fits.card import Card; print('Import OK')\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from astropy.io.fits.header import Header; from astropy.io.fits.card import Card; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-8707",
+  "i": 1,
+  "cmd": "python -c \"from astropy.io.fits.header import Header; from astropy.io.fits.card import Card; print('Import OK')\" 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from astropy.io.fits.header import Header; from astropy.io.fits.card import Card; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "astropy__astropy-8707",
+  "i": 2,
+  "cmd": "python -c \"from astropy.io.fits.header import Header; from astropy.io.fits.card import Card; print('Import OK')\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from astropy.io.fits.header import Header; from astropy.io.fits.card import Card; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "django__django-10880",
+  "i": 0,
+  "cmd": "cd /home/user/repos/django && find tests -name \"*.py\" -exec grep -l \"distinct.*Case\\|Case.*distinct\\|COUNT.*DISTINCT.*CASE\" {} \\; 2>/dev/null | head -10",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Shell chain/redirect operators not allowed: [';', '>', '|']. Issue separate bash calls for each command, or use read_fil",
+  "testish": false
+ },
+ {
+  "iid": "django__django-10880",
+  "i": 1,
+  "cmd": "cd /home/user/repos/django && python -m pytest tests/aggregation_regress/tests.py -x -q --tb=short 2>&1 | head -40",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/aggregation_regress/tests.py -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "django__django-10880",
+  "i": 2,
+  "cmd": "cd /home/user/repos/django && python -m pytest tests/aggregation_regress/tests.py -x -q --tb=short 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/aggregation_regress/tests.py -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "django__django-10880",
+  "i": 3,
+  "cmd": "cd /home/user/repos/django && python -m pytest tests/aggregation_regress/tests.py -x -q --tb=short",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/aggregation_regress/tests.py -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "django__django-10973",
+  "i": 0,
+  "cmd": "cd /home/user/repo && python -m pytest tests/dbshell/test_postgresql.py -v 2>&1 | head -60",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/dbshell/test_postgresql.py -v",
+  "testish": true
+ },
+ {
+  "iid": "django__django-10973",
+  "i": 1,
+  "cmd": "cd /home/user/repo && python -m pytest tests/dbshell/test_postgresql.py -v 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/dbshell/test_postgresql.py -v",
+  "testish": true
+ },
+ {
+  "iid": "django__django-10973",
+  "i": 2,
+  "cmd": "cd /home/user/repo && python -m pytest tests/dbshell/test_postgresql.py -v",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/dbshell/test_postgresql.py -v",
+  "testish": true
+ },
+ {
+  "iid": "django__django-10999",
+  "i": 0,
+  "cmd": "python -c \"from django.utils import dateparse; print(dateparse.parse_duration('-00:01:01')); print(dateparse.parse_duration('-01:01')); print(dateparse.parse_duration('01:01:01'))\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from django.utils import dateparse; print(dateparse.parse_duration('-00:01:01')); print(dateparse.parse_duration('-01:01')); print(dateparse.parse_duration('01:01:01'))\"",
+  "testish": false
+ },
+ {
+  "iid": "django__django-10999",
+  "i": 1,
+  "cmd": "cd /home/user && python -c \"import sys; sys.path.insert(0, '.'); from django.utils import dateparse; print(dateparse.parse_duration('-00:01:01')); print(dateparse.parse_duration('-01:01')); print(dateparse.parse_duration('01:01:01'))\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"import sys; sys.path.insert(0, '.'); from django.utils import dateparse; print(dateparse.parse_duration('-00:01:01')); print(dateparse.parse_duration('-01:01')); print(dateparse.parse_duration('01:01:01'))\"",
+  "testish": false
+ },
+ {
+  "iid": "django__django-10999",
+  "i": 2,
+  "cmd": "cd /home/user && python -c \"import sys; sys.path.insert(0, '.'); from django.utils import dateparse; print(dateparse.parse_duration('-00:01:01')); print(dateparse.parse_duration('-01:01')); print(dateparse.parse_duration('01:01:01'))\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"import sys; sys.path.insert(0, '.'); from django.utils import dateparse; print(dateparse.parse_duration('-00:01:01')); print(dateparse.parse_duration('-01:01')); print(dateparse.parse_duration('01:01:01'))\"",
+  "testish": false
+ },
+ {
+  "iid": "django__django-11333",
+  "i": 0,
+  "cmd": "python -m pytest tests/urlpatterns_reverse/ -x -q 2>&1 | head -50",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/urlpatterns_reverse/ -x -q",
+  "testish": true
+ },
+ {
+  "iid": "django__django-11333",
+  "i": 1,
+  "cmd": "python -m pytest tests/urlpatterns_reverse/ -x -q 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/urlpatterns_reverse/ -x -q",
+  "testish": true
+ },
+ {
+  "iid": "django__django-11333",
+  "i": 2,
+  "cmd": "python -m pytest tests/urlpatterns_reverse/ -x -q",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/urlpatterns_reverse/ -x -q",
+  "testish": true
+ },
+ {
+  "iid": "django__django-11734",
+  "i": 0,
+  "cmd": "cd /testbed && git show 35431298226165986ad07e91f9d3aca721ff38ec --stat",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git show 35431298226165986ad07e91f9d3aca721ff38ec --stat",
+  "testish": false
+ },
+ {
+  "iid": "django__django-11734",
+  "i": 1,
+  "cmd": "cd /testbed && git show 35431298226165986ad07e91f9d3aca721ff38ec --stat",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git show 35431298226165986ad07e91f9d3aca721ff38ec --stat",
+  "testish": false
+ },
+ {
+  "iid": "django__django-11734",
+  "i": 2,
+  "cmd": "cd /testbed && git show 35431298226165986ad07e91f9d3aca721ff38ec",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git show 35431298226165986ad07e91f9d3aca721ff38ec",
+  "testish": false
+ },
+ {
+  "iid": "django__django-11734",
+  "i": 3,
+  "cmd": "cd /testbed && git log --oneline --all | head -50",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git log --oneline --all",
+  "testish": false
+ },
+ {
+  "iid": "django__django-11734",
+  "i": 4,
+  "cmd": "cd /testbed && git log --oneline -20",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git log --oneline -20",
+  "testish": false
+ },
+ {
+  "iid": "django__django-11734",
+  "i": 5,
+  "cmd": "cd /testbed && git log --oneline -20",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git log --oneline -20",
+  "testish": false
+ },
+ {
+  "iid": "matplotlib__matplotlib-13989",
+  "i": 0,
+  "cmd": "cd /home/user && python -m pytest lib/matplotlib/tests/test_axes.py -k \"hist\" -x -q 2>&1 | head -60",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_axes.py -k \"hist\" -x -q",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-13989",
+  "i": 1,
+  "cmd": "cd /home/user && python -m pytest lib/matplotlib/tests/test_axes.py -k \"hist\" -x -q 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_axes.py -k \"hist\" -x -q",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-13989",
+  "i": 2,
+  "cmd": "cd /home/user && python -m pytest lib/matplotlib/tests/test_axes.py -k \"hist\" -x -q",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_axes.py -k \"hist\" -x -q",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-14623",
+  "i": 0,
+  "cmd": "cd /home/user && python -m pytest lib/matplotlib/tests/test_ticker.py -x -q -k \"log\" 2>&1 | head -50",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_ticker.py -x -q -k \"log\"",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-14623",
+  "i": 1,
+  "cmd": "cd /home/user && python -m pytest lib/matplotlib/tests/test_ticker.py -x -q -k log 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_ticker.py -x -q -k log",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-14623",
+  "i": 2,
+  "cmd": "cd /home/user && python -m pytest lib/matplotlib/tests/test_ticker.py -x -q -k log 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_ticker.py -x -q -k log",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-20676",
+  "i": 0,
+  "cmd": "cd /home/user && git show 4013172681 --stat",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git show 4013172681 --stat",
+  "testish": false
+ },
+ {
+  "iid": "matplotlib__matplotlib-20676",
+  "i": 1,
+  "cmd": "cd /home/user && git show 4013172681 -- lib/matplotlib/widgets.py | head -200",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git show 4013172681 -- lib/matplotlib/widgets.py",
+  "testish": false
+ },
+ {
+  "iid": "matplotlib__matplotlib-20676",
+  "i": 2,
+  "cmd": "cd /home/user && git show 4013172681 -- lib/matplotlib/widgets.py 2>&1 | head -300",
+  "old": "refused",
+  "new": "host",
+  "new_cmd": "git show 4013172681 -- lib/matplotlib/widgets.py",
+  "testish": false
+ },
+ {
+  "iid": "matplotlib__matplotlib-20676",
+  "i": 3,
+  "cmd": "cd /home/user && git show 4013172681 -- lib/matplotlib/widgets.py 2>&1 | grep -A5 -B5 \"autoscale\\|set_xlim\\|set_ylim\" | head -100",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Shell chain/redirect operators not allowed: ['>&', '|', '|']. Issue separate bash calls for each command, or use read_fi",
+  "testish": false
+ },
+ {
+  "iid": "matplotlib__matplotlib-24870",
+  "i": 0,
+  "cmd": "cd /home/user/repos/matplotlib && python -m pytest lib/matplotlib/tests/test_contour.py -x -q 2>&1 | head -60",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_contour.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-24870",
+  "i": 1,
+  "cmd": "cd /home/user/repos/matplotlib && python -m pytest lib/matplotlib/tests/test_contour.py -x -q 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_contour.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-24870",
+  "i": 2,
+  "cmd": "cd /home/user/repos/matplotlib && python -m pytest lib/matplotlib/tests/test_contour.py -x -q --tb=short 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest lib/matplotlib/tests/test_contour.py -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "matplotlib__matplotlib-25479",
+  "i": 0,
+  "cmd": "python -c \"\nfrom matplotlib import cm\nfrom matplotlib.colors import LinearSegmentedColormap\nimport matplotlib.pyplot as plt\nimport matplotlib\n\nmy_cmap_data = [[  1.5e-03,   4.7e-04,   1.4e-02],\n                [  2.3e-03,   1.3e-03,   1.8e-02],\n                [  3.3e-03,   2.3e-03,   2.4e-02]]\nmy_cmap = LinearSegmentedColormap.from_list('some_cmap_name', my_cmap_data)\ncm.register_cmap(name='my_cmap_name', cmap=my_cmap)\n\nplt.set_cmap('my_cmap_name')\nfig, ax = plt.subplots()\nim = ax.imshow([[1, 1], [2, 2]])\nprint('SUCCESS: imshow worked with registered colormap')\nprint(f'rc image.cmap = {matplotlib.rcParams[\\\"image.cmap\\\"]}')\n\"\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Unquoted newline in command \u2014 sh runs each line as a separate command. Issue separate bash calls instead.",
+  "testish": false
+ },
+ {
+  "iid": "matplotlib__matplotlib-25479",
+  "i": 1,
+  "cmd": "python -c \"\nfrom matplotlib import cm\nfrom matplotlib.colors import LinearSegmentedColormap\nimport matplotlib.pyplot as plt\nimport matplotlib\n\nmy_cmap_data = [[1.5e-03, 4.7e-04, 1.4e-02], [2.3e-03, 1.3e-03, 1.8e-02], [3.3e-03, 2.3e-03, 2.4e-02]]\nmy_cmap = LinearSegmentedColormap.from_list('some_cmap_name', my_cmap_data)\ncm.register_cmap(name='my_cmap_name', cmap=my_cmap)\n\nplt.set_cmap('my_cmap_name')\nfig, ax = plt.subplots()\nim = ax.imshow([[1, 1], [2, 2]])\nprint('SUCCESS: imshow worked with registered colormap')\nprint(f'rc image.cmap = {matplotlib.rcParams[\\\"image.cmap\\\"]}')\n\"\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Unquoted newline in command \u2014 sh runs each line as a separate command. Issue separate bash calls instead.",
+  "testish": false
+ },
+ {
+  "iid": "matplotlib__matplotlib-25479",
+  "i": 2,
+  "cmd": "python -c \"from matplotlib import cm; from matplotlib.colors import LinearSegmentedColormap; import matplotlib.pyplot as plt; import matplotlib; my_cmap_data = [[1.5e-03, 4.7e-04, 1.4e-02], [2.3e-03, 1.3e-03, 1.8e-02], [3.3e-03, 2.3e-03, 2.4e-02]]; my_cmap = LinearSegmentedColormap.from_list('some_cmap_name', my_cmap_data); cm.register_cmap(name='my_cmap_name', cmap=my_cmap); plt.set_cmap('my_cmap_name'); fig, ax = plt.subplots(); im = ax.imshow([[1, 1], [2, 2]]); print('SUCCESS'); print(matplotlib.rcParams['image.cmap'])\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from matplotlib import cm; from matplotlib.colors import LinearSegmentedColormap; import matplotlib.pyplot as plt; import matplotlib; my_cmap_data = [[1.5e-03, 4.7e-04, 1.4e-02], [2.3e-03, 1.3e-03, 1.8e-02], [3.3e-03, 2.3e-03, 2.4e-02]]; my_cmap = LinearSegmentedColormap.from_list('some_cmap_name', my_cmap_data); cm.register_cmap(name='my_cmap_name', cmap=my_cmap); plt.set_cmap('my_cmap_name'); fig, ax = plt.subplots(); im = ax.imshow([[1, 1], [2, 2]]); print('SUCCESS'); print(matplotlib.rcParams['image.cmap'])\"",
+  "testish": false
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 0,
+  "cmd": "python3 -c \"\nimport matplotlib.pyplot as plt\nimport numpy as np\nfrom matplotlib.ticker import ScalarFormatter\n\nfig, ax = plt.subplots()\nax.set_xlim(1e6, 2e6)\nax.set_ylim(1, 10)\n\nfmt = ScalarFormatter()\nfmt.set_useOffset(True)\nax.xaxis.set_major_formatter(fmt)\nax.xaxis.set_major_locator(plt.MaxNLocator(5))\n\n# Force a draw to set up the formatter\nfig.canvas.draw()\n\nprint('offset:', fmt.offset)\nprint('useOffset:', fmt._useOffset)\nprint('tick locations:', ax.xaxis.get_major_locator()())\nprint('formatted:', [fmt.format_tick(x) for x in ax.xaxis.get_major_locator()()])\n\"\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Unquoted newline in command \u2014 sh runs each line as a separate command. Issue separate bash calls instead.",
+  "testish": false
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 1,
+  "cmd": "python3 -c \"\nimport matplotlib.pyplot as plt\nimport numpy as np\nfrom matplotlib.ticker import ScalarFormatter\n\nfig, ax = plt.subplots()\nax.set_xlim(1e6, 2e6)\nax.set_ylim(1, 10)\n\nfmt = ScalarFormatter()\nfmt.set_useOffset(True)\nax.xaxis.set_major_formatter(fmt)\nax.xaxis.set_major_locator(plt.MaxNLocator(5))\n\nfig.canvas.draw()\n\nprint('offset:', fmt.offset)\nprint('useOffset:', fmt._useOffset)\nlocs = ax.xaxis.get_major_locator()()\nprint('tick locations:', locs)\nprint('formatted:', [fmt.format_tick(x) for x in locs])\nprint('format_ticks:', fmt.format_ticks(locs))\n\"\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Unquoted newline in command \u2014 sh runs each line as a separate command. Issue separate bash calls instead.",
+  "testish": false
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 2,
+  "cmd": "python3 << 'EOF'\nimport matplotlib.pyplot as plt\nimport numpy as np\nfrom matplotlib.ticker import ScalarFormatter\n\nfig, ax = plt.subplots()\nax.set_xlim(1e6, 2e6)\nax.set_ylim(1, 10)\n\nfmt = ScalarFormatter()\nfmt.set_useOffset(True)\nax.xaxis.set_major_formatter(fmt)\nax.xaxis.set_major_locator(plt.MaxNLocator(5))\n\nfig.canvas.draw()\n\nprint('offset:', fmt.offset)\nprint('useOffset:', fmt._useOffset)\nlocs = ax.xaxis.get_major_locator()()\nprint('tick locations:', locs)\nprint('formatted:', [fmt.format_tick(x) for x in locs])\nprint('format_ticks:', fmt.format_ticks(locs))\nEOF\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Unquoted newline in command \u2014 sh runs each line as a separate command. Issue separate bash calls instead.",
+  "testish": false
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 3,
+  "cmd": "python3 -c \"import matplotlib.pyplot as plt; import numpy as np; from matplotlib.ticker import ScalarFormatter; fig, ax = plt.subplots(); ax.set_xlim(1e6, 2e6); fmt = ScalarFormatter(); fmt.set_useOffset(True); ax.xaxis.set_major_formatter(fmt); ax.xaxis.set_major_locator(plt.MaxNLocator(5)); fig.canvas.draw(); print('offset:', fmt.offset); locs = ax.xaxis.get_major_locator()(); print('tick locations:', locs); print('format_ticks:', fmt.format_ticks(locs))\"",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Command 'python3' not in allowlist. Allowed: ['cargo', 'cat', 'echo', 'find', 'git', 'go', 'grep', 'head', 'ls', 'make',",
+  "testish": false
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 4,
+  "cmd": "python -c \"import matplotlib.pyplot as plt; import numpy as np; from matplotlib.ticker import ScalarFormatter; fig, ax = plt.subplots(); ax.set_xlim(1e6, 2e6); fmt = ScalarFormatter(); fmt.set_useOffset(True); ax.xaxis.set_major_formatter(fmt); ax.xaxis.set_major_locator(plt.MaxNLocator(5)); fig.canvas.draw(); print('offset:', fmt.offset); locs = ax.xaxis.get_major_locator()(); print('tick locations:', locs); print('format_ticks:', fmt.format_ticks(locs))\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"import matplotlib.pyplot as plt; import numpy as np; from matplotlib.ticker import ScalarFormatter; fig, ax = plt.subplots(); ax.set_xlim(1e6, 2e6); fmt = ScalarFormatter(); fmt.set_useOffset(True); ax.xaxis.set_major_formatter(fmt); ax.xaxis.set_major_locator(plt.MaxNLocator(5)); fig.canvas.draw(); print('offset:', fmt.offset); locs = ax.xaxis.get_major_locator()(); print('tick locations:', locs); print('format_ticks:', fmt.format_ticks(locs))\"",
+  "testish": false
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 5,
+  "cmd": "cat << 'PYEOF' | python\nimport matplotlib.pyplot as plt\nimport numpy as np\nfrom matplotlib.ticker import ScalarFormatter\n\nfig, ax = plt.subplots()\nax.set_xlim(1e6, 2e6)\nax.set_ylim(1, 10)\n\nfmt = ScalarFormatter()\nfmt.set_useOffset(True)\nax.xaxis.set_major_formatter(fmt)\nax.xaxis.set_major_locator(plt.MaxNLocator(5))\n\nfig.canvas.draw()\n\nprint('offset:', fmt.offset)\nprint('useOffset:', fmt._useOffset)\nlocs = ax.xaxis.get_major_locator()()\nprint('tick locations:', locs)\nprint('formatted:', [fmt.format_tick(x) for x in locs])\nprint('format_ticks:', fmt.format_ticks(locs))\nPYEOF\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Unquoted newline in command \u2014 sh runs each line as a separate command. Issue separate bash calls instead.",
+  "testish": false
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 6,
+  "cmd": "python -m pytest tests/_core/test_scales.py -v --tb=short 2>&1 | head -80",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/_core/test_scales.py -v --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 7,
+  "cmd": "python -m pytest tests/_core/test_scales.py -v --tb=short",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/_core/test_scales.py -v --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "mwaskom__seaborn-3187",
+  "i": 8,
+  "cmd": "python -m pytest tests/_core/test_scales.py -v --tb=short 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/_core/test_scales.py -v --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "psf__requests-2931",
+  "i": 0,
+  "cmd": "python -m pytest test_requests.py -x -q --tb=short 2>&1 | head -80",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest test_requests.py -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "psf__requests-2931",
+  "i": 1,
+  "cmd": "python -m pytest test_requests.py -x -q --tb=short 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest test_requests.py -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "psf__requests-2931",
+  "i": 2,
+  "cmd": "python -m pytest test_requests.py -x -q --tb=short",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest test_requests.py -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "psf__requests-5414",
+  "i": 0,
+  "cmd": "python -m pytest tests/ -x -q --tb=short 2>&1 | head -60",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/ -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "psf__requests-5414",
+  "i": 1,
+  "cmd": "python -m pytest tests/ -x -q --tb=short 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/ -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "psf__requests-5414",
+  "i": 2,
+  "cmd": "python -m pytest tests/ -x -q --tb=short",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/ -x -q --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "psf__requests-6028",
+  "i": 0,
+  "cmd": "git show 99b3b492 --stat",
+  "old": "host",
+  "new": "host",
+  "new_cmd": "git show 99b3b492 --stat",
+  "testish": false
+ },
+ {
+  "iid": "psf__requests-6028",
+  "i": 1,
+  "cmd": "git show 99b3b492 -- requests/sessions.py requests/utils.py",
+  "old": "host",
+  "new": "host",
+  "new_cmd": "git show 99b3b492 -- requests/sessions.py requests/utils.py",
+  "testish": false
+ },
+ {
+  "iid": "pydata__xarray-2905",
+  "i": 0,
+  "cmd": "cd /testbed && python -c \"\nimport xarray as xr\nimport numpy as np\n\n# Test case from bug report\ngood_indexed, bad_indexed = xr.DataArray([None]), xr.DataArray([None])\n\nclass HasValues(object):\n    values = 5\n    \ngood_indexed.loc[{'dim_0': 0}] = set()\nbad_indexed.loc[{'dim_0': 0}] = HasValues()\n\nprint('good_indexed.values:', good_indexed.values)\nprint('bad_indexed.values:', bad_indexed.values)\nprint('bad_indexed.values[0] is HasValues instance:', isinstance(bad_indexed.values[0], HasValues))\n\n# Test that DataArray still works\nda = xr.DataArray([1, 2, 3])\nprint('DataArray values:', da.values)\n\n# Test that pandas Series still works\nimport pandas as pd\ns = pd.Series([1, 2, 3])\nprint('Series as DataArray:', xr.DataArray(s).values)\n\n# Test that np.asarray still works\nprint('np.asarray(5):', np.asarray(5))\n\"\n",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"\nimport xarray as xr\nimport numpy as np\n\n# Test case from bug report\ngood_indexed, bad_indexed = xr.DataArray([None]), xr.DataArray([None])\n\nclass HasValues(object):\n    values = 5\n    \ngood_indexed.loc[{'dim_0': 0}] = set()\nbad_indexed.loc[{'dim_0': 0}] = HasValues()\n\nprint('good_indexed.values:', good_indexed.values)\nprint('bad_indexed.values:', bad_indexed.values)\nprint('bad_indexed.values[0] is HasValues instance:', isinstance(bad_indexed.values[0], HasValues))\n\n# Test that DataArray still works\nda = xr.DataArray([1, 2, 3])\nprint('DataArray values:', da.values)\n\n# Test that pandas Series still works\nimport pandas as pd\ns = pd.Series([1, 2, 3])\nprint('Series as DataArray:', xr.DataArray(s).values)\n\n# Test that np.asarray still works\nprint('np.asarray(5):', np.asarray(5))\n\"",
+  "testish": false
+ },
+ {
+  "iid": "pydata__xarray-2905",
+  "i": 1,
+  "cmd": "cd /testbed && python -c \"\nimport xarray as xr\nimport numpy as np\n\n# Test case from bug report\ngood_indexed, bad_indexed = xr.DataArray([None]), xr.DataArray([None])\n\nclass HasValues(object):\n    values = 5\n    \ngood_indexed.loc[{'dim_0': 0}] = set()\nbad_indexed.loc[{'dim_0': 0}] = HasValues()\n\nprint('good_indexed.values:', good_indexed.values)\nprint('bad_indexed.values:', bad_indexed.values)\nprint('bad_indexed.values[0] is HasValues instance:', isinstance(bad_indexed.values[0], HasValues))\n\n# Test that DataArray still works\nda = xr.DataArray([1, 2, 3])\nprint('DataArray values:', da.values)\n\n# Test that pandas Series still works\nimport pandas as pd\ns = pd.Series([1, 2, 3])\nprint('Series as DataArray:', xr.DataArray(s).values)\n\n# Test that np.asarray still works\nprint('np.asarray(5):', np.asarray(5))\n\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"\nimport xarray as xr\nimport numpy as np\n\n# Test case from bug report\ngood_indexed, bad_indexed = xr.DataArray([None]), xr.DataArray([None])\n\nclass HasValues(object):\n    values = 5\n    \ngood_indexed.loc[{'dim_0': 0}] = set()\nbad_indexed.loc[{'dim_0': 0}] = HasValues()\n\nprint('good_indexed.values:', good_indexed.values)\nprint('bad_indexed.values:', bad_indexed.values)\nprint('bad_indexed.values[0] is HasValues instance:', isinstance(bad_indexed.values[0], HasValues))\n\n# Test that DataArray still works\nda = xr.DataArray([1, 2, 3])\nprint('DataArray values:', da.values)\n\n# Test that pandas Series still works\nimport pandas as pd\ns = pd.Series([1, 2, 3])\nprint('Series as DataArray:', xr.DataArray(s).values)\n\n# Test that np.asarray still works\nprint('np.asarray(5):', np.asarray(5))\n\"",
+  "testish": false
+ },
+ {
+  "iid": "pydata__xarray-2905",
+  "i": 2,
+  "cmd": "cd /testbed && python -c \"import xarray as xr; import numpy as np; good_indexed, bad_indexed = xr.DataArray([None]), xr.DataArray([None]); class HasValues(object): values = 5; good_indexed.loc[{'dim_0': 0}] = set(); bad_indexed.loc[{'dim_0': 0}] = HasValues(); print('good_indexed.values:', good_indexed.values); print('bad_indexed.values:', bad_indexed.values); print('bad_indexed.values[0] is HasValues instance:', isinstance(bad_indexed.values[0], HasValues))\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"import xarray as xr; import numpy as np; good_indexed, bad_indexed = xr.DataArray([None]), xr.DataArray([None]); class HasValues(object): values = 5; good_indexed.loc[{'dim_0': 0}] = set(); bad_indexed.loc[{'dim_0': 0}] = HasValues(); print('good_indexed.values:', good_indexed.values); print('bad_indexed.values:', bad_indexed.values); print('bad_indexed.values[0] is HasValues instance:', isinstance(bad_indexed.values[0], HasValues))\"",
+  "testish": false
+ },
+ {
+  "iid": "pydata__xarray-6938",
+  "i": 0,
+  "cmd": "cd /testbed && python -m pytest xarray/tests/test_dataset.py::TestDataset::test_swap_dims -xvs 2>&1 | head -80",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest xarray/tests/test_dataset.py::TestDataset::test_swap_dims -xvs",
+  "testish": true
+ },
+ {
+  "iid": "pydata__xarray-6938",
+  "i": 1,
+  "cmd": "cd /testbed && python -m pytest xarray/tests/test_dataset.py::TestDataset::test_swap_dims -xvs",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest xarray/tests/test_dataset.py::TestDataset::test_swap_dims -xvs",
+  "testish": true
+ },
+ {
+  "iid": "pydata__xarray-6938",
+  "i": 2,
+  "cmd": "cd /testbed && python -m pytest xarray/tests/test_dataset.py::TestDataset::test_swap_dims -xvs",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest xarray/tests/test_dataset.py::TestDataset::test_swap_dims -xvs",
+  "testish": true
+ },
+ {
+  "iid": "pylint-dev__pylint-4970",
+  "i": 0,
+  "cmd": "python -m pytest tests/checkers/unittest_similar.py -v 2>&1 | head -60",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/checkers/unittest_similar.py -v",
+  "testish": true
+ },
+ {
+  "iid": "pylint-dev__pylint-4970",
+  "i": 1,
+  "cmd": "python -m pytest tests/checkers/unittest_similar.py -v 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/checkers/unittest_similar.py -v",
+  "testish": true
+ },
+ {
+  "iid": "pylint-dev__pylint-4970",
+  "i": 2,
+  "cmd": "python -m pytest tests/checkers/unittest_similar.py -v",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/checkers/unittest_similar.py -v",
+  "testish": true
+ },
+ {
+  "iid": "pylint-dev__pylint-6386",
+  "i": 0,
+  "cmd": "cd /home/user/repos/pylint && python -m pytest tests/test_self.py::TestRun::test_verbose -xvs 2>&1 | head -50",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_self.py::TestRun::test_verbose -xvs",
+  "testish": true
+ },
+ {
+  "iid": "pylint-dev__pylint-6386",
+  "i": 1,
+  "cmd": "cd /home/user/repos/pylint && python -m pytest tests/test_self.py::TestRun::test_verbose -xvs 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_self.py::TestRun::test_verbose -xvs",
+  "testish": true
+ },
+ {
+  "iid": "pylint-dev__pylint-6386",
+  "i": 2,
+  "cmd": "cd /home/user/repos/pylint && python -m pytest tests/test_self.py::TestRun::test_verbose -xvs",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_self.py::TestRun::test_verbose -xvs",
+  "testish": true
+ },
+ {
+  "iid": "pylint-dev__pylint-6528",
+  "i": 0,
+  "cmd": "cd /home/user/repo && python -c \"from pylint.lint.pylinter import PyLinter; print('Import OK')\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from pylint.lint.pylinter import PyLinter; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "pylint-dev__pylint-6528",
+  "i": 1,
+  "cmd": "python -c \"from pylint.lint.pylinter import PyLinter; print('Import OK')\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from pylint.lint.pylinter import PyLinter; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "pylint-dev__pylint-6528",
+  "i": 2,
+  "cmd": "python -c \"from pylint.lint.pylinter import PyLinter; print('Import OK')\" 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from pylint.lint.pylinter import PyLinter; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "pytest-dev__pytest-10051",
+  "i": 0,
+  "cmd": "python -m pytest tests/test_logging.py -x -q 2>&1 | tail -30",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_logging.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "pytest-dev__pytest-10051",
+  "i": 1,
+  "cmd": "python -m pytest tests/test_logging.py -x -q 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_logging.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "pytest-dev__pytest-10051",
+  "i": 2,
+  "cmd": "python -m pytest tests/test_logging.py -x -q",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_logging.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "pytest-dev__pytest-5262",
+  "i": 0,
+  "cmd": "cd /home/user/repo && python -m pytest testing/test_capture.py -x -q 2>&1 | tail -30",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest testing/test_capture.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "pytest-dev__pytest-5262",
+  "i": 1,
+  "cmd": "cd /home/user/repo && python -m pytest testing/test_capture.py -x -q",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest testing/test_capture.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "pytest-dev__pytest-5262",
+  "i": 2,
+  "cmd": "cd /home/user/repo && python -m pytest testing/test_capture.py -x -q 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest testing/test_capture.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "pytest-dev__pytest-5840",
+  "i": 0,
+  "cmd": "cd /testbed && python -c \"from _pytest.pathlib import unique_path; print('Import OK')\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from _pytest.pathlib import unique_path; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "pytest-dev__pytest-5840",
+  "i": 1,
+  "cmd": "python -c \"from _pytest.pathlib import unique_path; print('Import OK')\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from _pytest.pathlib import unique_path; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "pytest-dev__pytest-5840",
+  "i": 2,
+  "cmd": "python -c \"from _pytest.pathlib import unique_path; print('Import OK')\" 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from _pytest.pathlib import unique_path; print('Import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "scikit-learn__scikit-learn-10297",
+  "i": 0,
+  "cmd": "python -c \"\nimport numpy as np\nfrom sklearn.linear_model import RidgeClassifierCV\n\nn = 100\nx = np.random.randn(n, 30)\ny = np.random.normal(size=n) > 0  # binary target\n\n# Test with store_cv_values=True\nrr = RidgeClassifierCV(alphas=np.arange(0.1, 10, 0.1), store_cv_values=True).fit(x, y)\nprint('cv_values_ shape:', rr.cv_values_.shape)\nprint('alpha_:', rr.alpha_)\nprint('SUCCESS: store_cv_values parameter works!')\n\"\n",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Unquoted newline in command \u2014 sh runs each line as a separate command. Issue separate bash calls instead.",
+  "testish": false
+ },
+ {
+  "iid": "scikit-learn__scikit-learn-10297",
+  "i": 1,
+  "cmd": "python -c \"import numpy as np; from sklearn.linear_model import RidgeClassifierCV; n = 100; x = np.random.randn(n, 30); y = np.random.normal(size=n) > 0; rr = RidgeClassifierCV(alphas=np.arange(0.1, 10, 0.1), store_cv_values=True).fit(x, y); print('cv_values_ shape:', rr.cv_values_.shape); print('alpha_:', rr.alpha_); print('SUCCESS: store_cv_values parameter works!')\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"import numpy as np; from sklearn.linear_model import RidgeClassifierCV; n = 100; x = np.random.randn(n, 30); y = np.random.normal(size=n) > 0; rr = RidgeClassifierCV(alphas=np.arange(0.1, 10, 0.1), store_cv_values=True).fit(x, y); print('cv_values_ shape:', rr.cv_values_.shape); print('alpha_:', rr.alpha_); print('SUCCESS: store_cv_values parameter works!')\"",
+  "testish": false
+ },
+ {
+  "iid": "scikit-learn__scikit-learn-10297",
+  "i": 2,
+  "cmd": "python -c \"import numpy as np; from sklearn.linear_model import RidgeClassifierCV; n=100; x=np.random.randn(n,30); y=np.random.normal(size=n)>0; rr=RidgeClassifierCV(alphas=np.arange(0.1,10,0.1),store_cv_values=True).fit(x,y); print('cv_values_ shape:', rr.cv_values_.shape); print('alpha_:', rr.alpha_); print('SUCCESS')\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"import numpy as np; from sklearn.linear_model import RidgeClassifierCV; n=100; x=np.random.randn(n,30); y=np.random.normal(size=n)>0; rr=RidgeClassifierCV(alphas=np.arange(0.1,10,0.1),store_cv_values=True).fit(x,y); print('cv_values_ shape:', rr.cv_values_.shape); print('alpha_:', rr.alpha_); print('SUCCESS')\"",
+  "testish": false
+ },
+ {
+  "iid": "scikit-learn__scikit-learn-12682",
+  "i": 0,
+  "cmd": "python -m pytest sklearn/decomposition/tests/test_dict_learning.py -x -q 2>&1 | tail -30",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest sklearn/decomposition/tests/test_dict_learning.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "scikit-learn__scikit-learn-12682",
+  "i": 1,
+  "cmd": "python -m pytest sklearn/decomposition/tests/test_dict_learning.py -x -q",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest sklearn/decomposition/tests/test_dict_learning.py -x -q",
+  "testish": true
+ },
+ {
+  "iid": "scikit-learn__scikit-learn-12682",
+  "i": 2,
+  "cmd": "python -c \"from sklearn.decomposition.dict_learning import _sparse_encode; print('import OK')\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from sklearn.decomposition.dict_learning import _sparse_encode; print('import OK')\"",
+  "testish": false
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10435",
+  "i": 0,
+  "cmd": "cd /home/user/repo && python -m pytest tests/test_build_latex.py -k \"test_build_latex_docsets\" -x -v 2>&1 | head -50",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_build_latex.py -k \"test_build_latex_docsets\" -x -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10435",
+  "i": 1,
+  "cmd": "cd /home/user/repo && python -m pytest tests/test_build_latex.py -k \"test_build_latex_docsets\" -x -v 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_build_latex.py -k \"test_build_latex_docsets\" -x -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10435",
+  "i": 2,
+  "cmd": "cd /home/user/repo && python -m pytest tests/test_build_latex.py -k \"test_build_latex_docsets\" -x -v",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_build_latex.py -k \"test_build_latex_docsets\" -x -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10614",
+  "i": 0,
+  "cmd": "cd /testbed && python -m pytest tests/test_ext_inheritance_diagram.py -v 2>&1 | head -80",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_ext_inheritance_diagram.py -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10614",
+  "i": 1,
+  "cmd": "cd /testbed && python -m pytest tests/test_ext_inheritance_diagram.py -v 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_ext_inheritance_diagram.py -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10614",
+  "i": 2,
+  "cmd": "cd /testbed && python -m pytest tests/test_ext_inheritance_diagram.py -v",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_ext_inheritance_diagram.py -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10673",
+  "i": 0,
+  "cmd": "find . -name \"*.py\" -path \"*/tests/*\" | xargs grep -l \"toctree\" 2>/dev/null | head -5",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Shell chain/redirect operators not allowed: ['|', '>', '|']. Issue separate bash calls for each command, or use read_fil",
+  "testish": false
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10673",
+  "i": 1,
+  "cmd": "find . -name \"*.py\" -path \"*/tests/*\" -exec grep -l \"toctree\" {} +",
+  "old": "host",
+  "new": "host",
+  "new_cmd": "find . -name \"*.py\" -path \"*/tests/*\" -exec grep -l \"toctree\" {} +",
+  "testish": false
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10673",
+  "i": 2,
+  "cmd": "grep -n \"genindex\\|modindex\\|search\" tests/test_environment_toctree.py",
+  "old": "host",
+  "new": "host",
+  "new_cmd": "grep -n \"genindex\\|modindex\\|search\" tests/test_environment_toctree.py",
+  "testish": false
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10673",
+  "i": 3,
+  "cmd": "grep -n \"nonexisting document\" tests/*.py",
+  "old": "host",
+  "new": "host",
+  "new_cmd": "grep -n \"nonexisting document\" tests/*.py",
+  "testish": false
+ },
+ {
+  "iid": "sphinx-doc__sphinx-10673",
+  "i": 4,
+  "cmd": "python -m pytest tests/test_environment_toctree.py -v --tb=short 2>&1 | head -60",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_environment_toctree.py -v --tb=short",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-7462",
+  "i": 0,
+  "cmd": "python -m pytest tests/test_domain_py.py::test_parse_annotation -xvs 2>&1 | head -50",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_domain_py.py::test_parse_annotation -xvs",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-7462",
+  "i": 1,
+  "cmd": "python -m pytest tests/test_domain_py.py::test_parse_annotation -xvs",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_domain_py.py::test_parse_annotation -xvs",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-7462",
+  "i": 2,
+  "cmd": "python -c \"from sphinx.domains.python import _parse_annotation; print(_parse_annotation('Tuple[()]'))\"",
+  "old": "host",
+  "new": "image",
+  "new_cmd": "python -c \"from sphinx.domains.python import _parse_annotation; print(_parse_annotation('Tuple[()]'))\"",
+  "testish": false
+ },
+ {
+  "iid": "sphinx-doc__sphinx-8120",
+  "i": 0,
+  "cmd": "cd /home/user/repo && python -m pytest tests/test_locale.py -v 2>&1 | head -50",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_locale.py -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-8120",
+  "i": 1,
+  "cmd": "cd /home/user/repo && python -m pytest tests/test_locale.py -v",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_locale.py -v",
+  "testish": true
+ },
+ {
+  "iid": "sphinx-doc__sphinx-8120",
+  "i": 2,
+  "cmd": "cd /home/user/repo && python -m pytest tests/test_locale.py -v 2>&1",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -m pytest tests/test_locale.py -v",
+  "testish": true
+ },
+ {
+  "iid": "sympy__sympy-13091",
+  "i": 0,
+  "cmd": "ls /",
+  "old": "host",
+  "new": "host",
+  "new_cmd": "ls /",
+  "testish": false
+ },
+ {
+  "iid": "sympy__sympy-13091",
+  "i": 1,
+  "cmd": "find / -name \"basic.py\" -path \"*/sympy/core/*\" 2>/dev/null | head -5",
+  "old": "refused",
+  "new": "refused",
+  "new_cmd": "Shell chain/redirect operators not allowed: ['>', '|']. Issue separate bash calls for each command, or use read_file/wri",
+  "testish": false
+ },
+ {
+  "iid": "sympy__sympy-17318",
+  "i": 0,
+  "cmd": "cd /home/user/repos/sympy && python -c \"from sympy import sqrt, I; from sympy.simplify.sqrtdenest import sqrtdenest; print(sqrtdenest((3 - sqrt(2)*sqrt(4 + 3*I) + 3*I)/2))\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from sympy import sqrt, I; from sympy.simplify.sqrtdenest import sqrtdenest; print(sqrtdenest((3 - sqrt(2)*sqrt(4 + 3*I) + 3*I)/2))\"",
+  "testish": false
+ },
+ {
+  "iid": "sympy__sympy-17318",
+  "i": 1,
+  "cmd": "cd /home/user/repos/sympy && python -c \"from sympy import sqrt, I; from sympy.simplify.sqrtdenest import sqrtdenest; print(sqrtdenest((3 - sqrt(2)*sqrt(4 + 3*I) + 3*I)/2))\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from sympy import sqrt, I; from sympy.simplify.sqrtdenest import sqrtdenest; print(sqrtdenest((3 - sqrt(2)*sqrt(4 + 3*I) + 3*I)/2))\"",
+  "testish": false
+ },
+ {
+  "iid": "sympy__sympy-17318",
+  "i": 2,
+  "cmd": "cd /home/user/repos/sympy && python -c \"from sympy import sqrt, I; from sympy.simplify.sqrtdenest import sqrtdenest; print(sqrtdenest((3 - sqrt(2)*sqrt(4 + 3*I) + 3*I)/2))\"",
+  "old": "refused",
+  "new": "image",
+  "new_cmd": "python -c \"from sympy import sqrt, I; from sympy.simplify.sqrtdenest import sqrtdenest; print(sqrtdenest((3 - sqrt(2)*sqrt(4 + 3*I) + 3*I)/2))\"",
+  "testish": false
+ }
+]

@@ -1,0 +1,6 @@
+{
+  "frozen_at": "2026-11-20",
+  "recipe": "G2 smoke for image exec: one D (requests-2931), one C with a runnable repro (astropy-14182), one no-harm (pytest-10051 is a flip target; pytest-5262 is the no-harm pick, 8/9 prior).",
+  "instance_ids": ["psf__requests-2931", "astropy__astropy-14182", "pytest-dev__pytest-5262"],
+  "n": 3
+}
