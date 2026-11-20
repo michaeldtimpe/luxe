@@ -307,6 +307,159 @@ def noop_stats() -> dict[str, int]:
     return dict(_noop_stats)
 
 
+# SWE-bench image exec (LUXE_SWEBENCH_EXEC=<image ref>, 2026-11-20; tools.sdd
+# § "SWE-bench image exec"). BENCH PATH ONLY: set by maintain from the env,
+# which only benchmarks/swebench/adapter.py (`run.py --image-exec`) exports.
+# On: the commands that execute repo code (`_IMAGE_BINARIES`) run in a fresh
+# container of the instance's SWE-bench eval image, with the model's working
+# tree synced over /testbed (at base_commit in the image), so the target
+# repo's own environment imports and collects (host: 1/46, image: 40/46,
+# acceptance/swebench/diag_misses_2026_11/feasibility.md). A leading
+# `cd <path> &&` is also handled. No host fallback: an unreachable docker or
+# a missing image is an error the model sees. None (default) = byte-identical.
+_IMAGE_BINARIES = frozenset({"python", "pytest", "pip"})
+_IMAGE_TIMEOUT = 180
+_IMAGE_TESTBED = "/testbed"
+_image_exec: tuple[str, str] | None = None   # (image ref, base commit)
+_image_calls: list[dict[str, Any]] = []
+_image_seq = 0
+
+
+def set_image_exec(image: str | None, base_commit: str | None) -> None:
+    """Turn image exec on (both values non-empty) or off. Clears the call log."""
+    global _image_exec
+    _image_exec = (image, base_commit) if image and base_commit else None
+    _image_calls.clear()
+
+
+def image_exec_calls() -> list[dict[str, Any]]:
+    """One record per bash call routed or rescued since `set_image_exec`."""
+    return [dict(c) for c in _image_calls]
+
+
+_CD_PREFIX = re.compile(r"^\s*cd\s+(\S+)\s*&&\s*(\S.*)$", re.DOTALL)
+
+
+def _cd_rescue(command: str, repo_root) -> tuple[str, str, str] | None:
+    """`cd <dir> && rest` -> (rest, cwd_rel, shown_dir), else None.
+
+    The target is resolved against the repo: relative, under /testbed, or
+    under the absolute repo root, and kept if it is an existing directory
+    inside the repo. Anything else (the hallucinated /home/user/repo, a path
+    outside) runs at the repo root. Only the ONE leading cd is consumed; the
+    rest is validated as usual, so a second chain is still refused."""
+    from pathlib import Path
+    m = _CD_PREFIX.match(command)
+    if not m:
+        return None
+    target, rest = m.group(1).strip("'\""), m.group(2).strip()
+    root = Path(repo_root).resolve()
+    rel = ""
+    if target.startswith(_IMAGE_TESTBED):
+        cand = root / target[len(_IMAGE_TESTBED):].lstrip("/")
+    elif os.path.isabs(target):
+        cand = Path(target)
+    else:
+        cand = root / target
+    try:
+        cand = cand.resolve()
+        if cand.is_dir() and (cand == root or root in cand.parents):
+            rel = str(cand.relative_to(root)) if cand != root else ""
+    except OSError:
+        rel = ""
+    return rest, rel, (rel or ".")
+
+
+def _changed_paths(repo_root, base: str) -> tuple[list[str], list[str]]:
+    """(present, deleted) paths that differ from `base`, without touching the
+    index: tracked changes via `git diff --name-status`, plus untracked files.
+    The synthetic `<repo>.sdd` the adapter drops is excluded."""
+    from luxe.secrets import scrubbed_env as _env
+    from pathlib import Path
+    root = Path(repo_root)
+    present: list[str] = []
+    deleted: list[str] = []
+    r = subprocess.run(["git", "diff", "--name-status", "--no-renames", base],
+                       cwd=root, capture_output=True, text=True, env=_env(),
+                       timeout=30)
+    for line in r.stdout.splitlines():
+        status, _, path = line.partition("\t")
+        (deleted if status.startswith("D") else present).append(path)
+    r = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"],
+                       cwd=root, capture_output=True, text=True, env=_env(),
+                       timeout=30)
+    present += [p for p in r.stdout.splitlines() if p]
+    sdd = f"{root.name}.sdd"
+    present = sorted({p for p in present if p != sdd and (root / p).is_file()})
+    return present, sorted(set(deleted))
+
+
+def _run_in_image(command: str, repo_root, cwd_rel: str) -> tuple[str, str | None]:
+    """Run one validated command in a fresh container of the instance image.
+
+    stdin carries a tar of the model's changed files, extracted over
+    /testbed; deletions are `rm -f`'d. No host env, no network. Same
+    `(output, "exit code N")` contract as the host path."""
+    import io
+    import tarfile
+    import time
+    from pathlib import Path
+    global _image_seq
+    assert _image_exec is not None
+    image, base = _image_exec
+    root = Path(repo_root)
+    try:
+        present, deleted = _changed_paths(root, base)
+    except (OSError, subprocess.SubprocessError) as e:
+        return "", f"image exec unavailable: could not list changes ({e})"
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for p in present:
+            tar.add(str(root / p), arcname=p, recursive=False)
+    rm = " ".join(shlex.quote(p) for p in deleted)
+    workdir = _IMAGE_TESTBED + (f"/{cwd_rel}" if cwd_rel else "")
+    inner = (f"cd {_IMAGE_TESTBED} && tar -xf - "
+             + (f"&& rm -f -- {rm} " if rm else "")
+             + f"&& cd {shlex.quote(workdir)} "
+             + "&& source /opt/miniconda3/bin/activate testbed "
+             + f"&& {command}")
+    _image_seq += 1
+    name = f"luxe-ix-{os.getpid()}-{_image_seq}"
+    docker_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                  "HOME": os.environ.get("HOME", "/tmp")}
+    host = os.environ.get("DOCKER_HOST") or (
+        f"unix://{Path.home()}/.colima/default/docker.sock")
+    docker_env["DOCKER_HOST"] = host
+    argv = ["docker", "run", "--rm", "-i", "--name", name,
+            "--platform", "linux/amd64", "--network", "none", "--memory", "6g",
+            image, "bash", "-c", inner]
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(argv, input=buf.getvalue(), capture_output=True,
+                              env=docker_env, timeout=_IMAGE_TIMEOUT)
+    except FileNotFoundError:
+        return "", "image exec unavailable: docker CLI not found"
+    except subprocess.TimeoutExpired:
+        subprocess.run(["docker", "kill", name], capture_output=True,
+                       env=docker_env, timeout=30)
+        return "", f"Command timed out after {_IMAGE_TIMEOUT}s (in image)"
+    wall = time.monotonic() - t0
+    out = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+    # docker's own failures (daemon down, image missing) exit 125 with a
+    # daemon message; 126/127 come from the container (command not found).
+    if proc.returncode == 125 and ("docker daemon" in out.lower()
+                                   or "unable to find image" in out.lower()
+                                   or "no such image" in out.lower()):
+        return "", f"image exec unavailable: {out.strip()[:300]}"
+    _image_calls.append({"binary": shlex.split(command)[0] if command else "",
+                         "rc": proc.returncode, "wall_s": round(wall, 2),
+                         "bytes_out": len(out), "files_synced": len(present),
+                         "cwd": cwd_rel or "."})
+    output = (f"[ran in the instance image at {workdir}]\n"
+              + _clip_output(out))
+    return output, None if proc.returncode == 0 else f"exit code {proc.returncode}"
+
+
 def strip_noop_suffixes(command: str) -> tuple[str, list[str]]:
     """`(cleaned, reasons)`. Peels known no-op suffixes off the END only,
     repeatedly (`npm test 2>&1 | tail -40` -> `npm test`). `reasons` is empty
@@ -371,6 +524,15 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
 
     command = args["command"]
     note = ""
+    cwd_rel = ""
+    # SWE-bench image exec only (None everywhere else, so this is skipped and
+    # the path below is byte-identical): consume ONE leading `cd <dir> &&`.
+    if _image_exec is not None and not unrestricted:
+        rescued = _cd_rescue(command, repo_root)
+        if rescued is not None:
+            command, cwd_rel, shown = rescued
+            note = f"[luxe ran `{command}` from {shown}: leading cd handled]\n"
+            _image_calls.append({"binary": "cd_rescue", "cwd": shown})
     if unrestricted:
         # Opt-in `luxe chat` dev mode (chat.sdd): no allowlist, no chain/redirect
         # rejection. cwd is the repo root but this is NOT a sandbox.
@@ -383,8 +545,8 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
             cleaned, err = _noop_rescue(command, err, _ALLOWLIST | extra_allow)
             if cleaned is None:
                 return "", err
-            note = (f"[luxe ran `{cleaned}`: the dropped suffix is a no-op "
-                    f"for this tool]\n")
+            note += (f"[luxe ran `{cleaned}`: the dropped suffix is a no-op "
+                     f"for this tool]\n")
             command = cleaned
             tokens, _ = _validate_command(command)
         binary = tokens[0]
@@ -392,9 +554,14 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
             return "", (f"Command '{binary}' not in allowlist. "
                         f"Allowed: {sorted(_ALLOWLIST | extra_allow)}")
         timeout = _TIMEOUT
+        if _image_exec is not None and binary in _IMAGE_BINARIES:
+            out, rerr = _run_in_image(command, repo_root, cwd_rel)
+            return (note + out if note else out), rerr
 
+    # cwd_rel is "" unless the image-exec cd rescue fired: repo root as before.
+    run_cwd = os.path.join(repo_root, cwd_rel) if cwd_rel else repo_root
     if cancel is not None:
-        out, rerr = _run_cancellable(command, cwd=repo_root, env=env,
+        out, rerr = _run_cancellable(command, cwd=run_cwd, env=env,
                                      timeout=timeout, cancel=cancel)
         return (note + out if note else out), rerr
 
@@ -422,7 +589,7 @@ def _bash(args: dict[str, Any], *, unrestricted: bool = False,
         # REPL read got nothing. Under a TTY the same command blocks until
         # the timeout. Neither is a shell command's job.
         stdin=subprocess.DEVNULL,
-        cwd=repo_root,
+        cwd=run_cwd,
         env=env,   # never None here: the scrubbed env (bench) or chat's own
         start_new_session=True,
     )

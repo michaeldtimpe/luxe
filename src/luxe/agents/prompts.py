@@ -346,6 +346,49 @@ _SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX = _SWEBENCH_TASK_PREFIX.replace(
 assert _SWEBENCH_COUNTEREXAMPLE_CLAUSE in _SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX
 
 
+# SWE-bench with image exec (2026-11-20; acceptance/swebench/image_exec_2026_11).
+# The base prompt forbids new files and steers away from executing reproducers
+# because, until now, bash ran in a host venv that could not import the target
+# repo (1/46 collect) and reproducers leaked into the patch. Under
+# `run.py --image-exec` python/pytest/pip run in the instance's own SWE-bench
+# image and scratch scripts are stripped from the patch, so this variant
+# invites a reproduce -> fix -> re-run loop instead. Selected only by
+# configs/single_64gb_swebench_exec.yaml (overlay swebench_exec_only), which
+# run.py requires together with --image-exec.
+_SWEBENCH_EXEC_TASK_PREFIX = (
+    "This is a SWE-bench bug-fix task. Your deliverable is a patch to "
+    "EXISTING source files within the package source tree. Only edits "
+    "to package source files are graded; the grader provides its own "
+    "tests.\n\n"
+    "Environment: `python`, `pytest` and `pip` commands run inside this "
+    "repository's own test environment (dependencies installed, your current "
+    "edits applied), so you can import the package and run its tests. Other "
+    "commands (grep, git, ls, cat) run directly on the working tree.\n\n"
+    "Core constraints:\n"
+    "1. Modify existing package source to fix the bug. Do not edit existing "
+    "tests.\n"
+    "2. You MAY create scratch scripts (e.g. `repro_issue.py` at the "
+    "repository root) to reproduce the bug and check your fix. Scratch "
+    "files are removed before grading and are never part of the patch.\n"
+    "3. Run ONE command per bash call; pipes, `&&` chains and redirects are "
+    "refused.\n"
+    "4. Invoke ONE tool per response. Do not emit parallel tool calls.\n\n"
+    "Protocol:\n"
+    "  (1) read bug report → identify likely module/function\n"
+    "  (2) call grep or find_symbol to locate the code\n"
+    "  (3) read the function and surrounding context\n"
+    "  (4) reproduce: write a short scratch script from the report, or run "
+    "the most relevant existing test file, and confirm the failure\n"
+    "  (5) make a minimal edit via edit_file\n"
+    "  (6) re-run the reproduction and the relevant existing test file; if "
+    "either fails, read the output and fix\n"
+    "  (7) final report\n\n"
+    "Open with a brief `## Plan` section (≤150 words), then "
+    "IMMEDIATELY call grep or find_symbol. Keep subsequent reasoning "
+    "concise and technical.\n\n"
+) + _BASELINE_TASK_PREFIX
+
+
 PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "baseline": PromptVariant(
         system=_BASELINE_SYSTEM,
@@ -386,6 +429,10 @@ PROMPT_REGISTRY: dict[str, PromptVariant] = {
     "swebench_bugfix_counterexample": PromptVariant(
         system=_BASELINE_SYSTEM,
         task_prefix=_SWEBENCH_COUNTEREXAMPLE_TASK_PREFIX,
+    ),
+    "swebench_bugfix_exec": PromptVariant(
+        system=_BASELINE_SYSTEM,
+        task_prefix=_SWEBENCH_EXEC_TASK_PREFIX,
     ),
 }
 
@@ -1153,6 +1200,13 @@ TASK_OVERLAYS: dict[str, TaskOverlay] = {
     # baseline overlay so the A/B is one config-flag apart.
     "swebench_strict_counterexample_only": TaskOverlay(by_task={
         "bugfix": "swebench_bugfix_counterexample",
+    }),
+    # swebench_exec_only — the image-exec arm (2026-11-20): routes bugfix to
+    # swebench_bugfix_exec, which invites reproduce/verify runs. Only via
+    # configs/single_64gb_swebench_exec.yaml, which run.py pairs with
+    # --image-exec (it refuses either without the other).
+    "swebench_exec_only": TaskOverlay(by_task={
+        "bugfix": "swebench_bugfix_exec",
     }),
 }
 

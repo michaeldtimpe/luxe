@@ -385,6 +385,17 @@ def _load_model(p: _Pipeline, config_path: str | None) -> None:
         console.print(f"[yellow]· Bash no-op suffixes:[/] [dim]"
                       f"LUXE_BASH_NOOP={shell_mod._noop_mode}[/]")
         p.emit("bash_noop_mode", mode=shell_mod._noop_mode)
+    # LUXE_SWEBENCH_EXEC=<image> + LUXE_SWEBENCH_BASE=<sha> (2026-11-20;
+    # tools.sdd § "SWE-bench image exec"): exported ONLY by the SWE-bench
+    # adapter under `--image-exec`. Set on EVERY run so module state cannot
+    # leak between runs; unset = off = byte-identical. Announced for liveness.
+    shell_mod.set_image_exec(os.environ.get("LUXE_SWEBENCH_EXEC") or None,
+                             os.environ.get("LUXE_SWEBENCH_BASE") or None)
+    if shell_mod._image_exec is not None:
+        console.print(f"[yellow]· Bash image exec:[/] [dim]"
+                      f"{shell_mod._image_exec[0]}[/]")
+        p.emit("image_exec_mode", image=shell_mod._image_exec[0],
+               base=shell_mod._image_exec[1])
 
     # LUXE_BENCH_PY_PATH (default ON since 2026-11-03, an environment fix;
     # tools/shell.py): luxe's venv bin first on the bench bash PATH, so
@@ -498,6 +509,12 @@ def _main_pass(p: _Pipeline) -> AgentResult:
         p.emit("bash_noop_stats", mode=shell_mod._noop_mode,
                **{k: shell_mod.noop_stats().get(k, 0)
                   for k in ("hint", "strip", "unfixable")})
+    if shell_mod._image_exec is not None:
+        calls = shell_mod.image_exec_calls()
+        p.emit("image_exec_stats",
+               image_calls=sum(c["binary"] != "cd_rescue" for c in calls),
+               cd_rescued=sum(c["binary"] == "cd_rescue" for c in calls),
+               calls=calls)
     if p.writes:
         _record_diff_stat(p, "after_main_pass")
     p.report = result.final_text or ""

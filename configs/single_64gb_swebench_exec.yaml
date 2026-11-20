@@ -1,0 +1,64 @@
+omlx_base_url: "http://127.0.0.1:8000"
+
+profile:
+  name: "Single-model 64 GB — SWE-bench (image exec)"
+  description: >-
+    SWE-bench image-exec arm (2026-11-20). Identical to
+    single_64gb_swebench.yaml except `task_overlay_id: swebench_exec_only`,
+    which routes bugfix tasks to the `swebench_bugfix_exec` PromptVariant
+    (reproduce -> fix -> re-run, scratch scripts allowed). Only valid with
+    `benchmarks.swebench.run --image-exec`, which runs python/pytest/pip in
+    the instance's SWE-bench image; run.py refuses either without the other.
+    See acceptance/swebench/image_exec_2026_11/.
+  memory_budget_gb: 64
+  peak_model_gb: 30.0
+
+models:
+  monolith: "Qwen3.6-35B-A3B-6bit"
+
+roles:
+  monolith:
+    model_key: monolith
+    num_ctx: 32768
+    max_steps: 30
+    max_tokens_per_turn: 8192
+    temperature: 0.0
+    task_overlay_id: swebench_exec_only
+    tools:
+      - read_file
+      - list_dir
+      - glob
+      - grep
+      - bm25_search
+      - find_symbol
+      - write_file
+      - edit_file
+      - git_diff
+      - git_log
+      - git_show
+      - bash
+      - lint
+      - typecheck
+      - security_scan
+      - deps_audit
+      - cve_lookup
+
+task_types:
+  review:
+    description: "Code review — single-model agentic loop"
+    pipeline: [monolith]
+  implement:
+    description: "Feature implementation — single-model agentic loop"
+    pipeline: [monolith]
+  bugfix:
+    description: "Bug investigation and fix — single-model agentic loop"
+    pipeline: [monolith]
+  document:
+    description: "Documentation generation — single-model agentic loop"
+    pipeline: [monolith]
+  summarize:
+    description: "Codebase summarization — single-model agentic loop"
+    pipeline: [monolith]
+  manage:
+    description: "Repository management — single-model agentic loop"
+    pipeline: [monolith]

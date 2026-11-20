@@ -43,6 +43,8 @@ class SweBenchInvocationResult:
     # The `luxe maintain` run id (parsed from its stdout banner), so a
     # diagnosis can open ~/.luxe/runs/<id>/ directly. "" when not found.
     luxe_run_id: str = ""
+    # --image-exec only: scratch files removed before diff extraction.
+    scratch_stripped: tuple[str, ...] = ()
 
 
 def extract_luxe_run_id(stdout: str) -> str:
@@ -193,16 +195,92 @@ strictly hold.
 """
 
 
-def write_swebench_sdd(repo: Path) -> Path:
+# Image-exec arm (2026-11-20, `run.py --image-exec`): scratch reproducers are
+# ALLOWED (the model can now run them in the instance image), so the
+# create-only scaffolding globs are dropped; `repo_root/**` stays. Scratch
+# files are removed by `strip_scratch` before `extract_diff` instead.
+SWEBENCH_SDD_BODY_EXEC = SWEBENCH_SDD_BODY[:SWEBENCH_SDD_BODY.index("## Forbids creating")]
+assert "## Forbids\n- repo_root/**" in SWEBENCH_SDD_BODY_EXEC
+
+# What `strip_scratch` removes: a file ADDED since base_commit (committed or
+# untracked) whose path or basename matches one of these, or any added `*.py`
+# directly at the repo root. Tracked files the model edited are never touched.
+SCRATCH_GLOBS = (
+    "repro*.py", "reproduce*.py", "reproducer*.py", "scratch*", "debug_*.py",
+    "tmp_*", "verify_*.py", "*_verify.py", "test_fix*.py", "test_*_fix.py",
+    "test_encoded_*.py", "test_*_time.py", "check_*.py",
+)
+
+
+def instance_image(instance_id: str) -> str:
+    """The local SWE-bench eval image for an instance (the same key the
+    grading harness builds/pulls: `__` becomes `_1776_`, lower-cased)."""
+    key = instance_id.replace("__", "_1776_").lower()
+    return f"swebench/sweb.eval.x86_64.{key}:latest"
+
+
+def docker_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("DOCKER_HOST", f"unix://{Path.home()}/.colima/default/docker.sock")
+    return env
+
+
+def missing_images(instance_ids: list[str]) -> list[str]:
+    """Instance ids whose eval image is not present locally (preflight)."""
+    missing = []
+    for iid in instance_ids:
+        r = subprocess.run(["docker", "image", "inspect", instance_image(iid)],
+                           capture_output=True, env=docker_env(), timeout=60)
+        if r.returncode != 0:
+            missing.append(iid)
+    return missing
+
+
+def _added_since(repo: Path, base_commit: str) -> list[str]:
+    rc, out, _ = _run(["git", "diff", "--name-status", "--no-renames", base_commit],
+                      cwd=repo)
+    added = [ln.split("\t", 1)[1] for ln in out.splitlines()
+             if ln.startswith("A\t")] if rc == 0 else []
+    rc, out, _ = _run(["git", "ls-files", "--others", "--exclude-standard"], cwd=repo)
+    if rc == 0:
+        added += [p for p in out.splitlines() if p]
+    return sorted(set(added))
+
+
+def is_scratch(path: str) -> bool:
+    import fnmatch
+    name = path.rsplit("/", 1)[-1]
+    if "/" not in path and name.endswith(".py"):
+        return True
+    return any(fnmatch.fnmatch(name, g) or fnmatch.fnmatch(path, g)
+               for g in SCRATCH_GLOBS)
+
+
+def strip_scratch(repo: Path, base_commit: str) -> list[str]:
+    """Delete scratch files the run added (see SCRATCH_GLOBS) from the working
+    tree so `extract_diff` (working tree vs base) does not carry them. Returns
+    the removed paths, which the caller records per instance."""
+    removed = []
+    for p in _added_since(repo, base_commit):
+        f = repo / p
+        if is_scratch(p) and f.is_file():
+            f.unlink()
+            removed.append(p)
+    return removed
+
+
+def write_swebench_sdd(repo: Path, *, image_exec: bool = False) -> Path:
     """Drop a synthetic `<repo_basename>.sdd` at the cloned-repo root.
 
     The basename matches the directory name so `find_all_sdd` picks it
     up. Written outside any tracked path; `remove_swebench_sdd` cleans
     it before `extract_diff` so the synthetic contract does not leak
-    into the predictions.json patch.
+    into the predictions.json patch. `image_exec` drops the create-only
+    scaffolding globs (scratch reproducers are allowed and stripped later).
     """
     sdd = repo / f"{repo.name}.sdd"
-    sdd.write_text(SWEBENCH_SDD_BODY, encoding="utf-8")
+    sdd.write_text(SWEBENCH_SDD_BODY_EXEC if image_exec else SWEBENCH_SDD_BODY,
+                   encoding="utf-8")
     return sdd
 
 
@@ -290,6 +368,7 @@ def run_instance(
     tiered_compact_threshold: float | None = None,
     tiered_compact_phase_thresholds: str | None = None,
     save_messages: bool = True,
+    image_exec: bool = False,
 ) -> SweBenchInvocationResult:
     """End-to-end per-instance run: ensure repo → inject .sdd → invoke luxe → strip .sdd → extract diff.
 
@@ -341,7 +420,7 @@ def run_instance(
             error=f"setup_failed: {e}",
         )
     if inject_sdd:
-        write_swebench_sdd(repo)
+        write_swebench_sdd(repo, image_exec=image_exec)
         if write_pressure:
             extra_env = {**(extra_env or {}), "LUXE_WRITE_PRESSURE": "1"}
     # v1.9: switch the early_bail message to the soft-anchor variant for
@@ -381,6 +460,15 @@ def run_instance(
     # in the caller's environment wins.
     if save_messages and "LUXE_SAVE_MESSAGES" not in os.environ:
         extra_env = {**(extra_env or {}), "LUXE_SAVE_MESSAGES": "1"}
+    # --image-exec (2026-11-20; tools.sdd "SWE-bench image exec"): the ONLY
+    # place LUXE_SWEBENCH_EXEC/BASE are set. python/pytest/pip run in the
+    # instance's eval image; scratch files are stripped before extract_diff.
+    if image_exec:
+        extra_env = {**(extra_env or {}),
+                     "LUXE_SWEBENCH_EXEC": instance_image(instance.instance_id),
+                     "LUXE_SWEBENCH_BASE": instance.base_commit,
+                     "DOCKER_HOST": docker_env()["DOCKER_HOST"]}
+    stripped: list[str] = []
     try:
         rc, out, err = invoke_luxe_maintain(
             instance, repo, log_dir,
@@ -389,6 +477,8 @@ def run_instance(
     finally:
         if inject_sdd:
             remove_swebench_sdd(repo)
+        if image_exec:
+            stripped = strip_scratch(repo, instance.base_commit)
     diff = extract_diff(repo, instance.base_commit)
     return SweBenchInvocationResult(
         instance_id=instance.instance_id,
@@ -398,6 +488,7 @@ def run_instance(
         stdout_log=str(log_dir / "stdout.log"),
         stderr_log=str(log_dir / "stderr.log"),
         luxe_run_id=extract_luxe_run_id(out),
+        scratch_stripped=tuple(stripped),
     )
 
 

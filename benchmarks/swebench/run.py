@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from .adapter import (  # noqa: E402
     SweBenchInvocationResult,
+    missing_images,
     run_instance,
     write_predictions,
 )
@@ -185,7 +186,26 @@ def main() -> int:
                         "trigger. Use to capture phase-1 benefits without phase-3 "
                         "destruction (forge-hybrid Phase 2 (A) n=75 4-arm sweep "
                         "finding). No effect without --tiered-compact.")
+    p.add_argument("--image-exec", action="store_true",
+                   help="Run the model's python/pytest/pip in each instance's "
+                        "SWE-bench eval image (colima), accept a leading "
+                        "`cd <dir> &&`, allow scratch reproducers and strip them "
+                        "from the patch (2026-11-20, tools.sdd 'SWE-bench image "
+                        "exec'). Requires --config configs/"
+                        "single_64gb_swebench_exec.yaml, and that config "
+                        "requires this flag. Preflight refuses to start if any "
+                        "instance image is missing.")
     args = p.parse_args()
+
+    # The exec prompt variant promises an environment only --image-exec
+    # provides, and --image-exec without it leaves the anti-reproducer prompt
+    # in place: refuse either half alone.
+    exec_cfg = args.config.name == "single_64gb_swebench_exec.yaml"
+    if args.image_exec != exec_cfg:
+        print("  --image-exec and --config configs/single_64gb_swebench_exec.yaml "
+              "go together (got image_exec=%s, config=%s)"
+              % (args.image_exec, args.config), file=sys.stderr)
+        return 2
 
     if not args.dataset.is_file():
         print(f"  dataset not found: {args.dataset}")
@@ -206,6 +226,13 @@ def main() -> int:
         instances = all_instances[: args.smoke]
     else:
         instances = all_instances
+
+    if args.image_exec:
+        missing = missing_images([x.instance_id for x in instances])
+        if missing:
+            print(f"  --image-exec: no local eval image for {len(missing)} "
+                  f"instance(s): {', '.join(missing)}", file=sys.stderr)
+            return 2
 
     args.output.mkdir(parents=True, exist_ok=True)
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -288,6 +315,7 @@ def main() -> int:
             tiered_compact_threshold=args.tiered_compact_threshold,
             tiered_compact_phase_thresholds=args.tiered_compact_phase_thresholds,
             save_messages=not args.no_save_messages,
+            image_exec=args.image_exec,
         )
         elapsed = time.time() - t0
         runtime_wall += elapsed
@@ -324,6 +352,8 @@ def main() -> int:
             "error": result.error,
             "model_patch": result.model_patch,
             "luxe_run_id": result.luxe_run_id,
+            "image_exec": args.image_exec,
+            "scratch_stripped": list(result.scratch_stripped),
         }, indent=2))
 
         wall = time.time() - t0

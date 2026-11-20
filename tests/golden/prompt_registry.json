@@ -12,6 +12,9 @@
     "manage_strict_only": {
       "manage": "manage_strict"
     },
+    "swebench_exec_only": {
+      "bugfix": "swebench_bugfix_exec"
+    },
     "swebench_strict_counterexample_only": {
       "bugfix": "swebench_bugfix_counterexample"
     },
@@ -79,6 +82,12 @@
       "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
       "task_prefix_len": 1797,
       "task_prefix_sha256": "8237f61a507183e20c8a51bd317aebae21e7d99d65a7eb9db5c9d022afab194c"
+    },
+    "swebench_bugfix_exec": {
+      "system_len": 972,
+      "system_sha256": "5bb8a525f8db93ef374724c7b7733e56cfa20f7f03176ca6d97f811ec60b6f23",
+      "task_prefix_len": 1619,
+      "task_prefix_sha256": "3c7d2af1f24fa580f7269056a3e343220b3bf7f27545816fad405257fe54503d"
     }
   }
 }

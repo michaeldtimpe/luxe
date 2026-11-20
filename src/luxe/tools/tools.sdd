@@ -380,8 +380,26 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   in acceptance/bash_noop_ab_2026_11 (no regression; outcome-neutral). The
   shell module default stays False (only maintain sets it). Graders' own
   commands (`tests_pass`, the PR test step) never read it.
+- SWE-bench image exec (`LUXE_SWEBENCH_EXEC=<image>` + `LUXE_SWEBENCH_BASE=
+  <sha>`, 2026-11-20, set by maintain via `shell.set_image_exec` on every
+  run; unset = off = byte-identical). Exported ONLY by
+  `benchmarks/swebench/adapter.py` under `run.py --image-exec` (which also
+  requires configs/single_64gb_swebench_exec.yaml). On: after validation
+  and the allowlist, `python`/`pytest`/`pip` run via `_run_in_image` in a
+  fresh `--network none` container of the instance's eval image, with the
+  files that differ from base_commit (tracked + untracked, index untouched,
+  synthetic .sdd excluded) tarred over /testbed; other binaries stay on the
+  host. One leading `cd <dir> &&` is consumed (`_cd_rescue`: in-repo dirs,
+  `/testbed/...` mapped; anything else = repo root) and the rest validated
+  as usual. Same `(output, "exit code N")` contract and `_clip_output`.
+  Docker unreachable or image missing is an error the MODEL sees
+  (`image exec unavailable: ...`); there is no host fallback. Calls are
+  recorded in the `image_exec_stats` event. A/B:
+  acceptance/swebench/image_exec_2026_11/.
 
 ## Must not
+- Set `LUXE_SWEBENCH_EXEC` from maintain_suite, chat, or any non-SWE-bench
+  caller, or fall back to host execution when image exec fails
 - Bypass `_safe()` path scoping in any new tool
 - Hardcode tool-allowlist subsets in `single.py` (the role config is the single source of truth)
 - Wire unrestricted bash into the benchmark/maintain path or the default

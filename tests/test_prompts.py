@@ -483,6 +483,31 @@ def test_swebench_bugfix_counterexample_extends_base_with_falsification_clause()
     assert len(var) > len(base)
 
 
+def test_swebench_exec_overlay_routes_bugfix_only():
+    """Image-exec arm (2026-11-20): bugfix -> swebench_bugfix_exec, nothing
+    else. Used only by configs/single_64gb_swebench_exec.yaml with
+    `run.py --image-exec`."""
+    from luxe.agents.prompts import PROMPT_REGISTRY, TASK_OVERLAYS, get_overlay
+    assert "swebench_exec_only" in TASK_OVERLAYS
+    assert get_overlay("swebench_exec_only").by_task == {"bugfix": "swebench_bugfix_exec"}
+    assert "swebench_bugfix_exec" in PROMPT_REGISTRY
+
+
+def test_swebench_bugfix_exec_invites_verification_not_static_analysis():
+    """The exec variant lifts exactly the two constraints image exec makes
+    obsolete (no new files; static analysis over running reproducers) and
+    keeps the rest (source-only patch, no test edits, one tool per response)."""
+    from luxe.agents.prompts import get
+    var = get("swebench_bugfix_exec").task_prefix
+    assert "Do NOT create any new files" not in var
+    assert "rather than executing reproducers" not in var
+    assert "scratch" in var and "removed before grading" in var
+    assert "re-run" in var
+    assert "Do not edit existing tests" in var
+    assert "ONE tool per response" in var
+    assert "grep or find_symbol" in var
+
+
 def test_resolve_prompt_ids_no_overlay_returns_role_defaults():
     """When no overlay is set, role-level system_prompt_id /
     task_prompt_id win regardless of task_type."""
