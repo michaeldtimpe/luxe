@@ -140,3 +140,19 @@ diag_misses control rep: old refused 98, new refused 14; **refused to runnable 8
 gate is 40%. Test-like calls that run: 8 old, 65 new. New routing: 95 image, 15 host, 14 refused
 (7 unquoted newline, 4 other chains, 3 not-allowlisted `python3`). Rows: `replay.json`.
 The exec half (`replay.py --exec`) runs after the maintain A/B finishes (CPU contention).
+
+## G1 result (exec half, 2026-11-20) - PASS
+
+`replay.py --exec` (`replay_exec.json`): all 95 routed commands ran in their instance image on that
+run's final tree; 0 `image exec unavailable`; median 4.3 s per call; 59 exit 0.
+- Real model-patch failures now visible: astropy-13236 `ImportError: cannot import name
+  'NdarrayMixin'` (the deleted import behind its 644 P2P failures), astropy-13453
+  `FAILED test_html.py::test_multicolumn_write` (its P2P regression).
+- 9 "No module named pytest": the Django testbed env has no pytest (Django uses
+  `tests/runtests.py`). Watch in G2/G3 whether the model switches runners; no Django hint added.
+- requests-2931 `recursive dependency involving fixture 'httpbin'`: same with network on, so it is
+  the old checkout's test setup, not `--network none` or the patch.
+- Sync check (astropy-13453): container `git status` = host (`M html.py`, `?? repro_x.py`). The
+  image HEAD is SWE-bench's setup commit on top of base_commit (a one-line `pyproject.toml`
+  change), the same tree the grader uses. Edge: a model edit to `pyproject.toml` would replace
+  that tweak in the container.
