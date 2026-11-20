@@ -25,9 +25,9 @@ while true; do
     stalled=0
   fi
   if ! pgrep -f 'benchmarks.(maintain_suite|swebench).run' >/dev/null \
-     && ! pgrep -f 'run_arms.sh|swebench_slice.sh' >/dev/null; then
+     && ! pgrep -f 'run_arms.sh|swebench_slice.sh|run_slice.sh' >/dev/null; then
     sleep 60
-    pgrep -f 'benchmarks.(maintain_suite|swebench).run|run_arms.sh|swebench_slice.sh' >/dev/null \
+    pgrep -f 'benchmarks.(maintain_suite|swebench).run|run_arms.sh|swebench_slice.sh|run_slice.sh' >/dev/null \
       || { echo "GONE no bench process and no DONE ($(date '+%F %T'))"; exit 1; }
   fi
   sleep 60

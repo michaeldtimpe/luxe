@@ -156,3 +156,17 @@ run's final tree; 0 `image exec unavailable`; median 4.3 s per call; 59 exit 0.
   image HEAD is SWE-bench's setup commit on top of base_commit (a one-line `pyproject.toml`
   change), the same tree the grader uses. Edge: a model edit to `pyproject.toml` would replace
   that tweak in the container.
+
+## G2 result (live smoke, 2026-11-20 10:19-10:26) - PASS
+
+ix arm, 1 rep, `smoke_g2.json`, bench at 68a639b. Graded **2/3**: psf__requests-2931 **resolved**
+(0/9 prior; a flip), pytest-dev__pytest-5262 resolved (no-harm held), astropy__astropy-14182 not
+resolved (0/9 prior). 0 `image_exec_error`; 4-7 image calls per instance at 1-29 s each; instance
+wall 64-101 s. No scratch file in any patch (the cleanup turn deleted `repro_issue.py`, so
+`scratch_stripped` stayed empty).
+- requests-2931 transcript: repro fails, fix, repro passes, the test run exposes the fix's own
+  P2P regression (`test_params_bytes_are_encoded`), the model narrows the fix to `prepare_body`,
+  and both checks pass. This is the loop the lever was meant to open.
+- Defect found: every run ended verification with `rm repro_issue.py` (refused, `rm` not
+  allowlisted). On astropy-14182 that was step 30, so a finished patch hit the step limit with no
+  final report. Fixed in the prompt before G3 (PR #63: "leave them in place").
