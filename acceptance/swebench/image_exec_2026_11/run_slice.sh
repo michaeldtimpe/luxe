@@ -23,10 +23,17 @@ REPS=${1:-3}
 # Harness workers for grading (2026-11-20: 2 took ~3.7 h for 9 cells on m5's 8-CPU colima).
 GRADE_WORKERS=${GRADE_WORKERS:-4}
 typeset -A ARM_ENV ARM_CFG ARM_FLAGS
-ARM_ENV=(control "" fo "LUXE_FAILED_OUTPUT=1" ix "LUXE_FAILED_OUTPUT=1 LUXE_BASH_NOOP=strip")
+# Follow-up arms (2026-11-20, after G3's 23/75 step-limit hits; TAG=followup ARMS="ix ix60 ix60nb"):
+#   ix60     ix with max_steps 60 (configs/single_64gb_swebench_exec_60.yaml)
+#   ix60nb   ix60 + --no-early-bail --no-write-pressure --no-action-density-gate
+IXENV="LUXE_FAILED_OUTPUT=1 LUXE_BASH_NOOP=strip"
+ARM_ENV=(control "" fo "LUXE_FAILED_OUTPUT=1" ix "$IXENV" ix60 "$IXENV" ix60nb "$IXENV")
 ARM_CFG=(control configs/single_64gb_swebench.yaml fo configs/single_64gb_swebench.yaml
-         ix configs/single_64gb_swebench_exec.yaml)
-ARM_FLAGS=(control "" fo "" ix "--image-exec")
+         ix configs/single_64gb_swebench_exec.yaml
+         ix60 configs/single_64gb_swebench_exec_60.yaml
+         ix60nb configs/single_64gb_swebench_exec_60.yaml)
+ARM_FLAGS=(control "" fo "" ix "--image-exec" ix60 "--image-exec"
+           ix60nb "--image-exec --no-early-bail --no-write-pressure --no-action-density-gate")
 ARMS=(${=ARMS:-control fo ix})
 
 colima status >/dev/null 2>&1 || colima start >> $OUT/grade.log 2>&1
