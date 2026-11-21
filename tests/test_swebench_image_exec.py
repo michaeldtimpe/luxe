@@ -386,3 +386,25 @@ def test_scratch_write_does_not_arm_post_write_idle_exit(repo, monkeypatch, imag
     assert ("post_write_idle_exit" in events) is exits
     assert calls == (4 if exits else 7)
     assert ("scratch_write" in events) is (image_exec and not exits)
+
+
+@pytest.mark.parametrize("commit_it", [False, True])
+def test_strip_scratch_removes_a_nested_git_repo(repo, commit_it):
+    from benchmarks.swebench.adapter import extract_diff, strip_scratch
+    r, base = repo
+    (r / "pkg" / "mod.py").write_text("x = 2\n")
+    nested = r / "sphinx-test-locale-override"
+    nested.mkdir()
+    git(nested, "init", "-q")
+    (nested / "conf.py").write_text("language = 'da'\n")
+    git(nested, "add", "-A")
+    git(nested, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "n")
+    if commit_it:   # luxe's commit step stages it as a gitlink
+        git(r, "add", "-A")
+        git(r, "commit", "-q", "-m", "luxe seals edits")
+    removed = strip_scratch(r, base)
+    assert removed == ["sphinx-test-locale-override/"]
+    assert not nested.exists()
+    diff = extract_diff(r, base)
+    assert "pkg/mod.py" in diff
+    assert "Subproject" not in diff and "sphinx-test-locale-override" not in diff

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -248,7 +249,20 @@ def strip_scratch(repo: Path, base_commit: str) -> list[str]:
     tree so `extract_diff` (working tree vs base) does not carry them. Returns
     the removed paths, which the caller records per instance."""
     removed = []
-    for p in _added_since(repo, base_commit):
+    added = _added_since(repo, base_commit)
+    # A nested git repository the run created (the model ran `git init` in a
+    # scratch dir) is never part of a fix: untracked it lists as `dir/`,
+    # committed it is a gitlink (mode 160000). Remove the directory and any
+    # index entry so extract_diff carries no `Subproject commit` line
+    # (sphinx-8120 x3, 2026-11-21).
+    for p in added:
+        d = repo / p.rstrip("/")
+        if d.is_dir() and (d / ".git").exists():
+            _run(["git", "rm", "-r", "-q", "--cached", "--ignore-unmatch", p.rstrip("/")],
+                 cwd=repo)
+            shutil.rmtree(d)
+            removed.append(p.rstrip("/") + "/")
+    for p in added:
         f = repo / p
         if f.is_file() and is_scratch_at(p, repo, base_commit):
             f.unlink()
