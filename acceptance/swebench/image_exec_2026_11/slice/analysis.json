@@ -1,0 +1,558 @@
+{
+ "grid": {
+  "astropy__astropy-12907": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "astropy__astropy-13236": {
+   "control": [
+    false,
+    true,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "astropy__astropy-13453": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    true,
+    false,
+    true
+   ]
+  },
+  "astropy__astropy-13977": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "astropy__astropy-14182": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "astropy__astropy-8707": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "django__django-10880": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    false,
+    true,
+    true
+   ]
+  },
+  "django__django-10973": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "django__django-10999": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "django__django-11333": {
+   "control": [
+    false,
+    true,
+    false
+   ],
+   "fo": [
+    false,
+    true,
+    false
+   ],
+   "ix": [
+    false,
+    true,
+    false
+   ]
+  },
+  "matplotlib__matplotlib-13989": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "matplotlib__matplotlib-14623": {
+   "control": [
+    true,
+    true,
+    false
+   ],
+   "fo": [
+    true,
+    true,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    true
+   ]
+  },
+  "matplotlib__matplotlib-24870": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "mwaskom__seaborn-3187": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "psf__requests-2931": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "psf__requests-5414": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    true,
+    false
+   ]
+  },
+  "pydata__xarray-2905": {
+   "control": [
+    false,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "pylint-dev__pylint-4970": {
+   "control": [
+    true,
+    false,
+    false
+   ],
+   "fo": [
+    true,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "pylint-dev__pylint-6528": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    true,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    true,
+    false
+   ]
+  },
+  "pytest-dev__pytest-10051": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "pytest-dev__pytest-5262": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "scikit-learn__scikit-learn-10297": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "sphinx-doc__sphinx-7462": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  },
+  "sphinx-doc__sphinx-8120": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "fo": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ]
+  },
+  "sympy__sympy-13091": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "fo": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ]
+  }
+ },
+ "liveness": {
+  "control": {
+   "runs": 75,
+   "image_runs": 0,
+   "image_errors": 0,
+   "fo_shown": 0,
+   "empty_patch": 5,
+   "scratch_stripped": 0
+  },
+  "fo": {
+   "runs": 75,
+   "image_runs": 0,
+   "image_errors": 0,
+   "fo_shown": 40,
+   "empty_patch": 3,
+   "scratch_stripped": 0
+  },
+  "ix": {
+   "runs": 75,
+   "image_runs": 72,
+   "image_errors": 0,
+   "fo_shown": 160,
+   "empty_patch": 11,
+   "scratch_stripped": 7
+  }
+ },
+ "flips": [
+  [
+   "ix",
+   "astropy__astropy-13236",
+   "never",
+   3,
+   1
+  ],
+  [
+   "ix",
+   "astropy__astropy-13453",
+   "never",
+   2,
+   0
+  ],
+  [
+   "ix",
+   "psf__requests-5414",
+   "never",
+   1,
+   0
+  ],
+  [
+   "fo",
+   "pylint-dev__pylint-6528",
+   "flaky:1/9",
+   1,
+   0
+  ],
+  [
+   "ix",
+   "pylint-dev__pylint-6528",
+   "flaky:1/9",
+   1,
+   0
+  ]
+ ],
+ "noharm_losses": [
+  [
+   "ix",
+   "django__django-10880",
+   3,
+   2
+  ],
+  [
+   "ix",
+   "matplotlib__matplotlib-14623",
+   2,
+   1
+  ],
+  [
+   "ix",
+   "pylint-dev__pylint-4970",
+   1,
+   0
+  ]
+ ],
+ "new_pass": [
+  [
+   "ix",
+   "astropy__astropy-13453",
+   [
+    1,
+    3
+   ]
+  ],
+  [
+   "ix",
+   "psf__requests-5414",
+   [
+    2
+   ]
+  ],
+  [
+   "fo",
+   "pylint-dev__pylint-6528",
+   [
+    1
+   ]
+  ],
+  [
+   "ix",
+   "pylint-dev__pylint-6528",
+   [
+    2
+   ]
+  ]
+ ],
+ "django": {
+  "control": {
+   "pytest": 15,
+   "pytest_missing": 0
+  },
+  "fo": {
+   "pytest": 22,
+   "pytest_missing": 0
+  },
+  "ix": {
+   "pytest": 13,
+   "pytest_missing": 8,
+   "runtests": 9
+  }
+ }
+}
