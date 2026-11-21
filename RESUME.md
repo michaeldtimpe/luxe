@@ -27,14 +27,15 @@
   Next (needs go-ahead): ix vs ix + max_steps 60 vs + no commit-pressure stack, same slice.
 - **Same day, later:** idle-wide re-run with output visible (still not promoted;
   `acceptance/idle_wide_rerun_2026_11`); 0.8.0 champion re-baseline 30/30, 27 REAL, -32% wall vs Oct
-  (`acceptance/baseline_080_2026_11`, the new reference); `LUXE_READ_OVERSIZE_WINDOW=1` fixes
-  document-config 32 to 55/55, 29 REAL, +19% prompt tokens (wants a confirmation rep before any
-  default change); document-config canonical 55-var set + R4 (PR #64,
+  (`acceptance/baseline_080_2026_11`, the new reference); `LUXE_READ_OVERSIZE_WINDOW=1` looked like a
+  document-config fix (32 to 55/55) but the evening confirmation rep refuted it (ow 31/29/28 vs ctl 32;
+  the 55/55 was one trajectory x3; the gap is the model trusting `grep os.getenv`); stays opt-in; document-config canonical 55-var set + R4 (PR #64,
   `acceptance/doc_config_rescore_2026_11`, incl. DIAGNOSIS: oMLX 0.8.0, not luxe); cleanup turn
   catches data litter (PRs #65-#68, `acceptance/cleanup_data_check_2026_11`; #66 had a newline
   bug fixed by #67 within the hour, lessons.md).
 - **Pending decisions (Michael):** ThinkingCap-4bit on m1; the ix + max_steps 60 follow-up; whether
-  to confirm `LUXE_READ_OVERSIZE_WINDOW=1` for maintain/chat. `wide` re-run done: still no.
+  to narrow the cleanup/orphan `_`-stem exemption to dunder names (`_test_health.py` litter, 10/12
+  healthcheck runs). Oversize-window confirmation done: refuted. `wide` re-run done: still no.
 
 ## ⇒ SESSION NOTE (2026-11-08, m5) — oversize-read window lever: opt-in, not promoted (34.7 vs 35.7)
 
