@@ -169,3 +169,90 @@ Fix both defects (scratch paths do not count as the write for the idle exit unde
 files in new top-level directories that hold no package), then run `control` vs `ix60nb` on this slice in
 one session, 3 reps (~3.5 h predictions + ~1 h grading). If it clears no-harm, the n=75 x 3 run against the
 42/75 gate decides promotion.
+
+## Same-session check: control vs ix60nb after the scratch fixes (2026-11-21 08:23 to 13:41)
+
+**Run.** Same slice, 3 reps interleaved, `control` (shipped defaults) and `ix60nb` in one session, bench at
+b1b8315 (PR #71: a scratch write no longer arms the post-write idle exit under image exec, and the strip
+covers new top-level directories). 150 runs, every arm rc=0, graded with 4 workers in 1.3 h, 0 harness
+errors. Analysis: `analyze.py --out samesession/analysis.json control=samesession/control
+ix60nb=samesession/ix60nb`.
+
+### Verdict
+
+**ix60nb resolves 40/75 against control's 31 in the same session, with 12 flip-target resolves against 0, and
+it still fails no-harm: net -3 against the gate's 1.** The idle-exit fix worked where it was aimed: django-10880
+is 3/3 (1/3 in the follow-up), and empty patches fell from 6 to 3. The remaining losses repeat the
+follow-up's shape (below). Not promoted on this slice's gate.
+
+| | control | ix60nb | gate |
+|---|---|---|---|
+| resolved, all 75 | 31 (11/10/10) | **40** (11/16/13) | report |
+| flip targets (39) | 0 | **12** | above control: **PASS** |
+| no-harm (36) | 31 | 28 | net loss at most 1: **FAIL** (-3) |
+| every new PASS read by hand | | 6 REAL, 1 THIN | |
+| runs at the step limit | 5 | 4 | |
+| median steps | 15 | 27 | |
+| median wall per instance | 38 s | 110 s | |
+| empty patches | 2 | 3 | |
+| runs with a `scratch_write` event | 0 | 69/75 (152 events) | liveness of the fix |
+| post-write idle exits | | 17 | |
+| scratch stripped | 0 | 6 files | |
+| backend errors (oMLX 500, invalid tool call) | 0 | 2 (pylint-4970 r1, sklearn-10297 r2, resolved) | infrastructure |
+
+### Flips
+
+| instance | prior | control / ix60nb |
+|---|---|---|
+| astropy__astropy-13236 | 0/9 | 0 / 3 |
+| astropy__astropy-13453 | 0/9 | 0 / 3 |
+| psf__requests-2931 | 0/9 | 0 / 2 |
+| pylint-dev__pylint-6528 | 1/9 | 0 / 2 |
+| matplotlib__matplotlib-24870 | 1/9 | 0 / 1 |
+| psf__requests-5414 | 0/9 | 0 / 1 |
+
+### Hand verification (10 distinct passing patches; 3 already read above)
+
+- **astropy-13236** `005c4504`: gold's removal of the structured-ndarray auto-view, plus the import moved to
+  `astropy/table/__init__.py` (the G3 shape). REAL.
+- **astropy-13453** `e3770ca5`, `fe6c89db`: set `col.info.format` from `self.data.formats` before rendering (the
+  follow-up's `22b0d532` shape). REAL x2.
+- **matplotlib-24870** `97ae2ca4`: records whether z was boolean before the float conversion and then
+  picks levels `[0, 0.5, 1]` (filled) or `[0.5]`, gold's rule, for contour and tricontour. Gold passes the
+  dtype through instead of a flag on self. REAL.
+- **pylint-6528** `2b7c4293`: prunes ignored walk roots through `skip_subtrees`, gold's approach. REAL.
+  `53a54532`: filters walked dirs by ignore and `black_list_re`, and files by all three options; dirs are not
+  filtered by ignore-paths. REAL (partial on ignore-paths for directories).
+- **psf__requests-5414** `f1b6293d`: **THIN.** It sends every plain ASCII host through `_get_idna_encoded_host`
+  to catch the empty label. That works for `.example.com`, but `idna.encode("my_host.local", uts46=True)`
+  raises `InvalidCodepoint` (checked), so any host with an underscore (common for docker service names)
+  now raises `InvalidURL`. The tests do not cover it.
+
+### No-harm losses
+
+| instance | prior | control / ix60nb | cause |
+|---|---|---|---|
+| matplotlib__matplotlib-14623 | 0/9 | 2 / 1 | control's resolve is a 13-line patch (r1, r2 identical); ix60nb writes 45 to 47 lines, one of which passes |
+| pylint-dev__pylint-4970 | 0/9 | 1 / 0 | r1 ended on the oMLX 500; r2, r3 13-line patches that fail, as in control r2, r3 |
+| pydata__xarray-2905 | 6/9 | 3 / 2 | r1: a different 15-line patch that fails |
+| pytest-dev__pytest-5262 | 8/9 | 3 / 2 | r3: a different 22-line patch that fails |
+| django__django-11333 | 6/9 | 1 / 2 | (gain) |
+
+Across all three sessions the pattern is the same: on the two 0/9-prior "no-harm" instances control gets 2 to 3
+resolves that image exec does not reproduce, and on the 10 instances with a prior of at least 6/9 every
+ix-family arm is at net -1 or better (here -1: xarray -1, pytest-5262 -1, django-11333 +1). The gate as written
+counts all 12 and fails.
+
+### Third scratch defect
+
+All three ix60nb sphinx-8120 predictions carry `sphinx-test-locale-override` as a gitlink (`new file mode
+160000`, a `Subproject commit` line): the model ran `git init` in a scratch directory, and the strip only removes
+files, so the nested repository's directory survives. The predictions applied and resolved, but the line is
+litter. Fix: remove an added directory that holds its own `.git` under the same new-top-level-dir rule.
+
+### Options
+
+1. Fix the gitlink strip, then run the promotion test: ix60nb vs control at n=75 x 3 against the 42/75 gate
+   (roughly 12 h predictions + 5 h grading). 73 of the 75 images are local; django-11734 and
+   psf__requests-6028 would need pulling first, since the adapter's preflight refuses to start without them.
+2. Hold: treat the no-harm result as a real cost (about 1 run in 36) and stop here.

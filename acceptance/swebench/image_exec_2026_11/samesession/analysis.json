@@ -1,0 +1,455 @@
+{
+ "grid": {
+  "astropy__astropy-12907": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "astropy__astropy-13236": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "astropy__astropy-13453": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "astropy__astropy-13977": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "astropy__astropy-14182": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "astropy__astropy-8707": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "django__django-10880": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "django__django-10973": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "django__django-10999": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "django__django-11333": {
+   "control": [
+    false,
+    false,
+    true
+   ],
+   "ix60nb": [
+    true,
+    false,
+    true
+   ]
+  },
+  "matplotlib__matplotlib-13989": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "matplotlib__matplotlib-14623": {
+   "control": [
+    true,
+    true,
+    false
+   ],
+   "ix60nb": [
+    false,
+    true,
+    false
+   ]
+  },
+  "matplotlib__matplotlib-24870": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    true,
+    false
+   ]
+  },
+  "mwaskom__seaborn-3187": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "psf__requests-2931": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    true,
+    true
+   ]
+  },
+  "psf__requests-5414": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    true,
+    false
+   ]
+  },
+  "pydata__xarray-2905": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    false,
+    true,
+    true
+   ]
+  },
+  "pylint-dev__pylint-4970": {
+   "control": [
+    true,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "pylint-dev__pylint-6528": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    true,
+    true
+   ]
+  },
+  "pytest-dev__pytest-10051": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "pytest-dev__pytest-5262": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    false
+   ]
+  },
+  "scikit-learn__scikit-learn-10297": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "sphinx-doc__sphinx-7462": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "sphinx-doc__sphinx-8120": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "sympy__sympy-13091": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  }
+ },
+ "liveness": {
+  "control": {
+   "runs": 75,
+   "image_runs": 0,
+   "step_limit": 5,
+   "image_errors": 0,
+   "fo_shown": 0,
+   "empty_patch": 2,
+   "scratch_stripped": 0
+  },
+  "ix60nb": {
+   "runs": 75,
+   "image_runs": 75,
+   "step_limit": 4,
+   "image_errors": 0,
+   "fo_shown": 218,
+   "empty_patch": 3,
+   "scratch_stripped": 6
+  }
+ },
+ "flips": [
+  [
+   "ix60nb",
+   "astropy__astropy-13236",
+   "never",
+   3,
+   0
+  ],
+  [
+   "ix60nb",
+   "astropy__astropy-13453",
+   "never",
+   3,
+   0
+  ],
+  [
+   "ix60nb",
+   "matplotlib__matplotlib-24870",
+   "flaky:1/9",
+   1,
+   0
+  ],
+  [
+   "ix60nb",
+   "psf__requests-2931",
+   "never",
+   2,
+   0
+  ],
+  [
+   "ix60nb",
+   "psf__requests-5414",
+   "never",
+   1,
+   0
+  ],
+  [
+   "ix60nb",
+   "pylint-dev__pylint-6528",
+   "flaky:1/9",
+   2,
+   0
+  ]
+ ],
+ "noharm_losses": [
+  [
+   "ix60nb",
+   "matplotlib__matplotlib-14623",
+   2,
+   1
+  ],
+  [
+   "ix60nb",
+   "pydata__xarray-2905",
+   3,
+   2
+  ],
+  [
+   "ix60nb",
+   "pylint-dev__pylint-4970",
+   1,
+   0
+  ],
+  [
+   "ix60nb",
+   "pytest-dev__pytest-5262",
+   3,
+   2
+  ]
+ ],
+ "new_pass": [
+  [
+   "ix60nb",
+   "astropy__astropy-13236",
+   [
+    1,
+    2,
+    3
+   ]
+  ],
+  [
+   "ix60nb",
+   "astropy__astropy-13453",
+   [
+    1,
+    2,
+    3
+   ]
+  ],
+  [
+   "ix60nb",
+   "matplotlib__matplotlib-24870",
+   [
+    2
+   ]
+  ],
+  [
+   "ix60nb",
+   "psf__requests-2931",
+   [
+    2,
+    3
+   ]
+  ],
+  [
+   "ix60nb",
+   "psf__requests-5414",
+   [
+    2
+   ]
+  ],
+  [
+   "ix60nb",
+   "pylint-dev__pylint-6528",
+   [
+    2,
+    3
+   ]
+  ]
+ ],
+ "django": {
+  "control": {
+   "pytest": 15,
+   "pytest_missing": 0
+  },
+  "ix60nb": {
+   "runtests": 40,
+   "pytest": 13,
+   "pytest_missing": 6
+  }
+ }
+}

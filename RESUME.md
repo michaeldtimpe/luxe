@@ -1,5 +1,19 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-21 afternoon, m5) — scratch fixes landed (#71); same-session control vs ix60nb: 40 vs 31, no-harm still -3
+
+- **PR #71 (b1b8315):** under image exec a scratch write no longer arms the post-write idle exit
+  (`LoopState.source_writes_seen`, event `scratch_write`, shared classifier `src/luxe/scratch.py`); the strip
+  also removes files under a new top-level dir with no package. Off = byte-identical.
+- **Same-session run** (`acceptance/swebench/image_exec_2026_11/REPORT.md` § Same-session): control 31,
+  ix60nb **40**/75; flip targets 0 vs 12 (PASS); no-harm 31 vs 28, net -3, **FAIL**. django-10880 now 3/3.
+  Hand-read: 6 REAL, 1 THIN (requests-5414 `f1b6293d` IDNA-encodes every host, so underscore hosts raise).
+  The losses sit on the two 0/9-prior "no-harm" instances plus one run each on xarray-2905 / pytest-5262.
+  2 oMLX 500 "unrecoverable tool call" errors (infrastructure).
+- **Third scratch defect:** a `git init` in a scratch dir reaches the patch as a gitlink (sphinx-8120 x3).
+- **Pending decision (Michael):** fix the gitlink strip and run ix60nb vs control at n=75 x 3 (~17 h; pull 2
+  missing images), or hold. Also ThinkingCap-4bit on m1.
+
 ## ⇒ SESSION NOTE (2026-11-21, m5) — image-exec follow-up: ix60nb 38/75 but no-harm still fails; `_`-stem cleanup fix confirmed live
 
 - **Image-exec follow-up** (`acceptance/swebench/image_exec_2026_11/REPORT.md` § Follow-up): ix / ix60

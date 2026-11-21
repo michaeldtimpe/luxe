@@ -1,0 +1,14 @@
+REP 1 ARM control start 2026-11-21 08:23:06
+REP 1 ARM control end 2026-11-21 08:41:06 rc=0
+REP 1 ARM ix60nb start 2026-11-21 08:41:06
+REP 1 ARM ix60nb end 2026-11-21 09:41:19 rc=0
+REP 2 ARM control start 2026-11-21 09:41:19
+REP 2 ARM control end 2026-11-21 10:02:53 rc=0
+REP 2 ARM ix60nb start 2026-11-21 10:02:53
+REP 2 ARM ix60nb end 2026-11-21 11:00:33 rc=0
+REP 3 ARM control start 2026-11-21 11:00:33
+REP 3 ARM control end 2026-11-21 11:21:45 rc=0
+REP 3 ARM ix60nb start 2026-11-21 11:21:45
+REP 3 ARM ix60nb end 2026-11-21 12:20:30 rc=0
+PREDICT_DONE samesession 2026-11-21 12:20:30
+DONE samesession 2026-11-21 13:40:56
