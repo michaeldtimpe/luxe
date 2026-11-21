@@ -213,3 +213,19 @@ def test_system_prompt_says_unread_data_is_scratch():
     from luxe.agents.prompts import CLEANUP_TURN_SYSTEM
     assert "no code or test in the repository reads is scratch" in CLEANUP_TURN_SYSTEM
     assert "including new tests meant to stay in the project" in CLEANUP_TURN_SYSTEM
+
+
+def test_single_underscore_scratch_is_a_candidate_dunder_is_not(repo):
+    """2026-11-20: `_test_health.py` was committed in 10/12 healthcheck runs
+    because every `_`-stem was exempt. Only dunder files are now; a private
+    module the change imports is still kept by the reference test."""
+    r, base = repo
+    (r / "_test_health.py").write_text("from app import app\nprint(app)\n")
+    (r / "_internal.py").write_text("X = 1\n")
+    (r / "app.py").write_text((r / "app.py").read_text() + "from _internal import X\n")
+    (r / "pkg").mkdir()
+    (r / "pkg" / "__main__.py").write_text("print('hi')\n")
+    paths = {c.path for c in cleanup.find_candidates(r, base)}
+    assert "_test_health.py" in paths
+    assert "_internal.py" not in paths
+    assert "pkg/__main__.py" not in paths

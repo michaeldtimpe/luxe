@@ -585,7 +585,10 @@ model call. Docs/config are never candidates. Since 2026-11-20 unreferenced
 DATA files the change added (not code, docs or config; e.g. a `fake.gguf`
 fixture) are candidates too: replayed over 553 past patches it offers only
 strict-flag litter (`fake.gguf`, `test_bad.gguf`, `pe_scan.py.bak`), nothing on
-any doc task (acceptance/idle_wide_rerun_2026_11).
+any doc task (acceptance/idle_wide_rerun_2026_11). Also 2026-11-20: only
+dunder stems (`__init__`, `__main__`) skip the reference test, here and in the
+`orphan_file` gate; a single leading underscore no longer does (`_test_health.py`
+litter in 10/12 healthcheck runs; 618-patch replay touches nothing else).
 
 - **Benched** (`acceptance/tuning_2026_10/REPORT.md` §6, §9): Qwen3.8-27B
   healthcheck 0/3 → 3/3 and typing litter gone, with 0 legitimate files

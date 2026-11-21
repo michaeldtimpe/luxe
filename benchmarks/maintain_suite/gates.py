@@ -682,8 +682,13 @@ def check_orphan_file(
     orphans: list[str] = []
     for new_path in new_files:
         new_stem = Path(new_path).stem
-        if not new_stem or new_stem.startswith("_"):
-            # __init__.py, _internal.py, etc. — legitimate bare-stem cases.
+        if not new_stem or (len(new_stem) > 4 and new_stem.startswith("__")
+                            and new_stem.endswith("__")):
+            # __init__.py, __main__.py: needed but never named. A single
+            # leading underscore is NOT exempt (2026-11-20: a scratch
+            # _test_health.py passed this gate in 10/12 runs); a real
+            # private module like _internal.py is imported by name, so
+            # prong 2 finds it.
             continue
 
         # Prong 1: same-directory sibling with same stem (different ext).

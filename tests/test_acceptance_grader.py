@@ -1521,3 +1521,38 @@ def test_long_code_line_does_not_clear_the_floor(git_repo: Path):
                       citations_unresolved=0, citations_total=0, base_sha=base)
     assert not r.expected_outcome_passed
     assert "only 1 added lines, need ≥2" in r.expected_outcome_detail
+
+
+def test_orphan_file_gate_flags_single_underscore_scratch(git_repo: Path):
+    """2026-11-20: a scratch `_test_health.py` passed this gate in 10/12
+    healthcheck runs because every `_`-stem was exempt. Only dunder files
+    (`__init__.py`, `__main__.py`) are exempt now."""
+    base = _base_sha(git_repo)
+    _commit_added_files(git_repo, {
+        "_test_health.py": "print('health ok')\n",
+        "src/main.py": (git_repo / "src" / "main.py").read_text()
+                       + "def health(): return 'ok'\n",
+    }, "impl + underscore scratch")
+    fix = _f("orph6", "regex_present", task_type="implement",
+             pattern=r"def health")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert not r.expected_outcome_passed
+    assert any(g["name"] == "orphan_file" for g in r.gates_triggered)
+    assert "_test_health.py" in r.expected_outcome_detail
+
+
+def test_orphan_file_gate_exempts_dunder_and_imported_private_module(git_repo: Path):
+    base = _base_sha(git_repo)
+    main = git_repo / "src" / "main.py"
+    _commit_added_files(git_repo, {
+        "src/__main__.py": "print('run')\n",
+        "src/_internal.py": "def compute(x): return x\n",
+        "src/main.py": main.read_text() + "from src._internal import compute\n",
+    }, "dunder + imported private module")
+    fix = _f("orph7", "regex_present", task_type="implement",
+             pattern=r"def compute")
+    r = grade_fixture(fix, git_repo, pr_url="x", pr_opened=True,
+                      citations_unresolved=0, citations_total=0, base_sha=base)
+    assert r.expected_outcome_passed, r.expected_outcome_detail
+    assert not any(g["name"] == "orphan_file" for g in r.gates_triggered)

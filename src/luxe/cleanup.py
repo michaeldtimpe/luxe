@@ -94,6 +94,14 @@ def _is_generated(path: str) -> bool:
     return "__pycache__/" in path or path.endswith((".pyc", ".pyo"))
 
 
+def _is_dunder(stem: str) -> bool:
+    """`__init__`, `__main__`: files a package needs but nothing names. Only
+    these are exempt from the reference test; a single leading underscore is
+    not (2026-11-20: `_test_health.py` litter was committed in 10/12
+    healthcheck runs because `_`-stems were skipped)."""
+    return len(stem) > 4 and stem.startswith("__") and stem.endswith("__")
+
+
 def _referenced_elsewhere(repo: Path, path: str) -> bool:
     stem = Path(path).stem
     rc, out = _git(repo, "grep", "-l", "-w", "--untracked", "-e", stem,
@@ -133,7 +141,7 @@ def find_candidates(repo: Path, base_sha: str) -> list[Candidate]:
         if _is_generated(p):
             out.append(Candidate(p, "generated"))
         elif (Path(p).suffix.lower() in _CODE_EXTS
-              and not Path(p).stem.startswith("_")
+              and not _is_dunder(Path(p).stem)
               and not _referenced_elsewhere(repo, p)):
             out.append(Candidate(p, "unreferenced"))
         elif _is_data(p) and not _name_mentioned_elsewhere(repo, p):
