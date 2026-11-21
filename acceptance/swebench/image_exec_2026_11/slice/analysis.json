@@ -430,6 +430,7 @@
   "control": {
    "runs": 75,
    "image_runs": 0,
+   "step_limit": 5,
    "image_errors": 0,
    "fo_shown": 0,
    "empty_patch": 5,
@@ -438,6 +439,7 @@
   "fo": {
    "runs": 75,
    "image_runs": 0,
+   "step_limit": 4,
    "image_errors": 0,
    "fo_shown": 40,
    "empty_patch": 3,
@@ -446,6 +448,7 @@
   "ix": {
    "runs": 75,
    "image_runs": 72,
+   "step_limit": 23,
    "image_errors": 0,
    "fo_shown": 160,
    "empty_patch": 11,

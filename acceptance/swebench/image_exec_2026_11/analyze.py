@@ -13,6 +13,12 @@ passes to read by hand (resolved in fo/ix but never in control here and
 <= 1/9 prior). Writes slice/analysis.json.
 
   python3 acceptance/swebench/image_exec_2026_11/analyze.py
+
+Follow-up form: arms as label=<dir>/<arm prefix>, the first one is the
+baseline every other arm is compared with, and --out names the json:
+
+  analyze.py --out followup/analysis.json control=slice/control \
+      ix=followup/ix ix60=followup/ix60 ix60nb=followup/ix60nb
 """
 from __future__ import annotations
 
@@ -28,6 +34,9 @@ S = HERE / "slice"
 SUB = HERE.parents[2] / "benchmarks/swebench/subsets/fo_slice_2026_11.json"
 RUNS = Path.home() / ".luxe/runs"
 ARMS = ("control", "fo", "ix")
+SRC = {a: S / a for a in ARMS}
+OUT = S / "analysis.json"
+STEP_LIMIT = {"control": 30, "fo": 30, "ix": 30, "ix60": 60, "ix60nb": 60}
 REPS = (1, 2, 3)
 TESTISH = re.compile(r"pytest|runtests\.py|unittest|bin/test")
 
@@ -68,11 +77,12 @@ def main() -> None:
     grid: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     live = defaultdict(lambda: defaultdict(int))
     walls = defaultdict(list)
+    walls_steps = defaultdict(list)
     django = defaultdict(lambda: defaultdict(int))
     missing = []
     for arm in ARMS:
         for rep in REPS:
-            cell = S / f"{arm}-rep{rep}"
+            cell = SRC[arm].parent / f"{SRC[arm].name}-rep{rep}"
             hs = cell / "harness" / "harness_summary.json"
             graded = json.loads(hs.read_text())["instances"] if hs.exists() else {}
             if not graded:
@@ -88,6 +98,9 @@ def main() -> None:
                 st = [e for e in ev if e["kind"] == "image_exec_stats"]
                 live[arm]["runs"] += 1
                 live[arm]["image_runs"] += bool(st and st[0].get("image_calls"))
+                steps = 1 + max((e["step"] for e in ev if e["kind"] == "step_usage"), default=-1)
+                live[arm]["step_limit"] += steps >= STEP_LIMIT.get(arm, 30)
+                walls_steps[arm].append(steps)
                 live[arm]["image_errors"] += sum(e["kind"] == "image_exec_error" for e in ev)
                 live[arm]["fo_shown"] += sum(e["kind"] == "failed_output_shown" for e in ev)
                 live[arm]["empty_patch"] += not (d.get("model_patch") or "").strip()
@@ -104,42 +117,53 @@ def main() -> None:
         return sum(v for i in ids if sel(i) for v in grid[i][arm] if v)
 
     print("cells without grades:", missing or "none")
-    print("\narm      resolved/75  flip_targets/39  no_harm/36  median_wall  image_runs  image_err  fo_shown  empty  scratch")
+    print("\narm      resolved/75  flip_targets/39  no_harm/36  median_wall  med_steps  at_limit  image_runs  image_err  fo_shown  empty  scratch")
     for arm in ARMS:
         print(f"{arm:8s} {resolved(arm):6d}       {resolved(arm, lambda i: role[i] == 'flip_target'):6d}"
               f"          {resolved(arm, lambda i: role[i] == 'no_harm'):6d}"
-              f"      {statistics.median(walls[arm]):7.0f}s  {live[arm]['image_runs']:4d}/{live[arm]['runs']}"
+              f"      {statistics.median(walls[arm]):7.0f}s  {statistics.median(walls_steps[arm]):6.0f}  {live[arm]['step_limit']:6d}    {live[arm]['image_runs']:4d}/{live[arm]['runs']}"
               f"    {live[arm]['image_errors']:4d}    {live[arm]['fo_shown']:5d}   {live[arm]['empty_patch']:3d}   {live[arm]['scratch_stripped']:3d}")
 
-    print("\nper instance (prior | control fo ix as resolved/3):")
+    base, others = ARMS[0], ARMS[1:]
+    print(f"\nper instance (prior | {' '.join(ARMS)} as resolved/3):")
     flips, losses, new_pass = [], [], []
     for i in sorted(ids, key=lambda x: (role[x], x)):
         c = {a: sum(1 for v in grid[i][a] if v) for a in ARMS}
-        print(f"  {role[i]:11s} {i:38s} {prior[i]:>11s} | {c['control']} {c['fo']} {c['ix']}")
+        print(f"  {role[i]:11s} {i:38s} {prior[i]:>11s} | {' '.join(str(c[a]) for a in ARMS)}")
         pr = prior_rate(prior[i])
-        for a in ("fo", "ix"):
+        for a in others:
             if role[i] == "flip_target" and c[a] / 3 > pr:
-                flips.append((a, i, prior[i], c[a], c["control"]))
-            if role[i] == "no_harm" and c[a] < c["control"]:
-                losses.append((a, i, c["control"], c[a]))
-            if c[a] and not c["control"] and pr <= 1 / 9:
+                flips.append((a, i, prior[i], c[a], c[base]))
+            if role[i] == "no_harm" and c[a] < c[base]:
+                losses.append((a, i, c[base], c[a]))
+            if c[a] and not c[base] and pr <= 1 / 9:
                 new_pass.append((a, i, [r for r, v in zip(REPS, grid[i][a]) if v]))
-    print("\nflips (arm, iid, prior, arm/3, control/3):")
+    print(f"\nflips (arm, iid, prior, arm/3, {base}/3):")
     for f in flips:
         print("  ", *f)
-    print("\nno-harm losses vs control (arm, iid, control/3, arm/3):", losses or "none")
-    for a in ("fo", "ix"):
+    print(f"\nno-harm losses vs {base} (arm, iid, {base}/3, arm/3):", losses or "none")
+    for a in others:
         net = sum(c - x for aa, _, c, x in losses if aa == a)
-        print(f"  {a}: net no-harm loss {net} (gate: ix <= 1)")
+        gain = sum(x - c for aa, i, c, x in [(a, i, sum(1 for v in grid[i][base] if v), sum(1 for v in grid[i][a] if v)) for i in ids if role[i] == "no_harm"] if x > c)
+        print(f"  {a}: no-harm runs lost {net}, gained {gain}, net {gain - net:+d} (gate: net loss <= 1)")
     print("\nNEW passes to hand-read (arm, iid, reps):")
     for n in new_pass:
         print("  ", *n)
     print("\nDjango test commands (pytest absent in testbed):", {a: dict(v) for a, v in django.items()})
-    (S / "analysis.json").write_text(json.dumps({
+    OUT.write_text(json.dumps({
         "grid": {i: dict(v) for i, v in grid.items()}, "liveness": {a: dict(v) for a, v in live.items()},
         "flips": flips, "noharm_losses": losses, "new_pass": new_pass,
         "django": {a: dict(v) for a, v in django.items()}}, indent=1, default=str))
 
 
 if __name__ == "__main__":
+    import sys
+    argv = sys.argv[1:]
+    if "--out" in argv:
+        k = argv.index("--out")
+        OUT = HERE / argv[k + 1]
+        del argv[k:k + 2]
+    if argv:
+        SRC = {a: HERE / d for a, d in (x.split("=", 1) for x in argv)}
+        ARMS = tuple(SRC)
     main()

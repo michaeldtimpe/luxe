@@ -1,0 +1,867 @@
+{
+ "grid": {
+  "astropy__astropy-12907": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    false
+   ]
+  },
+  "astropy__astropy-13236": {
+   "control": [
+    false,
+    true,
+    false
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "astropy__astropy-13453": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    true
+   ],
+   "ix60": [
+    true,
+    false,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "astropy__astropy-13977": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "astropy__astropy-14182": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "astropy__astropy-8707": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "django__django-10880": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    false,
+    true,
+    true
+   ],
+   "ix60": [
+    false,
+    true,
+    true
+   ],
+   "ix60nb": [
+    false,
+    false,
+    true
+   ]
+  },
+  "django__django-10973": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "django__django-10999": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "django__django-11333": {
+   "control": [
+    false,
+    true,
+    false
+   ],
+   "ix": [
+    false,
+    true,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    false
+   ]
+  },
+  "matplotlib__matplotlib-13989": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "matplotlib__matplotlib-14623": {
+   "control": [
+    true,
+    true,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "matplotlib__matplotlib-24870": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "mwaskom__seaborn-3187": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "psf__requests-2931": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    true,
+    false
+   ],
+   "ix60": [
+    false,
+    true,
+    false
+   ],
+   "ix60nb": [
+    true,
+    true,
+    false
+   ]
+  },
+  "psf__requests-5414": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    true,
+    true,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "pydata__xarray-2905": {
+   "control": [
+    false,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "pylint-dev__pylint-4970": {
+   "control": [
+    true,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    true
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "pylint-dev__pylint-6528": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    true
+   ],
+   "ix60nb": [
+    false,
+    false,
+    true
+   ]
+  },
+  "pytest-dev__pytest-10051": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    true,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "pytest-dev__pytest-5262": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    false,
+    true
+   ],
+   "ix60": [
+    true,
+    false,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "scikit-learn__scikit-learn-10297": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "sphinx-doc__sphinx-7462": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  },
+  "sphinx-doc__sphinx-8120": {
+   "control": [
+    true,
+    true,
+    true
+   ],
+   "ix": [
+    true,
+    true,
+    true
+   ],
+   "ix60": [
+    true,
+    true,
+    true
+   ],
+   "ix60nb": [
+    true,
+    true,
+    true
+   ]
+  },
+  "sympy__sympy-13091": {
+   "control": [
+    false,
+    false,
+    false
+   ],
+   "ix": [
+    false,
+    false,
+    false
+   ],
+   "ix60": [
+    false,
+    false,
+    false
+   ],
+   "ix60nb": [
+    false,
+    false,
+    false
+   ]
+  }
+ },
+ "liveness": {
+  "control": {
+   "runs": 75,
+   "image_runs": 0,
+   "step_limit": 5,
+   "image_errors": 0,
+   "fo_shown": 0,
+   "empty_patch": 5,
+   "scratch_stripped": 0
+  },
+  "ix": {
+   "runs": 75,
+   "image_runs": 71,
+   "step_limit": 21,
+   "image_errors": 0,
+   "fo_shown": 154,
+   "empty_patch": 12,
+   "scratch_stripped": 1
+  },
+  "ix60": {
+   "runs": 75,
+   "image_runs": 73,
+   "step_limit": 4,
+   "image_errors": 0,
+   "fo_shown": 184,
+   "empty_patch": 6,
+   "scratch_stripped": 1
+  },
+  "ix60nb": {
+   "runs": 75,
+   "image_runs": 75,
+   "step_limit": 7,
+   "image_errors": 0,
+   "fo_shown": 212,
+   "empty_patch": 6,
+   "scratch_stripped": 2
+  }
+ },
+ "flips": [
+  [
+   "ix",
+   "astropy__astropy-13236",
+   "never",
+   3,
+   1
+  ],
+  [
+   "ix60",
+   "astropy__astropy-13236",
+   "never",
+   3,
+   1
+  ],
+  [
+   "ix60nb",
+   "astropy__astropy-13236",
+   "never",
+   3,
+   1
+  ],
+  [
+   "ix",
+   "astropy__astropy-13453",
+   "never",
+   1,
+   0
+  ],
+  [
+   "ix60",
+   "astropy__astropy-13453",
+   "never",
+   2,
+   0
+  ],
+  [
+   "ix60nb",
+   "astropy__astropy-13453",
+   "never",
+   3,
+   0
+  ],
+  [
+   "ix",
+   "psf__requests-2931",
+   "never",
+   1,
+   0
+  ],
+  [
+   "ix60",
+   "psf__requests-2931",
+   "never",
+   1,
+   0
+  ],
+  [
+   "ix60nb",
+   "psf__requests-2931",
+   "never",
+   2,
+   0
+  ],
+  [
+   "ix",
+   "psf__requests-5414",
+   "never",
+   2,
+   0
+  ],
+  [
+   "ix60nb",
+   "psf__requests-5414",
+   "never",
+   3,
+   0
+  ],
+  [
+   "ix60",
+   "pylint-dev__pylint-6528",
+   "flaky:1/9",
+   1,
+   0
+  ],
+  [
+   "ix60nb",
+   "pylint-dev__pylint-6528",
+   "flaky:1/9",
+   1,
+   0
+  ],
+  [
+   "ix60",
+   "pytest-dev__pytest-10051",
+   "never",
+   1,
+   0
+  ]
+ ],
+ "noharm_losses": [
+  [
+   "ix60nb",
+   "astropy__astropy-12907",
+   3,
+   2
+  ],
+  [
+   "ix",
+   "django__django-10880",
+   3,
+   2
+  ],
+  [
+   "ix60",
+   "django__django-10880",
+   3,
+   2
+  ],
+  [
+   "ix60nb",
+   "django__django-10880",
+   3,
+   1
+  ],
+  [
+   "ix",
+   "matplotlib__matplotlib-14623",
+   2,
+   0
+  ],
+  [
+   "ix60",
+   "matplotlib__matplotlib-14623",
+   2,
+   0
+  ],
+  [
+   "ix60nb",
+   "matplotlib__matplotlib-14623",
+   2,
+   0
+  ],
+  [
+   "ix60",
+   "pylint-dev__pylint-4970",
+   1,
+   0
+  ],
+  [
+   "ix60nb",
+   "pylint-dev__pylint-4970",
+   1,
+   0
+  ],
+  [
+   "ix",
+   "pytest-dev__pytest-5262",
+   3,
+   2
+  ],
+  [
+   "ix60",
+   "pytest-dev__pytest-5262",
+   3,
+   2
+  ]
+ ],
+ "new_pass": [
+  [
+   "ix",
+   "astropy__astropy-13453",
+   [
+    3
+   ]
+  ],
+  [
+   "ix60",
+   "astropy__astropy-13453",
+   [
+    1,
+    3
+   ]
+  ],
+  [
+   "ix60nb",
+   "astropy__astropy-13453",
+   [
+    1,
+    2,
+    3
+   ]
+  ],
+  [
+   "ix",
+   "psf__requests-2931",
+   [
+    2
+   ]
+  ],
+  [
+   "ix60",
+   "psf__requests-2931",
+   [
+    2
+   ]
+  ],
+  [
+   "ix60nb",
+   "psf__requests-2931",
+   [
+    1,
+    2
+   ]
+  ],
+  [
+   "ix",
+   "psf__requests-5414",
+   [
+    1,
+    2
+   ]
+  ],
+  [
+   "ix60nb",
+   "psf__requests-5414",
+   [
+    1,
+    2,
+    3
+   ]
+  ],
+  [
+   "ix60",
+   "pylint-dev__pylint-6528",
+   [
+    3
+   ]
+  ],
+  [
+   "ix60nb",
+   "pylint-dev__pylint-6528",
+   [
+    3
+   ]
+  ],
+  [
+   "ix60",
+   "pytest-dev__pytest-10051",
+   [
+    1
+   ]
+  ]
+ ],
+ "django": {
+  "control": {
+   "pytest": 15,
+   "pytest_missing": 0
+  },
+  "ix": {
+   "pytest": 13,
+   "pytest_missing": 8,
+   "runtests": 18
+  },
+  "ix60": {
+   "pytest": 15,
+   "pytest_missing": 10,
+   "runtests": 17
+  },
+  "ix60nb": {
+   "runtests": 18,
+   "pytest": 16,
+   "pytest_missing": 8
+  }
+ }
+}

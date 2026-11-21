@@ -1,5 +1,23 @@
 # luxe — session resume document
 
+## ⇒ SESSION NOTE (2026-11-21, m5) — image-exec follow-up: ix60nb 38/75 but no-harm still fails; `_`-stem cleanup fix confirmed live
+
+- **Image-exec follow-up** (`acceptance/swebench/image_exec_2026_11/REPORT.md` § Follow-up): ix / ix60
+  (max_steps 60) / ix60nb (ix60 + no early-bail, write-pressure, action-density), slice x 3. Resolved
+  34 / 34 / **38** of 75 (G3 control 31); flip targets 7 / 8 / **12**; no-harm 27 / 26 / 26 vs 30 = net
+  -3/-4/-4, **gate FAILS**. 60 steps alone: step-limit hits 21 to 4, outcome unchanged; the gain is from
+  removing commit pressure. 10 new passing patches hand-read vs gold, all REAL. ix re-run reproduces G3
+  (34 vs 35). Control is from G3's session, so the no-harm comparison is cross-session.
+- **Two defects found:** (1) a scratch reproducer write arms `post_write_idle_exit`, so the run ends
+  before any source edit (all 6 ix60nb empty patches had scratch-only writes; 2 of 3 django-10880 losses);
+  (2) the scratch strip misses new directories (`test_repro/`, `tmp/pylint_test/`): 5 predictions, all
+  pylint-6528, one resolved. This also corrects G3's "no scratch reached a prediction".
+- **Cleanup `_`-stem fix** (PR #70, f270dd8) live: healthcheck x 3 offers and deletes `_test_health.py`,
+  patch app.py only (`acceptance/cleanup_underscore_2026_11/REPORT.md`; reps identical, n=1).
+- `analyze.py` takes `label=dir/arm` arms and `--out`, and reports median steps and step-limit hits.
+- **Pending decisions (Michael):** ThinkingCap-4bit on m1; fix the two defects and run control vs
+  ix60nb in one session (~4.5 h), then n=75 x 3 if it clears no-harm.
+
 ## ⇒ SESSION NOTE (2026-11-20, m5) — open-items sweep: ThinkingCap-4bit, FAILED_OUTPUT landed, SWE-bench image exec landed + A/B running
 
 - **ThinkingCap 4-bit A/B** (`acceptance/thinkingcap_4bit_2026_11/REPORT.md`): tc4 vs Qwen3.6-27B-4bit,
