@@ -20,6 +20,8 @@ export PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 LUXE_LOG_TOOL_CALLS=1
 export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
 SUB=${SUB:-$HOME/Downloads/luxe/benchmarks/swebench/subsets/fo_slice_2026_11.json}
 REPS=${1:-3}
+# Harness workers for grading (2026-11-20: 2 took ~3.7 h for 9 cells on m5's 8-CPU colima).
+GRADE_WORKERS=${GRADE_WORKERS:-4}
 typeset -A ARM_ENV ARM_CFG ARM_FLAGS
 ARM_ENV=(control "" fo "LUXE_FAILED_OUTPUT=1" ix "LUXE_FAILED_OUTPUT=1 LUXE_BASH_NOOP=strip")
 ARM_CFG=(control configs/single_64gb_swebench.yaml fo configs/single_64gb_swebench.yaml
@@ -37,7 +39,7 @@ grade() {  # $1 = <arm>-rep<N>
 from pathlib import Path
 from benchmarks.swebench.harness import run_harness, write_harness_summary
 out = Path('.').resolve()
-r = run_harness(Path('../predictions.json').resolve(), output_dir=out, run_id='ix_${TAG}_$cell')
+r = run_harness(Path('../predictions.json').resolve(), output_dir=out, run_id='ix_${TAG}_$cell', max_workers=$GRADE_WORKERS)
 write_harness_summary(r, out / 'harness_summary.json')
 print('$cell resolved', sum(x.resolved for x in r.values()), '/', len(r), 'errors', sum(bool(x.error) for x in r.values()))
 " ) >> $OUT/grade.log 2>&1
