@@ -285,3 +285,32 @@ def test_exec_config_routes_bugfix_to_exec_prompt():
         c.pop("profile")
         c["roles"]["monolith"].pop("task_overlay_id")
     assert base == cfg
+
+
+def test_exec_config_is_keyed_on_overlay_not_file_name(tmp_path):
+    """A step-budget copy of the exec config pairs with --image-exec; a
+    renamed strict config does not (2026-11-20, ix60 follow-up)."""
+    import yaml
+    from benchmarks.swebench.run import is_exec_config
+    root = Path(__file__).resolve().parents[1]
+    assert is_exec_config(root / "configs/single_64gb_swebench_exec.yaml")
+    assert is_exec_config(root / "configs/single_64gb_swebench_exec_60.yaml")
+    assert not is_exec_config(root / "configs/single_64gb_swebench.yaml")
+    strict = yaml.safe_load((root / "configs/single_64gb_swebench.yaml").read_text())
+    fake = tmp_path / "single_64gb_swebench_exec.yaml"     # exec name, strict overlay
+    fake.write_text(yaml.safe_dump(strict))
+    assert not is_exec_config(fake)
+    assert not is_exec_config(tmp_path / "missing.yaml")
+
+
+def test_exec_60_config_differs_only_in_step_budget():
+    import yaml
+    root = Path(__file__).resolve().parents[1]
+    a = yaml.safe_load((root / "configs/single_64gb_swebench_exec.yaml").read_text())
+    b = yaml.safe_load((root / "configs/single_64gb_swebench_exec_60.yaml").read_text())
+    assert a["roles"]["monolith"]["max_steps"] == 30
+    assert b["roles"]["monolith"]["max_steps"] == 60
+    for c in (a, b):
+        c.pop("profile")
+        c["roles"]["monolith"].pop("max_steps")
+    assert a == b

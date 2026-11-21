@@ -384,7 +384,8 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   <sha>`, 2026-11-20, set by maintain via `shell.set_image_exec` on every
   run; unset = off = byte-identical). Exported ONLY by
   `benchmarks/swebench/adapter.py` under `run.py --image-exec` (which also
-  requires configs/single_64gb_swebench_exec.yaml). On: after validation
+  requires a config whose monolith overlay is `swebench_exec_only`, e.g.
+  configs/single_64gb_swebench_exec.yaml or its 60-step copy). On: after validation
   and the allowlist, `python`/`pytest`/`pip` run via `_run_in_image` in a
   fresh `--network none` container of the instance's eval image, with the
   files that differ from base_commit (tracked + untracked, index untouched,

@@ -119,6 +119,22 @@ def _preflight_check_venv_pollution() -> int:
     return 0
 
 
+EXEC_OVERLAY = "swebench_exec_only"
+
+
+def is_exec_config(path: Path) -> bool:
+    """True iff the config routes the monolith to the image-exec prompt
+    overlay. Keyed on the overlay, not the file name, so step-budget copies
+    (single_64gb_swebench_exec_60.yaml) pair with --image-exec too. An
+    unreadable config is not an exec config (main fails on it later)."""
+    import yaml
+    try:
+        cfg = yaml.safe_load(Path(path).read_text()) or {}
+        return cfg["roles"]["monolith"].get("task_overlay_id") == EXEC_OVERLAY
+    except (OSError, KeyError, TypeError, AttributeError, yaml.YAMLError):
+        return False
+
+
 def main() -> int:
     rc = _preflight_check_venv_pollution()
     if rc != 0:
@@ -191,8 +207,9 @@ def main() -> int:
                         "SWE-bench eval image (colima), accept a leading "
                         "`cd <dir> &&`, allow scratch reproducers and strip them "
                         "from the patch (2026-11-20, tools.sdd 'SWE-bench image "
-                        "exec'). Requires --config configs/"
-                        "single_64gb_swebench_exec.yaml, and that config "
+                        "exec'). Requires an exec config (task_overlay_id: "
+                        "swebench_exec_only, e.g. configs/"
+                        "single_64gb_swebench_exec.yaml), and such a config "
                         "requires this flag. Preflight refuses to start if any "
                         "instance image is missing.")
     args = p.parse_args()
@@ -200,11 +217,12 @@ def main() -> int:
     # The exec prompt variant promises an environment only --image-exec
     # provides, and --image-exec without it leaves the anti-reproducer prompt
     # in place: refuse either half alone.
-    exec_cfg = args.config.name == "single_64gb_swebench_exec.yaml"
+    exec_cfg = is_exec_config(args.config)
     if args.image_exec != exec_cfg:
-        print("  --image-exec and --config configs/single_64gb_swebench_exec.yaml "
-              "go together (got image_exec=%s, config=%s)"
-              % (args.image_exec, args.config), file=sys.stderr)
+        print("  --image-exec and an exec config (task_overlay_id: "
+              "%s, e.g. configs/single_64gb_swebench_exec.yaml) go together "
+              "(got image_exec=%s, config=%s)"
+              % (EXEC_OVERLAY, args.image_exec, args.config), file=sys.stderr)
         return 2
 
     if not args.dataset.is_file():
