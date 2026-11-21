@@ -21,15 +21,20 @@
   G0 unit RED to GREEN; G1 replay 84/98 refused commands now run, 95/95 executed in image (median
   4.3 s); G2 smoke 2/3 resolved, including **requests-2931 (0/9 prior)** via repro, fix, test,
   regression caught, refix.
-- **IN FLIGHT: G3**, the 3-arm slice (control / fo / ix) x 25 x 3 on `fo_slice_2026_11.json`,
-  started 10:28 from `luxe-bench` at 5f05acf. Output in `acceptance/swebench/image_exec_2026_11/slice/`
-  (`arms.log`; `PREDICT_DONE`, then grading, then `DONE`). Watcher:
-  `acceptance/failed_output_ab_2026_11/watch_stall.sh <dir> 40`. Next: analyze flips vs the 9-rep
-  prior, no-harm on the 12, read every new PASS, write REPORT.md. Watch Django (its testbed has no
-  pytest; does the model switch to `tests/runtests.py`?).
-- **Pending decisions (Michael):** ThinkingCap-4bit on m1 (see above). `LUXE_IDLE_NARROW=wide`
-  (recommendation still no). Both the idle and bash_noop verdicts were measured with failing output
-  hidden, so they deserve a re-run before being carried forward.
+- **G3 done** (`acceptance/swebench/image_exec_2026_11/REPORT.md`): ix 35/75 vs control 31 / fo 32;
+  flip targets 7 vs 1 (astropy-13236 3/3, -13453 2/3, requests-5414, pylint-6528; all REAL vs gold);
+  no-harm -2 (gate 1) FAILS. Cause: verification now hits the 30-step limit (23/75 ix runs vs 5).
+  Next (needs go-ahead): ix vs ix + max_steps 60 vs + no commit-pressure stack, same slice.
+- **Same day, later:** idle-wide re-run with output visible (still not promoted;
+  `acceptance/idle_wide_rerun_2026_11`); 0.8.0 champion re-baseline 30/30, 27 REAL, -32% wall vs Oct
+  (`acceptance/baseline_080_2026_11`, the new reference); `LUXE_READ_OVERSIZE_WINDOW=1` fixes
+  document-config 32 to 55/55, 29 REAL, +19% prompt tokens (wants a confirmation rep before any
+  default change); document-config canonical 55-var set + R4 (PR #64,
+  `acceptance/doc_config_rescore_2026_11`, incl. DIAGNOSIS: oMLX 0.8.0, not luxe); cleanup turn
+  catches data litter (PRs #65-#68, `acceptance/cleanup_data_check_2026_11`; #66 had a newline
+  bug fixed by #67 within the hour, lessons.md).
+- **Pending decisions (Michael):** ThinkingCap-4bit on m1; the ix + max_steps 60 follow-up; whether
+  to confirm `LUXE_READ_OVERSIZE_WINDOW=1` for maintain/chat. `wide` re-run done: still no.
 
 ## ⇒ SESSION NOTE (2026-11-08, m5) — oversize-read window lever: opt-in, not promoted (34.7 vs 35.7)
 
