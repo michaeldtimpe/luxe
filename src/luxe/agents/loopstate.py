@@ -159,6 +159,10 @@ class LoopState:
     prev_completion_tokens: int = 0
     prev_tool_calls_total_at_sample: int = 0  # v1.9 — for next_action_was_tool_call
     writes_seen: int = 0
+    # Writes that arm the post-write idle exit. Equal to writes_seen unless
+    # SWE-bench image exec is on, where a scratch reproducer (luxe.scratch)
+    # does not count (agents.sdd "Post-write idle exit under image exec").
+    source_writes_seen: int = 0
     post_write_idle_tools: int = 0
     # LUXE_IDLE_NARROW=capped: refusals spared so far this run, and whether
     # idle_refusal_budget_spent has been emitted.

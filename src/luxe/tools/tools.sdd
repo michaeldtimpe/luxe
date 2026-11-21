@@ -395,7 +395,10 @@ module; honesty guards and SpecDD Lever 2 Forbids enforcement live here.
   as usual. Same `(output, "exit code N")` contract and `_clip_output`.
   Docker unreachable or image missing is an error the MODEL sees
   (`image exec unavailable: ...`); there is no host fallback. Calls are
-  recorded in the `image_exec_stats` event. A/B:
+  recorded in the `image_exec_stats` event. Scratch classification
+  (`luxe.scratch`) is shared by the adapter's `strip_scratch` and the loop's
+  idle exit; since 2026-11-21 it also covers files under a new top-level dir
+  with no package (`test_repro/`, `tmp/...`, `.a/`). A/B:
   acceptance/swebench/image_exec_2026_11/.
 
 ## Must not

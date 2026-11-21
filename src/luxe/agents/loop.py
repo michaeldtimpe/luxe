@@ -1170,14 +1170,32 @@ def _dedup_short_circuit(run: _Run, st: LoopState, result: AgentResult,
         key_hash=key_hash, duplicate=True, cached=False,
         bytes_out=0,
     )
-    if st.writes_seen > 0:
+    if st.source_writes_seen > 0:
         st.post_write_idle_tools += 1
 
 
+def _scratch_write(path: str | None) -> str | None:
+    """Repo-relative path when image exec is on and `path` is scratch."""
+    from luxe.tools import shell as _shell
+    from luxe.tools.fs import get_repo_root
+    base = _shell.image_exec_base()
+    root = get_repo_root()
+    if base is None or root is None or not path:
+        return None
+    from luxe.scratch import is_scratch_at, relative_to_repo
+    rel = relative_to_repo(path, root)
+    return rel if rel and is_scratch_at(rel, root, base) else None
+
+
 def _track_write(run: _Run, st: LoopState, step: int,
-                 emit: Callable[..., None]) -> None:
+                 emit: Callable[..., None], path: str | None = None) -> None:
     """Bookkeeping for a successful write_file / edit_file."""
     st.writes_seen += 1
+    scratch = _scratch_write(path)
+    if scratch is None:
+        st.source_writes_seen += 1
+    else:
+        emit("scratch_write", step=step, path=scratch)
     st.post_write_idle_tools = 0
     # A write changes what every observation tool would return, so
     # "you already called this — the result was provided above" is
@@ -1262,8 +1280,8 @@ def _track_dispatched(run: _Run, st: LoopState, tc: ToolCallResponse,
         if len(st.tool_history) > TOOL_HISTORY_MAX:
             st.tool_history = st.tool_history[-TOOL_HISTORY_MAX:]
     if tc.name in _WRITE_TOOLS and not executed.error:
-        _track_write(run, st, step, emit)
-    elif st.writes_seen > 0:
+        _track_write(run, st, step, emit, path)
+    elif st.source_writes_seen > 0:
         # A dedup-exempt repeat (read_file) returns content, so it
         # RESETS the streak. Counting such repeats as idle was benched
         # twice and refuted (LUXE_POST_WRITE_IDLE_REPEATS, removed

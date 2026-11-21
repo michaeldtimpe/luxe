@@ -671,7 +671,8 @@ invariants in its `.sdd` you must read before enabling:
   `configs/single_64gb_swebench_exec.yaml`, 2026-11-20, being A/B'd) — the
   model's python/pytest/pip run in the instance's SWE-bench image (colima),
   a leading `cd <dir> &&` is accepted, scratch reproducers are allowed and
-  stripped from the patch. Bench path only: maintain/chat never set
+  stripped from the patch (also files in a new top-level dir with no package, and a
+  scratch write does not arm the post-write idle exit, 2026-11-21). Bench path only: maintain/chat never set
   `LUXE_SWEBENCH_EXEC`; no host fallback. See `tools.sdd` and
   `acceptance/swebench/image_exec_2026_11/PLAN.md`.
 - **Removed 2026-10-22** (refuted or inert, off by default): cohort priors,

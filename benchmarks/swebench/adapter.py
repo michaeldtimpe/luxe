@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from luxe.scratch import SCRATCH_GLOBS, is_scratch, is_scratch_at  # noqa: F401
+
 from .fixtures import SweBenchInstance
 
 
@@ -202,14 +204,8 @@ strictly hold.
 SWEBENCH_SDD_BODY_EXEC = SWEBENCH_SDD_BODY[:SWEBENCH_SDD_BODY.index("## Forbids creating")]
 assert "## Forbids\n- repo_root/**" in SWEBENCH_SDD_BODY_EXEC
 
-# What `strip_scratch` removes: a file ADDED since base_commit (committed or
-# untracked) whose path or basename matches one of these, or any added `*.py`
-# directly at the repo root. Tracked files the model edited are never touched.
-SCRATCH_GLOBS = (
-    "repro*.py", "reproduce*.py", "reproducer*.py", "scratch*", "debug_*.py",
-    "tmp_*", "verify_*.py", "*_verify.py", "test_fix*.py", "test_*_fix.py",
-    "test_encoded_*.py", "test_*_time.py", "check_*.py",
-)
+# What `strip_scratch` removes: see `luxe.scratch` (shared with the loop's
+# post-write idle exit). Tracked files the model edited are never touched.
 
 
 def instance_image(instance_id: str) -> str:
@@ -247,15 +243,6 @@ def _added_since(repo: Path, base_commit: str) -> list[str]:
     return sorted(set(added))
 
 
-def is_scratch(path: str) -> bool:
-    import fnmatch
-    name = path.rsplit("/", 1)[-1]
-    if "/" not in path and name.endswith(".py"):
-        return True
-    return any(fnmatch.fnmatch(name, g) or fnmatch.fnmatch(path, g)
-               for g in SCRATCH_GLOBS)
-
-
 def strip_scratch(repo: Path, base_commit: str) -> list[str]:
     """Delete scratch files the run added (see SCRATCH_GLOBS) from the working
     tree so `extract_diff` (working tree vs base) does not carry them. Returns
@@ -263,9 +250,14 @@ def strip_scratch(repo: Path, base_commit: str) -> list[str]:
     removed = []
     for p in _added_since(repo, base_commit):
         f = repo / p
-        if is_scratch(p) and f.is_file():
+        if f.is_file() and is_scratch_at(p, repo, base_commit):
             f.unlink()
             removed.append(p)
+    for p in removed:   # drop directories the strip left empty
+        d = (repo / p).parent
+        while d != repo and d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+            d = d.parent
     return removed
 
 

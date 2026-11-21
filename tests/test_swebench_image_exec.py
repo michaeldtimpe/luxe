@@ -314,3 +314,75 @@ def test_exec_60_config_differs_only_in_step_budget():
         c.pop("profile")
         c["roles"]["monolith"].pop("max_steps")
     assert a == b
+
+
+# ── 2026-11-21: scratch in new directories; scratch writes and the idle exit ──
+
+def test_strip_scratch_removes_new_top_level_dirs_but_not_new_packages(repo):
+    from benchmarks.swebench.adapter import extract_diff, strip_scratch
+    r, base = repo
+    (r / "pkg" / "mod.py").write_text("x = 2\n")
+    for p in ("test_repro/.a/foo.py", "test_repro/bar.py", "tmp/pylint_test/.a/foo.py",
+              ".a/foo.py", "newpkg/__init__.py", "newpkg/core.py", "pkg/sub/data.txt"):
+        (r / p).parent.mkdir(parents=True, exist_ok=True)
+        (r / p).write_text("import re\n")
+    removed = strip_scratch(r, base)
+    assert removed == [".a/foo.py", "test_repro/.a/foo.py", "test_repro/bar.py",
+                       "tmp/pylint_test/.a/foo.py"]
+    assert not (r / "test_repro").exists() and not (r / "tmp").exists() and not (r / ".a").exists()
+    diff = extract_diff(r, base)
+    assert "pkg/mod.py" in diff and "newpkg/core.py" in diff and "pkg/sub/data.txt" in diff
+    assert "test_repro" not in diff and "pylint_test" not in diff
+
+
+def _idle_run(repo_root, write_path, image_exec, monkeypatch):
+    import luxe.agents.loop as loop_mod
+    from luxe.agents.loop import run_agent
+    from luxe.backend import ChatResponse, GenerationTiming, ToolCallResponse
+    from luxe.config import RoleConfig
+    from luxe.tools.base import ToolDef
+    from tests._fakes import ScriptedBackend
+
+    def resp(name, args):
+        return ChatResponse(text="", tool_calls=[ToolCallResponse(id=name, name=name, arguments=args)],
+                            finish_reason="tool_calls",
+                            timing=GenerationTiming(prompt_tokens=100, completion_tokens=50))
+    scripted = [resp("write_file", {"path": write_path, "content": "x"})]
+    scripted += [resp("lint", {"n": i}) for i in range(5)]
+    scripted.append(ChatResponse(text="done", finish_reason="stop",
+                                 timing=GenerationTiming(prompt_tokens=100, completion_tokens=10)))
+    events = []
+    monkeypatch.setattr(loop_mod, "append_event", lambda rid, kind, **kw: events.append(kind))
+    shell.set_image_exec("img:latest" if image_exec else None,
+                         git(repo_root, "rev-parse", "HEAD") if image_exec else None)
+    backend = ScriptedBackend(scripted)
+    run_agent(
+        backend=backend,
+        role_cfg=RoleConfig(model_key="t", num_ctx=4096, max_steps=30,
+                            max_tokens_per_turn=2048, temperature=0.0),
+        system_prompt="s", task_prompt="t",
+        tool_defs=[ToolDef(name="write_file", description="w", parameters={
+                       "type": "object", "properties": {"path": {"type": "string"},
+                                                        "content": {"type": "string"}},
+                       "required": ["path", "content"]}),
+                   ToolDef(name="lint", description="l",
+                           parameters={"type": "object", "properties": {"n": {"type": "integer"}},
+                                       "required": []})],
+        tool_fns={"write_file": lambda a: ("ok", None), "lint": lambda a: ("", None)},
+        run_id="t",
+    )
+    return len(backend.calls), events
+
+
+@pytest.mark.parametrize("image_exec,path,exits", [
+    (False, "repro_issue.py", True),      # off: any write arms the exit (unchanged)
+    (True, "pkg/mod.py", True),           # on: a source write still arms it
+    (True, "repro_issue.py", False),      # on: a scratch reproducer does not
+    (True, "test_repro/bar.py", False),   # on: nor a file in a new scratch dir
+])
+def test_scratch_write_does_not_arm_post_write_idle_exit(repo, monkeypatch, image_exec, path, exits):
+    r, _ = repo
+    calls, events = _idle_run(r, path, image_exec, monkeypatch)
+    assert ("post_write_idle_exit" in events) is exits
+    assert calls == (4 if exits else 7)
+    assert ("scratch_write" in events) is (image_exec and not exits)

@@ -467,6 +467,22 @@ strings; the registry pattern keeps variant cells coupled to runtime.
   runners (maintain_suite, swebench) export it by default; it is not a bench
   arm and is excluded from maintain_suite's config fingerprint.
 
+### Post-write idle exit under image exec (2026-11-21)
+
+- `LoopState.source_writes_seen` counts the writes that arm the post-write
+  idle exit; `writes_seen` still counts every write for every other guard.
+  The two are equal unless SWE-bench image exec is on (`shell.image_exec_base()`
+  non-None), where a write whose repo-relative path is scratch per
+  `luxe.scratch.is_scratch_at` (name globs, a new root-level `*.py`, or a file
+  under a top-level dir absent at base_commit with no `__init__.py`) does not
+  count and emits `scratch_write` (step, path). It still resets the idle streak.
+- Why: under image exec the model often writes a reproducer first; the exit
+  then ended the run before any source edit (empty patches: all 6 in the
+  image_exec follow-up's ix60nb arm, 2 of its 3 django-10880 losses;
+  acceptance/swebench/image_exec_2026_11/REPORT.md § Follow-up).
+- Off (no image exec) = byte-identical: the counter equals `writes_seen` and no
+  new event is emitted.
+
 ### Failed-command output (LUXE_FAILED_OUTPUT, opt-in exact "1", 2026-11-19, being A/B'd)
 
 - `_dispatch_one` sends `executed.error or executed.result`, so a tool that

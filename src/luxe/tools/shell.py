@@ -332,6 +332,11 @@ def set_image_exec(image: str | None, base_commit: str | None) -> None:
     _image_calls.clear()
 
 
+def image_exec_base() -> str | None:
+    """base_commit while image exec is on, else None."""
+    return _image_exec[1] if _image_exec else None
+
+
 def image_exec_calls() -> list[dict[str, Any]]:
     """One record per bash call routed or rescued since `set_image_exec`."""
     return [dict(c) for c in _image_calls]
